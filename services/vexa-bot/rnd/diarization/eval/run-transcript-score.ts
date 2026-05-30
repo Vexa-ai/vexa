@@ -172,36 +172,70 @@ async function scoreCorpus(id: string, samples: Float32Array, gt: GroundTruth, t
   // Pass 2: score each commit.
   const commitScores: CommitScore[] = [];
   for (const c of commits) {
-    const startSample = Math.max(0, Math.floor((c.tStartMs / 1000) * SAMPLE_RATE));
-    const endSample = Math.min(samples.length, Math.floor((c.tEndMs / 1000) * SAMPLE_RATE));
+    // Give Whisper ±150ms of context audio outside the commit window so
+    // words straddling the boundary still get fully heard. This is a
+    // transcription-only padding; the boundary timing itself is unchanged.
+    const CONTEXT_MS = 300;
+    const startSample = Math.max(0, Math.floor(((c.tStartMs - CONTEXT_MS) / 1000) * SAMPLE_RATE));
+    const endSample = Math.min(samples.length, Math.floor(((c.tEndMs + CONTEXT_MS) / 1000) * SAMPLE_RATE));
     if (endSample - startSample < SAMPLE_RATE * 0.3) {
       // <300ms — skip; too short to score reliably.
       continue;
     }
     const rawSlice = samples.subarray(startSample, endSample);
-    // Trim leading and trailing silence ONLY (don't chop mid-word breaths
-    // which Whisper uses for context). Compute RMS per 32ms window; find
-    // first/last windows above SILENCE_RMS; slice between them with a
-    // small pad on either side.
-    const WIN = 512;
+    // Trim leading/trailing silence AND collapse long internal silence
+    // gaps (>500ms of contiguous sub-threshold audio). Hysteresis padding
+    // and mid-monologue pauses both confuse Whisper into hallucinating
+    // filler — but mid-word breaths (~50-200ms) are useful context, so
+    // we collapse only sufficiently-long quiet stretches.
+    const WIN = 512;             // ~32ms at 16kHz
     const SILENCE_RMS = 0.006;
-    const PAD_WINS = 4; // ~128ms pad
+    const PAD_WINS = 4;          // ~128ms pad around speech
+    const MIN_GAP_WINS = 16;     // ~512ms → collapse only if gap exceeds this
+    const nWins = Math.floor(rawSlice.length / WIN);
+    const winIsSpeech: boolean[] = new Array(nWins);
     let firstSpeechWin = -1;
     let lastSpeechWin = -1;
-    const nWins = Math.floor(rawSlice.length / WIN);
     for (let w = 0; w < nWins; w++) {
       let sumSq = 0;
       for (let j = 0; j < WIN; j++) sumSq += rawSlice[w * WIN + j] * rawSlice[w * WIN + j];
       const rms = Math.sqrt(sumSq / WIN);
-      if (rms >= SILENCE_RMS) {
+      winIsSpeech[w] = rms >= SILENCE_RMS;
+      if (winIsSpeech[w]) {
         if (firstSpeechWin < 0) firstSpeechWin = w;
         lastSpeechWin = w;
       }
     }
     if (firstSpeechWin < 0) continue;
-    const sliceStart = Math.max(0, (firstSpeechWin - PAD_WINS) * WIN);
-    const sliceEnd = Math.min(rawSlice.length, (lastSpeechWin + 1 + PAD_WINS) * WIN);
-    const slice = rawSlice.subarray(sliceStart, sliceEnd);
+    // Build keep-mask: start with trimmed range (firstSpeech..lastSpeech),
+    // then within it scan for runs of consecutive non-speech windows of
+    // length >= MIN_GAP_WINS; drop those runs (with PAD_WINS preserved on
+    // each side to keep breath context).
+    const trimStart = Math.max(0, firstSpeechWin - PAD_WINS);
+    const trimEnd = Math.min(nWins - 1, lastSpeechWin + PAD_WINS);
+    const keepWin: boolean[] = new Array(nWins).fill(false);
+    for (let w = trimStart; w <= trimEnd; w++) keepWin[w] = true;
+    let runStart = -1;
+    for (let w = trimStart; w <= trimEnd + 1; w++) {
+      const silent = w <= trimEnd ? !winIsSpeech[w] : false;
+      if (silent && runStart < 0) runStart = w;
+      else if (!silent && runStart >= 0) {
+        const runLen = w - runStart;
+        if (runLen >= MIN_GAP_WINS) {
+          // Drop middle of the run, keep PAD_WINS at each end.
+          for (let k = runStart + PAD_WINS; k < w - PAD_WINS; k++) keepWin[k] = false;
+        }
+        runStart = -1;
+      }
+    }
+    const keptChunks: Float32Array[] = [];
+    for (let w = 0; w < nWins; w++) {
+      if (keepWin[w]) keptChunks.push(rawSlice.subarray(w * WIN, (w + 1) * WIN));
+    }
+    if (keptChunks.length === 0) continue;
+    const slice = new Float32Array(keptChunks.reduce((a, c) => a + c.length, 0));
+    let pos = 0;
+    for (const k of keptChunks) { slice.set(k, pos); pos += k.length; }
     if (slice.length < SAMPLE_RATE * 0.3) continue;
 
     // Build GT text + dominant-speaker for this commit's range.
