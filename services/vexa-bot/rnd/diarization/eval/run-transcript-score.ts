@@ -178,7 +178,31 @@ async function scoreCorpus(id: string, samples: Float32Array, gt: GroundTruth, t
       // <300ms — skip; too short to score reliably.
       continue;
     }
-    const slice = samples.subarray(startSample, endSample);
+    const rawSlice = samples.subarray(startSample, endSample);
+    // Trim leading and trailing silence ONLY (don't chop mid-word breaths
+    // which Whisper uses for context). Compute RMS per 32ms window; find
+    // first/last windows above SILENCE_RMS; slice between them with a
+    // small pad on either side.
+    const WIN = 512;
+    const SILENCE_RMS = 0.006;
+    const PAD_WINS = 4; // ~128ms pad
+    let firstSpeechWin = -1;
+    let lastSpeechWin = -1;
+    const nWins = Math.floor(rawSlice.length / WIN);
+    for (let w = 0; w < nWins; w++) {
+      let sumSq = 0;
+      for (let j = 0; j < WIN; j++) sumSq += rawSlice[w * WIN + j] * rawSlice[w * WIN + j];
+      const rms = Math.sqrt(sumSq / WIN);
+      if (rms >= SILENCE_RMS) {
+        if (firstSpeechWin < 0) firstSpeechWin = w;
+        lastSpeechWin = w;
+      }
+    }
+    if (firstSpeechWin < 0) continue;
+    const sliceStart = Math.max(0, (firstSpeechWin - PAD_WINS) * WIN);
+    const sliceEnd = Math.min(rawSlice.length, (lastSpeechWin + 1 + PAD_WINS) * WIN);
+    const slice = rawSlice.subarray(sliceStart, sliceEnd);
+    if (slice.length < SAMPLE_RATE * 0.3) continue;
 
     // Build GT text + dominant-speaker for this commit's range.
     const perSpeakerMs = new Map<string, number>();
@@ -364,11 +388,17 @@ async function main(): Promise<number> {
     );
   }
   console.log();
+  // BALANCED metric: transcript × purity × recall. Rewards systems that
+  // get all three right rather than optimizing one at the expense of the
+  // others. This is the right single number for the user-asked-for
+  // optimization: "correct transcript AND correct speech boundaries".
+  const aggBalanced = aggTranscript * aggPurity * aggRecall;
   console.log(
     `OVERALL  transcript=${(aggTranscript * 100).toFixed(1)}%  purity=${(aggPurity * 100).toFixed(1)}%  ` +
-      `composite=${(aggComposite * 100).toFixed(1)}%  recall=${(aggRecall * 100).toFixed(1)}%`,
+      `recall=${(aggRecall * 100).toFixed(1)}%  composite=${(aggComposite * 100).toFixed(1)}%  ` +
+      `BALANCED=${(aggBalanced * 100).toFixed(1)}%`,
   );
-  console.log(`SCORE  transcript=${(aggTranscript * 100).toFixed(1)}  purity=${(aggPurity * 100).toFixed(1)}  composite=${(aggComposite * 100).toFixed(1)}  recall=${(aggRecall * 100).toFixed(1)}`);
+  console.log(`SCORE  balanced=${(aggBalanced * 100).toFixed(1)}  transcript=${(aggTranscript * 100).toFixed(1)}  purity=${(aggPurity * 100).toFixed(1)}  recall=${(aggRecall * 100).toFixed(1)}  composite=${(aggComposite * 100).toFixed(1)}`);
   return 0;
 }
 
