@@ -263,6 +263,42 @@ async function main() {
         lastLanguagePerSpeaker.set(speakerName, result.language);
       }
 
+      // CONFIDENCE-BASED HALLUCINATION GATE. Whisper exposes per-segment
+      // quality signals; the production bot (services/vexa-bot/core/src/
+      // index.ts:1374-1405) uses three thresholds. Port them here so the
+      // hallucination is dropped BEFORE it ever reaches speakerManager
+      // (and thus before any downstream dashboard / publish).
+      //
+      //   - no_speech_prob > 0.5  AND  avg_logprob < -0.7  → noise
+      //   - avg_logprob   < -0.8  AND  duration   <  2.0s  → short garbage
+      //   - compression_ratio > 2.4                       → repetitive
+      //
+      // When dropped, we call handleTranscriptionResult with empty text
+      // so the speaker buffer offset still advances (otherwise the
+      // discarded audio would re-arrive on the next round-trip).
+      if (result.segments && result.segments.length > 0) {
+        const seg = result.segments[0];
+        const noSpeech = seg.no_speech_prob ?? 0;
+        const logProb = seg.avg_logprob ?? 0;
+        const compression = seg.compression_ratio ?? 1;
+        const duration = (seg.end ?? 0) - (seg.start ?? 0);
+        let dropReason: string | null = null;
+        if (noSpeech > 0.5 && logProb < -0.7) {
+          dropReason = `NO_SPEECH no_speech=${noSpeech.toFixed(2)} logprob=${logProb.toFixed(2)}`;
+        } else if (logProb < -0.8 && duration < 2.0) {
+          dropReason = `LOW_QUALITY logprob=${logProb.toFixed(2)} dur=${duration.toFixed(1)}s`;
+        } else if (compression > 2.4) {
+          dropReason = `REPETITIVE compression=${compression.toFixed(1)}`;
+        }
+        if (dropReason) {
+          console.log(
+            `[harness] 🚫 ${dropReason} for ${speakerName}: "${(result.text || '').trim()}" — discarded`,
+          );
+          speakerManager.handleTranscriptionResult(speakerId, '');
+          return;
+        }
+      }
+
       // Feed into manager — this may trigger onSegmentConfirmed callbacks
       // that populate confirmedBatches.
       const lastSeg = result.segments[result.segments.length - 1];
