@@ -270,7 +270,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.peekIntervalSamples = Math.floor(((cfg.peekIntervalMs ?? 250) / 1000) * SAMPLE_RATE);
     this.peekWindowSamples = Math.floor(((cfg.peekWindowMs ?? 750) / 1000) * SAMPLE_RATE);
     this.peekConfidenceThreshold = cfg.peekConfidenceThreshold ?? 0.40;
-    this.newClusterCooldownMs = cfg.newClusterCooldownMs ?? 2000;
+    this.newClusterCooldownMs = cfg.newClusterCooldownMs ?? 4000;
   }
 
   static async create(cfg: OnnxLocalDiarizerConfig = {}): Promise<OnnxLocalDiarizer> {

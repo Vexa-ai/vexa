@@ -427,18 +427,24 @@ async function main() {
       // are routed to this speaker's stream; frames before tStartMs are
       // dropped (silence / non-speech the diarizer chose not to embed).
       //
-      // HALLUCINATION LAYER: before routing, gather the in-range frames
-      // and filter silence — Whisper hallucinates "Amen.", "Thanks for
-      // watching", etc. when fed >300ms of contiguous quiet audio. We
-      //   (a) drop frames whose 64-frame (≈64ms) windowed RMS is below
-      //       the silence threshold; the diarizer's VAD already passes
-      //       these, but Piper-rendered audio sometimes has long quiet
-      //       inter-line gaps and live audio similarly has filler;
-      //   (b) skip the entire commit if the surviving speech content is
-      //       <300ms — Whisper can't transcribe such short audio
-      //       reliably and tends to invent text instead.
-      const SILENCE_RMS = 0.006;
-      const MIN_SPEECH_SAMPLES = Math.ceil(0.3 * SAMPLE_RATE); // 300ms
+      // HALLUCINATION LAYER. Whisper hallucinates filler text ("Amen.",
+      // "Thanks for watching", "laughter", "What?", "Oh.") when fed
+      // borderline-quiet audio or short fragments. Three gates:
+      //   (a) drop frames whose 64-frame (~64ms) RMS is below the SPEECH
+      //       threshold (0.012). This is STRICTER than the diarizer's
+      //       silence floor (0.006); we want full-on speech, not borderline
+      //       quiet background.
+      //   (b) require ≥600ms of surviving supra-threshold speech content
+      //       in the commit (was 300ms; Whisper on <600ms is unreliable).
+      //   (c) require the speech-ratio (supra-threshold / total) to be
+      //       at least 0.5, i.e. the commit's audio must be majority
+      //       speech, not mostly-quiet "speech buried in background".
+      // Production observation: rapid "What?" / "laughter" repeats in
+      // the live log came from short borderline-quiet commits that
+      // passed the prior 300ms/0.006 gates. Tightening kills the source.
+      const SILENCE_RMS = 0.012;
+      const MIN_SPEECH_SAMPLES = Math.ceil(0.6 * SAMPLE_RATE); // 600ms
+      const MIN_SPEECH_RATIO = 0.5;
       let i = 0;
       let routed = 0;
       let dropped = 0;
@@ -456,8 +462,10 @@ async function main() {
       if (i > 0) pendingFrames.splice(0, i);
       // Filter silence frames within the in-range set.
       let speechSamples = 0;
+      let totalSamples = 0;
       const speechFrames: Float32Array[] = [];
       for (const pcm of inRangeFrames) {
+        totalSamples += pcm.length;
         let sumSq = 0;
         for (let j = 0; j < pcm.length; j++) sumSq += pcm[j] * pcm[j];
         const rms = Math.sqrt(sumSq / Math.max(1, pcm.length));
@@ -468,8 +476,9 @@ async function main() {
           dropped++;
         }
       }
-      // Skip entire commit if we don't have enough speech content.
-      if (speechSamples >= MIN_SPEECH_SAMPLES) {
+      const speechRatio = totalSamples > 0 ? speechSamples / totalSamples : 0;
+      // Skip entire commit unless BOTH gates pass.
+      if (speechSamples >= MIN_SPEECH_SAMPLES && speechRatio >= MIN_SPEECH_RATIO) {
         for (const pcm of speechFrames) {
           speakerManager.feedAudio(resolved, pcm);
           routed++;
