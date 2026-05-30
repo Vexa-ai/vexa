@@ -153,6 +153,23 @@ let segmentPublisher: SegmentPublisher | null = null;
 export function getSegmentPublisher(): SegmentPublisher | null { return segmentPublisher; }
 let speakerManager: SpeakerStreamManager | null = null;
 let vadModel: SileroVAD | null = null;
+
+// --- MS Teams diarization cutover (pack #394) ---
+// pyannote/segmentation-3.0-driven boundaries + caption correlation.
+// Replaces the legacy caption-driven audio-flush mechanism. See
+// services/diarization/ and services/teams-attributor.ts.
+import { OnnxLocalDiarizer } from './services/diarization/onnx-local-diarizer';
+import type { CommitEvent } from './services/diarization/onnx-local-diarizer';
+import { TeamsAttributor } from './services/teams-attributor';
+let teamsDiarizer: OnnxLocalDiarizer | null = null;
+let teamsAttributor: TeamsAttributor | null = null;
+/** Per-session pending frames buffer for deferred routing. Frames are
+ *  queued here as they arrive from the browser; the diarizer's onCommit
+ *  handler drains them and routes to the attributor-resolved speaker. */
+const teamsPendingFrames: Array<{ ts: number; pcm: Float32Array }> = [];
+/** Frames the diarizer has been fed but no commit has fired yet. Cap
+ *  bounds memory if the diarizer pauses (it shouldn't, but defensive). */
+const TEAMS_PENDING_FRAMES_MAX = 1500;
 /** Per-speaker VAD states for streaming mode (GMeet only) */
 import type { VadSpeakerState } from './services/vad';
 const vadSpeakerStates: Map<string, VadSpeakerState> = new Map();
@@ -1299,6 +1316,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     }
 
     const isGoogleMeet = botConfig.platform === 'google_meet';
+    const isTeams = botConfig.platform === 'teams';
     speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
       minAudioDuration: 3,     // 3s of unconfirmed audio before submission
@@ -1309,6 +1327,96 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     });
     // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
     // SpeakerStreamManager no longer does VAD — it only receives real speech.
+
+    // ── pack-msteams-diarization-cutover (#394) ──
+    // For MS Teams, initialise pyannote/segmentation-3.0-driven diarizer
+    // + TeamsAttributor. The diarizer's onCommit handler drains
+    // teamsPendingFrames into speakerManager.feedAudio under the
+    // attributor's resolved speaker name (caption-correlated; cluster-
+    // vote fallback; provisional cluster_id otherwise).
+    if (isTeams) {
+      teamsAttributor = new TeamsAttributor({
+        captionLagMs: 1000,
+        matchToleranceMs: 2500,
+        onLateResolve: (clusterId, resolvedName) => {
+          if (!speakerManager) return;
+          if (!speakerManager.hasSpeaker(clusterId)) return;
+          const currentName = speakerManager.getSpeakerName(clusterId) || '';
+          if (currentName === resolvedName) return;
+          log(`[Teams diarizer] late-resolve: cluster ${clusterId} → "${resolvedName}" (was "${currentName || clusterId}")`);
+          speakerManager.updateSpeakerName(clusterId, resolvedName);
+        },
+      });
+      try {
+        teamsDiarizer = await OnnxLocalDiarizer.create({
+          onCommit: (ev: CommitEvent) => {
+            if (!speakerManager || !teamsAttributor) return;
+            const resolution = teamsAttributor.resolve({
+              clusterId: ev.speakerId,
+              tStartMs: ev.tStartMs,
+              tEndMs: ev.tEndMs,
+            });
+            const speakerName = resolution.speakerName;
+            // Use cluster_id as the speakerManager key so cluster-vote
+            // late-rename can target it via updateSpeakerName. Display
+            // name is the resolved speakerName.
+            const speakerId = ev.speakerId;
+            if (!speakerManager.hasSpeaker(speakerId)) {
+              speakerManager.addSpeaker(speakerId, speakerName);
+              segmentPublisher?.publishSpeakerEvent({
+                speaker: speakerName,
+                type: 'joined',
+                timestamp: ev.tStartMs,
+              }).catch(() => { /* fire-and-forget */ });
+            } else if (speakerManager.getSpeakerName(speakerId) !== speakerName) {
+              speakerManager.updateSpeakerName(speakerId, speakerName);
+            }
+            // Drain frames in [tStartMs, tEndMs] into speakerManager.
+            // Same hallucination gate as the RnD harness: per-frame RMS
+            // filter + 600ms min-speech + 50% speech-ratio.
+            const SILENCE_RMS = 0.012;
+            const MIN_SPEECH_SAMPLES = Math.ceil(0.6 * 16000);
+            const MIN_SPEECH_RATIO = 0.5;
+            let i = 0;
+            const inRange: Float32Array[] = [];
+            while (i < teamsPendingFrames.length) {
+              const pf = teamsPendingFrames[i];
+              if (pf.ts > ev.tEndMs) break;
+              if (pf.ts >= ev.tStartMs) inRange.push(pf.pcm);
+              i++;
+            }
+            if (i > 0) teamsPendingFrames.splice(0, i);
+            // Filter silence + speech-ratio.
+            let speechSamples = 0;
+            let totalSamples = 0;
+            const speechFrames: Float32Array[] = [];
+            for (const pcm of inRange) {
+              totalSamples += pcm.length;
+              let sumSq = 0;
+              for (let j = 0; j < pcm.length; j++) sumSq += pcm[j] * pcm[j];
+              const rms = Math.sqrt(sumSq / Math.max(1, pcm.length));
+              if (rms >= SILENCE_RMS) {
+                speechFrames.push(pcm);
+                speechSamples += pcm.length;
+              }
+            }
+            const speechRatio = totalSamples > 0 ? speechSamples / totalSamples : 0;
+            if (speechSamples < MIN_SPEECH_SAMPLES || speechRatio < MIN_SPEECH_RATIO) {
+              // Commit's audio is mostly silence or too short — skip
+              // routing to avoid Whisper hallucinations.
+              return;
+            }
+            for (const pcm of speechFrames) speakerManager.feedAudio(speakerId, pcm);
+          },
+        });
+        log('[Teams diarizer] OnnxLocalDiarizer (pyannote/segmentation-3.0 + wespeaker) ready');
+      } catch (err: any) {
+        // Per pack spec: NO fallback. A diarizer-load failure means the
+        // bot can't attribute speech for Teams. Hard error.
+        log(`[Teams diarizer] FATAL: failed to load: ${err.message}`);
+        throw err;
+      }
+    }
 
     // onSegmentReady: transcribe the buffer (called every submitInterval)
     // Does NOT publish — just transcribes and feeds result back for confirmation.
@@ -1768,6 +1876,20 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
     speakerManager = null;
   }
 
+  // ── pack-msteams-diarization-cutover (#394) ──
+  // Tear down the Teams diarizer + attributor. The pending-frames buffer
+  // is emptied so any leftover audio (commits that didn't fire before
+  // session end) doesn't leak into the next session.
+  if (teamsDiarizer) {
+    try { teamsDiarizer.reset(); } catch { /* defensive */ }
+    teamsDiarizer = null;
+  }
+  if (teamsAttributor) {
+    teamsAttributor.reset();
+    teamsAttributor = null;
+  }
+  teamsPendingFrames.length = 0;
+
   // Flush remaining confirmed batches before session_end
   if (segmentPublisher && confirmedBatches.size > 0) {
     for (const [speakerId, batch] of confirmedBatches) {
@@ -1798,26 +1920,59 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
  *   - DOM blue squares (fallback): voice-level-stream-outline + vdi-frame-occlusion
  * Speaker name is known from DOM/caption events — no voting/locking needed.
  */
+/**
+ * Teams audio data callback — pack-msteams-diarization-cutover (#394).
+ *
+ * The browser-side recording.ts still calls __vexaTeamsAudioData(speaker,
+ * data) — we keep the signature for callsite compatibility but the
+ * `speaker` parameter is now ADVISORY ONLY. The browser's caption-driven
+ * speaker label is recorded into the TeamsAttributor's caption log so
+ * later commits can correlate against it; speaker attribution for the
+ * audio bucket is decided by the diarizer's commit boundaries + the
+ * attributor's window-match / cluster-vote / provisional rules.
+ *
+ * Per-frame flow:
+ *   1. Append the frame to teamsPendingFrames with arrival timestamp.
+ *   2. Feed the frame to the diarizer (pyannote-driven segmentation).
+ *   3. The diarizer's onCommit handler (set at pipeline init) drains
+ *      pendingFrames inside the commit's [tStart, tEnd] range,
+ *      consults the attributor for the speaker name, and calls
+ *      speakerManager.feedAudio with the resolved name.
+ *
+ * NO caption-driven flush. Captions feed the attributor only.
+ */
 async function handleTeamsAudioData(speakerName: string, audioDataArray: number[]): Promise<void> {
   if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
-
-  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
-  const audioData = new Float32Array(audioDataArray);
-
-  // Add speaker if new — name is already known from DOM/caption
-  if (!speakerManager.hasSpeaker(speakerId)) {
-    log(`[🎙️ TEAMS SPEAKER] "${speakerName}" — first audio received`);
-    speakerManager.addSpeaker(speakerId, speakerName);
-    await segmentPublisher.publishSpeakerEvent({
-      speaker: speakerName,
-      type: 'joined',
-      timestamp: Date.now(),
-    });
+  if (!teamsDiarizer || !teamsAttributor) {
+    // Diarizer not yet initialised — happens during the brief window
+    // between SpeakerStreamManager creation and diarizer load. Drop the
+    // frame; pyannote/segmentation-3.0 needs a 10s context anyway.
+    return;
   }
 
-  // No VAD for Teams — caption-driven routing already gates audio.
-  // Small ring buffer chunks are too short for Silero VAD to reliably detect speech.
-  speakerManager.feedAudio(speakerId, audioData);
+  const audioData = new Float32Array(audioDataArray);
+  const ts = Date.now();
+
+  // (Advisory) record the browser's caption-derived label as a caption
+  // event so the attributor has correlation data even if Teams' separate
+  // caption stream hasn't fired __vexaTeamsCaptionData yet.
+  if (speakerName) {
+    teamsAttributor.recordCaption(speakerName, ts);
+  }
+
+  // Buffer the frame for deferred routing on commit.
+  teamsPendingFrames.push({ ts, pcm: audioData });
+  if (teamsPendingFrames.length > TEAMS_PENDING_FRAMES_MAX) {
+    teamsPendingFrames.splice(0, teamsPendingFrames.length - TEAMS_PENDING_FRAMES_MAX);
+  }
+
+  // Feed the diarizer. Its onCommit callback (wired at pipeline init)
+  // drains pendingFrames and routes to speakerManager.feedAudio.
+  try {
+    await teamsDiarizer.process(audioData, ts);
+  } catch (err: any) {
+    log(`[Teams diarizer] process() error: ${err.message}`);
+  }
 }
 
 /**
@@ -1837,21 +1992,21 @@ let latestWhisperWords: { word: string; start: number; end: number; probability:
 async function handleTeamsCaptionData(speakerName: string, captionText: string, timestampMs: number): Promise<void> {
   if (!segmentPublisher || !page || page.isClosed()) return;
 
-  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
-
-  // When caption speaker changes, flush the PREVIOUS speaker's buffer immediately.
-  // This prevents cross-speaker contamination — the old speaker's buffer gets emitted
-  // before any of the new speaker's audio leaks into it.
-  if (lastCaptionSpeakerId && lastCaptionSpeakerId !== speakerId && speakerManager) {
-    log(`[PerSpeaker] Caption speaker change: flushing "${speakerManager.getSpeakerName(lastCaptionSpeakerId) || lastCaptionSpeakerId}" buffer`);
-    await speakerManager.flushSpeaker(lastCaptionSpeakerId);
+  // pack-msteams-diarization-cutover (#394): the legacy
+  // lastCaptionSpeakerId / flushSpeaker block is DELETED. Captions are
+  // no longer authoritative for audio boundaries — the diarizer is.
+  // Captions feed the TeamsAttributor as identity-correlation data only.
+  if (teamsAttributor) {
+    teamsAttributor.recordCaption(speakerName, timestampMs, captionText);
   }
+
+  // Update lastCaptionSpeakerId only for telemetry / debugging.
+  // Production attribution doesn't depend on this value anymore.
+  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
   lastCaptionSpeakerId = speakerId;
 
-  // Accumulate for speaker-mapper boundaries.
-  // Store timestamp as session-relative seconds to match Whisper word timestamps
-  // (which are offset by bufferStartMs - sessionStartMs). Absolute wall-clock
-  // timestamps would be in a completely different domain (~1.7B vs ~200s).
+  // Accumulate for speaker-mapper boundaries (downstream consumer).
+  // Store timestamp as session-relative seconds to match Whisper word timestamps.
   const sessionRelativeSec = segmentPublisher.sessionStartMs
     ? (timestampMs - segmentPublisher.sessionStartMs) / 1000
     : timestampMs / 1000;
