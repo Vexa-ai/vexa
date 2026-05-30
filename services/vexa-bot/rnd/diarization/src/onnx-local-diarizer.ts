@@ -40,6 +40,7 @@ import {
 import type { Diarizer, DiarizerLabel } from './diarizer';
 import { OnlineSpeakerClustering } from './online-clustering';
 import { metrics } from './metrics';
+import { PyannoteSegmenter, type BoundaryEvent } from './pyannote-segmenter';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,6 +101,21 @@ export interface OnnxLocalDiarizerConfig {
    *  on live YouTube where overlap/audio-glitches produce a short stretch
    *  of unreliable embeddings. Default 4000 ms; set to 0 to disable. */
   newClusterCooldownMs?: number;
+  /** When TRUE, segmentation is driven by onnx-community/pyannote-segmentation-3.0
+   *  (per-frame multi-speaker logits on a 10s rolling buffer) instead of
+   *  the wespeaker head/tail change-point detector. Pyannote is
+   *  architecturally correct for online speaker-change detection: it
+   *  emits per-frame multi-speaker probabilities including explicit
+   *  overlap classes, so the "interruption with no silence gap" case is
+   *  detected at frame resolution (~13 ms) rather than at the
+   *  "now − tail_length" anchor of the cosine-distance approach.
+   *  Default true. Set false to fall back to the legacy head/tail
+   *  detector. */
+  usePyannoteSegmentation?: boolean;
+  /** Pyannote inference cadence — how often to run the model on the
+   *  rolling buffer. Default 500 ms. Lower = lower boundary-emission
+   *  latency, more CPU. */
+  pyannoteInferIntervalMs?: number;
   /** Optional callback fired on every committed utterance (after embedding +
    *  cluster assignment). Used by the eval pipeline to capture diarizer
    *  decisions without parsing console.log. Fields:
@@ -149,6 +165,12 @@ export class OnnxLocalDiarizer implements Diarizer {
   private readonly peekConfidenceThreshold: number;
   private samplesAtLastPeek = 0;
   private readonly newClusterCooldownMs: number;
+  /** Pyannote segmenter — when set, drives mid-utterance splits. */
+  private pyannoteSegmenter: PyannoteSegmenter | null = null;
+  /** Boundary events queued by the pyannote segmenter's async callback,
+   *  consumed during process() to decide whether to split the current
+   *  in-progress utterance. */
+  private pendingPyannoteBoundaries: BoundaryEvent[] = [];
   /** Wall-clock-style timestamp of the last new-cluster allocation, in the
    *  same timebase as utteranceStartTs. Initialized to -Infinity so the
    *  first allocation isn't blocked. */
@@ -257,14 +279,23 @@ export class OnnxLocalDiarizer implements Diarizer {
 
     console.log(`[onnx-diarizer] loading processor (mel-fbank) for ${MODEL_ID}...`);
     const processor = await AutoProcessor.from_pretrained(MODEL_ID);
-    // fp32 model (~25 MB) — cleaner embeddings than the q8 quantized variant.
-    // We pay ~18 MB more disk and ~3× inference time vs q8, but cluster
-    // assignment quality improves noticeably on real meeting audio. Tunable
-    // back to 'q8' for the cheaper path once accuracy is good enough.
     console.log(`[onnx-diarizer] loading model (fp32 ONNX, ~25 MB)...`);
     const model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'fp32' });
-    console.log(`[onnx-diarizer] model ready (transformers.js handles ONNX inference internally)`);
-    return new OnnxLocalDiarizer(model, processor, cfg);
+    console.log(`[onnx-diarizer] wespeaker model ready (used for embedding + clustering)`);
+    const inst = new OnnxLocalDiarizer(model, processor, cfg);
+    // Pyannote/segmentation-3.0 is the segmentation source by default.
+    // It runs in parallel to the wespeaker pipeline: pyannote emits
+    // mid-utterance boundary events; wespeaker continues to provide
+    // per-segment embeddings + online clustering.
+    if (cfg.usePyannoteSegmentation !== false) {
+      console.log(`[onnx-diarizer] loading pyannote/segmentation-3.0 for boundary detection...`);
+      inst.pyannoteSegmenter = await PyannoteSegmenter.create({
+        inferIntervalMs: cfg.pyannoteInferIntervalMs ?? 500,
+        onBoundary: (ev) => inst.pendingPyannoteBoundaries.push(ev),
+      });
+      console.log(`[onnx-diarizer] pyannote ready — segmentation driven by per-frame logits`);
+    }
+    return inst;
   }
 
   /** Synchronous energy-based VAD on a single audio frame. RMS gate with
@@ -306,6 +337,21 @@ export class OnnxLocalDiarizer implements Diarizer {
     const wasInSpeech = this.inSpeech;
     const isInSpeech = this.updateVadAndAccumulate(audio);
 
+    // Feed the pyannote segmenter (if enabled). The segmenter's
+    // onBoundary callback (set at construction) pushes BoundaryEvents
+    // into `pendingPyannoteBoundaries`; we drain that queue below to
+    // decide whether to split the in-progress utterance. The segmenter
+    // sees ALL audio (not just current-utterance) because pyannote
+    // benefits from 10s of cross-silence context.
+    if (this.pyannoteSegmenter) {
+      // Fire-and-forget the append. The inference itself awaits inside
+      // the segmenter, but we don't gate diarizer processing on it.
+      await this.pyannoteSegmenter.appendFrame(audio, timestampMs);
+    }
+    // Drain pending boundaries. Pyannote boundaries that land INSIDE the
+    // current in-progress utterance are committed as splits.
+    await this.processPendingPyannoteBoundaries(timestampMs);
+
     if (isInSpeech) {
       if (!wasInSpeech) {
         // Speech start
@@ -318,11 +364,12 @@ export class OnnxLocalDiarizer implements Diarizer {
       this.utteranceChunks.push(audio);
       this.utteranceSamples += audio.length;
 
-      // Change-point check: every changePointCheckIntervalSamples of new audio,
-      // see if the speaker shifted mid-utterance (interruption with no silence).
-      // Only check once we have enough audio for two distinct head/tail windows
-      // plus a middle gap to absorb the transition itself.
+      // Legacy wespeaker head/tail change-point check. Only runs when
+      // pyannote segmentation is DISABLED (otherwise pyannote provides
+      // earlier + more precise boundaries via the pending-boundaries
+      // queue above).
       if (
+        !this.pyannoteSegmenter &&
         this.changePointCheckIntervalSamples > 0 &&
         this.utteranceSamples - this.samplesAtLastCpCheck >= this.changePointCheckIntervalSamples &&
         this.utteranceSamples >= 2 * this.changePointHeadTailSamples + this.changePointHeadTailSamples / 2
@@ -414,11 +461,80 @@ export class OnnxLocalDiarizer implements Diarizer {
     return out;
   }
 
+  /** Process any pyannote boundary events that landed during this frame's
+   *  appendFrame call. For each event whose timestamp falls INSIDE the
+   *  current in-progress utterance, split the utterance at the boundary
+   *  (commit head, restart with tail). Events outside the current
+   *  utterance (e.g. before utterance start, or in audio that already
+   *  committed) are discarded.
+   *
+   *  The boundary timestamp is in the same wall-clock-style timebase
+   *  passed to process(). We map it to a sample offset within the
+   *  in-progress utterance via: samplesIntoUtterance = (boundaryMs -
+   *  utteranceStartMs) * SAMPLE_RATE / 1000. */
+  private async processPendingPyannoteBoundaries(nowMs: number): Promise<void> {
+    if (this.pendingPyannoteBoundaries.length === 0) return;
+    const events = this.pendingPyannoteBoundaries.splice(0, this.pendingPyannoteBoundaries.length);
+    // Only handle events that fall INSIDE the in-progress utterance,
+    // i.e. utteranceStartTs < ev.tMs < nowMs. Outside-utterance events
+    // are speaker changes that already crossed an utterance boundary
+    // (typically a clean VAD silence-end) and don't need a mid-utterance
+    // split.
+    if (this.utteranceStartTs == null || this.utteranceSamples === 0) return;
+    for (const ev of events) {
+      const utteranceStartMs = this.utteranceStartTs;
+      // The boundary's timestamp is the wall-clock at which pyannote
+      // says the speaker change happened. Convert to sample offset
+      // within the current utterance.
+      const samplesIntoUtterance = Math.floor(((ev.tMs - utteranceStartMs) / 1000) * SAMPLE_RATE);
+      // Need at least minUtteranceSamples of head AND tail for a sane
+      // split. If the boundary is too close to the start or end, skip.
+      if (samplesIntoUtterance < this.minUtteranceSamples) continue;
+      if (samplesIntoUtterance > this.utteranceSamples - this.minUtteranceSamples) continue;
+      console.log(
+        `[onnx-diarizer] pyannote boundary at ${(ev.tMs / 1000).toFixed(2)}s ` +
+          `(${ev.kind}, conf=${ev.confidence.toFixed(3)}) ` +
+          `→ splitting utterance at ${(samplesIntoUtterance / SAMPLE_RATE).toFixed(2)}s in`,
+      );
+      await this.splitUtteranceAtSample(samplesIntoUtterance);
+      metrics.recordChangePoint();
+      // After splitting, the remaining utterance is the tail; subsequent
+      // boundary events from this frame might still apply, but their
+      // timestamps would no longer make sense in the new utterance
+      // timebase. Break and let the next process() round handle them.
+      break;
+    }
+  }
+
+  /** Split the in-progress utterance at the given sample offset. Commits
+   *  the head as one utterance, leaves the tail in place as the start of
+   *  the next utterance. Shared helper with the legacy head/tail
+   *  change-point detector. */
+  private async splitUtteranceAtSample(splitSample: number): Promise<void> {
+    const utteranceStartMs = this.utteranceStartTs ?? 0;
+    const firstPartChunks = this.chunksUpTo(splitSample);
+    const tailChunks = this.chunksFrom(splitSample);
+    const tailStartMs = utteranceStartMs + Math.round((splitSample / SAMPLE_RATE) * 1000);
+    this.utteranceChunks = firstPartChunks;
+    this.utteranceSamples = firstPartChunks.reduce((s, c) => s + c.length, 0);
+    await this.commitUtterance();
+    this.utteranceChunks = tailChunks;
+    this.utteranceSamples = tailChunks.reduce((s, c) => s + c.length, 0);
+    this.utteranceStartTs = tailStartMs;
+    this.samplesAtLastCpCheck = this.utteranceSamples;
+    this.samplesAtLastPeek = this.utteranceSamples;
+  }
+
   /** Run a change-point check on the current accumulated buffer.
    *  If the embeddings of the first `changePointHeadTailSamples` (head) and
    *  the last `changePointHeadTailSamples` (tail) are > `changePointDistThreshold`
    *  apart, the buffer contains a speaker change. Split it: commit head+middle
-   *  as one utterance, restart accumulation with the tail. */
+   *  as one utterance, restart accumulation with the tail.
+   *
+   *  This is the LEGACY wespeaker-based detector. When pyannote
+   *  segmentation is enabled (`usePyannoteSegmentation`), it provides
+   *  earlier + more precise boundaries; we keep this path as a fallback
+   *  for the no-pyannote configuration. */
   private async checkAndSplitChangePoint(): Promise<void> {
     const totalSamples = this.utteranceSamples;
     const headWin = this.changePointHeadTailSamples;
@@ -688,6 +804,8 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.commitHistory.length = 0;
     this.commitRewrites.clear();
     this.clustering.reset();
+    this.pyannoteSegmenter?.reset();
+    this.pendingPyannoteBoundaries.length = 0;
   }
 
   /** Returns the transitive label-rewrite map accumulated over the session.
