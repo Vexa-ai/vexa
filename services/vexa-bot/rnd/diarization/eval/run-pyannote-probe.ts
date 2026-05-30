@@ -323,14 +323,77 @@ async function probeCorpus(
   };
 }
 
+async function probeSingleWavNoGT(
+  wavPath: string,
+  model: PreTrainedModel,
+  processor: Processor,
+) {
+  const samples = await readWav16kMono(wavPath);
+  const durS = samples.length / SAMPLE_RATE;
+  console.log(`[pyannote-probe] ${wavPath}  duration=${durS.toFixed(1)}s`);
+  const allBoundaries: DetectedBoundary[] = [];
+  let chunkStart = 0;
+  const totalSamples = samples.length;
+  const inferStart = Date.now();
+  let nChunks = 0;
+  while (chunkStart < totalSamples) {
+    const chunkEnd = Math.min(chunkStart + WIN_SAMPLES, totalSamples);
+    let chunk = samples.subarray(chunkStart, chunkEnd);
+    if (chunk.length < WIN_SAMPLES) {
+      const padded = new Float32Array(WIN_SAMPLES);
+      padded.set(chunk);
+      chunk = padded;
+    }
+    const chunkResult = await runChunk(model, processor, chunk, chunkStart / SAMPLE_RATE * 1000);
+    nChunks++;
+    const boundaries = extractBoundariesFromChunk(chunkResult);
+    const winMs = (WIN_SAMPLES / SAMPLE_RATE) * 1000;
+    const trustStart = chunkStart === 0 ? 0 : (chunkResult.chunkStartMs + winMs * 0.25);
+    const trustEnd = (chunkEnd >= totalSamples)
+      ? (totalSamples / SAMPLE_RATE) * 1000
+      : (chunkResult.chunkStartMs + winMs * 0.75);
+    for (const b of boundaries) {
+      if (b.tMs >= trustStart && b.tMs < trustEnd) allBoundaries.push(b);
+    }
+    chunkStart += HOP_SAMPLES;
+  }
+  const inferMs = Date.now() - inferStart;
+  const final = dedupBoundaries(allBoundaries, 100);
+  console.log();
+  console.log(`pyannote/segmentation-3.0 boundary detections — ${final.length} events from ${nChunks} chunks (${inferMs}ms total inference)`);
+  console.log();
+  for (const b of final) {
+    const s = b.tMs / 1000;
+    const mins = Math.floor(s / 60);
+    const secs = (s % 60).toFixed(2);
+    console.log(`  ${mins}:${secs.padStart(5, '0')}  (${b.tMs.toFixed(0).padStart(7)}ms)  ${b.kind.padEnd(16)}  conf=${b.confidence.toFixed(3)}`);
+  }
+  // Also print the current wespeaker change-point baseline's commits on
+  // the same wav, for side-by-side comparison.
+  console.log();
+  console.log(`Tip: compare to current wespeaker baseline via:`);
+  console.log(`  npx tsx eval/run-wav.ts ${wavPath}`);
+  return 0;
+}
+
 async function main(): Promise<number> {
-  const entries = await fs.readdir(CORPUS_DIR);
-  const wavs = entries.filter((e) => e.endsWith('.wav')).sort();
-  console.log(`[pyannote-probe] ${wavs.length} corpora — loading model ${PYANNOTE_MODEL}...`);
+  const arg = process.argv[2];
+  console.log(`[pyannote-probe] loading model ${PYANNOTE_MODEL}...`);
   const t0 = Date.now();
   const model = await AutoModel.from_pretrained(PYANNOTE_MODEL, { device: 'cpu' });
   const processor = await AutoProcessor.from_pretrained(PYANNOTE_MODEL);
   console.log(`[pyannote-probe] model loaded in ${Date.now() - t0}ms`);
+
+  // Single-file mode: just print the detected boundaries (no GT needed).
+  // Use when probing a captured-from-YouTube wav.
+  if (arg && arg.endsWith('.wav')) {
+    const abs = path.isAbsolute(arg) ? arg : path.resolve(process.cwd(), arg);
+    return probeSingleWavNoGT(abs, model, processor);
+  }
+
+  const entries = await fs.readdir(CORPUS_DIR);
+  const wavs = entries.filter((e) => e.endsWith('.wav')).sort();
+  console.log(`[pyannote-probe] ${wavs.length} corpora — scoring against ground-truth`);
 
   const allResults: Awaited<ReturnType<typeof probeCorpus>>[] = [];
   for (const wav of wavs) {
