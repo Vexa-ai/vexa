@@ -58,9 +58,17 @@ RUN npm install -g typescript
 # Copy TypeScript source and assets (default avatar logo)
 COPY core/src/ ./src/
 COPY core/assets/ ./assets/
+COPY core/scripts/ ./scripts/
 
 # Build TypeScript
 RUN npm run build
+
+# pack-msteams-diarization-cutover (#394): pre-download the diarization
+# ONNX models so the runtime container doesn't hit Hugging Face on
+# first bot start. ~32 MB into node_modules/@huggingface/transformers/
+# .cache; flows into the runtime stage via the existing
+# `COPY --from=ts-builder ./core/node_modules` line below.
+RUN node scripts/bake-diarization-models.js
 
 # Install Playwright browsers
 RUN npx playwright install-deps && npx playwright install --with-deps
