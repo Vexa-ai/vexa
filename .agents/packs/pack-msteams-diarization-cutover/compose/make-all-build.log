@@ -1,0 +1,16 @@
+.env is up to date.
+Auto-detected DOCKER_GID=998 (written to .env)
+Auto-set IMAGE_TAG=dev (branch=codex/pack-pack-msteams-diarization-cutover)
+
+  Vexa uses transcription.vexa.ai to process meeting audio.
+  If you use a different provider, edit .env and re-run make all.
+
+  Press Enter to continue: /bin/sh: 9: cannot open /dev/tty: No such device or address
+
+  Get your token at: https://vexa.ai/account
+
+  Paste your transcription token: /bin/sh: 14: cannot open /dev/tty: No such device or address
+
+  ✓ Token saved to .env
+  ✗ TRANSCRIPTION_SERVICE_TOKEN rejected (403). Token expired — get a new one.
+make: *** [Makefile:102: preflight] Error 1

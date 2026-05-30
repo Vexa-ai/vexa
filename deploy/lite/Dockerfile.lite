@@ -139,6 +139,10 @@ RUN ln -sf /app/vexa-bot /app/vexa-bot/core
 WORKDIR /app/vexa-bot
 RUN npm ci --omit=dev 2>/dev/null || npm install \
     && npm run build
+# pack-msteams-diarization-cutover (#394): pre-download diarization ONNX
+# models so the Lite container's first bot session doesn't hit Hugging
+# Face. ~32 MB into node_modules/@huggingface/transformers/.cache/.
+RUN node scripts/bake-diarization-models.js
 RUN npx playwright install msedge --with-deps || true
 RUN node build-browser-utils.js || true
 

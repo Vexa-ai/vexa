@@ -1,0 +1,1083 @@
+Building vexa-lite:dev for current platform...
+docker build -f /home/dima/dev/vexa-pack-pack-msteams-diarization-cutover/deploy/lite/Dockerfile.lite -t vexa-lite:dev /home/dima/dev/vexa-pack-pack-msteams-diarization-cutover/deploy/lite/../..
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile.lite
+#1 transferring dockerfile: 11.25kB done
+#1 WARN: UndefinedVar: Usage of undefined variable '$PYTHONPATH' (line 103)
+#1 WARN: SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "OPENAI_API_KEY") (line 242)
+#1 WARN: SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "MINIO_ACCESS_KEY") (line 256)
+#1 WARN: SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "MINIO_SECRET_KEY") (line 256)
+#1 WARN: SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "AWS_ACCESS_KEY_ID") (line 256)
+#1 WARN: SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "AWS_SECRET_ACCESS_KEY") (line 256)
+#1 DONE 0.0s
+
+#2 [internal] load metadata for mcr.microsoft.com/playwright:v1.56.0-jammy
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 76B done
+#3 DONE 0.0s
+
+#4 [ 1/49] FROM mcr.microsoft.com/playwright:v1.56.0-jammy
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 50.78MB 0.3s done
+#5 DONE 0.3s
+
+#6 [ 2/49] RUN apt-get update &&     apt-get install -y --no-install-recommends --fix-missing     python3     python3-pip     python3-venv     python3-dev     build-essential     gcc     g++     xvfb     x11vnc     novnc     python3-websockify     fluxbox     pulseaudio     ffmpeg     libsndfile1     supervisor     postgresql-client     redis-tools     redis-server     awscli     curl     wget     git     && apt-get clean     && rm -rf /var/lib/apt/lists/*     && usermod -aG pulse-access root
+#6 CACHED
+
+#7 [ 3/49] WORKDIR /app
+#7 CACHED
+
+#8 [ 4/49] RUN mkdir -p     /app/api-gateway     /app/admin-api     /app/meeting-api     /app/runtime-api     /app/agent-api     /app/vexa-bot     /app/mcp     /app/tts-service     /app/admin-models     /app/schema-sync     /var/log/supervisor     /var/log/vexa-bots     /var/lib/redis     /var/run/redis
+#8 CACHED
+
+#9 [ 5/49] COPY deploy/lite/requirements.txt /tmp/requirements.txt
+#9 DONE 0.1s
+
+#10 [ 6/49] COPY services/mcp/requirements.txt /tmp/requirements-mcp.txt
+#10 DONE 0.0s
+
+#11 [ 7/49] RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+#11 0.783 Collecting fastapi>=0.110
+#11 0.857   Downloading fastapi-0.136.3-py3-none-any.whl (117 kB)
+#11 0.881      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 117.5/117.5 KB 4.9 MB/s eta 0:00:00
+#11 0.929 Collecting uvicorn[standard]>=0.29
+#11 0.934   Downloading uvicorn-0.48.0-py3-none-any.whl (71 kB)
+#11 0.939      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 71.4/71.4 KB 14.5 MB/s eta 0:00:00
+#11 0.960 Collecting python-multipart>=0.0.20
+#11 0.965   Downloading python_multipart-0.0.29-py3-none-any.whl (29 kB)
+#11 1.232 Collecting pydantic[email]>=2.0
+#11 1.237   Downloading pydantic-2.13.4-py3-none-any.whl (472 kB)
+#11 1.261      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 472.3/472.3 KB 20.7 MB/s eta 0:00:00
+#11 1.336 Collecting pyyaml>=6.0
+#11 1.342   Downloading pyyaml-6.0.3-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (770 kB)
+#11 1.369      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 770.3/770.3 KB 30.2 MB/s eta 0:00:00
+#11 2.041 Collecting SQLAlchemy[asyncio]>=2.0
+#11 2.048   Downloading sqlalchemy-2.0.50-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.2 MB)
+#11 2.110      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.2/3.2 MB 54.9 MB/s eta 0:00:00
+#11 2.272 Collecting psycopg2-binary>=2.9
+#11 2.278   Downloading psycopg2_binary-2.9.12-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.3 MB)
+#11 2.325      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.3/4.3 MB 98.2 MB/s eta 0:00:00
+#11 2.460 Collecting asyncpg>=0.29
+#11 2.467   Downloading asyncpg-0.31.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (2.9 MB)
+#11 2.589      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.9/2.9 MB 24.0 MB/s eta 0:00:00
+#11 2.671 Collecting alembic>=1.13
+#11 2.678   Downloading alembic-1.18.4-py3-none-any.whl (263 kB)
+#11 2.680      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 263.9/263.9 KB 366.2 MB/s eta 0:00:00
+#11 2.744 Collecting redis[hiredis]>=5.0
+#11 2.750   Downloading redis-8.0.0-py3-none-any.whl (499 kB)
+#11 2.755      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 499.9/499.9 KB 130.8 MB/s eta 0:00:00
+#11 2.789 Collecting httpx>=0.28.1
+#11 2.794   Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+#11 2.796      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.5/73.5 KB 321.9 MB/s eta 0:00:00
+#11 2.916 Collecting h11>=0.16.0
+#11 2.921   Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#11 2.962 Collecting requests>=2.31
+#11 2.968   Downloading requests-2.34.2-py3-none-any.whl (73 kB)
+#11 2.969      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.1/73.1 KB 368.3 MB/s eta 0:00:00
+#11 3.091 Collecting requests-unixsocket>=0.3
+#11 3.098   Downloading requests_unixsocket-0.4.1-py3-none-any.whl (11 kB)
+#11 3.790 Collecting boto3>=1.34
+#11 3.790   Downloading boto3-1.43.18-py3-none-any.whl (140 kB)
+#11 3.794      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 140.5/140.5 KB 193.6 MB/s eta 0:00:00
+#11 4.110 Collecting websockets>=11.0
+#11 4.116   Downloading websockets-16.0-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (183 kB)
+#11 4.120      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 183.8/183.8 KB 216.7 MB/s eta 0:00:00
+#11 4.269 Collecting croniter>=2.0
+#11 4.276   Downloading croniter-6.2.2-py3-none-any.whl (45 kB)
+#11 4.278      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 45.4/45.4 KB 339.8 MB/s eta 0:00:00
+#11 4.405 Collecting piper-tts>=1.4.0
+#11 4.412   Downloading piper_tts-1.4.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux_2_28_x86_64.whl (13.8 MB)
+#11 4.546      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.8/13.8 MB 109.2 MB/s eta 0:00:00
+#11 4.570 Requirement already satisfied: numpy>=1.21.0 in /usr/lib/python3/dist-packages (from -r /tmp/requirements.txt (line 43)) (1.21.5)
+#11 4.688 Collecting langdetect>=1.0.9
+#11 4.695   Downloading langdetect-1.0.9.tar.gz (981 kB)
+#11 4.712      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 981.5/981.5 KB 67.5 MB/s eta 0:00:00
+#11 4.778   Preparing metadata (setup.py): started
+#11 4.921   Preparing metadata (setup.py): finished with status 'done'
+#11 4.962 Collecting python-dotenv>=1.2.1
+#11 4.974   Downloading python_dotenv-1.2.2-py3-none-any.whl (22 kB)
+#11 5.096 Collecting email-validator>=2.0
+#11 5.103   Downloading email_validator-2.3.0-py3-none-any.whl (35 kB)
+#11 5.142 Collecting Mako>=1.3.12
+#11 5.148   Downloading mako-1.3.12-py3-none-any.whl (78 kB)
+#11 5.151      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 78.5/78.5 KB 229.4 MB/s eta 0:00:00
+#11 5.348 Collecting typing-inspection>=0.4.2
+#11 5.353   Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
+#11 5.404 Collecting starlette>=0.46.0
+#11 5.409   Downloading starlette-1.2.0-py3-none-any.whl (73 kB)
+#11 5.411      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.2/73.2 KB 323.6 MB/s eta 0:00:00
+#11 5.522 Collecting annotated-doc>=0.0.2
+#11 5.528   Downloading annotated_doc-0.0.4-py3-none-any.whl (5.3 kB)
+#11 5.573 Collecting typing-extensions>=4.8.0
+#11 5.579   Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+#11 5.582      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 44.6/44.6 KB 207.2 MB/s eta 0:00:00
+#11 5.642 Collecting click>=7.0
+#11 5.647   Downloading click-8.4.1-py3-none-any.whl (116 kB)
+#11 5.649      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 116.6/116.6 KB 353.7 MB/s eta 0:00:00
+#11 5.825 Collecting watchfiles>=0.20
+#11 5.831   Downloading watchfiles-1.2.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (457 kB)
+#11 5.837      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 457.1/457.1 KB 137.7 MB/s eta 0:00:00
+#11 5.911 Collecting httptools>=0.6.3
+#11 5.918   Downloading httptools-0.8.0-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (450 kB)
+#11 5.923      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 450.0/450.0 KB 138.3 MB/s eta 0:00:00
+#11 5.999 Collecting uvloop>=0.15.1
+#11 6.005   Downloading uvloop-0.22.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.7 MB)
+#11 6.037      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.7/3.7 MB 128.8 MB/s eta 0:00:00
+#11 7.699 Collecting pydantic-core==2.46.4
+#11 7.706   Downloading pydantic_core-2.46.4-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+#11 7.725      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 126.7 MB/s eta 0:00:00
+#11 7.747 Collecting annotated-types>=0.6.0
+#11 7.755   Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
+#11 8.195 Collecting greenlet>=1
+#11 8.201   Downloading greenlet-3.5.1-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (612 kB)
+#11 8.208      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 612.9/612.9 KB 129.4 MB/s eta 0:00:00
+#11 8.231 Collecting async_timeout>=4.0.3
+#11 8.236   Downloading async_timeout-5.0.1-py3-none-any.whl (6.2 kB)
+#11 8.286 Collecting tomli
+#11 8.297   Downloading tomli-2.4.1-py3-none-any.whl (14 kB)
+#11 8.639 Collecting hiredis>=3.2.0
+#11 8.646   Downloading hiredis-3.3.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (168 kB)
+#11 8.651      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 168.8/168.8 KB 49.3 MB/s eta 0:00:00
+#11 8.800 Collecting httpcore==1.*
+#11 8.806   Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+#11 8.809      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 78.8/78.8 KB 255.2 MB/s eta 0:00:00
+#11 8.811 Requirement already satisfied: idna in /usr/lib/python3/dist-packages (from httpx>=0.28.1->-r /tmp/requirements.txt (line 27)) (3.3)
+#11 8.970 Collecting anyio
+#11 8.976   Downloading anyio-4.13.0-py3-none-any.whl (114 kB)
+#11 8.980      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 114.4/114.4 KB 216.4 MB/s eta 0:00:00
+#11 8.982 Requirement already satisfied: certifi in /usr/lib/python3/dist-packages (from httpx>=0.28.1->-r /tmp/requirements.txt (line 27)) (2020.6.20)
+#11 9.003 Requirement already satisfied: urllib3<3,>=1.26 in /usr/lib/python3/dist-packages (from requests>=2.31->-r /tmp/requirements.txt (line 29)) (1.26.5)
+#11 9.232 Collecting charset_normalizer<4,>=2
+#11 9.238   Downloading charset_normalizer-3.4.7-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (216 kB)
+#11 9.241      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 216.9/216.9 KB 375.8 MB/s eta 0:00:00
+#11 9.271 Collecting certifi
+#11 9.276   Downloading certifi-2026.5.20-py3-none-any.whl (134 kB)
+#11 9.278      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 134.1/134.1 KB 377.2 MB/s eta 0:00:00
+#11 10.20 Collecting botocore<1.44.0,>=1.43.18
+#11 10.21   Downloading botocore-1.43.18-py3-none-any.whl (15.1 MB)
+#11 10.34      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.1/15.1 MB 117.1 MB/s eta 0:00:00
+#11 10.38 Requirement already satisfied: jmespath<2.0.0,>=0.7.1 in /usr/lib/python3/dist-packages (from boto3>=1.34->-r /tmp/requirements.txt (line 33)) (0.10.0)
+#11 10.51 Collecting s3transfer<0.19.0,>=0.18.0
+#11 10.52   Downloading s3transfer-0.18.0-py3-none-any.whl (88 kB)
+#11 10.52      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 88.6/88.6 KB 376.3 MB/s eta 0:00:00
+#11 10.52 Requirement already satisfied: python-dateutil in /usr/lib/python3/dist-packages (from croniter>=2.0->-r /tmp/requirements.txt (line 39)) (2.8.1)
+#11 10.70 Collecting pathvalidate<4,>=3
+#11 10.70   Downloading pathvalidate-3.3.1-py3-none-any.whl (24 kB)
+#11 10.97 Collecting onnxruntime<2,>=1
+#11 10.98   Downloading onnxruntime-1.23.2-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (17.4 MB)
+#11 11.14      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 17.4/17.4 MB 120.7 MB/s eta 0:00:00
+#11 11.17 Requirement already satisfied: six in /usr/lib/python3/dist-packages (from langdetect>=1.0.9->-r /tmp/requirements.txt (line 44)) (1.16.0)
+#11 11.31 Collecting dnspython>=2.0.0
+#11 11.31   Downloading dnspython-2.8.0-py3-none-any.whl (331 kB)
+#11 11.32      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 331.1/331.1 KB 277.3 MB/s eta 0:00:00
+#11 11.45 Collecting MarkupSafe>=0.9.2
+#11 11.46   Downloading markupsafe-3.0.3-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (20 kB)
+#11 11.99 Collecting protobuf
+#11 12.00   Downloading protobuf-7.35.0-cp310-abi3-manylinux2014_x86_64.whl (327 kB)
+#11 12.00      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 327.1/327.1 KB 217.1 MB/s eta 0:00:00
+#11 12.13 Collecting coloredlogs
+#11 12.13   Downloading coloredlogs-15.0.1-py2.py3-none-any.whl (46 kB)
+#11 12.13      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 46.0/46.0 KB 283.6 MB/s eta 0:00:00
+#11 12.16 Collecting sympy
+#11 12.17   Downloading sympy-1.14.0-py3-none-any.whl (6.3 MB)
+#11 12.21      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.3/6.3 MB 137.6 MB/s eta 0:00:00
+#11 12.24 Requirement already satisfied: packaging in /usr/lib/python3/dist-packages (from onnxruntime<2,>=1->piper-tts>=1.4.0->-r /tmp/requirements.txt (line 42)) (21.3)
+#11 12.36 Collecting flatbuffers
+#11 12.37   Downloading flatbuffers-25.12.19-py2.py3-none-any.whl (26 kB)
+#11 12.86 Collecting numpy>=1.21.0
+#11 12.87   Downloading numpy-2.2.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (16.8 MB)
+#11 13.30      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.8/16.8 MB 26.7 MB/s eta 0:00:00
+#11 13.51 Collecting exceptiongroup>=1.0.2
+#11 13.51   Downloading exceptiongroup-1.3.1-py3-none-any.whl (16 kB)
+#11 13.70 Collecting humanfriendly>=9.1
+#11 13.71   Downloading humanfriendly-10.0-py2.py3-none-any.whl (86 kB)
+#11 13.71      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 86.8/86.8 KB 272.4 MB/s eta 0:00:00
+#11 13.85 Collecting mpmath<1.4,>=1.1.0
+#11 13.85   Downloading mpmath-1.3.0-py3-none-any.whl (536 kB)
+#11 13.86      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 536.2/536.2 KB 226.7 MB/s eta 0:00:00
+#11 13.89 Building wheels for collected packages: langdetect
+#11 13.89   Building wheel for langdetect (setup.py): started
+#11 14.23   Building wheel for langdetect (setup.py): finished with status 'done'
+#11 14.23   Created wheel for langdetect: filename=langdetect-1.0.9-py3-none-any.whl size=993242 sha256=7ef8c994af398f7189631789569fb38acc29df126452158a5e8d315b2732e2bb
+#11 14.23   Stored in directory: /tmp/pip-ephem-wheel-cache-cxz33xiw/wheels/95/03/7d/59ea870c70ce4e5a370638b5462a7711ab78fba2f655d05106
+#11 14.23 Successfully built langdetect
+#11 14.62 Installing collected packages: mpmath, flatbuffers, websockets, uvloop, typing-extensions, tomli, sympy, pyyaml, python-multipart, python-dotenv, psycopg2-binary, protobuf, pathvalidate, numpy, MarkupSafe, langdetect, humanfriendly, httptools, hiredis, h11, greenlet, dnspython, croniter, click, charset_normalizer, certifi, botocore, async_timeout, annotated-types, annotated-doc, uvicorn, typing-inspection, SQLAlchemy, s3transfer, requests, redis, pydantic-core, Mako, httpcore, exceptiongroup, email-validator, coloredlogs, asyncpg, requests-unixsocket, pydantic, onnxruntime, boto3, anyio, alembic, watchfiles, starlette, piper-tts, httpx, fastapi
+#11 18.26   Attempting uninstall: pyyaml
+#11 18.26     Found existing installation: PyYAML 5.4.1
+#11 18.26     Not uninstalling pyyaml at /usr/lib/python3/dist-packages, outside environment /usr
+#11 18.26     Can't uninstall 'PyYAML'. No files were found to uninstall.
+#11 18.49   Attempting uninstall: numpy
+#11 18.49     Found existing installation: numpy 1.21.5
+#11 18.49     Not uninstalling numpy at /usr/lib/python3/dist-packages, outside environment /usr
+#11 18.49     Can't uninstall 'numpy'. No files were found to uninstall.
+#11 20.18   Attempting uninstall: certifi
+#11 20.18     Found existing installation: certifi 2020.6.20
+#11 20.18     Not uninstalling certifi at /usr/lib/python3/dist-packages, outside environment /usr
+#11 20.18     Can't uninstall 'certifi'. No files were found to uninstall.
+#11 20.19   Attempting uninstall: botocore
+#11 20.19     Found existing installation: botocore 1.23.34
+#11 20.19     Not uninstalling botocore at /usr/lib/python3/dist-packages, outside environment /usr
+#11 20.19     Can't uninstall 'botocore'. No files were found to uninstall.
+#11 21.36   Attempting uninstall: s3transfer
+#11 21.36     Found existing installation: s3transfer 0.5.0
+#11 21.36     Not uninstalling s3transfer at /usr/lib/python3/dist-packages, outside environment /usr
+#11 21.36     Can't uninstall 's3transfer'. No files were found to uninstall.
+#11 21.39   Attempting uninstall: requests
+#11 21.39     Found existing installation: requests 2.25.1
+#11 21.39     Not uninstalling requests at /usr/lib/python3/dist-packages, outside environment /usr
+#11 21.39     Can't uninstall 'requests'. No files were found to uninstall.
+#11 23.23 Successfully installed Mako-1.3.12 MarkupSafe-3.0.3 SQLAlchemy-2.0.50 alembic-1.18.4 annotated-doc-0.0.4 annotated-types-0.7.0 anyio-4.13.0 async_timeout-5.0.1 asyncpg-0.31.0 boto3-1.43.18 botocore-1.43.18 certifi-2026.5.20 charset_normalizer-3.4.7 click-8.4.1 coloredlogs-15.0.1 croniter-6.2.2 dnspython-2.8.0 email-validator-2.3.0 exceptiongroup-1.3.1 fastapi-0.136.3 flatbuffers-25.12.19 greenlet-3.5.1 h11-0.16.0 hiredis-3.3.1 httpcore-1.0.9 httptools-0.8.0 httpx-0.28.1 humanfriendly-10.0 langdetect-1.0.9 mpmath-1.3.0 numpy-2.2.6 onnxruntime-1.23.2 pathvalidate-3.3.1 piper-tts-1.4.2 protobuf-7.35.0 psycopg2-binary-2.9.12 pydantic-2.13.4 pydantic-core-2.46.4 python-dotenv-1.2.2 python-multipart-0.0.29 pyyaml-6.0.3 redis-8.0.0 requests-2.34.2 requests-unixsocket-0.4.1 s3transfer-0.18.0 starlette-1.2.0 sympy-1.14.0 tomli-2.4.1 typing-extensions-4.15.0 typing-inspection-0.4.2 uvicorn-0.48.0 uvloop-0.22.1 watchfiles-1.2.0 websockets-16.0
+#11 23.23 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+#11 DONE 24.2s
+
+#12 [ 8/49] RUN pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
+#12 0.696 Requirement already satisfied: fastapi>=0.100.0 in /usr/local/lib/python3.10/dist-packages (from -r /tmp/requirements-mcp.txt (line 1)) (0.136.3)
+#12 0.697 Requirement already satisfied: uvicorn>=0.22.0 in /usr/local/lib/python3.10/dist-packages (from -r /tmp/requirements-mcp.txt (line 2)) (0.48.0)
+#12 0.697 Requirement already satisfied: httpx>=0.28.1 in /usr/local/lib/python3.10/dist-packages (from -r /tmp/requirements-mcp.txt (line 3)) (0.28.1)
+#12 0.698 Requirement already satisfied: h11>=0.16.0 in /usr/local/lib/python3.10/dist-packages (from -r /tmp/requirements-mcp.txt (line 4)) (0.16.0)
+#12 0.698 Requirement already satisfied: pydantic>=2.0.0 in /usr/local/lib/python3.10/dist-packages (from -r /tmp/requirements-mcp.txt (line 5)) (2.13.4)
+#12 0.698 Requirement already satisfied: python-dotenv>=1.0.0 in /usr/local/lib/python3.10/dist-packages (from -r /tmp/requirements-mcp.txt (line 6)) (1.2.2)
+#12 0.889 Collecting fastapi-mcp
+#12 0.960   Downloading fastapi_mcp-0.4.0-py3-none-any.whl (25 kB)
+#12 0.986 Requirement already satisfied: typing-inspection>=0.4.2 in /usr/local/lib/python3.10/dist-packages (from fastapi>=0.100.0->-r /tmp/requirements-mcp.txt (line 1)) (0.4.2)
+#12 0.987 Requirement already satisfied: annotated-doc>=0.0.2 in /usr/local/lib/python3.10/dist-packages (from fastapi>=0.100.0->-r /tmp/requirements-mcp.txt (line 1)) (0.0.4)
+#12 0.987 Requirement already satisfied: starlette>=0.46.0 in /usr/local/lib/python3.10/dist-packages (from fastapi>=0.100.0->-r /tmp/requirements-mcp.txt (line 1)) (1.2.0)
+#12 0.988 Requirement already satisfied: typing-extensions>=4.8.0 in /usr/local/lib/python3.10/dist-packages (from fastapi>=0.100.0->-r /tmp/requirements-mcp.txt (line 1)) (4.15.0)
+#12 0.995 Requirement already satisfied: click>=7.0 in /usr/local/lib/python3.10/dist-packages (from uvicorn>=0.22.0->-r /tmp/requirements-mcp.txt (line 2)) (8.4.1)
+#12 1.002 Requirement already satisfied: idna in /usr/lib/python3/dist-packages (from httpx>=0.28.1->-r /tmp/requirements-mcp.txt (line 3)) (3.3)
+#12 1.002 Requirement already satisfied: httpcore==1.* in /usr/local/lib/python3.10/dist-packages (from httpx>=0.28.1->-r /tmp/requirements-mcp.txt (line 3)) (1.0.9)
+#12 1.003 Requirement already satisfied: certifi in /usr/local/lib/python3.10/dist-packages (from httpx>=0.28.1->-r /tmp/requirements-mcp.txt (line 3)) (2026.5.20)
+#12 1.003 Requirement already satisfied: anyio in /usr/local/lib/python3.10/dist-packages (from httpx>=0.28.1->-r /tmp/requirements-mcp.txt (line 3)) (4.13.0)
+#12 1.012 Requirement already satisfied: pydantic-core==2.46.4 in /usr/local/lib/python3.10/dist-packages (from pydantic>=2.0.0->-r /tmp/requirements-mcp.txt (line 5)) (2.46.4)
+#12 1.013 Requirement already satisfied: annotated-types>=0.6.0 in /usr/local/lib/python3.10/dist-packages (from pydantic>=2.0.0->-r /tmp/requirements-mcp.txt (line 5)) (0.7.0)
+#12 1.241 Collecting rich>=13.0.0
+#12 1.247   Downloading rich-15.0.0-py3-none-any.whl (310 kB)
+#12 1.279      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 310.7/310.7 KB 10.5 MB/s eta 0:00:00
+#12 1.282 Requirement already satisfied: requests>=2.25.0 in /usr/local/lib/python3.10/dist-packages (from fastapi-mcp->-r /tmp/requirements-mcp.txt (line 7)) (2.34.2)
+#12 1.322 Collecting typer>=0.9.0
+#12 1.327   Downloading typer-0.26.4-py3-none-any.whl (122 kB)
+#12 1.336      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 122.4/122.4 KB 17.1 MB/s eta 0:00:00
+#12 1.361 Collecting pydantic-settings>=2.5.2
+#12 1.366   Downloading pydantic_settings-2.14.1-py3-none-any.whl (60 kB)
+#12 1.371      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 61.0/61.0 KB 16.5 MB/s eta 0:00:00
+#12 1.512 Collecting mcp>=1.12.0
+#12 1.518   Downloading mcp-1.27.2-py3-none-any.whl (220 kB)
+#12 1.531      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 220.5/220.5 KB 20.3 MB/s eta 0:00:00
+#12 1.535 Requirement already satisfied: tomli>=2.2.1 in /usr/local/lib/python3.10/dist-packages (from fastapi-mcp->-r /tmp/requirements-mcp.txt (line 7)) (2.4.1)
+#12 1.687 Collecting httpx-sse>=0.4
+#12 1.694   Downloading httpx_sse-0.4.3-py3-none-any.whl (9.0 kB)
+#12 1.736 Collecting pyjwt[crypto]>=2.10.1
+#12 1.743   Downloading pyjwt-2.13.0-py3-none-any.whl (31 kB)
+#12 1.892 Collecting sse-starlette>=1.6.1
+#12 1.900   Downloading sse_starlette-3.4.4-py3-none-any.whl (16 kB)
+#12 1.903 Requirement already satisfied: python-multipart>=0.0.9 in /usr/local/lib/python3.10/dist-packages (from mcp>=1.12.0->fastapi-mcp->-r /tmp/requirements-mcp.txt (line 7)) (0.0.29)
+#12 2.061 Collecting jsonschema>=4.20.0
+#12 2.068   Downloading jsonschema-4.26.0-py3-none-any.whl (90 kB)
+#12 2.074      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 90.6/90.6 KB 25.6 MB/s eta 0:00:00
+#12 2.086 Requirement already satisfied: exceptiongroup>=1.0.2 in /usr/local/lib/python3.10/dist-packages (from anyio->httpx>=0.28.1->-r /tmp/requirements-mcp.txt (line 3)) (1.3.1)
+#12 2.124 Requirement already satisfied: urllib3<3,>=1.26 in /usr/lib/python3/dist-packages (from requests>=2.25.0->fastapi-mcp->-r /tmp/requirements-mcp.txt (line 7)) (1.26.5)
+#12 2.124 Requirement already satisfied: charset_normalizer<4,>=2 in /usr/local/lib/python3.10/dist-packages (from requests>=2.25.0->fastapi-mcp->-r /tmp/requirements-mcp.txt (line 7)) (3.4.7)
+#12 2.162 Collecting pygments<3.0.0,>=2.13.0
+#12 2.170   Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
+#12 2.212      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 30.6 MB/s eta 0:00:00
+#12 2.363 Collecting markdown-it-py>=2.2.0
+#12 2.369   Downloading markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+#12 2.372      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 91.7/91.7 KB 241.3 MB/s eta 0:00:00
+#12 2.427 Collecting shellingham>=1.3.0
+#12 2.434   Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+#12 3.215 Collecting rpds-py>=0.25.0
+#12 3.222   Downloading rpds_py-0.30.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (390 kB)
+#12 3.230      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 390.5/390.5 KB 54.0 MB/s eta 0:00:00
+#12 3.352 Collecting jsonschema-specifications>=2023.03.6
+#12 3.358   Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
+#12 3.518 Collecting referencing>=0.28.4
+#12 3.523   Downloading referencing-0.37.0-py3-none-any.whl (26 kB)
+#12 3.554 Collecting attrs>=22.2.0
+#12 3.559   Downloading attrs-26.1.0-py3-none-any.whl (67 kB)
+#12 3.562      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 67.5/67.5 KB 283.0 MB/s eta 0:00:00
+#12 3.703 Collecting mdurl~=0.1
+#12 3.708   Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+#12 3.717 Requirement already satisfied: cryptography>=3.4.0 in /usr/lib/python3/dist-packages (from pyjwt[crypto]>=2.10.1->mcp>=1.12.0->fastapi-mcp->-r /tmp/requirements-mcp.txt (line 7)) (3.4.8)
+#12 3.974 Installing collected packages: shellingham, rpds-py, pyjwt, pygments, mdurl, httpx-sse, attrs, referencing, markdown-it-py, rich, pydantic-settings, jsonschema-specifications, typer, sse-starlette, jsonschema, mcp, fastapi-mcp
+#12 4.965 Successfully installed attrs-26.1.0 fastapi-mcp-0.4.0 httpx-sse-0.4.3 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 markdown-it-py-4.2.0 mcp-1.27.2 mdurl-0.1.2 pydantic-settings-2.14.1 pygments-2.20.0 pyjwt-2.13.0 referencing-0.37.0 rich-15.0.0 rpds-py-0.30.0 shellingham-1.5.4 sse-starlette-3.4.4 typer-0.26.4
+#12 4.965 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+#12 DONE 5.1s
+
+#13 [ 9/49] RUN rm -f /tmp/requirements-*.txt
+#13 DONE 0.5s
+
+#14 [10/49] COPY libs/schema-sync /app/schema-sync
+#14 DONE 0.0s
+
+#15 [11/49] COPY libs/admin-models /app/admin-models
+#15 DONE 0.1s
+
+#16 [12/49] COPY services/meeting-api/ /app/meeting-api/
+#16 DONE 0.0s
+
+#17 [13/49] RUN python3 -c "from admin_models.models import User; print('admin_models OK')"     && python3 -c "from meeting_api.schemas import Platform; print('meeting_api OK')"
+#17 0.574 admin_models OK
+#17 0.791 meeting_api OK
+#17 DONE 0.8s
+
+#18 [14/49] COPY services/api-gateway/ /app/api-gateway/
+#18 DONE 0.0s
+
+#19 [15/49] COPY services/admin-api/ /app/admin-api/
+#19 DONE 0.1s
+
+#20 [16/49] COPY services/runtime-api/ /app/runtime-api/
+#20 DONE 0.0s
+
+#21 [17/49] COPY services/agent-api/ /app/agent-api/
+#21 DONE 0.0s
+
+#22 [18/49] COPY services/mcp/ /app/mcp/
+#22 DONE 0.0s
+
+#23 [19/49] COPY services/tts-service/ /app/tts-service/
+#23 DONE 0.0s
+
+#24 [20/49] COPY services/vexa-bot/core/ /app/vexa-bot/
+#24 DONE 0.2s
+
+#25 [21/49] RUN chmod +x /app/vexa-bot/entrypoint.sh
+#25 DONE 0.3s
+
+#26 [22/49] RUN ln -sf /app/vexa-bot /app/vexa-bot/core
+#26 DONE 0.5s
+
+#27 [23/49] WORKDIR /app/vexa-bot
+#27 DONE 0.0s
+
+#28 [24/49] RUN npm ci --omit=dev 2>/dev/null || npm install     && npm run build
+#28 15.36 npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+#28 15.36 npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+#28 15.37 npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+#28 15.38 npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+#28 27.49 
+#28 27.49 added 205 packages, and audited 214 packages in 27s
+#28 27.49 
+#28 27.49 26 packages are looking for funding
+#28 27.49   run `npm fund` for details
+#28 27.49 
+#28 27.49 found 0 vulnerabilities
+#28 27.62 
+#28 27.62 > bot-core@1.0.0 build
+#28 27.62 > tsc && cp -r src/services/hallucinations dist/services/hallucinations && node build-browser-utils.js
+#28 27.62 
+#28 32.40 ✅ Browser utilities bundle created: /app/vexa-bot/dist/browser-utils.global.js
+#28 32.40 📦 Bundle includes:
+#28 32.40   - BrowserAudioService
+#28 32.40   - BrowserMediaRecorderPipeline
+#28 32.40   - BrowserWhisperLiveService
+#28 32.40   - generateBrowserUUID
+#28 32.40   - window.VexaBrowserUtils
+#28 32.40   - window.performLeaveAction
+#28 DONE 32.8s
+
+#29 [25/49] RUN node scripts/bake-diarization-models.js
+#29 0.466 [bake] onnx-community/pyannote-segmentation-3.0 — downloading processor...
+#29 0.720 [bake] onnx-community/pyannote-segmentation-3.0 — downloading model...
+#29 1.185 [bake] onnx-community/pyannote-segmentation-3.0 — done (721 ms)
+#29 1.185 [bake] onnx-community/wespeaker-voxceleb-resnet34-LM — downloading processor...
+#29 1.336 [bake] onnx-community/wespeaker-voxceleb-resnet34-LM — downloading model...
+#29 1.827 [bake] onnx-community/wespeaker-voxceleb-resnet34-LM — done (642 ms)
+#29 1.827 [bake] all models cached
+#29 DONE 1.9s
+
+#30 [26/49] RUN npx playwright install msedge --with-deps || true
+#30 1.126 Installing dependencies...
+#30 1.243 Get:1 http://archive.ubuntu.com/ubuntu jammy InRelease [270 kB]
+#30 1.246 Get:2 http://security.ubuntu.com/ubuntu jammy-security InRelease [129 kB]
+#30 1.289 Get:3 https://deb.nodesource.com/node_22.x nodistro InRelease [12.1 kB]
+#30 1.362 Get:4 https://deb.nodesource.com/node_22.x nodistro/main amd64 Packages [9970 B]
+#30 1.407 Get:5 http://archive.ubuntu.com/ubuntu jammy-updates InRelease [128 kB]
+#30 1.453 Get:6 http://security.ubuntu.com/ubuntu jammy-security/restricted amd64 Packages [7090 kB]
+#30 1.454 Get:7 http://archive.ubuntu.com/ubuntu jammy-backports InRelease [127 kB]
+#30 1.525 Get:8 http://security.ubuntu.com/ubuntu jammy-security/main amd64 Packages [3959 kB]
+#30 1.549 Get:9 http://archive.ubuntu.com/ubuntu jammy/restricted amd64 Packages [164 kB]
+#30 1.553 Get:10 http://security.ubuntu.com/ubuntu jammy-security/multiverse amd64 Packages [77.8 kB]
+#30 1.566 Get:11 http://archive.ubuntu.com/ubuntu jammy/main amd64 Packages [1792 kB]
+#30 1.567 Get:12 http://security.ubuntu.com/ubuntu jammy-security/universe amd64 Packages [1297 kB]
+#30 1.586 Get:13 http://archive.ubuntu.com/ubuntu jammy/multiverse amd64 Packages [266 kB]
+#30 1.601 Get:14 http://archive.ubuntu.com/ubuntu jammy/universe amd64 Packages [17.5 MB]
+#30 1.727 Get:15 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages [4311 kB]
+#30 1.755 Get:16 http://archive.ubuntu.com/ubuntu jammy-updates/restricted amd64 Packages [7400 kB]
+#30 1.819 Get:17 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 Packages [1605 kB]
+#30 1.830 Get:18 http://archive.ubuntu.com/ubuntu jammy-updates/multiverse amd64 Packages [86.4 kB]
+#30 1.839 Get:19 http://archive.ubuntu.com/ubuntu jammy-backports/universe amd64 Packages [35.6 kB]
+#30 1.846 Get:20 http://archive.ubuntu.com/ubuntu jammy-backports/main amd64 Packages [82.8 kB]
+#30 2.837 Fetched 46.3 MB in 2s (27.8 MB/s)
+#30 2.837 Reading package lists...
+#30 3.790 Reading package lists...
+#30 4.656 Building dependency tree...
+#30 4.902 Reading state information...
+#30 5.128 fonts-freefont-ttf is already the newest version (20120503-10build1).
+#30 5.128 fonts-liberation is already the newest version (1:1.07.4-11).
+#30 5.128 libfontconfig1 is already the newest version (2.13.1-4.2ubuntu5).
+#30 5.128 xfonts-scalable is already the newest version (1:1.0.3-1.2ubuntu1).
+#30 5.128 fonts-ipafont-gothic is already the newest version (00303-21ubuntu1).
+#30 5.128 fonts-tlwg-loma-otf is already the newest version (1:0.7.3-1).
+#30 5.128 fonts-unifont is already the newest version (1:14.0.01-1).
+#30 5.128 fonts-wqy-zenhei is already the newest version (0.9.45-8).
+#30 5.128 xfonts-cyrillic is already the newest version (1:1.0.5).
+#30 5.128 fonts-noto-color-emoji is already the newest version (2.047-0ubuntu0.22.04.1).
+#30 5.128 libfreetype6 is already the newest version (2.11.1+dfsg-1ubuntu0.3).
+#30 5.128 xvfb is already the newest version (2:21.1.4-2ubuntu1.7~22.04.16).
+#30 5.128 0 upgraded, 0 newly installed, 0 to remove and 72 not upgraded.
+#30 5.141 ++ arch
+#30 5.142 + [[ x86_64 == \a\a\r\c\h\6\4 ]]
+#30 5.142 + '[' -z '' ']'
+#30 5.142 + [[ ! -f /etc/os-release ]]
+#30 5.143 ++ bash -c 'source /etc/os-release && echo $ID'
+#30 5.144 + ID=ubuntu
+#30 5.144 + [[ ubuntu != \u\b\u\n\t\u ]]
+#30 5.145 + dpkg --get-selections
+#30 5.145 + grep -q '^microsoft-edge-stable[[:space:]]*install$'
+#30 5.154 + command -v curl
+#30 5.155 + command -v gpg
+#30 5.155 + curl https://packages.microsoft.com/keys/microsoft.asc
+#30 5.155 + gpg --dearmor
+#30 5.163   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+#30 5.163                                  Dload  Upload   Total   Spent    Left  Speed
+#30 5.163   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100   975  100   975    0     0   4316      0 --:--:-- --:--:-- --:--:--  4333
+#30 5.393 + install -o root -g root -m 644 /tmp/microsoft.gpg /etc/apt/trusted.gpg.d/
+#30 5.395 + sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge-stable.list'
+#30 5.396 + rm /tmp/microsoft.gpg
+#30 5.397 + apt-get update
+#30 5.565 Hit:1 http://security.ubuntu.com/ubuntu jammy-security InRelease
+#30 5.567 Hit:2 http://archive.ubuntu.com/ubuntu jammy InRelease
+#30 5.600 Hit:3 https://deb.nodesource.com/node_22.x nodistro InRelease
+#30 5.622 Hit:4 http://archive.ubuntu.com/ubuntu jammy-updates InRelease
+#30 5.672 Hit:5 http://archive.ubuntu.com/ubuntu jammy-backports InRelease
+#30 5.713 Get:6 https://packages.microsoft.com/repos/edge stable InRelease [3590 B]
+#30 6.106 Get:7 https://packages.microsoft.com/repos/edge stable/main amd64 Packages [36.2 kB]
+#30 6.148 Fetched 39.8 kB in 1s (58.9 kB/s)
+#30 6.148 Reading package lists...
+#30 7.052 + apt-get install -y microsoft-edge-stable
+#30 7.110 Reading package lists...
+#30 7.982 Building dependency tree...
+#30 8.222 Reading state information...
+#30 8.421 The following additional packages will be installed:
+#30 8.421   libauthen-sasl-perl libclone-perl libdata-dump-perl libencode-locale-perl
+#30 8.421   libfile-basedir-perl libfile-desktopentry-perl libfile-listing-perl
+#30 8.421   libfile-mimeinfo-perl libfont-afm-perl libgtkd-3-0 libhtml-form-perl
+#30 8.421   libhtml-format-perl libhtml-parser-perl libhtml-tagset-perl
+#30 8.421   libhtml-tree-perl libhttp-cookies-perl libhttp-daemon-perl libhttp-date-perl
+#30 8.421   libhttp-message-perl libhttp-negotiate-perl libio-html-perl
+#30 8.421   libio-socket-ssl-perl libio-stringy-perl libipc-system-simple-perl libllvm11
+#30 8.421   liblwp-mediatypes-perl liblwp-protocol-https-perl libmailtools-perl
+#30 8.421   libnet-dbus-perl libnet-http-perl libnet-smtp-ssl-perl libnet-ssleay-perl
+#30 8.421   libphobos2-ldc-shared98 libtie-ixhash-perl libtimedate-perl libtry-tiny-perl
+#30 8.421   liburi-perl libvte-2.91-0 libvte-2.91-common libvted-3-0 libvulkan1
+#30 8.421   libwww-perl libwww-robotrules-perl libx11-protocol-perl libxml-parser-perl
+#30 8.422   libxml-twig-perl libxml-xpathengine-perl libxxf86dga1 mesa-vulkan-drivers
+#30 8.422   perl-openssl-defaults tilix tilix-common x11-utils x11-xserver-utils
+#30 8.422   xdg-utils
+#30 8.423 Suggested packages:
+#30 8.423   libdigest-hmac-perl libgssapi-perl libcrypt-ssleay-perl libsub-name-perl
+#30 8.423   libbusiness-isbn-perl libauthen-ntlm-perl libunicode-map8-perl
+#30 8.423   libunicode-string-perl xml-twig-tools python-nautilus mesa-utils nickle
+#30 8.423   cairo-5c xorg-docs-core
+#30 8.539 The following NEW packages will be installed:
+#30 8.539   libauthen-sasl-perl libclone-perl libdata-dump-perl libencode-locale-perl
+#30 8.539   libfile-basedir-perl libfile-desktopentry-perl libfile-listing-perl
+#30 8.539   libfile-mimeinfo-perl libfont-afm-perl libgtkd-3-0 libhtml-form-perl
+#30 8.539   libhtml-format-perl libhtml-parser-perl libhtml-tagset-perl
+#30 8.539   libhtml-tree-perl libhttp-cookies-perl libhttp-daemon-perl libhttp-date-perl
+#30 8.539   libhttp-message-perl libhttp-negotiate-perl libio-html-perl
+#30 8.539   libio-socket-ssl-perl libio-stringy-perl libipc-system-simple-perl libllvm11
+#30 8.539   liblwp-mediatypes-perl liblwp-protocol-https-perl libmailtools-perl
+#30 8.539   libnet-dbus-perl libnet-http-perl libnet-smtp-ssl-perl libnet-ssleay-perl
+#30 8.540   libphobos2-ldc-shared98 libtie-ixhash-perl libtimedate-perl libtry-tiny-perl
+#30 8.540   liburi-perl libvte-2.91-0 libvte-2.91-common libvted-3-0 libvulkan1
+#30 8.540   libwww-perl libwww-robotrules-perl libx11-protocol-perl libxml-parser-perl
+#30 8.540   libxml-twig-perl libxml-xpathengine-perl libxxf86dga1 mesa-vulkan-drivers
+#30 8.541   microsoft-edge-stable perl-openssl-defaults tilix tilix-common x11-utils
+#30 8.541   x11-xserver-utils xdg-utils
+#30 8.624 0 upgraded, 56 newly installed, 0 to remove and 72 not upgraded.
+#30 8.624 Need to get 220 MB of archives.
+#30 8.624 After this operation, 813 MB of additional disk space will be used.
+#30 8.624 Get:1 http://archive.ubuntu.com/ubuntu jammy/main amd64 libvulkan1 amd64 1.3.204.1-2 [128 kB]
+#30 8.644 Get:2 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 xdg-utils all 1.1.3-4.1ubuntu3~22.04.1 [61.9 kB]
+#30 8.657 Get:3 http://archive.ubuntu.com/ubuntu jammy/main amd64 libclone-perl amd64 0.45-1build3 [11.0 kB]
+#30 8.669 Get:4 http://archive.ubuntu.com/ubuntu jammy/main amd64 libdata-dump-perl all 1.25-1 [25.9 kB]
+#30 8.684 Get:5 http://archive.ubuntu.com/ubuntu jammy/main amd64 libencode-locale-perl all 1.05-1.1 [11.8 kB]
+#30 8.696 Get:6 http://archive.ubuntu.com/ubuntu jammy/main amd64 libipc-system-simple-perl all 1.30-1 [23.2 kB]
+#30 8.709 Get:7 http://archive.ubuntu.com/ubuntu jammy/main amd64 libfile-basedir-perl all 0.09-1 [15.7 kB]
+#30 8.721 Get:8 http://archive.ubuntu.com/ubuntu jammy/main amd64 liburi-perl all 5.10-1 [78.8 kB]
+#30 8.730 Get:9 http://archive.ubuntu.com/ubuntu jammy/main amd64 libfile-desktopentry-perl all 0.22-2 [17.8 kB]
+#30 8.740 Get:10 http://archive.ubuntu.com/ubuntu jammy/main amd64 libtimedate-perl all 2.3300-2 [34.0 kB]
+#30 8.751 Get:11 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhttp-date-perl all 6.05-1 [9920 B]
+#30 8.761 Get:12 http://archive.ubuntu.com/ubuntu jammy/main amd64 libfile-listing-perl all 6.14-1 [11.2 kB]
+#30 8.772 Get:13 http://archive.ubuntu.com/ubuntu jammy/main amd64 libfile-mimeinfo-perl all 0.31-1 [43.5 kB]
+#30 8.783 Get:14 http://archive.ubuntu.com/ubuntu jammy/main amd64 libfont-afm-perl all 1.20-3 [13.6 kB]
+#30 8.788 Get:15 https://packages.microsoft.com/repos/edge stable/main amd64 microsoft-edge-stable amd64 148.0.3967.96-1 [182 MB]
+#30 8.794 Get:16 http://archive.ubuntu.com/ubuntu jammy/universe amd64 libllvm11 amd64 1:11.1.0-6 [19.6 MB]
+#30 8.929 Get:17 http://archive.ubuntu.com/ubuntu jammy/universe amd64 libphobos2-ldc-shared98 amd64 1:1.28.0-1ubuntu1 [1487 kB]
+#30 8.946 Get:18 http://archive.ubuntu.com/ubuntu jammy/universe amd64 libgtkd-3-0 amd64 3.10.0-1ubuntu1 [1963 kB]
+#30 8.964 Get:19 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhtml-tagset-perl all 3.20-4 [12.5 kB]
+#30 8.976 Get:20 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhtml-parser-perl amd64 3.76-1build2 [88.4 kB]
+#30 8.988 Get:21 http://archive.ubuntu.com/ubuntu jammy/main amd64 libio-html-perl all 1.004-2 [15.4 kB]
+#30 9.000 Get:22 http://archive.ubuntu.com/ubuntu jammy/main amd64 liblwp-mediatypes-perl all 6.04-1 [19.5 kB]
+#30 9.014 Get:23 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhttp-message-perl all 6.36-1 [76.8 kB]
+#30 9.028 Get:24 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhtml-form-perl all 6.07-1 [22.2 kB]
+#30 9.040 Get:25 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhtml-tree-perl all 5.07-2 [200 kB]
+#30 9.052 Get:26 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhtml-format-perl all 2.12-1.1 [41.3 kB]
+#30 9.063 Get:27 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhttp-cookies-perl all 6.10-1 [18.4 kB]
+#30 9.072 Get:28 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libhttp-daemon-perl all 6.13-1ubuntu0.1 [22.9 kB]
+#30 9.083 Get:29 http://archive.ubuntu.com/ubuntu jammy/main amd64 libhttp-negotiate-perl all 6.01-1 [12.5 kB]
+#30 9.094 Get:30 http://archive.ubuntu.com/ubuntu jammy/main amd64 perl-openssl-defaults amd64 5build2 [7542 B]
+#30 9.108 Get:31 http://archive.ubuntu.com/ubuntu jammy/main amd64 libnet-ssleay-perl amd64 1.92-1build2 [327 kB]
+#30 9.124 Get:32 http://archive.ubuntu.com/ubuntu jammy/main amd64 libio-socket-ssl-perl all 2.074-2 [192 kB]
+#30 9.143 Get:33 http://archive.ubuntu.com/ubuntu jammy/main amd64 libio-stringy-perl all 2.111-3 [55.8 kB]
+#30 9.155 Get:34 http://archive.ubuntu.com/ubuntu jammy/main amd64 libnet-http-perl all 6.22-1 [23.2 kB]
+#30 9.166 Get:35 http://archive.ubuntu.com/ubuntu jammy/main amd64 libtry-tiny-perl all 0.31-1 [21.8 kB]
+#30 9.180 Get:36 http://archive.ubuntu.com/ubuntu jammy/main amd64 libwww-robotrules-perl all 6.02-1 [12.6 kB]
+#30 9.190 Get:37 http://archive.ubuntu.com/ubuntu jammy/main amd64 libwww-perl all 6.61-1 [141 kB]
+#30 9.201 Get:38 http://archive.ubuntu.com/ubuntu jammy/main amd64 liblwp-protocol-https-perl all 6.10-1 [10.9 kB]
+#30 9.212 Get:39 http://archive.ubuntu.com/ubuntu jammy/main amd64 libnet-smtp-ssl-perl all 1.04-1 [5948 B]
+#30 9.223 Get:40 http://archive.ubuntu.com/ubuntu jammy/main amd64 libmailtools-perl all 2.21-1 [80.7 kB]
+#30 9.234 Get:41 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libxml-parser-perl amd64 2.46-3ubuntu0.1 [212 kB]
+#30 9.244 Get:42 http://archive.ubuntu.com/ubuntu jammy/main amd64 libxml-twig-perl all 1:3.52-1 [157 kB]
+#30 9.257 Get:43 http://archive.ubuntu.com/ubuntu jammy/main amd64 libnet-dbus-perl amd64 1.2.0-1build3 [181 kB]
+#30 9.268 Get:44 http://archive.ubuntu.com/ubuntu jammy/main amd64 libtie-ixhash-perl all 1.23-2.1 [11.3 kB]
+#30 9.279 Get:45 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libvte-2.91-common amd64 0.68.0-1ubuntu0.1 [9408 B]
+#30 9.290 Get:46 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libvte-2.91-0 amd64 0.68.0-1ubuntu0.1 [214 kB]
+#30 9.304 Get:47 http://archive.ubuntu.com/ubuntu jammy/universe amd64 libvted-3-0 amd64 3.10.0-1ubuntu1 [54.1 kB]
+#30 9.327 Get:48 http://archive.ubuntu.com/ubuntu jammy/main amd64 libx11-protocol-perl all 0.56-7.1 [138 kB]
+#30 9.340 Get:49 http://archive.ubuntu.com/ubuntu jammy/main amd64 libxml-xpathengine-perl all 0.14-1 [31.8 kB]
+#30 9.351 Get:50 http://archive.ubuntu.com/ubuntu jammy/main amd64 libxxf86dga1 amd64 2:1.1.5-0ubuntu3 [12.6 kB]
+#30 9.362 Get:51 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 mesa-vulkan-drivers amd64 23.2.1-1ubuntu3.1~22.04.3 [10.7 MB]
+#30 9.452 Get:52 http://archive.ubuntu.com/ubuntu jammy/universe amd64 tilix-common all 1.9.4-2build1 [281 kB]
+#30 9.456 Get:53 http://archive.ubuntu.com/ubuntu jammy/universe amd64 tilix amd64 1.9.4-2build1 [681 kB]
+#30 9.472 Get:54 http://archive.ubuntu.com/ubuntu jammy/main amd64 x11-utils amd64 7.7+5build2 [206 kB]
+#30 9.485 Get:55 http://archive.ubuntu.com/ubuntu jammy/main amd64 x11-xserver-utils amd64 7.7+9build1 [170 kB]
+#30 9.496 Get:56 http://archive.ubuntu.com/ubuntu jammy/main amd64 libauthen-sasl-perl all 2.1600-1.1 [43.1 kB]
+#30 11.03 debconf: delaying package configuration, since apt-utils is not installed
+#30 11.07 Fetched 220 MB in 2s (96.5 MB/s)
+#30 11.10 Selecting previously unselected package libvulkan1:amd64.
+#30 11.10 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 55626 files and directories currently installed.)
+#30 11.12 Preparing to unpack .../00-libvulkan1_1.3.204.1-2_amd64.deb ...
+#30 11.12 Unpacking libvulkan1:amd64 (1.3.204.1-2) ...
+#30 11.15 Selecting previously unselected package xdg-utils.
+#30 11.15 Preparing to unpack .../01-xdg-utils_1.1.3-4.1ubuntu3~22.04.1_all.deb ...
+#30 11.16 Unpacking xdg-utils (1.1.3-4.1ubuntu3~22.04.1) ...
+#30 11.18 Selecting previously unselected package microsoft-edge-stable.
+#30 11.19 Preparing to unpack .../02-microsoft-edge-stable_148.0.3967.96-1_amd64.deb ...
+#30 11.19 Unpacking microsoft-edge-stable (148.0.3967.96-1) ...
+#30 20.96 Selecting previously unselected package libclone-perl.
+#30 20.96 Preparing to unpack .../03-libclone-perl_0.45-1build3_amd64.deb ...
+#30 20.97 Unpacking libclone-perl (0.45-1build3) ...
+#30 20.99 Selecting previously unselected package libdata-dump-perl.
+#30 21.00 Preparing to unpack .../04-libdata-dump-perl_1.25-1_all.deb ...
+#30 21.00 Unpacking libdata-dump-perl (1.25-1) ...
+#30 21.03 Selecting previously unselected package libencode-locale-perl.
+#30 21.03 Preparing to unpack .../05-libencode-locale-perl_1.05-1.1_all.deb ...
+#30 21.03 Unpacking libencode-locale-perl (1.05-1.1) ...
+#30 21.06 Selecting previously unselected package libipc-system-simple-perl.
+#30 21.07 Preparing to unpack .../06-libipc-system-simple-perl_1.30-1_all.deb ...
+#30 21.07 Unpacking libipc-system-simple-perl (1.30-1) ...
+#30 21.09 Selecting previously unselected package libfile-basedir-perl.
+#30 21.10 Preparing to unpack .../07-libfile-basedir-perl_0.09-1_all.deb ...
+#30 21.10 Unpacking libfile-basedir-perl (0.09-1) ...
+#30 21.13 Selecting previously unselected package liburi-perl.
+#30 21.13 Preparing to unpack .../08-liburi-perl_5.10-1_all.deb ...
+#30 21.14 Unpacking liburi-perl (5.10-1) ...
+#30 21.16 Selecting previously unselected package libfile-desktopentry-perl.
+#30 21.17 Preparing to unpack .../09-libfile-desktopentry-perl_0.22-2_all.deb ...
+#30 21.17 Unpacking libfile-desktopentry-perl (0.22-2) ...
+#30 21.19 Selecting previously unselected package libtimedate-perl.
+#30 21.20 Preparing to unpack .../10-libtimedate-perl_2.3300-2_all.deb ...
+#30 21.20 Unpacking libtimedate-perl (2.3300-2) ...
+#30 21.23 Selecting previously unselected package libhttp-date-perl.
+#30 21.24 Preparing to unpack .../11-libhttp-date-perl_6.05-1_all.deb ...
+#30 21.24 Unpacking libhttp-date-perl (6.05-1) ...
+#30 21.27 Selecting previously unselected package libfile-listing-perl.
+#30 21.27 Preparing to unpack .../12-libfile-listing-perl_6.14-1_all.deb ...
+#30 21.28 Unpacking libfile-listing-perl (6.14-1) ...
+#30 21.30 Selecting previously unselected package libfile-mimeinfo-perl.
+#30 21.31 Preparing to unpack .../13-libfile-mimeinfo-perl_0.31-1_all.deb ...
+#30 21.31 Unpacking libfile-mimeinfo-perl (0.31-1) ...
+#30 21.34 Selecting previously unselected package libfont-afm-perl.
+#30 21.35 Preparing to unpack .../14-libfont-afm-perl_1.20-3_all.deb ...
+#30 21.35 Unpacking libfont-afm-perl (1.20-3) ...
+#30 21.38 Selecting previously unselected package libllvm11:amd64.
+#30 21.39 Preparing to unpack .../15-libllvm11_1%3a11.1.0-6_amd64.deb ...
+#30 21.39 Unpacking libllvm11:amd64 (1:11.1.0-6) ...
+#30 21.97 Selecting previously unselected package libphobos2-ldc-shared98:amd64.
+#30 21.98 Preparing to unpack .../16-libphobos2-ldc-shared98_1%3a1.28.0-1ubuntu1_amd64.deb ...
+#30 21.98 Unpacking libphobos2-ldc-shared98:amd64 (1:1.28.0-1ubuntu1) ...
+#30 22.05 Selecting previously unselected package libgtkd-3-0:amd64.
+#30 22.05 Preparing to unpack .../17-libgtkd-3-0_3.10.0-1ubuntu1_amd64.deb ...
+#30 22.06 Unpacking libgtkd-3-0:amd64 (3.10.0-1ubuntu1) ...
+#30 22.15 Selecting previously unselected package libhtml-tagset-perl.
+#30 22.15 Preparing to unpack .../18-libhtml-tagset-perl_3.20-4_all.deb ...
+#30 22.15 Unpacking libhtml-tagset-perl (3.20-4) ...
+#30 22.18 Selecting previously unselected package libhtml-parser-perl:amd64.
+#30 22.19 Preparing to unpack .../19-libhtml-parser-perl_3.76-1build2_amd64.deb ...
+#30 22.19 Unpacking libhtml-parser-perl:amd64 (3.76-1build2) ...
+#30 22.22 Selecting previously unselected package libio-html-perl.
+#30 22.22 Preparing to unpack .../20-libio-html-perl_1.004-2_all.deb ...
+#30 22.23 Unpacking libio-html-perl (1.004-2) ...
+#30 22.25 Selecting previously unselected package liblwp-mediatypes-perl.
+#30 22.25 Preparing to unpack .../21-liblwp-mediatypes-perl_6.04-1_all.deb ...
+#30 22.26 Unpacking liblwp-mediatypes-perl (6.04-1) ...
+#30 22.28 Selecting previously unselected package libhttp-message-perl.
+#30 22.28 Preparing to unpack .../22-libhttp-message-perl_6.36-1_all.deb ...
+#30 22.29 Unpacking libhttp-message-perl (6.36-1) ...
+#30 22.31 Selecting previously unselected package libhtml-form-perl.
+#30 22.31 Preparing to unpack .../23-libhtml-form-perl_6.07-1_all.deb ...
+#30 22.32 Unpacking libhtml-form-perl (6.07-1) ...
+#30 22.34 Selecting previously unselected package libhtml-tree-perl.
+#30 22.34 Preparing to unpack .../24-libhtml-tree-perl_5.07-2_all.deb ...
+#30 22.34 Unpacking libhtml-tree-perl (5.07-2) ...
+#30 22.39 Selecting previously unselected package libhtml-format-perl.
+#30 22.39 Preparing to unpack .../25-libhtml-format-perl_2.12-1.1_all.deb ...
+#30 22.39 Unpacking libhtml-format-perl (2.12-1.1) ...
+#30 22.42 Selecting previously unselected package libhttp-cookies-perl.
+#30 22.42 Preparing to unpack .../26-libhttp-cookies-perl_6.10-1_all.deb ...
+#30 22.42 Unpacking libhttp-cookies-perl (6.10-1) ...
+#30 22.45 Selecting previously unselected package libhttp-daemon-perl.
+#30 22.45 Preparing to unpack .../27-libhttp-daemon-perl_6.13-1ubuntu0.1_all.deb ...
+#30 22.46 Unpacking libhttp-daemon-perl (6.13-1ubuntu0.1) ...
+#30 22.48 Selecting previously unselected package libhttp-negotiate-perl.
+#30 22.49 Preparing to unpack .../28-libhttp-negotiate-perl_6.01-1_all.deb ...
+#30 22.49 Unpacking libhttp-negotiate-perl (6.01-1) ...
+#30 22.52 Selecting previously unselected package perl-openssl-defaults:amd64.
+#30 22.53 Preparing to unpack .../29-perl-openssl-defaults_5build2_amd64.deb ...
+#30 22.53 Unpacking perl-openssl-defaults:amd64 (5build2) ...
+#30 22.55 Selecting previously unselected package libnet-ssleay-perl:amd64.
+#30 22.56 Preparing to unpack .../30-libnet-ssleay-perl_1.92-1build2_amd64.deb ...
+#30 22.56 Unpacking libnet-ssleay-perl:amd64 (1.92-1build2) ...
+#30 22.60 Selecting previously unselected package libio-socket-ssl-perl.
+#30 22.60 Preparing to unpack .../31-libio-socket-ssl-perl_2.074-2_all.deb ...
+#30 22.61 Unpacking libio-socket-ssl-perl (2.074-2) ...
+#30 22.63 Selecting previously unselected package libio-stringy-perl.
+#30 22.64 Preparing to unpack .../32-libio-stringy-perl_2.111-3_all.deb ...
+#30 22.64 Unpacking libio-stringy-perl (2.111-3) ...
+#30 22.67 Selecting previously unselected package libnet-http-perl.
+#30 22.67 Preparing to unpack .../33-libnet-http-perl_6.22-1_all.deb ...
+#30 22.68 Unpacking libnet-http-perl (6.22-1) ...
+#30 22.70 Selecting previously unselected package libtry-tiny-perl.
+#30 22.70 Preparing to unpack .../34-libtry-tiny-perl_0.31-1_all.deb ...
+#30 22.71 Unpacking libtry-tiny-perl (0.31-1) ...
+#30 22.73 Selecting previously unselected package libwww-robotrules-perl.
+#30 22.74 Preparing to unpack .../35-libwww-robotrules-perl_6.02-1_all.deb ...
+#30 22.74 Unpacking libwww-robotrules-perl (6.02-1) ...
+#30 22.76 Selecting previously unselected package libwww-perl.
+#30 22.77 Preparing to unpack .../36-libwww-perl_6.61-1_all.deb ...
+#30 22.77 Unpacking libwww-perl (6.61-1) ...
+#30 22.80 Selecting previously unselected package liblwp-protocol-https-perl.
+#30 22.80 Preparing to unpack .../37-liblwp-protocol-https-perl_6.10-1_all.deb ...
+#30 22.80 Unpacking liblwp-protocol-https-perl (6.10-1) ...
+#30 22.83 Selecting previously unselected package libnet-smtp-ssl-perl.
+#30 22.84 Preparing to unpack .../38-libnet-smtp-ssl-perl_1.04-1_all.deb ...
+#30 22.84 Unpacking libnet-smtp-ssl-perl (1.04-1) ...
+#30 22.86 Selecting previously unselected package libmailtools-perl.
+#30 22.87 Preparing to unpack .../39-libmailtools-perl_2.21-1_all.deb ...
+#30 22.87 Unpacking libmailtools-perl (2.21-1) ...
+#30 22.90 Selecting previously unselected package libxml-parser-perl:amd64.
+#30 22.91 Preparing to unpack .../40-libxml-parser-perl_2.46-3ubuntu0.1_amd64.deb ...
+#30 22.91 Unpacking libxml-parser-perl:amd64 (2.46-3ubuntu0.1) ...
+#30 22.94 Selecting previously unselected package libxml-twig-perl.
+#30 22.95 Preparing to unpack .../41-libxml-twig-perl_1%3a3.52-1_all.deb ...
+#30 22.95 Unpacking libxml-twig-perl (1:3.52-1) ...
+#30 22.99 Selecting previously unselected package libnet-dbus-perl.
+#30 22.99 Preparing to unpack .../42-libnet-dbus-perl_1.2.0-1build3_amd64.deb ...
+#30 23.00 Unpacking libnet-dbus-perl (1.2.0-1build3) ...
+#30 23.03 Selecting previously unselected package libtie-ixhash-perl.
+#30 23.03 Preparing to unpack .../43-libtie-ixhash-perl_1.23-2.1_all.deb ...
+#30 23.03 Unpacking libtie-ixhash-perl (1.23-2.1) ...
+#30 23.06 Selecting previously unselected package libvte-2.91-common.
+#30 23.06 Preparing to unpack .../44-libvte-2.91-common_0.68.0-1ubuntu0.1_amd64.deb ...
+#30 23.07 Unpacking libvte-2.91-common (0.68.0-1ubuntu0.1) ...
+#30 23.10 Selecting previously unselected package libvte-2.91-0:amd64.
+#30 23.10 Preparing to unpack .../45-libvte-2.91-0_0.68.0-1ubuntu0.1_amd64.deb ...
+#30 23.11 Unpacking libvte-2.91-0:amd64 (0.68.0-1ubuntu0.1) ...
+#30 23.14 Selecting previously unselected package libvted-3-0:amd64.
+#30 23.14 Preparing to unpack .../46-libvted-3-0_3.10.0-1ubuntu1_amd64.deb ...
+#30 23.14 Unpacking libvted-3-0:amd64 (3.10.0-1ubuntu1) ...
+#30 23.17 Selecting previously unselected package libx11-protocol-perl.
+#30 23.18 Preparing to unpack .../47-libx11-protocol-perl_0.56-7.1_all.deb ...
+#30 23.18 Unpacking libx11-protocol-perl (0.56-7.1) ...
+#30 23.22 Selecting previously unselected package libxml-xpathengine-perl.
+#30 23.23 Preparing to unpack .../48-libxml-xpathengine-perl_0.14-1_all.deb ...
+#30 23.23 Unpacking libxml-xpathengine-perl (0.14-1) ...
+#30 23.26 Selecting previously unselected package libxxf86dga1:amd64.
+#30 23.27 Preparing to unpack .../49-libxxf86dga1_2%3a1.1.5-0ubuntu3_amd64.deb ...
+#30 23.27 Unpacking libxxf86dga1:amd64 (2:1.1.5-0ubuntu3) ...
+#30 23.29 Selecting previously unselected package mesa-vulkan-drivers:amd64.
+#30 23.30 Preparing to unpack .../50-mesa-vulkan-drivers_23.2.1-1ubuntu3.1~22.04.3_amd64.deb ...
+#30 23.30 Unpacking mesa-vulkan-drivers:amd64 (23.2.1-1ubuntu3.1~22.04.3) ...
+#30 23.60 Selecting previously unselected package tilix-common.
+#30 23.60 Preparing to unpack .../51-tilix-common_1.9.4-2build1_all.deb ...
+#30 23.61 Unpacking tilix-common (1.9.4-2build1) ...
+#30 23.65 Selecting previously unselected package tilix.
+#30 23.66 Preparing to unpack .../52-tilix_1.9.4-2build1_amd64.deb ...
+#30 23.66 Unpacking tilix (1.9.4-2build1) ...
+#30 23.72 Selecting previously unselected package x11-utils.
+#30 23.72 Preparing to unpack .../53-x11-utils_7.7+5build2_amd64.deb ...
+#30 23.72 Unpacking x11-utils (7.7+5build2) ...
+#30 23.76 Selecting previously unselected package x11-xserver-utils.
+#30 23.76 Preparing to unpack .../54-x11-xserver-utils_7.7+9build1_amd64.deb ...
+#30 23.77 Unpacking x11-xserver-utils (7.7+9build1) ...
+#30 23.79 Selecting previously unselected package libauthen-sasl-perl.
+#30 23.80 Preparing to unpack .../55-libauthen-sasl-perl_2.1600-1.1_all.deb ...
+#30 23.80 Unpacking libauthen-sasl-perl (2.1600-1.1) ...
+#30 23.85 Setting up libtie-ixhash-perl (1.23-2.1) ...
+#30 23.86 Setting up tilix-common (1.9.4-2build1) ...
+#30 23.86 Setting up libfont-afm-perl (1.20-3) ...
+#30 23.87 Setting up libvte-2.91-common (0.68.0-1ubuntu0.1) ...
+#30 23.89 Setting up libclone-perl (0.45-1build3) ...
+#30 23.90 Setting up libio-stringy-perl (2.111-3) ...
+#30 23.90 Setting up libhtml-tagset-perl (3.20-4) ...
+#30 23.91 Setting up libauthen-sasl-perl (2.1600-1.1) ...
+#30 23.92 Setting up liblwp-mediatypes-perl (6.04-1) ...
+#30 23.92 Setting up libtry-tiny-perl (0.31-1) ...
+#30 23.93 Setting up libxxf86dga1:amd64 (2:1.1.5-0ubuntu3) ...
+#30 23.94 Setting up perl-openssl-defaults:amd64 (5build2) ...
+#30 23.94 Setting up libencode-locale-perl (1.05-1.1) ...
+#30 23.95 Setting up libvte-2.91-0:amd64 (0.68.0-1ubuntu0.1) ...
+#30 23.96 Setting up x11-xserver-utils (7.7+9build1) ...
+#30 23.97 Setting up libllvm11:amd64 (1:11.1.0-6) ...
+#30 23.98 Setting up libdata-dump-perl (1.25-1) ...
+#30 23.99 Setting up libipc-system-simple-perl (1.30-1) ...
+#30 23.99 Setting up libxml-xpathengine-perl (0.14-1) ...
+#30 24.00 Setting up libio-html-perl (1.004-2) ...
+#30 24.01 Setting up libvulkan1:amd64 (1.3.204.1-2) ...
+#30 24.02 Setting up libtimedate-perl (2.3300-2) ...
+#30 24.02 Setting up x11-utils (7.7+5build2) ...
+#30 24.06 Setting up xdg-utils (1.1.3-4.1ubuntu3~22.04.1) ...
+#30 24.07 update-alternatives: using /usr/bin/xdg-open to provide /usr/bin/open (open) in auto mode
+#30 24.07 update-alternatives: warning: skip creation of /usr/share/man/man1/open.1.gz because associated file /usr/share/man/man1/xdg-open.1.gz (of link group open) doesn't exist
+#30 24.07 Setting up liburi-perl (5.10-1) ...
+#30 24.08 Setting up libx11-protocol-perl (0.56-7.1) ...
+#30 24.08 Setting up libnet-ssleay-perl:amd64 (1.92-1build2) ...
+#30 24.09 Setting up microsoft-edge-stable (148.0.3967.96-1) ...
+#30 24.22 update-alternatives: using /usr/bin/microsoft-edge-stable to provide /usr/bin/x-www-browser (x-www-browser) in auto mode
+#30 24.24 update-alternatives: using /usr/bin/microsoft-edge-stable to provide /usr/bin/gnome-www-browser (gnome-www-browser) in auto mode
+#30 24.24 update-alternatives: using /usr/bin/microsoft-edge-stable to provide /usr/bin/microsoft-edge (microsoft-edge) in auto mode
+#30 24.27 Setting up mesa-vulkan-drivers:amd64 (23.2.1-1ubuntu3.1~22.04.3) ...
+#30 24.27 Setting up libhttp-date-perl (6.05-1) ...
+#30 24.28 Setting up libfile-basedir-perl (0.09-1) ...
+#30 24.29 Setting up libphobos2-ldc-shared98:amd64 (1:1.28.0-1ubuntu1) ...
+#30 24.29 Setting up libfile-listing-perl (6.14-1) ...
+#30 24.30 Setting up libnet-http-perl (6.22-1) ...
+#30 24.31 Setting up libfile-desktopentry-perl (0.22-2) ...
+#30 24.31 Setting up libvted-3-0:amd64 (3.10.0-1ubuntu1) ...
+#30 24.32 Setting up libwww-robotrules-perl (6.02-1) ...
+#30 24.32 Setting up libhtml-parser-perl:amd64 (3.76-1build2) ...
+#30 24.33 Setting up libgtkd-3-0:amd64 (3.10.0-1ubuntu1) ...
+#30 24.34 Setting up libio-socket-ssl-perl (2.074-2) ...
+#30 24.34 Setting up tilix (1.9.4-2build1) ...
+#30 24.35 update-alternatives: using /usr/bin/tilix.wrapper to provide /usr/bin/x-terminal-emulator (x-terminal-emulator) in auto mode
+#30 24.35 update-alternatives: warning: skip creation of /usr/share/man/man1/x-terminal-emulator.1.gz because associated file /usr/share/man/man1/tilix.1.gz (of link group x-terminal-emulator) doesn't exist
+#30 24.36 Setting up libhttp-message-perl (6.36-1) ...
+#30 24.36 Setting up libhtml-form-perl (6.07-1) ...
+#30 24.37 Setting up libfile-mimeinfo-perl (0.31-1) ...
+#30 24.38 Setting up libhttp-negotiate-perl (6.01-1) ...
+#30 24.38 Setting up libhttp-cookies-perl (6.10-1) ...
+#30 24.39 Setting up libhtml-tree-perl (5.07-2) ...
+#30 24.40 Setting up libhtml-format-perl (2.12-1.1) ...
+#30 24.40 Setting up libnet-smtp-ssl-perl (1.04-1) ...
+#30 24.41 Setting up libmailtools-perl (2.21-1) ...
+#30 24.42 Setting up libhttp-daemon-perl (6.13-1ubuntu0.1) ...
+#30 24.42 Setting up liblwp-protocol-https-perl (6.10-1) ...
+#30 24.43 Setting up libwww-perl (6.61-1) ...
+#30 24.44 Setting up libxml-parser-perl:amd64 (2.46-3ubuntu0.1) ...
+#30 24.45 Setting up libxml-twig-perl (1:3.52-1) ...
+#30 24.45 Setting up libnet-dbus-perl (1.2.0-1build3) ...
+#30 24.47 Processing triggers for menu (2.1.47ubuntu4) ...
+#30 24.50 Processing triggers for mailcap (3.70+nmu1ubuntu1) ...
+#30 24.51 Processing triggers for hicolor-icon-theme (0.17-2) ...
+#30 24.53 Processing triggers for libglib2.0-0:amd64 (2.72.4-0ubuntu2.6) ...
+#30 24.55 Processing triggers for libc-bin (2.35-0ubuntu3.11) ...
+#30 24.67 + microsoft-edge-stable --version
+#30 24.70 Microsoft Edge 148.0.3967.96 
+#30 DONE 24.9s
+
+#31 [27/49] RUN node build-browser-utils.js || true
+#31 0.744 ✅ Browser utilities bundle created: /app/vexa-bot/dist/browser-utils.global.js
+#31 0.744 📦 Bundle includes:
+#31 0.744   - BrowserAudioService
+#31 0.744   - BrowserMediaRecorderPipeline
+#31 0.744   - BrowserWhisperLiveService
+#31 0.744   - generateBrowserUUID
+#31 0.744   - window.VexaBrowserUtils
+#31 0.744   - window.performLeaveAction
+#31 DONE 0.8s
+
+#32 [28/49] WORKDIR /app
+#32 DONE 0.4s
+
+#33 [29/49] RUN mkdir -p /app/dashboard-build
+#33 DONE 0.6s
+
+#34 [30/49] COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
+#34 DONE 0.5s
+
+#35 [31/49] COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
+#35 DONE 0.3s
+
+#36 [32/49] COPY services/dashboard/package.json /app/dashboard-build/
+#36 DONE 0.3s
+
+#37 [33/49] RUN cd /app/dashboard-build &&     sed -i 's|file:../../../packages/transcript-rendering|file:/transcript-rendering|' package.json &&     npm install --ignore-scripts --legacy-peer-deps &&     rm -rf node_modules/@vexaai/transcript-rendering &&     cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
+#37 34.45 npm warn deprecated uuid@8.3.2: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
+#37 43.25 
+#37 43.25 added 672 packages, and audited 674 packages in 43s
+#37 43.25 
+#37 43.25 281 packages are looking for funding
+#37 43.25   run `npm fund` for details
+#37 43.45 
+#37 43.45 13 vulnerabilities (8 low, 4 moderate, 1 high)
+#37 43.45 
+#37 43.45 To address all issues (including breaking changes), run:
+#37 43.45   npm audit fix --force
+#37 43.45 
+#37 43.45 Run `npm audit` for details.
+#37 DONE 43.9s
+
+#38 [34/49] COPY services/dashboard/src /app/dashboard-build/src
+#38 DONE 0.1s
+
+#39 [35/49] COPY services/dashboard/public /app/dashboard-build/public
+#39 DONE 0.0s
+
+#40 [36/49] COPY services/dashboard/scripts /app/dashboard-build/scripts
+#40 DONE 0.0s
+
+#41 [37/49] COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs /app/dashboard-build/
+#41 DONE 0.0s
+
+#42 [38/49] COPY services/dashboard/components.json /app/dashboard-build/
+#42 DONE 0.0s
+
+#43 [39/49] RUN cd /app/dashboard-build && npm run build
+#43 0.370 
+#43 0.370 > vexa-dashboard@0.1.0 prebuild
+#43 0.370 > node scripts/generate-release-version.js
+#43 0.370 
+#43 0.407 [release-version] dev · 2026-05-30 (source: env)
+#43 0.411 
+#43 0.411 > vexa-dashboard@0.1.0 build
+#43 0.411 > next build
+#43 0.411 
+#43 3.184 [baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+#43 3.643 Attention: Next.js now collects completely anonymous telemetry regarding usage.
+#43 3.643 This information is used to shape Next.js' roadmap and prioritize features.
+#43 3.643 You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+#43 3.643 https://nextjs.org/telemetry
+#43 3.643 
+#43 3.655    ▲ Next.js 16.0.10 (Turbopack)
+#43 3.655 
+#43 6.365    Creating an optimized production build ...
+#43 9.141 [baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+#43 16.72 
+#43 16.72 > Build error occurred
+#43 16.73 Error: Turbopack build failed with 9 errors:
+#43 16.73 ./src/app/api/auth/me/route.ts:3:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 1 |[39m [36mimport[39m { [33mNextResponse[39m } [36mfrom[39m [32m"next/server"[39m[33m;[39m
+#43 16.73  [90m 2 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 3 |[39m [36mimport[39m { getAuthCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 4 |[39m
+#43 16.73  [90m 5 |[39m [90m/**[39m
+#43 16.73  [90m 6 |[39m [90m * Get current user info from token.[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/app/api/auth/send-magic-link/route.ts:7:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m  5 |[39m [36mimport[39m { findUserByEmail[33m,[39m createUser[33m,[39m createUserToken } [36mfrom[39m [32m"@/lib/vexa-admin-api"[39m[33m;[39m
+#43 16.73  [90m  6 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m  7 |[39m [36mimport[39m { getAuthCookieName[33m,[39m getUserInfoCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m    |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m  8 |[39m
+#43 16.73  [90m  9 |[39m [36mconst[39m [33mJWT_SECRET[39m [33m=[39m process[33m.[39menv[33m.[39m[33mJWT_SECRET[39m [33m||[39m process[33m.[39menv[33m.[39m[33mVEXA_ADMIN_API_KEY[39m [33m||[39m [32m"default-secret-change-me"[39m[33m;[39m
+#43 16.73  [90m 10 |[39m [36mconst[39m [33mMAGIC_LINK_EXPIRY[39m [33m=[39m [32m"15m"[39m[33m;[39m [90m// 15 minutes[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/app/api/config/route.ts:3:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 1 |[39m [36mimport[39m { [33mNextRequest[39m[33m,[39m [33mNextResponse[39m } [36mfrom[39m [32m"next/server"[39m[33m;[39m
+#43 16.73  [90m 2 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 3 |[39m [36mimport[39m { getAuthCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 4 |[39m [36mimport[39m { resolveBrowserApiUrl } [36mfrom[39m [32m"@/lib/browser-api-url"[39m[33m;[39m
+#43 16.73  [90m 5 |[39m
+#43 16.73  [90m 6 |[39m [90m/**[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/app/api/profile/keys/[id]/route.ts:3:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 1 |[39m [36mimport[39m { [33mNextRequest[39m[33m,[39m [33mNextResponse[39m } [36mfrom[39m [32m"next/server"[39m[33m;[39m
+#43 16.73  [90m 2 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 3 |[39m [36mimport[39m { getAuthCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 4 |[39m
+#43 16.73  [90m 5 |[39m [90m/**[39m
+#43 16.73  [90m 6 |[39m [90m * DELETE /api/profile/keys/:id — revoke an API key via admin API[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/app/api/vexa/[...path]/route.ts:3:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 1 |[39m [36mimport[39m { [33mNextRequest[39m[33m,[39m [33mNextResponse[39m } [36mfrom[39m [32m"next/server"[39m[33m;[39m
+#43 16.73  [90m 2 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 3 |[39m [36mimport[39m { getAuthCookieName[33m,[39m getUserInfoCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 4 |[39m
+#43 16.73  [90m 5 |[39m [36mexport[39m [36mconst[39m dynamic [33m=[39m [32m"force-dynamic"[39m[33m;[39m
+#43 16.73  [90m 6 |[39m [36mexport[39m [36mconst[39m revalidate [33m=[39m [35m0[39m[33m;[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/app/api/webhooks/config/route.ts:5:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 3 |[39m [36mimport[39m crypto [36mfrom[39m [32m"crypto"[39m[33m;[39m
+#43 16.73  [90m 4 |[39m [36mimport[39m { getAuthenticatedUserId } [36mfrom[39m [32m"@/lib/auth-utils"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 5 |[39m [36mimport[39m { getAuthCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 6 |[39m
+#43 16.73  [90m 7 |[39m [36mconst[39m getAdminConfig [33m=[39m () [33m=>[39m {
+#43 16.73  [90m 8 |[39m   [36mconst[39m [33mVEXA_ADMIN_API_URL[39m [33m=[39m process[33m.[39menv[33m.[39m[33mVEXA_ADMIN_API_URL[39m [33m||[39m [32m""[39m[33m;[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/app/api/webhooks/deliveries/[meetingId]/route.ts:3:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 1 |[39m [36mimport[39m { [33mNextRequest[39m[33m,[39m [33mNextResponse[39m } [36mfrom[39m [32m"next/server"[39m[33m;[39m
+#43 16.73  [90m 2 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 3 |[39m [36mimport[39m { getAuthCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 4 |[39m
+#43 16.73  [90m 5 |[39m [90m/**[39m
+#43 16.73  [90m 6 |[39m [90m * GET /api/webhooks/deliveries/:meetingId[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/app/api/webhooks/deliveries/route.ts:3:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 1 |[39m [36mimport[39m { [33mNextRequest[39m[33m,[39m [33mNextResponse[39m } [36mfrom[39m [32m"next/server"[39m[33m;[39m
+#43 16.73  [90m 2 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 3 |[39m [36mimport[39m { getAuthCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 4 |[39m
+#43 16.73  [90m 5 |[39m [36mconst[39m getAdminConfig [33m=[39m () [33m=>[39m {
+#43 16.73  [90m 6 |[39m   [36mconst[39m [33mVEXA_ADMIN_API_URL[39m [33m=[39m process[33m.[39menv[33m.[39m[33mVEXA_ADMIN_API_URL[39m [33m||[39m [32m""[39m[33m;[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73 ./src/lib/auth-utils.ts:2:1
+#43 16.73 Module not found: Can't resolve '@/lib/auth-cookies'
+#43 16.73 [0m [90m 1 |[39m [36mimport[39m { cookies } [36mfrom[39m [32m"next/headers"[39m[33m;[39m
+#43 16.73 [31m[1m>[22m[39m[90m 2 |[39m [36mimport[39m { getAuthCookieName[33m,[39m getUserInfoCookieName } [36mfrom[39m [32m"@/lib/auth-cookies"[39m[33m;[39m
+#43 16.73  [90m   |[39m [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+#43 16.73  [90m 3 |[39m
+#43 16.73  [90m 4 |[39m [90m/**[39m
+#43 16.73  [90m 5 |[39m [90m * Resolve the authenticated user's ID from the configured auth cookie.[39m[0m
+#43 16.73 
+#43 16.73 Import map: aliased to relative './src/lib/auth-cookies' inside of [project]/
+#43 16.73 
+#43 16.73 
+#43 16.73 Import trace:
+#43 16.73   App Route:
+#43 16.73     ./src/lib/auth-utils.ts
+#43 16.73     ./src/app/api/profile/keys/route.ts
+#43 16.73 
+#43 16.73 https://nextjs.org/docs/messages/module-not-found
+#43 16.73 
+#43 16.73 
+#43 16.73     at <unknown> (./src/app/api/auth/me/route.ts:3:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/app/api/auth/send-magic-link/route.ts:7:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/app/api/config/route.ts:3:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/app/api/profile/keys/[id]/route.ts:3:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/app/api/vexa/[...path]/route.ts:3:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/app/api/webhooks/config/route.ts:5:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/app/api/webhooks/deliveries/[meetingId]/route.ts:3:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/app/api/webhooks/deliveries/route.ts:3:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 16.73     at <unknown> (./src/lib/auth-utils.ts:2:1)
+#43 16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+#43 ERROR: process "/bin/sh -c cd /app/dashboard-build && npm run build" did not complete successfully: exit code: 1
+------
+ > [39/49] RUN cd /app/dashboard-build && npm run build:
+16.73     at <unknown> (./src/app/api/vexa/[...path]/route.ts:3:1)
+16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+16.73     at <unknown> (./src/app/api/webhooks/config/route.ts:5:1)
+16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+16.73     at <unknown> (./src/app/api/webhooks/deliveries/[meetingId]/route.ts:3:1)
+16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+16.73     at <unknown> (./src/app/api/webhooks/deliveries/route.ts:3:1)
+16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+16.73     at <unknown> (./src/lib/auth-utils.ts:2:1)
+16.73     at <unknown> (https://nextjs.org/docs/messages/module-not-found)
+------
+
+ [33m6 warnings found (use docker --debug to expand):
+[0m - UndefinedVar: Usage of undefined variable '$PYTHONPATH' (line 103)
+ - SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "OPENAI_API_KEY") (line 242)
+ - SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "MINIO_ACCESS_KEY") (line 256)
+ - SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "MINIO_SECRET_KEY") (line 256)
+ - SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "AWS_ACCESS_KEY_ID") (line 256)
+ - SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "AWS_SECRET_ACCESS_KEY") (line 256)
+Dockerfile.lite:189
+--------------------
+ 187 |     # Build-time env: rewrites in next.config.ts bake VEXA_API_URL into routes-manifest
+ 188 |     ENV VEXA_API_URL=http://localhost:8056
+ 189 | >>> RUN cd /app/dashboard-build && npm run build
+ 190 |     
+ 191 |     # Move standalone output to final location
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c cd /app/dashboard-build && npm run build" did not complete successfully: exit code: 1
+make: *** [Makefile:59: build] Error 1

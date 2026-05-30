@@ -1,0 +1,107 @@
+{
+  "checks": [
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "pack.json"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "runtime.json"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "ops/ops.jsonl"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "tests"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "compose"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "lite"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "pass_status": true,
+      "path": "compose/meeting-deployment-test.md"
+    },
+    {
+      "exists": false,
+      "kind": "file",
+      "pass_status": false,
+      "path": "compose/human-eyeball.md"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "pass_status": true,
+      "path": "lite/meeting-deployment-test.md"
+    },
+    {
+      "exists": false,
+      "kind": "file",
+      "pass_status": false,
+      "path": "lite/human-eyeball.md"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "pass_status": false,
+      "path": "human/overall-functionality.md"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "hardenloop"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "review.md"
+    },
+    {
+      "exists": false,
+      "kind": "file",
+      "path": "pr.md"
+    }
+  ],
+  "evidence_root": ".agents/packs/pack-msteams-diarization-cutover",
+  "invalid": [
+    "human/overall-functionality.md"
+  ],
+  "missing": [
+    "compose/human-eyeball.md",
+    "lite/human-eyeball.md",
+    "pr.md"
+  ],
+  "mode": "pr-ready",
+  "pack_id": "pack-msteams-diarization-cutover",
+  "required": [
+    "pack.json",
+    "runtime.json",
+    "ops/ops.jsonl",
+    "tests",
+    "compose",
+    "lite",
+    "compose/meeting-deployment-test.md",
+    "compose/human-eyeball.md",
+    "lite/meeting-deployment-test.md",
+    "lite/human-eyeball.md",
+    "human/overall-functionality.md",
+    "hardenloop",
+    "review.md",
+    "pr.md"
+  ],
+  "status": "fail"
+}
