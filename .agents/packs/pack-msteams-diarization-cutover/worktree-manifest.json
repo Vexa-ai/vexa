@@ -1,0 +1,9 @@
+{
+  "action": "apply",
+  "pack_id": "pack-msteams-diarization-cutover",
+  "repo_root": "/home/dima/dev/vexa",
+  "worktree_path": "/home/dima/dev/vexa-pack-pack-msteams-diarization-cutover",
+  "base_branch": "main",
+  "integration_branch": "main` (or release integration branch — assigned at stitch time)",
+  "branch": "codex/pack-pack-msteams-diarization-cutover"
+}

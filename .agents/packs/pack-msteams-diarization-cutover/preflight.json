@@ -1,0 +1,9 @@
+{
+  "status": "pass",
+  "pack_json": "/tmp/develop-394-evidence-stash/pack-msteams-diarization-cutover/pack.json",
+  "runtime_json": "/tmp/develop-394-evidence-stash/pack-msteams-diarization-cutover/runtime.json",
+  "repo_root": ".",
+  "worktree": "",
+  "errors": [],
+  "warnings": []
+}

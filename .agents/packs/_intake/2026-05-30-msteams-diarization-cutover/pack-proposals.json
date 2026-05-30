@@ -1,0 +1,46 @@
+{
+  "run_id": "2026-05-30-msteams-diarization-cutover",
+  "repo": "Vexa-ai/vexa",
+  "generated_at": "2026-05-30T13:10:00Z",
+  "method": "design-driven (single-pack proposal authored from operator-validated RnD outcomes; no raw GitHub issue intake)",
+  "proposals": [
+    {
+      "pack_id": "pack-msteams-diarization-cutover",
+      "title": "MS Teams diarization cutover — replace caption-driven audio gating with pyannote segmentation + blue-square correlation",
+      "labels": ["pack", "status:available"],
+      "ceo_outcome": "MS Teams transcripts no longer break when Teams' own captions lag, flicker, or drop. Speaker attribution is audio-driven, identity is correlated with the Teams DOM blue-square. Same architecture is reusable for Google Meet and Zoom in later packs.",
+      "cto_outcome": "Replace caption-driven boundary control in services/vexa-bot/core/src/index.ts:1837 (the lastCaptionSpeakerId / flushSpeaker block) with diarizer-driven boundary control using pyannote/segmentation-3.0 + wespeaker, validated in pack-msteams-local-diarization-rnd. Captions become an identity hint, not a flush trigger. No fallback path.",
+      "user_outcome": "Dashboard transcripts switch speakers at the actual change moment (±50ms typical, vs ~1.5s caption lag). Whisper hallucinations on silent/short audio drop ≥80%. Brief interjections that Teams captions miss are correctly attributed.",
+      "included_items": [
+        {
+          "type": "predecessor-pack",
+          "ref": "pack-msteams-local-diarization-rnd",
+          "issue": "https://github.com/Vexa-ai/vexa/issues/378",
+          "pr": "https://github.com/Vexa-ai/vexa/pulls/379"
+        }
+      ],
+      "out_of_scope": [
+        "Google Meet platform port (separate pack)",
+        "Zoom platform port (separate pack)",
+        "Same-gender 2-speaker corpus regression fix (needs segment embedding refinement pass; future pack)",
+        "Removing the RnD pack's services/vexa-bot/rnd/diarization/ sandbox",
+        "Replacing wespeaker (it stays as embedding + clustering model)",
+        "Speaker rename UI changes (reuse existing path)"
+      ],
+      "base_branch": "main",
+      "integration_branch": "main",
+      "runtime_namespace": "pack-msteams-diarization-cutover",
+      "evidence_root": ".agents/packs/pack-msteams-diarization-cutover/",
+      "body_file": "bodies/pack-msteams-diarization-cutover.md",
+      "release_id": "TBD — bind to next numbered Vexa release at release-staging time",
+      "existing_issue_number": null,
+      "stitching_risks": [
+        "Must land after RnD pack PR #379 is merged or tagged",
+        "Image size +32 MB from baked ONNX models — release hardenloop image-budget gate may need ack",
+        "No fallback path — diarizer load failure means bot fails to start (behaviour change)",
+        "Cross-pack dependency on SegmentPublisher.updateSpeakerName — currently shared with GMeet track-resolution"
+      ]
+    }
+  ],
+  "out_of_band": []
+}

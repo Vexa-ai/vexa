@@ -1,0 +1,5 @@
+{"ts":"2026-05-30T14:10:00Z","op":"pack_claim","detail":"Issue #394 claimed: status:available -> status:in-progress","actor":"develop"}
+{"ts":"2026-05-30T14:11:00Z","op":"preflight","detail":"preflight passed against /home/dima/dev/vexa-pack-pack-msteams-local-diarization-rnd after stashing untracked evidence","actor":"develop"}
+{"ts":"2026-05-30T14:12:00Z","op":"worktree_create","detail":"branch codex/pack-pack-msteams-diarization-cutover at /home/dima/dev/vexa-pack-pack-msteams-diarization-cutover off main@0360466","actor":"develop"}
+{"ts":"2026-05-30T19:05:00Z","op":"deps_install","detail":"npm install --ignore-scripts --workspace=core; added @huggingface/transformers ^4.2.0; pre-existing node-gyp Zoom-native build failure side-stepped","actor":"develop"}
+{"ts":"2026-05-30T19:06:00Z","op":"port_diarization","detail":"copied 5 files from predecessor rnd/diarization/src/ to core/src/services/diarization/; CJS adaptation (dropped import.meta.url / fileURLToPath); tsc shows no new errors","actor":"develop","commit":"1571ae7"}

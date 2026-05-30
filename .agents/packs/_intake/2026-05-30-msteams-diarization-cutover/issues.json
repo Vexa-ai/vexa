@@ -1,0 +1,25 @@
+{
+  "run_id": "2026-05-30-msteams-diarization-cutover",
+  "method": "no raw issue intake — this is a design-driven pack proposal from validated RnD outcomes",
+  "issues": [],
+  "prs": [],
+  "predecessor_artifacts": [
+    {
+      "kind": "pack-epic-issue",
+      "url": "https://github.com/Vexa-ai/vexa/issues/378",
+      "pack_id": "pack-msteams-local-diarization-rnd",
+      "status": "in-progress"
+    },
+    {
+      "kind": "pack-pr",
+      "url": "https://github.com/Vexa-ai/vexa/pulls/379",
+      "pack_id": "pack-msteams-local-diarization-rnd",
+      "status": "open"
+    },
+    {
+      "kind": "branch",
+      "ref": "codex/pack-pack-msteams-local-diarization-rnd",
+      "head_commit_summary": "b67d1a9 feat: Whisper confidence-based hallucination gates in onSegmentReady (after 26 commits delivering pyannote/segmentation-3.0 integration + hallucination layer)"
+    }
+  ]
+}

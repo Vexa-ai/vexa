@@ -1,0 +1,27 @@
+{
+  "compose_project": "vexa_home-dima-dev-vexa-pack-pack-msteams-local-diarization-rnd-agents-packs-pack-msteams-diarization-cutover-pack-json_compose",
+  "forbidden_ports": [
+    3000,
+    8056,
+    8080
+  ],
+  "lite_container": "vexa-home-dima-dev-vexa-pack-pack-msteams-local-diarization-rnd-agents-packs-pack-msteams-diarization-cutover-pack-json-lite",
+  "namespace": "pack-home-dima-dev-vexa-pack-pack-msteams-local-diarization-rnd-agents-packs-pack-msteams-diarization-cutover-pack-json",
+  "network_prefix": "pack-home-dima-dev-vexa-pack-pack-msteams-local-diarization-rnd-agents-packs-pack-msteams-diarization-cutover-pack-json",
+  "notes": [
+    "Ports are pack-scoped and intentionally avoid popular/default Vexa service ports.",
+    "Meeting API and other internal services should stay internal unless a deploy skill explicitly exposes a debug lane."
+  ],
+  "pack_id": "home-dima-dev-vexa-pack-pack-msteams-local-diarization-rnd-agents-packs-pack-msteams-diarization-cutover-pack-json",
+  "ports": {
+    "compose_browser_session": 42302,
+    "compose_dashboard": 42300,
+    "compose_gateway": 42301,
+    "compose_vnc": 42303,
+    "lite_dashboard": 42310,
+    "lite_gateway": 42311,
+    "lite_vnc": 42312
+  },
+  "release_id": "",
+  "slot": 65
+}
