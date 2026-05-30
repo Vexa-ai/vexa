@@ -178,7 +178,7 @@ async function scoreCorpus(id: string, samples: Float32Array, gt: GroundTruth, t
   const groups: Group[] = [];
   for (const c of commits) {
     const last = groups[groups.length - 1];
-    if (last && last.cluster === c.speakerId && c.tStartMs - last.tEndMs <= 800) {
+    if (last && last.cluster === c.speakerId && c.tStartMs - last.tEndMs <= 600) {
       last.tEndMs = Math.max(last.tEndMs, c.tEndMs);
     } else {
       groups.push({ tStartMs: c.tStartMs, tEndMs: c.tEndMs, cluster: c.speakerId });
