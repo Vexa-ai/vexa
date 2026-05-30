@@ -169,9 +169,25 @@ async function scoreCorpus(id: string, samples: Float32Array, gt: GroundTruth, t
     }
   }
 
-  // Pass 2: score each commit.
-  const commitScores: CommitScore[] = [];
+  // Merge consecutive same-cluster commits into "commit groups" so Whisper
+  // sees a longer chunk of one speaker's continuous audio per call.
+  // Boundary recall is unaffected (we still keep the original commit
+  // boundaries elsewhere); we just don't fragment same-speaker continuations
+  // for the transcription pass.
+  type Group = { tStartMs: number; tEndMs: number; cluster: string };
+  const groups: Group[] = [];
   for (const c of commits) {
+    const last = groups[groups.length - 1];
+    if (last && last.cluster === c.speakerId && c.tStartMs - last.tEndMs <= 800) {
+      last.tEndMs = Math.max(last.tEndMs, c.tEndMs);
+    } else {
+      groups.push({ tStartMs: c.tStartMs, tEndMs: c.tEndMs, cluster: c.speakerId });
+    }
+  }
+
+  // Pass 2: score each merged group.
+  const commitScores: CommitScore[] = [];
+  for (const c of groups) {
     // Give Whisper ±150ms of context audio outside the commit window so
     // words straddling the boundary still get fully heard. This is a
     // transcription-only padding; the boundary timing itself is unchanged.
@@ -309,7 +325,7 @@ async function scoreCorpus(id: string, samples: Float32Array, gt: GroundTruth, t
       tStartMs: c.tStartMs,
       tEndMs: c.tEndMs,
       durationMs: c.tEndMs - c.tStartMs,
-      speakerCluster: c.speakerId,
+      speakerCluster: c.cluster,
       gtText,
       dominantGtSpeaker: dominantSpeaker,
       purity,
