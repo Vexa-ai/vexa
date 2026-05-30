@@ -226,7 +226,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.maxUtteranceSamples = Math.floor(((cfg.maxUtteranceMs ?? 10000) / 1000) * SAMPLE_RATE);
     this.speechRms = cfg.speechRmsThreshold ?? 0.012;
     this.silenceRms = cfg.silenceRmsThreshold ?? 0.006;
-    this.minSilenceSamples = Math.floor(((cfg.minSilenceMs ?? 200) / 1000) * SAMPLE_RATE);
+    this.minSilenceSamples = Math.floor(((cfg.minSilenceMs ?? 100) / 1000) * SAMPLE_RATE);
     // Change-point detection (interruption-without-silence handler).
     // Defaults tuned for the eval suite's interruption corpora:
     //   - 2000ms check interval: balance compute (~2 embeds/check) vs latency
