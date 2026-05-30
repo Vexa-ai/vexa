@@ -426,21 +426,57 @@ async function main() {
       // Drain pendingFrames in time order. Frames inside [tStartMs, tEndMs]
       // are routed to this speaker's stream; frames before tStartMs are
       // dropped (silence / non-speech the diarizer chose not to embed).
+      //
+      // HALLUCINATION LAYER: before routing, gather the in-range frames
+      // and filter silence — Whisper hallucinates "Amen.", "Thanks for
+      // watching", etc. when fed >300ms of contiguous quiet audio. We
+      //   (a) drop frames whose 64-frame (≈64ms) windowed RMS is below
+      //       the silence threshold; the diarizer's VAD already passes
+      //       these, but Piper-rendered audio sometimes has long quiet
+      //       inter-line gaps and live audio similarly has filler;
+      //   (b) skip the entire commit if the surviving speech content is
+      //       <300ms — Whisper can't transcribe such short audio
+      //       reliably and tends to invent text instead.
+      const SILENCE_RMS = 0.006;
+      const MIN_SPEECH_SAMPLES = Math.ceil(0.3 * SAMPLE_RATE); // 300ms
       let i = 0;
       let routed = 0;
       let dropped = 0;
+      const inRangeFrames: Float32Array[] = [];
       while (i < pendingFrames.length) {
         const pf = pendingFrames[i];
         if (pf.ts > ev.tEndMs) break;
         if (pf.ts >= ev.tStartMs) {
-          speakerManager.feedAudio(resolved, pf.pcm);
-          routed++;
+          inRangeFrames.push(pf.pcm);
         } else {
           dropped++;
         }
         i++;
       }
       if (i > 0) pendingFrames.splice(0, i);
+      // Filter silence frames within the in-range set.
+      let speechSamples = 0;
+      const speechFrames: Float32Array[] = [];
+      for (const pcm of inRangeFrames) {
+        let sumSq = 0;
+        for (let j = 0; j < pcm.length; j++) sumSq += pcm[j] * pcm[j];
+        const rms = Math.sqrt(sumSq / Math.max(1, pcm.length));
+        if (rms >= SILENCE_RMS) {
+          speechFrames.push(pcm);
+          speechSamples += pcm.length;
+        } else {
+          dropped++;
+        }
+      }
+      // Skip entire commit if we don't have enough speech content.
+      if (speechSamples >= MIN_SPEECH_SAMPLES) {
+        for (const pcm of speechFrames) {
+          speakerManager.feedAudio(resolved, pcm);
+          routed++;
+        }
+      } else if (speechFrames.length > 0) {
+        dropped += speechFrames.length;
+      }
       if (routed > 0) metrics.recordFrameRouted(routed);
       if (dropped > 0) metrics.recordFrameDropped(dropped);
     };
