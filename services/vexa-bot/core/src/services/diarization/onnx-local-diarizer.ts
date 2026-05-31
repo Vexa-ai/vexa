@@ -198,6 +198,10 @@ export class OnnxLocalDiarizer implements Diarizer {
   private samplesAtLastCpCheck = 0;
   private inSpeech = false;
   private silenceSampleAccumulator = 0;
+  /** Running background-noise RMS estimate for the adaptive VAD gate
+   *  (pack #394). Seeded at the absolute speech floor; adapts to the
+   *  recording's actual level. */
+  private noiseFloor = 0.004;
   private lastLabel: DiarizerLabel = { speakerId: 'speaker_0', speakerName: 'speaker_0' };
   /** Embedding of the most-recently-committed utterance. Used purely for the
    *  turn-distance diagnostic — we report how far the current utterance is
@@ -355,10 +359,34 @@ export class OnnxLocalDiarizer implements Diarizer {
    *  processing this frame. Mutates internal speech-state. */
   private updateVadAndAccumulate(audio: Float32Array): boolean {
     const rms = computeRms(audio);
-    if (rms >= this.speechRms) {
+    // pack-msteams-diarization-cutover (#394): ADAPTIVE VAD gate. The old
+    // gate compared rms against the absolute speechRms=0.012 / silenceRms
+    // thresholds. That silently dropped quiet recordings wholesale — the
+    // offline eval found an AMI window at 10× lower gain (mean RMS 0.0028)
+    // where only 2% of frames cleared 0.012, so 98% of real speech was
+    // discarded. The same fails on quiet Teams conference audio (distant
+    // speaker / low capture gain). Fix: track a running noise floor and
+    // gate RELATIVE to it, with the absolute thresholds kept only as a
+    // low floor so pure-silence noise still can't trip it.
+    //
+    // Asymmetric tracker: the floor falls quickly toward quiet frames
+    // (captures inter-word pauses) and rises very slowly, so sustained
+    // speech can't drag the floor up and self-gate.
+    if (rms < this.noiseFloor) {
+      this.noiseFloor = 0.95 * this.noiseFloor + 0.05 * rms;
+    } else {
+      this.noiseFloor = 0.9995 * this.noiseFloor + 0.0005 * rms;
+    }
+    // Effective thresholds: max(absolute floor, noiseFloor × ratio).
+    // speech ≈ 3.5× background, silence-release ≈ 2× background. The
+    // absolute floors (scaled down from the configured values) prevent a
+    // dead-silent stretch from setting an absurdly low gate.
+    const dynSpeech = Math.max(this.speechRms * 0.3, this.noiseFloor * 3.5);
+    const dynSilence = Math.max(this.silenceRms * 0.3, this.noiseFloor * 2.0);
+    if (rms >= dynSpeech) {
       this.silenceSampleAccumulator = 0;
       this.inSpeech = true;
-    } else if (rms <= this.silenceRms) {
+    } else if (rms <= dynSilence) {
       this.silenceSampleAccumulator += audio.length;
       if (this.inSpeech && this.silenceSampleAccumulator >= this.minSilenceSamples) {
         this.inSpeech = false;
