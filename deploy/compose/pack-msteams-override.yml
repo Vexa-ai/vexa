@@ -1,0 +1,31 @@
+# Pack-msteams-diarization-cutover (#394) Compose override.
+#
+# Strips host-port mappings that collide with other locally-running
+# Vexa stacks. Internal service-to-service communication via the
+# `vexa` network is unaffected — the bot reaches the TTS service via
+# `http://tts-service:8002` regardless of the host port mapping.
+#
+# This file is loaded via `-f docker-compose.yml -f pack-msteams-override.yml`
+# (smuggled through the Makefile's COMPOSE_FILE variable). It is NOT
+# loaded by default — production deploys use docker-compose.yml only.
+
+services:
+  # Host-port 127.0.0.1:8002 is hard-coded in docker-compose.yml for
+  # host-side `curl localhost:8002` testing (TTS-auto-language probes).
+  # Conflicts with any other Vexa stack on the same host. The pack's
+  # blast radius doesn't include those host-side probes, so drop the
+  # mapping. Internal `tts-service:8002` still works for bot + meeting-api.
+  tts-service:
+    ports: !reset []
+
+  # Hot-dev (pack #394): runtime-api needs BOT_DEV_MODE and the host
+  # source mount path in its own env so that profiles.yaml env-expansion
+  # picks them up when spawning bot containers. The host path is also
+  # bind-mounted into runtime-api so the docker daemon (when spawning
+  # the bot from runtime-api's view) finds it — but actually it's the
+  # HOST docker daemon that needs the path resolvable on the HOST, so
+  # no mount into runtime-api is required.
+  runtime-api:
+    environment:
+      - BOT_DEV_MODE=${BOT_DEV_MODE:-}
+      - VEXA_BOT_DEV_SRC_MOUNT=${VEXA_BOT_DEV_SRC_MOUNT:-}
