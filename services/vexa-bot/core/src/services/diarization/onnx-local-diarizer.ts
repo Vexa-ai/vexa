@@ -128,6 +128,18 @@ export interface OnnxLocalDiarizerConfig {
    *    - seedAllowed: did the utterance pass the min-seed duration gate
    */
   onCommit?: (ev: CommitEvent) => void;
+  /** RnD capture hook (pack-msteams-diarization-cutover #394): fired in
+   *  commitUtterance right after the wespeaker embedding is computed, BEFORE
+   *  clustering assignment. Lets the offline eval cache the expensive
+   *  embeddings + per-utterance gating inputs once, then replay clustering
+   *  sweeps in milliseconds. Unused in production (callback unset). */
+  onUtteranceEmbed?: (rec: {
+    tStartMs: number;
+    tEndMs: number;
+    durSamples: number;
+    canSeedNew: boolean;
+    emb: number[];
+  }) => void;
 }
 
 export interface CommitEvent {
@@ -211,6 +223,7 @@ export class OnnxLocalDiarizer implements Diarizer {
   private commitRewrites = new Map<string, string>();
 
   private readonly onCommit?: (ev: CommitEvent) => void;
+  private readonly onUtteranceEmbed?: OnnxLocalDiarizerConfig['onUtteranceEmbed'];
 
   private constructor(
     model: PreTrainedModel,
@@ -220,6 +233,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.model = model;
     this.processor = processor;
     this.onCommit = cfg.onCommit;
+    this.onUtteranceEmbed = cfg.onUtteranceEmbed;
     this.clustering = new OnlineSpeakerClustering({
       // 0.45 with the second-nearest-gap rule. Single threshold alone
       // can't separate "mixed-voice noise" (~0.55, multiple speakers
@@ -440,6 +454,17 @@ export class OnnxLocalDiarizer implements Diarizer {
       // updated labels and don't accumulate unbounded audio.
       if (this.utteranceSamples >= this.maxUtteranceSamples) {
         await this.commitUtterance();
+        // pack-msteams-diarization-cutover (#394): speech continues after a
+        // mid-speech cap-commit, but commitUtterance() reset utteranceStartTs
+        // to null and the `!wasInSpeech` speech-start block won't re-run
+        // (we're still in speech). Without re-seeding the start, the NEXT
+        // cap-commit fell back to `utteranceStartMs = utteranceStartTs ?? 0`
+        // → tStart=0, stacking every subsequent monologue commit at the
+        // timeline origin. Re-seed to the current frame so timestamps stay
+        // in the fed-audio timebase. (Insulated in prod because the FIFO
+        // drain keys off duration, not absolute time — but it corrupts any
+        // absolute-time consumer, including the offline eval's GT alignment.)
+        this.utteranceStartTs = timestampMs;
       }
     } else if (wasInSpeech && !isInSpeech) {
       // Speech end — commit the just-finished utterance.
@@ -742,6 +767,19 @@ export class OnnxLocalDiarizer implements Diarizer {
     try {
       const emb = await this.embedUtterance(combined);
       if (!emb) return;
+
+      // RnD capture (pack #394): dump the embedding + gating inputs so the
+      // offline eval can replay clustering sweeps without re-running the
+      // expensive pyannote+wespeaker stages. Fires before assignment.
+      if (this.onUtteranceEmbed) {
+        this.onUtteranceEmbed({
+          tStartMs: utteranceStartMs,
+          tEndMs: utteranceEndMs,
+          durSamples: combined.length,
+          canSeedNew,
+          emb: Array.from(emb),
+        });
+      }
 
       // Turn-distance diagnostic: how far is this utterance from the LAST
       // committed utterance's embedding? Big distance ≈ new speaker turn,

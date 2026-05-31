@@ -1397,22 +1397,43 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           // sub-3s utterances on real speaker changes. Cost is more
           // whisper calls; we have headroom (134ms avg per call).
           maxUtteranceMs: 3000,
-          // pack-msteams-diarization-cutover (#394): aggressive cluster
-          // allocation. Live tests showed cluster MERGES (false negatives)
-          // were the dominant failure — JCAL handing off to CHAMATH or
-          // GURLEY interjecting "They need a scapegoat" landed on the
-          // wrong existing cluster because the wespeaker distance fell
-          // between newSpeakerThreshold (0.45) and veryFarThreshold
-          // (0.65), so the allocator picked nearest-existing. Merged
-          // identities are unrecoverable; over-split is recoverable
-          // (visually messier but the audio is still attributed to a
-          // distinct cluster). Pushed thresholds:
-          //   newSpeakerThreshold 0.45 → 0.30  (tighter "same speaker")
-          //   veryFarThreshold    0.65 → 0.45  (lower bypass)
-          //   newClusterCooldownMs 4000 → 1000 (allow rapid allocations)
-          newSpeakerThreshold: 0.30,
-          veryFarThreshold: 0.45,
-          newClusterCooldownMs: 1000,
+          // pack-msteams-diarization-cutover (#394): cluster-allocation
+          // config re-derived from the OFFLINE AMI EVAL (.agents/rnd/
+          // diarization-eval) after the earlier live-tuned Fix-7 values
+          // (nst 0.30 / vft 0.45 / cooldown 1000) proved BACKWARDS.
+          //
+          // The eval measured wespeaker embedding distances directly:
+          //   same-speaker  cosine dist  ≈ 0.44–0.60 (p75 ~0.54–0.61)
+          //   diff-speaker  cosine dist  ≈ 0.85–0.94 (p25 ~0.82–0.88)
+          // — a clean, consistent gap across 3 meetings. The shipped
+          // default 0.45 sat INSIDE the same-speaker spread, so ~40% of a
+          // single speaker's utterances exceeded it and spawned duplicate
+          // clusters (the "speaker_1 scattered across C/E/A/E" failure).
+          // Fix-7's 0.30 made that far worse (runaway over-clustering to
+          // 15-28 clusters). The eval optimum sits in the empty gap.
+          //
+          //   newSpeakerThreshold 0.45 → 0.55  (above same-speaker p75)
+          //   veryFarThreshold    0.65 → 0.80  (above diff-speaker p25)
+          //   newClusterCooldownMs 1000 → 2000 (anti-chaos, eval-tuned)
+          //
+          // THE KEY FIX is minSeedUtteranceMs below — the live "merges"
+          // (JCAL→CHAMATH not splitting) were NOT a threshold problem at
+          // all; they were the seed gate. See its comment.
+          newSpeakerThreshold: 0.55,
+          veryFarThreshold: 0.80,
+          newClusterCooldownMs: 2000,
+          // pack-msteams-diarization-cutover (#394) — the real root cause
+          // of the live speaker-collapse/merge. minSeedUtteranceMs gates
+          // how long an utterance must be to SEED a new cluster (default
+          // 3000ms). The offline eval found that in rapid back-and-forth
+          // (the All-In interruption case) essentially EVERY utterance is
+          // <3s — so nothing could ever seed a 2nd cluster and the whole
+          // meeting collapsed into speaker_0 (TS3003d: 100% utts <3s →
+          // exactly 1 cluster, 0.015 boundary recall). Dropping to 1000ms
+          // uncollapsed it: 1 → multiple clusters, clean-speech accuracy
+          // 0.21 → 0.87. The mechanism is universal (about utterance
+          // LENGTH, not embedding scale), so this generalizes to Teams.
+          minSeedUtteranceMs: 1000,
           // pack-msteams-diarization-cutover (#394) Fix 8: tighter pyannote
           // timing. Inference cadence 500→250 ms (boundary detection
           // latency halved). Pyannote forward pass is ~50 ms so cost
