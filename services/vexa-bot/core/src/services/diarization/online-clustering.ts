@@ -160,9 +160,13 @@ export class OnlineSpeakerClustering {
     // distance to the assigned centroid.
 
     const underCap = this.maxSpeakers == null || this.centroids.size < this.maxSpeakers;
-    // Very-far override: short utterance whose distance to nearest is very
-    // high (clearly different voice).
-    const veryFarOverride = !canSeedNew && nearestDist >= this.veryFarThreshold;
+    // Very-far override: utterance whose distance to nearest is very high
+    // (clearly different voice). pack-msteams-diarization-cutover (#394):
+    // applies regardless of canSeedNew — when the embedding is genuinely
+    // far from every existing centroid we want to allocate, even when the
+    // seed-duration gate is "open" (which is most of the time). The
+    // previous `!canSeedNew && ...` form made this escape hatch unreachable.
+    const veryFarOverride = nearestDist >= this.veryFarThreshold;
     // Second-nearest gap rule: an embedding qualifies as a brand-new speaker
     // only if it is **distinctly** closer to NOTHING in particular. Pure
     // mixed-voice utterances (multiple speakers overlapping) tend to sit
@@ -177,7 +181,16 @@ export class OnlineSpeakerClustering {
     const hasGap = (this.centroids.size < 2) ||
                    (secondNearestDist - nearestDist >= gapMargin) ||
                    (nearestDist >= this.veryFarThreshold);
-    const canAllocateNew = (canSeedNew || veryFarOverride) && underCap && hasGap && allowNewCluster;
+    // pack-msteams-diarization-cutover (#394): veryFarOverride is a TRUE
+    // bypass — it ignores both the seed-duration gate and the new-cluster
+    // cooldown. When a wespeaker embedding is genuinely far from every
+    // existing centroid (>= veryFarThreshold), it's a different voice and
+    // must allocate now, even if the 4s anti-chaos cooldown is still
+    // active. underCap + hasGap still apply (can't blow past max-speakers
+    // and won't allocate on equidistant mixed audio).
+    const canAllocateNew = underCap && hasGap && (
+      veryFarOverride || (canSeedNew && allowNewCluster)
+    );
     if (nearestDist < this.threshold || !canAllocateNew) {
       // Assign to existing speaker; update centroid via EMA, re-normalize.
       // Only update the centroid if this was actually a CONFIDENT match
