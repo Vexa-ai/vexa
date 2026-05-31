@@ -1413,14 +1413,17 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           // 15-28 clusters). The eval optimum sits in the empty gap.
           //
           //   newSpeakerThreshold 0.45 → 0.55  (above same-speaker p75)
-          //   veryFarThreshold    0.65 → 0.80  (above diff-speaker p25)
+          //   veryFarThreshold    0.65 → 0.90  (well above diff-speaker p25;
+          //     a joint re-tune on LOW-OVERLAP windows showed 0.90 cuts
+          //     spurious very-far-bypass clusters and lifts mean clean-
+          //     speech accuracy to 0.86 across 3 meetings vs 0.80 at 0.80)
           //   newClusterCooldownMs 1000 → 2000 (anti-chaos, eval-tuned)
           //
           // THE KEY FIX is minSeedUtteranceMs below — the live "merges"
           // (JCAL→CHAMATH not splitting) were NOT a threshold problem at
           // all; they were the seed gate. See its comment.
           newSpeakerThreshold: 0.55,
-          veryFarThreshold: 0.80,
+          veryFarThreshold: 0.90,
           newClusterCooldownMs: 2000,
           // pack-msteams-diarization-cutover (#394) — the real root cause
           // of the live speaker-collapse/merge. minSeedUtteranceMs gates
@@ -1433,7 +1436,11 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           // uncollapsed it: 1 → multiple clusters, clean-speech accuracy
           // 0.21 → 0.87. The mechanism is universal (about utterance
           // LENGTH, not embedding scale), so this generalizes to Teams.
-          minSeedUtteranceMs: 1000,
+          // 1500ms (vs the 3000 that collapsed): low enough that rapid
+          // interjections can still seed, high enough that the shortest
+          // noise blips don't spawn spurious centroids — the clean-data
+          // re-tune preferred 1500 over 1000 (fewer over-clusters).
+          minSeedUtteranceMs: 1500,
           // pack-msteams-diarization-cutover (#394) Fix 8: tighter pyannote
           // timing. Inference cadence 500→250 ms (boundary detection
           // latency halved). Pyannote forward pass is ~50 ms so cost
