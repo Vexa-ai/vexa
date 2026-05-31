@@ -96,7 +96,10 @@ cat <<INFO
   BOT_DEV_MODE    : 1
 INFO
 
-exec docker run --rm -it \
+DOCKER_TTY_ARGS=""
+if [ -t 0 ] && [ -t 1 ]; then DOCKER_TTY_ARGS="-it"; fi
+
+exec docker run --rm $DOCKER_TTY_ARGS \
   --platform linux/amd64 \
   --add-host=host.docker.internal:host-gateway \
   --shm-size=2g \
