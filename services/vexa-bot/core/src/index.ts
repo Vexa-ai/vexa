@@ -1349,6 +1349,15 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       });
       try {
         teamsDiarizer = await OnnxLocalDiarizer.create({
+          // pack-msteams-diarization-cutover (#394) live-latency tune:
+          // default maxUtteranceMs=10000 → 10s wait when only one speaker is
+          // active (no pyannote boundary fires), which feels broken on the
+          // dashboard ("nothing for 10s, big chunk, repeat"). Drop to 3s so
+          // mandatory commits arrive at human-perceptible cadence; pyannote's
+          // own boundary detection still carves earlier when there's a real
+          // speaker change. Cluster identity (speaker_N) carries across
+          // chunks so attribution stays stable.
+          maxUtteranceMs: 3000,
           onCommit: (ev: CommitEvent) => {
             if (!speakerManager || !teamsAttributor) return;
             const resolution = teamsAttributor.resolve({
@@ -1372,11 +1381,15 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
               speakerManager.updateSpeakerName(speakerId, speakerName);
             }
             // Drain frames in [tStartMs, tEndMs] into speakerManager.
-            // Same hallucination gate as the RnD harness: per-frame RMS
-            // filter + 600ms min-speech + 50% speech-ratio.
-            const SILENCE_RMS = 0.012;
-            const MIN_SPEECH_SAMPLES = Math.ceil(0.6 * 16000);
-            const MIN_SPEECH_RATIO = 0.5;
+            // Hallucination layer 1 (browser-side RMS≥0.01) already cut
+            // pure silence before frames reached us. The original Node-side
+            // gate from the RnD eval (RMS≥0.012, ≥600ms min, ≥50% ratio)
+            // was tuned for clean TTS audio and rejected all real Teams
+            // mic input. Loosened to a minimum-volume backstop only;
+            // Whisper confidence (no_speech_prob, avg_logprob,
+            // compression_ratio) inside onSegmentReady is layer 2 and
+            // the actual hallucination defence.
+            const MIN_TOTAL_SAMPLES = Math.ceil(0.2 * 16000); // 200ms — Whisper needs ~200ms minimum
             let i = 0;
             const inRange: Float32Array[] = [];
             while (i < teamsPendingFrames.length) {
@@ -1386,27 +1399,14 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
               i++;
             }
             if (i > 0) teamsPendingFrames.splice(0, i);
-            // Filter silence + speech-ratio.
-            let speechSamples = 0;
+            // Compute total audio in window for the min-duration check.
             let totalSamples = 0;
-            const speechFrames: Float32Array[] = [];
-            for (const pcm of inRange) {
-              totalSamples += pcm.length;
-              let sumSq = 0;
-              for (let j = 0; j < pcm.length; j++) sumSq += pcm[j] * pcm[j];
-              const rms = Math.sqrt(sumSq / Math.max(1, pcm.length));
-              if (rms >= SILENCE_RMS) {
-                speechFrames.push(pcm);
-                speechSamples += pcm.length;
-              }
-            }
-            const speechRatio = totalSamples > 0 ? speechSamples / totalSamples : 0;
-            if (speechSamples < MIN_SPEECH_SAMPLES || speechRatio < MIN_SPEECH_RATIO) {
-              // Commit's audio is mostly silence or too short — skip
-              // routing to avoid Whisper hallucinations.
+            for (const pcm of inRange) totalSamples += pcm.length;
+            if (totalSamples < MIN_TOTAL_SAMPLES) {
+              // Too-short window (<200ms) — Whisper can't transcribe.
               return;
             }
-            for (const pcm of speechFrames) speakerManager.feedAudio(speakerId, pcm);
+            for (const pcm of inRange) speakerManager.feedAudio(speakerId, pcm);
           },
         });
         log('[Teams diarizer] OnnxLocalDiarizer (pyannote/segmentation-3.0 + wespeaker) ready');

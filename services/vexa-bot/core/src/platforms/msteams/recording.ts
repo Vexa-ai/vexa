@@ -570,21 +570,15 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             countParticipants();
             setInterval(countParticipants, 5000);
 
-            // Per-speaker audio routing: Teams has ONE mixed stream. Caption
-            // text drives speaker boundaries (captions only fire on real
-            // speech, so no false activations). A ring buffer holds recent
-            // audio to look back across the caption delay; flush on text
-            // growth (new words) — refinements (punctuation/case) are ignored.
-            const MAX_QUEUE_AGE_MS = 10000;
-            const MIN_TEXT_GROWTH = 3; // chars — below this = refinement
-            interface QueuedChunk {
-              data: Float32Array;
-              timestamp: number;
-            }
-            const audioQueue: QueuedChunk[] = [];
+            // pack-msteams-diarization-cutover (#394): audio routing is now
+            // Node-driven by the pyannote/segmentation-3.0 diarizer. Every
+            // frame is dispatched to __vexaTeamsAudioData continuously;
+            // captions feed __vexaTeamsCaptionData for the TeamsAttributor
+            // (window-match + cluster-vote) and have NO effect on audio
+            // dispatch. The previous caption-gated audio queue + speaker-
+            // change flush + text-growth flush were the legacy fallback and
+            // are deleted in this pack — no fallbacks.
             let captionsEnabled = false;
-            let lastCaptionSpeaker: string | null = null;
-            let lastFlushedTextLength: number = 0;
 
             const setupPerSpeakerAudioRouting = () => {
               const audioEl = document.querySelector('audio') as HTMLAudioElement | null;
@@ -606,27 +600,28 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
 
               processor.onaudioprocess = (e: AudioProcessingEvent) => {
                 const data = e.inputBuffer.getChannelData(0);
-                const now = Date.now();
 
-                // Skip silence — don't queue chunks with no speech energy.
-                // This prevents silence from being flushed to the wrong speaker
-                // on speaker transitions.
+                // Browser-side silence gate (pack #394 hallucination layer 1
+                // of 2; Node-side is layer 2 and runs on commit). Threshold
+                // 0.01 mirrors the original capture path; below this we drop
+                // the frame to avoid feeding empty audio to the diarizer.
                 let sum = 0;
                 for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-                const rms = Math.sqrt(sum / data.length);
-                if (rms < 0.01) return;
+                if (Math.sqrt(sum / data.length) < 0.01) return;
 
-                audioQueue.push({ data: new Float32Array(data), timestamp: now });
-
-                // Drop entries older than MAX_QUEUE_AGE_MS
-                while (audioQueue.length > 0 && now - audioQueue[0].timestamp > MAX_QUEUE_AGE_MS) {
-                  audioQueue.shift();
+                // Dispatch every frame straight to the Node-side diarizer.
+                // The Node-side pyannote-driven OnnxLocalDiarizer owns
+                // boundaries; captions feed the attributor separately and
+                // do NOT gate audio. Speaker label is empty here — the
+                // attributor resolves it on each commit.
+                if (typeof (window as any).__vexaTeamsAudioData === 'function') {
+                  (window as any).__vexaTeamsAudioData('', Array.from(data));
                 }
               };
 
               source.connect(processor);
               processor.connect(ctx.destination);
-              (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (caption-aware with ring buffer)');
+              (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (diarizer-driven, no caption gate)');
             };
 
             // Caption observer: watches Teams live captions for speaker name +
@@ -669,63 +664,11 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               const speakerLower = speaker.toLowerCase();
               if (speakerLower.includes(botNameLower2) || speakerLower.includes('vexa')) return;
 
-              if (speaker !== lastCaptionSpeaker) {
-                // Speaker changed. Queue contains new speaker's audio
-                // (~1-1.5s accumulated during caption delay). Flush to
-                // new speaker to preserve their opening words.
-                lastFlushedTextLength = 0;
-                const queued = audioQueue.length;
-                if (queued > 0 && !speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
-                  // Only flush recent chunks (last 2s) — the caption delay lookback.
-                  // Older chunks are stale silence from the gap between speakers.
-                  const lookbackCutoff = now - 2000;
-                  let discarded = 0;
-                  while (audioQueue.length > 0 && audioQueue[0].timestamp < lookbackCutoff) {
-                    audioQueue.shift();
-                    discarded++;
-                  }
-                  let flushed = 0;
-                  while (audioQueue.length > 0) {
-                    const entry = audioQueue.shift()!;
-                    if (typeof (window as any).__vexaTeamsAudioData === 'function') {
-                      (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
-                    }
-                    flushed++;
-                  }
-                  (window as any).logBot?.('[Teams Captions] Speaker change: ' +
-                    (lastCaptionSpeaker || '(none)') + ' → ' + speaker +
-                    ' (flushed ' + flushed + ' chunks, discarded ' + discarded + ' stale)');
-                } else {
-                  (window as any).logBot?.('[Teams Captions] Speaker change: ' +
-                    (lastCaptionSpeaker || '(none)') + ' → ' + speaker);
-                }
-              }
-
-              lastCaptionSpeaker = speaker;
-
-              // Flush only when text GREW (new words). Refinements
-              // (punctuation/case) change text by 1-2 chars; new words grow by
-              // 5+. Compare against PREVIOUS text length, not cumulative max
-              // (Teams replaces caption text per entry, not appends).
-              const textGrowth = text.length - lastFlushedTextLength;
-              if (textGrowth > MIN_TEXT_GROWTH || text.length < lastFlushedTextLength) {
-                if (!speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
-                  let flushed = 0;
-                  while (audioQueue.length > 0) {
-                    const entry = audioQueue.shift()!;
-                    if (typeof (window as any).__vexaTeamsAudioData === 'function') {
-                      (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
-                    }
-                    flushed++;
-                  }
-                  if (flushed > 0) {
-                    (window as any).logBot?.('[Teams Captions] Flushed ' + flushed + ' chunks to ' + speaker +
-                      ' (text ' + (textGrowth > 0 ? '+' + textGrowth : textGrowth) + ' chars)');
-                  }
-                }
-                lastFlushedTextLength = text.length;
-              }
-
+              // pack-msteams-diarization-cutover (#394): captions only feed
+              // the Node-side TeamsAttributor. They do NOT drive audio
+              // boundaries any more — the pyannote/segmentation-3.0 diarizer
+              // on the Node side decides where utterances start/end. No
+              // speaker-change flush, no text-growth flush, no audioQueue.
               if (typeof (window as any).__vexaTeamsCaptionData === 'function') {
                 (window as any).__vexaTeamsCaptionData(speaker, text, now);
               }
