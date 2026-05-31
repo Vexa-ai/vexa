@@ -1,3 +1,12 @@
+// pack-msteams-diarization-cutover (#394) early signal claim: Node's
+// default action for SIGUSR2 (and SIGUSR1) is to TERMINATE. Our real
+// handlers are registered inside initPerSpeakerPipeline after Teams
+// admission — any signal arriving before that would kill the bot.
+// Register no-op listeners at module load so the signal is always
+// caught; the real handlers attach in addition and both fire.
+process.on('SIGUSR2', () => { /* placeholder until real handler attaches */ });
+process.on('SIGUSR1', () => { /* placeholder until real handler attaches */ });
+
 import { runBot } from "."
 import { z } from 'zod';
 import { BotConfig, BrowserSessionConfig } from "./types";

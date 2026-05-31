@@ -267,12 +267,15 @@ export class PyannoteSegmenter {
       if (prev === cur) continue;
       if (!speakerSetChanges(SPEAKERS_BY_CLASS[prev], SPEAKERS_BY_CLASS[cur])) continue;
       const tMs = windowStartMs + f * frameMs;
-      // Dedup against most recent emitted boundary (also against earlier
-      // events in this batch).
+      // pack-msteams-diarization-cutover (#394) Fix 8: dedup windows
+      // tightened (in-batch 100→50 ms, ever-emitted 200→100 ms) so
+      // rapid turn-taking like "Okay." → "Let's be honest..." can fire
+      // two boundaries within the same inference window. Previous 200 ms
+      // floor swallowed close-spaced events in back-and-forth segments.
       const lastInBatch = events.length > 0 ? events[events.length - 1].tMs : -Infinity;
       const lastEverEmitted = this.lastEmittedBoundaryMs;
-      if (tMs - lastInBatch <= 100) continue;
-      if (tMs - lastEverEmitted <= 200) continue;
+      if (tMs - lastInBatch <= 50) continue;
+      if (tMs - lastEverEmitted <= 100) continue;
       const prevSet = SPEAKERS_BY_CLASS[prev];
       const curSet = SPEAKERS_BY_CLASS[cur];
       const kind: BoundaryEvent['kind'] = prevSet.length === 0

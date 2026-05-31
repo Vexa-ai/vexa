@@ -272,6 +272,45 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.newClusterCooldownMs = cfg.newClusterCooldownMs ?? 4000;
   }
 
+  /** pack-msteams-diarization-cutover (#394) hot-tune support: mutate
+   *  the runtime config fields without rebuilding the diarizer. Only
+   *  the scalar tunables are exposed — model/processor/clustering
+   *  topology stays put. Pass `{maxUtteranceMs: 2500}` etc.; unset
+   *  fields stay unchanged. Returns the resolved current values for
+   *  log readback. */
+  updateConfig(partial: Partial<OnnxLocalDiarizerConfig>): Record<string, number> {
+    if (partial.maxUtteranceMs != null) {
+      this.maxUtteranceSamples = Math.floor((partial.maxUtteranceMs / 1000) * SAMPLE_RATE);
+    }
+    if (partial.minUtteranceMs != null) {
+      this.minUtteranceSamples = Math.floor((partial.minUtteranceMs / 1000) * SAMPLE_RATE);
+    }
+    if (partial.changePointDistThreshold != null) {
+      this.changePointDistThreshold = partial.changePointDistThreshold;
+    }
+    if (partial.peekConfidenceThreshold != null) {
+      this.peekConfidenceThreshold = partial.peekConfidenceThreshold;
+    }
+    if (partial.newClusterCooldownMs != null) {
+      this.newClusterCooldownMs = partial.newClusterCooldownMs;
+    }
+    if (partial.veryFarThreshold != null) {
+      (this.clustering as any).veryFarThreshold = partial.veryFarThreshold;
+    }
+    if (partial.newSpeakerThreshold != null) {
+      (this.clustering as any).newSpeakerThreshold = partial.newSpeakerThreshold;
+    }
+    return {
+      maxUtteranceMs: (this.maxUtteranceSamples / SAMPLE_RATE) * 1000,
+      minUtteranceMs: (this.minUtteranceSamples / SAMPLE_RATE) * 1000,
+      changePointDistThreshold: this.changePointDistThreshold,
+      peekConfidenceThreshold: this.peekConfidenceThreshold,
+      newClusterCooldownMs: this.newClusterCooldownMs,
+      veryFarThreshold: (this.clustering as any).veryFarThreshold,
+      newSpeakerThreshold: (this.clustering as any).newSpeakerThreshold,
+    };
+  }
+
   static async create(cfg: OnnxLocalDiarizerConfig = {}): Promise<OnnxLocalDiarizer> {
     transformersEnv.allowLocalModels = true;
     transformersEnv.allowRemoteModels = true; // first run downloads from HF; cached after
@@ -488,14 +527,38 @@ export class OnnxLocalDiarizer implements Diarizer {
     for (const ev of events) {
       const utteranceStartMs = this.utteranceStartTs;
       const samplesIntoUtterance = Math.floor(((ev.tMs - utteranceStartMs) / 1000) * SAMPLE_RATE);
-      if (samplesIntoUtterance < this.minUtteranceSamples) continue;
-      if (samplesIntoUtterance > this.utteranceSamples - this.minUtteranceSamples) continue;
+      // pack-msteams-diarization-cutover (#394) — Fix 1: honour
+      // SKIP_TOO_LATE/EARLY boundaries instead of dropping them. The
+      // old `continue` left the after-boundary tail glued to the
+      // before-boundary cluster (the "Can you explain it? Sure." case
+      // where a 1s interjection got attributed to the surrounding
+      // speaker). Now we clamp the split sample to the legal
+      // [minUtteranceSamples, utteranceSamples - minUtteranceSamples]
+      // window — the clamp introduces a few-frames misalignment vs
+      // the true boundary but preserves the cluster break, which is
+      // what matters for downstream wespeaker assignment. When the
+      // boundary is far from the legal window (>500ms), still skip
+      // (very-near-edge boundaries are likely smoothing artefacts).
+      const minSplit = this.minUtteranceSamples;
+      const maxSplit = this.utteranceSamples - this.minUtteranceSamples;
+      let splitSample = samplesIntoUtterance;
+      const drift500ms = Math.floor(0.5 * SAMPLE_RATE);
+      if (splitSample < minSplit) {
+        if (minSplit - splitSample > drift500ms) continue;
+        splitSample = minSplit;
+      } else if (splitSample > maxSplit) {
+        if (splitSample - maxSplit > drift500ms) continue;
+        splitSample = maxSplit;
+      }
       console.log(
         `[onnx-diarizer] pyannote boundary at ${(ev.tMs / 1000).toFixed(2)}s ` +
           `(${ev.kind}, conf=${ev.confidence.toFixed(3)}) ` +
-          `→ splitting utterance at ${(samplesIntoUtterance / SAMPLE_RATE).toFixed(2)}s in`,
+          `→ splitting utterance at ${(splitSample / SAMPLE_RATE).toFixed(2)}s in` +
+          (splitSample !== samplesIntoUtterance
+            ? ` (clamped from ${(samplesIntoUtterance / SAMPLE_RATE).toFixed(2)}s)`
+            : ''),
       );
-      await this.splitUtteranceAtSample(samplesIntoUtterance);
+      await this.splitUtteranceAtSample(splitSample);
       metrics.recordChangePoint();
       // After splitting, the remaining utterance is the tail; subsequent
       // boundary events from this frame might still apply, but their

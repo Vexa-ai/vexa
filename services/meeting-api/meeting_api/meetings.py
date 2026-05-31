@@ -1025,12 +1025,25 @@ async def request_bot(
     except Exception:
         pass
 
-    # System defaults for timeouts (ms)
+    # System defaults for timeouts (ms).
+    # pack-msteams-diarization-cutover (#394): bumped
+    # no_one_joined_timeout 120000 → 3600000 because the upstream 2-min
+    # default kept killing dev/test bots before the user could press
+    # "play" on a podcast or open the meeting in another tab. The
+    # underlying upstream MS Teams "is anyone else here" roster check
+    # is fragile and frequently returns 0 visible participants even
+    # when a human has actually joined, so the bot incorrectly
+    # concludes it is alone. 1h is the same value we already pass
+    # explicitly in the debug spawn config — making it the system
+    # default closes the gap for spawn paths (dashboard UI, skills,
+    # automation) that don't pass an explicit timeout. Also lifted
+    # max_time_left_alone from 15 min → 1h for consistency with the
+    # debug behavior.
     SYSTEM_DEFAULTS = {
         "max_bot_time": 7200000,          # 2h
         "max_wait_for_admission": 900000, # 15 min
-        "max_time_left_alone": 900000,    # 15 min
-        "no_one_joined_timeout": 120000,  # 2 min
+        "max_time_left_alone": 3600000,   # 1h (was 15 min)
+        "no_one_joined_timeout": 3600000, # 1h (was 2 min — too aggressive)
     }
 
     # Resolution order: per-request → user.data.bot_config → system defaults

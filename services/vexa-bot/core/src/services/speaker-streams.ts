@@ -78,6 +78,14 @@ export class SpeakerStreamManager {
   private carryForward: Float32Array[] = [];
   /** Generation at time of last submission — used to detect stale responses after fullReset */
   private submitGeneration: Map<string, number> = new Map();
+  /** pack-msteams-diarization-cutover (#394) Fix 9: wall-clock of the most
+   *  recent feedAudio across ALL clusters. Used by trySubmit to detect
+   *  "stale seam" idle-flushes: when speaker_0's buffer goes idle because
+   *  speaker_1 took over, the audio still in speaker_0's buffer is likely
+   *  misrouted seam audio (the diarizer's boundary lagged the actual
+   *  speaker change). Suppressing that emit prevents the duplicate-on-
+   *  wrong-cluster pattern. */
+  private lastAudioAnyClusterMs = 0;
 
   /** Called when unconfirmed audio needs transcription. */
   onSegmentReady: ((speakerId: string, speakerName: string, audioBuffer: Float32Array) => void) | null = null;
@@ -92,6 +100,25 @@ export class SpeakerStreamManager {
     this.maxBufferDuration = config?.maxBufferDuration ?? 30;
     this.idleTimeoutSec = config?.idleTimeoutSec ?? 15;
     this.sampleRate = config?.sampleRate ?? 16000;
+  }
+
+  /** pack-msteams-diarization-cutover (#394) hot-tune support: mutate
+   *  the per-speaker streaming scalars at runtime without rebuilding
+   *  the manager. submitInterval and sampleRate are NOT mutable — the
+   *  former is wired into setInterval timers per-speaker (would need to
+   *  cancel + re-arm each), the latter affects buffer math globally.
+   *  Returns the resolved current values for log readback. */
+  updateConfig(partial: { minAudioDuration?: number; confirmThreshold?: number; maxBufferDuration?: number; idleTimeoutSec?: number }): Record<string, number> {
+    if (partial.minAudioDuration != null) this.minAudioDuration = partial.minAudioDuration;
+    if (partial.confirmThreshold != null) this.confirmThreshold = partial.confirmThreshold;
+    if (partial.maxBufferDuration != null) this.maxBufferDuration = partial.maxBufferDuration;
+    if (partial.idleTimeoutSec != null) this.idleTimeoutSec = partial.idleTimeoutSec;
+    return {
+      minAudioDuration: this.minAudioDuration,
+      confirmThreshold: this.confirmThreshold,
+      maxBufferDuration: this.maxBufferDuration,
+      idleTimeoutSec: this.idleTimeoutSec,
+    };
   }
 
   addSpeaker(speakerId: string, speakerName: string): void {
@@ -138,8 +165,11 @@ export class SpeakerStreamManager {
 
     buffer.chunks.push(audioData);
     buffer.totalSamples += audioData.length;
-    buffer.lastAudioTimestamp = Date.now();
+    const now = Date.now();
+    buffer.lastAudioTimestamp = now;
     buffer.idleSubmitted = false;
+    // Fix 9 bookkeeping — track most-recent audio across all clusters
+    this.lastAudioAnyClusterMs = now;
   }
 
   /**
@@ -252,6 +282,21 @@ export class SpeakerStreamManager {
           const lastConfirmedSeg = segments[confirmedSegCount - 1];
           this.advanceOffset(buffer, lastConfirmedSeg.end);
           buffer.windowStartMs = baseWindowMs + Math.floor(lastConfirmedSeg.end * 1000);
+          // pack-msteams-diarization-cutover (#394) Fix 6: after a
+          // prefix-confirm + advanceOffset, the trailing UNCONFIRMED
+          // words from this submission are still in buffer.chunks (the
+          // offset advance only trimmed past the confirmed-segment
+          // boundary). On the NEXT submission Whisper re-decodes that
+          // residual audio + new arrivals; if buffer.lastWords still
+          // holds the FULL currentWords (set at line 234 above), the
+          // residual tail words pattern-match against themselves in
+          // the prefix-overlap test and get emitted AGAIN as a new
+          // segment — that's the "scattered transcripts" duplicate
+          // pattern the user reported (idx 1→2 "you don't", idx 27→28
+          // "He might be fighting for that", etc.). Slice the
+          // baseline down to ONLY the unconfirmed tail so the next
+          // round can't self-confirm against trimmed-away words.
+          buffer.lastWords = currentWords.slice(prefixLen);
           return;
         }
       }
@@ -380,6 +425,21 @@ export class SpeakerStreamManager {
 
     // Idle timeout
     if (idleMs > this.idleTimeoutSec * 1000 && this.unconfirmedSamples(buffer) > 0) {
+      // pack-msteams-diarization-cutover (#394) Fix 9: stale-seam
+      // suppression. If this cluster's last audio is significantly
+      // older than the most-recent-audio across ALL clusters, the
+      // remaining unconfirmed bytes are almost certainly seam audio
+      // that was misrouted to this cluster before pyannote detected
+      // the boundary. Emitting it produces the duplicate-on-wrong-
+      // cluster pattern (e.g. "Okay. Let's be honest..." appearing
+      // on speaker_0 after speaker_1 has already taken over with the
+      // same content). Suppress the emit and just reset the buffer.
+      const seamLagMs = this.lastAudioAnyClusterMs - buffer.lastAudioTimestamp;
+      if (seamLagMs > 2000) {
+        log(`[SpeakerStreams] Suppress stale-seam idle for "${buffer.speakerName}" (${(idleMs/1000).toFixed(1)}s idle, ${seamLagMs}ms behind another cluster — likely misrouted seam audio)`);
+        this.fullReset(buffer);
+        return;
+      }
       if (!buffer.idleSubmitted) {
         buffer.idleSubmitted = true;
         log(`[SpeakerStreams] Idle submit for "${buffer.speakerName}" (${(idleMs/1000).toFixed(1)}s idle, final submission)`);

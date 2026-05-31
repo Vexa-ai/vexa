@@ -1332,11 +1332,28 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       // John_Doe key. The earlier divergence (confirmThreshold=1,
       // submitInterval=1, minAudioDuration=0.5) was overcorrection while
       // the audio-flow bug masqueraded as a confirmation bug.
-      minAudioDuration: 3,     // 3s of unconfirmed audio before submission
-      submitInterval: 2,       // submit every 2s — lower latency
-      confirmThreshold: 2,     // 2 consecutive matches confirms
-      maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
-      idleTimeoutSec: 15,      // 15s idle → emit + reset
+      // pack-msteams-diarization-cutover (#394) Fix 5 (revised):
+      // minAudioDuration was inherited from the upstream CAPTION-driven
+      // model where speakerManager continuously accumulated audio from
+      // caption-text-growth events and needed a 3s gate to avoid
+      // submitting microscopic snippets. In our DIARIZER-driven model,
+      // the diarizer already decides when an utterance is complete
+      // enough to commit (its own minUtteranceMs=300ms gate) before
+      // draining audio to speakerManager.feedAudio. minAudioDuration
+      // here is a redundant filter that was suppressing legitimate
+      // short turns — "Yes", "No", "I got you", back-channels — and
+      // causing the cluster-collapse we observed on bot 46 (only the
+      // long-turn speaker hit the threshold, short-turn speakers'
+      // audio sat in their buffers until 30s idle-flush). Drop to 1s
+      // so the diarizer's own decision drives submission; drop
+      // idleTimeoutSec to 5s so back-channels that don't hit a
+      // prefix-confirm still get flushed quickly. All hot-tunable via
+      // SIGUSR2 once that's repaired.
+      minAudioDuration: 1,
+      submitInterval: 2,
+      confirmThreshold: 2,
+      maxBufferDuration: 30,
+      idleTimeoutSec: 5,
     });
     // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
     // SpeakerStreamManager no longer does VAD — it only receives real speech.
@@ -1371,8 +1388,37 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       // friendly by editing this file and respawning.
       const buildTeamsDiarizer = async () => {
         return await OnnxLocalDiarizer.create({
-          maxUtteranceMs: 5000,
-          veryFarThreshold: 0.65,
+          // pack-msteams-diarization-cutover (#394): 3000ms is the live-UX
+          // backstop. Dropped from 5000ms because when pyannote misses a
+          // boundary, the per-commit drift was 0.7-1.2s on average — those
+          // missed-boundary cases produced the "few words off" split
+          // misalignment we observed in live tests. 3s caps the drift at
+          // ~0.5s while still letting pyannote-driven boundaries carve
+          // sub-3s utterances on real speaker changes. Cost is more
+          // whisper calls; we have headroom (134ms avg per call).
+          maxUtteranceMs: 3000,
+          // pack-msteams-diarization-cutover (#394): aggressive cluster
+          // allocation. Live tests showed cluster MERGES (false negatives)
+          // were the dominant failure — JCAL handing off to CHAMATH or
+          // GURLEY interjecting "They need a scapegoat" landed on the
+          // wrong existing cluster because the wespeaker distance fell
+          // between newSpeakerThreshold (0.45) and veryFarThreshold
+          // (0.65), so the allocator picked nearest-existing. Merged
+          // identities are unrecoverable; over-split is recoverable
+          // (visually messier but the audio is still attributed to a
+          // distinct cluster). Pushed thresholds:
+          //   newSpeakerThreshold 0.45 → 0.30  (tighter "same speaker")
+          //   veryFarThreshold    0.65 → 0.45  (lower bypass)
+          //   newClusterCooldownMs 4000 → 1000 (allow rapid allocations)
+          newSpeakerThreshold: 0.30,
+          veryFarThreshold: 0.45,
+          newClusterCooldownMs: 1000,
+          // pack-msteams-diarization-cutover (#394) Fix 8: tighter pyannote
+          // timing. Inference cadence 500→250 ms (boundary detection
+          // latency halved). Pyannote forward pass is ~50 ms so cost
+          // goes from 10% → 20% CPU per inference loop — still room
+          // on the live-prod transcription host.
+          pyannoteInferIntervalMs: 250,
           onCommit: (ev: CommitEvent) => {
             if (!speakerManager || !teamsAttributor) return;
             const resolution = teamsAttributor.resolve({
@@ -1457,6 +1503,44 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           log('[Hot-Reload] teamsDiarizer rebuilt');
         } catch (err: any) {
           log(`[Hot-Reload] rebuild failed: ${err.message}`);
+        }
+      });
+      // pack-msteams-diarization-cutover (#394) hot-tune: SIGUSR2 reads
+      // /tmp/teams-diarizer-config.json and applies its scalar fields to
+      // BOTH the live diarizer and the live speakerManager via their
+      // updateConfig methods — no rebuild, no readmit. JSON shape:
+      //   {
+      //     "diarizer": {"maxUtteranceMs": 2500, "veryFarThreshold": 0.6},
+      //     "speakerStreams": {"minAudioDuration": 8, "idleTimeoutSec": 30}
+      //   }
+      // Bare keys (no "diarizer"/"speakerStreams" wrapper) are routed to
+      // the diarizer for backward-compat with earlier usage.
+      // Trigger: docker kill --signal=SIGUSR2 <container>
+      process.on('SIGUSR2', () => {
+        try {
+          const fs = require('fs');
+          const raw = fs.readFileSync('/tmp/teams-diarizer-config.json', 'utf8');
+          const parsed = JSON.parse(raw);
+          const diarizerCfg = parsed.diarizer ?? (parsed.speakerStreams ? {} : parsed);
+          const streamsCfg = parsed.speakerStreams ?? {};
+          const out: Record<string, any> = {};
+          if (Object.keys(diarizerCfg).length > 0) {
+            if (teamsDiarizer && typeof (teamsDiarizer as any).updateConfig === 'function') {
+              out.diarizer = (teamsDiarizer as any).updateConfig(diarizerCfg);
+            } else {
+              out.diarizer = { error: 'not ready' };
+            }
+          }
+          if (Object.keys(streamsCfg).length > 0) {
+            if (speakerManager && typeof (speakerManager as any).updateConfig === 'function') {
+              out.speakerStreams = (speakerManager as any).updateConfig(streamsCfg);
+            } else {
+              out.speakerStreams = { error: 'not ready' };
+            }
+          }
+          log(`[Hot-Tune] applied ${JSON.stringify(parsed)} → live ${JSON.stringify(out)}`);
+        } catch (err: any) {
+          log(`[Hot-Tune] SIGUSR2 failed: ${err.message}`);
         }
       });
     }

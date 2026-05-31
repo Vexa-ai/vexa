@@ -609,6 +609,18 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
                 if (Math.sqrt(sum / data.length) < 0.01) return;
 
+                // pack-msteams-diarization-cutover (#394) audio-presence
+                // fallback for the alone-monitor. Upstream `speakersIdentified`
+                // flips on DOM participant count > 1, but Teams' participant
+                // roster selector is fragile and frequently returns 0 even
+                // when a human is in the meeting — that's what causes bots
+                // to drop "mid-meeting" via no_one_joined_timeout despite
+                // audio + transcripts flowing. We stamp the wall-clock time
+                // of every non-silent frame; the alone-monitor below treats
+                // recent non-silent audio (<3s old) as proof the bot is not
+                // alone, regardless of the DOM check.
+                (window as any).__vexaTeamsLastAudioMs = Date.now();
+
                 // Dispatch every frame straight to the Node-side diarizer.
                 // The Node-side pyannote-driven OnnxLocalDiarizer owns
                 // boundaries; captions feed the attributor separately and
@@ -828,6 +840,27 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                   speakersIdentified = true;
                   (window as any).logBot("Teams Speakers identified - switching to post-speaker monitoring mode");
                 }
+              }
+
+              // pack-msteams-diarization-cutover (#394) audio-presence
+              // fallback: if non-silent audio passed the silence gate
+              // within the last 3s, treat the bot as NOT alone and (if
+              // we haven't yet) flip speakersIdentified=true so the
+              // active-phase timeout (max_time_left_alone) takes over
+              // from the startup-phase one (no_one_joined_timeout).
+              // This compensates for the upstream Teams DOM participant
+              // selector returning 0 even when a human IS in the
+              // meeting — without this, bots silently drop "mid-meeting"
+              // while audio + transcripts continue to flow.
+              const lastAudioMs = (window as any).__vexaTeamsLastAudioMs || 0;
+              const audioFreshMs = Date.now() - lastAudioMs;
+              if (audioFreshMs < 3000) {
+                aloneTime = 0;
+                if (!speakersIdentified) {
+                  speakersIdentified = true;
+                  (window as any).logBot(`Teams audio-presence fallback: non-silent audio ${audioFreshMs}ms ago — switching to post-speaker monitoring mode`);
+                }
+                return;
               }
 
               if (currentParticipantCount === 0) {
