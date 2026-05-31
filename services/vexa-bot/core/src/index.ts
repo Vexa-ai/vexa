@@ -1390,20 +1390,27 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             // compression_ratio) inside onSegmentReady is layer 2 and
             // the actual hallucination defence.
             const MIN_TOTAL_SAMPLES = Math.ceil(0.2 * 16000); // 200ms — Whisper needs ~200ms minimum
-            let i = 0;
+            // pack-msteams-diarization-cutover (#394) — diarizer-driven drain.
+            // The bug we just caught: ev.tStartMs/tEndMs come from the
+            // diarizer's session-relative time (samples since session start),
+            // while teamsPendingFrames[i].ts is wall-clock Date.now(). Those
+            // axes don't match, so the "in range" filter spuriously dropped
+            // commits 2+. Fix: drain ALL frames the diarizer has consumed
+            // so far (i.e. the next dur*16000 samples worth of buffered
+            // frames). The diarizer commits utterances in order, so frames
+            // for utterance N are the FIFO-oldest frames in the buffer.
+            const wantSamples = Math.round(((ev.tEndMs - ev.tStartMs) / 1000) * 16000);
             const inRange: Float32Array[] = [];
-            while (i < teamsPendingFrames.length) {
-              const pf = teamsPendingFrames[i];
-              if (pf.ts > ev.tEndMs) break;
-              if (pf.ts >= ev.tStartMs) inRange.push(pf.pcm);
-              i++;
+            let drained = 0;
+            let collected = 0;
+            while (drained < teamsPendingFrames.length && collected < wantSamples) {
+              const pcm = teamsPendingFrames[drained].pcm;
+              inRange.push(pcm);
+              collected += pcm.length;
+              drained++;
             }
-            if (i > 0) teamsPendingFrames.splice(0, i);
-            // Compute total audio in window for the min-duration check.
-            let totalSamples = 0;
-            for (const pcm of inRange) totalSamples += pcm.length;
-            if (totalSamples < MIN_TOTAL_SAMPLES) {
-              // Too-short window (<200ms) — Whisper can't transcribe.
+            if (drained > 0) teamsPendingFrames.splice(0, drained);
+            if (collected < MIN_TOTAL_SAMPLES) {
               return;
             }
             for (const pcm of inRange) speakerManager.feedAudio(speakerId, pcm);
