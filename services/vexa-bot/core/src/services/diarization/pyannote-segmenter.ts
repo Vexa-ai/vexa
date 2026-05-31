@@ -37,6 +37,9 @@ const DEFAULT_INFER_INTERVAL_MS = 500;
 /** Frames per 10s window — the model emits [1, 767, 7]. */
 const EXPECTED_FRAMES_PER_WINDOW = 767;
 const MS_PER_FRAME = (10 * 1000) / EXPECTED_FRAMES_PER_WINDOW; // ≈13.04
+/** How long to retain detected overlap intervals (pack #394). Utterances
+ *  cap at a few seconds, so 30s is ample for the diarizer to query. */
+const OVERLAP_RETENTION_MS = 30_000;
 
 /** Speaker set per powerset class. Order: silence, then single-speakers,
  *  then 2-speaker overlaps. */
@@ -126,6 +129,15 @@ export class PyannoteSegmenter {
    *  same boundary. */
   private lastEmittedBoundaryMs = -Infinity;
 
+  /** pack-msteams-diarization-cutover (#394): rolling list of absolute
+   *  time ranges [startMs, endMs] where pyannote classified 2+ speakers
+   *  active simultaneously (overlap classes {1,2}/{1,3}/{2,3}). The
+   *  diarizer queries this to (a) exclude overlap frames from wespeaker
+   *  embeddings — they contain 2 voices and contaminate the centroid —
+   *  and (b) hard-split utterances at overlap edges. Pruned to the last
+   *  OVERLAP_RETENTION_MS so a long meeting doesn't grow it unbounded. */
+  private overlapIntervals: Array<[number, number]> = [];
+
   private constructor(cfg: PyannoteSegmenterConfig) {
     this.inferIntervalSamples = Math.floor(((cfg.inferIntervalMs ?? DEFAULT_INFER_INTERVAL_MS) / 1000) * SAMPLE_RATE);
     this.freshWindowSamples = Math.floor(((cfg.freshWindowMs ?? 1200) / 1000) * SAMPLE_RATE);
@@ -146,6 +158,7 @@ export class PyannoteSegmenter {
     this.ringBaseTsMs = 0;
     this.samplesSinceLastInfer = 0;
     this.lastEmittedBoundaryMs = -Infinity;
+    this.overlapIntervals = [];
   }
 
   /** Append a frame of audio to the ring buffer + advance inference cadence.
@@ -289,6 +302,38 @@ export class PyannoteSegmenter {
       this.lastEmittedBoundaryMs = tMs;
       this.onBoundary?.(ev);
     }
+
+    // pack-msteams-diarization-cutover (#394): record overlap intervals
+    // (frames whose class has 2+ active speakers) in absolute time, so
+    // the diarizer can mask them out of embeddings + hard-split at their
+    // edges. Only scan the FRESH tail (last freshWindowMs) so overlapping
+    // inference windows don't keep re-adding the same region.
+    const freshStart = Math.max(scanStart, scanEnd - Math.ceil((this.freshWindowSamples / SAMPLE_RATE) * 1000 / frameMs));
+    let runStart = -1;
+    for (let f = freshStart; f < scanEnd; f++) {
+      const isOv = SPEAKERS_BY_CLASS[smoothed[f]].length >= 2;
+      if (isOv && runStart < 0) {
+        runStart = windowStartMs + f * frameMs;
+      } else if (!isOv && runStart >= 0) {
+        this.overlapIntervals.push([runStart, windowStartMs + f * frameMs]);
+        runStart = -1;
+      }
+    }
+    if (runStart >= 0) this.overlapIntervals.push([runStart, windowStartMs + scanEnd * frameMs]);
+    // prune old intervals
+    const cutoff = latestTsMs - OVERLAP_RETENTION_MS;
+    if (this.overlapIntervals.length > 0 && this.overlapIntervals[0][1] < cutoff) {
+      this.overlapIntervals = this.overlapIntervals.filter((iv) => iv[1] >= cutoff);
+    }
     return events;
+  }
+
+  /** pack-msteams-diarization-cutover (#394): true if absolute time `tMs`
+   *  falls inside a detected 2+-speaker overlap region. */
+  isOverlapMs(tMs: number): boolean {
+    for (const [a, b] of this.overlapIntervals) {
+      if (tMs >= a && tMs < b) return true;
+    }
+    return false;
   }
 }

@@ -151,6 +151,12 @@ export interface CommitEvent {
   isNew: boolean;
   dbSize: number;
   seedAllowed: boolean;
+  /** pack-msteams-diarization-cutover (#394): true if this committed
+   *  utterance falls inside a pyannote-detected 2+-speaker overlap
+   *  region. The onCommit drain routes overlap audio to BOTH the
+   *  outgoing and incoming speaker buffers so neither turn has a gap at
+   *  the moment they talked over each other. */
+  isOverlap: boolean;
 }
 
 const SAMPLE_RATE = 16_000;
@@ -378,6 +384,34 @@ export class OnnxLocalDiarizer implements Diarizer {
     return this.inSpeech;
   }
 
+  /** pack-msteams-diarization-cutover (#394) overlap-mask (#1): return a
+   *  copy of `audio` with the 2+-speaker overlap frames removed, using the
+   *  pyannote segmenter's detected overlap intervals. Checks in ~64ms
+   *  blocks (pyannote frame ≈13ms, so this is fine-grained enough). If
+   *  stripping would leave too little clean audio (<60% retained or below
+   *  the min-utterance length), returns the original — a half-overlapped
+   *  embedding still beats a too-short one. No segmenter → identity. */
+  private maskOverlap(audio: Float32Array, startMs: number): Float32Array {
+    if (!this.pyannoteSegmenter || audio.length === 0) return audio;
+    const BLOCK = 1024; // ~64ms at 16kHz
+    const keep: Float32Array[] = [];
+    let kept = 0;
+    for (let i = 0; i < audio.length; i += BLOCK) {
+      const blockMs = startMs + (i / SAMPLE_RATE) * 1000;
+      if (!this.pyannoteSegmenter.isOverlapMs(blockMs)) {
+        const block = audio.subarray(i, Math.min(i + BLOCK, audio.length));
+        keep.push(block);
+        kept += block.length;
+      }
+    }
+    if (kept < audio.length * 0.6 || kept < this.minUtteranceSamples) return audio;
+    if (kept === audio.length) return audio;
+    const out = new Float32Array(kept);
+    let off = 0;
+    for (const b of keep) { out.set(b, off); off += b.length; }
+    return out;
+  }
+
   private async embedUtterance(utteranceAudio: Float32Array): Promise<Float32Array | null> {
     const t0 = Date.now();
     // Processor turns raw PCM into the mel-fbank input the model expects.
@@ -577,12 +611,19 @@ export class OnnxLocalDiarizer implements Diarizer {
       const minSplit = this.minUtteranceSamples;
       const maxSplit = this.utteranceSamples - this.minUtteranceSamples;
       let splitSample = samplesIntoUtterance;
+      // pack-msteams-diarization-cutover (#394) hard-split (#2): overlap
+      // edges (onset/offset) ALWAYS split — they isolate the 2-speaker
+      // region as its own segment so it can't contaminate the clean
+      // single-speaker audio on either side. They bypass the 500ms drift
+      // skip (clamp into the legal window unconditionally). Non-overlap
+      // boundaries keep the drift guard (>500ms = likely smoothing noise).
+      const isOverlapEdge = ev.kind === 'overlap-onset' || ev.kind === 'overlap-offset';
       const drift500ms = Math.floor(0.5 * SAMPLE_RATE);
       if (splitSample < minSplit) {
-        if (minSplit - splitSample > drift500ms) continue;
+        if (!isOverlapEdge && minSplit - splitSample > drift500ms) continue;
         splitSample = minSplit;
       } else if (splitSample > maxSplit) {
-        if (splitSample - maxSplit > drift500ms) continue;
+        if (!isOverlapEdge && splitSample - maxSplit > drift500ms) continue;
         splitSample = maxSplit;
       }
       console.log(
@@ -775,7 +816,14 @@ export class OnnxLocalDiarizer implements Diarizer {
     const canSeedNew = combined.length >= this.minSeedUtteranceSamples;
 
     try {
-      const emb = await this.embedUtterance(combined);
+      // pack-msteams-diarization-cutover (#394) overlap-mask (#1): embed
+      // only the single-speaker frames of this utterance. Frames pyannote
+      // marked as 2+-speaker overlap contain a mix of voices and pull the
+      // wespeaker centroid toward a blend — that was a major source of the
+      // cluster scatter/merge. We strip those frames before embedding;
+      // assignment + commit still use the full audio.
+      const cleanForEmbed = this.maskOverlap(combined, utteranceStartMs);
+      const emb = await this.embedUtterance(cleanForEmbed);
       if (!emb) return;
 
       // RnD capture (pack #394): dump the embedding + gating inputs so the
@@ -854,6 +902,11 @@ export class OnnxLocalDiarizer implements Diarizer {
           `new=${assignment.isNew}, total=${this.clustering.size()}, ` +
           `seed_allowed=${canSeedNew})`,
       );
+      // pack-msteams-diarization-cutover (#394): flag overlap commits.
+      // With hard-split (#2) the overlap region is isolated as its own
+      // short utterance, so a midpoint probe of the segmenter's overlap
+      // map reliably identifies it.
+      const isOverlap = this.pyannoteSegmenter?.isOverlapMs((utteranceStartMs + utteranceEndMs) / 2) ?? false;
       this.onCommit?.({
         speakerId: finalSpeakerId,
         tStartMs: utteranceStartMs,
@@ -863,6 +916,7 @@ export class OnnxLocalDiarizer implements Diarizer {
         isNew: assignment.isNew && finalSpeakerId === assignment.speakerId,
         dbSize: this.clustering.size(),
         seedAllowed: canSeedNew,
+        isOverlap,
       });
       // Push into bounded commit history for post-hoc refinement.
       this.commitHistory.push({

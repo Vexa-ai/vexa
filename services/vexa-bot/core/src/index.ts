@@ -1387,6 +1387,11 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       // bot config (the values inside .create({...}) ) is hot-edit-
       // friendly by editing this file and respawning.
       const buildTeamsDiarizer = async () => {
+        // pack-msteams-diarization-cutover (#394) overlap dual-route (#3):
+        // the most recent single-speaker (non-overlap) cluster, so an
+        // overlap commit can be appended to the OUTGOING speaker's buffer
+        // as well as the incoming one's.
+        let lastNonOverlapSpeakerId: string | null = null;
         return await OnnxLocalDiarizer.create({
           // pack-msteams-diarization-cutover (#394): 3000ms is the live-UX
           // backstop. Dropped from 5000ms because when pyannote misses a
@@ -1448,16 +1453,16 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           // on the live-prod transcription host.
           pyannoteInferIntervalMs: 250,
           onCommit: (ev: CommitEvent) => {
-            if (!speakerManager || !teamsAttributor) return;
-            const resolution = teamsAttributor.resolve({
-              clusterId: ev.speakerId,
-              tStartMs: ev.tStartMs,
-              tEndMs: ev.tEndMs,
-            });
-            const speakerName = resolution.speakerName;
-            // Use cluster_id as the speakerManager key so cluster-vote
-            // late-rename can target it via updateSpeakerName. Display
-            // name is the resolved speakerName.
+            if (!speakerManager) return;
+            // pack-msteams-diarization-cutover (#394): captions FULLY
+            // removed from the speaker-naming path. The published speaker
+            // label is now the raw diarizer cluster id (speaker_0/1/2/3),
+            // never a caption-derived name. This completes the cutover —
+            // captions were already removed as the audio-boundary source;
+            // now they're removed as the naming source too. Pure
+            // diarization: the dashboard shows the diarizer's clusters
+            // directly. (Downstream may map cluster→real name later.)
+            const speakerName = ev.speakerId;
             const speakerId = ev.speakerId;
             if (!speakerManager.hasSpeaker(speakerId)) {
               speakerManager.addSpeaker(speakerId, speakerName);
@@ -1502,7 +1507,24 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             if (collected < MIN_TOTAL_SAMPLES) {
               return;
             }
+            // pack-msteams-diarization-cutover (#394) overlap dual-route
+            // (#3): when this committed segment is a 2+-speaker overlap,
+            // feed its audio to BOTH the outgoing speaker's buffer (so
+            // their turn doesn't end with a gap at the moment they were
+            // talked over) AND the incoming speaker's buffer (so their
+            // turn starts including the overlap). Both transcripts flow
+            // continuously through the overlap instead of one losing it.
+            // Normal (single-speaker) commits route to one buffer and
+            // update the "previous speaker" anchor.
             for (const pcm of inRange) speakerManager.feedAudio(speakerId, pcm);
+            if (ev.isOverlap && lastNonOverlapSpeakerId && lastNonOverlapSpeakerId !== speakerId) {
+              if (!speakerManager.hasSpeaker(lastNonOverlapSpeakerId)) {
+                speakerManager.addSpeaker(lastNonOverlapSpeakerId, lastNonOverlapSpeakerId);
+              }
+              for (const pcm of inRange) speakerManager.feedAudio(lastNonOverlapSpeakerId, pcm);
+            } else if (!ev.isOverlap) {
+              lastNonOverlapSpeakerId = speakerId;
+            }
           },
         });
       };
