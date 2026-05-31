@@ -363,12 +363,17 @@ export class OnnxLocalDiarizer implements Diarizer {
       this.utteranceChunks.push(audio);
       this.utteranceSamples += audio.length;
 
-      // Legacy wespeaker head/tail change-point check. Only runs when
-      // pyannote segmentation is DISABLED (otherwise pyannote provides
-      // earlier + more precise boundaries via the pending-boundaries
-      // queue above).
+      // pack-msteams-diarization-cutover (#394): run wespeaker head/tail
+      // change-point check ALONGSIDE pyannote. On live MS Teams audio,
+      // pyannote's speaker→speaker transitions don't fire reliably
+      // (recordings played back-to-back often classify as the same
+      // pyannote class even though wespeaker embeddings are very
+      // different). Both detectors run independently; if pyannote
+      // catches the boundary first, it splits; if not, the wespeaker
+      // head/tail check (every 1s, threshold 0.40) catches it ~1s
+      // later. splitUtteranceAtSample is idempotent — only the first
+      // split per utterance commits.
       if (
-        !this.pyannoteSegmenter &&
         this.changePointCheckIntervalSamples > 0 &&
         this.utteranceSamples - this.samplesAtLastCpCheck >= this.changePointCheckIntervalSamples &&
         this.utteranceSamples >= 2 * this.changePointHeadTailSamples + this.changePointHeadTailSamples / 2
@@ -482,12 +487,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     if (this.utteranceStartTs == null || this.utteranceSamples === 0) return;
     for (const ev of events) {
       const utteranceStartMs = this.utteranceStartTs;
-      // The boundary's timestamp is the wall-clock at which pyannote
-      // says the speaker change happened. Convert to sample offset
-      // within the current utterance.
       const samplesIntoUtterance = Math.floor(((ev.tMs - utteranceStartMs) / 1000) * SAMPLE_RATE);
-      // Need at least minUtteranceSamples of head AND tail for a sane
-      // split. If the boundary is too close to the start or end, skip.
       if (samplesIntoUtterance < this.minUtteranceSamples) continue;
       if (samplesIntoUtterance > this.utteranceSamples - this.minUtteranceSamples) continue;
       console.log(

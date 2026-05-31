@@ -1360,23 +1360,18 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           speakerManager.updateSpeakerName(clusterId, resolvedName);
         },
       });
-      try {
-        teamsDiarizer = await OnnxLocalDiarizer.create({
-          // pack-msteams-diarization-cutover (#394): pyannote-driven boundary
-          // splits ride on top, but maxUtteranceMs is still the live-UX
-          // backstop so a long single-speaker monologue still commits
-          // periodically and dashboard segments keep arriving. 5s is the
-          // sweet spot — perceived-live for users, long enough that
-          // pyannote almost always carves earlier when there's a real
-          // speaker change.
+      // pack-msteams-diarization-cutover (#394): hot-reload via dynamic
+      // require() turned out to be unsafe — the diarization modules
+      // pull in @huggingface/transformers which has its own nested
+      // onnxruntime-node native binding; re-requiring caused it to
+      // collide with the top-level onnxruntime-node and fail with
+      // "version VERS_1.24.3 not found". Stick with static import.
+      // Algorithm-code edits still require a bot restart; only
+      // bot config (the values inside .create({...}) ) is hot-edit-
+      // friendly by editing this file and respawning.
+      const buildTeamsDiarizer = async () => {
+        return await OnnxLocalDiarizer.create({
           maxUtteranceMs: 5000,
-          // pack-msteams-diarization-cutover (#394): seed a new cluster
-          // immediately when wespeaker distance is HUGE (clearly a different
-          // voice), bypassing both the seed-gate and the 4s cooldown. Without
-          // this, the 4s cooldown after speaker_0 seeding collapses speaker_1
-          // (their high-distance utterance gets matched to speaker_0).
-          // 0.65 is well above newSpeakerThreshold (0.45) — only fires for
-          // genuinely far voices.
           veryFarThreshold: 0.65,
           onCommit: (ev: CommitEvent) => {
             if (!speakerManager || !teamsAttributor) return;
@@ -1436,6 +1431,9 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             for (const pcm of inRange) speakerManager.feedAudio(speakerId, pcm);
           },
         });
+      };
+      try {
+        teamsDiarizer = await buildTeamsDiarizer();
         log('[Teams diarizer] OnnxLocalDiarizer (pyannote/segmentation-3.0 + wespeaker) ready');
       } catch (err: any) {
         // Per pack spec: NO fallback. A diarizer-load failure means the
@@ -1443,6 +1441,24 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
         log(`[Teams diarizer] FATAL: failed to load: ${err.message}`);
         throw err;
       }
+      // pack-msteams-diarization-cutover (#394) hot-dev:
+      // `kill -USR1 1` rebuilds teamsDiarizer in place — Teams session,
+      // audio pipeline, speakerManager, attributor all stay live. Use
+      // this to (a) reset clustering state mid-meeting, or (b) apply
+      // config-only edits inside the OnnxLocalDiarizer.create({...})
+      // call. Source edits in the diarization modules themselves still
+      // need a bot restart — dynamic require-cache reload collides with
+      // @huggingface/transformers' nested onnxruntime-node native lib.
+      process.on('SIGUSR1', async () => {
+        log('[Hot-Reload] SIGUSR1 received — rebuilding teamsDiarizer');
+        try {
+          try { (teamsDiarizer as any)?.reset?.(); } catch {}
+          teamsDiarizer = await buildTeamsDiarizer();
+          log('[Hot-Reload] teamsDiarizer rebuilt');
+        } catch (err: any) {
+          log(`[Hot-Reload] rebuild failed: ${err.message}`);
+        }
+      });
     }
 
     // onSegmentReady: transcribe the buffer (called every submitInterval)
