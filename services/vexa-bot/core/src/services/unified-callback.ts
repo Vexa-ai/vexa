@@ -150,10 +150,21 @@ export async function callStatusChangeCallback(
       const controller = new AbortController();
       timeoutId = setTimeout(() => controller.abort(), 5000);
 
+      // pack-msteams-diarization-cutover (#394) — port the upstream
+      // X-Internal-Secret header (origin/main commit fa86a09: "fix(callbacks):
+      // preserve internal secret across bot lifecycle"). Without it,
+      // meeting-api in 0.10.6.2+ rejects this callback with HTTP 403
+      // "Invalid internal secret", and the bot dies during join. Our pack
+      // branch is based on 0360466 (0.10.6.2 base) which predates that fix.
+      // Required to make /vexa-meeting-deployment-test work; cleanly merges
+      // away once we rebase onto a post-0.10.6.3 main.
+      const internalSecret =
+        (botConfig as any).internalSecret || process.env.INTERNAL_API_SECRET;
       const response = await fetch(baseUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(internalSecret ? { 'X-Internal-Secret': internalSecret } : {}),
         },
         body: JSON.stringify(payload),
         signal: controller.signal

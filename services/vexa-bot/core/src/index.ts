@@ -2498,14 +2498,47 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       bypassCSP: true,
       viewport: null, // CDP fullscreen removes browser chrome; window fills the 1920x1080 Xvfb display
     });
-    
-    // Pre-inject browser utils before any page scripts (affects current + future navigations)
-    try {
-      await context.addInitScript({
-        path: require('path').join(__dirname, 'browser-utils.global.js'),
-      });
-    } catch (e) {
-      log(`Warning: context.addInitScript failed: ${(e as any)?.message || e}`);
+
+    // pack-msteams-diarization-cutover (#394) hot-dev compat:
+    // tsx (esbuild) inserts __name(...) calls into every TypeScript class
+    // it compiles to keep .name correct under minification. When Playwright
+    // serializes a `page.evaluate(fn)` callback into the browser context,
+    // the callback retains __name() invocations but the helper lives only
+    // in the node-side module scope — browser eval throws
+    // "ReferenceError: __name is not defined" and post-admission code dies
+    // with post_join_setup_error. The compiled dist/ path (tsc) doesn't
+    // emit __name, so prod is unaffected; this polyfill is a no-op there.
+    await context.addInitScript(() => {
+      if (typeof (window as any).__name !== 'function') {
+        (window as any).__name = (target: any, value: any) => {
+          try { Object.defineProperty(target, 'name', { value, configurable: true }); } catch {}
+          return target;
+        };
+      }
+    });
+
+    // Pre-inject browser utils before any page scripts (affects current + future navigations).
+    // pack-msteams-diarization-cutover (#394) hot-dev compat:
+    //   - prod (`node dist/docker.js`): __dirname=/app/vexa-bot/core/dist → bundle at __dirname/browser-utils.global.js
+    //   - hot-dev (`tsx src/docker.ts` + host src mount): __dirname=/app/vexa-bot/core/src → no bundle there.
+    // build-browser-utils.js only writes to dist/. Fall back to ../dist/ so hot-dev finds the image-baked bundle.
+    {
+      const pathMod = require('path');
+      const fsMod = require('fs');
+      const candidates = [
+        pathMod.join(__dirname, 'browser-utils.global.js'),
+        pathMod.resolve(__dirname, '..', 'dist', 'browser-utils.global.js'),
+      ];
+      const found = candidates.find((p: string) => { try { return fsMod.existsSync(p); } catch { return false; } });
+      try {
+        if (found) {
+          await context.addInitScript({ path: found });
+        } else {
+          log(`Warning: browser-utils.global.js not found in any of: ${candidates.join(', ')}`);
+        }
+      } catch (e) {
+        log(`Warning: context.addInitScript failed: ${(e as any)?.message || e}`);
+      }
     }
 
     // Diagnostic: verify addInitScript works for Teams
