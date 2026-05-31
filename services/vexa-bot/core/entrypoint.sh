@@ -93,9 +93,18 @@ FBAPPS
   echo "[entrypoint] Starting SSH server on port 22"
   /usr/sbin/sshd
 
-  # Run node and keep container alive even if node crashes
-  echo "[entrypoint] Starting browser session node process..."
-  node dist/docker.js
+  # Run node and keep container alive even if node crashes.
+  # Hot-dev (pack-msteams-diarization-cutover #394 tooling):
+  # BOT_DEV_MODE=1 runs via tsx from /app/vexa-bot/core/src — when the
+  # host's services/vexa-bot/core/src is bind-mounted on top, edits
+  # land in the next bot spawn without an image rebuild.
+  if [ "${BOT_DEV_MODE:-}" = "1" ]; then
+    echo "[entrypoint] BOT_DEV_MODE=1 — browser session via tsx src/docker.ts"
+    npx tsx src/docker.ts
+  else
+    echo "[entrypoint] Starting browser session node process..."
+    node dist/docker.js
+  fi
   EXIT_CODE=$?
   echo "[entrypoint] node dist/docker.js exited with code $EXIT_CODE — keeping container alive for VNC access"
   # Keep alive so VNC + websockify remain accessible
@@ -117,6 +126,12 @@ FBAPPS
     websockify 6080 localhost:5900 &
   fi
 
-  # Run the bot
-  node dist/docker.js
+  # Run the bot — BOT_DEV_MODE=1 uses tsx + mounted src (see browser-session
+  # block above for rationale).
+  if [ "${BOT_DEV_MODE:-}" = "1" ]; then
+    echo "[entrypoint] BOT_DEV_MODE=1 — meeting bot via tsx src/docker.ts"
+    npx tsx src/docker.ts
+  else
+    node dist/docker.js
+  fi
 fi

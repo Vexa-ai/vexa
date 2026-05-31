@@ -41,6 +41,16 @@ profiles:
       TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
       TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
       INTERNAL_API_SECRET: "${INTERNAL_API_SECRET}"
+      # Hot-dev (pack-msteams-diarization-cutover #394 tooling). Unset in
+      # prod → entrypoint.sh runs `node dist/docker.js`. Set to "1" in dev
+      # (alongside VEXA_BOT_DEV_SRC_MOUNT below) → entrypoint runs via
+      # tsx against the mounted host source.
+      BOT_DEV_MODE: "${BOT_DEV_MODE:-}"
+    mounts:
+      # Hot-dev only. Set VEXA_BOT_DEV_SRC_MOUNT="/abs/host/services/vexa-bot/core/src:/app/vexa-bot/core/src:ro"
+      # (with BOT_DEV_MODE=1) to iterate on bot source without rebuilds.
+      # Empty/unset → no mount injected (empty strings filtered in api.py).
+      - "${VEXA_BOT_DEV_SRC_MOUNT:-}"
     ports:
       "9222/tcp": {}         # CDP debug port
 
@@ -64,6 +74,9 @@ profiles:
       REDIS_URL: "${REDIS_URL}"
       TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
       INTERNAL_API_SECRET: "${INTERNAL_API_SECRET}"
+      BOT_DEV_MODE: "${BOT_DEV_MODE:-}"  # see meeting profile
+    mounts:
+      - "${VEXA_BOT_DEV_SRC_MOUNT:-}"
     ports:
       "9222/tcp": {}         # CDP debug port
 

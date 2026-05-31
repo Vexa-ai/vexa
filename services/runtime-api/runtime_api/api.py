@@ -219,9 +219,13 @@ async def create_container(req: CreateContainerRequest, request: Request):
         "runtime.user_id": req.user_id,
     }
 
-    # Build mounts from profile + user config
-    mounts = list(profile_def.get("mounts", []))
-    user_mounts = req.config.get("mounts", [])
+    # Build mounts from profile + user config.
+    # Empty strings filtered — produced by profiles.yaml when a
+    # ${VAR:-} placeholder is left unset (e.g. the hot-dev hook
+    # VEXA_BOT_DEV_SRC_MOUNT). Docker rejects empty Binds with
+    # InvalidArgument, so drop them before reaching the backend.
+    mounts = [m for m in profile_def.get("mounts", []) if m]
+    user_mounts = [m for m in req.config.get("mounts", []) if m]
     if user_mounts:
         mounts.extend(user_mounts)
 
