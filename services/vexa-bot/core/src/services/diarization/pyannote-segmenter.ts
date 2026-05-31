@@ -55,6 +55,20 @@ function gainsSpeaker(prev: ReadonlyArray<number>, cur: ReadonlyArray<number>): 
   return false;
 }
 
+/** pack-msteams-diarization-cutover (#394): emit boundary on ANY change in
+ *  the active speaker set, not just "speaker added". The original
+ *  `gainsSpeaker` filter only fired on silence→speaker and overlap-onset
+ *  transitions; speaker_A→speaker_B with no silence gap (the common
+ *  back-and-forth meeting case) was silently dropped, leaving the diarizer
+ *  to wait for maxUtteranceMs and stuff both voices into one utterance.
+ *  We want the split moment to match the actual speaker change so each
+ *  speaker's audio routes cleanly to their own cluster buffer. */
+function speakerSetChanges(prev: ReadonlyArray<number>, cur: ReadonlyArray<number>): boolean {
+  if (prev.length !== cur.length) return true;
+  for (const s of cur) if (!prev.includes(s)) return true;
+  return false;
+}
+
 /** 3-tap median filter to suppress single-frame argmax spikes. */
 function medianFilter3(arr: number[]): number[] {
   const out = new Array<number>(arr.length);
@@ -83,8 +97,8 @@ export interface PyannoteSegmenterConfig {
 export interface BoundaryEvent {
   /** Absolute audio time of the boundary, in ms. */
   tMs: number;
-  /** silence→speaker | speaker→speaker | overlap-onset */
-  kind: 'silence→speaker' | 'speaker→speaker' | 'overlap-onset';
+  /** pack #394: extended to cover all speaker-set changes, not just additions. */
+  kind: 'silence→speaker' | 'speaker→speaker' | 'speaker→silence' | 'overlap-onset' | 'overlap-offset';
   /** Softmax confidence of the post-boundary frame's argmax. */
   confidence: number;
 }
@@ -111,6 +125,7 @@ export class PyannoteSegmenter {
    *  drop duplicates when overlapping inference windows re-detect the
    *  same boundary. */
   private lastEmittedBoundaryMs = -Infinity;
+  private lastClassDumpAtMs = 0;
 
   private constructor(cfg: PyannoteSegmenterConfig) {
     this.inferIntervalSamples = Math.floor(((cfg.inferIntervalMs ?? DEFAULT_INFER_INTERVAL_MS) / 1000) * SAMPLE_RATE);
@@ -226,17 +241,31 @@ export class PyannoteSegmenter {
     }
     const smoothed = medianFilter3(frameClasses);
     const frameMs = (window.length / SAMPLE_RATE) * 1000 / numFrames; // ≈13.04
-    // Scan only the FRESH region — last freshWindowSamples worth of
-    // frames. Re-detected boundaries from earlier in the window are
-    // filtered by lastEmittedBoundaryMs.
-    const freshFrames = Math.ceil((this.freshWindowSamples / SAMPLE_RATE) * 1000 / frameMs);
-    const scanStart = Math.max(1, numFrames - freshFrames);
+    // pack-msteams-diarization-cutover (#394): scan the ENTIRE window
+    // every time, not just the last freshWindowSamples worth. The fresh-
+    // only scan missed boundaries when speech started >freshWindowMs ago
+    // and continued steadily — the transition itself was in the older
+    // part of the window we skipped. The lastEmittedBoundaryMs dedup
+    // (200ms) already prevents re-emitting the same boundary, so a
+    // full-window scan adds no spurious events; it just makes sure we
+    // never miss the boundary moment.
+    const scanStart = 1;
     const events: BoundaryEvent[] = [];
+    // pack-msteams-diarization-cutover (#394) debug: count and log
+    // per-frame transitions vs what pyannote actually predicts, so we
+    // can tell whether the model itself sees changes (and we filter)
+    // vs whether the model is just returning one stable class.
+    let transitionsSeen = 0;
+    const classHistogram: Record<number, number> = {};
+    for (const c of smoothed) classHistogram[c] = (classHistogram[c] || 0) + 1;
     for (let f = scanStart; f < numFrames; f++) {
       const prev = smoothed[f - 1];
       const cur = smoothed[f];
       if (prev === cur) continue;
-      if (!gainsSpeaker(SPEAKERS_BY_CLASS[prev], SPEAKERS_BY_CLASS[cur])) continue;
+      transitionsSeen++;
+      // Use speakerSetChanges (any change) instead of gainsSpeaker
+      // (only-additions) so we split at speaker→speaker transitions too.
+      if (!speakerSetChanges(SPEAKERS_BY_CLASS[prev], SPEAKERS_BY_CLASS[cur])) continue;
       const tMs = windowStartMs + f * frameMs;
       // Dedup against most recent emitted boundary (also against earlier
       // events in this batch).
@@ -248,11 +277,27 @@ export class PyannoteSegmenter {
       const curSet = SPEAKERS_BY_CLASS[cur];
       const kind: BoundaryEvent['kind'] = prevSet.length === 0
         ? 'silence→speaker'
-        : (curSet.length > prevSet.length ? 'overlap-onset' : 'speaker→speaker');
+        : curSet.length === 0
+          ? 'speaker→silence'
+          : (curSet.length > prevSet.length ? 'overlap-onset'
+            : (curSet.length < prevSet.length ? 'overlap-offset' : 'speaker→speaker'));
       const ev: BoundaryEvent = { tMs, kind, confidence: frameConfidence[f] };
       events.push(ev);
       this.lastEmittedBoundaryMs = tMs;
       this.onBoundary?.(ev);
+    }
+    // Periodic class-histogram dump (every ~5s of fresh inference) so we
+    // can see whether pyannote is actually predicting different classes.
+    const now = Date.now();
+    if (now - this.lastClassDumpAtMs >= 5000) {
+      this.lastClassDumpAtMs = now;
+      const histStr = Object.entries(classHistogram)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .map(([c, n]) => `${c}:${n}`).join(' ');
+      console.log(
+        `[pyannote][DBG] window classes (cls:count) → ${histStr} · ` +
+        `transitions=${transitionsSeen} · emitted=${events.length}`,
+      );
     }
     return events;
   }

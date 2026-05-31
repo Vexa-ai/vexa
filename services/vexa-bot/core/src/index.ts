@@ -1362,15 +1362,14 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       });
       try {
         teamsDiarizer = await OnnxLocalDiarizer.create({
-          // pack-msteams-diarization-cutover (#394) live-latency tune:
-          // default maxUtteranceMs=10000 → 10s wait when only one speaker is
-          // active (no pyannote boundary fires), which feels broken on the
-          // dashboard ("nothing for 10s, big chunk, repeat"). Drop to 3s so
-          // mandatory commits arrive at human-perceptible cadence; pyannote's
-          // own boundary detection still carves earlier when there's a real
-          // speaker change. Cluster identity (speaker_N) carries across
-          // chunks so attribution stays stable.
-          maxUtteranceMs: 3000,
+          // pack-msteams-diarization-cutover (#394): pyannote-driven boundary
+          // splits ride on top, but maxUtteranceMs is still the live-UX
+          // backstop so a long single-speaker monologue still commits
+          // periodically and dashboard segments keep arriving. 5s is the
+          // sweet spot — perceived-live for users, long enough that
+          // pyannote almost always carves earlier when there's a real
+          // speaker change.
+          maxUtteranceMs: 5000,
           // pack-msteams-diarization-cutover (#394): seed a new cluster
           // immediately when wespeaker distance is HUGE (clearly a different
           // voice), bypassing both the seed-gate and the 4s cooldown. Without
