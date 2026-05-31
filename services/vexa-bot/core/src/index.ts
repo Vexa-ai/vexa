@@ -1319,20 +1319,24 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     const isTeams = botConfig.platform === 'teams';
     speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
-      // pack-msteams-diarization-cutover (#394): for Teams the audio
-      // arrives as discrete diarizer-committed utterances (~3s each,
-      // already-bounded by pyannote/segmentation-3.0). Each commit IS
-      // a finalized segment boundary — there's no streaming-prefix
-      // reconfirmation to wait for, so confirmThreshold=1 and a tiny
-      // minAudioDuration lets each commit produce one segment instead
-      // of accumulating into the buffer and force-flushing at 30s.
-      // GoogleMeet's per-speaker stream still works under these
-      // settings (it just emits more aggressively).
-      minAudioDuration: isTeams ? 0.5 : 3,
-      submitInterval: isTeams ? 1 : 2,
-      confirmThreshold: isTeams ? 1 : 2,
-      maxBufferDuration: 30,
-      idleTimeoutSec: 15,
+      // pack-msteams-diarization-cutover (#394): same defaults as upstream
+      // main's per-speaker streaming. The pack changes WHICH speaker key
+      // audio is routed to (diarizer cluster_id instead of caption-derived
+      // name) and WHICH boundary triggers a dispatch (pyannote-segmentation
+      // commit instead of caption-flush), but does NOT change the per-
+      // speaker streaming/confirmation contract. When speaker_0 talks for
+      // 30s, ten 3s diarizer commits drain into speaker_0's buffer
+      // continuously; trySubmit fires every 2s and LocalAgreement-2
+      // prefix-confirms across consecutive submissions of the same
+      // speaker's audio — exactly like main does per caption-attributed
+      // John_Doe key. The earlier divergence (confirmThreshold=1,
+      // submitInterval=1, minAudioDuration=0.5) was overcorrection while
+      // the audio-flow bug masqueraded as a confirmation bug.
+      minAudioDuration: 3,     // 3s of unconfirmed audio before submission
+      submitInterval: 2,       // submit every 2s — lower latency
+      confirmThreshold: 2,     // 2 consecutive matches confirms
+      maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
+      idleTimeoutSec: 15,      // 15s idle → emit + reset
     });
     // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
     // SpeakerStreamManager no longer does VAD — it only receives real speech.
