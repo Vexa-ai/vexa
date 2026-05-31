@@ -1319,11 +1319,20 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     const isTeams = botConfig.platform === 'teams';
     speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
-      minAudioDuration: 3,     // 3s of unconfirmed audio before submission
-      submitInterval: 2,       // submit every 2s — lower latency
-      confirmThreshold: 2,     // 2 consecutive matches — faster confirmation
-      maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
-      idleTimeoutSec: 15,      // 15s idle → emit + reset
+      // pack-msteams-diarization-cutover (#394): for Teams the audio
+      // arrives as discrete diarizer-committed utterances (~3s each,
+      // already-bounded by pyannote/segmentation-3.0). Each commit IS
+      // a finalized segment boundary — there's no streaming-prefix
+      // reconfirmation to wait for, so confirmThreshold=1 and a tiny
+      // minAudioDuration lets each commit produce one segment instead
+      // of accumulating into the buffer and force-flushing at 30s.
+      // GoogleMeet's per-speaker stream still works under these
+      // settings (it just emits more aggressively).
+      minAudioDuration: isTeams ? 0.5 : 3,
+      submitInterval: isTeams ? 1 : 2,
+      confirmThreshold: isTeams ? 1 : 2,
+      maxBufferDuration: 30,
+      idleTimeoutSec: 15,
     });
     // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
     // SpeakerStreamManager no longer does VAD — it only receives real speech.
@@ -1358,6 +1367,14 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           // speaker change. Cluster identity (speaker_N) carries across
           // chunks so attribution stays stable.
           maxUtteranceMs: 3000,
+          // pack-msteams-diarization-cutover (#394): seed a new cluster
+          // immediately when wespeaker distance is HUGE (clearly a different
+          // voice), bypassing both the seed-gate and the 4s cooldown. Without
+          // this, the 4s cooldown after speaker_0 seeding collapses speaker_1
+          // (their high-distance utterance gets matched to speaker_0).
+          // 0.65 is well above newSpeakerThreshold (0.45) — only fires for
+          // genuinely far voices.
+          veryFarThreshold: 0.65,
           onCommit: (ev: CommitEvent) => {
             if (!speakerManager || !teamsAttributor) return;
             const resolution = teamsAttributor.resolve({
