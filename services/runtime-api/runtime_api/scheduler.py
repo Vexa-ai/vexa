@@ -210,7 +210,7 @@ async def _fire_request(request: dict[str, Any]) -> dict[str, Any]:
     timeout = request.get("timeout", 30)
 
     start = time.time()
-    async with httpx.AsyncClient(follow_redirects=True) as client:
+    async with httpx.AsyncClient(follow_redirects=False) as client:
         if body is not None:
             if "Content-Type" not in headers and "content-type" not in headers:
                 headers["Content-Type"] = "application/json"
