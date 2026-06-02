@@ -85,13 +85,12 @@ console.log("\nTest 4: X11Input command emission (dryRun)");
   await x.moveRel(12, -3);
   await x.buttonDown(1);
   await x.buttonUp(1);
-  await x.clipboardPaste("VexaBot");
+  await x.typeText("VexaBot", 55);
   const argvs = x.log.map((a) => a.join(" "));
   assert(argvs.some((a) => a === "xdotool mousemove_relative --sync -- 12 -3"), "relative move uses XTEST mousemove_relative --sync");
   assert(argvs.some((a) => a === "xdotool mousedown 1"), "button down via xdotool mousedown");
   assert(argvs.some((a) => a === "xdotool mouseup 1"), "button up via xdotool mouseup");
-  assert(argvs.some((a) => a.startsWith("xclip -selection clipboard")), "paste stages text on clipboard via xclip");
-  assert(argvs.some((a) => a === "xdotool key --clearmodifiers ctrl+v"), "paste issues ctrl+v via XTEST");
+  assert(argvs.some((a) => a === "xdotool type --clearmodifiers --delay 55 -- VexaBot"), "text entry uses XTEST xdotool type (not the hang-prone clipboard path)");
 
   // ── 5. End-to-end replay against a fake Page (dryRun) ──────
   console.log("\nTest 5: navigateAndClick replay (fake page, dryRun)");

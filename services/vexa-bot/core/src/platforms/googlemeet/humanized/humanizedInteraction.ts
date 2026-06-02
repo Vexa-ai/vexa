@@ -186,10 +186,15 @@ export class HumanizedInteractor {
     await this.x11.buttonUp(1);
   }
 
-  /** Click a text field then enter text via clipboard paste (most human-safe). */
+  /**
+   * Click a text field then enter text via real XTEST keystrokes (xdotool type),
+   * with a per-character delay so input looks human. We deliberately avoid the
+   * clipboard path: `xclip` holds the X selection and does not exit, which hangs
+   * the child process.
+   */
   async fillField(page: Page, handle: ElementHandle<Element>, text: string): Promise<void> {
     await this.navigateAndClick(page, handle);
     await sleep(120 + Math.floor(Math.random() * 180));
-    await this.x11.clipboardPaste(text);
+    await this.x11.typeText(text, 55 + Math.floor(Math.random() * 50));
   }
 }

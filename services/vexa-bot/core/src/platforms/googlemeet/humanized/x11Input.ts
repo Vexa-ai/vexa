@@ -91,7 +91,11 @@ export class X11Input {
     await this.run(["xdotool", "key", "--clearmodifiers", keyName]);
   }
 
-  /** Put text on the clipboard (xclip) and paste it with Ctrl+V. */
+  /**
+   * Put text on the clipboard (xclip) and paste with Ctrl+V.
+   * WARNING: under execFile this can hang — `xclip` keeps running to serve the
+   * X selection and never exits. Prefer `typeText`. Kept for completeness/tests.
+   */
   async clipboardPaste(text: string): Promise<void> {
     await this.run(["xclip", "-selection", "clipboard"], Buffer.from(text, "utf-8"));
     await this.key("ctrl+v");
