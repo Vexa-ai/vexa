@@ -189,12 +189,29 @@ export async function joinGoogleMeeting(
       log("Camera already off or not found.");
     }
 
-    const joinSelector = googleJoinButtonSelectors[0];
-    const joinHandle = await page.waitForSelector(joinSelector, { timeout: 60000 });
-    await clickHandle(joinHandle!, "ask_to_join");
-    log(`${botName} joined the Google Meet Meeting.`);
+    // Try all join button selectors in order.
+    // googleJoinButtonSelectors[0] is 'Ask to join' (regular/lobby meetings).
+    // OPEN meetings created via Google Meet API (accessType=OPEN) show 'Join now'
+    // instead — the loop finds whichever button is present, avoiding a 60s timeout.
+    let joinClicked = false;
+    for (const sel of googleJoinButtonSelectors) {
+      try {
+        const joinHandle = await page.waitForSelector(sel, { timeout: 8000 });
+        if (joinHandle) {
+          await clickHandle(joinHandle, "ask_to_join");
+          joinClicked = true;
+          log(`${botName} joined the Google Meet Meeting (selector: ${sel}).`);
+          break;
+        }
+      } catch (e) {
+        log(`Join button not found with selector: ${sel}, trying next...`);
+      }
+    }
+    if (!joinClicked) {
+      throw new Error('No join button found after trying all selectors');
+    }
 
     await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-ask-to-join.png', fullPage: true });
-    log("📸 Screenshot taken: After clicking 'Ask to join'");
+    log('📸 Screenshot taken: After clicking join button');
   }
 }
