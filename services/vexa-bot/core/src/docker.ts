@@ -52,6 +52,7 @@ export const BotConfigSchema = z.object({
   defaultAvatarUrl: z.string().url().optional(),
   videoReceiveEnabled: z.boolean().optional(),
   cameraEnabled: z.boolean().optional(),
+  uiInteractionMode: z.enum(["humanized", "synthetic"]).optional(),
   authenticated: z.boolean().optional(),
   userdataS3Path: z.string().optional(),
   s3Endpoint: z.string().optional(),
