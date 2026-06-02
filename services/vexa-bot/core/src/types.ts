@@ -38,6 +38,13 @@ export type BotConfig = {
   videoReceiveEnabled?: boolean;  // Receive+decode video from participants (default: false)
   cameraEnabled?: boolean;        // Outgoing virtual camera/avatar (default: false)
 
+  // Google Meet UI interaction mode. "humanized" drives real OS-level (XTEST)
+  // pointer/keyboard input along recorded-style trajectories to satisfy Google
+  // Meet's input-authenticity bot detection; "synthetic" uses Playwright's
+  // direct click/fill. Defaults to "humanized" for google_meet, "synthetic"
+  // elsewhere (see resolveUiInteractionMode in platforms/googlemeet/join.ts).
+  uiInteractionMode?: "humanized" | "synthetic";
+
   // Authenticated meeting mode (uses persistent browser context with stored userdata)
   authenticated?: boolean;
   userdataS3Path?: string;   // e.g. "users/123/browser-userdata"
