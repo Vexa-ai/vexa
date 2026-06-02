@@ -50,6 +50,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteract
     xserver-xephyr \
     x11-utils \
     x11-xserver-utils \
+    xdotool \
+    xclip \
     fluxbox \
     x11vnc \
     socat \
