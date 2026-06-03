@@ -259,7 +259,11 @@ export const googleJoinButtonSelectors: string[] = [
   'button:has-text("Teilnahme anfragen")',
   // Italian
   'button:has-text("Partecipa ora")',
-  'button:has-text("Richiedi di partecipare")'
+  'button:has-text("Richiedi di partecipare")',
+  // Catalan (ca)
+  'button:has-text("Uneix-te ara")',
+  'button:has-text("Demana per unir-te")',
+  'button:has-text("Uneix-te")'
 ];
 
 export const googleCameraButtonSelectors: string[] = [
