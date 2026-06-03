@@ -138,15 +138,21 @@ export async function joinGoogleMeeting(
     const askToJoinSelector = googleJoinButtonSelectors[0];
 
     try {
-      // Use Promise.any (NOT Promise.race) so that locale variants that don't
-      // match (timeout-reject after 30s) don't abort the whole race.
-      // Promise.race rejects on first rejection — fatal here since most
-      // variants will reject (only the user's locale matches).
-      // Promise.any rejects only when ALL variants reject.
-      const joinButton = await Promise.any([
-        ...joinNowVariants.map(sel => page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const }))),
-        ...switchHereVariants.map(sel => page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const }))),
-        page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const })),
+      // Wrap each promise so rejection turns into a never-resolving promise.
+      // This lets Promise.race wait for the FIRST resolve across all variants
+      // without being short-circuited by the first reject (locale variants
+      // that don't match will time out and reject — most variants reject by
+      // design since only the user's locale matches).
+      // ES2021 Promise.any would be cleaner but tsconfig targets ES2020.
+      const neverRejects = <T>(p: Promise<T>): Promise<T> =>
+        p.catch(() => new Promise<T>(() => { /* hang forever on reject */ }));
+
+      const joinButton = await Promise.race([
+        ...joinNowVariants.map(sel => neverRejects(page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const })))),
+        ...switchHereVariants.map(sel => neverRejects(page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const })))),
+        neverRejects(page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const }))),
+        // Global timeout so the race terminates if NO variant matches
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('No join button visible in any locale within 30s')), 30000)),
       ]);
 
       if (joinButton.type === 'join_now') {
