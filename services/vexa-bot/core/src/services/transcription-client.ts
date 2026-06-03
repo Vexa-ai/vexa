@@ -145,15 +145,23 @@ export class TranscriptionClient {
       ));
     }
 
-    // Request word-level timestamps
-    parts.push(Buffer.from(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="timestamp_granularities"\r\n\r\n` +
-      `word\r\n`
-    ));
+    // Request word-level timestamps.
+    // NOTE: Groq's OpenAI-compatible transcription endpoint rejects
+    // `timestamp_granularities` with HTTP 400 "unknown param". OpenAI
+    // and the in-tree vexa-transcription-service both accept it.
+    // Skip the field when the endpoint host is groq.com.
+    const isGroqEndpoint = /(^|\.)groq\.com$/i.test(new URL(this.serviceUrl).hostname);
+    if (!isGroqEndpoint) {
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="timestamp_granularities"\r\n\r\n` +
+        `word\r\n`
+      ));
+    }
 
     // Max speech segment duration (controls how often Whisper splits segments)
-    if (this.maxSpeechDurationSec !== undefined) {
+    // Skip on Groq — same reason as timestamp_granularities (unknown param).
+    if (this.maxSpeechDurationSec !== undefined && !isGroqEndpoint) {
       parts.push(Buffer.from(
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="max_speech_duration_s"\r\n\r\n` +
@@ -162,7 +170,8 @@ export class TranscriptionClient {
     }
 
     // Min silence duration for VAD segment splitting (lower = more splits at natural pauses)
-    if (this.minSilenceDurationMs !== undefined) {
+    // Skip on Groq.
+    if (this.minSilenceDurationMs !== undefined && !isGroqEndpoint) {
       parts.push(Buffer.from(
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="min_silence_duration_ms"\r\n\r\n` +
