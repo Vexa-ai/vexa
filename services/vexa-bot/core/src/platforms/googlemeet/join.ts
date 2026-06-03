@@ -1,5 +1,5 @@
 import { Page, ElementHandle } from "playwright";
-import { log, randomDelay, callJoiningCallback } from "../../utils";
+import { log, callJoiningCallback } from "../../utils";
 import { BotConfig } from "../../types";
 import {
   googleNameInputSelectors,
@@ -198,7 +198,7 @@ export async function joinGoogleMeeting(
       try {
         const joinHandle = await page.waitForSelector(sel, { timeout: 8000 });
         if (joinHandle) {
-          await clickHandle(joinHandle, "ask_to_join");
+          await clickHandle(joinHandle, "join_button");
           joinClicked = true;
           log(`${botName} joined the Google Meet Meeting (selector: ${sel}).`);
           break;

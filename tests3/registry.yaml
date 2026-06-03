@@ -3635,3 +3635,63 @@ DISRUPTIVE_CRASH_KILLS_CANONICAL_BOT_CONTAINER:
   state: stateless
   max_duration_sec: 5
   release: 260508-v0.10.6.1
+
+BOT_PER_SPEAKER_USES_AUDIO_SERVICE:
+  proves: "startPerSpeakerAudioCapture uses AudioService.findMediaElements() + captureStream fallback — Google Meet elements found via captureStream() not srcObject"
+  symptom: "GMeet per-speaker audio capture finds 0 media elements (handleCount=0) — strict srcObject filter misses captureStream()-assigned audio — 0 transcription segments produced"
+  found: '2026-06-02'
+  type: static
+  file: services/vexa-bot/core/src/index.ts
+  grep: "captureStream|findMediaElements|connectedElements"
+  modes: [lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260602-transcriptions
+
+TEAMS_ALONE_DETECTION_HAS_AUDIO_CROSS_VALIDATE:
+  proves: "Teams alone-detection cross-validates against __vexaLastAudioActivityTs before incrementing aloneTime — mirrors Google Meet guard"
+  symptom: "Teams bot leaves false-positive at 120s when DOM participant selector breaks but audio is still active"
+  found: '2026-06-02'
+  type: static
+  file: services/vexa-bot/core/src/platforms/msteams/recording.ts
+  grep: "__vexaLastAudioActivityTs.*120000|Teams Cross-Validate"
+  modes: [lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260602-autostop
+
+DRAIN_TIMEOUT_GTE_10S:
+  proves: "Graceful-leave drain timeout is 10 s (not 2 s) so final chunk reaches MinIO under load"
+  symptom: "Last recording chunk dropped when MinIO is slow — recording ends with truncated final segment, status stays IN_PROGRESS"
+  found: '2026-06-02'
+  type: static
+  file: services/vexa-bot/core/src/index.ts
+  grep: "Waiting 10 more seconds before cleanup"
+  modes: [lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260602-autostop
+
+ZOOM_REMOVAL_MONITOR_CLEANUP_IS_NOT_NOOP:
+  proves: "Zoom startZoomRemovalMonitor cleanup function sets cancelled=true — SDK callback becomes no-op after teardown"
+  symptom: "Memory leak and potential double-leave on long Zoom meetings — onMeetingStatus callback fires after bot teardown"
+  found: '2026-06-02'
+  type: static
+  file: services/vexa-bot/core/src/platforms/zoom/strategies/removal.ts
+  grep: "cancelled = true"
+  modes: [lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260602-autostop
+
+BOT_HAS_NODEJS_ALONE_DETECTION_FALLBACK:
+  proves: "Node.js-side alone-detection watchdog module exists and is integrated in index.ts — safety net for hung browser JS context"
+  symptom: "Bot runs indefinitely (Meeting 17 = 15h) when browser JS context hangs — browser-side setInterval timers never fire"
+  found: '2026-06-02'
+  type: static
+  file: services/vexa-bot/core/src/index.ts
+  grep: "node-alone-watchdog|nodeWatchdogCleanup|node_watchdog_timeout"
+  modes: [lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260602-autostop
