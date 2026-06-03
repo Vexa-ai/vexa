@@ -23,12 +23,17 @@ export function startNodeAloneWatchdog(
 ): () => void {
   let aloneSeconds = 0;
   let stopped = false;
+  // Prevents overlapping evaluate calls if tick fires while previous is still pending.
+  // Defensive only — evaluate timeout (4s) < interval (5s) so overlap is unlikely.
+  let evaluating = false;
 
   log(`[NodeWatchdog] Started — threshold=${timeoutSeconds}s, poll=${POLL_INTERVAL_MS / 1000}s`);
 
   const interval = setInterval(async () => {
     if (stopped) return;
+    if (evaluating) return;
 
+    evaluating = true;
     let participantCount = 0;
     try {
       participantCount = await Promise.race([
@@ -46,6 +51,8 @@ export function startNodeAloneWatchdog(
       // Page unresponsive or evaluate failed — treat as alone.
       log('[NodeWatchdog] page.evaluate() failed or timed out — counting as alone');
       participantCount = 0;
+    } finally {
+      evaluating = false;
     }
 
     if (participantCount > 1) {
