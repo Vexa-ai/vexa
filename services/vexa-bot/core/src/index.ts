@@ -4,6 +4,7 @@ import { logJSON, setLogContext } from "./utils/log";
 import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unified-callback";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
+import { startNodeAloneWatchdog } from "./node-alone-watchdog";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
 import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
@@ -61,6 +62,7 @@ let activeVideoRecordingService: VideoRecordingService | null = null;
 // the resource summary at exit time and stop the sampler.
 let currentBotResourceSampler: ReturnType<typeof startBotResourceSampler> | null = null;
 let botPaSinkModuleId: string | null = null; // PulseAudio module ID for per-bot sink cleanup
+let nodeWatchdogCleanup: (() => void) | null = null; // AIS-151 Fix #1 Node.js alone-detection watchdog
 let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
   activeRecordingService = svc;
@@ -646,7 +648,9 @@ async function performGracefulLeave(
     });
     return;
   }
-  isShuttingDown = true;
+  isShuttingDown = true; // set before watchdog cleanup to close the re-entry window
+  nodeWatchdogCleanup?.();
+  nodeWatchdogCleanup = null;
   // v0.10.5 Pack G.1 (#272 issue 6) — emit the graceful-leave start
   // event with structured fields. This is the diagnostic-critical
   // window: Pack G.2's kubectl-logs capture reads stdout right up to
@@ -693,8 +697,8 @@ async function performGracefulLeave(
       
       // If leave was successful, wait a bit longer before closing to ensure Teams processes the leave
       if (platformLeaveSuccess === true) {
-        log("[Graceful Leave] Leave action successful. Waiting 2 more seconds before cleanup...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        log("[Graceful Leave] Leave action successful. Waiting 10 more seconds before cleanup...");
+        await new Promise(resolve => setTimeout(resolve, 10000)); // AIS-151 Fix #3: 2s→10s so final chunk reaches MinIO under load
       }
     } catch (leaveError: any) {
       log(`[Graceful Leave] Error during platform leave/close attempt: ${leaveError.message}`);
@@ -1922,17 +1926,47 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     const TARGET_SAMPLE_RATE = 16000;
     const BUFFER_SIZE = 4096;
 
-    // Find active media elements with audio tracks (retry up to 10 times)
+    // AIS-150: delegate to AudioService.findMediaElements() which already has
+    // the correct two-pass filter (strict srcObject + captureStream fallback).
+    // Google Meet assigns audio via captureStream(), not srcObject — the old
+    // strict-only filter returned 0 elements on every GMeet session.
+    // __vexaAudioService is set by startGoogleRecording before this runs.
+    const audioSvc = (window as any).__vexaAudioService;
     let mediaElements: HTMLMediaElement[] = [];
-    for (let attempt = 0; attempt < 10; attempt++) {
-      mediaElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
-        !el.paused &&
-        el.srcObject instanceof MediaStream &&
-        el.srcObject.getAudioTracks().length > 0
-      ) as HTMLMediaElement[];
-      if (mediaElements.length > 0) break;
-      await new Promise(r => setTimeout(r, 2000));
-      (window as any).logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
+    let audioSvcUsed = false;
+    if (audioSvc && typeof audioSvc.findMediaElements === 'function') {
+      try {
+        mediaElements = await audioSvc.findMediaElements(10, 2000);
+        audioSvcUsed = true;
+        (window as any).logBot?.(`[PerSpeaker] AudioService.findMediaElements returned ${mediaElements.length} element(s)`);
+      } catch (err: any) {
+        (window as any).logBot?.(`[PerSpeaker] AudioService.findMediaElements error: ${err.message} — using inline fallback`);
+      }
+    }
+    // Inline two-pass fallback — only when AudioService was unavailable or threw.
+    // Do NOT run when audioSvc returned [] after exhausting retries: that would
+    // double the 20s wait to 40s with no benefit (BLOCK perf-audit finding).
+    if (!audioSvcUsed) {
+      (window as any).logBot?.('[PerSpeaker] AudioService unavailable — using inline 2-pass fallback');
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const all = Array.from(document.querySelectorAll('audio, video'));
+        mediaElements = all.filter((el: any) =>
+          !el.paused &&
+          el.srcObject instanceof MediaStream &&
+          el.srcObject.getAudioTracks().length > 0
+        ) as HTMLMediaElement[];
+        if (mediaElements.length > 0) break;
+        // Pass 2: broad heuristic fallback (Google Meet).
+        // captureStream() must NOT be called here — every call returns a new
+        // MediaStream whose live tracks are never closed (orphaned stream BLOCK).
+        // readyState > 1 (HAVE_CURRENT_DATA+) with !paused is sufficient signal.
+        mediaElements = all.filter((el: any) =>
+          !el.paused && el.readyState > 1
+        ) as HTMLMediaElement[];
+        if (mediaElements.length > 0) break;
+        await new Promise(r => setTimeout(r, 2000));
+        (window as any).logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
+      }
     }
 
     if (mediaElements.length === 0) {
@@ -1942,8 +1976,10 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
     (window as any).logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
 
-    // Track connected streams by MediaStream ID to avoid double-binding
-    const connectedStreamIds = new Set<string>();
+    // Track connected elements by identity — NOT by stream.id, because
+    // captureStream() returns a new MediaStream with a different id on every call,
+    // making stream.id-based dedup unreliable (BLOCK correctness-audit finding).
+    const connectedElements = new Set<HTMLMediaElement>();
     // Track per-stream audio activity for health monitoring
     const streamCallCounts = new Map<number, number>();
     const streamLastActive = new Map<number, number>();
@@ -1951,10 +1987,17 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
     function connectElement(el: HTMLMediaElement, index: number): boolean {
       try {
-        const stream: MediaStream = (el as any).srcObject;
+        // captureStream fallback mirrors AudioService.createCombinedAudioStream
+        let stream: MediaStream | null =
+          (el as any).srcObject instanceof MediaStream ? (el as any).srcObject : null;
+        if (!stream && typeof (el as any).captureStream === 'function') {
+          try { stream = (el as any).captureStream(); } catch {}
+        }
+        if (!stream && typeof (el as any).mozCaptureStream === 'function') {
+          try { stream = (el as any).mozCaptureStream(); } catch {}
+        }
         if (!stream || stream.getAudioTracks().length === 0) return false;
-        const streamId = stream.id;
-        if (connectedStreamIds.has(streamId)) return false;
+        if (connectedElements.has(el)) return false;
 
         const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
         const source = ctx.createMediaStreamSource(stream);
@@ -1976,16 +2019,16 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
         source.connect(processor);
         processor.connect(ctx.destination);
-        connectedStreamIds.add(streamId);
+        connectedElements.add(el);
 
         // Monitor track ending — log when MediaStreamTrack becomes "ended"
         const track = stream.getAudioTracks()[0];
         track.addEventListener('ended', () => {
-          (window as any).logBot?.(`[PerSpeaker] Track ${index} ENDED (streamId=${streamId.substring(0, 12)})`);
-          connectedStreamIds.delete(streamId);
+          (window as any).logBot?.(`[PerSpeaker] Track ${index} ENDED`);
+          connectedElements.delete(el);
         });
 
-        (window as any).logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)}, streamId: ${streamId.substring(0, 12)})`);
+        (window as any).logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)})`);
         return true;
       } catch (err: any) {
         (window as any).logBot?.(`[PerSpeaker] Stream ${index} error: ${err.message}`);
@@ -2001,16 +2044,23 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
     // Periodic re-scan: discover new audio elements (late joiners, element recycling)
     const rescanInterval = setInterval(() => {
-      const currentElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
+      const all = Array.from(document.querySelectorAll('audio, video'));
+      // Two-pass filter: strict first, captureStream fallback second (mirrors initial scan)
+      let currentElements = all.filter((el: any) =>
         !el.paused &&
         el.srcObject instanceof MediaStream &&
         el.srcObject.getAudioTracks().length > 0
       ) as HTMLMediaElement[];
+      if (currentElements.length === 0) {
+        // Broad heuristic fallback — no captureStream() (orphaned stream BLOCK).
+        currentElements = all.filter((el: any) =>
+          !el.paused && el.readyState > 1
+        ) as HTMLMediaElement[];
+      }
 
       let newStreams = 0;
       for (const el of currentElements) {
-        const stream: MediaStream = (el as any).srcObject;
-        if (stream && !connectedStreamIds.has(stream.id)) {
+        if (!connectedElements.has(el)) {
           if (connectElement(el, nextStreamIndex)) {
             newStreams++;
             nextStreamIndex++;
@@ -2018,7 +2068,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
         }
       }
       if (newStreams > 0) {
-        (window as any).logBot?.(`[PerSpeaker] Re-scan: connected ${newStreams} new stream(s) (total tracked: ${connectedStreamIds.size})`);
+        (window as any).logBot?.(`[PerSpeaker] Re-scan: connected ${newStreams} new stream(s) (total: ${connectedElements.size})`);
       }
     }, 15000);
 
@@ -2561,6 +2611,17 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
   } else {
     log('[Bot] Transcription disabled, skipping per-speaker pipeline');
+  }
+
+  // AIS-151 Fix #1 — start Node.js-side alone-detection watchdog as a safety
+  // net for the case where browser JS context hangs and browser-side timers stall.
+  if (botConfig.platform === "google_meet" || botConfig.platform === "teams") {
+    const watchdogSecs = Math.floor(
+      (botConfig.automaticLeave?.everyoneLeftTimeout ?? 120000) / 1000
+    );
+    nodeWatchdogCleanup = startNodeAloneWatchdog(page, watchdogSecs, () =>
+      performGracefulLeave(page, 0, "node_watchdog_timeout")
+    );
   }
 
   // Call the appropriate platform handler
