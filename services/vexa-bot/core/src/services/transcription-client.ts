@@ -111,6 +111,12 @@ export class TranscriptionClient {
     // Build multipart form data manually (no external dependency needed)
     const boundary = `----FormBoundary${Date.now().toString(36)}`;
 
+    // Endpoint detection: Groq's OpenAI-compatible API differs in:
+    //   - default model name (whisper-large-v3-turbo instead of whisper-1)
+    //   - rejected params (timestamp_granularities, max_speech_duration_s,
+    //     min_silence_duration_ms)
+    const isGroqEndpoint = /(^|\.)groq\.com$/i.test(new URL(this.serviceUrl).hostname);
+
     const parts: Buffer[] = [];
 
     // File part
@@ -122,11 +128,18 @@ export class TranscriptionClient {
     parts.push(wavBuffer);
     parts.push(Buffer.from('\r\n'));
 
-    // Model part (required by OpenAI-compatible API)
+    // Model part (required by OpenAI-compatible API).
+    // Groq does NOT have "whisper-1" — it returns HTTP 404
+    // "The model `whisper-1` does not exist". Use Groq's whisper-large-v3-turbo
+    // when the endpoint is Groq. OpenAI and vexa-transcription-service
+    // accept "whisper-1".
+    // Allow override via env (TRANSCRIPTION_MODEL) for other providers.
+    const defaultModel = isGroqEndpoint ? 'whisper-large-v3-turbo' : 'whisper-1';
+    const model = process.env.TRANSCRIPTION_MODEL || defaultModel;
     parts.push(Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="model"\r\n\r\n` +
-      `whisper-1\r\n`
+      `${model}\r\n`
     ));
 
     // Response format part
@@ -150,7 +163,6 @@ export class TranscriptionClient {
     // `timestamp_granularities` with HTTP 400 "unknown param". OpenAI
     // and the in-tree vexa-transcription-service both accept it.
     // Skip the field when the endpoint host is groq.com.
-    const isGroqEndpoint = /(^|\.)groq\.com$/i.test(new URL(this.serviceUrl).hostname);
     if (!isGroqEndpoint) {
       parts.push(Buffer.from(
         `--${boundary}\r\n` +
