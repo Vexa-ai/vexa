@@ -138,8 +138,12 @@ export async function joinGoogleMeeting(
     const askToJoinSelector = googleJoinButtonSelectors[0];
 
     try {
-      // Race: wait for any join button across all locale variants
-      const joinButton = await Promise.race([
+      // Use Promise.any (NOT Promise.race) so that locale variants that don't
+      // match (timeout-reject after 30s) don't abort the whole race.
+      // Promise.race rejects on first rejection — fatal here since most
+      // variants will reject (only the user's locale matches).
+      // Promise.any rejects only when ALL variants reject.
+      const joinButton = await Promise.any([
         ...joinNowVariants.map(sel => page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const }))),
         ...switchHereVariants.map(sel => page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const }))),
         page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const })),
