@@ -1930,16 +1930,21 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     // __vexaAudioService is set by startGoogleRecording before this runs.
     const audioSvc = (window as any).__vexaAudioService;
     let mediaElements: HTMLMediaElement[] = [];
+    let audioSvcUsed = false;
     if (audioSvc && typeof audioSvc.findMediaElements === 'function') {
       try {
         mediaElements = await audioSvc.findMediaElements(10, 2000);
+        audioSvcUsed = true;
         (window as any).logBot?.(`[PerSpeaker] AudioService.findMediaElements returned ${mediaElements.length} element(s)`);
       } catch (err: any) {
         (window as any).logBot?.(`[PerSpeaker] AudioService.findMediaElements error: ${err.message} — using inline fallback`);
       }
     }
-    // Inline two-pass fallback when AudioService is unavailable
-    if (mediaElements.length === 0) {
+    // Inline two-pass fallback — only when AudioService was unavailable or threw.
+    // Do NOT run when audioSvc returned [] after exhausting retries: that would
+    // double the 20s wait to 40s with no benefit (BLOCK perf-audit finding).
+    if (!audioSvcUsed) {
+      (window as any).logBot?.('[PerSpeaker] AudioService unavailable — using inline 2-pass fallback');
       for (let attempt = 0; attempt < 10; attempt++) {
         const all = Array.from(document.querySelectorAll('audio, video'));
         mediaElements = all.filter((el: any) =>
@@ -1976,8 +1981,10 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
     (window as any).logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
 
-    // Track connected streams by MediaStream ID to avoid double-binding
-    const connectedStreamIds = new Set<string>();
+    // Track connected elements by identity — NOT by stream.id, because
+    // captureStream() returns a new MediaStream with a different id on every call,
+    // making stream.id-based dedup unreliable (BLOCK correctness-audit finding).
+    const connectedElements = new Set<HTMLMediaElement>();
     // Track per-stream audio activity for health monitoring
     const streamCallCounts = new Map<number, number>();
     const streamLastActive = new Map<number, number>();
@@ -1995,8 +2002,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
           try { stream = (el as any).mozCaptureStream(); } catch {}
         }
         if (!stream || stream.getAudioTracks().length === 0) return false;
-        const streamId = stream.id;
-        if (connectedStreamIds.has(streamId)) return false;
+        if (connectedElements.has(el)) return false;
 
         const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
         const source = ctx.createMediaStreamSource(stream);
@@ -2018,16 +2024,16 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
         source.connect(processor);
         processor.connect(ctx.destination);
-        connectedStreamIds.add(streamId);
+        connectedElements.add(el);
 
         // Monitor track ending — log when MediaStreamTrack becomes "ended"
         const track = stream.getAudioTracks()[0];
         track.addEventListener('ended', () => {
-          (window as any).logBot?.(`[PerSpeaker] Track ${index} ENDED (streamId=${streamId.substring(0, 12)})`);
-          connectedStreamIds.delete(streamId);
+          (window as any).logBot?.(`[PerSpeaker] Track ${index} ENDED`);
+          connectedElements.delete(el);
         });
 
-        (window as any).logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)}, streamId: ${streamId.substring(0, 12)})`);
+        (window as any).logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)})`);
         return true;
       } catch (err: any) {
         (window as any).logBot?.(`[PerSpeaker] Stream ${index} error: ${err.message}`);
@@ -2069,12 +2075,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
       let newStreams = 0;
       for (const el of currentElements) {
-        let stream: MediaStream | null =
-          (el as any).srcObject instanceof MediaStream ? (el as any).srcObject : null;
-        if (!stream && typeof (el as any).captureStream === 'function') {
-          try { stream = (el as any).captureStream(); } catch {}
-        }
-        if (stream && !connectedStreamIds.has(stream.id)) {
+        if (!connectedElements.has(el)) {
           if (connectElement(el, nextStreamIndex)) {
             newStreams++;
             nextStreamIndex++;
@@ -2082,7 +2083,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
         }
       }
       if (newStreams > 0) {
-        (window as any).logBot?.(`[PerSpeaker] Re-scan: connected ${newStreams} new stream(s) (total tracked: ${connectedStreamIds.size})`);
+        (window as any).logBot?.(`[PerSpeaker] Re-scan: connected ${newStreams} new stream(s) (total: ${connectedElements.size})`);
       }
     }, 15000);
 
