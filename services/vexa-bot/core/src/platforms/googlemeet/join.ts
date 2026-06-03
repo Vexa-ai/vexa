@@ -135,7 +135,21 @@ export async function joinGoogleMeeting(
       'button:has-text("Passa qui")',         // it
       'button:has-text("Canvia aquí")',       // ca
     ];
-    const askToJoinSelector = googleJoinButtonSelectors[0];
+    // Localized "Ask to join" variants. Used when the authenticated account is
+    // NOT a participant of the meeting (Workspace external guest) and must
+    // request admission from the host. Replaces the old single
+    // googleJoinButtonSelectors[0] which was English-XPath only.
+    const askToJoinVariants = [
+      'button:has-text("Ask to join")',            // en
+      'button:has-text("Solicitar unirse")',       // es
+      'button:has-text("Pedir unirse")',           // es alt
+      'button:has-text("Pedir para participar")',  // pt
+      'button:has-text("Demander à participer")',  // fr
+      'button:has-text("Teilnahme anfragen")',     // de
+      'button:has-text("Richiedi di partecipare")', // it
+      `button:has-text("Sol·licita unir-t'hi")`,   // ca (correct: Sol·licita, not Demana)
+      'button:has-text("Sol·licita")',             // ca short fallback
+    ];
 
     try {
       // Wrap each promise so rejection turns into a never-resolving promise.
@@ -150,7 +164,7 @@ export async function joinGoogleMeeting(
       const joinButton = await Promise.race([
         ...joinNowVariants.map(sel => neverRejects(page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const })))),
         ...switchHereVariants.map(sel => neverRejects(page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const })))),
-        neverRejects(page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const }))),
+        ...askToJoinVariants.map(sel => neverRejects(page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const })))),
         // Global timeout so the race terminates if NO variant matches
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error('No join button visible in any locale within 30s')), 30000)),
       ]);
