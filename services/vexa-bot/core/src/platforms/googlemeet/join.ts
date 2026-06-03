@@ -115,15 +115,31 @@ export async function joinGoogleMeeting(
     // - "Join now" — standard authenticated join
     // - "Switch here" — same account already in the meeting
     // - "Ask to join" — cookies didn't load (fallback to anonymous)
-    const joinNowSelector = 'button:has-text("Join now")';
-    const switchHereSelector = 'button:has-text("Switch here")';
+    // Localized for the 5 most common Vexa user locales (en/es/pt/fr/de/it).
+    // Account language drives the actual rendered label, not the meeting domain.
+    const joinNowVariants = [
+      'button:has-text("Join now")',          // en
+      'button:has-text("Unirse ahora")',      // es
+      'button:has-text("Participar agora")',  // pt
+      'button:has-text("Participer maintenant")', // fr
+      'button:has-text("Jetzt teilnehmen")',  // de
+      'button:has-text("Partecipa ora")',     // it
+    ];
+    const switchHereVariants = [
+      'button:has-text("Switch here")',       // en
+      'button:has-text("Cambiar aquí")',      // es
+      'button:has-text("Trocar aqui")',       // pt
+      'button:has-text("Changer ici")',       // fr
+      'button:has-text("Hier wechseln")',     // de
+      'button:has-text("Passa qui")',         // it
+    ];
     const askToJoinSelector = googleJoinButtonSelectors[0];
 
     try {
-      // Race: wait for any join button
+      // Race: wait for any join button across all locale variants
       const joinButton = await Promise.race([
-        page.waitForSelector(joinNowSelector, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const })),
-        page.waitForSelector(switchHereSelector, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const })),
+        ...joinNowVariants.map(sel => page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const }))),
+        ...switchHereVariants.map(sel => page.waitForSelector(sel, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const }))),
         page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const })),
       ]);
 
