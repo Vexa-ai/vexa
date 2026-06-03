@@ -4,6 +4,7 @@ import { logJSON, setLogContext } from "./utils/log";
 import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unified-callback";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
+import { startNodeAloneWatchdog } from "./node-alone-watchdog";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
 import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
@@ -61,6 +62,7 @@ let activeVideoRecordingService: VideoRecordingService | null = null;
 // the resource summary at exit time and stop the sampler.
 let currentBotResourceSampler: ReturnType<typeof startBotResourceSampler> | null = null;
 let botPaSinkModuleId: string | null = null; // PulseAudio module ID for per-bot sink cleanup
+let nodeWatchdogCleanup: (() => void) | null = null; // AIS-151 Fix #1 Node.js alone-detection watchdog
 let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
   activeRecordingService = svc;
@@ -646,6 +648,8 @@ async function performGracefulLeave(
     });
     return;
   }
+  nodeWatchdogCleanup?.();
+  nodeWatchdogCleanup = null;
   isShuttingDown = true;
   // v0.10.5 Pack G.1 (#272 issue 6) — emit the graceful-leave start
   // event with structured fields. This is the diagnostic-critical
@@ -693,8 +697,8 @@ async function performGracefulLeave(
       
       // If leave was successful, wait a bit longer before closing to ensure Teams processes the leave
       if (platformLeaveSuccess === true) {
-        log("[Graceful Leave] Leave action successful. Waiting 2 more seconds before cleanup...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        log("[Graceful Leave] Leave action successful. Waiting 10 more seconds before cleanup...");
+        await new Promise(resolve => setTimeout(resolve, 10000)); // AIS-151 Fix #3: 2s→10s so final chunk reaches MinIO under load
       }
     } catch (leaveError: any) {
       log(`[Graceful Leave] Error during platform leave/close attempt: ${leaveError.message}`);
@@ -2561,6 +2565,17 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
   } else {
     log('[Bot] Transcription disabled, skipping per-speaker pipeline');
+  }
+
+  // AIS-151 Fix #1 — start Node.js-side alone-detection watchdog as a safety
+  // net for the case where browser JS context hangs and browser-side timers stall.
+  if (botConfig.platform === "google_meet" || botConfig.platform === "teams") {
+    const watchdogSecs = Math.floor(
+      (botConfig.automaticLeave?.everyoneLeftTimeout || 120000) / 1000
+    );
+    nodeWatchdogCleanup = startNodeAloneWatchdog(page, watchdogSecs, () =>
+      performGracefulLeave(page, 0, "node_watchdog_timeout")
+    );
   }
 
   // Call the appropriate platform handler
