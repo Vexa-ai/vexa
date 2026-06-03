@@ -1956,21 +1956,13 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
           el.srcObject.getAudioTracks().length > 0
         ) as HTMLMediaElement[];
         if (mediaElements.length > 0) break;
-        // Pass 2: captureStream fallback (Google Meet)
-        mediaElements = all.filter((el: any) => {
-          try {
-            if (el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0) return true;
-            if (typeof el.captureStream === 'function') {
-              const cs = el.captureStream();
-              if (cs && cs.getAudioTracks().length > 0) return true;
-            }
-            if (typeof el.mozCaptureStream === 'function') {
-              const cs = el.mozCaptureStream();
-              if (cs && cs.getAudioTracks().length > 0) return true;
-            }
-          } catch {}
-          return false;
-        }) as HTMLMediaElement[];
+        // Pass 2: broad heuristic fallback (Google Meet).
+        // captureStream() must NOT be called here — every call returns a new
+        // MediaStream whose live tracks are never closed (orphaned stream BLOCK).
+        // readyState > 1 (HAVE_CURRENT_DATA+) with !paused is sufficient signal.
+        mediaElements = all.filter((el: any) =>
+          !el.paused && el.readyState > 1
+        ) as HTMLMediaElement[];
         if (mediaElements.length > 0) break;
         await new Promise(r => setTimeout(r, 2000));
         (window as any).logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
@@ -2060,20 +2052,10 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
         el.srcObject.getAudioTracks().length > 0
       ) as HTMLMediaElement[];
       if (currentElements.length === 0) {
-        currentElements = all.filter((el: any) => {
-          try {
-            if (el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0) return true;
-            if (typeof el.captureStream === 'function') {
-              const cs = el.captureStream();
-              if (cs && cs.getAudioTracks().length > 0) return true;
-            }
-            if (typeof el.mozCaptureStream === 'function') {
-              const cs = el.mozCaptureStream();
-              if (cs && cs.getAudioTracks().length > 0) return true;
-            }
-          } catch {}
-          return false;
-        }) as HTMLMediaElement[];
+        // Broad heuristic fallback — no captureStream() (orphaned stream BLOCK).
+        currentElements = all.filter((el: any) =>
+          !el.paused && el.readyState > 1
+        ) as HTMLMediaElement[];
       }
 
       let newStreams = 0;
@@ -2635,7 +2617,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   // net for the case where browser JS context hangs and browser-side timers stall.
   if (botConfig.platform === "google_meet" || botConfig.platform === "teams") {
     const watchdogSecs = Math.floor(
-      (botConfig.automaticLeave?.everyoneLeftTimeout || 120000) / 1000
+      (botConfig.automaticLeave?.everyoneLeftTimeout ?? 120000) / 1000
     );
     nodeWatchdogCleanup = startNodeAloneWatchdog(page, watchdogSecs, () =>
       performGracefulLeave(page, 0, "node_watchdog_timeout")

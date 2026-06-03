@@ -813,6 +813,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               : Number(leaveCfg.everyoneLeftTimeoutSeconds ?? 60);
 
             let aloneTime = 0;
+            let audioGuardTotalSuppressed = 0; // ceiling: max ticks the audio guard may suppress alone-time
             let lastParticipantCount = 0;
             let speakersIdentified = false;
             let hasEverHadMultipleParticipants = false;
@@ -891,16 +892,22 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 // AIS-151 Fix #2 — audio cross-validate before counting alone-time.
                 // Mirrors Google Meet guard (recording.ts:627). If audio was heard
                 // within the last 120 s the DOM count is unreliable; skip this tick.
+                // Ceiling: cap suppression at everyoneLeftTimeoutSeconds ticks so that
+                // sustained background noise cannot prevent the bot from ever leaving.
                 const lastAudioMs = (window as any).__vexaLastAudioActivityTs || 0;
                 const audioRecentlyActive = lastAudioMs > 0 && (Date.now() - lastAudioMs) < 120000;
-                if (audioRecentlyActive) {
+                if (audioRecentlyActive && audioGuardTotalSuppressed < everyoneLeftTimeoutSeconds) {
                   if (aloneTime > 0) {
                     (window as any).logBot(
                       `🎤 [Teams Cross-Validate] DOM count=0 but audio activity ${Math.round((Date.now() - lastAudioMs) / 1000)}s ago — refusing to count alone-time (false-LEFT_ALONE guard)`
                     );
                   }
+                  audioGuardTotalSuppressed++;
                   aloneTime = 0;
                   return;
+                }
+                if (!audioRecentlyActive) {
+                  audioGuardTotalSuppressed = 0;
                 }
                 aloneTime++;
                 const currentTimeout = speakersIdentified ? everyoneLeftTimeoutSeconds : startupAloneTimeoutSeconds;
