@@ -124,6 +124,7 @@ export async function joinGoogleMeeting(
       'button:has-text("Participer maintenant")', // fr
       'button:has-text("Jetzt teilnehmen")',  // de
       'button:has-text("Partecipa ora")',     // it
+      'button:has-text("Uneix-te ara")',      // ca
     ];
     const switchHereVariants = [
       'button:has-text("Switch here")',       // en
@@ -132,6 +133,7 @@ export async function joinGoogleMeeting(
       'button:has-text("Changer ici")',       // fr
       'button:has-text("Hier wechseln")',     // de
       'button:has-text("Passa qui")',         // it
+      'button:has-text("Canvia aquí")',       // ca
     ];
     const askToJoinSelector = googleJoinButtonSelectors[0];
 
