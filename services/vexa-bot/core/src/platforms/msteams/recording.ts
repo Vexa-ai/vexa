@@ -888,6 +888,20 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               }
 
               if (currentParticipantCount === 0) {
+                // AIS-151 Fix #2 — audio cross-validate before counting alone-time.
+                // Mirrors Google Meet guard (recording.ts:627). If audio was heard
+                // within the last 120 s the DOM count is unreliable; skip this tick.
+                const lastAudioMs = (window as any).__vexaLastAudioActivityTs || 0;
+                const audioRecentlyActive = lastAudioMs > 0 && (Date.now() - lastAudioMs) < 120000;
+                if (audioRecentlyActive) {
+                  if (aloneTime > 0) {
+                    (window as any).logBot(
+                      `🎤 [Teams Cross-Validate] DOM count=0 but audio activity ${Math.round((Date.now() - lastAudioMs) / 1000)}s ago — refusing to count alone-time (false-LEFT_ALONE guard)`
+                    );
+                  }
+                  aloneTime = 0;
+                  return;
+                }
                 aloneTime++;
                 const currentTimeout = speakersIdentified ? everyoneLeftTimeoutSeconds : startupAloneTimeoutSeconds;
                 const timeoutDescription = speakersIdentified ? "post-speaker" : "startup";

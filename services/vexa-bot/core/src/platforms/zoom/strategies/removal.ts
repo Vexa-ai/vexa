@@ -17,8 +17,11 @@ export function startZoomRemovalMonitor(
       return () => {}; // Return no-op cleanup function
     }
 
-    // Monitor SDK meeting status for removal/end events
+    // AIS-151 Fix #6: cancelled flag prevents the callback firing after teardown.
+    // SDK has no offMeetingStatus — closure flag is the correct cancel pattern.
+    let cancelled = false;
     sdk.onMeetingStatus((status: any) => {
+      if (cancelled) return;
       log(`[Zoom] Meeting status change: ${status.status}`);
 
       // Trigger removal callback on meeting end or failure
@@ -30,8 +33,8 @@ export function startZoomRemovalMonitor(
       }
     });
 
-    // Return cleanup function (SDK handles its own cleanup)
     return () => {
+      cancelled = true;
       log('[Zoom] Removal monitor cleanup');
     };
   } catch (error) {
