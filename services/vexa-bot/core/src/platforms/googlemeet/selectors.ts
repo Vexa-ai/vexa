@@ -235,10 +235,31 @@ export const googleRemovalIndicators: string[] = [
 
 // Google Meet UI interaction selectors
 export const googleJoinButtonSelectors: string[] = [
+  // English
   '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
-  'button:has-text("Join")'
+  'button:has-text("Join")',
+  // Spanish (account language es-* — common in LATAM/ES)
+  '//button[.//span[text()="Unirse ahora"]]',
+  '//button[.//span[text()="Solicitar unirse"]]',
+  '//button[.//span[text()="Pedir unirse"]]',
+  'button:has-text("Unirse ahora")',
+  'button:has-text("Solicitar unirse")',
+  'button:has-text("Pedir unirse")',
+  'button:has-text("Unirse")',
+  // Portuguese
+  'button:has-text("Participar agora")',
+  'button:has-text("Pedir para participar")',
+  // French
+  'button:has-text("Participer maintenant")',
+  'button:has-text("Demander à participer")',
+  // German
+  'button:has-text("Jetzt teilnehmen")',
+  'button:has-text("Teilnahme anfragen")',
+  // Italian
+  'button:has-text("Partecipa ora")',
+  'button:has-text("Richiedi di partecipare")'
 ];
 
 export const googleCameraButtonSelectors: string[] = [
