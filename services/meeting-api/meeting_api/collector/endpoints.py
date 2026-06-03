@@ -362,8 +362,8 @@ async def get_transcript_by_native_id(
 
         rec_with_playback = dict(rec)
         rec_with_playback["playback_url"] = {
-            "audio": f"/api/vexa/recordings/{rec.get('id')}/media/{audio_file.get('id')}/download" if audio_file else None,
-            "video": f"/api/vexa/recordings/{rec.get('id')}/media/{video_file.get('id')}/download" if video_file else None,
+            "audio": f"/recordings/{rec.get('id')}/media/{audio_file.get('id')}/download" if audio_file else None,
+            "video": f"/recordings/{rec.get('id')}/media/{video_file.get('id')}/download" if video_file else None,
         }
         recordings_with_playback.append(rec_with_playback)
 

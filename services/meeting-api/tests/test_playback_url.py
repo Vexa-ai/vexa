@@ -1,7 +1,10 @@
 """
-AIS-159 — test fail-first: playback_url = None aunque media_files existen
+AIS-159 — Spec-driven test fail-first: endpoint correcto para playback_url
 
-Este test valida que el backend deriva playback_url desde media_files.
+El endpoint de download real NO tiene /api/vexa prefix.
+La ruta correcta: /recordings/{rec_id}/media/{file_id}/download
+
+Este test DEBE FALLAR con el codigo actual (que usa /api/vexa).
 """
 
 import pytest
@@ -12,15 +15,15 @@ from meeting_api.models import Meeting
 
 
 @pytest.mark.asyncio
-async def test_completed_recording_has_playback_url(client: AsyncClient, mock_db):
+async def test_playback_url_uses_correct_endpoint_path(client: AsyncClient, mock_db):
     """
-    GIVEN: DB returns meeting with recordings + media_files (no playback_url)
+    GIVEN: DB returns meeting con recordings + media_files
 
     WHEN: GET /transcripts/google_meet/aaa-bbbb-ccc
 
-    THEN: response includes playback_url.audio and playback_url.video derived from media_files
+    THEN: playback_url.audio apunta a /recordings/{rec_id}/media/{file_id}/download
+          (sin /api/vexa prefix — el router no tiene ese prefix)
     """
-    # GIVEN: mock meeting with recordings + media_files
     meeting_dict = {
         "id": 42,
         "user_id": 1,
@@ -63,15 +66,13 @@ async def test_completed_recording_has_playback_url(client: AsyncClient, mock_db
         "updated_at": datetime.utcnow()
     }
 
-    # Crear MagicMock del modelo Meeting
     mock_meeting = MagicMock(spec=Meeting)
     for k, v in meeting_dict.items():
         setattr(mock_meeting, k, v)
 
-    # Configurar mock_db.execute para devolver la meeting
     mock_result = MagicMock()
     mock_result.scalars.return_value.first.return_value = mock_meeting
-    mock_result.scalars.return_value.all.return_value = []  # Empty segments
+    mock_result.scalars.return_value.all.return_value = []
 
     async def fake_execute(stmt):
         return mock_result
@@ -79,7 +80,6 @@ async def test_completed_recording_has_playback_url(client: AsyncClient, mock_db
     mock_db.execute = fake_execute
     mock_db.get = AsyncMock(return_value=mock_meeting)
 
-    # Reaplicar overrides (conftest fixture solo se ejecuta una vez)
     from meeting_api.main import app
     from meeting_api.database import get_db
 
@@ -88,34 +88,27 @@ async def test_completed_recording_has_playback_url(client: AsyncClient, mock_db
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # WHEN: GET /transcripts/google_meet/aaa-bbbb-ccc
     response = await client.get("/transcripts/google_meet/aaa-bbbb-ccc")
 
-    # THEN: 200 OK
     assert response.status_code == 200
-
     data = response.json()
 
-    # THEN: hay recordings
     assert "recordings" in data
     assert len(data["recordings"]) == 1
 
     rec = data["recordings"][0]
+    assert "playback_url" in rec
+    assert rec["playback_url"] is not None
 
-    # THEN: playback_url está derivado (NO es None)
-    assert "playback_url" in rec, "playback_urlDebe estar presente"
-    assert rec["playback_url"] is not None, "playback_url no debe ser None"
-
-    # THEN: audio y video URLs están pobladas
-    assert rec["playback_url"]["audio"] is not None, "playback_url.audio no debe ser None"
-    assert rec["playback_url"]["video"] is not None, "playback_url.video no debe ser None"
-
-    # THEN: URLs apuntan al endpoint correcto
+    # SPEC: URL correcta SIN /api/vexa prefix
     audio_url = rec["playback_url"]["audio"]
     video_url = rec["playback_url"]["video"]
 
-    assert "/api/vexa/recordings/100/media/201/download" in audio_url
-    assert "/api/vexa/recordings/100/media/202/download" in video_url
+    # El endpoint de download real es /recordings/{id}/media/{file_id}/download
+    assert audio_url == "/recordings/100/media/201/download", \
+        f"URL audio incorrecta: expected /recordings/100/media/201/download, got {audio_url}"
 
-    # Cleanup
+    assert video_url == "/recordings/100/media/202/download", \
+        f"URL video incorrecta: expected /recordings/100/media/202/download, got {video_url}"
+
     app.dependency_overrides.clear()
