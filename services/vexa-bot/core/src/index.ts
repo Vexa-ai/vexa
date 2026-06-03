@@ -648,9 +648,9 @@ async function performGracefulLeave(
     });
     return;
   }
+  isShuttingDown = true; // set before watchdog cleanup to close the re-entry window
   nodeWatchdogCleanup?.();
   nodeWatchdogCleanup = null;
-  isShuttingDown = true;
   // v0.10.5 Pack G.1 (#272 issue 6) — emit the graceful-leave start
   // event with structured fields. This is the diagnostic-critical
   // window: Pack G.2's kubectl-logs capture reads stdout right up to
