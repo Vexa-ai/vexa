@@ -33,7 +33,6 @@ worktree_create() {
     fi
 
     pass "worktree ready: $target (release=$rel)"
-    info "next: cd $target && make release-groom ID=$rel"
 }
 
 worktree_list() {

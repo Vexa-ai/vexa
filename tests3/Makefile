@@ -143,7 +143,7 @@ auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, joi
 # ═══ Matrix validation (reads test-registry.yaml) ══════════════
 # validate-<mode> runs every cheap-tier test registered for that mode,
 # writes .state/reports/<mode>/<test>.json, exits non-zero on any failure.
-# Reports drive the aggregator (Phase C+) and release-ship gate (Phase D).
+# Reports drive the aggregator + the gate verdict.
 
 # validate-<mode>: run tests for that mode.
 # With no SCOPE: runs ALL cheap-tier tests registered for the mode (full matrix).
