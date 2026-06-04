@@ -13,7 +13,7 @@
 
 import type { Page, ElementHandle } from "playwright";
 import { MocapEngine, type Rect } from "./mocapEngine";
-import { X11Input } from "./x11Input";
+import { X11Input, type PointerLocation } from "./x11Input";
 import type { MocapLibrary } from "./types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -22,6 +22,11 @@ export interface HumanizedOptions {
   display?: string;
   dryRun?: boolean;
   log?: (msg: string) => void;
+  /**
+   * Optional sink for a diagnostic screenshot when a click is abandoned as a
+   * confirmed miss (no-fallbacks.md: fail LOUD with a logged reason + image).
+   */
+  onMissScreenshot?: (page: Page, reason: string) => Promise<void>;
 }
 
 interface PageMetrics {
@@ -43,11 +48,15 @@ export class HumanizedInteractor {
   private dpr = 1;
   private calibrated = false;
   private mocapMisses = 0;
+  private onMissScreenshot?: (page: Page, reason: string) => Promise<void>;
+  /** Slack (device px) allowed between the real pointer and the live button rect. */
+  private static readonly ENDPOINT_SLACK_PX = 2;
 
   constructor(library: MocapLibrary, opts: HumanizedOptions = {}) {
     this.engine = new MocapEngine(library);
     this.x11 = new X11Input({ display: opts.display, dryRun: opts.dryRun });
     this.log = opts.log ?? (() => {});
+    this.onMissScreenshot = opts.onMissScreenshot;
   }
 
   async available(): Promise<boolean> {
@@ -60,8 +69,11 @@ export class HumanizedInteractor {
    * and reading the resulting mousemove events. Falls back to the
    * window.screenX/Y + devicePixelRatio formula if events aren't observed.
    */
-  async calibrate(page: Page): Promise<void> {
-    if (this.calibrated) return;
+  async calibrate(page: Page, force = false): Promise<void> {
+    if (this.calibrated && !force) return;
+    // DPR / screenX can change between page load and lobby render (zoom,
+    // window move, OS scaling). Always re-read on a (re)calibrate so the
+    // offset reflects the geometry at click time, not at page-load time.
     this.dpr = await page.evaluate(() => window.devicePixelRatio || 1);
 
     await page.evaluate(() => {
@@ -138,16 +150,66 @@ export class HumanizedInteractor {
     }, handle);
   }
 
-  /** Move the pointer to the element along a human trajectory and click it. */
-  async navigateAndClick(page: Page, handle: ElementHandle<Element>): Promise<void> {
-    await this.calibrate(page);
+  /** Map an absolute X-screen point (device px) into page client coords (CSS px). */
+  private screenToPage(sx: number, sy: number): { x: number; y: number } {
+    return { x: (sx - this.offsetX) / this.dpr, y: (sy - this.offsetY) / this.dpr };
+  }
+
+  /** Map a page client point (CSS px) to absolute X-screen coords (device px). */
+  private pageToScreen(px: number, py: number): { x: number; y: number } {
+    return { x: this.offsetX + px * this.dpr, y: this.offsetY + py * this.dpr };
+  }
+
+  /**
+   * Endpoint verification (the fix for the silent off-target click).
+   *
+   * Reads the REAL hardware pointer from the X server and re-reads the target's
+   * LIVE bounding rect, then asserts the pointer is inside that rect AND that
+   * elementFromPoint at the mapped page coords resolves to the target. Crucially
+   * this uses the actual pointer position (not the predicted endpoint) so a wrong
+   * screen↔page offset is detected instead of papered over by a self-consistent
+   * page-space round-trip.
+   */
+  private async pointerHitsTarget(
+    page: Page,
+    handle: ElementHandle<Element>
+  ): Promise<{ ok: boolean; m: PageMetrics; pointer: PointerLocation; pageX: number; pageY: number }> {
+    const m = await this.metricsOf(page, handle);
+    const pointer = await this.x11.getPointer();
+    const { x: pageX, y: pageY } = this.screenToPage(pointer.x, pointer.y);
+    const S = HumanizedInteractor.ENDPOINT_SLACK_PX;
+    const insideRect =
+      pageX >= m.left - S &&
+      pageX <= m.left + m.width + S &&
+      pageY >= m.top - S &&
+      pageY <= m.top + m.height + S;
+    if (!insideRect) {
+      return { ok: false, m, pointer, pageX, pageY };
+    }
+    const onTarget = await page.evaluate(
+      ([px, py, el]) => {
+        const hit = document.elementFromPoint(px as number, py as number);
+        return !!hit && (hit === el || (el as Element).contains(hit as Node) || (hit as Element).contains(el as Node));
+      },
+      [pageX, pageY, handle] as const
+    );
+    return { ok: onTarget, m, pointer, pageX, pageY };
+  }
+
+  /**
+   * Replay a human trajectory toward the target's live rect. Returns the rect
+   * (device px) the trajectory aimed at so the caller can re-verify.
+   */
+  private async replayTowards(page: Page, handle: ElementHandle<Element>): Promise<void> {
+    // Let layout settle before reading the rect: a rect read before the lobby
+    // finishes painting was a primary miss source (button shifts after read).
+    await page.waitForTimeout(120);
     const m = await this.metricsOf(page, handle);
     if (m.width <= 0 || m.height <= 0) throw new Error("humanized: element has zero size");
     const rect = this.rectDevicePx(m);
 
     const cur = await this.x11.getPointer();
     let seq = this.engine.findSequenceLandingInRect(cur.x, cur.y, rect);
-
     if (!seq) {
       this.mocapMisses++;
       this.log(`humanized: no direct sequence (miss #${this.mocapMisses}); trying stretch+rotate`);
@@ -155,34 +217,61 @@ export class HumanizedInteractor {
     }
     if (!seq) throw new Error("humanized: no mocap sequence lands on target element");
 
-    // Verify endpoint actually resolves to the element; if not, attempt a few
-    // other sequences before giving up (mirrors the documented retry).
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const endScreenX = cur.x + seq.total_dx;
-      const endScreenY = cur.y + seq.total_dy;
-      const pageX = (endScreenX - this.offsetX) / this.dpr;
-      const pageY = (endScreenY - this.offsetY) / this.dpr;
-      const onTarget = await page.evaluate(
-        ([px, py, el]) => {
-          const hit = document.elementFromPoint(px as number, py as number);
-          return !!hit && (hit === el || (el as Element).contains(hit as Node));
-        },
-        [pageX, pageY, handle] as const
-      );
-      if (onTarget) break;
-      const next = this.engine.findSequenceLandingInRect(cur.x, cur.y, rect);
-      if (!next) break;
-      seq = next;
-    }
-
     this.log(`humanized: replay ${seq.movements.length} moves dx=${seq.total_dx} dy=${seq.total_dy}`);
     for (const mv of seq.movements) {
       if (mv.dt > 0) await sleep(mv.dt * 1000);
       if (mv.dx !== 0 || mv.dy !== 0) await this.x11.moveRel(mv.dx, mv.dy);
     }
-    if (seq.click_down_dt > 0) await sleep(seq.click_down_dt * 1000);
+  }
+
+  /** Move the pointer to the element along a human trajectory and click it. */
+  async navigateAndClick(page: Page, handle: ElementHandle<Element>): Promise<void> {
+    await this.calibrate(page);
+    await this.replayTowards(page, handle);
+
+    // ── Endpoint verification (PRIMARY fix) ──────────────────────────────
+    // Re-read the button rect and the REAL pointer immediately before the
+    // click; assert the pointer is inside the live button. On a miss, treat the
+    // pointer↔mouseevent geometry as stale: recalibrate, nudge the pointer to
+    // the live rect center via an absolute move, and re-verify. A click is only
+    // emitted once the pointer is confirmed inside the target — a miss is caught,
+    // not silently lost.
+    const MAX_CORRECTIONS = 4;
+    let hit = await this.pointerHitsTarget(page, handle);
+    for (let i = 0; !hit.ok && i < MAX_CORRECTIONS; i++) {
+      this.log(
+        `humanized: endpoint miss #${i + 1} — pointer page=(${hit.pageX.toFixed(0)},${hit.pageY.toFixed(0)}) ` +
+        `rect=[${hit.m.left.toFixed(0)},${hit.m.top.toFixed(0)} ${hit.m.width.toFixed(0)}x${hit.m.height.toFixed(0)}]; recalibrating`
+      );
+      await this.calibrate(page, /* force */ true);
+      // Aim at the live rect center, mapped through the fresh offset.
+      const cx = hit.m.left + hit.m.width / 2;
+      const cy = hit.m.top + hit.m.height / 2;
+      const target = this.pageToScreen(cx, cy);
+      await this.x11.moveAbs(Math.round(target.x), Math.round(target.y));
+      await sleep(60);
+      hit = await this.pointerHitsTarget(page, handle);
+    }
+
+    if (!hit.ok) {
+      const reason =
+        `humanized: click target verification FAILED after ${MAX_CORRECTIONS} corrections — ` +
+        `real pointer page=(${hit.pageX.toFixed(0)},${hit.pageY.toFixed(0)}) is not inside the join control ` +
+        `rect=[${hit.m.left.toFixed(0)},${hit.m.top.toFixed(0)} ${hit.m.width.toFixed(0)}x${hit.m.height.toFixed(0)}] ` +
+        `(offset=(${this.offsetX.toFixed(0)},${this.offsetY.toFixed(0)}) dpr=${this.dpr}). Refusing to click off-target.`;
+      this.log(reason);
+      if (this.onMissScreenshot) {
+        try { await this.onMissScreenshot(page, reason); } catch { /* screenshot best-effort */ }
+      }
+      throw new Error(reason);
+    }
+
+    this.log(`humanized: endpoint verified inside target page=(${hit.pageX.toFixed(0)},${hit.pageY.toFixed(0)}); clicking`);
+    const downDt = 0.06 + Math.random() * 0.05;
+    const upDt = 0.05 + Math.random() * 0.05;
+    await sleep(downDt * 1000);
     await this.x11.buttonDown(1);
-    if (seq.click_up_dt > 0) await sleep(seq.click_up_dt * 1000);
+    await sleep(upDt * 1000);
     await this.x11.buttonUp(1);
   }
 

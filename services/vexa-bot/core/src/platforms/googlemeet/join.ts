@@ -18,6 +18,51 @@ export function resolveUiInteractionMode(botConfig: BotConfig): "humanized" | "s
   return botConfig.platform === "google_meet" ? "humanized" : "synthetic";
 }
 
+/**
+ * Wait for the FIRST of an ordered selector list to appear (locale-agnostic
+ * selectors first, English text fallbacks last). Returns the matched handle and
+ * the selector that won. On total failure: screenshot + LOUD throw with the full
+ * list tried (no-fallbacks.md — a missing control fails with a logged reason +
+ * screenshot, never a silent skip).
+ */
+export async function waitForAnySelector(
+  page: Page,
+  selectors: string[],
+  timeoutMs: number,
+  label: string
+): Promise<{ handle: ElementHandle<Element>; selector: string }> {
+  // First selector to MATCH wins; a per-selector timeout/parse rejection must
+  // NOT abort the others (so the locale-agnostic + English fallbacks all get a
+  // fair chance). We resolve on first success and only fail once every selector
+  // has settled without a match.
+  const winner = await new Promise<{ handle: ElementHandle<Element>; selector: string } | null>((resolve) => {
+    let pending = selectors.length;
+    let settled = false;
+    if (pending === 0) { resolve(null); return; }
+    for (const sel of selectors) {
+      page
+        .waitForSelector(sel, { timeout: timeoutMs, state: "visible" })
+        .then((el) => {
+          if (!settled && el) { settled = true; resolve({ handle: el as ElementHandle<Element>, selector: sel }); }
+          else if (--pending === 0 && !settled) { settled = true; resolve(null); }
+        })
+        .catch(() => {
+          if (--pending === 0 && !settled) { settled = true; resolve(null); }
+        });
+    }
+  });
+
+  if (winner) {
+    log(`Located ${label} via selector: ${winner.selector}`);
+    return winner;
+  }
+
+  const shot = `/app/storage/screenshots/bot-checkpoint-${label.replace(/[^a-z0-9]+/gi, "-")}-not-found.png`;
+  try { await page.screenshot({ path: shot, fullPage: true }); } catch { /* best-effort */ }
+  log(`📸 Screenshot: ${label} not found by any of ${selectors.length} selectors (tried: ${selectors.join(" | ")})`);
+  throw new Error(`Could not locate ${label} by any locale-agnostic or English selector after ${timeoutMs}ms`);
+}
+
 export async function joinGoogleMeeting(
   page: Page,
   meetingUrl: string,
@@ -43,7 +88,13 @@ export async function joinGoogleMeeting(
   const uiMode = resolveUiInteractionMode(botConfig);
   let humanizer: HumanizedInteractor | null = null;
   if (uiMode === "humanized") {
-    humanizer = new HumanizedInteractor(MOCAP_LIBRARY, { log });
+    humanizer = new HumanizedInteractor(MOCAP_LIBRARY, {
+      log,
+      onMissScreenshot: async (p, reason) => {
+        await p.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-humanized-click-miss.png', fullPage: true });
+        log(`📸 Screenshot: humanized click abandoned as off-target — ${reason}`);
+      },
+    });
     if (!(await humanizer.available())) {
       log("WARNING: humanized UI mode requested but xdotool/X display is unavailable — falling back to synthetic input. Install xdotool+xclip in the bot image.");
       humanizer = null;
@@ -166,8 +217,12 @@ export async function joinGoogleMeeting(
     // Anonymous flow: enter bot name and ask to join
     log("Attempting to find name input field...");
 
-    const nameFieldSelector = googleNameInputSelectors[0];
-    const nameHandle = await page.waitForSelector(nameFieldSelector, { timeout: 120000 });
+    const { handle: nameHandle, selector: nameFieldSelector } = await waitForAnySelector(
+      page,
+      googleNameInputSelectors,
+      120000,
+      "name input"
+    );
     log("Name input field found.");
 
     await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true });
@@ -189,8 +244,12 @@ export async function joinGoogleMeeting(
       log("Camera already off or not found.");
     }
 
-    const joinSelector = googleJoinButtonSelectors[0];
-    const joinHandle = await page.waitForSelector(joinSelector, { timeout: 60000 });
+    const { handle: joinHandle } = await waitForAnySelector(
+      page,
+      googleJoinButtonSelectors,
+      60000,
+      "join button"
+    );
     await clickHandle(joinHandle!, "ask_to_join");
     log(`${botName} joined the Google Meet Meeting.`);
 

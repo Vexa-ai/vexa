@@ -24,6 +24,8 @@ export class X11Input {
   private dryRun: boolean;
   /** Recorded argv lines when dryRun is on. */
   readonly log: string[][] = [];
+  /** Simulated pointer position, maintained only in dryRun for faithful tests. */
+  private simPointer: PointerLocation = { x: 0, y: 0 };
 
   constructor(opts: X11InputOptions = {}) {
     this.display = opts.display ?? process.env.DISPLAY ?? ":99";
@@ -64,7 +66,7 @@ export class X11Input {
   }
 
   async getPointer(): Promise<PointerLocation> {
-    if (this.dryRun) return { x: 0, y: 0 };
+    if (this.dryRun) return { ...this.simPointer };
     const out = await this.run(["xdotool", "getmouselocation", "--shell"]);
     const x = Number(/X=(-?\d+)/.exec(out)?.[1] ?? 0);
     const y = Number(/Y=(-?\d+)/.exec(out)?.[1] ?? 0);
@@ -72,10 +74,12 @@ export class X11Input {
   }
 
   async moveAbs(x: number, y: number): Promise<void> {
+    if (this.dryRun) this.simPointer = { x, y };
     await this.run(["xdotool", "mousemove", "--sync", String(x), String(y)]);
   }
 
   async moveRel(dx: number, dy: number): Promise<void> {
+    if (this.dryRun) this.simPointer = { x: this.simPointer.x + dx, y: this.simPointer.y + dy };
     await this.run(["xdotool", "mousemove_relative", "--sync", "--", String(dx), String(dy)]);
   }
 
