@@ -117,6 +117,14 @@ FBAPPS
     websockify 6080 localhost:5900 &
   fi
 
-  # Run the bot
+  # Run the bot.
+  # #407 407-C: export DISPLAY so the humanized XTEST path finds Xvfb (:99); and always
+  # emit a start + exit-code breadcrumb so a zero-log instant crash is never silent in
+  # container stdout (meeting mode previously ran node with no exit logging).
+  export DISPLAY="${DISPLAY:-:99}"
+  echo "[entrypoint] Meeting mode — starting bot node process (DISPLAY=$DISPLAY)"
   node dist/docker.js
+  EXIT_CODE=$?
+  echo "[entrypoint] node dist/docker.js exited with code $EXIT_CODE"
+  exit $EXIT_CODE
 fi
