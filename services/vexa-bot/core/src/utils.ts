@@ -32,7 +32,23 @@ export async function callStartupCallback(botConfig: any): Promise<void> {
   await callStatusChangeCallback(botConfig, "active");
 }
 
-export async function callJoiningCallback(botConfig: any): Promise<void> {await callStatusChangeCallback(botConfig, "joining");}
+export async function callJoiningCallback(botConfig: any): Promise<void> {
+  // #407 407-B: the join must abort on a DELIBERATE server rejection (the original
+  // "Fix 2"), but a TRANSIENT meeting-api blip (timeout / 5xx / network — e.g. a
+  // meeting-api rollout window, where these failures clustered) must NOT abort an
+  // otherwise-fine join. Proceed on transient; the later awaiting_admission/active
+  // callbacks reconcile the status. (Decision tracked in #407; bound to
+  // registry check gmeet.join_callback_resilient.)
+  try {
+    await callStatusChangeCallback(botConfig, "joining");
+  } catch (e: any) {
+    if (e?.transient) {
+      log(`WARNING: joining callback failed transiently (${e?.message}); proceeding with join — status will reconcile on the next lifecycle callback.`);
+      return;
+    }
+    throw e; // deliberate rejection (4xx / explicit reject body) — abort the join
+  }
+}
 
 export async function callAwaitingAdmissionCallback(botConfig: any): Promise<void> {
   await callStatusChangeCallback(botConfig, "awaiting_admission");
