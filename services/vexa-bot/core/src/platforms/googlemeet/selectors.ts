@@ -29,6 +29,22 @@ export const googleWaitingRoomIndicators: string[] = [
 ];
 
 export const googleRejectionIndicators: string[] = [
+  // Waiting-room denial patterns. Google Meet can leave some lobby text in
+  // the DOM after a host rejects the bot, so these must be checked before
+  // waiting-room indicators in admission polling.
+  'text*="denied your request"',
+  'text*="denied your request to join"',
+  'text*="Your request to join was denied"',
+  'text*="You were denied"',
+  'text*="weren\'t allowed to join"',
+  'text*="not allowed to join"',
+  'text*="not admitted"',
+  'text*="can\'t join this call"',
+  'text*="cannot join this call"',
+  'text*="Ask to join again"',
+  'button:has-text("Ask to join again")',
+  'button:has-text("Return to home screen")',
+
   // Meeting not found or access denied patterns
   'text="Meeting not found"',
   'text="Can\'t join the meeting"',
@@ -233,8 +249,22 @@ export const googleRemovalIndicators: string[] = [
   '.meeting-error'
 ];
 
-// Google Meet UI interaction selectors
+// Google Meet UI interaction selectors.
+//
+// Locale-agnostic FIRST (structure / jsname / role), then English text as a
+// fallback. The English-literal `text()="Ask to join"` / has-text locators only
+// match an English UI, so a Hungarian (or any non-English) Meet lobby never
+// found the join button — the bot sat in the lobby until manual_leave
+// (prod ids 13951 13952 14018 14153). The primary admission CTA in the Meet
+// lobby is the last/right-most jsname-tagged <button> in the lobby controls;
+// it carries a jsname and is the only enabled <button> with non-icon text.
 export const googleJoinButtonSelectors: string[] = [
+  // Locale-agnostic: a real <button> carrying Google's jsname token whose label
+  // text is non-empty (excludes icon-only mic/camera toggles which have no text
+  // node). Matches "Ask to join"/"Join now"/localized equivalents alike.
+  'button[jsname]:not([aria-label]):has(span)',
+  'div[jscontroller] button[jsname]:has(span)',
+  // English fallbacks (kept for resilience on English UIs).
   '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
@@ -253,7 +283,17 @@ export const googleMicrophoneButtonSelectors: string[] = [
   'button[aria-label*="Turn on microphone"]'
 ];
 
+// Name input — locale-agnostic FIRST. `aria-label="Your name"` is English-only,
+// so the non-English lobby (Hungarian: "A neved") never matched and the bot
+// could not fill its name. The lobby has exactly one editable text input, so
+// match by structure/role; keep the English aria-label + placeholder as
+// fallbacks.
 export const googleNameInputSelectors: string[] = [
+  // Locale-agnostic: the single text input in the pre-join lobby form.
+  'input[jsname][type="text"]',
+  'input[type="text"]:not([aria-hidden="true"])',
+  'div[jscontroller] input[type="text"]',
+  // English fallbacks.
   'input[type="text"][aria-label="Your name"]',
   'input[placeholder*="name"]',
   'input[placeholder*="Name"]'
@@ -332,5 +372,4 @@ export const googlePeopleButtonSelectors: string[] = [
   'button[data-tooltip*="participants"]',
   'button[data-tooltip*="Participants"]'
 ];
-
 
