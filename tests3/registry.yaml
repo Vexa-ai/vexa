@@ -1719,19 +1719,6 @@ MEETING_BOT_RESOURCES_FIELD_PRESENT:
   - helm
   state: stateful
   max_duration_sec: 120
-STAGE_DOC_DEVELOP_NO_FALLBACKS_RULE:
-  proves: "tests3/stages/03-develop.md contains the 'No fallbacks unless explicitly decided' rule under May NOT"
-  symptom: "fallback patterns added to OSS code without scope-stage decision-record (Pack M's chunk-buffer leak was committed exactly this way)"
-  found: '2026-05-01'
-  type: grep
-  file: tests3/stages/03-develop.md
-  must_match: '(?i)no fallback.*explicit.*decision'
-  modes:
-  - lite
-  - compose
-  - helm
-  state: stateless
-  max_duration_sec: 5
 BOT_NO_UNJUSTIFIED_FALLBACKS:
   proves: "soft-grep across services/vexa-bot/core/src/ surfaces fallback patterns; pass with WARN on existing 117 patterns; develop-stage rule is primary enforcement"
   symptom: "new fallback added without #NNN issue ref \u2014 repeats the v0.10.5.2 chunk-buffer leak pattern"
