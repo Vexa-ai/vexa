@@ -1,9 +1,0 @@
-{
-  "action": "apply",
-  "pack_id": "0.10.6x-pack-1-recording-playback-trust",
-  "repo_root": "/home/dima/dev/vexa-agents-pack-pipeline-strategy",
-  "worktree_path": "/home/dima/dev/vexa-pack-0.10.6x-pack-1-recording-playback-trust",
-  "base_branch": "v0.10.6^{}",
-  "integration_branch": "codex/release-0.10.6x-pack-integration",
-  "branch": "codex/pack-0.10.6x-pack-1-recording-playback-trust"
-}

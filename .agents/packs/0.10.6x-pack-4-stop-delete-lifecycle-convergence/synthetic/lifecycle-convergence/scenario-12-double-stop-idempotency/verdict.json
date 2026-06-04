@@ -1,6 +1,0 @@
-{
-  "scenario_dir": "scenario-12-double-stop-idempotency",
-  "completed_at": "2026-05-25T17:15:35Z",
-  "pass": true,
-  "note": "idempotent: 1st=202→completed, 2nd=202 (status preserved)"
-}

@@ -1,9 +1,0 @@
-{
-  "status": "pass",
-  "pack_json": "/tmp/vexa-develop-pack-362/pack.json",
-  "runtime_json": "/tmp/vexa-develop-pack-362/runtime.json",
-  "repo_root": "/home/dima/dev/vexa-agents-pack-pipeline-strategy",
-  "worktree": "",
-  "errors": [],
-  "warnings": []
-}

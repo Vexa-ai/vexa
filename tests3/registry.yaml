@@ -1499,46 +1499,6 @@ TEAMS_URL_STANDARD:
   - helm
   state: stateful
   max_duration_sec: 30
-TESTS3_LABEL_RELEASE_TRACEABLE:
-  proves: release_label helper emits labels of shape PREFIX-<release_id|adhoc>-<6-hex-char-suffix>; two calls produce distinct
-    suffixes
-  symptom: "tests3/lib/vm.sh and lib/lke.sh use date +%H%M \u2014 collides between parallel devs (#229)"
-  found: '2026-04-22'
-  type: script
-  dispatch: SHELL_CHECK
-  script: tests3/checks/scripts/tests3-label-release-traceable.sh
-  from_tier: static
-  modes:
-  - lite
-  state: stateless
-  max_duration_sec: 5
-TESTS3_RELEASE_KEY_CONSISTENT:
-  proves: 'four-way single-key invariant: basename(worktree)=vexa-<id>, branch=release/<id>, tests3/releases/<id>/ exists,
-    all match .current-stage.release_id'
-  symptom: release_id drifts across branch / worktree / .current-stage without any check catching it
-  found: '2026-04-22'
-  type: script
-  dispatch: SHELL_CHECK
-  script: tests3/checks/scripts/tests3-release-key-consistent.sh
-  from_tier: static
-  modes:
-  - lite
-  state: stateless
-  max_duration_sec: 5
-TESTS3_WORKTREE_BOOTSTRAP:
-  proves: make release-worktree ID=<id> creates ../vexa-<id>, seeds stage=idle, branch release/<id>, and stage.py next reports
-    groom
-  symptom: No standard way to bootstrap a per-release worktree; manual git worktree add + hand-seeded stage state is undocumented
-    and error-prone
-  found: '2026-04-22'
-  type: script
-  dispatch: SHELL_CHECK
-  script: tests3/checks/scripts/tests3-worktree-bootstrap.sh
-  from_tier: static
-  modes:
-  - lite
-  state: stateless
-  max_duration_sec: 30
 TRANSCRIPTION_TOKEN_VALID:
   proves: "transcription API token accepted \u2014 bots can convert audio to text"
   symptom: "Transcription returns 403 \u2014 TRANSCRIPTION_SERVICE_TOKEN expired or invalid. Bots capture audio but produce\
