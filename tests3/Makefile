@@ -157,16 +157,16 @@ validate-compose:                  ## run tests for compose mode + write JSON re
 validate-helm:                     ## run tests for helm mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh helm $(if $(SCOPE),--scope $(SCOPE),)
 
-report:                            ## aggregate .state/reports/* → tests3/reports/release-<tag>.md + update feature READMEs
-	@mkdir -p $(ROOT)/tests3/reports
+report:                            ## aggregate .state/reports/* → tests3/.state/reports/release-<tag>.md + update feature READMEs
+	@mkdir -p $(ROOT)/tests3/.state/reports
 	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
-	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/reports/release-$$TAG.md; \
-	echo "  report → tests3/reports/release-$$TAG.md"
+	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/.state/reports/release-$$TAG.md; \
+	echo "  report → tests3/.state/reports/release-$$TAG.md"
 
 report-gate:                       ## like `report` but exits non-zero if any feature is below its confidence_min
-	@mkdir -p $(ROOT)/tests3/reports
+	@mkdir -p $(ROOT)/tests3/.state/reports
 	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
-	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/reports/release-$$TAG.md --gate-check
+	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/.state/reports/release-$$TAG.md --gate-check
 
 validate-all: validate-lite validate-compose validate-helm report  ## run all cheap tests on all modes + aggregate
 
