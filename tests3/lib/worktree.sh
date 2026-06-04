@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 # Per-release git worktrees.
 #
-# The stage state machine (.current-stage, .state/, throwaway infra labels)
-# is tied to a single working directory. Running N releases in parallel from
-# one clone therefore requires N worktrees — each gets its own stage file,
-# its own .state, its own release-aware infra labels (#229).
-#
 # Convention: `../vexa-<release_id>` on branch `release/<release_id>`.
 set -euo pipefail
 
@@ -37,13 +32,7 @@ worktree_create() {
         git -C "$ROOT" worktree add -b "$branch" "$target" "$base"
     fi
 
-    # Bootstrap the worktree's stage state: fresh worktree has no
-    # .current-stage, so seed it at idle with this release_id. From idle,
-    # `make release-groom` is the legal next step.
-    python3 "$target/tests3/lib/stage.py" enter idle \
-        --release "$rel" --actor worktree-create >/dev/null
-
-    pass "worktree ready: $target (stage=idle, release=$rel)"
+    pass "worktree ready: $target (release=$rel)"
     info "next: cd $target && make release-groom ID=$rel"
 }
 

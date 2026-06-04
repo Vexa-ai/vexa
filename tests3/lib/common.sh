@@ -303,11 +303,7 @@ pod_logs() {
 
 release_label() {
     local prefix="${1:?release_label requires prefix}"
-    local rel sfx stage_file="$ROOT/tests3/.current-stage"
-    if [ -f "$stage_file" ]; then
-        rel=$(awk '/^release_id:/ {gsub(/["'\'' ]/, "", $2); print $2; exit}' \
-            "$stage_file" 2>/dev/null || true)
-    fi
+    local rel sfx
     rel="${rel:-adhoc}"
     sfx=$(openssl rand -hex 3)
     local label="${prefix}-${rel}-${sfx}"
