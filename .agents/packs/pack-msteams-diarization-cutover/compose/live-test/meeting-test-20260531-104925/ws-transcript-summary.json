@@ -1,0 +1,16 @@
+{
+  "meeting_id": "23",
+  "native_id": "31975786009289",
+  "platform": "teams",
+  "status": "validated",
+  "subscribed": true,
+  "subscription": [
+    {
+      "native_id": "31975786009289",
+      "platform": "teams"
+    }
+  ],
+  "text_segments_seen": 1,
+  "transcript_messages": 1,
+  "validated_at": "2026-05-31T10:50:09Z"
+}

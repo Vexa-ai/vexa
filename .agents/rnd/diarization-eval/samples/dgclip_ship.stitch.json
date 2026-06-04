@@ -1,0 +1,196 @@
+{
+  "wav": "/data/dgclip.wav",
+  "durationS": 300,
+  "policy": "stitch",
+  "clusters": [
+    "speaker_0",
+    "speaker_2",
+    "speaker_1",
+    "speaker_3"
+  ],
+  "transcript": [
+    {
+      "speaker": "speaker_0",
+      "start": 0,
+      "end": 24,
+      "text": "Down a Dream Fellowship, I understand? Yeah. It's targeted at a different demographic. It called ourdad.org, runningdownadream.org. There's a website we can give a link to. We're going to do $5,000 grants to people who want to chase their dreams but need some help. And so there is an application process like Teal Fellows and other programs, and we've been out talking to those to those people. But we're...",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 24,
+      "end": 32.1,
+      "text": "We're actually live. We went live applications. So, you know, people who have read the book and are inspired and need some help, haven't",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 33.75,
+      "end": 36.86,
+      "text": "Yeah. All right, folks. And good for you, BJ.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 37.46,
+      "end": 37.76,
+      "text": "Great.",
+      "stitched": true,
+      "conf": 0.641
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 37.76,
+      "end": 58.73,
+      "text": "I did a TED Talk, which will come out soon. That's related to the book. There's a professor in Miami that's built a course around the book, which I'm excited about. And he's doing it in kind of an open source way so that other people can borrow that as well. And so if there's anyone out there, I'd love to help them do that.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 59.67,
+      "end": 62.72,
+      "text": "What's your take on all of this doomerism? Like if you're a young...",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_1",
+      "start": 62.93,
+      "end": 63.23,
+      "text": "person.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 64,
+      "end": 70.61,
+      "text": "And you're in college or you're in high school. Is this much ado about nothing? Or how do you run down a dream and dream in the face of...",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 70.87,
+      "end": 94.87,
+      "text": "something like that. Yeah, well, I started the book before this happened and I've been asked the question a lot and it came up in the TED talk. I fear that a lot of people are in jobs, they actually don't care about that much. And there's a Gallup poll that backs this up. They can't put that word quiet quitters. They're like 59% of the people they serve are kind of ambivalent about their job. And when you're in...",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 94.87,
+      "end": 118.87,
+      "text": "about your job, you're not high agency. And so you don't lean in. You know, if you look at how Jason talks about how they implemented AI and all of his different working groups, you hear that enthusiasm and that high agency, and then you want to go try these. And I think the best way to protect yourself from AI is to be the most AI enabled version.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 118.87,
+      "end": 128.26,
+      "text": "of yourself you can be. But if you're ambivalent about your job, you're probably not doing that. And you could be sitting ducks. I think it's the mindset that's the problem.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_1",
+      "start": 133.21,
+      "end": 157.21,
+      "text": "and associate in training program for my firm because we want to help people get into venture capital. And we gave them a choice of assignments. One of them was to write coverage of one of our portfolio companies that's breaking out, MicroOne is the name, and just give us like, hey, here's a competitive landscape, basically write a deal memo on coverage of that company. And then we gave another option to vibe code a very specific project I've wanted to have for our venture firm for a long time.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_1",
+      "start": 157.21,
+      "end": 181.21,
+      "text": "you know, on competitive intelligence. And I would say, I think like maybe 80% of the students applying and we had four or 500 people apply for six positions, 80% percent of them did the vibe coding. And i was shocked. I thought it would be the exact opposite. Any anybody can write anybody can throw in chat CPT and get some output, but they actually built software. And that's the scary thing. The students who graduated at least as",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_1",
+      "start": 181.21,
+      "end": 203.82,
+      "text": "is my perception, Chamath. The students who graduated like five, 10 years ago before AI, they're not AI first. They feel lost in adrift. They don't have age. But the group coming out of college right now that cheated their way through school using ChatGPT, doing their assignments, like using those tools. I'm joking, cheating, but I mean hacking. I agree with that. Yeah. And they're just like, I know how to use these tools to get through my final.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 204.76,
+      "end": 205.52,
+      "text": "So  they -",
+      "stitched": true,
+      "conf": 0.642,
+      "loser": {
+        "speaker": "speaker_2",
+        "conf": 0.546,
+        "text": "So,"
+      }
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 210.9,
+      "end": 211.29,
+      "text": "Yeah,",
+      "stitched": true,
+      "conf": 0.424
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 211.29,
+      "end": 227.03,
+      "text": "Gurley, I think you're saying something super important. I said this last week, which is nobody asks the warehouse worker at Amazon whether they actually want that job. And so to your point, job satisfaction isn't some external person judging your job to be valid and saying you must be able to have it. I think it should.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_3",
+      "start": 228.31,
+      "end": 228.61,
+      "text": "be",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 229.12,
+      "end": 241.66,
+      "text": "asking the person that does the job, do you like it? And do you want to keep it? Those are two very different questions. And I think that all of this AI doom and gloom was a lot and too much, frankly, of the former and not enough of the latter.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_3",
+      "start": 242.64,
+      "end": 242.94,
+      "text": "and",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 243.46,
+      "end": 257.54,
+      "text": "Now this whole lie is kind of getting undone. I think Sachs posted a bit about it this week as well, the Goldman Sachs CEOs. And now in this crazy twist of fate, now that we need to have trillion dollar IPO, the entire Frontier Labs are all like, wow, it's going to be a bonanza of jobs.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 259.07,
+      "end": 274.69,
+      "text": "Mark Cuban had a great quote. He said, there are two types of people in the world, those that use AI to learn faster than they ever could before and those that used AI to avoid learning altogether. And I think it's this notion of high agency or not. That's pretty good. Are you leaning?",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_3",
+      "start": 275.41,
+      "end": 275.71,
+      "text": "in.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_0",
+      "start": 276.22,
+      "end": 286.72,
+      "text": "And using this stuff to be ever more powerful and full in what you try and accomplish, are you using it as a cheat code? And if you're in the latter, yeah, you're probably at risk.",
+      "stitched": false
+    },
+    {
+      "speaker": "speaker_2",
+      "start": 287.28,
+      "end": 296.55,
+      "text": "asked a lot about how to educate yourself if you're a parent of kids so that you can put them on a path to launch and do well and chase surgery. Do you have a good answer for that question?",
+      "stitched": false
+    }
+  ]
+}

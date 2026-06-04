@@ -1,0 +1,4251 @@
+{
+  "wav": "/data/meetclip.wav",
+  "durationS": 300,
+  "nSwitches": 41,
+  "segments": [
+    {
+      "idx": 0,
+      "start": 0,
+      "end": 8.93,
+      "durS": 8.93,
+      "startedByStrongSwitch": false,
+      "text": "two different legs on the chip and so sends a different message. And that then...",
+      "words": [
+        {
+          "word": " two",
+          "start": 0,
+          "end": 0.22
+        },
+        {
+          "word": " different",
+          "start": 0.22,
+          "end": 1.18
+        },
+        {
+          "word": " legs",
+          "start": 1.18,
+          "end": 1.48
+        },
+        {
+          "word": " on",
+          "start": 1.48,
+          "end": 1.68
+        },
+        {
+          "word": " the",
+          "start": 1.68,
+          "end": 1.9
+        },
+        {
+          "word": " chip",
+          "start": 1.9,
+          "end": 2.78
+        },
+        {
+          "word": " and",
+          "start": 2.78,
+          "end": 3.04
+        },
+        {
+          "word": " so",
+          "start": 3.04,
+          "end": 3.24
+        },
+        {
+          "word": " sends",
+          "start": 3.24,
+          "end": 3.5
+        },
+        {
+          "word": " a",
+          "start": 3.5,
+          "end": 3.64
+        },
+        {
+          "word": " different",
+          "start": 3.64,
+          "end": 3.82
+        },
+        {
+          "word": " message.",
+          "start": 3.82,
+          "end": 4.34
+        },
+        {
+          "word": " And",
+          "start": 6.02,
+          "end": 6.58
+        },
+        {
+          "word": " that",
+          "start": 6.58,
+          "end": 7.14
+        },
+        {
+          "word": " then...",
+          "start": 7.14,
+          "end": 7.86
+        }
+      ]
+    },
+    {
+      "idx": 1,
+      "start": 8.93,
+      "end": 17.9,
+      "durS": 8.97,
+      "startedByStrongSwitch": false,
+      "text": "gets translated by the chip into a code and then it's fired out of this LED in the sequence of on-and-off bursts.",
+      "words": [
+        {
+          "word": " gets",
+          "start": 8.93,
+          "end": 9.77
+        },
+        {
+          "word": " translated",
+          "start": 9.77,
+          "end": 10.25
+        },
+        {
+          "word": " by",
+          "start": 10.25,
+          "end": 10.51
+        },
+        {
+          "word": " the",
+          "start": 10.51,
+          "end": 10.63
+        },
+        {
+          "word": " chip",
+          "start": 10.63,
+          "end": 10.85
+        },
+        {
+          "word": " into",
+          "start": 10.85,
+          "end": 11.09
+        },
+        {
+          "word": " a",
+          "start": 11.09,
+          "end": 11.27
+        },
+        {
+          "word": " code",
+          "start": 11.27,
+          "end": 11.47
+        },
+        {
+          "word": " and",
+          "start": 11.47,
+          "end": 11.59
+        },
+        {
+          "word": " then",
+          "start": 11.59,
+          "end": 11.73
+        },
+        {
+          "word": " it's",
+          "start": 11.73,
+          "end": 11.91
+        },
+        {
+          "word": " fired",
+          "start": 11.91,
+          "end": 12.25
+        },
+        {
+          "word": " out",
+          "start": 12.25,
+          "end": 12.51
+        },
+        {
+          "word": " of",
+          "start": 12.51,
+          "end": 12.77
+        },
+        {
+          "word": " this",
+          "start": 12.77,
+          "end": 13.15
+        },
+        {
+          "word": " LED",
+          "start": 13.15,
+          "end": 14.13
+        },
+        {
+          "word": " in",
+          "start": 14.13,
+          "end": 14.55
+        },
+        {
+          "word": " the",
+          "start": 14.55,
+          "end": 14.65
+        },
+        {
+          "word": " sequence",
+          "start": 14.65,
+          "end": 15.07
+        },
+        {
+          "word": " of",
+          "start": 15.07,
+          "end": 15.41
+        },
+        {
+          "word": " on",
+          "start": 15.41,
+          "end": 16.45
+        },
+        {
+          "word": "-and",
+          "start": 16.45,
+          "end": 16.61
+        },
+        {
+          "word": "-off",
+          "start": 16.61,
+          "end": 16.83
+        },
+        {
+          "word": " bursts.",
+          "start": 16.83,
+          "end": 17.45
+        }
+      ]
+    },
+    {
+      "idx": 2,
+      "start": 17.9,
+      "end": 24.99,
+      "durS": 7.08,
+      "startedByStrongSwitch": false,
+      "text": "What kind of things do we have to consider there? Does it come in varying sizes or is it just one size?",
+      "words": [
+        {
+          "word": " What",
+          "start": 17.9,
+          "end": 18.28
+        },
+        {
+          "word": " kind",
+          "start": 18.28,
+          "end": 18.44
+        },
+        {
+          "word": " of",
+          "start": 18.44,
+          "end": 18.52
+        },
+        {
+          "word": " things",
+          "start": 18.52,
+          "end": 18.66
+        },
+        {
+          "word": " do",
+          "start": 18.66,
+          "end": 18.82
+        },
+        {
+          "word": " we",
+          "start": 18.82,
+          "end": 18.9
+        },
+        {
+          "word": " have",
+          "start": 18.9,
+          "end": 19
+        },
+        {
+          "word": " to",
+          "start": 19,
+          "end": 19.08
+        },
+        {
+          "word": " consider",
+          "start": 19.08,
+          "end": 19.46
+        },
+        {
+          "word": " there?",
+          "start": 19.46,
+          "end": 19.74
+        },
+        {
+          "word": " Does",
+          "start": 22.02,
+          "end": 22.34
+        },
+        {
+          "word": " it",
+          "start": 22.34,
+          "end": 22.66
+        },
+        {
+          "word": " come",
+          "start": 22.66,
+          "end": 22.78
+        },
+        {
+          "word": " in",
+          "start": 22.78,
+          "end": 22.92
+        },
+        {
+          "word": " varying",
+          "start": 22.92,
+          "end": 23.22
+        },
+        {
+          "word": " sizes",
+          "start": 23.22,
+          "end": 23.72
+        },
+        {
+          "word": " or",
+          "start": 23.72,
+          "end": 23.98
+        },
+        {
+          "word": " is",
+          "start": 23.98,
+          "end": 24.1
+        },
+        {
+          "word": " it",
+          "start": 24.1,
+          "end": 24.18
+        },
+        {
+          "word": " just",
+          "start": 24.18,
+          "end": 24.32
+        },
+        {
+          "word": " one",
+          "start": 24.32,
+          "end": 24.62
+        },
+        {
+          "word": " size?",
+          "start": 24.62,
+          "end": 24.94
+        }
+      ]
+    },
+    {
+      "idx": 3,
+      "start": 24.99,
+      "end": 26.69,
+      "durS": 1.71,
+      "startedByStrongSwitch": true,
+      "text": "and we would have to fit the...",
+      "words": [
+        {
+          "word": " and",
+          "start": 24.99,
+          "end": 25.57
+        },
+        {
+          "word": " we",
+          "start": 25.57,
+          "end": 25.71
+        },
+        {
+          "word": " would",
+          "start": 25.71,
+          "end": 25.87
+        },
+        {
+          "word": " have",
+          "start": 25.87,
+          "end": 26.01
+        },
+        {
+          "word": " to",
+          "start": 26.01,
+          "end": 26.13
+        },
+        {
+          "word": " fit",
+          "start": 26.13,
+          "end": 26.43
+        },
+        {
+          "word": " the...",
+          "start": 26.43,
+          "end": 26.67
+        }
+      ]
+    },
+    {
+      "idx": 4,
+      "start": 26.69,
+      "end": 27.87,
+      "durS": 1.18,
+      "startedByStrongSwitch": true,
+      "text": "Well",
+      "words": [
+        {
+          "word": " Well",
+          "start": 26.77,
+          "end": 27.41
+        }
+      ]
+    },
+    {
+      "idx": 5,
+      "start": 27.87,
+      "end": 31.26,
+      "durS": 3.39,
+      "startedByStrongSwitch": true,
+      "text": "The thing about it is...",
+      "words": [
+        {
+          "word": " The",
+          "start": 27.87,
+          "end": 28.27
+        },
+        {
+          "word": " thing",
+          "start": 28.27,
+          "end": 28.85
+        },
+        {
+          "word": " about",
+          "start": 28.85,
+          "end": 29.15
+        },
+        {
+          "word": " it",
+          "start": 29.15,
+          "end": 29.35
+        },
+        {
+          "word": " is...",
+          "start": 29.35,
+          "end": 29.83
+        }
+      ]
+    },
+    {
+      "idx": 6,
+      "start": 31.26,
+      "end": 45.36,
+      "durS": 14.11,
+      "startedByStrongSwitch": false,
+      "text": "They can be as big or small as you want them to be because you can print a circuit board like that It's simply spaced like that so you can have fit the size of the nine buttons in if you see how thin the tracks",
+      "words": [
+        {
+          "word": " They",
+          "start": 31.26,
+          "end": 31.82
+        },
+        {
+          "word": " can",
+          "start": 31.82,
+          "end": 32.34
+        },
+        {
+          "word": " be",
+          "start": 32.34,
+          "end": 32.5
+        },
+        {
+          "word": " as",
+          "start": 32.5,
+          "end": 32.7
+        },
+        {
+          "word": " big",
+          "start": 32.7,
+          "end": 32.9
+        },
+        {
+          "word": " or",
+          "start": 32.9,
+          "end": 33.1
+        },
+        {
+          "word": " small",
+          "start": 33.1,
+          "end": 33.38
+        },
+        {
+          "word": " as",
+          "start": 33.38,
+          "end": 33.64
+        },
+        {
+          "word": " you",
+          "start": 33.64,
+          "end": 33.74
+        },
+        {
+          "word": " want",
+          "start": 33.74,
+          "end": 33.92
+        },
+        {
+          "word": " them",
+          "start": 33.92,
+          "end": 34.04
+        },
+        {
+          "word": " to",
+          "start": 34.04,
+          "end": 34.18
+        },
+        {
+          "word": " be",
+          "start": 34.18,
+          "end": 34.32
+        },
+        {
+          "word": " because",
+          "start": 34.32,
+          "end": 34.74
+        },
+        {
+          "word": " you",
+          "start": 34.74,
+          "end": 35.22
+        },
+        {
+          "word": " can",
+          "start": 35.22,
+          "end": 35.48
+        },
+        {
+          "word": " print",
+          "start": 35.48,
+          "end": 36.18
+        },
+        {
+          "word": " a",
+          "start": 36.18,
+          "end": 36.4
+        },
+        {
+          "word": " circuit",
+          "start": 36.4,
+          "end": 36.7
+        },
+        {
+          "word": " board",
+          "start": 36.7,
+          "end": 36.98
+        },
+        {
+          "word": " like",
+          "start": 36.98,
+          "end": 37.24
+        },
+        {
+          "word": " that",
+          "start": 37.24,
+          "end": 37.52
+        },
+        {
+          "word": " It's",
+          "start": 37.52,
+          "end": 38.38
+        },
+        {
+          "word": " simply",
+          "start": 38.38,
+          "end": 39.02
+        },
+        {
+          "word": " spaced",
+          "start": 39.02,
+          "end": 39.5
+        },
+        {
+          "word": " like",
+          "start": 39.5,
+          "end": 39.78
+        },
+        {
+          "word": " that",
+          "start": 39.78,
+          "end": 39.96
+        },
+        {
+          "word": " so",
+          "start": 39.96,
+          "end": 40.18
+        },
+        {
+          "word": " you",
+          "start": 40.18,
+          "end": 40.3
+        },
+        {
+          "word": " can",
+          "start": 40.3,
+          "end": 40.44
+        },
+        {
+          "word": " have",
+          "start": 40.44,
+          "end": 40.68
+        },
+        {
+          "word": " fit",
+          "start": 40.68,
+          "end": 41.14
+        },
+        {
+          "word": " the",
+          "start": 41.14,
+          "end": 41.36
+        },
+        {
+          "word": " size",
+          "start": 41.36,
+          "end": 42.06
+        },
+        {
+          "word": " of",
+          "start": 42.06,
+          "end": 42.2
+        },
+        {
+          "word": " the",
+          "start": 42.2,
+          "end": 42.3
+        },
+        {
+          "word": " nine",
+          "start": 42.3,
+          "end": 42.48
+        },
+        {
+          "word": " buttons",
+          "start": 42.48,
+          "end": 42.82
+        },
+        {
+          "word": " in",
+          "start": 42.82,
+          "end": 43.04
+        },
+        {
+          "word": " if",
+          "start": 43.04,
+          "end": 43.72
+        },
+        {
+          "word": " you",
+          "start": 43.72,
+          "end": 43.86
+        },
+        {
+          "word": " see",
+          "start": 43.86,
+          "end": 44.28
+        },
+        {
+          "word": " how",
+          "start": 44.28,
+          "end": 44.54
+        },
+        {
+          "word": " thin",
+          "start": 44.54,
+          "end": 44.78
+        },
+        {
+          "word": " the",
+          "start": 44.78,
+          "end": 44.96
+        },
+        {
+          "word": " tracks",
+          "start": 44.96,
+          "end": 45.18
+        }
+      ]
+    },
+    {
+      "idx": 7,
+      "start": 45.36,
+      "end": 63.41,
+      "durS": 18.05,
+      "startedByStrongSwitch": true,
+      "text": "you could put them virtually right next to each other and have a much smaller switch on each one if you wanted to. But there is an option to do it like that or you could have some sort of...",
+      "words": [
+        {
+          "word": " you",
+          "start": 45.36,
+          "end": 46.18
+        },
+        {
+          "word": " could",
+          "start": 46.18,
+          "end": 46.44
+        },
+        {
+          "word": " put",
+          "start": 46.44,
+          "end": 47.9
+        },
+        {
+          "word": " them",
+          "start": 47.9,
+          "end": 48.14
+        },
+        {
+          "word": " virtually",
+          "start": 48.14,
+          "end": 48.62
+        },
+        {
+          "word": " right",
+          "start": 48.62,
+          "end": 49.06
+        },
+        {
+          "word": " next",
+          "start": 49.06,
+          "end": 49.34
+        },
+        {
+          "word": " to",
+          "start": 49.34,
+          "end": 49.52
+        },
+        {
+          "word": " each",
+          "start": 49.52,
+          "end": 49.68
+        },
+        {
+          "word": " other",
+          "start": 49.68,
+          "end": 49.9
+        },
+        {
+          "word": " and",
+          "start": 49.9,
+          "end": 50.26
+        },
+        {
+          "word": " have",
+          "start": 50.26,
+          "end": 50.44
+        },
+        {
+          "word": " a",
+          "start": 50.44,
+          "end": 50.54
+        },
+        {
+          "word": " much",
+          "start": 50.54,
+          "end": 50.78
+        },
+        {
+          "word": " smaller",
+          "start": 50.78,
+          "end": 51.16
+        },
+        {
+          "word": " switch",
+          "start": 51.16,
+          "end": 51.5
+        },
+        {
+          "word": " on",
+          "start": 51.5,
+          "end": 51.72
+        },
+        {
+          "word": " each",
+          "start": 51.72,
+          "end": 51.88
+        },
+        {
+          "word": " one",
+          "start": 51.88,
+          "end": 52.06
+        },
+        {
+          "word": " if",
+          "start": 52.06,
+          "end": 52.28
+        },
+        {
+          "word": " you",
+          "start": 52.28,
+          "end": 52.94
+        },
+        {
+          "word": " wanted",
+          "start": 52.94,
+          "end": 53.22
+        },
+        {
+          "word": " to.",
+          "start": 53.22,
+          "end": 53.5
+        },
+        {
+          "word": " But",
+          "start": 55.08,
+          "end": 55.64
+        },
+        {
+          "word": " there",
+          "start": 55.64,
+          "end": 56.2
+        },
+        {
+          "word": " is",
+          "start": 56.2,
+          "end": 56.72
+        },
+        {
+          "word": " an",
+          "start": 56.72,
+          "end": 56.84
+        },
+        {
+          "word": " option",
+          "start": 56.84,
+          "end": 57.12
+        },
+        {
+          "word": " to",
+          "start": 57.12,
+          "end": 57.36
+        },
+        {
+          "word": " do",
+          "start": 57.36,
+          "end": 57.58
+        },
+        {
+          "word": " it",
+          "start": 57.58,
+          "end": 58.54
+        },
+        {
+          "word": " like",
+          "start": 58.54,
+          "end": 58.78
+        },
+        {
+          "word": " that",
+          "start": 58.78,
+          "end": 59.08
+        },
+        {
+          "word": " or",
+          "start": 59.08,
+          "end": 59.64
+        },
+        {
+          "word": " you",
+          "start": 59.64,
+          "end": 59.84
+        },
+        {
+          "word": " could",
+          "start": 59.84,
+          "end": 60.1
+        },
+        {
+          "word": " have",
+          "start": 60.1,
+          "end": 60.44
+        },
+        {
+          "word": " some",
+          "start": 60.44,
+          "end": 61.56
+        },
+        {
+          "word": " sort",
+          "start": 61.56,
+          "end": 61.88
+        },
+        {
+          "word": " of...",
+          "start": 61.88,
+          "end": 62.22
+        }
+      ]
+    },
+    {
+      "idx": 8,
+      "start": 63.41,
+      "end": 68.8,
+      "durS": 5.38,
+      "startedByStrongSwitch": true,
+      "text": "array of switches which I'll speak about in the next bit.",
+      "words": [
+        {
+          "word": " array",
+          "start": 63.41,
+          "end": 63.93
+        },
+        {
+          "word": " of",
+          "start": 63.93,
+          "end": 64.15
+        },
+        {
+          "word": " switches",
+          "start": 64.15,
+          "end": 64.49
+        },
+        {
+          "word": " which",
+          "start": 64.49,
+          "end": 64.75
+        },
+        {
+          "word": " I'll",
+          "start": 64.75,
+          "end": 64.99
+        },
+        {
+          "word": " speak",
+          "start": 64.99,
+          "end": 65.35
+        },
+        {
+          "word": " about",
+          "start": 65.35,
+          "end": 65.59
+        },
+        {
+          "word": " in",
+          "start": 65.59,
+          "end": 65.75
+        },
+        {
+          "word": " the",
+          "start": 65.75,
+          "end": 65.85
+        },
+        {
+          "word": " next",
+          "start": 65.85,
+          "end": 66.11
+        },
+        {
+          "word": " bit.",
+          "start": 66.11,
+          "end": 66.37
+        }
+      ]
+    },
+    {
+      "idx": 9,
+      "start": 68.8,
+      "end": 89.72,
+      "durS": 20.92,
+      "startedByStrongSwitch": false,
+      "text": "And then to conserve battery life, the remote should be in a standby mode while not being used. Now what I was thinking about that was because sometimes when you have these things, they've got little lights on behind the buttons so you can see what all the buttons are. Like on a mobile phone, they do it more often than on a...",
+      "words": [
+        {
+          "word": " And",
+          "start": 68.8,
+          "end": 69.28
+        },
+        {
+          "word": " then",
+          "start": 69.28,
+          "end": 69.54
+        },
+        {
+          "word": " to",
+          "start": 69.54,
+          "end": 70
+        },
+        {
+          "word": " conserve",
+          "start": 70,
+          "end": 72.66
+        },
+        {
+          "word": " battery",
+          "start": 72.66,
+          "end": 73.12
+        },
+        {
+          "word": " life,",
+          "start": 73.12,
+          "end": 73.42
+        },
+        {
+          "word": " the",
+          "start": 73.56,
+          "end": 73.58
+        },
+        {
+          "word": " remote",
+          "start": 73.58,
+          "end": 73.7
+        },
+        {
+          "word": " should",
+          "start": 73.7,
+          "end": 73.96
+        },
+        {
+          "word": " be",
+          "start": 73.96,
+          "end": 74.14
+        },
+        {
+          "word": " in",
+          "start": 74.14,
+          "end": 74.26
+        },
+        {
+          "word": " a",
+          "start": 74.26,
+          "end": 74.42
+        },
+        {
+          "word": " standby",
+          "start": 74.42,
+          "end": 74.72
+        },
+        {
+          "word": " mode",
+          "start": 74.72,
+          "end": 75.08
+        },
+        {
+          "word": " while",
+          "start": 75.08,
+          "end": 75.5
+        },
+        {
+          "word": " not",
+          "start": 75.5,
+          "end": 75.72
+        },
+        {
+          "word": " being",
+          "start": 75.72,
+          "end": 75.96
+        },
+        {
+          "word": " used.",
+          "start": 75.96,
+          "end": 76.26
+        },
+        {
+          "word": " Now",
+          "start": 76.46,
+          "end": 76.76
+        },
+        {
+          "word": " what",
+          "start": 76.76,
+          "end": 76.9
+        },
+        {
+          "word": " I",
+          "start": 76.9,
+          "end": 76.92
+        },
+        {
+          "word": " was",
+          "start": 76.92,
+          "end": 77.06
+        },
+        {
+          "word": " thinking",
+          "start": 77.06,
+          "end": 77.3
+        },
+        {
+          "word": " about",
+          "start": 77.3,
+          "end": 77.6
+        },
+        {
+          "word": " that",
+          "start": 77.6,
+          "end": 77.94
+        },
+        {
+          "word": " was",
+          "start": 77.94,
+          "end": 78.72
+        },
+        {
+          "word": " because",
+          "start": 78.72,
+          "end": 79.56
+        },
+        {
+          "word": " sometimes",
+          "start": 79.56,
+          "end": 80.08
+        },
+        {
+          "word": " when",
+          "start": 80.08,
+          "end": 80.54
+        },
+        {
+          "word": " you",
+          "start": 80.54,
+          "end": 80.96
+        },
+        {
+          "word": " have",
+          "start": 80.96,
+          "end": 81.12
+        },
+        {
+          "word": " these",
+          "start": 81.12,
+          "end": 81.32
+        },
+        {
+          "word": " things,",
+          "start": 81.32,
+          "end": 81.56
+        },
+        {
+          "word": " they've",
+          "start": 81.7,
+          "end": 81.78
+        },
+        {
+          "word": " got",
+          "start": 81.78,
+          "end": 81.94
+        },
+        {
+          "word": " little",
+          "start": 81.94,
+          "end": 82.22
+        },
+        {
+          "word": " lights",
+          "start": 82.22,
+          "end": 82.72
+        },
+        {
+          "word": " on",
+          "start": 82.72,
+          "end": 83.04
+        },
+        {
+          "word": " behind",
+          "start": 83.04,
+          "end": 83.68
+        },
+        {
+          "word": " the",
+          "start": 83.68,
+          "end": 83.9
+        },
+        {
+          "word": " buttons",
+          "start": 83.9,
+          "end": 84.28
+        },
+        {
+          "word": " so",
+          "start": 84.28,
+          "end": 84.86
+        },
+        {
+          "word": " you",
+          "start": 84.86,
+          "end": 85
+        },
+        {
+          "word": " can",
+          "start": 85,
+          "end": 85.1
+        },
+        {
+          "word": " see",
+          "start": 85.1,
+          "end": 85.32
+        },
+        {
+          "word": " what",
+          "start": 85.32,
+          "end": 85.52
+        },
+        {
+          "word": " all",
+          "start": 85.52,
+          "end": 85.66
+        },
+        {
+          "word": " the",
+          "start": 85.66,
+          "end": 85.78
+        },
+        {
+          "word": " buttons",
+          "start": 85.78,
+          "end": 86.08
+        },
+        {
+          "word": " are.",
+          "start": 86.08,
+          "end": 86.26
+        },
+        {
+          "word": " Like",
+          "start": 86.26,
+          "end": 86.54
+        },
+        {
+          "word": " on",
+          "start": 86.54,
+          "end": 86.66
+        },
+        {
+          "word": " a",
+          "start": 86.66,
+          "end": 86.74
+        },
+        {
+          "word": " mobile",
+          "start": 86.74,
+          "end": 87.02
+        },
+        {
+          "word": " phone,",
+          "start": 87.02,
+          "end": 87.36
+        },
+        {
+          "word": " they",
+          "start": 87.38,
+          "end": 87.56
+        },
+        {
+          "word": " do",
+          "start": 87.56,
+          "end": 87.7
+        },
+        {
+          "word": " it",
+          "start": 87.7,
+          "end": 87.84
+        },
+        {
+          "word": " more",
+          "start": 87.84,
+          "end": 88.34
+        },
+        {
+          "word": " often",
+          "start": 88.34,
+          "end": 88.66
+        },
+        {
+          "word": " than",
+          "start": 88.66,
+          "end": 88.84
+        },
+        {
+          "word": " on",
+          "start": 88.84,
+          "end": 89.04
+        },
+        {
+          "word": " a...",
+          "start": 89.04,
+          "end": 89.18
+        }
+      ]
+    },
+    {
+      "idx": 10,
+      "start": 89.72,
+      "end": 104.64,
+      "durS": 14.92,
+      "startedByStrongSwitch": false,
+      "text": "than on a TV remote. But you could have lights behind the buttons and after like five or ten seconds of not being used I'd have that turned off if we decided to go for buttons that could light up.",
+      "words": [
+        {
+          "word": " than",
+          "start": 90.28,
+          "end": 90.86
+        },
+        {
+          "word": " on",
+          "start": 90.86,
+          "end": 91.18
+        },
+        {
+          "word": " a",
+          "start": 91.18,
+          "end": 91.38
+        },
+        {
+          "word": " TV",
+          "start": 91.38,
+          "end": 91.7
+        },
+        {
+          "word": " remote.",
+          "start": 91.7,
+          "end": 92.04
+        },
+        {
+          "word": " But",
+          "start": 92.26,
+          "end": 92.34
+        },
+        {
+          "word": " you",
+          "start": 92.34,
+          "end": 92.52
+        },
+        {
+          "word": " could",
+          "start": 92.52,
+          "end": 93.14
+        },
+        {
+          "word": " have",
+          "start": 93.14,
+          "end": 93.32
+        },
+        {
+          "word": " lights",
+          "start": 93.32,
+          "end": 93.62
+        },
+        {
+          "word": " behind",
+          "start": 93.62,
+          "end": 93.88
+        },
+        {
+          "word": " the",
+          "start": 93.88,
+          "end": 94.02
+        },
+        {
+          "word": " buttons",
+          "start": 94.02,
+          "end": 94.3
+        },
+        {
+          "word": " and",
+          "start": 94.3,
+          "end": 94.6
+        },
+        {
+          "word": " after",
+          "start": 95.68,
+          "end": 96.2
+        },
+        {
+          "word": " like",
+          "start": 96.2,
+          "end": 96.5
+        },
+        {
+          "word": " five",
+          "start": 96.5,
+          "end": 96.74
+        },
+        {
+          "word": " or",
+          "start": 96.74,
+          "end": 96.9
+        },
+        {
+          "word": " ten",
+          "start": 96.9,
+          "end": 97.1
+        },
+        {
+          "word": " seconds",
+          "start": 97.1,
+          "end": 97.5
+        },
+        {
+          "word": " of",
+          "start": 97.5,
+          "end": 97.66
+        },
+        {
+          "word": " not",
+          "start": 97.66,
+          "end": 97.8
+        },
+        {
+          "word": " being",
+          "start": 97.8,
+          "end": 98
+        },
+        {
+          "word": " used",
+          "start": 98,
+          "end": 98.32
+        },
+        {
+          "word": " I'd",
+          "start": 98.32,
+          "end": 98.76
+        },
+        {
+          "word": " have",
+          "start": 98.76,
+          "end": 99.22
+        },
+        {
+          "word": " that",
+          "start": 99.22,
+          "end": 99.44
+        },
+        {
+          "word": " turned",
+          "start": 99.44,
+          "end": 99.7
+        },
+        {
+          "word": " off",
+          "start": 99.7,
+          "end": 99.92
+        },
+        {
+          "word": " if",
+          "start": 99.92,
+          "end": 100.18
+        },
+        {
+          "word": " we",
+          "start": 100.18,
+          "end": 100.34
+        },
+        {
+          "word": " decided",
+          "start": 100.34,
+          "end": 100.9
+        },
+        {
+          "word": " to",
+          "start": 100.9,
+          "end": 101.12
+        },
+        {
+          "word": " go",
+          "start": 101.12,
+          "end": 101.28
+        },
+        {
+          "word": " for",
+          "start": 101.28,
+          "end": 101.72
+        },
+        {
+          "word": " buttons",
+          "start": 101.72,
+          "end": 102.04
+        },
+        {
+          "word": " that",
+          "start": 102.04,
+          "end": 102.3
+        },
+        {
+          "word": " could",
+          "start": 102.3,
+          "end": 102.4
+        },
+        {
+          "word": " light",
+          "start": 102.4,
+          "end": 102.62
+        },
+        {
+          "word": " up.",
+          "start": 102.62,
+          "end": 102.88
+        }
+      ]
+    },
+    {
+      "idx": 11,
+      "start": 104.64,
+      "end": 120.58,
+      "durS": 15.94,
+      "startedByStrongSwitch": false,
+      "text": "The case material, I've been sent what the factory can actually give us. There's the plastic which I think we were going to go for anyway as the main case.",
+      "words": [
+        {
+          "word": " The",
+          "start": 104.64,
+          "end": 105.88
+        },
+        {
+          "word": " case",
+          "start": 105.88,
+          "end": 106.16
+        },
+        {
+          "word": " material,",
+          "start": 106.16,
+          "end": 106.8
+        },
+        {
+          "word": " I've",
+          "start": 107.04,
+          "end": 107.56
+        },
+        {
+          "word": " been",
+          "start": 107.56,
+          "end": 108.92
+        },
+        {
+          "word": " sent",
+          "start": 108.92,
+          "end": 109.32
+        },
+        {
+          "word": " what",
+          "start": 109.35,
+          "end": 110.59
+        },
+        {
+          "word": " the",
+          "start": 110.59,
+          "end": 110.93
+        },
+        {
+          "word": " factory",
+          "start": 110.93,
+          "end": 111.57
+        },
+        {
+          "word": " can",
+          "start": 111.57,
+          "end": 111.93
+        },
+        {
+          "word": " actually",
+          "start": 111.93,
+          "end": 112.23
+        },
+        {
+          "word": " give",
+          "start": 112.23,
+          "end": 112.53
+        },
+        {
+          "word": " us.",
+          "start": 112.53,
+          "end": 112.83
+        },
+        {
+          "word": " There's",
+          "start": 114.42,
+          "end": 115.08
+        },
+        {
+          "word": " the",
+          "start": 115.08,
+          "end": 115.2
+        },
+        {
+          "word": " plastic",
+          "start": 115.2,
+          "end": 115.62
+        },
+        {
+          "word": " which",
+          "start": 115.62,
+          "end": 116.08
+        },
+        {
+          "word": " I",
+          "start": 116.08,
+          "end": 116.9
+        },
+        {
+          "word": " think",
+          "start": 116.9,
+          "end": 117.26
+        },
+        {
+          "word": " we",
+          "start": 117.26,
+          "end": 117.54
+        },
+        {
+          "word": " were",
+          "start": 117.54,
+          "end": 117.72
+        },
+        {
+          "word": " going",
+          "start": 117.72,
+          "end": 117.84
+        },
+        {
+          "word": " to",
+          "start": 117.84,
+          "end": 117.92
+        },
+        {
+          "word": " go",
+          "start": 117.92,
+          "end": 118.08
+        },
+        {
+          "word": " for",
+          "start": 118.08,
+          "end": 118.32
+        },
+        {
+          "word": " anyway",
+          "start": 118.32,
+          "end": 118.7
+        },
+        {
+          "word": " as",
+          "start": 118.7,
+          "end": 119.82
+        },
+        {
+          "word": " the",
+          "start": 119.82,
+          "end": 120.04
+        },
+        {
+          "word": " main",
+          "start": 120.04,
+          "end": 120.32
+        },
+        {
+          "word": " case.",
+          "start": 120.32,
+          "end": 120.54
+        }
+      ]
+    },
+    {
+      "idx": 12,
+      "start": 120.58,
+      "end": 124.4,
+      "durS": 3.82,
+      "startedByStrongSwitch": true,
+      "text": "case housing and",
+      "words": [
+        {
+          "word": " case",
+          "start": 120.58,
+          "end": 121.32
+        },
+        {
+          "word": " housing",
+          "start": 121.32,
+          "end": 121.88
+        },
+        {
+          "word": " and",
+          "start": 121.88,
+          "end": 123
+        }
+      ]
+    },
+    {
+      "idx": 13,
+      "start": 124.4,
+      "end": 125.9,
+      "durS": 1.5,
+      "startedByStrongSwitch": false,
+      "text": "The...",
+      "words": [
+        {
+          "word": " The...",
+          "start": 124.4,
+          "end": 125.1
+        }
+      ]
+    },
+    {
+      "idx": 14,
+      "start": 125.9,
+      "end": 134.14,
+      "durS": 8.24,
+      "startedByStrongSwitch": false,
+      "text": "the main problems with the well you could go for wood but I think it would be a bit impractical titanium",
+      "words": [
+        {
+          "word": " the",
+          "start": 125.9,
+          "end": 126.34
+        },
+        {
+          "word": " main",
+          "start": 126.34,
+          "end": 126.78
+        },
+        {
+          "word": " problems",
+          "start": 126.78,
+          "end": 128.14
+        },
+        {
+          "word": " with",
+          "start": 128.14,
+          "end": 128.52
+        },
+        {
+          "word": " the",
+          "start": 128.52,
+          "end": 128.7
+        },
+        {
+          "word": " well",
+          "start": 128.7,
+          "end": 128.96
+        },
+        {
+          "word": " you",
+          "start": 128.96,
+          "end": 129.12
+        },
+        {
+          "word": " could",
+          "start": 129.12,
+          "end": 129.32
+        },
+        {
+          "word": " go",
+          "start": 129.32,
+          "end": 129.48
+        },
+        {
+          "word": " for",
+          "start": 129.48,
+          "end": 129.66
+        },
+        {
+          "word": " wood",
+          "start": 129.66,
+          "end": 129.98
+        },
+        {
+          "word": " but",
+          "start": 129.98,
+          "end": 130.18
+        },
+        {
+          "word": " I",
+          "start": 130.18,
+          "end": 130.28
+        },
+        {
+          "word": " think",
+          "start": 130.28,
+          "end": 130.54
+        },
+        {
+          "word": " it",
+          "start": 130.54,
+          "end": 130.68
+        },
+        {
+          "word": " would",
+          "start": 130.68,
+          "end": 130.78
+        },
+        {
+          "word": " be",
+          "start": 130.78,
+          "end": 130.84
+        },
+        {
+          "word": " a",
+          "start": 130.84,
+          "end": 130.92
+        },
+        {
+          "word": " bit",
+          "start": 130.92,
+          "end": 131.06
+        },
+        {
+          "word": " impractical",
+          "start": 131.06,
+          "end": 131.8
+        },
+        {
+          "word": " titanium",
+          "start": 132.38,
+          "end": 132.78
+        }
+      ]
+    },
+    {
+      "idx": 15,
+      "start": 134.14,
+      "end": 146.43,
+      "durS": 12.29,
+      "startedByStrongSwitch": false,
+      "text": "Very expensive, just the process which to make it is expensive. And rubber, well you're saying that people like this spongy fit.",
+      "words": [
+        {
+          "word": " Very",
+          "start": 135.06,
+          "end": 135.74
+        },
+        {
+          "word": " expensive,",
+          "start": 135.74,
+          "end": 136.28
+        },
+        {
+          "word": " just",
+          "start": 136.94,
+          "end": 137.34
+        },
+        {
+          "word": " the",
+          "start": 137.34,
+          "end": 137.48
+        },
+        {
+          "word": " process",
+          "start": 137.48,
+          "end": 137.86
+        },
+        {
+          "word": " which",
+          "start": 137.86,
+          "end": 138.2
+        },
+        {
+          "word": " to",
+          "start": 138.2,
+          "end": 138.96
+        },
+        {
+          "word": " make",
+          "start": 138.96,
+          "end": 139.18
+        },
+        {
+          "word": " it",
+          "start": 139.18,
+          "end": 139.4
+        },
+        {
+          "word": " is",
+          "start": 139.4,
+          "end": 139.56
+        },
+        {
+          "word": " expensive.",
+          "start": 139.56,
+          "end": 140.06
+        },
+        {
+          "word": " And",
+          "start": 141.26,
+          "end": 141.4
+        },
+        {
+          "word": " rubber,",
+          "start": 141.4,
+          "end": 142.7
+        },
+        {
+          "word": " well",
+          "start": 143.32,
+          "end": 143.42
+        },
+        {
+          "word": " you're",
+          "start": 143.42,
+          "end": 143.68
+        },
+        {
+          "word": " saying",
+          "start": 143.68,
+          "end": 143.96
+        },
+        {
+          "word": " that",
+          "start": 143.96,
+          "end": 144.28
+        },
+        {
+          "word": " people",
+          "start": 144.28,
+          "end": 144.72
+        },
+        {
+          "word": " like",
+          "start": 144.72,
+          "end": 145.06
+        },
+        {
+          "word": " this",
+          "start": 145.06,
+          "end": 145.4
+        },
+        {
+          "word": " spongy",
+          "start": 145.4,
+          "end": 146.28
+        },
+        {
+          "word": " fit.",
+          "start": 146.28,
+          "end": 146.4
+        }
+      ]
+    },
+    {
+      "idx": 16,
+      "start": 146.43,
+      "end": 160.91,
+      "durS": 14.47,
+      "startedByStrongSwitch": true,
+      "text": "this year so perhaps some something made of rubber but I was thinking more of the buttons because the buttons which they've said that they've put across",
+      "words": [
+        {
+          "word": " this",
+          "start": 146.43,
+          "end": 146.75
+        },
+        {
+          "word": " year",
+          "start": 146.75,
+          "end": 146.97
+        },
+        {
+          "word": " so",
+          "start": 146.97,
+          "end": 147.31
+        },
+        {
+          "word": " perhaps",
+          "start": 147.31,
+          "end": 148.79
+        },
+        {
+          "word": " some",
+          "start": 148.95,
+          "end": 150.07
+        },
+        {
+          "word": " something",
+          "start": 150.07,
+          "end": 150.95
+        },
+        {
+          "word": " made",
+          "start": 150.95,
+          "end": 151.23
+        },
+        {
+          "word": " of",
+          "start": 151.23,
+          "end": 151.39
+        },
+        {
+          "word": " rubber",
+          "start": 151.39,
+          "end": 151.65
+        },
+        {
+          "word": " but",
+          "start": 151.65,
+          "end": 152.01
+        },
+        {
+          "word": " I",
+          "start": 152.01,
+          "end": 152.19
+        },
+        {
+          "word": " was",
+          "start": 152.19,
+          "end": 152.37
+        },
+        {
+          "word": " thinking",
+          "start": 152.37,
+          "end": 152.61
+        },
+        {
+          "word": " more",
+          "start": 152.61,
+          "end": 152.95
+        },
+        {
+          "word": " of",
+          "start": 152.95,
+          "end": 153.09
+        },
+        {
+          "word": " the",
+          "start": 153.09,
+          "end": 153.21
+        },
+        {
+          "word": " buttons",
+          "start": 153.21,
+          "end": 153.63
+        },
+        {
+          "word": " because",
+          "start": 153.63,
+          "end": 154.07
+        },
+        {
+          "word": " the",
+          "start": 154.07,
+          "end": 154.75
+        },
+        {
+          "word": " buttons",
+          "start": 154.75,
+          "end": 155.15
+        },
+        {
+          "word": " which",
+          "start": 155.15,
+          "end": 155.43
+        },
+        {
+          "word": " they've",
+          "start": 155.43,
+          "end": 155.79
+        },
+        {
+          "word": " said",
+          "start": 155.79,
+          "end": 156.37
+        },
+        {
+          "word": " that",
+          "start": 156.37,
+          "end": 157.57
+        },
+        {
+          "word": " they've",
+          "start": 158.05,
+          "end": 158.87
+        },
+        {
+          "word": " put",
+          "start": 158.87,
+          "end": 159.55
+        },
+        {
+          "word": " across",
+          "start": 159.55,
+          "end": 159.85
+        }
+      ]
+    },
+    {
+      "idx": 17,
+      "start": 160.91,
+      "end": 166.08,
+      "durS": 5.17,
+      "startedByStrongSwitch": false,
+      "text": "are what is used in some stressful manufacture.",
+      "words": [
+        {
+          "word": " are",
+          "start": 161.21,
+          "end": 162.01
+        },
+        {
+          "word": " what",
+          "start": 162.01,
+          "end": 162.65
+        },
+        {
+          "word": " is",
+          "start": 162.65,
+          "end": 162.87
+        },
+        {
+          "word": " used",
+          "start": 162.87,
+          "end": 163.15
+        },
+        {
+          "word": " in",
+          "start": 163.15,
+          "end": 163.43
+        },
+        {
+          "word": " some",
+          "start": 163.43,
+          "end": 164.03
+        },
+        {
+          "word": " stressful",
+          "start": 164.03,
+          "end": 164.73
+        },
+        {
+          "word": " manufacture.",
+          "start": 164.73,
+          "end": 165.53
+        }
+      ]
+    },
+    {
+      "idx": 18,
+      "start": 166.08,
+      "end": 169.67,
+      "durS": 3.6,
+      "startedByStrongSwitch": true,
+      "text": "And it's meant to be anti-RSI.",
+      "words": [
+        {
+          "word": " And",
+          "start": 166.08,
+          "end": 166.56
+        },
+        {
+          "word": " it's",
+          "start": 166.56,
+          "end": 166.82
+        },
+        {
+          "word": " meant",
+          "start": 166.82,
+          "end": 166.96
+        },
+        {
+          "word": " to",
+          "start": 166.96,
+          "end": 167.08
+        },
+        {
+          "word": " be",
+          "start": 167.08,
+          "end": 167.2
+        },
+        {
+          "word": " anti",
+          "start": 167.2,
+          "end": 167.78
+        },
+        {
+          "word": "-RSI.",
+          "start": 167.78,
+          "end": 168.88
+        }
+      ]
+    },
+    {
+      "idx": 19,
+      "start": 169.67,
+      "end": 187.25,
+      "durS": 17.58,
+      "startedByStrongSwitch": true,
+      "text": "I'm not sure how that would work because surely your fingers would still be moving over the short distances, but that's what they said. The problem with the casing is that there's quite...",
+      "words": [
+        {
+          "word": " I'm",
+          "start": 169.67,
+          "end": 170.19
+        },
+        {
+          "word": " not",
+          "start": 170.19,
+          "end": 170.67
+        },
+        {
+          "word": " sure",
+          "start": 170.67,
+          "end": 170.97
+        },
+        {
+          "word": " how",
+          "start": 170.97,
+          "end": 171.43
+        },
+        {
+          "word": " that",
+          "start": 171.43,
+          "end": 171.69
+        },
+        {
+          "word": " would",
+          "start": 171.69,
+          "end": 171.85
+        },
+        {
+          "word": " work",
+          "start": 171.85,
+          "end": 172.17
+        },
+        {
+          "word": " because",
+          "start": 172.17,
+          "end": 172.53
+        },
+        {
+          "word": " surely",
+          "start": 172.53,
+          "end": 173.23
+        },
+        {
+          "word": " your",
+          "start": 173.23,
+          "end": 173.57
+        },
+        {
+          "word": " fingers",
+          "start": 173.57,
+          "end": 173.99
+        },
+        {
+          "word": " would",
+          "start": 173.99,
+          "end": 174.19
+        },
+        {
+          "word": " still",
+          "start": 174.19,
+          "end": 174.41
+        },
+        {
+          "word": " be",
+          "start": 174.41,
+          "end": 174.59
+        },
+        {
+          "word": " moving",
+          "start": 174.59,
+          "end": 174.95
+        },
+        {
+          "word": " over",
+          "start": 174.95,
+          "end": 175.29
+        },
+        {
+          "word": " the",
+          "start": 175.29,
+          "end": 175.45
+        },
+        {
+          "word": " short",
+          "start": 175.45,
+          "end": 175.67
+        },
+        {
+          "word": " distances,",
+          "start": 175.67,
+          "end": 176.15
+        },
+        {
+          "word": " but",
+          "start": 176.15,
+          "end": 176.53
+        },
+        {
+          "word": " that's",
+          "start": 176.53,
+          "end": 177.85
+        },
+        {
+          "word": " what",
+          "start": 177.85,
+          "end": 178.01
+        },
+        {
+          "word": " they",
+          "start": 178.01,
+          "end": 178.21
+        },
+        {
+          "word": " said.",
+          "start": 178.21,
+          "end": 178.55
+        },
+        {
+          "word": " The",
+          "start": 179.57,
+          "end": 180.27
+        },
+        {
+          "word": " problem",
+          "start": 180.27,
+          "end": 180.83
+        },
+        {
+          "word": " with",
+          "start": 180.83,
+          "end": 181.37
+        },
+        {
+          "word": " the",
+          "start": 181.37,
+          "end": 181.67
+        },
+        {
+          "word": " casing",
+          "start": 181.67,
+          "end": 182.19
+        },
+        {
+          "word": " is",
+          "start": 182.19,
+          "end": 182.57
+        },
+        {
+          "word": " that",
+          "start": 182.57,
+          "end": 182.91
+        },
+        {
+          "word": " there's",
+          "start": 183.14,
+          "end": 184.7
+        },
+        {
+          "word": " quite...",
+          "start": 185.31,
+          "end": 186.81
+        }
+      ]
+    },
+    {
+      "idx": 20,
+      "start": 187.25,
+      "end": 209.87,
+      "durS": 22.62,
+      "startedByStrongSwitch": false,
+      "text": "There's quite a few design restrictions that they've got on the shape of the case. If you go for titanium, they can only do a standard box shape. Whereas if you come to plastic, they could be a little more... They can do sort of curved shapes. But whether or not... Because we'd have it in two separate units.",
+      "words": [
+        {
+          "word": " There's",
+          "start": 188.31,
+          "end": 188.79
+        },
+        {
+          "word": " quite",
+          "start": 188.79,
+          "end": 188.93
+        },
+        {
+          "word": " a",
+          "start": 188.93,
+          "end": 189.07
+        },
+        {
+          "word": " few",
+          "start": 189.07,
+          "end": 189.19
+        },
+        {
+          "word": " design",
+          "start": 189.19,
+          "end": 189.73
+        },
+        {
+          "word": " restrictions",
+          "start": 189.73,
+          "end": 190.33
+        },
+        {
+          "word": " that",
+          "start": 190.33,
+          "end": 190.67
+        },
+        {
+          "word": " they've",
+          "start": 190.67,
+          "end": 190.87
+        },
+        {
+          "word": " got",
+          "start": 190.87,
+          "end": 191.09
+        },
+        {
+          "word": " on",
+          "start": 191.09,
+          "end": 192.11
+        },
+        {
+          "word": " the",
+          "start": 192.11,
+          "end": 193.17
+        },
+        {
+          "word": " shape",
+          "start": 193.17,
+          "end": 193.55
+        },
+        {
+          "word": " of",
+          "start": 193.55,
+          "end": 193.71
+        },
+        {
+          "word": " the",
+          "start": 193.71,
+          "end": 193.77
+        },
+        {
+          "word": " case.",
+          "start": 193.77,
+          "end": 194.03
+        },
+        {
+          "word": " If",
+          "start": 194.27,
+          "end": 194.35
+        },
+        {
+          "word": " you",
+          "start": 194.35,
+          "end": 194.45
+        },
+        {
+          "word": " go",
+          "start": 194.45,
+          "end": 194.61
+        },
+        {
+          "word": " for",
+          "start": 194.61,
+          "end": 194.79
+        },
+        {
+          "word": " titanium,",
+          "start": 194.79,
+          "end": 195.25
+        },
+        {
+          "word": " they",
+          "start": 195.45,
+          "end": 195.53
+        },
+        {
+          "word": " can",
+          "start": 195.53,
+          "end": 195.67
+        },
+        {
+          "word": " only",
+          "start": 195.67,
+          "end": 195.83
+        },
+        {
+          "word": " do",
+          "start": 195.83,
+          "end": 196.03
+        },
+        {
+          "word": " a",
+          "start": 196.03,
+          "end": 196.27
+        },
+        {
+          "word": " standard",
+          "start": 196.27,
+          "end": 196.59
+        },
+        {
+          "word": " box",
+          "start": 196.59,
+          "end": 196.99
+        },
+        {
+          "word": " shape.",
+          "start": 196.99,
+          "end": 197.41
+        },
+        {
+          "word": " Whereas",
+          "start": 197.95,
+          "end": 198.43
+        },
+        {
+          "word": " if",
+          "start": 198.43,
+          "end": 198.67
+        },
+        {
+          "word": " you",
+          "start": 198.67,
+          "end": 198.81
+        },
+        {
+          "word": " come",
+          "start": 198.81,
+          "end": 199.17
+        },
+        {
+          "word": " to",
+          "start": 199.17,
+          "end": 199.49
+        },
+        {
+          "word": " plastic,",
+          "start": 199.49,
+          "end": 199.87
+        },
+        {
+          "word": " they",
+          "start": 200.05,
+          "end": 200.13
+        },
+        {
+          "word": " could",
+          "start": 200.13,
+          "end": 201.01
+        },
+        {
+          "word": " be",
+          "start": 201.01,
+          "end": 201.23
+        },
+        {
+          "word": " a",
+          "start": 201.23,
+          "end": 201.37
+        },
+        {
+          "word": " little",
+          "start": 201.37,
+          "end": 201.51
+        },
+        {
+          "word": " more...",
+          "start": 201.51,
+          "end": 202.01
+        },
+        {
+          "word": " They",
+          "start": 202.01,
+          "end": 202.63
+        },
+        {
+          "word": " can",
+          "start": 202.63,
+          "end": 203.17
+        },
+        {
+          "word": " do",
+          "start": 203.17,
+          "end": 203.37
+        },
+        {
+          "word": " sort",
+          "start": 203.37,
+          "end": 203.61
+        },
+        {
+          "word": " of",
+          "start": 203.61,
+          "end": 203.73
+        },
+        {
+          "word": " curved",
+          "start": 203.73,
+          "end": 204.05
+        },
+        {
+          "word": " shapes.",
+          "start": 204.05,
+          "end": 204.49
+        },
+        {
+          "word": " But",
+          "start": 205.05,
+          "end": 205.15
+        },
+        {
+          "word": " whether",
+          "start": 205.15,
+          "end": 205.47
+        },
+        {
+          "word": " or",
+          "start": 205.47,
+          "end": 206.39
+        },
+        {
+          "word": " not...",
+          "start": 206.39,
+          "end": 206.77
+        },
+        {
+          "word": " Because",
+          "start": 206.77,
+          "end": 207.13
+        },
+        {
+          "word": " we'd",
+          "start": 207.13,
+          "end": 207.37
+        },
+        {
+          "word": " have",
+          "start": 207.37,
+          "end": 207.55
+        },
+        {
+          "word": " it",
+          "start": 207.55,
+          "end": 207.67
+        },
+        {
+          "word": " in",
+          "start": 207.67,
+          "end": 207.79
+        },
+        {
+          "word": " two",
+          "start": 207.79,
+          "end": 207.99
+        },
+        {
+          "word": " separate",
+          "start": 207.99,
+          "end": 208.41
+        },
+        {
+          "word": " units.",
+          "start": 208.41,
+          "end": 208.91
+        }
+      ]
+    },
+    {
+      "idx": 21,
+      "start": 209.87,
+      "end": 211.13,
+      "durS": 1.26,
+      "startedByStrongSwitch": false,
+      "text": "",
+      "words": []
+    },
+    {
+      "idx": 22,
+      "start": 211.13,
+      "end": 215.76,
+      "durS": 4.62,
+      "startedByStrongSwitch": true,
+      "text": "For the flip phone. And second question is like mobile you can change the cover.",
+      "words": [
+        {
+          "word": " For",
+          "start": 211.13,
+          "end": 211.51
+        },
+        {
+          "word": " the",
+          "start": 211.51,
+          "end": 211.71
+        },
+        {
+          "word": " flip",
+          "start": 211.71,
+          "end": 211.91
+        },
+        {
+          "word": " phone.",
+          "start": 211.91,
+          "end": 212.29
+        },
+        {
+          "word": " And",
+          "start": 212.49,
+          "end": 212.89
+        },
+        {
+          "word": " second",
+          "start": 212.89,
+          "end": 213.31
+        },
+        {
+          "word": " question",
+          "start": 213.31,
+          "end": 213.65
+        },
+        {
+          "word": " is",
+          "start": 213.65,
+          "end": 213.79
+        },
+        {
+          "word": " like",
+          "start": 213.79,
+          "end": 213.99
+        },
+        {
+          "word": " mobile",
+          "start": 213.99,
+          "end": 214.43
+        },
+        {
+          "word": " you",
+          "start": 214.43,
+          "end": 214.63
+        },
+        {
+          "word": " can",
+          "start": 214.63,
+          "end": 214.75
+        },
+        {
+          "word": " change",
+          "start": 214.75,
+          "end": 214.97
+        },
+        {
+          "word": " the",
+          "start": 214.97,
+          "end": 215.13
+        },
+        {
+          "word": " cover.",
+          "start": 215.13,
+          "end": 215.37
+        }
+      ]
+    },
+    {
+      "idx": 23,
+      "start": 215.76,
+      "end": 222.96,
+      "durS": 7.2,
+      "startedByStrongSwitch": false,
+      "text": "Yeah, it is skin or whatever so in this case if you're looking at like a customer can change the color like from green parrot green to chili red or something",
+      "words": [
+        {
+          "word": " Yeah,",
+          "start": 215.76,
+          "end": 216.28
+        },
+        {
+          "word": " it",
+          "start": 216.28,
+          "end": 216.46
+        },
+        {
+          "word": " is",
+          "start": 216.46,
+          "end": 216.62
+        },
+        {
+          "word": " skin",
+          "start": 216.62,
+          "end": 216.74
+        },
+        {
+          "word": " or",
+          "start": 216.74,
+          "end": 216.9
+        },
+        {
+          "word": " whatever",
+          "start": 216.9,
+          "end": 217.14
+        },
+        {
+          "word": " so",
+          "start": 217.14,
+          "end": 217.8
+        },
+        {
+          "word": " in",
+          "start": 217.8,
+          "end": 218.02
+        },
+        {
+          "word": " this",
+          "start": 218.02,
+          "end": 218.16
+        },
+        {
+          "word": " case",
+          "start": 218.16,
+          "end": 218.34
+        },
+        {
+          "word": " if",
+          "start": 218.34,
+          "end": 218.48
+        },
+        {
+          "word": " you're",
+          "start": 218.48,
+          "end": 218.6
+        },
+        {
+          "word": " looking",
+          "start": 218.6,
+          "end": 218.76
+        },
+        {
+          "word": " at",
+          "start": 218.76,
+          "end": 218.94
+        },
+        {
+          "word": " like",
+          "start": 218.94,
+          "end": 219.1
+        },
+        {
+          "word": " a",
+          "start": 219.1,
+          "end": 219.28
+        },
+        {
+          "word": " customer",
+          "start": 219.28,
+          "end": 219.54
+        },
+        {
+          "word": " can",
+          "start": 219.54,
+          "end": 219.72
+        },
+        {
+          "word": " change",
+          "start": 219.72,
+          "end": 219.9
+        },
+        {
+          "word": " the",
+          "start": 219.9,
+          "end": 220.02
+        },
+        {
+          "word": " color",
+          "start": 220.02,
+          "end": 220.24
+        },
+        {
+          "word": " like",
+          "start": 220.24,
+          "end": 220.5
+        },
+        {
+          "word": " from",
+          "start": 220.5,
+          "end": 220.88
+        },
+        {
+          "word": " green",
+          "start": 220.88,
+          "end": 221.18
+        },
+        {
+          "word": " parrot",
+          "start": 221.18,
+          "end": 221.44
+        },
+        {
+          "word": " green",
+          "start": 221.44,
+          "end": 221.76
+        },
+        {
+          "word": " to",
+          "start": 221.76,
+          "end": 221.96
+        },
+        {
+          "word": " chili",
+          "start": 221.96,
+          "end": 222.36
+        },
+        {
+          "word": " red",
+          "start": 222.36,
+          "end": 222.58
+        },
+        {
+          "word": " or",
+          "start": 222.58,
+          "end": 222.72
+        },
+        {
+          "word": " something",
+          "start": 222.72,
+          "end": 222.86
+        }
+      ]
+    },
+    {
+      "idx": 24,
+      "start": 222.96,
+      "end": 226.53,
+      "durS": 3.57,
+      "startedByStrongSwitch": true,
+      "text": "Yeah, I think so is it feature available in like titanium?",
+      "words": [
+        {
+          "word": " Yeah,",
+          "start": 222.96,
+          "end": 223.4
+        },
+        {
+          "word": " I",
+          "start": 223.46,
+          "end": 223.56
+        },
+        {
+          "word": " think",
+          "start": 223.56,
+          "end": 223.68
+        },
+        {
+          "word": " so",
+          "start": 223.68,
+          "end": 223.74
+        },
+        {
+          "word": " is",
+          "start": 223.74,
+          "end": 223.94
+        },
+        {
+          "word": " it",
+          "start": 223.94,
+          "end": 224.06
+        },
+        {
+          "word": " feature",
+          "start": 224.06,
+          "end": 224.28
+        },
+        {
+          "word": " available",
+          "start": 224.28,
+          "end": 224.58
+        },
+        {
+          "word": " in",
+          "start": 224.58,
+          "end": 224.86
+        },
+        {
+          "word": " like",
+          "start": 224.86,
+          "end": 225.12
+        },
+        {
+          "word": " titanium?",
+          "start": 225.12,
+          "end": 226.02
+        }
+      ]
+    },
+    {
+      "idx": 25,
+      "start": 226.53,
+      "end": 228.59,
+      "durS": 2.06,
+      "startedByStrongSwitch": true,
+      "text": "Or it's like only specific to class? Yeah.",
+      "words": [
+        {
+          "word": " Or",
+          "start": 226.53,
+          "end": 226.69
+        },
+        {
+          "word": " it's",
+          "start": 226.69,
+          "end": 226.93
+        },
+        {
+          "word": " like",
+          "start": 226.93,
+          "end": 227.09
+        },
+        {
+          "word": " only",
+          "start": 227.09,
+          "end": 227.37
+        },
+        {
+          "word": " specific",
+          "start": 227.37,
+          "end": 227.95
+        },
+        {
+          "word": " to",
+          "start": 227.95,
+          "end": 228.11
+        },
+        {
+          "word": " class?",
+          "start": 228.11,
+          "end": 228.25
+        },
+        {
+          "word": " Yeah.",
+          "start": 228.27,
+          "end": 228.57
+        }
+      ]
+    },
+    {
+      "idx": 26,
+      "start": 228.59,
+      "end": 241.03,
+      "durS": 12.44,
+      "startedByStrongSwitch": true,
+      "text": "in titanium I don't think it would be available at all really. Well you could make it available in the titanium, it was just it would be so expensive to buy a new case for it.",
+      "words": [
+        {
+          "word": " in",
+          "start": 228.59,
+          "end": 229.15
+        },
+        {
+          "word": " titanium",
+          "start": 229.15,
+          "end": 229.53
+        },
+        {
+          "word": " I",
+          "start": 229.53,
+          "end": 229.97
+        },
+        {
+          "word": " don't",
+          "start": 229.97,
+          "end": 230.67
+        },
+        {
+          "word": " think",
+          "start": 230.67,
+          "end": 230.79
+        },
+        {
+          "word": " it",
+          "start": 230.79,
+          "end": 230.95
+        },
+        {
+          "word": " would",
+          "start": 230.95,
+          "end": 231.05
+        },
+        {
+          "word": " be",
+          "start": 231.05,
+          "end": 231.13
+        },
+        {
+          "word": " available",
+          "start": 231.13,
+          "end": 231.53
+        },
+        {
+          "word": " at",
+          "start": 231.53,
+          "end": 231.81
+        },
+        {
+          "word": " all",
+          "start": 231.81,
+          "end": 231.99
+        },
+        {
+          "word": " really.",
+          "start": 231.99,
+          "end": 232.27
+        },
+        {
+          "word": " Well",
+          "start": 234.21,
+          "end": 234.71
+        },
+        {
+          "word": " you",
+          "start": 234.71,
+          "end": 235.21
+        },
+        {
+          "word": " could",
+          "start": 235.21,
+          "end": 235.45
+        },
+        {
+          "word": " make",
+          "start": 235.45,
+          "end": 235.71
+        },
+        {
+          "word": " it",
+          "start": 235.71,
+          "end": 235.89
+        },
+        {
+          "word": " available",
+          "start": 235.89,
+          "end": 236.33
+        },
+        {
+          "word": " in",
+          "start": 236.33,
+          "end": 236.89
+        },
+        {
+          "word": " the",
+          "start": 236.89,
+          "end": 236.99
+        },
+        {
+          "word": " titanium,",
+          "start": 236.99,
+          "end": 237.47
+        },
+        {
+          "word": " it",
+          "start": 237.79,
+          "end": 237.79
+        },
+        {
+          "word": " was",
+          "start": 237.79,
+          "end": 237.95
+        },
+        {
+          "word": " just",
+          "start": 237.95,
+          "end": 238.15
+        },
+        {
+          "word": " it",
+          "start": 238.15,
+          "end": 238.31
+        },
+        {
+          "word": " would",
+          "start": 238.31,
+          "end": 238.45
+        },
+        {
+          "word": " be",
+          "start": 238.45,
+          "end": 238.63
+        },
+        {
+          "word": " so",
+          "start": 238.63,
+          "end": 239.07
+        },
+        {
+          "word": " expensive",
+          "start": 239.07,
+          "end": 239.53
+        },
+        {
+          "word": " to",
+          "start": 239.53,
+          "end": 239.75
+        },
+        {
+          "word": " buy",
+          "start": 239.75,
+          "end": 239.91
+        },
+        {
+          "word": " a",
+          "start": 239.91,
+          "end": 240.05
+        },
+        {
+          "word": " new",
+          "start": 240.05,
+          "end": 240.15
+        },
+        {
+          "word": " case",
+          "start": 240.15,
+          "end": 240.47
+        },
+        {
+          "word": " for",
+          "start": 240.47,
+          "end": 240.77
+        },
+        {
+          "word": " it.",
+          "start": 240.77,
+          "end": 240.93
+        }
+      ]
+    },
+    {
+      "idx": 27,
+      "start": 241.03,
+      "end": 252.3,
+      "durS": 11.26,
+      "startedByStrongSwitch": true,
+      "text": "because of the expense of how much titanium is. It's light and strong, but I think it should be left for aircraft design rather than for...",
+      "words": [
+        {
+          "word": " because",
+          "start": 241.05,
+          "end": 242.09
+        },
+        {
+          "word": " of",
+          "start": 242.09,
+          "end": 242.39
+        },
+        {
+          "word": " the",
+          "start": 242.39,
+          "end": 242.51
+        },
+        {
+          "word": " expense",
+          "start": 242.51,
+          "end": 242.87
+        },
+        {
+          "word": " of",
+          "start": 242.87,
+          "end": 243.21
+        },
+        {
+          "word": " how",
+          "start": 243.21,
+          "end": 243.51
+        },
+        {
+          "word": " much",
+          "start": 243.51,
+          "end": 243.73
+        },
+        {
+          "word": " titanium",
+          "start": 243.73,
+          "end": 244.13
+        },
+        {
+          "word": " is.",
+          "start": 244.13,
+          "end": 244.45
+        },
+        {
+          "word": " It's",
+          "start": 244.89,
+          "end": 245.51
+        },
+        {
+          "word": " light",
+          "start": 245.51,
+          "end": 245.83
+        },
+        {
+          "word": " and",
+          "start": 245.83,
+          "end": 246.05
+        },
+        {
+          "word": " strong,",
+          "start": 246.05,
+          "end": 246.41
+        },
+        {
+          "word": " but",
+          "start": 246.41,
+          "end": 246.85
+        },
+        {
+          "word": " I",
+          "start": 246.85,
+          "end": 247.85
+        },
+        {
+          "word": " think",
+          "start": 247.85,
+          "end": 248.11
+        },
+        {
+          "word": " it",
+          "start": 248.11,
+          "end": 248.25
+        },
+        {
+          "word": " should",
+          "start": 248.25,
+          "end": 248.39
+        },
+        {
+          "word": " be",
+          "start": 248.39,
+          "end": 248.57
+        },
+        {
+          "word": " left",
+          "start": 248.57,
+          "end": 248.87
+        },
+        {
+          "word": " for",
+          "start": 248.87,
+          "end": 249.11
+        },
+        {
+          "word": " aircraft",
+          "start": 249.11,
+          "end": 249.55
+        },
+        {
+          "word": " design",
+          "start": 249.55,
+          "end": 250.01
+        },
+        {
+          "word": " rather",
+          "start": 250.01,
+          "end": 250.33
+        },
+        {
+          "word": " than",
+          "start": 250.33,
+          "end": 250.57
+        },
+        {
+          "word": " for...",
+          "start": 250.57,
+          "end": 251.11
+        }
+      ]
+    },
+    {
+      "idx": 28,
+      "start": 252.3,
+      "end": 256.5,
+      "durS": 4.2,
+      "startedByStrongSwitch": true,
+      "text": "It does work quite easily too if you let it fall. I've got a mobile phone myself which is titanium.",
+      "words": [
+        {
+          "word": " It",
+          "start": 252.3,
+          "end": 252.3
+        },
+        {
+          "word": " does",
+          "start": 252.3,
+          "end": 252.44
+        },
+        {
+          "word": " work",
+          "start": 252.44,
+          "end": 252.86
+        },
+        {
+          "word": " quite",
+          "start": 252.86,
+          "end": 252.96
+        },
+        {
+          "word": " easily",
+          "start": 252.96,
+          "end": 253.28
+        },
+        {
+          "word": " too",
+          "start": 253.28,
+          "end": 253.48
+        },
+        {
+          "word": " if",
+          "start": 253.48,
+          "end": 253.66
+        },
+        {
+          "word": " you",
+          "start": 253.66,
+          "end": 253.72
+        },
+        {
+          "word": " let",
+          "start": 253.72,
+          "end": 253.94
+        },
+        {
+          "word": " it",
+          "start": 253.94,
+          "end": 254.06
+        },
+        {
+          "word": " fall.",
+          "start": 254.06,
+          "end": 254.38
+        },
+        {
+          "word": " I've",
+          "start": 254.52,
+          "end": 254.56
+        },
+        {
+          "word": " got",
+          "start": 254.56,
+          "end": 254.62
+        },
+        {
+          "word": " a",
+          "start": 254.62,
+          "end": 254.72
+        },
+        {
+          "word": " mobile",
+          "start": 254.72,
+          "end": 254.92
+        },
+        {
+          "word": " phone",
+          "start": 254.92,
+          "end": 255.14
+        },
+        {
+          "word": " myself",
+          "start": 255.14,
+          "end": 255.52
+        },
+        {
+          "word": " which",
+          "start": 255.52,
+          "end": 255.78
+        },
+        {
+          "word": " is",
+          "start": 255.78,
+          "end": 255.92
+        },
+        {
+          "word": " titanium.",
+          "start": 255.92,
+          "end": 256.24
+        }
+      ]
+    },
+    {
+      "idx": 29,
+      "start": 256.5,
+      "end": 257.73,
+      "durS": 1.23,
+      "startedByStrongSwitch": true,
+      "text": "and it does mark very easily.",
+      "words": [
+        {
+          "word": " and",
+          "start": 256.5,
+          "end": 256.62
+        },
+        {
+          "word": " it",
+          "start": 256.62,
+          "end": 256.72
+        },
+        {
+          "word": " does",
+          "start": 256.72,
+          "end": 256.92
+        },
+        {
+          "word": " mark",
+          "start": 256.92,
+          "end": 257.34
+        },
+        {
+          "word": " very",
+          "start": 257.34,
+          "end": 257.6
+        },
+        {
+          "word": " easily.",
+          "start": 257.6,
+          "end": 257.7
+        }
+      ]
+    },
+    {
+      "idx": 30,
+      "start": 257.73,
+      "end": 263.61,
+      "durS": 5.89,
+      "startedByStrongSwitch": true,
+      "text": "I was just wondering if we make the basic mold out of plastic but have like a rubber cover",
+      "words": [
+        {
+          "word": " I",
+          "start": 259.13,
+          "end": 259.49
+        },
+        {
+          "word": " was",
+          "start": 259.49,
+          "end": 259.61
+        },
+        {
+          "word": " just",
+          "start": 259.61,
+          "end": 259.73
+        },
+        {
+          "word": " wondering",
+          "start": 259.73,
+          "end": 259.99
+        },
+        {
+          "word": " if",
+          "start": 259.99,
+          "end": 260.17
+        },
+        {
+          "word": " we",
+          "start": 260.17,
+          "end": 260.29
+        },
+        {
+          "word": " make",
+          "start": 260.29,
+          "end": 260.45
+        },
+        {
+          "word": " the",
+          "start": 260.45,
+          "end": 260.57
+        },
+        {
+          "word": " basic",
+          "start": 260.57,
+          "end": 261.01
+        },
+        {
+          "word": " mold",
+          "start": 261.01,
+          "end": 261.49
+        },
+        {
+          "word": " out",
+          "start": 261.49,
+          "end": 261.69
+        },
+        {
+          "word": " of",
+          "start": 261.69,
+          "end": 261.83
+        },
+        {
+          "word": " plastic",
+          "start": 261.83,
+          "end": 262.33
+        },
+        {
+          "word": " but",
+          "start": 262.33,
+          "end": 262.61
+        },
+        {
+          "word": " have",
+          "start": 262.61,
+          "end": 262.75
+        },
+        {
+          "word": " like",
+          "start": 262.75,
+          "end": 262.91
+        },
+        {
+          "word": " a",
+          "start": 262.91,
+          "end": 263.01
+        },
+        {
+          "word": " rubber",
+          "start": 263.01,
+          "end": 263.23
+        },
+        {
+          "word": " cover",
+          "start": 263.23,
+          "end": 263.59
+        }
+      ]
+    },
+    {
+      "idx": 31,
+      "start": 263.61,
+      "end": 268.36,
+      "durS": 4.74,
+      "startedByStrongSwitch": true,
+      "text": "that comes over, that gives the spongy feel. That also allows us to kind of have different...",
+      "words": [
+        {
+          "word": " that",
+          "start": 263.61,
+          "end": 263.85
+        },
+        {
+          "word": " comes",
+          "start": 263.85,
+          "end": 263.99
+        },
+        {
+          "word": " over,",
+          "start": 263.99,
+          "end": 264.41
+        },
+        {
+          "word": " that",
+          "start": 264.57,
+          "end": 265.09
+        },
+        {
+          "word": " gives",
+          "start": 265.09,
+          "end": 265.35
+        },
+        {
+          "word": " the",
+          "start": 265.35,
+          "end": 265.53
+        },
+        {
+          "word": " spongy",
+          "start": 265.53,
+          "end": 265.97
+        },
+        {
+          "word": " feel.",
+          "start": 265.97,
+          "end": 266.29
+        },
+        {
+          "word": " That",
+          "start": 266.51,
+          "end": 266.73
+        },
+        {
+          "word": " also",
+          "start": 266.73,
+          "end": 266.97
+        },
+        {
+          "word": " allows",
+          "start": 266.97,
+          "end": 267.43
+        },
+        {
+          "word": " us",
+          "start": 267.43,
+          "end": 267.69
+        },
+        {
+          "word": " to",
+          "start": 267.69,
+          "end": 267.83
+        },
+        {
+          "word": " kind",
+          "start": 267.83,
+          "end": 267.93
+        },
+        {
+          "word": " of",
+          "start": 267.93,
+          "end": 268.05
+        },
+        {
+          "word": " have",
+          "start": 268.05,
+          "end": 268.17
+        },
+        {
+          "word": " different...",
+          "start": 268.17,
+          "end": 268.33
+        }
+      ]
+    },
+    {
+      "idx": 32,
+      "start": 268.36,
+      "end": 270.37,
+      "durS": 2.01,
+      "startedByStrongSwitch": true,
+      "text": "and you can peel them off.",
+      "words": [
+        {
+          "word": " and",
+          "start": 268.36,
+          "end": 268.82
+        },
+        {
+          "word": " you",
+          "start": 268.82,
+          "end": 268.94
+        },
+        {
+          "word": " can",
+          "start": 268.94,
+          "end": 269.14
+        },
+        {
+          "word": " peel",
+          "start": 269.14,
+          "end": 269.46
+        },
+        {
+          "word": " them",
+          "start": 269.46,
+          "end": 269.6
+        },
+        {
+          "word": " off.",
+          "start": 269.6,
+          "end": 269.84
+        }
+      ]
+    },
+    {
+      "idx": 33,
+      "start": 270.37,
+      "end": 274.04,
+      "durS": 3.67,
+      "startedByStrongSwitch": true,
+      "text": "instead of the fascia that comes off being plastic, the fascias that...",
+      "words": [
+        {
+          "word": " instead",
+          "start": 270.37,
+          "end": 270.75
+        },
+        {
+          "word": " of",
+          "start": 270.75,
+          "end": 271.01
+        },
+        {
+          "word": " the",
+          "start": 271.01,
+          "end": 271.55
+        },
+        {
+          "word": " fascia",
+          "start": 271.55,
+          "end": 272.15
+        },
+        {
+          "word": " that",
+          "start": 272.15,
+          "end": 272.25
+        },
+        {
+          "word": " comes",
+          "start": 272.25,
+          "end": 272.41
+        },
+        {
+          "word": " off",
+          "start": 272.41,
+          "end": 272.65
+        },
+        {
+          "word": " being",
+          "start": 272.65,
+          "end": 272.83
+        },
+        {
+          "word": " plastic,",
+          "start": 272.83,
+          "end": 273.35
+        },
+        {
+          "word": " the",
+          "start": 273.51,
+          "end": 273.61
+        },
+        {
+          "word": " fascias",
+          "start": 273.61,
+          "end": 273.91
+        },
+        {
+          "word": " that...",
+          "start": 273.91,
+          "end": 274.01
+        }
+      ]
+    },
+    {
+      "idx": 34,
+      "start": 274.04,
+      "end": 276.34,
+      "durS": 2.3,
+      "startedByStrongSwitch": true,
+      "text": "Like a rubber sleeve almost.",
+      "words": [
+        {
+          "word": " Like",
+          "start": 274.06,
+          "end": 274.46
+        },
+        {
+          "word": " a",
+          "start": 274.46,
+          "end": 274.5
+        },
+        {
+          "word": " rubber",
+          "start": 274.5,
+          "end": 274.62
+        },
+        {
+          "word": " sleeve",
+          "start": 274.62,
+          "end": 275.06
+        },
+        {
+          "word": " almost.",
+          "start": 275.06,
+          "end": 275.56
+        }
+      ]
+    },
+    {
+      "idx": 35,
+      "start": 276.34,
+      "end": 282.35,
+      "durS": 6.01,
+      "startedByStrongSwitch": true,
+      "text": "It's like those pens that you get with the grip. Yeah, right. That could be a good idea.",
+      "words": [
+        {
+          "word": " It's",
+          "start": 276.34,
+          "end": 276.5
+        },
+        {
+          "word": " like",
+          "start": 276.5,
+          "end": 276.5
+        },
+        {
+          "word": " those",
+          "start": 276.5,
+          "end": 276.72
+        },
+        {
+          "word": " pens",
+          "start": 276.72,
+          "end": 277.06
+        },
+        {
+          "word": " that",
+          "start": 277.06,
+          "end": 277.28
+        },
+        {
+          "word": " you",
+          "start": 277.28,
+          "end": 277.32
+        },
+        {
+          "word": " get",
+          "start": 277.32,
+          "end": 277.46
+        },
+        {
+          "word": " with",
+          "start": 277.46,
+          "end": 277.6
+        },
+        {
+          "word": " the",
+          "start": 277.6,
+          "end": 277.68
+        },
+        {
+          "word": " grip.",
+          "start": 277.68,
+          "end": 277.98
+        },
+        {
+          "word": " Yeah,",
+          "start": 278.2,
+          "end": 278.56
+        },
+        {
+          "word": " right.",
+          "start": 278.68,
+          "end": 278.84
+        },
+        {
+          "word": " That",
+          "start": 279.1,
+          "end": 279.22
+        },
+        {
+          "word": " could",
+          "start": 279.22,
+          "end": 279.44
+        },
+        {
+          "word": " be",
+          "start": 279.44,
+          "end": 280.22
+        },
+        {
+          "word": " a",
+          "start": 280.22,
+          "end": 280.26
+        },
+        {
+          "word": " good",
+          "start": 280.26,
+          "end": 280.36
+        },
+        {
+          "word": " idea.",
+          "start": 280.36,
+          "end": 280.54
+        }
+      ]
+    },
+    {
+      "idx": 36,
+      "start": 282.35,
+      "end": 284.5,
+      "durS": 2.15,
+      "startedByStrongSwitch": true,
+      "text": "It would be comfortable to hold on also.",
+      "words": [
+        {
+          "word": " It",
+          "start": 282.35,
+          "end": 282.49
+        },
+        {
+          "word": " would",
+          "start": 282.49,
+          "end": 282.59
+        },
+        {
+          "word": " be",
+          "start": 282.59,
+          "end": 282.67
+        },
+        {
+          "word": " comfortable",
+          "start": 282.67,
+          "end": 282.99
+        },
+        {
+          "word": " to",
+          "start": 282.99,
+          "end": 283.19
+        },
+        {
+          "word": " hold",
+          "start": 283.19,
+          "end": 283.39
+        },
+        {
+          "word": " on",
+          "start": 283.39,
+          "end": 283.51
+        },
+        {
+          "word": " also.",
+          "start": 283.51,
+          "end": 283.75
+        }
+      ]
+    },
+    {
+      "idx": 37,
+      "start": 284.5,
+      "end": 287.64,
+      "durS": 3.14,
+      "startedByStrongSwitch": true,
+      "text": "very cheap way of changing the look of it and people can just buy a new",
+      "words": [
+        {
+          "word": " very",
+          "start": 284.5,
+          "end": 284.84
+        },
+        {
+          "word": " cheap",
+          "start": 284.84,
+          "end": 285.12
+        },
+        {
+          "word": " way",
+          "start": 285.12,
+          "end": 285.32
+        },
+        {
+          "word": " of",
+          "start": 285.32,
+          "end": 285.46
+        },
+        {
+          "word": " changing",
+          "start": 285.46,
+          "end": 285.72
+        },
+        {
+          "word": " the",
+          "start": 285.72,
+          "end": 285.92
+        },
+        {
+          "word": " look",
+          "start": 285.92,
+          "end": 286.14
+        },
+        {
+          "word": " of",
+          "start": 286.14,
+          "end": 286.28
+        },
+        {
+          "word": " it",
+          "start": 286.28,
+          "end": 286.4
+        },
+        {
+          "word": " and",
+          "start": 286.4,
+          "end": 286.56
+        },
+        {
+          "word": " people",
+          "start": 286.56,
+          "end": 286.82
+        },
+        {
+          "word": " can",
+          "start": 286.82,
+          "end": 287
+        },
+        {
+          "word": " just",
+          "start": 287,
+          "end": 287.16
+        },
+        {
+          "word": " buy",
+          "start": 287.16,
+          "end": 287.4
+        },
+        {
+          "word": " a",
+          "start": 287.4,
+          "end": 287.48
+        },
+        {
+          "word": " new",
+          "start": 287.48,
+          "end": 287.6
+        }
+      ]
+    },
+    {
+      "idx": 38,
+      "start": 287.64,
+      "end": 288.73,
+      "durS": 1.09,
+      "startedByStrongSwitch": true,
+      "text": "Yeah.",
+      "words": [
+        {
+          "word": " Yeah.",
+          "start": 287.64,
+          "end": 287.94
+        }
+      ]
+    },
+    {
+      "idx": 39,
+      "start": 288.73,
+      "end": 293.46,
+      "durS": 4.73,
+      "startedByStrongSwitch": true,
+      "text": "Well, that's been really popular with mobile phones. I don't see why not.",
+      "words": [
+        {
+          "word": " Well,",
+          "start": 288.73,
+          "end": 288.91
+        },
+        {
+          "word": " that's",
+          "start": 289.05,
+          "end": 289.17
+        },
+        {
+          "word": " been",
+          "start": 289.17,
+          "end": 289.33
+        },
+        {
+          "word": " really",
+          "start": 289.33,
+          "end": 289.71
+        },
+        {
+          "word": " popular",
+          "start": 289.71,
+          "end": 290.73
+        },
+        {
+          "word": " with",
+          "start": 290.73,
+          "end": 290.93
+        },
+        {
+          "word": " mobile",
+          "start": 290.93,
+          "end": 291.17
+        },
+        {
+          "word": " phones.",
+          "start": 291.17,
+          "end": 291.55
+        },
+        {
+          "word": " I",
+          "start": 291.65,
+          "end": 291.73
+        },
+        {
+          "word": " don't",
+          "start": 291.73,
+          "end": 291.99
+        },
+        {
+          "word": " see",
+          "start": 291.99,
+          "end": 292.13
+        },
+        {
+          "word": " why",
+          "start": 292.13,
+          "end": 292.33
+        },
+        {
+          "word": " not.",
+          "start": 292.33,
+          "end": 292.57
+        }
+      ]
+    },
+    {
+      "idx": 40,
+      "start": 293.46,
+      "end": 294.88,
+      "durS": 1.42,
+      "startedByStrongSwitch": false,
+      "text": "Also the...",
+      "words": [
+        {
+          "word": " Also",
+          "start": 293.46,
+          "end": 294.1
+        },
+        {
+          "word": " the...",
+          "start": 294.1,
+          "end": 294.64
+        }
+      ]
+    },
+    {
+      "idx": 41,
+      "start": 294.88,
+      "end": 300,
+      "durS": 5.12,
+      "startedByStrongSwitch": true,
+      "text": "Just going back to the interface designs with the buttons.",
+      "words": [
+        {
+          "word": " Just",
+          "start": 294.88,
+          "end": 295.42
+        },
+        {
+          "word": " going",
+          "start": 295.42,
+          "end": 296.02
+        },
+        {
+          "word": " back",
+          "start": 296.02,
+          "end": 296.26
+        },
+        {
+          "word": " to",
+          "start": 296.26,
+          "end": 296.46
+        },
+        {
+          "word": " the",
+          "start": 296.46,
+          "end": 296.6
+        },
+        {
+          "word": " interface",
+          "start": 296.6,
+          "end": 297.1
+        },
+        {
+          "word": " designs",
+          "start": 297.1,
+          "end": 297.54
+        },
+        {
+          "word": " with",
+          "start": 297.54,
+          "end": 297.72
+        },
+        {
+          "word": " the",
+          "start": 297.72,
+          "end": 297.8
+        },
+        {
+          "word": " buttons.",
+          "start": 297.8,
+          "end": 298.22
+        }
+      ]
+    }
+  ]
+}

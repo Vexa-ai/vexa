@@ -1,0 +1,72 @@
+<!doctype html><meta charset=utf-8>
+<title>Vexa MS Teams — MAIN (caption-driven, as deployed)</title>
+<style>
+ body{font:14px/1.5 system-ui;margin:0;background:#0f172a;color:#e2e8f0}
+ header{padding:12px 18px;border-bottom:1px solid #334155;background:#1e293b}
+ h1{font-size:16px;margin:0 0 4px} .sub{color:#94a3b8;font-size:12px}
+ .legend{margin:10px 18px;font-size:12px;color:#cbd5e1}
+ .legend b{padding:2px 8px;border-radius:5px;margin-right:8px}
+ .mermaid{background:#fff;margin:12px;border-radius:8px;padding:12px}
+ .notes{max-width:1000px;margin:8px 18px 40px;color:#cbd5e1}
+ .notes h3{color:#f1f5f9;font-size:13px;margin:14px 0 4px}
+ .notes code{background:#1e293b;padding:1px 5px;border-radius:4px;color:#fbbf24}
+</style>
+<header>
+ <h1>Vexa MS Teams — <b style="color:#34d399">MAIN</b> (caption-driven), traced from <code style="color:#fbbf24">main → handleMicrosoftTeams</code></h1>
+ <div class=sub>NO pyannote, NO wespeaker, NO clustering — Teams' own live captions provide who + when</div>
+</header>
+<div class=legend>
+ <b style="background:#dbeafe;color:#1e40af">browser (page context)</b>
+ <b style="background:#dcfce7;color:#166534">Teams captions = the diarizer</b>
+ <b style="background:#e0e7ff;color:#3730a3">node (bot process)</b>
+</div>
+<pre class="mermaid">
+flowchart TD
+  M["runBot() · platform==='teams'"] --> H["handleMicrosoftTeams()"]
+  H --> INIT["initializePerSpeakerTranscription()<br/>speakerManager · transcriptionClient · segmentPublisher"]
+  H --> REC["startTeamsRecording() (browser)"]
+
+  subgraph BROWSER["BROWSER — platforms/msteams/recording.ts"]
+    REC --> SP["ScriptProcessor(4096) on meeting stream"]
+    REC --> DOM["read Teams live-captions DOM:<br/>current speaker name + text"]
+    SP --> AUD["__vexaTeamsAudioData(<b>caption speakerName</b>, frame)"]
+    DOM --> CAPE["__vexaTeamsCaptionData(speaker, text, ts)"]
+  end
+
+  subgraph TEAMSDIAR["② DIARIZATION = TEAMS CAPTIONS (free)"]
+    AUD --> HTAD["handleTeamsAudioData(name, data)"]
+    HTAD --> SID["speakerId = 'teams-' + name<br/>(identity straight from Teams)"]
+    SID --> FEED["speakerManager.feedAudio(speakerId, data)<br/>NO VAD · caption-gated"]
+    CAPE --> HTCD["handleTeamsCaptionData()"]
+    HTCD --> CHG{"caption speaker changed?<br/>lastCaptionSpeakerId !== speakerId"}
+    CHG -- yes --> FLUSH["flushSpeaker(previous)<br/>= the SPEAKER-CHANGE signal"]
+    CHG -- no --> CONT["keep filling buffer"]
+  end
+
+  FEED --> BUF["per-speaker buffers (SpeakerStreamManager)"]
+  FLUSH --> BUF
+  subgraph ASR["③ per-speaker ASR (same as pack)"]
+    BUF --> CONF["LocalAgreement-2 + submitInterval"]
+    CONF --> WH["transcriptionClient.transcribe() → Whisper"]
+    WH --> PUB["segmentPublisher.publish() → dashboard"]
+  end
+
+  classDef br fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+  classDef cap fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  class REC,SP,DOM,AUD,CAPE br;
+  class SID,FEED,HTCD,CHG,FLUSH cap;
+</pre>
+<div class=notes>
+ <h3>What main actually does</h3>
+ Teams already runs its own speaker diarization and shows it in <b>live captions</b>. Main just <b>reads that</b>: the browser tags every audio frame with the caption's current speaker name (<code>__vexaTeamsAudioData(name, …)</code>), and a <b>caption speaker change</b> triggers <code>flushSpeaker(previous)</code> — that's the entire "speaker change" mechanism. Audio is routed by <code>speakerId = 'teams-' + name</code>. There is <b>no VAD, no segmentation model, no embeddings, no clustering</b>. Whisper only re-transcribes each speaker's buffer for the published text.
+ <h3>So the whole diarization problem in main is outsourced to Teams</h3>
+ <b>Who</b> = caption name. <b>When (boundary)</b> = caption speaker change. The bot never has to figure out speakers itself.
+ <h3>Why the pack (#394) replaces this</h3>
+ Caption-driven diarization breaks when: live captions are <b>off / not permitted</b>, lag or mis-attribute, or aren't available for the language. The pack swaps the green block for pyannote+wespeaker so diarization is <b>self-contained</b> and doesn't depend on Teams captions — but that's exactly what introduced the segmentation+clustering work we've been doing.
+ <h3>Implication for our direction</h3>
+ The cut-at-switch idea is the bridge: keep main's clean "switch → flush → fresh buffer → Whisper" shape, but drive the <b>switch signal</b> from our own segmentation instead of Teams captions — so it works without captions, without depending on the weak clustering for routing.
+</div>
+<script type="module">
+ import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+ mermaid.initialize({ startOnLoad:true, theme:"default", flowchart:{ useMaxWidth:true } });
+</script>

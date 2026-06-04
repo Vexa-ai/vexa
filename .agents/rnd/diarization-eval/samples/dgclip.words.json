@@ -1,0 +1,5874 @@
+{
+  "wav": "/data/dgclip.wav",
+  "durationS": 300,
+  "words": [
+    {
+      "word": " Down",
+      "start": 0,
+      "end": 0.16,
+      "prob": 0.83
+    },
+    {
+      "word": " a",
+      "start": 0.16,
+      "end": 0.24,
+      "prob": 0.86
+    },
+    {
+      "word": " Dream",
+      "start": 0.24,
+      "end": 0.4,
+      "prob": 1
+    },
+    {
+      "word": " Fellowship,",
+      "start": 0.4,
+      "end": 0.88,
+      "prob": 0.95
+    },
+    {
+      "word": " I",
+      "start": 0.88,
+      "end": 1,
+      "prob": 1
+    },
+    {
+      "word": " understand?",
+      "start": 1,
+      "end": 1.28,
+      "prob": 1
+    },
+    {
+      "word": " Yeah.",
+      "start": 1.54,
+      "end": 1.8,
+      "prob": 0.98
+    },
+    {
+      "word": " It's",
+      "start": 2.14,
+      "end": 2.66,
+      "prob": 1
+    },
+    {
+      "word": " targeted",
+      "start": 2.66,
+      "end": 3.06,
+      "prob": 0.99
+    },
+    {
+      "word": " at",
+      "start": 3.06,
+      "end": 3.28,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 3.28,
+      "end": 3.4,
+      "prob": 1
+    },
+    {
+      "word": " different",
+      "start": 3.4,
+      "end": 3.68,
+      "prob": 1
+    },
+    {
+      "word": " demographic.",
+      "start": 3.68,
+      "end": 4.2,
+      "prob": 1
+    },
+    {
+      "word": " It",
+      "start": 4.2,
+      "end": 4.6,
+      "prob": 1
+    },
+    {
+      "word": " called",
+      "start": 4.6,
+      "end": 5.08,
+      "prob": 0
+    },
+    {
+      "word": " ourdad",
+      "start": 5.08,
+      "end": 6.16,
+      "prob": 0.77
+    },
+    {
+      "word": ".org,",
+      "start": 6.16,
+      "end": 6.74,
+      "prob": 1
+    },
+    {
+      "word": " runningdownadream",
+      "start": 6.9,
+      "end": 7.54,
+      "prob": 0.96
+    },
+    {
+      "word": ".org.",
+      "start": 7.54,
+      "end": 8.06,
+      "prob": 1
+    },
+    {
+      "word": " There's",
+      "start": 8.18,
+      "end": 8.62,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 8.62,
+      "end": 8.7,
+      "prob": 1
+    },
+    {
+      "word": " website",
+      "start": 8.7,
+      "end": 9.08,
+      "prob": 1
+    },
+    {
+      "word": " we",
+      "start": 9.08,
+      "end": 9.38,
+      "prob": 0.99
+    },
+    {
+      "word": " can",
+      "start": 9.38,
+      "end": 9.5,
+      "prob": 1
+    },
+    {
+      "word": " give",
+      "start": 9.5,
+      "end": 9.68,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 9.68,
+      "end": 9.82,
+      "prob": 1
+    },
+    {
+      "word": " link",
+      "start": 9.82,
+      "end": 9.98,
+      "prob": 1
+    },
+    {
+      "word": " to.",
+      "start": 9.98,
+      "end": 10.24,
+      "prob": 1
+    },
+    {
+      "word": " We're",
+      "start": 10.44,
+      "end": 10.96,
+      "prob": 1
+    },
+    {
+      "word": " going",
+      "start": 10.96,
+      "end": 11.02,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 11.02,
+      "end": 11.14,
+      "prob": 1
+    },
+    {
+      "word": " do",
+      "start": 11.14,
+      "end": 11.38,
+      "prob": 1
+    },
+    {
+      "word": " $5",
+      "start": 11.38,
+      "end": 11.78,
+      "prob": 1
+    },
+    {
+      "word": ",000",
+      "start": 11.78,
+      "end": 12.22,
+      "prob": 1
+    },
+    {
+      "word": " grants",
+      "start": 12.22,
+      "end": 12.92,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 12.92,
+      "end": 13.36,
+      "prob": 1
+    },
+    {
+      "word": " people",
+      "start": 13.36,
+      "end": 13.94,
+      "prob": 1
+    },
+    {
+      "word": " who",
+      "start": 13.94,
+      "end": 14.24,
+      "prob": 1
+    },
+    {
+      "word": " want",
+      "start": 14.24,
+      "end": 14.84,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 14.84,
+      "end": 14.94,
+      "prob": 1
+    },
+    {
+      "word": " chase",
+      "start": 14.94,
+      "end": 15.18,
+      "prob": 1
+    },
+    {
+      "word": " their",
+      "start": 15.18,
+      "end": 15.42,
+      "prob": 1
+    },
+    {
+      "word": " dreams",
+      "start": 15.42,
+      "end": 15.7,
+      "prob": 1
+    },
+    {
+      "word": " but",
+      "start": 15.7,
+      "end": 15.92,
+      "prob": 0.73
+    },
+    {
+      "word": " need",
+      "start": 15.92,
+      "end": 16.18,
+      "prob": 1
+    },
+    {
+      "word": " some",
+      "start": 16.18,
+      "end": 16.38,
+      "prob": 1
+    },
+    {
+      "word": " help.",
+      "start": 16.38,
+      "end": 16.68,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 16.84,
+      "end": 17.08,
+      "prob": 0.92
+    },
+    {
+      "word": " so",
+      "start": 17.08,
+      "end": 17.28,
+      "prob": 1
+    },
+    {
+      "word": " there",
+      "start": 17.28,
+      "end": 17.48,
+      "prob": 0.86
+    },
+    {
+      "word": " is",
+      "start": 17.48,
+      "end": 17.7,
+      "prob": 1
+    },
+    {
+      "word": " an",
+      "start": 17.7,
+      "end": 17.84,
+      "prob": 1
+    },
+    {
+      "word": " application",
+      "start": 17.84,
+      "end": 18.28,
+      "prob": 1
+    },
+    {
+      "word": " process",
+      "start": 18.28,
+      "end": 19.02,
+      "prob": 1
+    },
+    {
+      "word": " like",
+      "start": 19.02,
+      "end": 19.38,
+      "prob": 0.99
+    },
+    {
+      "word": " Teal",
+      "start": 19.38,
+      "end": 20.28,
+      "prob": 0.91
+    },
+    {
+      "word": " Fellows",
+      "start": 20.28,
+      "end": 20.64,
+      "prob": 0.99
+    },
+    {
+      "word": " and",
+      "start": 20.64,
+      "end": 20.86,
+      "prob": 1
+    },
+    {
+      "word": " other",
+      "start": 20.86,
+      "end": 21.12,
+      "prob": 1
+    },
+    {
+      "word": " programs,",
+      "start": 21.12,
+      "end": 21.64,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 21.74,
+      "end": 21.8,
+      "prob": 1
+    },
+    {
+      "word": " we've",
+      "start": 21.8,
+      "end": 21.98,
+      "prob": 1
+    },
+    {
+      "word": " been",
+      "start": 21.98,
+      "end": 22.08,
+      "prob": 1
+    },
+    {
+      "word": " out",
+      "start": 22.08,
+      "end": 22.26,
+      "prob": 1
+    },
+    {
+      "word": " talking",
+      "start": 22.26,
+      "end": 22.62,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 22.62,
+      "end": 22.84,
+      "prob": 1
+    },
+    {
+      "word": " those",
+      "start": 22.84,
+      "end": 23.1,
+      "prob": 1
+    },
+    {
+      "word": " people.",
+      "start": 23.1,
+      "end": 23.52,
+      "prob": 1
+    },
+    {
+      "word": " But",
+      "start": 23.86,
+      "end": 24.38,
+      "prob": 1
+    },
+    {
+      "word": " we're",
+      "start": 24.38,
+      "end": 25.04,
+      "prob": 1
+    },
+    {
+      "word": " actually",
+      "start": 25.04,
+      "end": 25.8,
+      "prob": 1
+    },
+    {
+      "word": " live.",
+      "start": 25.8,
+      "end": 26.2,
+      "prob": 1
+    },
+    {
+      "word": " We",
+      "start": 26.3,
+      "end": 26.38,
+      "prob": 1
+    },
+    {
+      "word": " went",
+      "start": 26.38,
+      "end": 26.56,
+      "prob": 1
+    },
+    {
+      "word": " live",
+      "start": 26.56,
+      "end": 26.84,
+      "prob": 1
+    },
+    {
+      "word": " last",
+      "start": 26.84,
+      "end": 27.14,
+      "prob": 1
+    },
+    {
+      "word": " week",
+      "start": 27.14,
+      "end": 27.38,
+      "prob": 1
+    },
+    {
+      "word": " for",
+      "start": 27.38,
+      "end": 27.56,
+      "prob": 1
+    },
+    {
+      "word": " Yeah.",
+      "start": 27.56,
+      "end": 27.8,
+      "prob": 0.39
+    },
+    {
+      "word": " So",
+      "start": 28,
+      "end": 28.68,
+      "prob": 0.68
+    },
+    {
+      "word": " if",
+      "start": 28.68,
+      "end": 29.18,
+      "prob": 0.82
+    },
+    {
+      "word": " you",
+      "start": 29.18,
+      "end": 29.6,
+      "prob": 0.68
+    },
+    {
+      "word": " know",
+      "start": 29.6,
+      "end": 29.76,
+      "prob": 1
+    },
+    {
+      "word": " people",
+      "start": 29.76,
+      "end": 30.12,
+      "prob": 1
+    },
+    {
+      "word": " who",
+      "start": 30.12,
+      "end": 30.44,
+      "prob": 1
+    },
+    {
+      "word": " have",
+      "start": 30.44,
+      "end": 31,
+      "prob": 1
+    },
+    {
+      "word": " read",
+      "start": 31,
+      "end": 31.18,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 31.18,
+      "end": 31.3,
+      "prob": 1
+    },
+    {
+      "word": " book",
+      "start": 31.3,
+      "end": 31.52,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 31.52,
+      "end": 31.66,
+      "prob": 1
+    },
+    {
+      "word": " are",
+      "start": 31.66,
+      "end": 31.78,
+      "prob": 1
+    },
+    {
+      "word": " inspired",
+      "start": 31.78,
+      "end": 32.22,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 32.22,
+      "end": 32.42,
+      "prob": 1
+    },
+    {
+      "word": " need",
+      "start": 32.42,
+      "end": 32.62,
+      "prob": 1
+    },
+    {
+      "word": " some",
+      "start": 32.62,
+      "end": 32.8,
+      "prob": 1
+    },
+    {
+      "word": " help,",
+      "start": 32.8,
+      "end": 33.06,
+      "prob": 1
+    },
+    {
+      "word": " have",
+      "start": 33.2,
+      "end": 33.36,
+      "prob": 1
+    },
+    {
+      "word": " them",
+      "start": 33.36,
+      "end": 33.46,
+      "prob": 1
+    },
+    {
+      "word": " apply.",
+      "start": 33.46,
+      "end": 33.82,
+      "prob": 1
+    },
+    {
+      "word": " Yeah.",
+      "start": 34.3,
+      "end": 34.44,
+      "prob": 0.92
+    },
+    {
+      "word": " All",
+      "start": 34.72,
+      "end": 34.8,
+      "prob": 1
+    },
+    {
+      "word": " right,",
+      "start": 34.8,
+      "end": 34.9,
+      "prob": 1
+    },
+    {
+      "word": " folks.",
+      "start": 35.02,
+      "end": 35.22,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 35.44,
+      "end": 35.62,
+      "prob": 0.56
+    },
+    {
+      "word": " good",
+      "start": 35.62,
+      "end": 36.32,
+      "prob": 0.96
+    },
+    {
+      "word": " for",
+      "start": 36.32,
+      "end": 36.5,
+      "prob": 1
+    },
+    {
+      "word": " you,",
+      "start": 36.5,
+      "end": 36.64,
+      "prob": 1
+    },
+    {
+      "word": " BG.",
+      "start": 36.7,
+      "end": 36.86,
+      "prob": 0.85
+    },
+    {
+      "word": " Yeah,",
+      "start": 37.18,
+      "end": 37.28,
+      "prob": 0.99
+    },
+    {
+      "word": " great.",
+      "start": 37.38,
+      "end": 37.64,
+      "prob": 0.59
+    },
+    {
+      "word": " Two",
+      "start": 38.7,
+      "end": 38.92,
+      "prob": 0.29
+    },
+    {
+      "word": " other.",
+      "start": 38.92,
+      "end": 39.38,
+      "prob": 0.93
+    },
+    {
+      "word": " So",
+      "start": 39.58,
+      "end": 39.78,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 39.78,
+      "end": 39.9,
+      "prob": 1
+    },
+    {
+      "word": " did",
+      "start": 39.9,
+      "end": 40.06,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 40.06,
+      "end": 40.18,
+      "prob": 1
+    },
+    {
+      "word": " TED",
+      "start": 40.18,
+      "end": 40.38,
+      "prob": 0.98
+    },
+    {
+      "word": " Talk,",
+      "start": 40.38,
+      "end": 40.7,
+      "prob": 0.7
+    },
+    {
+      "word": " which",
+      "start": 40.82,
+      "end": 40.96,
+      "prob": 1
+    },
+    {
+      "word": " will",
+      "start": 40.96,
+      "end": 41.08,
+      "prob": 1
+    },
+    {
+      "word": " come",
+      "start": 41.08,
+      "end": 41.28,
+      "prob": 1
+    },
+    {
+      "word": " out",
+      "start": 41.28,
+      "end": 41.48,
+      "prob": 1
+    },
+    {
+      "word": " soon.",
+      "start": 41.48,
+      "end": 41.82,
+      "prob": 1
+    },
+    {
+      "word": " That's",
+      "start": 41.98,
+      "end": 42.38,
+      "prob": 1
+    },
+    {
+      "word": " related",
+      "start": 42.38,
+      "end": 42.7,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 42.7,
+      "end": 42.94,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 42.94,
+      "end": 43.06,
+      "prob": 1
+    },
+    {
+      "word": " book.",
+      "start": 43.06,
+      "end": 43.32,
+      "prob": 1
+    },
+    {
+      "word": " There's",
+      "start": 45.58,
+      "end": 45.98,
+      "prob": 0.91
+    },
+    {
+      "word": " a",
+      "start": 45.98,
+      "end": 46.06,
+      "prob": 1
+    },
+    {
+      "word": " professor",
+      "start": 46.06,
+      "end": 46.48,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 46.48,
+      "end": 46.68,
+      "prob": 1
+    },
+    {
+      "word": " Miami",
+      "start": 46.68,
+      "end": 46.98,
+      "prob": 1
+    },
+    {
+      "word": " that's",
+      "start": 46.98,
+      "end": 47.32,
+      "prob": 1
+    },
+    {
+      "word": " built",
+      "start": 47.32,
+      "end": 47.5,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 47.5,
+      "end": 47.66,
+      "prob": 1
+    },
+    {
+      "word": " course",
+      "start": 47.66,
+      "end": 48,
+      "prob": 1
+    },
+    {
+      "word": " around",
+      "start": 48,
+      "end": 48.3,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 48.3,
+      "end": 48.46,
+      "prob": 1
+    },
+    {
+      "word": " book,",
+      "start": 48.46,
+      "end": 48.7,
+      "prob": 1
+    },
+    {
+      "word": " which",
+      "start": 48.86,
+      "end": 49.02,
+      "prob": 1
+    },
+    {
+      "word": " I'm",
+      "start": 49.02,
+      "end": 49.18,
+      "prob": 1
+    },
+    {
+      "word": " excited",
+      "start": 49.18,
+      "end": 49.56,
+      "prob": 1
+    },
+    {
+      "word": " about.",
+      "start": 49.56,
+      "end": 49.94,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 50.2,
+      "end": 50.6,
+      "prob": 1
+    },
+    {
+      "word": " he's",
+      "start": 50.6,
+      "end": 50.96,
+      "prob": 1
+    },
+    {
+      "word": " doing",
+      "start": 50.96,
+      "end": 51.94,
+      "prob": 0.89
+    },
+    {
+      "word": " it",
+      "start": 51.94,
+      "end": 52.14,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 52.14,
+      "end": 52.26,
+      "prob": 0.99
+    },
+    {
+      "word": " kind",
+      "start": 52.26,
+      "end": 52.5,
+      "prob": 0.28
+    },
+    {
+      "word": " of",
+      "start": 52.5,
+      "end": 52.64,
+      "prob": 1
+    },
+    {
+      "word": " an",
+      "start": 52.64,
+      "end": 52.74,
+      "prob": 1
+    },
+    {
+      "word": " open",
+      "start": 52.74,
+      "end": 52.98,
+      "prob": 1
+    },
+    {
+      "word": " source",
+      "start": 52.98,
+      "end": 53.26,
+      "prob": 0.97
+    },
+    {
+      "word": " way",
+      "start": 53.26,
+      "end": 53.56,
+      "prob": 1
+    },
+    {
+      "word": " so",
+      "start": 53.56,
+      "end": 53.78,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 53.78,
+      "end": 53.94,
+      "prob": 1
+    },
+    {
+      "word": " other",
+      "start": 53.94,
+      "end": 54.12,
+      "prob": 1
+    },
+    {
+      "word": " people",
+      "start": 54.12,
+      "end": 54.44,
+      "prob": 1
+    },
+    {
+      "word": " can",
+      "start": 54.44,
+      "end": 54.68,
+      "prob": 1
+    },
+    {
+      "word": " borrow",
+      "start": 54.68,
+      "end": 54.96,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 54.96,
+      "end": 55.2,
+      "prob": 1
+    },
+    {
+      "word": " as",
+      "start": 55.2,
+      "end": 55.36,
+      "prob": 1
+    },
+    {
+      "word": " well.",
+      "start": 55.36,
+      "end": 55.58,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 56,
+      "end": 56.2,
+      "prob": 0.96
+    },
+    {
+      "word": " so",
+      "start": 56.2,
+      "end": 56.38,
+      "prob": 1
+    },
+    {
+      "word": " if",
+      "start": 56.38,
+      "end": 56.52,
+      "prob": 0.96
+    },
+    {
+      "word": " there's",
+      "start": 56.52,
+      "end": 56.84,
+      "prob": 1
+    },
+    {
+      "word": " anyone",
+      "start": 56.84,
+      "end": 57.24,
+      "prob": 1
+    },
+    {
+      "word": " out",
+      "start": 57.24,
+      "end": 57.5,
+      "prob": 1
+    },
+    {
+      "word": " there,",
+      "start": 57.5,
+      "end": 57.7,
+      "prob": 1
+    },
+    {
+      "word": " I'd",
+      "start": 57.94,
+      "end": 58.1,
+      "prob": 1
+    },
+    {
+      "word": " love",
+      "start": 58.1,
+      "end": 58.26,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 58.26,
+      "end": 58.52,
+      "prob": 1
+    },
+    {
+      "word": " help",
+      "start": 58.52,
+      "end": 59.04,
+      "prob": 1
+    },
+    {
+      "word": " them",
+      "start": 59.04,
+      "end": 59.28,
+      "prob": 1
+    },
+    {
+      "word": " do",
+      "start": 59.28,
+      "end": 59.48,
+      "prob": 1
+    },
+    {
+      "word": " that.",
+      "start": 59.48,
+      "end": 59.76,
+      "prob": 1
+    },
+    {
+      "word": " What's",
+      "start": 59.94,
+      "end": 60.14,
+      "prob": 1
+    },
+    {
+      "word": " your",
+      "start": 60.14,
+      "end": 60.24,
+      "prob": 1
+    },
+    {
+      "word": " take",
+      "start": 60.24,
+      "end": 60.5,
+      "prob": 1
+    },
+    {
+      "word": " on",
+      "start": 60.5,
+      "end": 60.78,
+      "prob": 1
+    },
+    {
+      "word": " all",
+      "start": 60.78,
+      "end": 61.1,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 61.1,
+      "end": 61.2,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 61.2,
+      "end": 61.4,
+      "prob": 1
+    },
+    {
+      "word": " Doomerism?",
+      "start": 61.4,
+      "end": 61.94,
+      "prob": 0.75
+    },
+    {
+      "word": " Like",
+      "start": 62.08,
+      "end": 62.18,
+      "prob": 0.92
+    },
+    {
+      "word": " if",
+      "start": 62.18,
+      "end": 62.32,
+      "prob": 0.89
+    },
+    {
+      "word": " you're",
+      "start": 62.32,
+      "end": 62.48,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 62.48,
+      "end": 62.56,
+      "prob": 1
+    },
+    {
+      "word": " young",
+      "start": 62.56,
+      "end": 62.74,
+      "prob": 1
+    },
+    {
+      "word": " person",
+      "start": 62.74,
+      "end": 63.24,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 63.24,
+      "end": 64.1,
+      "prob": 0.99
+    },
+    {
+      "word": " you're",
+      "start": 64.1,
+      "end": 64.3,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 64.3,
+      "end": 64.42,
+      "prob": 1
+    },
+    {
+      "word": " college",
+      "start": 64.42,
+      "end": 64.8,
+      "prob": 1
+    },
+    {
+      "word": " or",
+      "start": 64.8,
+      "end": 65.2,
+      "prob": 1
+    },
+    {
+      "word": " you're",
+      "start": 65.2,
+      "end": 65.56,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 65.56,
+      "end": 65.68,
+      "prob": 1
+    },
+    {
+      "word": " high",
+      "start": 65.68,
+      "end": 65.86,
+      "prob": 1
+    },
+    {
+      "word": " school,",
+      "start": 65.86,
+      "end": 66.16,
+      "prob": 1
+    },
+    {
+      "word": " is",
+      "start": 66.62,
+      "end": 66.74,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 66.74,
+      "end": 66.92,
+      "prob": 1
+    },
+    {
+      "word": " much",
+      "start": 66.92,
+      "end": 67.96,
+      "prob": 0.41
+    },
+    {
+      "word": " ado",
+      "start": 67.96,
+      "end": 68.1,
+      "prob": 0.97
+    },
+    {
+      "word": " about",
+      "start": 68.1,
+      "end": 68.38,
+      "prob": 1
+    },
+    {
+      "word": " nothing?",
+      "start": 68.38,
+      "end": 68.68,
+      "prob": 1
+    },
+    {
+      "word": " Or",
+      "start": 68.84,
+      "end": 68.94,
+      "prob": 0.94
+    },
+    {
+      "word": " how",
+      "start": 68.94,
+      "end": 69.28,
+      "prob": 1
+    },
+    {
+      "word": " do",
+      "start": 69.28,
+      "end": 69.36,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 69.36,
+      "end": 69.46,
+      "prob": 1
+    },
+    {
+      "word": " run",
+      "start": 69.46,
+      "end": 69.68,
+      "prob": 1
+    },
+    {
+      "word": " down",
+      "start": 69.68,
+      "end": 69.86,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 69.86,
+      "end": 70.02,
+      "prob": 0.97
+    },
+    {
+      "word": " dream",
+      "start": 70.02,
+      "end": 70.24,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 70.24,
+      "end": 70.42,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 70.42,
+      "end": 70.5,
+      "prob": 1
+    },
+    {
+      "word": " face",
+      "start": 70.5,
+      "end": 70.72,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 70.72,
+      "end": 70.86,
+      "prob": 1
+    },
+    {
+      "word": " something",
+      "start": 70.86,
+      "end": 71.1,
+      "prob": 1
+    },
+    {
+      "word": " like",
+      "start": 71.1,
+      "end": 71.3,
+      "prob": 1
+    },
+    {
+      "word": " that?",
+      "start": 71.3,
+      "end": 71.48,
+      "prob": 0.92
+    },
+    {
+      "word": " Yeah,",
+      "start": 71.48,
+      "end": 71.6,
+      "prob": 0.6
+    },
+    {
+      "word": " well,",
+      "start": 71.78,
+      "end": 71.9,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 72.1,
+      "end": 72.6,
+      "prob": 0.61
+    },
+    {
+      "word": " started",
+      "start": 72.6,
+      "end": 72.96,
+      "prob": 0.48
+    },
+    {
+      "word": " the",
+      "start": 72.96,
+      "end": 73.16,
+      "prob": 0.88
+    },
+    {
+      "word": " book",
+      "start": 73.16,
+      "end": 73.34,
+      "prob": 1
+    },
+    {
+      "word": " before",
+      "start": 73.34,
+      "end": 73.64,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 73.64,
+      "end": 73.96,
+      "prob": 1
+    },
+    {
+      "word": " happened.",
+      "start": 73.96,
+      "end": 74.36,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 74.36,
+      "end": 74.74,
+      "prob": 1
+    },
+    {
+      "word": " I've",
+      "start": 74.74,
+      "end": 74.94,
+      "prob": 1
+    },
+    {
+      "word": " been",
+      "start": 74.94,
+      "end": 75.06,
+      "prob": 1
+    },
+    {
+      "word": " asked",
+      "start": 75.06,
+      "end": 75.34,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 75.34,
+      "end": 75.68,
+      "prob": 1
+    },
+    {
+      "word": " question",
+      "start": 75.68,
+      "end": 76.06,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 76.06,
+      "end": 76.26,
+      "prob": 1
+    },
+    {
+      "word": " lot.",
+      "start": 76.26,
+      "end": 76.44,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 76.44,
+      "end": 76.58,
+      "prob": 0.87
+    },
+    {
+      "word": " it",
+      "start": 76.58,
+      "end": 76.88,
+      "prob": 1
+    },
+    {
+      "word": " came",
+      "start": 76.88,
+      "end": 77.28,
+      "prob": 1
+    },
+    {
+      "word": " up",
+      "start": 77.28,
+      "end": 77.48,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 77.48,
+      "end": 77.6,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 77.6,
+      "end": 77.72,
+      "prob": 1
+    },
+    {
+      "word": " TED",
+      "start": 77.72,
+      "end": 77.92,
+      "prob": 0.99
+    },
+    {
+      "word": " Talk.",
+      "start": 77.92,
+      "end": 78.2,
+      "prob": 0.66
+    },
+    {
+      "word": " I",
+      "start": 78.46,
+      "end": 78.86,
+      "prob": 1
+    },
+    {
+      "word": " fear",
+      "start": 78.86,
+      "end": 79.9,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 79.9,
+      "end": 80.68,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 80.68,
+      "end": 82.12,
+      "prob": 1
+    },
+    {
+      "word": " lot",
+      "start": 82.12,
+      "end": 82.28,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 82.28,
+      "end": 82.36,
+      "prob": 1
+    },
+    {
+      "word": " people",
+      "start": 82.36,
+      "end": 82.62,
+      "prob": 1
+    },
+    {
+      "word": " are",
+      "start": 82.62,
+      "end": 82.76,
+      "prob": 0.99
+    },
+    {
+      "word": " in",
+      "start": 82.76,
+      "end": 82.86,
+      "prob": 1
+    },
+    {
+      "word": " jobs",
+      "start": 82.86,
+      "end": 83.18,
+      "prob": 1
+    },
+    {
+      "word": " they",
+      "start": 83.18,
+      "end": 83.36,
+      "prob": 0.88
+    },
+    {
+      "word": " actually",
+      "start": 83.36,
+      "end": 83.7,
+      "prob": 1
+    },
+    {
+      "word": " don't.",
+      "start": 83.7,
+      "end": 83.98,
+      "prob": 1
+    },
+    {
+      "word": " care",
+      "start": 84,
+      "end": 84.26,
+      "prob": 1
+    },
+    {
+      "word": " about",
+      "start": 84.26,
+      "end": 84.52,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 84.52,
+      "end": 84.76,
+      "prob": 1
+    },
+    {
+      "word": " much.",
+      "start": 84.76,
+      "end": 85.14,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 85.62,
+      "end": 85.86,
+      "prob": 0.96
+    },
+    {
+      "word": " there's",
+      "start": 85.86,
+      "end": 87.04,
+      "prob": 0.97
+    },
+    {
+      "word": " a",
+      "start": 87.04,
+      "end": 87.12,
+      "prob": 1
+    },
+    {
+      "word": " Gallup",
+      "start": 87.12,
+      "end": 87.44,
+      "prob": 1
+    },
+    {
+      "word": " poll",
+      "start": 87.44,
+      "end": 87.68,
+      "prob": 0.99
+    },
+    {
+      "word": " that",
+      "start": 87.68,
+      "end": 87.86,
+      "prob": 1
+    },
+    {
+      "word": " backs",
+      "start": 87.86,
+      "end": 88.18,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 88.18,
+      "end": 88.36,
+      "prob": 0.99
+    },
+    {
+      "word": " up.",
+      "start": 88.36,
+      "end": 88.56,
+      "prob": 1
+    },
+    {
+      "word": " They",
+      "start": 88.68,
+      "end": 88.74,
+      "prob": 1
+    },
+    {
+      "word": " came",
+      "start": 88.74,
+      "end": 88.94,
+      "prob": 0.98
+    },
+    {
+      "word": " up",
+      "start": 88.94,
+      "end": 89.08,
+      "prob": 1
+    },
+    {
+      "word": " with",
+      "start": 89.08,
+      "end": 89.22,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 89.22,
+      "end": 89.4,
+      "prob": 1
+    },
+    {
+      "word": " word",
+      "start": 89.4,
+      "end": 89.66,
+      "prob": 1
+    },
+    {
+      "word": " quiet",
+      "start": 89.66,
+      "end": 90,
+      "prob": 0.85
+    },
+    {
+      "word": " quitters.",
+      "start": 90,
+      "end": 90.54,
+      "prob": 1
+    },
+    {
+      "word": " They're",
+      "start": 90.8,
+      "end": 90.92,
+      "prob": 0.98
+    },
+    {
+      "word": " like",
+      "start": 90.92,
+      "end": 91.1,
+      "prob": 1
+    },
+    {
+      "word": " 59",
+      "start": 91.1,
+      "end": 91.52,
+      "prob": 0.99
+    },
+    {
+      "word": "%",
+      "start": 91.52,
+      "end": 91.9,
+      "prob": 0.82
+    },
+    {
+      "word": " of",
+      "start": 91.9,
+      "end": 92.1,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 92.1,
+      "end": 92.24,
+      "prob": 0.77
+    },
+    {
+      "word": " people",
+      "start": 92.24,
+      "end": 92.4,
+      "prob": 1
+    },
+    {
+      "word": " they",
+      "start": 92.4,
+      "end": 92.58,
+      "prob": 1
+    },
+    {
+      "word": " surveyed",
+      "start": 92.58,
+      "end": 93.4,
+      "prob": 1
+    },
+    {
+      "word": " are",
+      "start": 93.4,
+      "end": 94.1,
+      "prob": 1
+    },
+    {
+      "word": " kind",
+      "start": 94.1,
+      "end": 94.28,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 94.28,
+      "end": 94.36,
+      "prob": 1
+    },
+    {
+      "word": " ambivalent",
+      "start": 94.36,
+      "end": 94.98,
+      "prob": 1
+    },
+    {
+      "word": " about",
+      "start": 94.98,
+      "end": 95.22,
+      "prob": 1
+    },
+    {
+      "word": " their",
+      "start": 95.22,
+      "end": 95.46,
+      "prob": 1
+    },
+    {
+      "word": " job.",
+      "start": 95.46,
+      "end": 95.9,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 95.94,
+      "end": 96.38,
+      "prob": 1
+    },
+    {
+      "word": " when",
+      "start": 96.38,
+      "end": 96.52,
+      "prob": 1
+    },
+    {
+      "word": " you're",
+      "start": 96.52,
+      "end": 96.68,
+      "prob": 1
+    },
+    {
+      "word": " ambivalen",
+      "start": 96.68,
+      "end": 97.18,
+      "prob": 0.67
+    },
+    {
+      "word": " about",
+      "start": 97.18,
+      "end": 97.38,
+      "prob": 0.94
+    },
+    {
+      "word": " your",
+      "start": 97.38,
+      "end": 97.54,
+      "prob": 1
+    },
+    {
+      "word": " job,",
+      "start": 97.54,
+      "end": 97.82,
+      "prob": 1
+    },
+    {
+      "word": " you're",
+      "start": 97.96,
+      "end": 98.04,
+      "prob": 1
+    },
+    {
+      "word": " not",
+      "start": 98.04,
+      "end": 98.2,
+      "prob": 1
+    },
+    {
+      "word": " high",
+      "start": 98.2,
+      "end": 98.44,
+      "prob": 1
+    },
+    {
+      "word": " agency.",
+      "start": 98.44,
+      "end": 98.92,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 98.92,
+      "end": 99.2,
+      "prob": 1
+    },
+    {
+      "word": " so",
+      "start": 99.2,
+      "end": 99.38,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 99.38,
+      "end": 99.56,
+      "prob": 0.91
+    },
+    {
+      "word": " don't",
+      "start": 99.56,
+      "end": 99.9,
+      "prob": 1
+    },
+    {
+      "word": " lean",
+      "start": 99.9,
+      "end": 100.24,
+      "prob": 1
+    },
+    {
+      "word": " in.",
+      "start": 100.24,
+      "end": 100.62,
+      "prob": 1
+    },
+    {
+      "word": " You",
+      "start": 100.78,
+      "end": 101.16,
+      "prob": 0.62
+    },
+    {
+      "word": " know,",
+      "start": 101.16,
+      "end": 101.22,
+      "prob": 1
+    },
+    {
+      "word": " if",
+      "start": 101.4,
+      "end": 101.48,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 101.48,
+      "end": 101.62,
+      "prob": 1
+    },
+    {
+      "word": " look",
+      "start": 101.62,
+      "end": 102.26,
+      "prob": 0.76
+    },
+    {
+      "word": " at",
+      "start": 102.26,
+      "end": 102.5,
+      "prob": 1
+    },
+    {
+      "word": " how",
+      "start": 102.5,
+      "end": 103,
+      "prob": 1
+    },
+    {
+      "word": " Jason",
+      "start": 103,
+      "end": 103.42,
+      "prob": 1
+    },
+    {
+      "word": " talks",
+      "start": 103.42,
+      "end": 103.82,
+      "prob": 1
+    },
+    {
+      "word": " about",
+      "start": 103.82,
+      "end": 104.1,
+      "prob": 1
+    },
+    {
+      "word": " how",
+      "start": 104.1,
+      "end": 104.46,
+      "prob": 0.96
+    },
+    {
+      "word": " they",
+      "start": 104.46,
+      "end": 104.68,
+      "prob": 1
+    },
+    {
+      "word": " implemented",
+      "start": 104.68,
+      "end": 105.26,
+      "prob": 1
+    },
+    {
+      "word": " AI",
+      "start": 105.26,
+      "end": 105.94,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 105.94,
+      "end": 106.2,
+      "prob": 0.87
+    },
+    {
+      "word": " all",
+      "start": 106.2,
+      "end": 106.38,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 106.38,
+      "end": 106.5,
+      "prob": 1
+    },
+    {
+      "word": " his",
+      "start": 106.5,
+      "end": 106.82,
+      "prob": 1
+    },
+    {
+      "word": " different",
+      "start": 106.82,
+      "end": 107.82,
+      "prob": 0.99
+    },
+    {
+      "word": " working",
+      "start": 107.82,
+      "end": 108.78,
+      "prob": 1
+    },
+    {
+      "word": " groups,",
+      "start": 108.78,
+      "end": 109.28,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 109.42,
+      "end": 110.28,
+      "prob": 1
+    },
+    {
+      "word": " hear",
+      "start": 110.28,
+      "end": 110.64,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 110.64,
+      "end": 110.9,
+      "prob": 1
+    },
+    {
+      "word": " enthusiasm.",
+      "start": 110.9,
+      "end": 111.36,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 112,
+      "end": 112.46,
+      "prob": 0.71
+    },
+    {
+      "word": " that",
+      "start": 112.46,
+      "end": 113,
+      "prob": 1
+    },
+    {
+      "word": " high",
+      "start": 113,
+      "end": 113.3,
+      "prob": 0.99
+    },
+    {
+      "word": " agency,",
+      "start": 113.3,
+      "end": 113.84,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 113.84,
+      "end": 114.1,
+      "prob": 1
+    },
+    {
+      "word": " then",
+      "start": 114.1,
+      "end": 114.24,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 114.24,
+      "end": 114.44,
+      "prob": 1
+    },
+    {
+      "word": " want",
+      "start": 114.44,
+      "end": 114.72,
+      "prob": 0.91
+    },
+    {
+      "word": " to",
+      "start": 114.72,
+      "end": 114.82,
+      "prob": 1
+    },
+    {
+      "word": " go",
+      "start": 114.82,
+      "end": 114.98,
+      "prob": 1
+    },
+    {
+      "word": " try",
+      "start": 114.98,
+      "end": 115.32,
+      "prob": 1
+    },
+    {
+      "word": " these",
+      "start": 115.32,
+      "end": 115.64,
+      "prob": 1
+    },
+    {
+      "word": " things.",
+      "start": 115.64,
+      "end": 115.92,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 116.12,
+      "end": 116.52,
+      "prob": 0.97
+    },
+    {
+      "word": " I",
+      "start": 116.52,
+      "end": 116.64,
+      "prob": 1
+    },
+    {
+      "word": " think",
+      "start": 116.64,
+      "end": 116.82,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 116.82,
+      "end": 117,
+      "prob": 1
+    },
+    {
+      "word": " best",
+      "start": 117,
+      "end": 117.26,
+      "prob": 1
+    },
+    {
+      "word": " way",
+      "start": 117.26,
+      "end": 117.54,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 117.54,
+      "end": 117.96,
+      "prob": 1
+    },
+    {
+      "word": " protect",
+      "start": 117.96,
+      "end": 118.74,
+      "prob": 1
+    },
+    {
+      "word": " yourself",
+      "start": 118.74,
+      "end": 119.14,
+      "prob": 1
+    },
+    {
+      "word": " from",
+      "start": 119.14,
+      "end": 119.42,
+      "prob": 1
+    },
+    {
+      "word": " AI",
+      "start": 119.42,
+      "end": 119.68,
+      "prob": 0.98
+    },
+    {
+      "word": " is",
+      "start": 119.68,
+      "end": 119.98,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 119.98,
+      "end": 120.12,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 120.12,
+      "end": 120.26,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 120.26,
+      "end": 120.4,
+      "prob": 1
+    },
+    {
+      "word": " most",
+      "start": 120.4,
+      "end": 120.64,
+      "prob": 1
+    },
+    {
+      "word": " AI",
+      "start": 120.64,
+      "end": 120.98,
+      "prob": 1
+    },
+    {
+      "word": "-enabled",
+      "start": 120.98,
+      "end": 121.48,
+      "prob": 0.85
+    },
+    {
+      "word": " version",
+      "start": 121.48,
+      "end": 122.06,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 122.06,
+      "end": 122.24,
+      "prob": 1
+    },
+    {
+      "word": " yourself",
+      "start": 122.24,
+      "end": 122.62,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 122.62,
+      "end": 122.84,
+      "prob": 1
+    },
+    {
+      "word": " can",
+      "start": 122.84,
+      "end": 123.02,
+      "prob": 1
+    },
+    {
+      "word": " be.",
+      "start": 123.02,
+      "end": 123.26,
+      "prob": 0.99
+    },
+    {
+      "word": " But",
+      "start": 123.52,
+      "end": 124.04,
+      "prob": 1
+    },
+    {
+      "word": " if",
+      "start": 124.04,
+      "end": 124.2,
+      "prob": 1
+    },
+    {
+      "word": " you're",
+      "start": 124.2,
+      "end": 124.36,
+      "prob": 1
+    },
+    {
+      "word": " ambivalent",
+      "start": 124.36,
+      "end": 124.88,
+      "prob": 1
+    },
+    {
+      "word": " about",
+      "start": 124.88,
+      "end": 125.1,
+      "prob": 1
+    },
+    {
+      "word": " your",
+      "start": 125.1,
+      "end": 125.3,
+      "prob": 1
+    },
+    {
+      "word": " job,",
+      "start": 125.3,
+      "end": 125.64,
+      "prob": 1
+    },
+    {
+      "word": " you're",
+      "start": 125.7,
+      "end": 125.92,
+      "prob": 1
+    },
+    {
+      "word": " probably",
+      "start": 125.92,
+      "end": 126.22,
+      "prob": 1
+    },
+    {
+      "word": " not",
+      "start": 126.22,
+      "end": 126.52,
+      "prob": 1
+    },
+    {
+      "word": " doing",
+      "start": 126.52,
+      "end": 126.8,
+      "prob": 1
+    },
+    {
+      "word": " that.",
+      "start": 126.8,
+      "end": 127.14,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 127.18,
+      "end": 127.56,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 127.56,
+      "end": 127.74,
+      "prob": 1
+    },
+    {
+      "word": " could",
+      "start": 127.74,
+      "end": 127.96,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 127.96,
+      "end": 128.26,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 128.26,
+      "end": 128.84,
+      "prob": 0.49
+    },
+    {
+      "word": " sitting",
+      "start": 128.84,
+      "end": 129.1,
+      "prob": 1
+    },
+    {
+      "word": " duck.",
+      "start": 129.1,
+      "end": 129.48,
+      "prob": 1
+    },
+    {
+      "word": " So",
+      "start": 129.78,
+      "end": 129.96,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 129.96,
+      "end": 130.5,
+      "prob": 0.94
+    },
+    {
+      "word": " think",
+      "start": 130.5,
+      "end": 130.6,
+      "prob": 1
+    },
+    {
+      "word": " it's",
+      "start": 130.6,
+      "end": 130.76,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 130.76,
+      "end": 130.92,
+      "prob": 1
+    },
+    {
+      "word": " mindset",
+      "start": 130.92,
+      "end": 131.34,
+      "prob": 1
+    },
+    {
+      "word": " that's",
+      "start": 131.34,
+      "end": 131.78,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 131.78,
+      "end": 131.92,
+      "prob": 1
+    },
+    {
+      "word": " problem.",
+      "start": 131.92,
+      "end": 132.3,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 132.46,
+      "end": 132.78,
+      "prob": 0.99
+    },
+    {
+      "word": " created",
+      "start": 132.78,
+      "end": 133.26,
+      "prob": 1
+    },
+    {
+      "word": " an",
+      "start": 133.26,
+      "end": 133.62,
+      "prob": 1
+    },
+    {
+      "word": " associate",
+      "start": 133.62,
+      "end": 134.12,
+      "prob": 0.89
+    },
+    {
+      "word": " in",
+      "start": 134.12,
+      "end": 134.34,
+      "prob": 0.2
+    },
+    {
+      "word": " training",
+      "start": 134.34,
+      "end": 134.64,
+      "prob": 0.94
+    },
+    {
+      "word": " program",
+      "start": 134.64,
+      "end": 134.96,
+      "prob": 1
+    },
+    {
+      "word": " for",
+      "start": 134.96,
+      "end": 135.14,
+      "prob": 1
+    },
+    {
+      "word": " my",
+      "start": 135.14,
+      "end": 135.28,
+      "prob": 1
+    },
+    {
+      "word": " firm",
+      "start": 135.28,
+      "end": 135.54,
+      "prob": 1
+    },
+    {
+      "word": " because",
+      "start": 135.54,
+      "end": 135.74,
+      "prob": 0.85
+    },
+    {
+      "word": " we",
+      "start": 135.74,
+      "end": 135.98,
+      "prob": 1
+    },
+    {
+      "word": " want",
+      "start": 135.98,
+      "end": 136.18,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 136.18,
+      "end": 136.3,
+      "prob": 1
+    },
+    {
+      "word": " help",
+      "start": 136.3,
+      "end": 136.72,
+      "prob": 0.97
+    },
+    {
+      "word": " people",
+      "start": 136.72,
+      "end": 137,
+      "prob": 1
+    },
+    {
+      "word": " get",
+      "start": 137,
+      "end": 137.36,
+      "prob": 1
+    },
+    {
+      "word": " into",
+      "start": 137.36,
+      "end": 137.58,
+      "prob": 1
+    },
+    {
+      "word": " venture",
+      "start": 137.58,
+      "end": 137.96,
+      "prob": 1
+    },
+    {
+      "word": " capital.",
+      "start": 137.96,
+      "end": 138.34,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 138.48,
+      "end": 138.94,
+      "prob": 1
+    },
+    {
+      "word": " we",
+      "start": 138.94,
+      "end": 139.08,
+      "prob": 1
+    },
+    {
+      "word": " gave",
+      "start": 139.08,
+      "end": 139.32,
+      "prob": 1
+    },
+    {
+      "word": " them",
+      "start": 139.32,
+      "end": 139.58,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 139.58,
+      "end": 139.68,
+      "prob": 1
+    },
+    {
+      "word": " choice.",
+      "start": 139.68,
+      "end": 139.88,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 140,
+      "end": 140.1,
+      "prob": 0.93
+    },
+    {
+      "word": " assignments.",
+      "start": 140.1,
+      "end": 140.52,
+      "prob": 1
+    },
+    {
+      "word": " One",
+      "start": 140.98,
+      "end": 141.34,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 141.34,
+      "end": 141.44,
+      "prob": 1
+    },
+    {
+      "word": " them",
+      "start": 141.44,
+      "end": 141.56,
+      "prob": 1
+    },
+    {
+      "word": " was",
+      "start": 141.56,
+      "end": 141.72,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 141.72,
+      "end": 141.82,
+      "prob": 1
+    },
+    {
+      "word": " write",
+      "start": 141.82,
+      "end": 141.96,
+      "prob": 1
+    },
+    {
+      "word": " coverage",
+      "start": 141.96,
+      "end": 142.4,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 142.4,
+      "end": 142.64,
+      "prob": 1
+    },
+    {
+      "word": " one",
+      "start": 142.64,
+      "end": 142.76,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 142.76,
+      "end": 142.84,
+      "prob": 1
+    },
+    {
+      "word": " our",
+      "start": 142.84,
+      "end": 142.96,
+      "prob": 1
+    },
+    {
+      "word": " portfolio",
+      "start": 142.96,
+      "end": 143.36,
+      "prob": 1
+    },
+    {
+      "word": " companies",
+      "start": 143.36,
+      "end": 143.78,
+      "prob": 1
+    },
+    {
+      "word": " that's",
+      "start": 143.78,
+      "end": 144.08,
+      "prob": 0.98
+    },
+    {
+      "word": " breaking",
+      "start": 144.08,
+      "end": 144.44,
+      "prob": 0.98
+    },
+    {
+      "word": " out,",
+      "start": 144.44,
+      "end": 144.72,
+      "prob": 1
+    },
+    {
+      "word": " MicroOne",
+      "start": 144.86,
+      "end": 145.3,
+      "prob": 0.53
+    },
+    {
+      "word": " is",
+      "start": 145.3,
+      "end": 145.44,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 145.44,
+      "end": 145.54,
+      "prob": 1
+    },
+    {
+      "word": " name",
+      "start": 145.54,
+      "end": 145.66,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 145.66,
+      "end": 145.78,
+      "prob": 1
+    },
+    {
+      "word": " it,",
+      "start": 145.78,
+      "end": 145.9,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 146.08,
+      "end": 146.4,
+      "prob": 1
+    },
+    {
+      "word": " just",
+      "start": 146.4,
+      "end": 146.54,
+      "prob": 1
+    },
+    {
+      "word": " give",
+      "start": 146.54,
+      "end": 146.7,
+      "prob": 1
+    },
+    {
+      "word": " us",
+      "start": 146.7,
+      "end": 146.84,
+      "prob": 1
+    },
+    {
+      "word": " like,",
+      "start": 146.84,
+      "end": 147.02,
+      "prob": 0.88
+    },
+    {
+      "word": " hey,",
+      "start": 147.12,
+      "end": 147.2,
+      "prob": 0.98
+    },
+    {
+      "word": " here's",
+      "start": 147.28,
+      "end": 147.44,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 147.44,
+      "end": 147.52,
+      "prob": 1
+    },
+    {
+      "word": " competitive",
+      "start": 147.52,
+      "end": 147.86,
+      "prob": 0.99
+    },
+    {
+      "word": " landscape,",
+      "start": 147.86,
+      "end": 148.26,
+      "prob": 1
+    },
+    {
+      "word": " basically",
+      "start": 148.42,
+      "end": 148.58,
+      "prob": 1
+    },
+    {
+      "word": " write",
+      "start": 148.58,
+      "end": 148.84,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 148.84,
+      "end": 148.98,
+      "prob": 1
+    },
+    {
+      "word": " deal",
+      "start": 148.98,
+      "end": 149.12,
+      "prob": 0.99
+    },
+    {
+      "word": " memo",
+      "start": 149.12,
+      "end": 149.4,
+      "prob": 0.95
+    },
+    {
+      "word": " on",
+      "start": 149.4,
+      "end": 149.58,
+      "prob": 0.4
+    },
+    {
+      "word": " coverage",
+      "start": 149.58,
+      "end": 149.92,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 149.92,
+      "end": 150.1,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 150.1,
+      "end": 150.2,
+      "prob": 1
+    },
+    {
+      "word": " company.",
+      "start": 150.2,
+      "end": 150.52,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 150.66,
+      "end": 150.94,
+      "prob": 0.95
+    },
+    {
+      "word": " then",
+      "start": 150.94,
+      "end": 151.02,
+      "prob": 1
+    },
+    {
+      "word": " we",
+      "start": 151.02,
+      "end": 151.12,
+      "prob": 1
+    },
+    {
+      "word": " gave",
+      "start": 151.12,
+      "end": 151.26,
+      "prob": 0.98
+    },
+    {
+      "word": " them",
+      "start": 151.26,
+      "end": 151.36,
+      "prob": 0.99
+    },
+    {
+      "word": " another",
+      "start": 151.36,
+      "end": 151.62,
+      "prob": 1
+    },
+    {
+      "word": " option",
+      "start": 151.62,
+      "end": 152.08,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 152.08,
+      "end": 152.76,
+      "prob": 1
+    },
+    {
+      "word": " vibe",
+      "start": 152.76,
+      "end": 153.44,
+      "prob": 0.95
+    },
+    {
+      "word": " code",
+      "start": 153.44,
+      "end": 153.78,
+      "prob": 0.98
+    },
+    {
+      "word": " a",
+      "start": 153.78,
+      "end": 153.96,
+      "prob": 0.91
+    },
+    {
+      "word": " very",
+      "start": 153.96,
+      "end": 154.12,
+      "prob": 1
+    },
+    {
+      "word": " specific",
+      "start": 154.12,
+      "end": 154.48,
+      "prob": 1
+    },
+    {
+      "word": " project",
+      "start": 154.48,
+      "end": 154.94,
+      "prob": 1
+    },
+    {
+      "word": " I've",
+      "start": 154.94,
+      "end": 155.24,
+      "prob": 1
+    },
+    {
+      "word": " wanted",
+      "start": 155.24,
+      "end": 155.44,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 155.44,
+      "end": 155.6,
+      "prob": 1
+    },
+    {
+      "word": " have",
+      "start": 155.6,
+      "end": 155.8,
+      "prob": 1
+    },
+    {
+      "word": " for",
+      "start": 155.8,
+      "end": 156.06,
+      "prob": 1
+    },
+    {
+      "word": " our",
+      "start": 156.06,
+      "end": 156.38,
+      "prob": 0.98
+    },
+    {
+      "word": " venture",
+      "start": 156.38,
+      "end": 157.06,
+      "prob": 1
+    },
+    {
+      "word": " firm",
+      "start": 157.06,
+      "end": 157.32,
+      "prob": 1
+    },
+    {
+      "word": " for",
+      "start": 157.32,
+      "end": 157.46,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 157.46,
+      "end": 157.6,
+      "prob": 1
+    },
+    {
+      "word": " long",
+      "start": 157.6,
+      "end": 157.7,
+      "prob": 1
+    },
+    {
+      "word": " time,",
+      "start": 157.7,
+      "end": 158.08,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 158.64,
+      "end": 159,
+      "prob": 0.95
+    },
+    {
+      "word": " know,",
+      "start": 159,
+      "end": 159.1,
+      "prob": 1
+    },
+    {
+      "word": " on",
+      "start": 159.22,
+      "end": 159.4,
+      "prob": 1
+    },
+    {
+      "word": " competitive",
+      "start": 159.4,
+      "end": 159.98,
+      "prob": 1
+    },
+    {
+      "word": " intelligence.",
+      "start": 159.98,
+      "end": 160.5,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 160.96,
+      "end": 161.32,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 161.32,
+      "end": 161.48,
+      "prob": 1
+    },
+    {
+      "word": " would",
+      "start": 161.48,
+      "end": 161.62,
+      "prob": 1
+    },
+    {
+      "word": " say,",
+      "start": 161.62,
+      "end": 161.94,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 162.44,
+      "end": 162.54,
+      "prob": 1
+    },
+    {
+      "word": " think",
+      "start": 162.54,
+      "end": 162.72,
+      "prob": 1
+    },
+    {
+      "word": " like",
+      "start": 162.72,
+      "end": 162.9,
+      "prob": 0.7
+    },
+    {
+      "word": " maybe",
+      "start": 162.9,
+      "end": 163.26,
+      "prob": 0.99
+    },
+    {
+      "word": " 80",
+      "start": 163.26,
+      "end": 163.78,
+      "prob": 1
+    },
+    {
+      "word": "%",
+      "start": 163.78,
+      "end": 164.08,
+      "prob": 0.98
+    },
+    {
+      "word": " of",
+      "start": 164.08,
+      "end": 164.32,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 164.32,
+      "end": 164.46,
+      "prob": 1
+    },
+    {
+      "word": " students",
+      "start": 164.46,
+      "end": 164.86,
+      "prob": 1
+    },
+    {
+      "word": " applying,",
+      "start": 164.86,
+      "end": 165.4,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 165.6,
+      "end": 165.64,
+      "prob": 0.6
+    },
+    {
+      "word": " we",
+      "start": 165.64,
+      "end": 165.68,
+      "prob": 1
+    },
+    {
+      "word": " had",
+      "start": 165.68,
+      "end": 165.86,
+      "prob": 1
+    },
+    {
+      "word": " four",
+      "start": 165.86,
+      "end": 166.2,
+      "prob": 0.55
+    },
+    {
+      "word": " or",
+      "start": 166.2,
+      "end": 166.3,
+      "prob": 1
+    },
+    {
+      "word": " 500",
+      "start": 166.3,
+      "end": 166.5,
+      "prob": 0.95
+    },
+    {
+      "word": " people",
+      "start": 166.5,
+      "end": 166.86,
+      "prob": 1
+    },
+    {
+      "word": " apply",
+      "start": 166.86,
+      "end": 167.14,
+      "prob": 1
+    },
+    {
+      "word": " for",
+      "start": 167.14,
+      "end": 167.3,
+      "prob": 1
+    },
+    {
+      "word": " six",
+      "start": 167.3,
+      "end": 167.5,
+      "prob": 1
+    },
+    {
+      "word": " positions.",
+      "start": 167.5,
+      "end": 167.86,
+      "prob": 1
+    },
+    {
+      "word": " 80",
+      "start": 168.46,
+      "end": 168.9,
+      "prob": 0.96
+    },
+    {
+      "word": "%",
+      "start": 168.9,
+      "end": 169.16,
+      "prob": 0.91
+    },
+    {
+      "word": " of",
+      "start": 169.16,
+      "end": 169.36,
+      "prob": 1
+    },
+    {
+      "word": " them",
+      "start": 169.36,
+      "end": 169.52,
+      "prob": 1
+    },
+    {
+      "word": " did",
+      "start": 169.52,
+      "end": 169.84,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 169.84,
+      "end": 170.02,
+      "prob": 1
+    },
+    {
+      "word": " vibe",
+      "start": 170.02,
+      "end": 170.26,
+      "prob": 0.71
+    },
+    {
+      "word": " coding.",
+      "start": 170.26,
+      "end": 170.6,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 171.41,
+      "end": 171.85,
+      "prob": 0.98
+    },
+    {
+      "word": " I",
+      "start": 171.85,
+      "end": 172.07,
+      "prob": 1
+    },
+    {
+      "word": " was",
+      "start": 172.07,
+      "end": 172.25,
+      "prob": 1
+    },
+    {
+      "word": " shocked.",
+      "start": 172.25,
+      "end": 172.55,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 172.71,
+      "end": 172.77,
+      "prob": 1
+    },
+    {
+      "word": " thought",
+      "start": 172.77,
+      "end": 172.89,
+      "prob": 1
+    },
+    {
+      "word": " it",
+      "start": 172.89,
+      "end": 173.01,
+      "prob": 1
+    },
+    {
+      "word": " would",
+      "start": 173.01,
+      "end": 173.09,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 173.09,
+      "end": 173.19,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 173.19,
+      "end": 173.33,
+      "prob": 1
+    },
+    {
+      "word": " exact",
+      "start": 173.33,
+      "end": 173.69,
+      "prob": 1
+    },
+    {
+      "word": " opposite.",
+      "start": 173.69,
+      "end": 174.11,
+      "prob": 1
+    },
+    {
+      "word": " Anybody",
+      "start": 174.41,
+      "end": 174.65,
+      "prob": 1
+    },
+    {
+      "word": " can",
+      "start": 174.65,
+      "end": 174.95,
+      "prob": 1
+    },
+    {
+      "word": " write,",
+      "start": 174.95,
+      "end": 175.19,
+      "prob": 1
+    },
+    {
+      "word": " anybody",
+      "start": 175.35,
+      "end": 175.47,
+      "prob": 1
+    },
+    {
+      "word": " can",
+      "start": 175.47,
+      "end": 175.67,
+      "prob": 1
+    },
+    {
+      "word": " throw",
+      "start": 175.67,
+      "end": 175.91,
+      "prob": 1
+    },
+    {
+      "word": " shit",
+      "start": 175.91,
+      "end": 176.19,
+      "prob": 0.48
+    },
+    {
+      "word": " in",
+      "start": 176.19,
+      "end": 176.37,
+      "prob": 0.84
+    },
+    {
+      "word": " chat,",
+      "start": 176.37,
+      "end": 176.59,
+      "prob": 0.85
+    },
+    {
+      "word": " shape",
+      "start": 176.71,
+      "end": 176.89,
+      "prob": 0.18
+    },
+    {
+      "word": " ET",
+      "start": 176.89,
+      "end": 177.07,
+      "prob": 0.12
+    },
+    {
+      "word": " and",
+      "start": 177.07,
+      "end": 177.37,
+      "prob": 0.69
+    },
+    {
+      "word": " get",
+      "start": 177.37,
+      "end": 177.51,
+      "prob": 1
+    },
+    {
+      "word": " some",
+      "start": 177.51,
+      "end": 177.69,
+      "prob": 1
+    },
+    {
+      "word": " output,",
+      "start": 177.69,
+      "end": 178.01,
+      "prob": 1
+    },
+    {
+      "word": " but",
+      "start": 178.01,
+      "end": 178.45,
+      "prob": 1
+    },
+    {
+      "word": " they",
+      "start": 178.45,
+      "end": 178.63,
+      "prob": 1
+    },
+    {
+      "word": " actually",
+      "start": 178.63,
+      "end": 179.01,
+      "prob": 0.92
+    },
+    {
+      "word": " built",
+      "start": 179.01,
+      "end": 179.29,
+      "prob": 0.98
+    },
+    {
+      "word": " software.",
+      "start": 179.29,
+      "end": 179.77,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 180.05,
+      "end": 180.49,
+      "prob": 1
+    },
+    {
+      "word": " that's",
+      "start": 180.49,
+      "end": 181.43,
+      "prob": 0.99
+    },
+    {
+      "word": " the",
+      "start": 181.43,
+      "end": 181.59,
+      "prob": 1
+    },
+    {
+      "word": " scary",
+      "start": 181.59,
+      "end": 181.87,
+      "prob": 1
+    },
+    {
+      "word": " thing.",
+      "start": 181.87,
+      "end": 182.09,
+      "prob": 1
+    },
+    {
+      "word": " The",
+      "start": 182.37,
+      "end": 182.47,
+      "prob": 1
+    },
+    {
+      "word": " students",
+      "start": 182.47,
+      "end": 182.77,
+      "prob": 1
+    },
+    {
+      "word": " who",
+      "start": 182.77,
+      "end": 182.93,
+      "prob": 1
+    },
+    {
+      "word": " graduated,",
+      "start": 182.93,
+      "end": 183.45,
+      "prob": 1
+    },
+    {
+      "word": " at",
+      "start": 183.79,
+      "end": 184.19,
+      "prob": 1
+    },
+    {
+      "word": " least",
+      "start": 184.19,
+      "end": 184.33,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 184.33,
+      "end": 184.45,
+      "prob": 0.99
+    },
+    {
+      "word": " is",
+      "start": 184.45,
+      "end": 184.51,
+      "prob": 1
+    },
+    {
+      "word": " my",
+      "start": 184.51,
+      "end": 184.65,
+      "prob": 1
+    },
+    {
+      "word": " perception,",
+      "start": 184.65,
+      "end": 185.21,
+      "prob": 1
+    },
+    {
+      "word": " Chamath,",
+      "start": 185.87,
+      "end": 186.21,
+      "prob": 0.9
+    },
+    {
+      "word": " the",
+      "start": 186.51,
+      "end": 186.67,
+      "prob": 1
+    },
+    {
+      "word": " students",
+      "start": 186.67,
+      "end": 186.91,
+      "prob": 1
+    },
+    {
+      "word": " who",
+      "start": 186.91,
+      "end": 187.03,
+      "prob": 1
+    },
+    {
+      "word": " graduating",
+      "start": 187.03,
+      "end": 187.47,
+      "prob": 0
+    },
+    {
+      "word": " like",
+      "start": 187.47,
+      "end": 187.69,
+      "prob": 0.99
+    },
+    {
+      "word": " five,",
+      "start": 187.69,
+      "end": 188.03,
+      "prob": 0.96
+    },
+    {
+      "word": " 10",
+      "start": 188.19,
+      "end": 188.31,
+      "prob": 0.99
+    },
+    {
+      "word": " years",
+      "start": 188.31,
+      "end": 188.57,
+      "prob": 1
+    },
+    {
+      "word": " ago",
+      "start": 188.57,
+      "end": 188.79,
+      "prob": 1
+    },
+    {
+      "word": " before",
+      "start": 188.79,
+      "end": 189.13,
+      "prob": 0.99
+    },
+    {
+      "word": " AI,",
+      "start": 189.13,
+      "end": 189.49,
+      "prob": 1
+    },
+    {
+      "word": " they're",
+      "start": 190.17,
+      "end": 190.61,
+      "prob": 1
+    },
+    {
+      "word": " not",
+      "start": 190.61,
+      "end": 190.79,
+      "prob": 1
+    },
+    {
+      "word": " AI",
+      "start": 190.79,
+      "end": 191.03,
+      "prob": 1
+    },
+    {
+      "word": " first.",
+      "start": 191.03,
+      "end": 191.37,
+      "prob": 1
+    },
+    {
+      "word": " They",
+      "start": 191.51,
+      "end": 191.59,
+      "prob": 1
+    },
+    {
+      "word": " feel",
+      "start": 191.59,
+      "end": 191.79,
+      "prob": 1
+    },
+    {
+      "word": " lost",
+      "start": 191.79,
+      "end": 192.17,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 192.17,
+      "end": 192.29,
+      "prob": 0.96
+    },
+    {
+      "word": " a",
+      "start": 192.29,
+      "end": 192.39,
+      "prob": 0.65
+    },
+    {
+      "word": " drift.",
+      "start": 192.39,
+      "end": 192.59,
+      "prob": 1
+    },
+    {
+      "word": " They",
+      "start": 192.77,
+      "end": 192.85,
+      "prob": 1
+    },
+    {
+      "word": " don't",
+      "start": 192.85,
+      "end": 193.15,
+      "prob": 1
+    },
+    {
+      "word": " have",
+      "start": 193.15,
+      "end": 193.31,
+      "prob": 1
+    },
+    {
+      "word": " agency.",
+      "start": 193.31,
+      "end": 193.75,
+      "prob": 1
+    },
+    {
+      "word": " But",
+      "start": 193.95,
+      "end": 194.39,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 194.39,
+      "end": 194.53,
+      "prob": 1
+    },
+    {
+      "word": " group",
+      "start": 194.53,
+      "end": 194.79,
+      "prob": 1
+    },
+    {
+      "word": " coming",
+      "start": 194.79,
+      "end": 195.05,
+      "prob": 1
+    },
+    {
+      "word": " out",
+      "start": 195.05,
+      "end": 195.19,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 195.19,
+      "end": 195.27,
+      "prob": 1
+    },
+    {
+      "word": " college",
+      "start": 195.27,
+      "end": 195.57,
+      "prob": 1
+    },
+    {
+      "word": " right",
+      "start": 195.57,
+      "end": 195.75,
+      "prob": 1
+    },
+    {
+      "word": " now",
+      "start": 195.75,
+      "end": 195.97,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 196,
+      "end": 196.56,
+      "prob": 0.96
+    },
+    {
+      "word": " cheated",
+      "start": 196.56,
+      "end": 196.84,
+      "prob": 1
+    },
+    {
+      "word": " their",
+      "start": 196.84,
+      "end": 197.04,
+      "prob": 1
+    },
+    {
+      "word": " way",
+      "start": 197.04,
+      "end": 197.24,
+      "prob": 1
+    },
+    {
+      "word": " through",
+      "start": 197.24,
+      "end": 197.48,
+      "prob": 1
+    },
+    {
+      "word": " school",
+      "start": 197.48,
+      "end": 197.86,
+      "prob": 1
+    },
+    {
+      "word": " using",
+      "start": 197.86,
+      "end": 198.28,
+      "prob": 0.91
+    },
+    {
+      "word": " chat",
+      "start": 198.28,
+      "end": 198.54,
+      "prob": 0.38
+    },
+    {
+      "word": " GPT,",
+      "start": 198.54,
+      "end": 199.08,
+      "prob": 0.87
+    },
+    {
+      "word": " doing",
+      "start": 199.44,
+      "end": 199.56,
+      "prob": 1
+    },
+    {
+      "word": " their",
+      "start": 199.56,
+      "end": 199.74,
+      "prob": 1
+    },
+    {
+      "word": " assignments,",
+      "start": 199.74,
+      "end": 200.22,
+      "prob": 1
+    },
+    {
+      "word": " like",
+      "start": 200.38,
+      "end": 200.5,
+      "prob": 0.88
+    },
+    {
+      "word": " using",
+      "start": 200.5,
+      "end": 201.12,
+      "prob": 0.98
+    },
+    {
+      "word": " those",
+      "start": 201.12,
+      "end": 201.38,
+      "prob": 1
+    },
+    {
+      "word": " tools.",
+      "start": 201.38,
+      "end": 201.58,
+      "prob": 0.98
+    },
+    {
+      "word": " I'm",
+      "start": 201.72,
+      "end": 202,
+      "prob": 0.99
+    },
+    {
+      "word": " joking,",
+      "start": 202,
+      "end": 202.3,
+      "prob": 1
+    },
+    {
+      "word": " cheating,",
+      "start": 202.42,
+      "end": 202.64,
+      "prob": 1
+    },
+    {
+      "word": " but",
+      "start": 202.78,
+      "end": 202.84,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 202.84,
+      "end": 202.94,
+      "prob": 1
+    },
+    {
+      "word": " mean",
+      "start": 202.94,
+      "end": 203.1,
+      "prob": 1
+    },
+    {
+      "word": " hacking.",
+      "start": 203.1,
+      "end": 203.52,
+      "prob": 0.78
+    },
+    {
+      "word": " I",
+      "start": 203.78,
+      "end": 203.98,
+      "prob": 0.99
+    },
+    {
+      "word": " agree",
+      "start": 203.98,
+      "end": 204.34,
+      "prob": 1
+    },
+    {
+      "word": " with",
+      "start": 204.34,
+      "end": 204.48,
+      "prob": 1
+    },
+    {
+      "word": " that.",
+      "start": 204.48,
+      "end": 204.62,
+      "prob": 1
+    },
+    {
+      "word": " So",
+      "start": 204.9,
+      "end": 205.1,
+      "prob": 0.87
+    },
+    {
+      "word": " they",
+      "start": 205.1,
+      "end": 205.3,
+      "prob": 0.92
+    },
+    {
+      "word": " were",
+      "start": 205.3,
+      "end": 205.64,
+      "prob": 0.98
+    },
+    {
+      "word": " hacked.",
+      "start": 205.64,
+      "end": 206.02,
+      "prob": 0.31
+    },
+    {
+      "word": " Yeah,",
+      "start": 206.7,
+      "end": 206.88,
+      "prob": 0.84
+    },
+    {
+      "word": " and",
+      "start": 207.22,
+      "end": 207.32,
+      "prob": 1
+    },
+    {
+      "word": " they're",
+      "start": 207.32,
+      "end": 207.68,
+      "prob": 1
+    },
+    {
+      "word": " just",
+      "start": 207.68,
+      "end": 207.8,
+      "prob": 1
+    },
+    {
+      "word": " like,",
+      "start": 207.8,
+      "end": 207.96,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 208.16,
+      "end": 208.22,
+      "prob": 1
+    },
+    {
+      "word": " know",
+      "start": 208.22,
+      "end": 208.36,
+      "prob": 1
+    },
+    {
+      "word": " how",
+      "start": 208.36,
+      "end": 208.46,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 208.46,
+      "end": 208.54,
+      "prob": 1
+    },
+    {
+      "word": " use",
+      "start": 208.54,
+      "end": 208.74,
+      "prob": 1
+    },
+    {
+      "word": " these",
+      "start": 208.74,
+      "end": 208.9,
+      "prob": 1
+    },
+    {
+      "word": " tools",
+      "start": 208.9,
+      "end": 209.2,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 209.2,
+      "end": 209.92,
+      "prob": 1
+    },
+    {
+      "word": " get",
+      "start": 209.92,
+      "end": 210.12,
+      "prob": 1
+    },
+    {
+      "word": " through",
+      "start": 210.12,
+      "end": 210.3,
+      "prob": 1
+    },
+    {
+      "word": " my",
+      "start": 210.3,
+      "end": 210.54,
+      "prob": 1
+    },
+    {
+      "word": " finals.",
+      "start": 210.54,
+      "end": 210.96,
+      "prob": 1
+    },
+    {
+      "word": " Gurley,",
+      "start": 211.3,
+      "end": 211.72,
+      "prob": 0.7
+    },
+    {
+      "word": " I",
+      "start": 211.84,
+      "end": 211.86,
+      "prob": 1
+    },
+    {
+      "word": " think",
+      "start": 211.86,
+      "end": 212,
+      "prob": 1
+    },
+    {
+      "word": " you're",
+      "start": 212,
+      "end": 212.16,
+      "prob": 1
+    },
+    {
+      "word": " saying",
+      "start": 212.16,
+      "end": 212.32,
+      "prob": 0.85
+    },
+    {
+      "word": " something",
+      "start": 212.32,
+      "end": 212.6,
+      "prob": 1
+    },
+    {
+      "word": " super",
+      "start": 212.6,
+      "end": 212.9,
+      "prob": 1
+    },
+    {
+      "word": " important.",
+      "start": 212.9,
+      "end": 213.22,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 213.38,
+      "end": 213.44,
+      "prob": 1
+    },
+    {
+      "word": " said",
+      "start": 213.44,
+      "end": 213.66,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 213.66,
+      "end": 213.84,
+      "prob": 1
+    },
+    {
+      "word": " last",
+      "start": 213.84,
+      "end": 214.1,
+      "prob": 1
+    },
+    {
+      "word": " week,",
+      "start": 214.1,
+      "end": 214.36,
+      "prob": 1
+    },
+    {
+      "word": " which",
+      "start": 214.48,
+      "end": 214.56,
+      "prob": 0.98
+    },
+    {
+      "word": " is",
+      "start": 214.56,
+      "end": 214.72,
+      "prob": 1
+    },
+    {
+      "word": " nobody",
+      "start": 214.72,
+      "end": 215.54,
+      "prob": 0.92
+    },
+    {
+      "word": " asks",
+      "start": 215.54,
+      "end": 216.06,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 216.06,
+      "end": 216.28,
+      "prob": 1
+    },
+    {
+      "word": " warehouse",
+      "start": 216.28,
+      "end": 216.64,
+      "prob": 1
+    },
+    {
+      "word": " worker",
+      "start": 216.64,
+      "end": 216.96,
+      "prob": 0.95
+    },
+    {
+      "word": " at",
+      "start": 216.96,
+      "end": 217.12,
+      "prob": 1
+    },
+    {
+      "word": " Amazon",
+      "start": 217.12,
+      "end": 217.4,
+      "prob": 1
+    },
+    {
+      "word": " whether",
+      "start": 217.4,
+      "end": 217.7,
+      "prob": 0.91
+    },
+    {
+      "word": " they",
+      "start": 217.7,
+      "end": 217.9,
+      "prob": 1
+    },
+    {
+      "word": " actually",
+      "start": 217.9,
+      "end": 218.26,
+      "prob": 1
+    },
+    {
+      "word": " want",
+      "start": 218.26,
+      "end": 218.6,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 218.6,
+      "end": 218.82,
+      "prob": 1
+    },
+    {
+      "word": " job.",
+      "start": 218.82,
+      "end": 219.16,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 219.64,
+      "end": 220.08,
+      "prob": 1
+    },
+    {
+      "word": " so",
+      "start": 220.08,
+      "end": 220.26,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 220.26,
+      "end": 220.44,
+      "prob": 0.99
+    },
+    {
+      "word": " your",
+      "start": 220.44,
+      "end": 220.58,
+      "prob": 1
+    },
+    {
+      "word": " point,",
+      "start": 220.58,
+      "end": 220.84,
+      "prob": 1
+    },
+    {
+      "word": " job",
+      "start": 221.04,
+      "end": 221.24,
+      "prob": 1
+    },
+    {
+      "word": " satisfaction",
+      "start": 221.24,
+      "end": 221.82,
+      "prob": 1
+    },
+    {
+      "word": " isn't",
+      "start": 221.82,
+      "end": 222.38,
+      "prob": 1
+    },
+    {
+      "word": " some",
+      "start": 222.38,
+      "end": 223.34,
+      "prob": 1
+    },
+    {
+      "word": " external...",
+      "start": 223.34,
+      "end": 223.98,
+      "prob": 0.63
+    },
+    {
+      "word": " person",
+      "start": 224,
+      "end": 224.32,
+      "prob": 0.96
+    },
+    {
+      "word": " judging",
+      "start": 224.32,
+      "end": 224.76,
+      "prob": 1
+    },
+    {
+      "word": " your",
+      "start": 224.76,
+      "end": 225.06,
+      "prob": 1
+    },
+    {
+      "word": " job",
+      "start": 225.06,
+      "end": 225.4,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 225.4,
+      "end": 225.56,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 225.56,
+      "end": 225.68,
+      "prob": 1
+    },
+    {
+      "word": " valid",
+      "start": 225.68,
+      "end": 226,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 226,
+      "end": 226.22,
+      "prob": 0.98
+    },
+    {
+      "word": " saying",
+      "start": 226.22,
+      "end": 226.46,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 226.46,
+      "end": 226.66,
+      "prob": 0.86
+    },
+    {
+      "word": " must",
+      "start": 226.66,
+      "end": 226.88,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 226.88,
+      "end": 227.04,
+      "prob": 1
+    },
+    {
+      "word": " able",
+      "start": 227.04,
+      "end": 227.18,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 227.18,
+      "end": 227.3,
+      "prob": 1
+    },
+    {
+      "word": " have",
+      "start": 227.3,
+      "end": 227.58,
+      "prob": 1
+    },
+    {
+      "word": " it.",
+      "start": 227.58,
+      "end": 227.7,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 227.8,
+      "end": 227.86,
+      "prob": 1
+    },
+    {
+      "word": " think",
+      "start": 227.86,
+      "end": 228,
+      "prob": 1
+    },
+    {
+      "word": " it",
+      "start": 228,
+      "end": 228.14,
+      "prob": 1
+    },
+    {
+      "word": " should",
+      "start": 228.14,
+      "end": 228.28,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 228.28,
+      "end": 228.58,
+      "prob": 1
+    },
+    {
+      "word": " asking",
+      "start": 229.12,
+      "end": 229.52,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 229.52,
+      "end": 229.72,
+      "prob": 1
+    },
+    {
+      "word": " person",
+      "start": 229.72,
+      "end": 229.98,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 229.98,
+      "end": 230.18,
+      "prob": 1
+    },
+    {
+      "word": " does",
+      "start": 230.18,
+      "end": 230.42,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 230.42,
+      "end": 230.56,
+      "prob": 1
+    },
+    {
+      "word": " job,",
+      "start": 230.56,
+      "end": 230.8,
+      "prob": 1
+    },
+    {
+      "word": " do",
+      "start": 230.92,
+      "end": 230.98,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 230.98,
+      "end": 231.1,
+      "prob": 1
+    },
+    {
+      "word": " like",
+      "start": 231.1,
+      "end": 231.34,
+      "prob": 1
+    },
+    {
+      "word": " it?",
+      "start": 231.34,
+      "end": 231.46,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 231.54,
+      "end": 231.56,
+      "prob": 0.98
+    },
+    {
+      "word": " do",
+      "start": 231.56,
+      "end": 231.68,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 231.68,
+      "end": 231.78,
+      "prob": 1
+    },
+    {
+      "word": " want",
+      "start": 231.78,
+      "end": 231.92,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 231.92,
+      "end": 232.04,
+      "prob": 1
+    },
+    {
+      "word": " keep",
+      "start": 232.04,
+      "end": 232.24,
+      "prob": 1
+    },
+    {
+      "word": " it?",
+      "start": 232.24,
+      "end": 232.4,
+      "prob": 1
+    },
+    {
+      "word": " Those",
+      "start": 232.52,
+      "end": 232.66,
+      "prob": 1
+    },
+    {
+      "word": " are",
+      "start": 232.66,
+      "end": 232.78,
+      "prob": 1
+    },
+    {
+      "word": " two",
+      "start": 232.78,
+      "end": 232.92,
+      "prob": 1
+    },
+    {
+      "word": " very",
+      "start": 232.92,
+      "end": 233.16,
+      "prob": 1
+    },
+    {
+      "word": " different",
+      "start": 233.16,
+      "end": 233.46,
+      "prob": 1
+    },
+    {
+      "word": " questions.",
+      "start": 233.46,
+      "end": 234.1,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 234.36,
+      "end": 234.46,
+      "prob": 0.99
+    },
+    {
+      "word": " yeah,",
+      "start": 234.46,
+      "end": 234.66,
+      "prob": 0.3
+    },
+    {
+      "word": " I",
+      "start": 234.66,
+      "end": 235.32,
+      "prob": 1
+    },
+    {
+      "word": " think",
+      "start": 235.32,
+      "end": 235.48,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 235.48,
+      "end": 235.68,
+      "prob": 1
+    },
+    {
+      "word": " all",
+      "start": 235.68,
+      "end": 236.46,
+      "prob": 0.15
+    },
+    {
+      "word": " of",
+      "start": 236.46,
+      "end": 236.6,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 236.6,
+      "end": 236.76,
+      "prob": 1
+    },
+    {
+      "word": " AI",
+      "start": 236.76,
+      "end": 237.06,
+      "prob": 0.98
+    },
+    {
+      "word": " doom",
+      "start": 237.06,
+      "end": 237.38,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 237.38,
+      "end": 237.54,
+      "prob": 1
+    },
+    {
+      "word": " gloom",
+      "start": 237.54,
+      "end": 237.98,
+      "prob": 1
+    },
+    {
+      "word": " was",
+      "start": 237.98,
+      "end": 238.68,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 238.68,
+      "end": 238.8,
+      "prob": 1
+    },
+    {
+      "word": " lot",
+      "start": 238.8,
+      "end": 238.98,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 239.46,
+      "end": 239.86,
+      "prob": 0.84
+    },
+    {
+      "word": " too",
+      "start": 239.86,
+      "end": 240.06,
+      "prob": 1
+    },
+    {
+      "word": " much,",
+      "start": 240.06,
+      "end": 240.28,
+      "prob": 1
+    },
+    {
+      "word": " frankly,",
+      "start": 240.38,
+      "end": 240.58,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 240.7,
+      "end": 240.76,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 240.76,
+      "end": 240.9,
+      "prob": 1
+    },
+    {
+      "word": " former",
+      "start": 240.9,
+      "end": 241.24,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 241.24,
+      "end": 241.62,
+      "prob": 1
+    },
+    {
+      "word": " not",
+      "start": 241.62,
+      "end": 241.82,
+      "prob": 1
+    },
+    {
+      "word": " enough",
+      "start": 241.82,
+      "end": 242.04,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 242.04,
+      "end": 242.22,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 242.22,
+      "end": 242.3,
+      "prob": 1
+    },
+    {
+      "word": " latter.",
+      "start": 242.3,
+      "end": 242.58,
+      "prob": 0.97
+    },
+    {
+      "word": " And",
+      "start": 242.8,
+      "end": 242.9,
+      "prob": 1
+    },
+    {
+      "word": " now",
+      "start": 242.9,
+      "end": 243.84,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 243.84,
+      "end": 244.32,
+      "prob": 1
+    },
+    {
+      "word": " whole",
+      "start": 244.32,
+      "end": 244.62,
+      "prob": 1
+    },
+    {
+      "word": " lie",
+      "start": 244.62,
+      "end": 245.36,
+      "prob": 1
+    },
+    {
+      "word": " is",
+      "start": 245.36,
+      "end": 245.6,
+      "prob": 1
+    },
+    {
+      "word": " kind",
+      "start": 245.6,
+      "end": 245.78,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 245.78,
+      "end": 245.92,
+      "prob": 1
+    },
+    {
+      "word": " getting",
+      "start": 245.92,
+      "end": 246.16,
+      "prob": 1
+    },
+    {
+      "word": " undone.",
+      "start": 246.16,
+      "end": 246.8,
+      "prob": 1
+    },
+    {
+      "word": " I",
+      "start": 247.04,
+      "end": 247.1,
+      "prob": 1
+    },
+    {
+      "word": " thinks",
+      "start": 247.1,
+      "end": 247.24,
+      "prob": 0
+    },
+    {
+      "word": " Sachs",
+      "start": 247.24,
+      "end": 247.6,
+      "prob": 0.72
+    },
+    {
+      "word": " posted",
+      "start": 247.6,
+      "end": 247.94,
+      "prob": 1
+    },
+    {
+      "word": " about",
+      "start": 247.94,
+      "end": 248.16,
+      "prob": 1
+    },
+    {
+      "word": " it",
+      "start": 248.16,
+      "end": 248.34,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 248.34,
+      "end": 248.68,
+      "prob": 1
+    },
+    {
+      "word": " week",
+      "start": 248.68,
+      "end": 248.86,
+      "prob": 1
+    },
+    {
+      "word": " as",
+      "start": 248.86,
+      "end": 248.98,
+      "prob": 1
+    },
+    {
+      "word": " well.",
+      "start": 248.98,
+      "end": 249.12,
+      "prob": 1
+    },
+    {
+      "word": " The",
+      "start": 249.24,
+      "end": 249.28,
+      "prob": 0.98
+    },
+    {
+      "word": " Goldman",
+      "start": 249.28,
+      "end": 249.5,
+      "prob": 1
+    },
+    {
+      "word": " Sachs",
+      "start": 249.5,
+      "end": 249.86,
+      "prob": 1
+    },
+    {
+      "word": " CEO",
+      "start": 249.86,
+      "end": 250.2,
+      "prob": 1
+    },
+    {
+      "word": " said",
+      "start": 250.2,
+      "end": 250.46,
+      "prob": 1
+    },
+    {
+      "word": " it",
+      "start": 250.46,
+      "end": 250.58,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 250.58,
+      "end": 251,
+      "prob": 0.82
+    },
+    {
+      "word": " now",
+      "start": 251,
+      "end": 251.2,
+      "prob": 0.99
+    },
+    {
+      "word": " in",
+      "start": 251.2,
+      "end": 251.32,
+      "prob": 0.93
+    },
+    {
+      "word": " this",
+      "start": 251.32,
+      "end": 251.48,
+      "prob": 1
+    },
+    {
+      "word": " crazy...",
+      "start": 251.48,
+      "end": 251.98,
+      "prob": 0.74
+    },
+    {
+      "word": " twist",
+      "start": 252,
+      "end": 252.18,
+      "prob": 0.96
+    },
+    {
+      "word": " the",
+      "start": 252.18,
+      "end": 252.34,
+      "prob": 0.56
+    },
+    {
+      "word": " fate,",
+      "start": 252.34,
+      "end": 252.54,
+      "prob": 1
+    },
+    {
+      "word": " now",
+      "start": 252.68,
+      "end": 252.76,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 252.76,
+      "end": 252.88,
+      "prob": 1
+    },
+    {
+      "word": " we",
+      "start": 252.88,
+      "end": 253,
+      "prob": 1
+    },
+    {
+      "word": " need",
+      "start": 253,
+      "end": 253.14,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 253.14,
+      "end": 253.22,
+      "prob": 1
+    },
+    {
+      "word": " have",
+      "start": 253.22,
+      "end": 253.34,
+      "prob": 1
+    },
+    {
+      "word": " trillion",
+      "start": 253.34,
+      "end": 253.58,
+      "prob": 1
+    },
+    {
+      "word": " dollar",
+      "start": 253.58,
+      "end": 253.84,
+      "prob": 0.71
+    },
+    {
+      "word": " IPOs,",
+      "start": 253.84,
+      "end": 254.34,
+      "prob": 0.99
+    },
+    {
+      "word": " the",
+      "start": 254.48,
+      "end": 254.8,
+      "prob": 1
+    },
+    {
+      "word": " entire",
+      "start": 254.8,
+      "end": 255.06,
+      "prob": 1
+    },
+    {
+      "word": " Frontier",
+      "start": 255.06,
+      "end": 255.48,
+      "prob": 0.72
+    },
+    {
+      "word": " Labs",
+      "start": 255.48,
+      "end": 255.88,
+      "prob": 0.99
+    },
+    {
+      "word": " are",
+      "start": 255.88,
+      "end": 256.52,
+      "prob": 1
+    },
+    {
+      "word": " all",
+      "start": 256.52,
+      "end": 256.64,
+      "prob": 1
+    },
+    {
+      "word": " like,",
+      "start": 256.64,
+      "end": 256.82,
+      "prob": 1
+    },
+    {
+      "word": " wow,",
+      "start": 256.9,
+      "end": 257.02,
+      "prob": 1
+    },
+    {
+      "word": " it's",
+      "start": 257.12,
+      "end": 257.28,
+      "prob": 1
+    },
+    {
+      "word": " going",
+      "start": 257.28,
+      "end": 257.38,
+      "prob": 0.99
+    },
+    {
+      "word": " to",
+      "start": 257.38,
+      "end": 257.44,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 257.44,
+      "end": 257.54,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 257.54,
+      "end": 257.64,
+      "prob": 1
+    },
+    {
+      "word": " bonanza",
+      "start": 257.64,
+      "end": 258.04,
+      "prob": 0.92
+    },
+    {
+      "word": " of",
+      "start": 258.04,
+      "end": 258.22,
+      "prob": 0.99
+    },
+    {
+      "word": " jobs.",
+      "start": 258.22,
+      "end": 258.48,
+      "prob": 0.48
+    },
+    {
+      "word": " And",
+      "start": 259.06,
+      "end": 259.18,
+      "prob": 0.42
+    },
+    {
+      "word": " Mark",
+      "start": 259.18,
+      "end": 259.34,
+      "prob": 1
+    },
+    {
+      "word": " Cuban",
+      "start": 259.34,
+      "end": 259.62,
+      "prob": 1
+    },
+    {
+      "word": " had",
+      "start": 259.62,
+      "end": 259.94,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 259.94,
+      "end": 260.32,
+      "prob": 0.81
+    },
+    {
+      "word": " great",
+      "start": 260.32,
+      "end": 260.54,
+      "prob": 1
+    },
+    {
+      "word": " quote.",
+      "start": 260.54,
+      "end": 260.84,
+      "prob": 1
+    },
+    {
+      "word": " He",
+      "start": 260.84,
+      "end": 261,
+      "prob": 1
+    },
+    {
+      "word": " said,",
+      "start": 261,
+      "end": 261.3,
+      "prob": 1
+    },
+    {
+      "word": " there",
+      "start": 261.44,
+      "end": 261.46,
+      "prob": 1
+    },
+    {
+      "word": " are",
+      "start": 261.46,
+      "end": 261.6,
+      "prob": 1
+    },
+    {
+      "word": " two",
+      "start": 261.6,
+      "end": 261.74,
+      "prob": 1
+    },
+    {
+      "word": " types",
+      "start": 261.74,
+      "end": 262.08,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 262.08,
+      "end": 262.26,
+      "prob": 1
+    },
+    {
+      "word": " people",
+      "start": 262.26,
+      "end": 262.54,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 262.54,
+      "end": 262.72,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 262.72,
+      "end": 262.8,
+      "prob": 1
+    },
+    {
+      "word": " world,",
+      "start": 262.8,
+      "end": 263,
+      "prob": 1
+    },
+    {
+      "word": " those",
+      "start": 263.16,
+      "end": 263.34,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 263.34,
+      "end": 263.54,
+      "prob": 1
+    },
+    {
+      "word": " use",
+      "start": 263.54,
+      "end": 263.86,
+      "prob": 1
+    },
+    {
+      "word": " AI",
+      "start": 263.86,
+      "end": 264.16,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 264.16,
+      "end": 264.82,
+      "prob": 1
+    },
+    {
+      "word": " learn",
+      "start": 264.82,
+      "end": 265.1,
+      "prob": 1
+    },
+    {
+      "word": " faster",
+      "start": 265.1,
+      "end": 265.64,
+      "prob": 1
+    },
+    {
+      "word": " than",
+      "start": 265.64,
+      "end": 265.9,
+      "prob": 1
+    },
+    {
+      "word": " they",
+      "start": 265.9,
+      "end": 266.16,
+      "prob": 1
+    },
+    {
+      "word": " ever",
+      "start": 266.16,
+      "end": 266.62,
+      "prob": 1
+    },
+    {
+      "word": " could",
+      "start": 266.62,
+      "end": 266.92,
+      "prob": 1
+    },
+    {
+      "word": " before",
+      "start": 266.92,
+      "end": 267.28,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 267.28,
+      "end": 267.5,
+      "prob": 0.33
+    },
+    {
+      "word": " those",
+      "start": 267.5,
+      "end": 267.76,
+      "prob": 1
+    },
+    {
+      "word": " that",
+      "start": 267.76,
+      "end": 267.9,
+      "prob": 1
+    },
+    {
+      "word": " us",
+      "start": 267.9,
+      "end": 268.1,
+      "prob": 0
+    },
+    {
+      "word": " AI",
+      "start": 268.1,
+      "end": 268.36,
+      "prob": 0.96
+    },
+    {
+      "word": " to",
+      "start": 268.36,
+      "end": 268.66,
+      "prob": 1
+    },
+    {
+      "word": " avoid",
+      "start": 268.66,
+      "end": 269.02,
+      "prob": 1
+    },
+    {
+      "word": " learning",
+      "start": 269.02,
+      "end": 269.38,
+      "prob": 1
+    },
+    {
+      "word": " altogether.",
+      "start": 269.38,
+      "end": 269.9,
+      "prob": 0.95
+    },
+    {
+      "word": " And",
+      "start": 270.5,
+      "end": 270.94,
+      "prob": 0.99
+    },
+    {
+      "word": " I",
+      "start": 270.94,
+      "end": 271.08,
+      "prob": 1
+    },
+    {
+      "word": " think",
+      "start": 271.08,
+      "end": 271.52,
+      "prob": 0.99
+    },
+    {
+      "word": " it's",
+      "start": 271.52,
+      "end": 271.76,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 271.76,
+      "end": 272,
+      "prob": 1
+    },
+    {
+      "word": " notion",
+      "start": 272,
+      "end": 272.44,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 272.44,
+      "end": 272.7,
+      "prob": 1
+    },
+    {
+      "word": " high",
+      "start": 272.7,
+      "end": 272.9,
+      "prob": 1
+    },
+    {
+      "word": " agency",
+      "start": 272.9,
+      "end": 273.38,
+      "prob": 1
+    },
+    {
+      "word": " or",
+      "start": 273.38,
+      "end": 273.6,
+      "prob": 1
+    },
+    {
+      "word": " not.",
+      "start": 273.6,
+      "end": 273.84,
+      "prob": 1
+    },
+    {
+      "word": " That's",
+      "start": 273.9,
+      "end": 274.1,
+      "prob": 0.98
+    },
+    {
+      "word": " pretty",
+      "start": 274.1,
+      "end": 274.28,
+      "prob": 1
+    },
+    {
+      "word": " good.",
+      "start": 274.28,
+      "end": 274.42,
+      "prob": 1
+    },
+    {
+      "word": " Are",
+      "start": 274.64,
+      "end": 274.84,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 274.84,
+      "end": 274.98,
+      "prob": 1
+    },
+    {
+      "word": " leaning",
+      "start": 274.98,
+      "end": 275.32,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 275.32,
+      "end": 275.72,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 275.72,
+      "end": 276.44,
+      "prob": 1
+    },
+    {
+      "word": " using",
+      "start": 276.44,
+      "end": 276.82,
+      "prob": 1
+    },
+    {
+      "word": " this",
+      "start": 276.82,
+      "end": 277.08,
+      "prob": 1
+    },
+    {
+      "word": " stuff",
+      "start": 277.08,
+      "end": 277.34,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 277.34,
+      "end": 277.52,
+      "prob": 1
+    },
+    {
+      "word": " be",
+      "start": 277.52,
+      "end": 277.86,
+      "prob": 1
+    },
+    {
+      "word": " ever",
+      "start": 277.86,
+      "end": 278.38,
+      "prob": 1
+    },
+    {
+      "word": " more",
+      "start": 278.38,
+      "end": 278.58,
+      "prob": 1
+    },
+    {
+      "word": " powerful",
+      "start": 278.58,
+      "end": 279.12,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 279.12,
+      "end": 279.38,
+      "prob": 0.84
+    },
+    {
+      "word": " what",
+      "start": 279.38,
+      "end": 279.56,
+      "prob": 1
+    },
+    {
+      "word": " you",
+      "start": 279.56,
+      "end": 279.74,
+      "prob": 1
+    },
+    {
+      "word": " try?",
+      "start": 279.74,
+      "end": 279.98,
+      "prob": 0.99
+    },
+    {
+      "word": " and",
+      "start": 280,
+      "end": 280.2,
+      "prob": 0.84
+    },
+    {
+      "word": " accomplish?",
+      "start": 280.2,
+      "end": 280.7,
+      "prob": 0.98
+    },
+    {
+      "word": " Are",
+      "start": 281.06,
+      "end": 281.46,
+      "prob": 0.72
+    },
+    {
+      "word": " you",
+      "start": 281.46,
+      "end": 281.64,
+      "prob": 1
+    },
+    {
+      "word": " using",
+      "start": 281.64,
+      "end": 281.98,
+      "prob": 1
+    },
+    {
+      "word": " it",
+      "start": 281.98,
+      "end": 282.2,
+      "prob": 1
+    },
+    {
+      "word": " as",
+      "start": 282.2,
+      "end": 282.76,
+      "prob": 0.52
+    },
+    {
+      "word": " a",
+      "start": 282.76,
+      "end": 282.88,
+      "prob": 1
+    },
+    {
+      "word": " cheat",
+      "start": 282.88,
+      "end": 283.1,
+      "prob": 1
+    },
+    {
+      "word": " code?",
+      "start": 283.1,
+      "end": 283.5,
+      "prob": 1
+    },
+    {
+      "word": " And",
+      "start": 283.74,
+      "end": 283.86,
+      "prob": 0.92
+    },
+    {
+      "word": " if",
+      "start": 283.86,
+      "end": 284.04,
+      "prob": 1
+    },
+    {
+      "word": " you're",
+      "start": 284.04,
+      "end": 284.16,
+      "prob": 1
+    },
+    {
+      "word": " in",
+      "start": 284.16,
+      "end": 284.26,
+      "prob": 1
+    },
+    {
+      "word": " the",
+      "start": 284.26,
+      "end": 284.4,
+      "prob": 1
+    },
+    {
+      "word": " latter,",
+      "start": 284.4,
+      "end": 284.74,
+      "prob": 0.77
+    },
+    {
+      "word": " yeah,",
+      "start": 285.18,
+      "end": 285.28,
+      "prob": 0.99
+    },
+    {
+      "word": " you're",
+      "start": 285.36,
+      "end": 285.52,
+      "prob": 1
+    },
+    {
+      "word": " probably",
+      "start": 285.52,
+      "end": 285.96,
+      "prob": 1
+    },
+    {
+      "word": " at",
+      "start": 285.96,
+      "end": 286.24,
+      "prob": 1
+    },
+    {
+      "word": " risk.",
+      "start": 286.24,
+      "end": 286.56,
+      "prob": 1
+    },
+    {
+      "word": " You",
+      "start": 286.8,
+      "end": 287.12,
+      "prob": 0.98
+    },
+    {
+      "word": " get",
+      "start": 287.12,
+      "end": 287.24,
+      "prob": 1
+    },
+    {
+      "word": " asked",
+      "start": 287.24,
+      "end": 287.5,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 287.5,
+      "end": 287.64,
+      "prob": 1
+    },
+    {
+      "word": " lot",
+      "start": 287.64,
+      "end": 287.74,
+      "prob": 1
+    },
+    {
+      "word": " about",
+      "start": 287.74,
+      "end": 287.94,
+      "prob": 1
+    },
+    {
+      "word": " how",
+      "start": 287.94,
+      "end": 288.7,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 288.7,
+      "end": 289.08,
+      "prob": 1
+    },
+    {
+      "word": " educate",
+      "start": 289.08,
+      "end": 289.44,
+      "prob": 1
+    },
+    {
+      "word": " yourself",
+      "start": 289.44,
+      "end": 289.92,
+      "prob": 1
+    },
+    {
+      "word": " if",
+      "start": 289.92,
+      "end": 290.26,
+      "prob": 0.84
+    },
+    {
+      "word": " you",
+      "start": 290.26,
+      "end": 290.34,
+      "prob": 1
+    },
+    {
+      "word": " are",
+      "start": 290.34,
+      "end": 290.4,
+      "prob": 0
+    },
+    {
+      "word": " a",
+      "start": 290.4,
+      "end": 290.5,
+      "prob": 0.98
+    },
+    {
+      "word": " parent",
+      "start": 290.5,
+      "end": 290.74,
+      "prob": 1
+    },
+    {
+      "word": " of",
+      "start": 290.74,
+      "end": 290.9,
+      "prob": 1
+    },
+    {
+      "word": " kids",
+      "start": 290.9,
+      "end": 291.24,
+      "prob": 1
+    },
+    {
+      "word": " so",
+      "start": 292.52,
+      "end": 292.92,
+      "prob": 0.62
+    },
+    {
+      "word": " that",
+      "start": 292.92,
+      "end": 293.08,
+      "prob": 0.96
+    },
+    {
+      "word": " you",
+      "start": 293.08,
+      "end": 293.28,
+      "prob": 1
+    },
+    {
+      "word": " can",
+      "start": 293.28,
+      "end": 293.44,
+      "prob": 1
+    },
+    {
+      "word": " put",
+      "start": 293.44,
+      "end": 293.64,
+      "prob": 1
+    },
+    {
+      "word": " them",
+      "start": 293.64,
+      "end": 293.8,
+      "prob": 1
+    },
+    {
+      "word": " on",
+      "start": 293.8,
+      "end": 293.92,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 293.92,
+      "end": 294.02,
+      "prob": 1
+    },
+    {
+      "word": " path",
+      "start": 294.02,
+      "end": 294.34,
+      "prob": 1
+    },
+    {
+      "word": " to",
+      "start": 294.34,
+      "end": 294.58,
+      "prob": 1
+    },
+    {
+      "word": " launch",
+      "start": 294.58,
+      "end": 294.92,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 294.92,
+      "end": 295.1,
+      "prob": 0.98
+    },
+    {
+      "word": " do",
+      "start": 295.1,
+      "end": 295.24,
+      "prob": 0.99
+    },
+    {
+      "word": " well",
+      "start": 295.24,
+      "end": 295.5,
+      "prob": 1
+    },
+    {
+      "word": " and",
+      "start": 295.5,
+      "end": 295.68,
+      "prob": 0.99
+    },
+    {
+      "word": " chase",
+      "start": 295.68,
+      "end": 295.92,
+      "prob": 1
+    },
+    {
+      "word": " their",
+      "start": 295.92,
+      "end": 296.1,
+      "prob": 0.99
+    },
+    {
+      "word": " dreams.",
+      "start": 296.1,
+      "end": 296.34,
+      "prob": 0.99
+    },
+    {
+      "word": " Do",
+      "start": 296.76,
+      "end": 297.16,
+      "prob": 0.54
+    },
+    {
+      "word": " you",
+      "start": 297.16,
+      "end": 297.3,
+      "prob": 1
+    },
+    {
+      "word": " have",
+      "start": 297.3,
+      "end": 297.3,
+      "prob": 1
+    },
+    {
+      "word": " a",
+      "start": 297.3,
+      "end": 297.34,
+      "prob": 0.99
+    },
+    {
+      "word": " good",
+      "start": 297.34,
+      "end": 297.44,
+      "prob": 1
+    },
+    {
+      "word": " answer",
+      "start": 297.44,
+      "end": 297.72,
+      "prob": 1
+    },
+    {
+      "word": " for",
+      "start": 297.72,
+      "end": 297.88,
+      "prob": 0.97
+    },
+    {
+      "word": " that",
+      "start": 297.88,
+      "end": 298.06,
+      "prob": 1
+    },
+    {
+      "word": " question?",
+      "start": 298.06,
+      "end": 298.36,
+      "prob": 0.99
+    },
+    {
+      "word": " I",
+      "start": 298.5,
+      "end": 298.78,
+      "prob": 0.86
+    },
+    {
+      "word": " mean,",
+      "start": 298.78,
+      "end": 298.96,
+      "prob": 0.99
+    },
+    {
+      "word": " the",
+      "start": 299.2,
+      "end": 299.3,
+      "prob": 0.98
+    },
+    {
+      "word": " second",
+      "start": 299.3,
+      "end": 299.8,
+      "prob": 0.98
+    },
+    {
+      "word": " chance",
+      "start": 299.8,
+      "end": 299.98,
+      "prob": 0.25
+    }
+  ]
+}

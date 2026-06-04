@@ -1,0 +1,17 @@
+{"at": "2026-05-31T09:52:02Z", "event": "connect", "meeting_id": "6", "ws_url": "ws://localhost:42301/ws"}
+{"at": "2026-05-31T09:52:02Z", "event": "message", "meeting_id": "6", "message": {"meetings": [{"native_id": "31975786009289", "platform": "teams"}], "type": "subscribed"}, "text_segments": 0, "type": "subscribed"}
+{"at": "2026-05-31T09:52:05Z", "event": "message", "meeting_id": "6", "message": {"meeting": {"id": 6, "native_id": "31975786009289", "platform": "teams"}, "payload": {"status": "failed"}, "ts": "2026-05-31T09:52:05.272561", "type": "meeting.status", "user_id": 2}, "text_segments": 0, "type": "meeting.status"}
+{"at": "2026-05-31T09:52:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:53:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:53:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:54:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:54:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:55:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:55:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:56:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:56:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:57:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:57:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:58:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:58:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-31T09:59:02Z", "event": "wait", "seconds": 30}

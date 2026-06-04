@@ -1,0 +1,572 @@
+[
+  {
+    "nst": 0.25,
+    "vft": 0.4,
+    "cd": 0,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.4,
+    "cd": 1000,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.4,
+    "cd": 4000,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.45,
+    "cd": 0,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.45,
+    "cd": 1000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.45,
+    "cd": 4000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.55,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.55,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.55,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.65,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.65,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.25,
+    "vft": 0.65,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.4,
+    "cd": 0,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.4,
+    "cd": 1000,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.4,
+    "cd": 4000,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.45,
+    "cd": 0,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.45,
+    "cd": 1000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.45,
+    "cd": 4000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.55,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.55,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.55,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.65,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.65,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.3,
+    "vft": 0.65,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.4,
+    "cd": 0,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.4,
+    "cd": 1000,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.4,
+    "cd": 4000,
+    "n_clusters": 5,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.45,
+    "cd": 0,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.45,
+    "cd": 1000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.45,
+    "cd": 4000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.55,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.55,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.55,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.65,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.65,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.35,
+    "vft": 0.65,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.45,
+    "cd": 0,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.45,
+    "cd": 1000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.45,
+    "cd": 4000,
+    "n_clusters": 4,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.1667,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.55,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.55,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.55,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.65,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.65,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.4,
+    "vft": 0.65,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.45,
+    "vft": 0.55,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.45,
+    "vft": 0.55,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.45,
+    "vft": 0.55,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.45,
+    "vft": 0.65,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.45,
+    "vft": 0.65,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.45,
+    "vft": 0.65,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.5,
+    "vft": 0.55,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.5,
+    "vft": 0.55,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.5,
+    "vft": 0.55,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.5,
+    "vft": 0.65,
+    "cd": 0,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.5,
+    "vft": 0.65,
+    "cd": 1000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  },
+  {
+    "nst": 0.5,
+    "vft": 0.65,
+    "cd": 4000,
+    "n_clusters": 2,
+    "frame_acc": 0.244,
+    "brecall": 0.0909,
+    "bprec": 0.3333,
+    "btime": 100.0
+  }
+]

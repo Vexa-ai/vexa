@@ -1,0 +1,81 @@
+<!doctype html><meta charset=utf-8>
+<title>Vexa Teams — main vs design-in-consideration</title>
+<style>
+ body{font:14px/1.5 system-ui;margin:0;background:#0f172a;color:#e2e8f0}
+ header{padding:12px 18px;border-bottom:1px solid #334155;background:#1e293b}
+ h1{font-size:16px;margin:0 0 4px} .sub{color:#94a3b8;font-size:12px}
+ .grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
+ .col h2{font-size:14px;text-align:center;margin:10px 0 0;font-family:system-ui}
+ .col.cur h2{color:#34d399} .col.new h2{color:#60a5fa}
+ .mermaid{background:#fff;margin:10px;border-radius:8px;padding:10px}
+ .notes{max-width:1150px;margin:8px auto 40px;color:#cbd5e1;padding:0 18px}
+ .notes table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
+ .notes td,.notes th{border:1px solid #334155;padding:6px 10px;text-align:left;vertical-align:top}
+ .notes th{background:#1e293b}
+ code{background:#1e293b;padding:1px 5px;border-radius:4px;color:#fbbf24}
+</style>
+<header>
+ <h1>Vexa MS Teams — <b style="color:#34d399">MAIN (caption-driven)</b> vs <b style="color:#60a5fa">DESIGN IN CONSIDERATION (segmentation-cut + turn-gate)</b></h1>
+ <div class=sub>same capture (top) and same frozen ③ ASR (bottom) — the diarization middle is what differs</div>
+</header>
+<div class=grid>
+ <div class="col cur">
+  <h2>MAIN — Teams captions do the diarization</h2>
+  <pre class="mermaid">
+flowchart TD
+  A["__vexaTeamsAudioData(captionName, frame)"] --> SID["speakerId = 'teams-' + captionName"]
+  CAP["Teams live-caption DOM<br/>(Teams' own ASR diarizes)"] --> SID
+  CAP --> CHG{"caption speaker changed?"}
+  CHG -- "yes" --> FL["flushSpeaker(previous)<br/>= the switch signal"]
+  CHG -- "no" --> K["keep filling buffer"]
+  SID --> FEED["speakerManager.feedAudio(speakerId, frame)<br/>NO VAD · NO model · caption-gated"]
+  FEED --> Z["③ per-speaker ASR (Whisper · publish)"]
+  FL --> Z
+  classDef cap fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef froz fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-dasharray:5 4;
+  class SID,CAP,CHG,FL,FEED cap; class Z froz;
+  </pre>
+  <div style="text-align:center;color:#94a3b8;font-size:12px">who + when = <b style="color:#34d399">Teams captions</b>. No model. Fails if captions off/laggy/unsupported.</div>
+ </div>
+ <div class="col new">
+  <h2>DESIGN IN CONSIDERATION — segmentation owns the buffer; diarization only names</h2>
+  <pre class="mermaid">
+flowchart TD
+  A2["__vexaTeamsAudioData frame"] --> SEG["① SEGMENTATION model (pyannote)<br/>— OWNS buffer switching · ~350–500ms react"]
+  SEG --> EV{"speaker-change EVENT?<br/>(controlled by segmentation, NOT voiceprint)"}
+  EV -- "no" --> CUR["append frame to CURRENT ephemeral buffer"]
+  EV -- "yes" --> SWB["flush current buffer →<br/>open NEW ephemeral buffer<br/>(+ ~500ms trailing hold so next speaker<br/>can't bleed into previous tail)"]
+  SWB --> CUR
+  CUR --> DIA["② DIARIZE the buffer (embed the turn)<br/>→ assign speaker NAME dynamically<br/>once centroid STABILIZES (hold til then;<br/>backstops: 2.5s timeout / turn-end)"]
+  DIA --> Z2["③ SpeakerStreamManager = EPHEMERAL BUFFER mgr<br/>buffer → Whisper → publish (FROZEN)<br/>+ prompt = rolling MEETING buffer"]
+  classDef ok fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+  classDef soft fill:#e0e7ff,stroke:#4f46e5,color:#312e81;
+  classDef froz fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-dasharray:5 4;
+  class SEG,EV,SWB ok; class DIA soft; class Z2 froz;
+  </pre>
+  <div style="text-align:center;color:#94a3b8;font-size:12px">when = <b style="color:#2563eb">segmentation event</b> (owns buffering) · who = <b style="color:#60a5fa">diarize-on-buffer</b> (name only). Buffers ephemeral.</div>
+ </div>
+</div>
+<div class=notes>
+ <h3 style="color:#f1f5f9">Main vs the design in consideration</h3>
+ <table>
+  <tr><th></th><th style="color:#34d399">MAIN (captions)</th><th style="color:#60a5fa">DESIGN IN CONSIDERATION</th></tr>
+  <tr><td><b>Who owns buffering</b></td><td>caption speaker change → flush</td><td><b>the segmentation model</b> — its speaker-change event opens a new ephemeral buffer (NOT voiceprint)</td></tr>
+  <tr><td><b>Buffer lifecycle</b></td><td>per-speaker, maintained</td><td><b>ephemeral, per turn</b> — created on segmentation event, named, flushed, discarded</td></tr>
+  <tr><td><b>Who is speaking (name)</b></td><td>Teams caption name</td><td><b>assigned dynamically</b> by diarizing the buffer (our wespeaker), once stable</td></tr>
+  <tr><td><b>Switch placement</b></td><td>caption timing</td><td><b>pyannote</b> ~0.16s placement, ~350–500ms to react</td></tr>
+  <tr><td><b>Dependency</b></td><td>Teams live captions ON + correct + language-supported</td><td>none external — self-contained</td></tr>
+  <tr><td><b>Naming timing</b></td><td>instant (caption)</td><td><b>held</b> until centroid stabilizes; nothing emitted before a confident name</td></tr>
+  <tr><td><b>Tail contamination</b></td><td>n/a (caption-gated)</td><td>prevented by <b>~500ms trailing hold</b> + retroactive cut at true boundary ts</td></tr>
+  <tr><td><b>Wrong label effect</b></td><td>caption is usually right</td><td><b>cosmetic</b> — clean turn, wrong name; never cross-speaker audio</td></tr>
+  <tr><td><b>Whisper prompt</b></td><td>per-speaker last text</td><td><b>rolling MEETING buffer</b> (all speakers) — coherent across turns</td></tr>
+  <tr><td><b>Stage ③ (ASR)</b></td><td>unchanged</td><td><b>FROZEN, untouched</b> — fed (name, audio)</td></tr>
+  <tr><td><b>Cost</b></td><td>~free</td><td>pyannote ~RTF 0.3–0.5 (CPU, sliding 10s @250ms) + wespeaker per turn</td></tr>
+  <tr><td><b>Remaining risk</b></td><td>captions unavailable / mis-attributed</td><td>a <b>missed segmentation switch</b> = two voices in one turn buffer</td></tr>
+ </table>
+ <p>Top (<code>__vexaTeamsAudioData</code> capture) and bottom (<code>③ SpeakerStreamManager → Whisper → publish</code>) are identical in both. Main outsources who+when to Teams captions; the design in consideration produces who+when itself — segmentation owns the cut, diarization-on-turn owns the name (held until stable, trailing-held so the next speaker can't bleed into the previous tail), then feeds the frozen ③.</p>
+</div>
+<script type="module">
+ import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+ mermaid.initialize({ startOnLoad:true, theme:"default", flowchart:{ useMaxWidth:true } });
+</script>

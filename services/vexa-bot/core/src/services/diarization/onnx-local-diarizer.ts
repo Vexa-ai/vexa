@@ -157,6 +157,11 @@ export interface CommitEvent {
    *  outgoing and incoming speaker buffers so neither turn has a gap at
    *  the moment they talked over each other. */
   isOverlap: boolean;
+  /** pack-msteams-diarization-cutover (#394): the wespeaker embedding of
+   *  this committed segment (overlap-masked, unit-norm). Exposed so the
+   *  TurnGate can accumulate full-turn centroids and gate speaker naming
+   *  on stabilization — independent of the diarizer's own clustering. */
+  emb: number[];
 }
 
 const SAMPLE_RATE = 16_000;
@@ -168,26 +173,28 @@ export class OnnxLocalDiarizer implements Diarizer {
   private processor: Processor;
   private clustering: OnlineSpeakerClustering;
 
-  private readonly minUtteranceSamples: number;
+  private minUtteranceSamples: number;
   private readonly minSeedUtteranceSamples: number;
-  private readonly maxUtteranceSamples: number;
+  private maxUtteranceSamples: number;
   private readonly speechRms: number;
   private readonly silenceRms: number;
   private readonly minSilenceSamples: number;
   private readonly changePointCheckIntervalSamples: number;
   private readonly changePointHeadTailSamples: number;
-  private readonly changePointDistThreshold: number;
+  private changePointDistThreshold: number;
   private readonly peekIntervalSamples: number;
   private readonly peekWindowSamples: number;
-  private readonly peekConfidenceThreshold: number;
+  private peekConfidenceThreshold: number;
   private samplesAtLastPeek = 0;
-  private readonly newClusterCooldownMs: number;
+  private newClusterCooldownMs: number;
   /** Pyannote segmenter — when set, drives mid-utterance splits. */
   private pyannoteSegmenter: PyannoteSegmenter | null = null;
   /** Boundary events queued by the pyannote segmenter's async callback,
    *  consumed during process() to decide whether to split the current
    *  in-progress utterance. */
   private pendingPyannoteBoundaries: BoundaryEvent[] = [];
+  /** RnD only (DIAR_DUMP_BOUNDARIES): every raw pyannote boundary event. */
+  allBoundaries: BoundaryEvent[] = [];
   /** Wall-clock-style timestamp of the last new-cluster allocation, in the
    *  same timebase as utteranceStartTs. Initialized to -Infinity so the
    *  first allocation isn't blocked. */
@@ -349,7 +356,16 @@ export class OnnxLocalDiarizer implements Diarizer {
       console.log(`[onnx-diarizer] loading pyannote/segmentation-3.0 for boundary detection...`);
       inst.pyannoteSegmenter = await PyannoteSegmenter.create({
         inferIntervalMs: cfg.pyannoteInferIntervalMs ?? 500,
-        onBoundary: (ev) => inst.pendingPyannoteBoundaries.push(ev),
+        onBoundary: (ev) => {
+          inst.pendingPyannoteBoundaries.push(ev);
+          // pack-msteams-diarization-cutover (#394) RnD: when
+          // DIAR_DUMP_BOUNDARIES is set, retain every raw pyannote boundary
+          // event (not just the ones that split an utterance) so the offline
+          // switch-detection scorer can measure pyannote's frame-level
+          // speaker-change signal directly, independent of wespeaker
+          // clustering. No-op in production.
+          if (process.env.DIAR_DUMP_BOUNDARIES) inst.allBoundaries.push(ev);
+        },
       });
       console.log(`[onnx-diarizer] pyannote ready — segmentation driven by per-frame logits`);
     }
@@ -917,6 +933,7 @@ export class OnnxLocalDiarizer implements Diarizer {
         dbSize: this.clustering.size(),
         seedAllowed: canSeedNew,
         isOverlap,
+        emb: Array.from(emb),
       });
       // Push into bounded commit history for post-hoc refinement.
       this.commitHistory.push({

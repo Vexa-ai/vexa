@@ -1,0 +1,335 @@
+{
+  "wav": "/data/dgclip.wav",
+  "durationS": 300,
+  "nSwitches": 40,
+  "segments": [
+    {
+      "idx": 0,
+      "start": 0,
+      "end": 1.31,
+      "durS": 1.31,
+      "startedByStrongSwitch": false,
+      "text": "down a dream fellowship, I understand."
+    },
+    {
+      "idx": 1,
+      "start": 1.31,
+      "end": 12.72,
+      "durS": 11.42,
+      "startedByStrongSwitch": false,
+      "text": "Yeah, it's targeted at a different demographic. It's called ourdad.org, runningdownadream.org. There's a website we can give a link to. We're going to do $5,000 grant."
+    },
+    {
+      "idx": 2,
+      "start": 12.72,
+      "end": 14.06,
+      "durS": 1.34,
+      "startedByStrongSwitch": true,
+      "text": "to people."
+    },
+    {
+      "idx": 3,
+      "start": 14.06,
+      "end": 14.83,
+      "durS": 0.77,
+      "startedByStrongSwitch": true,
+      "text": "who want to"
+    },
+    {
+      "idx": 4,
+      "start": 14.83,
+      "end": 19.65,
+      "durS": 4.81,
+      "startedByStrongSwitch": true,
+      "text": "chase their dreams but need some help and so there is an application process like"
+    },
+    {
+      "idx": 5,
+      "start": 19.65,
+      "end": 27.48,
+      "durS": 7.83,
+      "startedByStrongSwitch": false,
+      "text": "Teal Fellows and other programs, and we've been out talking to those people. But we're actually live. We went live last week."
+    },
+    {
+      "idx": 6,
+      "start": 27.48,
+      "end": 34.27,
+      "durS": 6.79,
+      "startedByStrongSwitch": true,
+      "text": "for the application. So if you know people who have read the book and are inspired and need some help, have them apply."
+    },
+    {
+      "idx": 7,
+      "start": 34.27,
+      "end": 37.6,
+      "durS": 3.33,
+      "startedByStrongSwitch": true,
+      "text": "Yeah. All right, folks. Good for you, BG."
+    },
+    {
+      "idx": 8,
+      "start": 37.6,
+      "end": 43.47,
+      "durS": 5.87,
+      "startedByStrongSwitch": true,
+      "text": "I did a TED Talk, which will come out soon. That's related to the book."
+    },
+    {
+      "idx": 9,
+      "start": 43.47,
+      "end": 59.67,
+      "durS": 16.2,
+      "startedByStrongSwitch": false,
+      "text": "Um, I, uh, there's a professor in Miami that's built a course around the book, which I'm excited about. And he's, he's doing it in a kind of an open source way so that other people can borrow that as well. And so if there's anyone out there, I'd love to help them do that."
+    },
+    {
+      "idx": 10,
+      "start": 59.67,
+      "end": 63.54,
+      "durS": 3.87,
+      "startedByStrongSwitch": true,
+      "text": "What's your take on all of this doomerism? Like if you're a young person."
+    },
+    {
+      "idx": 11,
+      "start": 63.54,
+      "end": 67.11,
+      "durS": 3.57,
+      "startedByStrongSwitch": false,
+      "text": "and you're in college or you're in high school. Is this..."
+    },
+    {
+      "idx": 12,
+      "start": 67.11,
+      "end": 71.12,
+      "durS": 4.01,
+      "startedByStrongSwitch": false,
+      "text": "Is this much ado about nothing? Or how do you run down a dream in the face of something?"
+    },
+    {
+      "idx": 13,
+      "start": 71.12,
+      "end": 85.22,
+      "durS": 14.1,
+      "startedByStrongSwitch": true,
+      "text": "like. Yeah, well, I you know, I started the book before this happened and I've been asked the question a lot and it came up in the TED talk. I fear that a lot of people are in jobs. They actually don't care about that much."
+    },
+    {
+      "idx": 14,
+      "start": 85.22,
+      "end": 93.66,
+      "durS": 8.44,
+      "startedByStrongSwitch": true,
+      "text": "and there's a Gallup poll that backs this up. They came up with that word quiet quitters. They're like 59% of the people they surveyed."
+    },
+    {
+      "idx": 15,
+      "start": 93.66,
+      "end": 108.27,
+      "durS": 14.61,
+      "startedByStrongSwitch": false,
+      "text": "are kind of ambivalent about their job. And when you're ambivalient about your job, you're not high agency. And so you don't lean in. You know, if you look at how Jason talks about how they implemented AI and all of his different..."
+    },
+    {
+      "idx": 16,
+      "start": 108.27,
+      "end": 110.53,
+      "durS": 2.26,
+      "startedByStrongSwitch": false,
+      "text": "working groups. You hear"
+    },
+    {
+      "idx": 17,
+      "start": 110.53,
+      "end": 123.58,
+      "durS": 13.05,
+      "startedByStrongSwitch": true,
+      "text": "that enthusiasm and that high agency, and then you want to go try these things. And I think the best way to protect yourself from AI is to be the most AI-enabled version of yourself you can be."
+    },
+    {
+      "idx": 18,
+      "start": 123.58,
+      "end": 133.1,
+      "durS": 9.52,
+      "startedByStrongSwitch": false,
+      "text": "But if you're ambivalent about your job, you're probably not doing that. And you could be a sitting duck. So I think it's the mindset that's the problem."
+    },
+    {
+      "idx": 19,
+      "start": 133.1,
+      "end": 158.55,
+      "durS": 25.45,
+      "startedByStrongSwitch": true,
+      "text": "an associate and training program for my firm because we want to help people get into venture capital. And we gave them a choice of assignments. One of them was to write coverage of one of our portfolio companies that's breaking out, MicroOne is the name of it, and just give us like, hey, here's a competitive landscape, basically write a deal memo on coverage of that company. And then we gave him another option to vibe code a very specific project I've wanted to have for our venture firm for a long time."
+    },
+    {
+      "idx": 20,
+      "start": 158.55,
+      "end": 168.43,
+      "durS": 9.88,
+      "startedByStrongSwitch": false,
+      "text": "you know, on competitive intelligence. And I would say, I think like maybe 80% of the students applying and we had four or 500 people apply for six positions."
+    },
+    {
+      "idx": 21,
+      "start": 168.43,
+      "end": 171.35,
+      "durS": 2.92,
+      "startedByStrongSwitch": false,
+      "text": "80% of them did the vibe coding."
+    },
+    {
+      "idx": 22,
+      "start": 171.35,
+      "end": 185.55,
+      "durS": 14.2,
+      "startedByStrongSwitch": false,
+      "text": "And I was shocked. I thought it would be the exact opposite. Anybody can write, anybody can throw shit in chat, shape ET and get some output, but they actually built software. And that's the scary thing. The students who graduated, at least this is my perception."
+    },
+    {
+      "idx": 23,
+      "start": 185.55,
+      "end": 190.11,
+      "durS": 4.56,
+      "startedByStrongSwitch": false,
+      "text": "Chamath, the students who graduated like five, 10 years ago before AI."
+    },
+    {
+      "idx": 24,
+      "start": 190.11,
+      "end": 205.09,
+      "durS": 14.99,
+      "startedByStrongSwitch": false,
+      "text": "They're not AI first. They feel lost in adrift. They don't have agency. But the group coming out of college right now that cheated their way through school using ChatGPT, doing their assignments, like using those tools. I'm joking, cheating, but I mean hacking. I agree with that."
+    },
+    {
+      "idx": 25,
+      "start": 205.09,
+      "end": 207.76,
+      "durS": 2.67,
+      "startedByStrongSwitch": true,
+      "text": "So they were hacking. Yeah, and they're just-"
+    },
+    {
+      "idx": 26,
+      "start": 207.76,
+      "end": 208.62,
+      "durS": 0.87,
+      "startedByStrongSwitch": true,
+      "text": "Just like, I know how to use it."
+    },
+    {
+      "idx": 27,
+      "start": 208.62,
+      "end": 213.08,
+      "durS": 4.46,
+      "startedByStrongSwitch": true,
+      "text": "use these tools to get through my finals. Yeah, Gurley, I think you're seeing something super important."
+    },
+    {
+      "idx": 28,
+      "start": 213.08,
+      "end": 215.04,
+      "durS": 1.96,
+      "startedByStrongSwitch": true,
+      "text": "I said this last week, which is"
+    },
+    {
+      "idx": 29,
+      "start": 215.04,
+      "end": 219.64,
+      "durS": 4.6,
+      "startedByStrongSwitch": false,
+      "text": "Nobody asks the warehouse worker at Amazon whether they actually want that job."
+    },
+    {
+      "idx": 30,
+      "start": 219.64,
+      "end": 222.82,
+      "durS": 3.19,
+      "startedByStrongSwitch": false,
+      "text": "And so to your point, job satisfaction isn't..."
+    },
+    {
+      "idx": 31,
+      "start": 222.82,
+      "end": 228.9,
+      "durS": 6.08,
+      "startedByStrongSwitch": false,
+      "text": "some external person judging your job to be valid and saying you must be able to have it. I think it should be..."
+    },
+    {
+      "idx": 32,
+      "start": 228.9,
+      "end": 239.38,
+      "durS": 10.48,
+      "startedByStrongSwitch": false,
+      "text": "asking the person that does the job, do you like it and do you want to keep it? Those are two very different questions. And I think that all of this AI doom and gloom was a lot..."
+    },
+    {
+      "idx": 33,
+      "start": 239.38,
+      "end": 243.19,
+      "durS": 3.81,
+      "startedByStrongSwitch": false,
+      "text": "and too much, frankly, of the former and not enough of the latter."
+    },
+    {
+      "idx": 34,
+      "start": 243.19,
+      "end": 258.8,
+      "durS": 15.61,
+      "startedByStrongSwitch": false,
+      "text": "Now, this whole lie is kind of getting undone. I think Sachs posted about it this week as well. The Goldman Sachs CEO said it. And now in this crazy twist of fate, now that we need to have trillion dollar IPOs, the entire Frontier Labs are all like, wow, it's going to be a bonanza of jobs."
+    },
+    {
+      "idx": 35,
+      "start": 258.8,
+      "end": 274.31,
+      "durS": 15.51,
+      "startedByStrongSwitch": false,
+      "text": "Mark Cuban had a great quote. He said, there are two types of people in the world, those that use AI to learn faster than they ever could before and those that used AI to avoid learning altogether. And I think it's this notion of high agency or not."
+    },
+    {
+      "idx": 36,
+      "start": 274.31,
+      "end": 287.03,
+      "durS": 12.72,
+      "startedByStrongSwitch": true,
+      "text": "Are you leaning in and using this stuff to be ever more powerful in what you try and accomplish? Or are you using it as a cheat code? And if you're in the latter, yeah, you're probably at risk."
+    },
+    {
+      "idx": 37,
+      "start": 287.03,
+      "end": 292.52,
+      "durS": 5.49,
+      "startedByStrongSwitch": true,
+      "text": "You get asked a lot about how to educate yourself if you're a parent of kids."
+    },
+    {
+      "idx": 38,
+      "start": 292.52,
+      "end": 296.71,
+      "durS": 4.18,
+      "startedByStrongSwitch": false,
+      "text": "So that you can put them on a path to launch and do well and chase their dreams."
+    },
+    {
+      "idx": 39,
+      "start": 296.71,
+      "end": 298.96,
+      "durS": 2.25,
+      "startedByStrongSwitch": false,
+      "text": "Do you have a good answer for that question? I mean—"
+    },
+    {
+      "idx": 40,
+      "start": 298.96,
+      "end": 300,
+      "durS": 1.04,
+      "startedByStrongSwitch": true,
+      "text": "The second challenge..."
+    }
+  ]
+}

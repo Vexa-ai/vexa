@@ -1,0 +1,387 @@
+[
+  {
+    "start": 2.41,
+    "end": 7.6,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 8.71,
+    "end": 9.25,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 9.19,
+    "end": 19.09,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 9.77,
+    "end": 9.99,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 12.99,
+    "end": 13.43,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 13.14,
+    "end": 13.87,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 14.47,
+    "end": 15.09,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 18.31,
+    "end": 19.91,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 19.08,
+    "end": 21.98,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 22.14,
+    "end": 25.01,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 25.37,
+    "end": 26.51,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 27.56,
+    "end": 28.14,
+    "speaker": "MTD0010ID"
+  },
+  {
+    "start": 28.45,
+    "end": 28.58,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 29.28,
+    "end": 30.36,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 29.52,
+    "end": 31.6,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 30.27,
+    "end": 30.64,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 36.05,
+    "end": 38.92,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 39.37,
+    "end": 52.63,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 39.43,
+    "end": 41.1,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 40.1,
+    "end": 44.29,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 44.82,
+    "end": 45.12,
+    "speaker": "MTD0010ID"
+  },
+  {
+    "start": 46.02,
+    "end": 46.41,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 46.66,
+    "end": 46.87,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 53.71,
+    "end": 56.81,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 54.5,
+    "end": 55.54,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 57.42,
+    "end": 58.54,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 58.08,
+    "end": 60.77,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 60.62,
+    "end": 61.17,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 62.8,
+    "end": 64.02,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 64.71,
+    "end": 65.97,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 65.37,
+    "end": 70.28,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 67.11,
+    "end": 68.19,
+    "speaker": "MTD0010ID"
+  },
+  {
+    "start": 67.14,
+    "end": 69.4,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 70.79,
+    "end": 71.66,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 71.65,
+    "end": 71.85,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 71.91,
+    "end": 72.13,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 76.39,
+    "end": 77.36,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 77.71,
+    "end": 82.14,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 82.81,
+    "end": 83.47,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 83.13,
+    "end": 83.66,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 83.49,
+    "end": 88.2,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 85.88,
+    "end": 86.31,
+    "speaker": "MTD0010ID"
+  },
+  {
+    "start": 86.27,
+    "end": 86.75,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 86.36,
+    "end": 86.58,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 87.87,
+    "end": 89.1,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 90.64,
+    "end": 91.0,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 93.44,
+    "end": 94.9,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 97.01,
+    "end": 103.3,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 104.28,
+    "end": 105.45,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 104.83,
+    "end": 108.51,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 104.88,
+    "end": 106.47,
+    "speaker": "MTD0010ID"
+  },
+  {
+    "start": 107.35,
+    "end": 110.14,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 112.76,
+    "end": 117.76,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 120.13,
+    "end": 123.49,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 120.3,
+    "end": 120.66,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 124.64,
+    "end": 124.85,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 129.99,
+    "end": 131.98,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 133.51,
+    "end": 135.14,
+    "speaker": "MTD0010ID"
+  },
+  {
+    "start": 133.81,
+    "end": 135.54,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 135.33,
+    "end": 137.3,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 135.97,
+    "end": 139.96,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 137.71,
+    "end": 138.05,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 140.61,
+    "end": 141.0,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 141.01,
+    "end": 141.79,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 142.49,
+    "end": 144.55,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 143.15,
+    "end": 143.79,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 144.72,
+    "end": 150.85,
+    "speaker": "MTD0010ID"
+  },
+  {
+    "start": 145.91,
+    "end": 146.26,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 146.67,
+    "end": 147.02,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 150.18,
+    "end": 155.34,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 155.37,
+    "end": 156.51,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 156.73,
+    "end": 157.03,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 158.91,
+    "end": 159.95,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 164.89,
+    "end": 166.72,
+    "speaker": "MTD012ME"
+  },
+  {
+    "start": 167.16,
+    "end": 168.8,
+    "speaker": "MTD011UID"
+  },
+  {
+    "start": 168.65,
+    "end": 171.39,
+    "speaker": "MTD009PM"
+  },
+  {
+    "start": 170.63,
+    "end": 170.97,
+    "speaker": "MTD012ME"
+  }
+]

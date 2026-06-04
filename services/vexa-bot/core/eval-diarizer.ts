@@ -175,6 +175,12 @@ async function main() {
     fs.writeFileSync(embOut, JSON.stringify({ durationS: durS, config, records: embRecs }));
     console.log(`[eval] wrote ${embOut} (${embRecs.length} utterance embeddings for clustering replay)`);
   }
+  if (process.env.DIAR_DUMP_BOUNDARIES) {
+    const bnds = (diarizer as any).allBoundaries ?? [];
+    const bOut = outPath.replace(/\.json$/, '') + '.boundaries.json';
+    fs.writeFileSync(bOut, JSON.stringify({ durationS: durS, config, boundaries: bnds }));
+    console.log(`[eval] wrote ${bOut} (${bnds.length} raw pyannote boundary events)`);
+  }
   process.exit(0);
 }
 

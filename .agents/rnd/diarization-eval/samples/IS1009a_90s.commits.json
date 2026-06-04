@@ -1,0 +1,294 @@
+{
+  "wav": "/data/IS1009a_90s.wav",
+  "config": {
+    "maxUtteranceMs": 3000,
+    "newSpeakerThreshold": 0.3,
+    "veryFarThreshold": 0.45,
+    "newClusterCooldownMs": 1000,
+    "pyannoteInferIntervalMs": 250
+  },
+  "durationS": 90,
+  "wallS": 46.555,
+  "nCommits": 29,
+  "nClusters": 15,
+  "clusters": [
+    "speaker_0",
+    "speaker_1",
+    "speaker_2",
+    "speaker_3",
+    "speaker_4",
+    "speaker_5",
+    "speaker_6",
+    "speaker_7",
+    "speaker_8",
+    "speaker_9",
+    "speaker_10",
+    "speaker_11",
+    "speaker_12",
+    "speaker_13",
+    "speaker_14"
+  ],
+  "commits": [
+    {
+      "speakerId": "speaker_0",
+      "startS": 0.256,
+      "endS": 3.328,
+      "isNew": true,
+      "centroidDist": 0,
+      "turnDist": null,
+      "dbSize": 1
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.219,
+      "turnDist": 0.219,
+      "dbSize": 1
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.175,
+      "turnDist": 0.283,
+      "dbSize": 1
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.189,
+      "turnDist": 0.264,
+      "dbSize": 1
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.185,
+      "turnDist": 0.228,
+      "dbSize": 1
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.369,
+      "turnDist": 0.431,
+      "dbSize": 1
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.441,
+      "turnDist": 0.61,
+      "dbSize": 1
+    },
+    {
+      "speakerId": "speaker_1",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": true,
+      "centroidDist": 0.753,
+      "turnDist": 0.835,
+      "dbSize": 2
+    },
+    {
+      "speakerId": "speaker_2",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": true,
+      "centroidDist": 0.629,
+      "turnDist": 0.629,
+      "dbSize": 3
+    },
+    {
+      "speakerId": "speaker_3",
+      "startS": 0,
+      "endS": 2.048,
+      "isNew": true,
+      "centroidDist": 0.655,
+      "turnDist": 0.655,
+      "dbSize": 4
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 38.656,
+      "endS": 41.728,
+      "isNew": false,
+      "centroidDist": 0.125,
+      "turnDist": 1.006,
+      "dbSize": 4
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 0,
+      "endS": 1.024,
+      "isNew": false,
+      "centroidDist": 0.095,
+      "turnDist": 0.19,
+      "dbSize": 4
+    },
+    {
+      "speakerId": "speaker_4",
+      "startS": 55.384,
+      "endS": 56.364,
+      "isNew": true,
+      "centroidDist": 0.726,
+      "turnDist": 0.947,
+      "dbSize": 5
+    },
+    {
+      "speakerId": "speaker_5",
+      "startS": 56.364,
+      "endS": 57.021,
+      "isNew": true,
+      "centroidDist": 0.701,
+      "turnDist": 0.994,
+      "dbSize": 6
+    },
+    {
+      "speakerId": "speaker_6",
+      "startS": 57.021,
+      "endS": 57.388,
+      "isNew": true,
+      "centroidDist": 0.565,
+      "turnDist": 0.832,
+      "dbSize": 7
+    },
+    {
+      "speakerId": "speaker_7",
+      "startS": 57.388,
+      "endS": 60.504,
+      "isNew": true,
+      "centroidDist": 0.415,
+      "turnDist": 1.032,
+      "dbSize": 8
+    },
+    {
+      "speakerId": "speaker_8",
+      "startS": 0,
+      "endS": 0.512,
+      "isNew": true,
+      "centroidDist": 0.642,
+      "turnDist": 0.642,
+      "dbSize": 9
+    },
+    {
+      "speakerId": "speaker_9",
+      "startS": 61.44,
+      "endS": 61.74,
+      "isNew": true,
+      "centroidDist": 0.709,
+      "turnDist": 0.709,
+      "dbSize": 10
+    },
+    {
+      "speakerId": "speaker_10",
+      "startS": 61.74,
+      "endS": 62.164,
+      "isNew": true,
+      "centroidDist": 0.689,
+      "turnDist": 1.025,
+      "dbSize": 11
+    },
+    {
+      "speakerId": "speaker_7",
+      "startS": 62.164,
+      "endS": 65.28,
+      "isNew": false,
+      "centroidDist": 0.297,
+      "turnDist": 0.769,
+      "dbSize": 11
+    },
+    {
+      "speakerId": "speaker_11",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": true,
+      "centroidDist": 0.579,
+      "turnDist": 0.554,
+      "dbSize": 12
+    },
+    {
+      "speakerId": "speaker_11",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.332,
+      "turnDist": 0.332,
+      "dbSize": 12
+    },
+    {
+      "speakerId": "speaker_11",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.305,
+      "turnDist": 0.295,
+      "dbSize": 12
+    },
+    {
+      "speakerId": "speaker_11",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.217,
+      "turnDist": 0.218,
+      "dbSize": 12
+    },
+    {
+      "speakerId": "speaker_11",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": false,
+      "centroidDist": 0.19,
+      "turnDist": 0.194,
+      "dbSize": 12
+    },
+    {
+      "speakerId": "speaker_12",
+      "startS": 0,
+      "endS": 1.536,
+      "isNew": true,
+      "centroidDist": 0.643,
+      "turnDist": 0.787,
+      "dbSize": 13
+    },
+    {
+      "speakerId": "speaker_0",
+      "startS": 82.944,
+      "endS": 83.244,
+      "isNew": false,
+      "centroidDist": 0.397,
+      "turnDist": 0.996,
+      "dbSize": 13
+    },
+    {
+      "speakerId": "speaker_13",
+      "startS": 83.244,
+      "endS": 86.272,
+      "isNew": true,
+      "centroidDist": 0.356,
+      "turnDist": 0.813,
+      "dbSize": 14
+    },
+    {
+      "speakerId": "speaker_14",
+      "startS": 0,
+      "endS": 3.072,
+      "isNew": true,
+      "centroidDist": 0.51,
+      "turnDist": 0.51,
+      "dbSize": 15
+    }
+  ]
+}

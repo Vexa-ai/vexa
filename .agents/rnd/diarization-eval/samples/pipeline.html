@@ -1,0 +1,75 @@
+<!doctype html><meta charset=utf-8>
+<title>Vexa bot — diarization + transcription pipeline (as implemented)</title>
+<style>
+ body{font:14px/1.5 system-ui;margin:0;background:#0f172a;color:#e2e8f0}
+ header{padding:12px 18px;border-bottom:1px solid #334155;background:#1e293b}
+ h1{font-size:16px;margin:0 0 4px} .sub{color:#94a3b8;font-size:12px}
+ .legend{margin:10px 18px;font-size:12px;color:#cbd5e1}
+ .legend b{padding:2px 8px;border-radius:5px;margin-right:8px}
+ .mermaid{background:#fff;margin:12px;border-radius:8px;padding:12px}
+ .notes{max-width:980px;margin:8px 18px 40px;color:#cbd5e1}
+ .notes h3{color:#f1f5f9;font-size:13px;margin:14px 0 4px}
+ .notes code{background:#1e293b;padding:1px 5px;border-radius:4px;color:#fbbf24}
+ .g{color:#22c55e} .r{color:#f87171} .y{color:#fbbf24}
+</style>
+<header>
+ <h1>Vexa bot — diarization + transcription pipeline <span class=sub>(MS Teams pack #394, as implemented today)</span></h1>
+ <div class=sub>single mixed 16&nbsp;kHz mono stream &nbsp;→&nbsp; cut into per-speaker buffers &nbsp;→&nbsp; Whisper per buffer</div>
+</header>
+<div class=legend>
+ <b style="background:#dcfce7;color:#166534">green = works well</b>
+ <b style="background:#fee2e2;color:#991b1b">red = the weak link</b>
+ <b style="background:#fef9c3;color:#854d0e">yellow = scaffolding (compensating)</b>
+</div>
+<pre class="mermaid">
+flowchart TD
+  A["🎙️ Teams meeting audio (mixed, mono)"] --> B["browser ScriptProcessor<br/>4096-sample frames @ 16 kHz"]
+  B --> V{"VAD — RMS gate<br/>speech vs silence"}
+  V -- silence --> IDLE["idle (diarizer rests)"]
+  V -- speech --> ACC["accumulate frames into<br/>ONE in-progress utterance buffer"]
+
+  B --> P
+  subgraph SEG["① SEGMENTATION — pyannote/segmentation-3.0 (≈6M params)"]
+    P["sliding 10s window,<br/>re-run every 250ms (~40× overlap)"] --> PB["per-frame speaker-activity<br/>→ boundary events:<br/>silence→spk · spk→spk · spk→silence · overlap"]
+  end
+
+  PB --> CUT
+  ACC --> CUT{"② CUT TRIGGERS<br/>(first time audio is separated)"}
+  CUT -- "pyannote boundary inside utterance" --> COMMIT["commitUtterance()"]
+  CUT -- "change-point: embedding distance jump" --> COMMIT
+  CUT -- "maxUtterance 3s backstop (timeout)" --> COMMIT
+  CUT -- "VAD silence (speech ended)" --> COMMIT
+
+  COMMIT --> EMB["③ wespeaker-resnet34 (VoxCeleb)<br/>embed utterance · overlap frames masked"]
+  EMB --> CLU["④ ONLINE CLUSTERING<br/>cosine dist + EMA centroids<br/>+ very-far + gap-margin + sticky-hint<br/>→ speakerId"]
+  CLU --> OC["onCommit(speakerId, audio, isOverlap)"]
+  OC --> DR["overlap dual-route<br/>(feed prev + current speaker on overlap)"]
+  DR --> SSM["⑤ SpeakerStreamManager<br/>per-speaker audio buffers"]
+  SSM --> LA["LocalAgreement-2 prefix confirm<br/>+ ~2s submitInterval"]
+  LA --> WH["⑥ TranscriptionClient → Whisper<br/>(transcription-service)"]
+  WH --> PUB["⑦ publish per-speaker<br/>transcript segments → dashboard"]
+
+  classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+  classDef scaffold fill:#fef9c3,stroke:#ca8a04,color:#713f12;
+  class SEG,P,PB good;
+  class EMB,CLU bad;
+  class WH,PUB good;
+  class CLU bad;
+</pre>
+<div class=notes>
+ <h3 class=g>① Segmentation — works (placement good)</h3>
+ pyannote finds <b>where</b> the speaker changes within ~0.16s. Cost: it re-runs on a sliding 10s window every 250ms (~40× redundant inference = the CPU spikes), and over-emits duplicate boundaries that need consolidating.
+ <h3 class=y>② Cut triggers — mostly scaffolding</h3>
+ The real cut is a pyannote boundary. The <code>change-point</code> detector and the <code>3s timeout</code> are band-aids: one covers pyannote's missed switches (using the weak embedding), the other bounds latency + missed-boundary damage. Both are symptoms of "streaming + imperfect segmentation."
+ <h3 class=r>③④ Embed + cluster — THE WEAK LINK</h3>
+ wespeaker (trained on clean VoxCeleb celebrity audio) can't separate our speakers on mixed meeting audio — embeddings barely move at real switches. The online cosine/EMA clustering then mislabels and scatters. Because downstream routes the buffer by <code>speakerId</code>, a wrong label sends audio to the wrong Whisper buffer → contamination. <b>This is what every fix targets.</b>
+ <h3 class=g>⑤⑥⑦ Buffer + Whisper + publish — fixed, out of scope</h3>
+ Per-speaker buffering, LocalAgreement confirmation, Whisper, and publishing stay exactly as they are in vexa-bot. Our job is only to hand this stage correct <code>(speakerId, audio)</code> cuts.
+ <h3>Deepgram (our ground truth) uses the SAME shape</h3>
+ segment → embed → cluster — but with a 100k-speaker conversational embedder, run in batch. The architecture isn't wrong; the embedder + online penalty are. Alternatives: stronger embedder (③), or Sortformer end-to-end (replaces ③④ with a learned per-frame speaker track).
+</div>
+<script type="module">
+ import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+ mermaid.initialize({ startOnLoad:true, theme:"default", flowchart:{ useMaxWidth:true } });
+</script>

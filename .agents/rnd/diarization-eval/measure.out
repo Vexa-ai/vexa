@@ -1,0 +1,9 @@
+[measure] cpuset=96-111 (16 cores), wav=IS1009a_90s.wav
+
+============ OVERHEAD (cpuset=96-111, 16 cores) ============
+  [eval] DONE: 29 commits over 90s audio in 598s wall (0.2x realtime)
+  [eval] OVERHEAD: 6.644 wall-sec/audio-sec @ default threads | pyannote_infers≈360 (every 250ms) | embeds=null mean=n/a
+  peak_mem_MiB    : 355
+  peak_cpu_pct    : 1623%  (=16.2 cores)
+  mean_cpu_pct    : 1468%  (=14.7 cores)
+  samples         : 286

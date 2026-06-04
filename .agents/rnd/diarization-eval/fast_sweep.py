@@ -30,21 +30,24 @@ class Clustering:
 
     def size(self): return len(self.centroids)
 
-    def assign(self, emb, can_seed_new, allow_new):
+    def assign(self, emb, can_seed_new, allow_new, sticky_hint_id=None, sticky_bias=0.0):
         emb = normalize(np.asarray(emb, dtype=np.float64))
         if not self.centroids:
             if not can_seed_new or not allow_new:
                 return ("speaker_0", float("nan"), False)
             self.centroids["speaker_0"] = emb.copy()
             return ("speaker_0", 0.0, True)
-        nearest_id, nearest, second = None, np.inf, np.inf
+        # Faithful port of online-clustering.ts: stickyBias discounts the
+        # hint (previous speaker) cluster's distance for the nearest-decision
+        # only; nearest_true stays the real cosine distance for gates/logs.
+        nearest_id, nearest, nearest_true, second = None, np.inf, np.inf, np.inf
         for cid, c in self.centroids.items():
-            d = 1.0 - float(np.dot(emb, c))
+            true_d = 1.0 - float(np.dot(emb, c))
+            d = max(0.0, true_d - sticky_bias) if (cid == sticky_hint_id and sticky_bias > 0) else true_d
             if d < nearest:
-                second = nearest; nearest = d; nearest_id = cid
+                second = nearest; nearest = d; nearest_true = true_d; nearest_id = cid
             elif d < second:
                 second = d
-        nearest_true = nearest
         under_cap = self.maxSpeakers is None or len(self.centroids) < self.maxSpeakers
         very_far = nearest >= self.veryFar
         gap_margin = 0.10
@@ -90,13 +93,15 @@ def replay(records, cfg):
     last_new = -np.inf
     rewrites = {}
     commits = []
+    sticky_bias = cfg.get("stickyBias", 0.0)
+    last_final = None  # previous committed speaker id (post-rewrite) = sticky hint
     # minSeedUtteranceMs is recomputable from cached durSamples, so it's
     # sweepable here without re-capture. None → use the cached canSeedNew.
     seed_ms = cfg.get("minSeedUtteranceMs")
     for r in records:
         allow_new = (r["tEndMs"] - last_new) >= cooldown
         can_seed = r["canSeedNew"] if seed_ms is None else (r["durSamples"] >= seed_ms / 1000 * 16000)
-        sid, dist, is_new = cl.assign(r["emb"], can_seed, allow_new)
+        sid, dist, is_new = cl.assign(r["emb"], can_seed, allow_new, last_final, sticky_bias)
         if is_new: last_new = r["tEndMs"]
         for old, kept in cl.merge_close(merge_thr).items():
             tgt = kept
@@ -104,6 +109,7 @@ def replay(records, cfg):
             rewrites[old] = tgt
         final = sid
         while final in rewrites: final = rewrites[final]
+        last_final = final
         commits.append((final, r["tStartMs"] / 1000.0, r["tEndMs"] / 1000.0))
     return commits
 

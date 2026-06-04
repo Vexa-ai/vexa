@@ -1,0 +1,11 @@
+{
+  "segment_count": 0,
+  "expected_turns": 16,
+  "key_anchors_total": 19,
+  "key_anchors_matched": 0,
+  "matched_anchors": [],
+  "speaker_labels_seen": [],
+  "speaker_label_count": 0,
+  "content_accuracy_summary": "0/19 key anchors matched",
+  "speaker_identification_summary": "unavailable"
+}

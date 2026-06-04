@@ -1,0 +1,16 @@
+{
+  "ended_at": "2026-05-31T09:59:02Z",
+  "meeting_id": "6",
+  "native_id": "31975786009289",
+  "platform": "teams",
+  "status": "no_transcript_message",
+  "subscribed": true,
+  "subscription": [
+    {
+      "native_id": "31975786009289",
+      "platform": "teams"
+    }
+  ],
+  "text_segments_seen": 0,
+  "transcript_messages": 0
+}

@@ -1,0 +1,344 @@
+{
+  "run_id": "meeting-test-20260531-095126",
+  "case_id": "case-pack-394",
+  "platform": "teams",
+  "native_meeting_id": "31975786009289",
+  "gateway_url": "http://localhost:42301",
+  "dashboard_url": "http://localhost:42300",
+  "listener_bot_id": "6",
+  "speaker_bot_ids": [
+    "7",
+    "8"
+  ],
+  "left_running": false,
+  "score": {
+    "segment_count": 0,
+    "expected_turns": 16,
+    "key_anchors_total": 19,
+    "key_anchors_matched": 0,
+    "matched_anchors": [],
+    "speaker_labels_seen": [],
+    "speaker_label_count": 0,
+    "content_accuracy_summary": "0/19 key anchors matched",
+    "speaker_identification_summary": "unavailable"
+  },
+  "telemetry_score": {
+    "ground_truth": {
+      "expected_turns": 16,
+      "matched_turns": 0,
+      "content_turn_match_rate": 0.0,
+      "key_anchors_total": 19,
+      "key_anchors_matched": 0,
+      "matched_anchors": [],
+      "raw_transcript_segments": 0,
+      "scored_transcript_segments": 0,
+      "filtered_out_segments": 0
+    },
+    "speaker_identification": {
+      "labels_seen": [],
+      "correct_matched_turns": 0,
+      "wrong_or_merged_matched_turns": 0,
+      "unknown_turns": 0
+    },
+    "latency": {
+      "first_speak_at": "2026-05-31T09:52:02.607258Z",
+      "first_transcript_created_at": null,
+      "first_transcript_latency_seconds": null,
+      "last_speak_at": "2026-05-31T09:56:07.999644Z",
+      "last_transcript_created_at": null,
+      "last_transcript_lag_seconds": null,
+      "transcript_window_start": "2026-05-31T09:51:32.607258Z",
+      "transcript_window_end": "2026-05-31T09:59:07.999644Z",
+      "per_speak_to_next_transcript_count": 0,
+      "per_speak_to_next_transcript_min_seconds": null,
+      "per_speak_to_next_transcript_median_seconds": null,
+      "per_speak_to_next_transcript_p95_seconds": null,
+      "per_speak_to_next_transcript_max_seconds": null
+    },
+    "webhooks": {
+      "target_configured": true,
+      "deliveries": [
+        {
+          "event_type": "meeting.status_change",
+          "status": "delivered",
+          "attempts": null,
+          "status_code": 200,
+          "delivered_at": null,
+          "next_retry_at": null,
+          "last_error": null
+        },
+        {
+          "event_type": "meeting.started",
+          "status": "delivered",
+          "attempts": null,
+          "status_code": 200,
+          "delivered_at": null,
+          "next_retry_at": null,
+          "last_error": null
+        },
+        {
+          "event_type": "meeting.completed",
+          "status": "delivered",
+          "attempts": 1,
+          "status_code": 200,
+          "delivered_at": "2026-05-31T09:52:06.186339+00:00",
+          "last_error": null
+        }
+      ],
+      "delivered_count": 3,
+      "retrying_count": 0,
+      "failed_count": 0
+    },
+    "recording": {
+      "recording_enabled": true,
+      "recording_count": 0,
+      "recording_status": null,
+      "recording_id_present": false,
+      "playback_or_master_url_present": false
+    },
+    "human_confirmation": {},
+    "playback_confirmation": {},
+    "turn_matches": [
+      {
+        "turn": 1,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 2,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 3,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 4,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 5,
+        "expected_speaker": "Maya Chen",
+        "voice": "es_ES-davefx-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 6,
+        "expected_speaker": "Leo Santos",
+        "voice": "fr_FR-siwis-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 7,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 8,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 9,
+        "expected_speaker": "Maya Chen",
+        "voice": "pt_BR-faber-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 10,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 11,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 12,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 13,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 14,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 15,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      },
+      {
+        "turn": 16,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": false,
+        "overlap_score": 0.0,
+        "best_overall_score": 0.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.0,
+        "matched_transcript_speaker": null,
+        "speaker_match": "unknown",
+        "matched_text_prefix": ""
+      }
+    ]
+  },
+  "ws_transcript_summary": {
+    "ended_at": "2026-05-31T09:59:02Z",
+    "meeting_id": "6",
+    "native_id": "31975786009289",
+    "platform": "teams",
+    "status": "no_transcript_message",
+    "subscribed": true,
+    "subscription": [
+      {
+        "native_id": "31975786009289",
+        "platform": "teams"
+      }
+    ],
+    "text_segments_seen": 0,
+    "transcript_messages": 0
+  },
+  "webhook_summary": {
+    "meeting_status": "failed",
+    "webhook_target_configured": true,
+    "status_delivery_count": 2,
+    "status_events": [
+      "meeting.started",
+      "meeting.status_change"
+    ],
+    "completion_status": "delivered",
+    "completion_http_status": null,
+    "retry_count": null,
+    "recording_count": 0,
+    "recording_status": null,
+    "recording_id_present": false,
+    "playback_or_master_url_present": false
+  }
+}

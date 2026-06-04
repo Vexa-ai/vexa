@@ -159,10 +159,16 @@ let vadModel: SileroVAD | null = null;
 // Replaces the legacy caption-driven audio-flush mechanism. See
 // services/diarization/ and services/teams-attributor.ts.
 import { OnnxLocalDiarizer } from './services/diarization/onnx-local-diarizer';
+import { TurnGate, DEFAULT_TURN_GATE } from './services/diarization/turn-gate';
 import type { CommitEvent } from './services/diarization/onnx-local-diarizer';
 import { TeamsAttributor } from './services/teams-attributor';
 let teamsDiarizer: OnnxLocalDiarizer | null = null;
+let teamsTurnGate: TurnGate | null = null;
 let teamsAttributor: TeamsAttributor | null = null;
+/** Rolling MEETING transcript (all speakers) fed to Whisper as a context
+ *  prompt to keep transcription coherent across turns. Not per-speaker. */
+let meetingPromptBuffer = '';
+const MEETING_PROMPT_MAX = 800; // chars kept as Whisper prompt
 /** Per-session pending frames buffer for deferred routing. Frames are
  *  queued here as they arrive from the browser; the diarizer's onCommit
  *  handler drains them and routes to the attributor-resolved speaker. */
@@ -1387,11 +1393,23 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       // bot config (the values inside .create({...}) ) is hot-edit-
       // friendly by editing this file and respawning.
       const buildTeamsDiarizer = async () => {
-        // pack-msteams-diarization-cutover (#394) overlap dual-route (#3):
-        // the most recent single-speaker (non-overlap) cluster, so an
-        // overlap commit can be appended to the OUTGOING speaker's buffer
-        // as well as the incoming one's.
-        let lastNonOverlapSpeakerId: string | null = null;
+        // pack-msteams-diarization-cutover (#394) segmentation-cut design:
+        // the TurnGate holds each turn until its voiceprint centroid
+        // stabilizes, then names it and flushes into the (frozen)
+        // SpeakerStreamManager. Cut = segmentation; name = diarize-on-turn;
+        // a wrong name is cosmetic, never cross-speaker contamination.
+        const turnGate = new TurnGate(DEFAULT_TURN_GATE, (name, audio, tStartMs) => {
+          if (!speakerManager) return;
+          if (!speakerManager.hasSpeaker(name)) {
+            log(`[TurnGate] new speaker "${name}" (centroid stabilized)`);
+            speakerManager.addSpeaker(name, name);
+            segmentPublisher?.publishSpeakerEvent({ speaker: name, type: 'joined', timestamp: tStartMs })
+              .catch(() => { /* fire-and-forget */ });
+          }
+          log(`[TurnGate] flush → ${name} (${(audio.length / 16000).toFixed(2)}s)`);
+          speakerManager.feedAudio(name, audio);
+        });
+        teamsTurnGate = turnGate;
         return await OnnxLocalDiarizer.create({
           // pack-msteams-diarization-cutover (#394): 3000ms is the live-UX
           // backstop. Dropped from 5000ms because when pyannote misses a
@@ -1454,45 +1472,14 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           pyannoteInferIntervalMs: 250,
           onCommit: (ev: CommitEvent) => {
             if (!speakerManager) return;
-            // pack-msteams-diarization-cutover (#394): captions FULLY
-            // removed from the speaker-naming path. The published speaker
-            // label is now the raw diarizer cluster id (speaker_0/1/2/3),
-            // never a caption-derived name. This completes the cutover —
-            // captions were already removed as the audio-boundary source;
-            // now they're removed as the naming source too. Pure
-            // diarization: the dashboard shows the diarizer's clusters
-            // directly. (Downstream may map cluster→real name later.)
-            const speakerName = ev.speakerId;
-            const speakerId = ev.speakerId;
-            if (!speakerManager.hasSpeaker(speakerId)) {
-              speakerManager.addSpeaker(speakerId, speakerName);
-              segmentPublisher?.publishSpeakerEvent({
-                speaker: speakerName,
-                type: 'joined',
-                timestamp: ev.tStartMs,
-              }).catch(() => { /* fire-and-forget */ });
-            } else if (speakerManager.getSpeakerName(speakerId) !== speakerName) {
-              speakerManager.updateSpeakerName(speakerId, speakerName);
-            }
-            // Drain frames in [tStartMs, tEndMs] into speakerManager.
-            // Hallucination layer 1 (browser-side RMS≥0.01) already cut
-            // pure silence before frames reached us. The original Node-side
-            // gate from the RnD eval (RMS≥0.012, ≥600ms min, ≥50% ratio)
-            // was tuned for clean TTS audio and rejected all real Teams
-            // mic input. Loosened to a minimum-volume backstop only;
-            // Whisper confidence (no_speech_prob, avg_logprob,
-            // compression_ratio) inside onSegmentReady is layer 2 and
-            // the actual hallucination defence.
-            const MIN_TOTAL_SAMPLES = Math.ceil(0.2 * 16000); // 200ms — Whisper needs ~200ms minimum
-            // pack-msteams-diarization-cutover (#394) — diarizer-driven drain.
-            // The bug we just caught: ev.tStartMs/tEndMs come from the
-            // diarizer's session-relative time (samples since session start),
-            // while teamsPendingFrames[i].ts is wall-clock Date.now(). Those
-            // axes don't match, so the "in range" filter spuriously dropped
-            // commits 2+. Fix: drain ALL frames the diarizer has consumed
-            // so far (i.e. the next dur*16000 samples worth of buffered
-            // frames). The diarizer commits utterances in order, so frames
-            // for utterance N are the FIFO-oldest frames in the buffer.
+            // pack-msteams-diarization-cutover (#394) segmentation-cut:
+            // drain this commit's frames (FIFO, sample-count matched — the
+            // diarizer commits in order, so frames for this utterance are
+            // the oldest buffered) and hand (embedding, audio) to the
+            // TurnGate. The gate decides turn boundaries by voiceprint
+            // divergence, holds until the centroid stabilizes, names the
+            // turn, and flushes into the frozen SpeakerStreamManager.
+            const MIN_TOTAL_SAMPLES = Math.ceil(0.2 * 16000); // Whisper needs ≥200ms
             const wantSamples = Math.round(((ev.tEndMs - ev.tStartMs) / 1000) * 16000);
             const inRange: Float32Array[] = [];
             let drained = 0;
@@ -1504,27 +1491,16 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
               drained++;
             }
             if (drained > 0) teamsPendingFrames.splice(0, drained);
-            if (collected < MIN_TOTAL_SAMPLES) {
-              return;
+            if (collected < MIN_TOTAL_SAMPLES) return;
+            let audio: Float32Array;
+            if (inRange.length === 1) {
+              audio = inRange[0];
+            } else {
+              audio = new Float32Array(collected);
+              let o = 0;
+              for (const p of inRange) { audio.set(p, o); o += p.length; }
             }
-            // pack-msteams-diarization-cutover (#394) overlap dual-route
-            // (#3): when this committed segment is a 2+-speaker overlap,
-            // feed its audio to BOTH the outgoing speaker's buffer (so
-            // their turn doesn't end with a gap at the moment they were
-            // talked over) AND the incoming speaker's buffer (so their
-            // turn starts including the overlap). Both transcripts flow
-            // continuously through the overlap instead of one losing it.
-            // Normal (single-speaker) commits route to one buffer and
-            // update the "previous speaker" anchor.
-            for (const pcm of inRange) speakerManager.feedAudio(speakerId, pcm);
-            if (ev.isOverlap && lastNonOverlapSpeakerId && lastNonOverlapSpeakerId !== speakerId) {
-              if (!speakerManager.hasSpeaker(lastNonOverlapSpeakerId)) {
-                speakerManager.addSpeaker(lastNonOverlapSpeakerId, lastNonOverlapSpeakerId);
-              }
-              for (const pcm of inRange) speakerManager.feedAudio(lastNonOverlapSpeakerId, pcm);
-            } else if (!ev.isOverlap) {
-              lastNonOverlapSpeakerId = speakerId;
-            }
+            turnGate.onCommit(new Float32Array(ev.emb), audio, ev.tStartMs, ev.tEndMs);
           },
         });
       };
@@ -1635,7 +1611,11 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
       const whisperStartMs = Date.now();
       try {
-        const contextPrompt = speakerManager!.getLastConfirmedText(speakerId);
+        // pack-msteams-diarization-cutover (#394): prompt Whisper with the
+        // rolling MEETING transcript (all speakers) instead of just this
+        // speaker's last text — keeps transcription coherent across turns.
+        // Falls back to the per-speaker last text early in the meeting.
+        const contextPrompt = meetingPromptBuffer || speakerManager!.getLastConfirmedText(speakerId);
         const result = await transcriptionClient.transcribe(audioBuffer, lang || undefined, contextPrompt || undefined);
         telemetry.whisperCalls++;
         telemetry.totalWhisperMs += Date.now() - whisperStartMs;
@@ -1774,6 +1754,11 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       if (isHallucination(transcript)) {
         log(`[🚫 HALLUCINATION] ${speakerName} | confirmed but filtered: "${transcript}"`);
         return;
+      }
+      // pack-msteams-diarization-cutover (#394): append confirmed text to the
+      // rolling MEETING prompt buffer (keep last MEETING_PROMPT_MAX chars).
+      if (transcript && transcript.trim()) {
+        meetingPromptBuffer = (meetingPromptBuffer + ' ' + transcript.trim()).slice(-MEETING_PROMPT_MAX);
       }
       const explicitLang = currentLanguage && currentLanguage !== 'auto' ? currentLanguage : null;
       const lang = explicitLang || lastDetectedLanguage.get(speakerId) || 'en';
