@@ -572,10 +572,11 @@ def check_health(lock):
     if url == "RUNTIME_API_HEALTH":
         mode = state_read("deploy_mode", required=True)
         if mode in ("compose", "lite"):
-            code, body = http_check("http://localhost:8090/health")
+            runtime_url = os.environ.get("RUNTIME_API_URL", "http://localhost:8090")
+            code, body = http_check(f"{runtime_url}/health")
             if code == 200:
                 return True, ""
-            return False, f"HTTP {code} from localhost:8090/health"
+            return False, f"HTTP {code} from {runtime_url}/health"
         elif mode == "helm":
             if not kubectl_available():
                 return True, "skipped (no kubectl access)"
