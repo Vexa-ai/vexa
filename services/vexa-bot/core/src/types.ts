@@ -35,6 +35,9 @@ export type BotConfig = {
   voiceAgentEnabled?: boolean;  // Enable TTS, chat, screen share capabilities
   defaultAvatarUrl?: string;   // Custom default avatar image URL for virtual camera
   showAvatar?: boolean;        // If false, skip virtual camera / avatar entirely (default true)
+  voiceAgentSettings?: {
+    url?: string;
+  };
 
   // Independent capability flags
   videoReceiveEnabled?: boolean;  // Receive+decode video from participants (default: false)

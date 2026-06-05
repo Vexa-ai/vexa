@@ -80,6 +80,10 @@ export class TTSPlaybackService {
         log(`[TTS Playback] paplay stderr: ${data.toString().trim()}`);
       });
 
+      proc.stdin?.on('error', (err: any) => {
+        log(`[TTS Playback] paplay stdin error: ${err?.message || err}`);
+      });
+
       proc.on('exit', (code) => {
         this._isPlaying = false;
         this.paplayProcess = null;
@@ -197,6 +201,10 @@ export class TTSPlaybackService {
 
       paplay.stderr?.on('data', (data: Buffer) => {
         log(`[TTS Playback] paplay stderr: ${data.toString().trim()}`);
+      });
+
+      paplay.stdin?.on('error', (err: any) => {
+        log(`[TTS Playback] paplay stdin error: ${err?.message || err}`);
       });
 
       paplay.on('exit', (code) => {
@@ -403,8 +411,27 @@ export class TTSPlaybackService {
           reject(err);
         });
 
-        // Pipe HTTP response body directly to paplay stdin
-        res.pipe(paplay.stdin!);
+        paplay.stdin?.on('error', (err: any) => {
+          log(`[TTS Playback] paplay stdin error: ${err?.message || err}`);
+        });
+
+        // Manually bridge stream to avoid unhandled EPIPE if paplay exits early.
+        res.on('data', (chunk: Buffer) => {
+          if (!paplay.stdin || paplay.stdin.destroyed) return;
+          const writable = paplay.stdin.write(chunk);
+          if (!writable) {
+            res.pause();
+            paplay.stdin.once('drain', () => res.resume());
+          }
+        });
+        res.on('end', () => {
+          if (paplay.stdin && !paplay.stdin.destroyed) {
+            paplay.stdin.end();
+          }
+        });
+        res.on('error', (err: any) => {
+          log(`[TTS Playback] response stream error: ${err?.message || err}`);
+        });
       });
 
       req.on('error', (err) => {

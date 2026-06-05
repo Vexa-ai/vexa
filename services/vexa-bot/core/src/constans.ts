@@ -29,6 +29,7 @@ const baseBrowserArgs = [
   "--incognito",
   "--no-sandbox",
   "--disable-setuid-sandbox",
+  "--autoplay-policy=no-user-gesture-required",
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",

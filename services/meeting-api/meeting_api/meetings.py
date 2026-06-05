@@ -309,6 +309,66 @@ async def publish_meeting_status_change(
         logger.error(f"Failed to publish status for meeting {meeting_id}: {e}")
 
 
+async def _publish_startup_voice_agent_url_with_retries(
+    meeting_id: int,
+    voice_agent_url: str,
+    retries: int = 4,
+    delay_seconds: float = 1.0,
+) -> None:
+    """Best-effort startup fallback: push voice_agent_set_url to bot command channel.
+
+    This protects fresh starts when BOT_CONFIG drops voiceAgentSettings.url in any
+    upstream hop (request mapping, runtime launch, env propagation).
+    """
+    if not redis_client or not voice_agent_url:
+        return
+
+    command_channel = f"bot_commands:meeting:{meeting_id}"
+    command_payload = json.dumps({"action": "voice_agent_set_url", "url": voice_agent_url})
+    for attempt in range(1, retries + 1):
+        try:
+            listeners = await redis_client.publish(command_channel, command_payload)
+            logger.info(
+                "[VoiceAgentStartupFallback] Published voice_agent_set_url "
+                f"for meeting={meeting_id} attempt={attempt}/{retries} listeners={listeners}"
+            )
+        except Exception as e:
+            logger.warning(
+                "[VoiceAgentStartupFallback] publish failed "
+                f"for meeting={meeting_id} attempt={attempt}/{retries}: {e}"
+            )
+        if attempt < retries:
+            await asyncio.sleep(delay_seconds)
+
+
+def _extract_voice_agent_url(req: MeetingCreate) -> str:
+    """Resolve voice-agent URL from all supported request shapes."""
+    candidates = []
+
+    settings = req.voice_agent_settings
+    if isinstance(settings, dict):
+        candidates.extend(
+            [
+                settings.get("url"),
+                settings.get("voice_agent_url"),
+                settings.get("voiceAgentUrl"),
+            ]
+        )
+
+    candidates.extend(
+        [
+            req.voice_agent_url,
+        ]
+    )
+
+    for value in candidates:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned
+    return ""
+
+
 async def schedule_status_webhook_task(
     meeting: Meeting,
     background_tasks: BackgroundTasks,
@@ -1139,8 +1199,56 @@ async def request_bot(
         bot_config["recordingEnabled"] = bool(req.recording_enabled)
     if req.voice_agent_enabled is not None:
         bot_config["voiceAgentEnabled"] = bool(req.voice_agent_enabled)
+    if req.camera_enabled is not None:
+        bot_config["cameraEnabled"] = bool(req.camera_enabled)
     if req.default_avatar_url:
         bot_config["defaultAvatarUrl"] = req.default_avatar_url
+    voice_agent_url = _extract_voice_agent_url(req)
+    if req.voice_agent_enabled is not None:
+        meeting_data["voice_agent_enabled"] = bool(req.voice_agent_enabled)
+    if req.camera_enabled is not None:
+        meeting_data["camera_enabled"] = bool(req.camera_enabled)
+    raw_voice_agent_url = ""
+    raw_body: Dict[str, Any] = {}
+    try:
+        raw_body = await request.json()
+    except Exception:
+        raw_body = {}
+    if isinstance(raw_body, dict):
+        raw_settings = raw_body.get("voice_agent_settings") or raw_body.get("voiceAgentSettings")
+        if isinstance(raw_settings, dict):
+            for key in ("url", "voice_agent_url", "voiceAgentUrl"):
+                val = raw_settings.get(key)
+                if isinstance(val, str) and val.strip():
+                    raw_voice_agent_url = val.strip()
+                    break
+        if not raw_voice_agent_url:
+            for key in ("voice_agent_url", "voiceAgentUrl"):
+                val = raw_body.get(key)
+                if isinstance(val, str) and val.strip():
+                    raw_voice_agent_url = val.strip()
+                    break
+    if not voice_agent_url and raw_voice_agent_url:
+        voice_agent_url = raw_voice_agent_url
+    logger.info(
+        "[VoiceAgentStartup] meeting_id=%s enabled=%s camera_enabled=%s "
+        "settings_type=%s resolved_url_present=%s raw_url_present=%s",
+        meeting_id,
+        req.voice_agent_enabled,
+        req.camera_enabled,
+        type(req.voice_agent_settings).__name__,
+        bool(voice_agent_url),
+        bool(raw_voice_agent_url),
+    )
+    if voice_agent_url:
+        bot_config["voiceAgentEnabled"] = True
+        meeting_data["voice_agent_enabled"] = True
+        bot_config["voiceAgentSettings"] = {"url": voice_agent_url}
+        meeting_data["voice_agent_settings"] = {"url": voice_agent_url}
+        # Voice-agent webpage rendering requires the virtual camera pipeline.
+        if req.camera_enabled is None:
+            bot_config["cameraEnabled"] = True
+            meeting_data["camera_enabled"] = True
     if os.getenv("SHOW_AVATAR", "true").lower() == "false":
         bot_config["showAvatar"] = False
     if req.zoom_obf_token:
@@ -1296,6 +1404,15 @@ async def request_bot(
         sess_val = json.dumps({"container_name": container_name, "meeting_id": meeting_id, "user_id": current_user.id})
         await redis_client.set(f"browser_session:{session_token}", sess_val, ex=86400)
         await redis_client.set(f"browser_session:{meeting_id}", sess_val, ex=86400)
+    if voice_agent_url:
+        # Startup safety net: re-send URL command after container launch.
+        # Fire-and-forget so meeting creation response is not blocked.
+        asyncio.create_task(
+            _publish_startup_voice_agent_url_with_retries(
+                meeting_id=meeting_id,
+                voice_agent_url=voice_agent_url,
+            )
+        )
 
     # Schedule bot timeout job (max_bot_time enforcement via scheduler)
     scheduler_job_id = await _schedule_bot_timeout(

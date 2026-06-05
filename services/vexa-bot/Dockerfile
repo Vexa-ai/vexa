@@ -92,6 +92,16 @@ RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && apt-get install -
     xclip \
     novnc \
     python3-websockify \
+    python3 \
+    python3-pip \
+    python3-gi \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-pulseaudio \
+    gstreamer1.0-x \
     awscli \
     socat \
     curl \
@@ -117,6 +127,10 @@ COPY --from=ts-builder /app/vexa-bot/core/package*.json ./core/
 COPY --from=ts-builder /app/vexa-bot/core/node_modules ./core/node_modules
 COPY --from=ts-builder /app/vexa-bot/core/dist ./core/dist
 COPY --from=ts-builder /app/vexa-bot/core/assets ./core/assets
+COPY core/webpage_streamer ./core/webpage_streamer
+
+# Install dedicated webpage-streamer Python dependencies
+RUN python3 -m pip install -r /app/vexa-bot/core/webpage_streamer/requirements.txt
 
 # Install MS Edge in runtime stage (x86_64 only)
 RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \

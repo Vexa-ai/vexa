@@ -22,15 +22,15 @@ profiles:
       # the prior gmeet/teams p95 (780m). Restoring those original
       # numbers; the brief 4000m / 2500m bump was an emergency
       # compensation while the gpu-process bug was unidentified.
-      cpu_request: "1000m"     # measured p95: 780m (load test 2026-04-15, 19 bots)
-      cpu_limit: "1500m"       # 1.5x headroom for browser spikes
-      memory_request: "1100Mi" # measured p95: 977Mi (load test 2026-04-15, 19 bots)
+      cpu_request: "2000m"     # measured p95: 780m (load test 2026-04-15, 19 bots)
+      cpu_limit: "3000m"       # 2x headroom for browser spikes
+      memory_request: "4000Mi" # measured p95: 977Mi (load test 2026-04-15, 19 bots)
       # Bumped 1536Mi → 2560Mi (Bug B 2026-04-21): Teams bot bursts memory
       # during admission-verification + graceful leave. Exit 137 observed
       # on helm meetings 9+10 + compose 18 after 10-20s active. 2.5× headroom
       # absorbs Teams-side memory spikes without affecting bot scheduling.
-      memory_limit: "2560Mi"
-      shm_size: 2147483648     # 2GB shared memory for browser
+      #memory_limit: "3000Mi"
+      shm_size: 3221225472     # 2GB shared memory for browser
     idle_timeout: 0          # managed by meeting-api (scheduler + bot-side timers)
     auto_remove: false
     env:
@@ -56,10 +56,10 @@ profiles:
     working_dir: "/app/vexa-bot"
     resources:
       cpu_request: "1000m"     # same as meeting bot
-      cpu_limit: "1500m"
-      memory_request: "1100Mi"
-      memory_limit: "1536Mi"
-      shm_size: 2147483648     # 2GB shared memory for browser
+      cpu_limit: "2000m"
+      memory_request: "2000Mi"
+      #memory_limit: "3000Mi"
+      shm_size: 3221225472     # 2GB shared memory for browser
     idle_timeout: 3600       # 1h — gateway /touch keeps alive while connected
     auto_remove: false
     env:

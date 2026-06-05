@@ -216,10 +216,14 @@ build: check_docker build-bot-image build-transcript-rendering build-lite
 up: check_docker preflight
 	@if [ -f $(LAST_TAG_FILE) ]; then \
 		export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
+		export BROWSER_IMAGE="$(DOCKERHUB_USER)/$(BOT_IMAGE):$$IMAGE_TAG"; \
 		echo "Using locally-built images (IMAGE_TAG=$$IMAGE_TAG from .last-tag)"; \
+		echo "Using bot image $$BROWSER_IMAGE"; \
 	else \
 		export IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "dev"); \
+		export BROWSER_IMAGE=$$(grep -E '^BROWSER_IMAGE=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 		echo "Using images (IMAGE_TAG=$$IMAGE_TAG from .env)"; \
+		if [ -n "$$BROWSER_IMAGE" ]; then echo "Using bot image $$BROWSER_IMAGE"; fi; \
 	fi; \
 	if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
@@ -374,9 +378,10 @@ test-transcription:
 		-F "model=large-v3-turbo" \
 		-w "\n%{http_code}" 2>&1); \
 	HTTP=$$(echo "$$RESP" | tail -1); \
-	BODY=$$(echo "$$RESP" | head -n -1); \
+	BODY=$$(echo "$$RESP" | sed '$d'); \
+        echo "$$BODY"; \
 	if [ "$$HTTP" = "200" ]; then \
-		TEXT=$$(echo "$$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('text','')[:80])" 2>/dev/null); \
+                TEXT=$$(printf "%s\n" "$$BODY" | jq -r 'select(type=="object") | (.text // .data.text // .output // "")' | head -c 80); \
 		if [ -n "$$TEXT" ]; then \
 			echo "  ✓ Transcription works: \"$$TEXT\""; \
 		else \
