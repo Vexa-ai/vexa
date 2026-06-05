@@ -244,7 +244,7 @@ svc_exec() {
     mode=$(cat "$STATE/deploy_mode" 2>/dev/null || detect_mode)
 
     case "$mode" in
-        compose) docker exec "vexa-${svc}-1" "$@" ;;
+        compose) docker exec "${COMPOSE_PROJECT:-vexa}-${svc}-1" "$@" ;;
         lite)    docker exec "$(_lite_container)" "$@" ;;
         helm)
             local release

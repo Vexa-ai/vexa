@@ -81,7 +81,7 @@ def svc_exec(svc, cmd):
     """Run command inside a service container. Returns (exit_code, stdout)."""
     mode = state_read("deploy_mode", required=True)
     if mode == "compose":
-        full = ["docker", "exec", f"vexa-{svc}-1"] + cmd
+        full = ["docker", "exec", f"{os.environ.get('COMPOSE_PROJECT', 'vexa')}-{svc}-1"] + cmd
     elif mode == "lite":
         # Container may be named "vexa" or "vexa-lite"
         r = subprocess.run(
