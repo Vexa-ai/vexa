@@ -3635,3 +3635,55 @@ DISRUPTIVE_CRASH_KILLS_CANONICAL_BOT_CONTAINER:
   state: stateless
   max_duration_sec: 5
   release: 260508-v0.10.6.1
+BOT_GMEET_HUMANIZED_JOIN_CLICK_VERIFIED:
+  proves: "humanized GMeet join verifies the REAL X11 pointer is inside the join control before pressing (pointerHitsTarget), recalibrating-or-failing-loud on a miss — the off-target XTEST click can't silently land outside the button (#407 407-A)"
+  symptom: "13/35 post-hotfix GMeet failures: bot fills the name field + runs the mouse replay but the click misses the join button (self-blind endpoint check reused the wrong screen-page offset; one-shot stale calibration) - never admitted - leave"
+  found: '2026-06-04'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/humanized/humanizedInteraction.ts
+  must_match: pointerHitsTarget
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_GMEET_LOCALE_AGNOSTIC_JOIN_SELECTORS:
+  proves: "GMeet join/name controls are located by locale-agnostic selectors (jsname/structure) ahead of the English-text fallback, so a non-English (e.g. Hungarian) Meet UI still matches (#407 407-A; Discord 2026-06-03)"
+  symptom: "4/35 failures: join button and name field located by English-only text/aria-label; a Hungarian Meet UI never matches - selector timeout - never joins"
+  found: '2026-06-04'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/selectors.ts
+  must_match: jsname
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_GMEET_JOIN_CALLBACK_RESILIENT_TO_TRANSIENT:
+  proves: "the bot's JOINING status callback classifies transient (timeout/5xx/network) vs deliberate (4xx/explicit-reject) and PROCEEDS on transient - a brief meeting-api unavailability no longer aborts an otherwise-fine join (#407 407-B)"
+  symptom: "13/35 failures clustered in the meeting-api rollout window: the JOINING callback exhausted retries on transient unavailability - 'server rejected after N attempts' - bot aborted before ever joining"
+  found: '2026-06-04'
+  type: grep
+  file: services/vexa-bot/core/src/services/unified-callback.ts
+  must_match: \.transient\s*=
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_STARTUP_FAILURE_REPORTED_NOT_SILENT:
+  proves: "a pre-runBot crash (bad BOT_CONFIG / schema throw) emits a startup breadcrumb AND reports the failure reason to meeting-api (reportStartupFailure) - a silent zero-log crash is now a recorded failure (#407 407-C)"
+  symptom: "3/35 zero-log crashes: container starts, dies before the logger inits, only console.error - meetings.data.bot_logs EMPTY in the DB; operator cannot diagnose"
+  found: '2026-06-04'
+  type: grep
+  file: services/vexa-bot/core/src/docker.ts
+  must_match: reportStartupFailure
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
