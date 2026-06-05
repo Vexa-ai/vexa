@@ -1,0 +1,5 @@
+aiohttp
+aiortc
+av
+numpy
+playwright==1.56.0

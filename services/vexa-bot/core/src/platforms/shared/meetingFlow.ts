@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { BotConfig } from "../../types";
 import { log, callStartupCallback } from "../../utils";
-import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat, startVideoRecordingIfNeeded, enterBrowserFullscreen } from "../../index";
+import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat, triggerPostAdmissionVoiceAgentAudio, startVideoRecordingIfNeeded, enterBrowserFullscreen } from "../../index";
 import { enableTeamsLiveCaptions } from "../msteams/captions";
 
 export type AdmissionDecision = {
@@ -144,6 +144,10 @@ export async function runMeetingFlow(
         return;
       }
       log("✅ Bot verified to be in meeting after ACTIVE callback");
+
+      triggerPostAdmissionVoiceAgentAudio().catch((err: any) => {
+        log(`[VoiceAgent] Post-admission audio bridge error (non-fatal): ${err?.message || err}`);
+      });
 
       // Re-enable virtual camera after admission. Google Meet may re-negotiate
       // WebRTC tracks during the waiting-room → meeting transition, killing

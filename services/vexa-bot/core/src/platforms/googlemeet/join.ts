@@ -14,6 +14,7 @@ export async function joinGoogleMeeting(
   botName: string,
   botConfig: BotConfig
 ): Promise<void> {
+  const isVoiceAgent = !!botConfig.voiceAgentEnabled;
   await page.goto(meetingUrl, { waitUntil: "domcontentloaded" });
   await page.bringToFront();
 
@@ -41,13 +42,17 @@ export async function joinGoogleMeeting(
     await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-lobby.png', fullPage: true });
     log("📸 Diagnostic screenshot: auth lobby state");
 
-    // Mute mic and camera if visible
-    try {
-      const micSelector = googleMicrophoneButtonSelectors[0];
-      await page.click(micSelector, { timeout: 3000 });
-      log("Microphone muted.");
-    } catch (e) {
-      log("Microphone already muted or not found.");
+    // Keep mic enabled for voice-agent bots so routed TTS/page audio is audible.
+    if (!isVoiceAgent) {
+      try {
+        const micSelector = googleMicrophoneButtonSelectors[0];
+        await page.click(micSelector, { timeout: 3000 });
+        log("Microphone muted.");
+      } catch (e) {
+        log("Microphone already muted or not found.");
+      }
+    } else {
+      log("Voice-agent mode: leaving microphone enabled.");
     }
 
     try {
@@ -69,9 +74,9 @@ export async function joinGoogleMeeting(
     try {
       // Race: wait for any join button
       const joinButton = await Promise.race([
-        page.waitForSelector(joinNowSelector, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const })),
-        page.waitForSelector(switchHereSelector, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const })),
-        page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const })),
+        page.waitForSelector(joinNowSelector, { timeout: 30000 }).then((el: any) => ({ el, type: 'join_now' as const })),
+        page.waitForSelector(switchHereSelector, { timeout: 30000 }).then((el: any) => ({ el, type: 'switch_here' as const })),
+        page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then((el: any) => ({ el, type: 'ask_to_join' as const })),
       ]);
 
       if (joinButton.type === 'join_now') {
@@ -121,12 +126,16 @@ export async function joinGoogleMeeting(
 
     await page.fill(nameFieldSelector, botName);
 
-    // Mute mic and camera if available
-    try {
-      const micSelector = googleMicrophoneButtonSelectors[0];
-      await page.click(micSelector, { timeout: 200 });
-    } catch (e) {
-      log("Microphone already muted or not found.");
+    // Keep mic enabled for voice-agent bots so routed TTS/page audio is audible.
+    if (!isVoiceAgent) {
+      try {
+        const micSelector = googleMicrophoneButtonSelectors[0];
+        await page.click(micSelector, { timeout: 200 });
+      } catch (e) {
+        log("Microphone already muted or not found.");
+      }
+    } else {
+      log("Voice-agent mode: leaving microphone enabled.");
     }
 
     try {

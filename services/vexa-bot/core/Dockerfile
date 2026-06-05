@@ -58,6 +58,16 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteract
     sshpass \
     unzip \
     curl \
+    python3 \
+    python3-pip \
+    python3-gi \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-pulseaudio \
+    gstreamer1.0-x \
     python3-websockify \
     novnc \
     && rm -rf /var/lib/apt/lists/*
@@ -70,6 +80,9 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tm
 
 # Copy the built application and node_modules from the base stage
 COPY --from=base /app /app
+
+# Install dedicated webpage-streamer Python dependencies
+RUN python3 -m pip install -r /app/webpage_streamer/requirements.txt
 
 # Install MS Edge in runtime stage as well (skip on ARM64 - not supported)
 RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \

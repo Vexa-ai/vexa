@@ -10,8 +10,51 @@ Xvfb :99 -screen 0 1920x1080x24 &
 
 # Set up PulseAudio for Zoom SDK audio capture
 echo "[Entrypoint] Starting PulseAudio daemon..."
-pulseaudio --start --log-target=syslog 2>/dev/null || true
-sleep 1
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/pulse-runtime}"
+mkdir -p "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
+export PULSE_RUNTIME_PATH="${PULSE_RUNTIME_PATH:-${XDG_RUNTIME_DIR}/pulse}"
+mkdir -p "${PULSE_RUNTIME_PATH}"
+chmod 700 "${PULSE_RUNTIME_PATH}" 2>/dev/null || true
+export PULSE_SERVER="${PULSE_SERVER:-unix:${PULSE_RUNTIME_PATH}/native}"
+
+start_pulseaudio() {
+  pulseaudio --daemonize=yes --disallow-exit --exit-idle-time=-1 --log-target=stderr --log-level=info --disable-shm=true 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if pactl info >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+if ! start_pulseaudio; then
+  echo "[Entrypoint] PulseAudio not ready after first start, retrying..."
+  pulseaudio -k 2>/dev/null || true
+  rm -rf "${PULSE_RUNTIME_PATH}"/* 2>/dev/null || true
+  unset DBUS_SESSION_BUS_ADDRESS
+  if ! start_pulseaudio; then
+    echo "[Entrypoint] PulseAudio user-mode failed, trying system-mode fallback..."
+    mkdir -p /var/run/pulse /var/lib/pulse
+    pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 --log-target=stderr --log-level=info --disable-shm=true 2>/dev/null || true
+    export PULSE_SERVER="unix:/var/run/pulse/native"
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if pactl info >/dev/null 2>&1; then
+        echo "[Entrypoint] PulseAudio ready (system-mode fallback)"
+        break
+      fi
+      sleep 0.5
+    done
+    if ! pactl info >/dev/null 2>&1; then
+      echo "[Entrypoint] WARNING: PulseAudio failed to initialize; TTS playback may fail"
+    fi
+  else
+    echo "[Entrypoint] PulseAudio ready after retry"
+  fi
+else
+  echo "[Entrypoint] PulseAudio ready"
+fi
 
 # Create a null sink for Zoom SDK audio output
 echo "[Entrypoint] Creating PulseAudio null sink for audio capture..."

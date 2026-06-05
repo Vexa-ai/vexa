@@ -596,9 +596,21 @@ class MeetingCreate(BaseModel):
         False,
         description="Enable voice agent (TTS, chat, screen share, avatar streaming) capabilities for this meeting"
     )
+    camera_enabled: Optional[bool] = Field(
+        None,
+        description="Enable outgoing bot camera (virtual camera/avatar/webpage rendering). Required for voice_agent_settings.url visual output.",
+    )
     default_avatar_url: Optional[str] = Field(
         None,
         description="Custom default avatar image URL for the bot's camera feed. Shown when no screen content is active. If omitted, the default Vexa logo is used."
+    )
+    voice_agent_settings: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional voice agent runtime settings. Supported keys: url (webpage URL to render on bot camera).",
+    )
+    voice_agent_url: Optional[str] = Field(
+        None,
+        description="Deprecated compatibility field. If provided, treated as voice_agent_settings.url.",
     )
     automatic_leave: Optional[AutomaticLeave] = Field(
         None,
@@ -637,6 +649,30 @@ class MeetingCreate(BaseModel):
         False,
         description="Synthetic-test mode: create meeting without launching a real bot. Test driver drives lifecycle via internal callback endpoints. Gated by VEXA_ENV != 'production'.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_camel_case_aliases(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        # Accept both snake_case and camelCase request bodies.
+        if "voice_agent_enabled" not in data and "voiceAgentEnabled" in data:
+            data["voice_agent_enabled"] = data.get("voiceAgentEnabled")
+        if "camera_enabled" not in data and "cameraEnabled" in data:
+            data["camera_enabled"] = data.get("cameraEnabled")
+        if "default_avatar_url" not in data and "defaultAvatarUrl" in data:
+            data["default_avatar_url"] = data.get("defaultAvatarUrl")
+        if "voice_agent_settings" not in data and "voiceAgentSettings" in data:
+            data["voice_agent_settings"] = data.get("voiceAgentSettings")
+        if "voice_agent_url" not in data and "voiceAgentUrl" in data:
+            data["voice_agent_url"] = data.get("voiceAgentUrl")
+
+        # Compatibility: allow flat URL field and upgrade it to nested settings.
+        if "voice_agent_settings" not in data and data.get("voice_agent_url"):
+            data["voice_agent_settings"] = {"url": data.get("voice_agent_url")}
+
+        return data
 
     @field_validator('platform')
     @classmethod
@@ -1032,6 +1068,27 @@ class MeetingConfigUpdate(BaseModel):
         if v is not None and v != "" and v not in ALLOWED_TASKS:
             raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
         return v
+
+
+class VoiceAgentSettingsUpdate(BaseModel):
+    """Schema for live voice-agent settings updates on active meetings."""
+    url: Optional[str] = Field(
+        None,
+        description="Webpage URL to render on the bot camera. Set null/empty to stop webpage rendering.",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v):
+        if v is None:
+            return v
+        s = str(v).strip()
+        if not s:
+            return None
+        parsed = urlparse(s)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("url must be a valid http/https URL")
+        return s
 
 # --- Transcription Schemas --- 
 

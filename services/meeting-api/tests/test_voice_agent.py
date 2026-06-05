@@ -356,3 +356,33 @@ class TestEvents:
 
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
+
+
+class TestVoiceAgentSettings:
+
+    @pytest.mark.asyncio
+    async def test_set_voice_agent_url(self, client, mock_redis, active_meeting):
+        """PATCH /voice-agent-settings with url → publishes voice_agent_set_url."""
+        with _patch_find_active(active_meeting):
+            resp = await client.patch(
+                f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/voice-agent-settings",
+                json={"url": "https://example.com"},
+            )
+
+        assert resp.status_code == 202
+        parsed = json.loads(mock_redis.publish.call_args[0][1])
+        assert parsed["action"] == "voice_agent_set_url"
+        assert parsed["url"] == "https://example.com"
+
+    @pytest.mark.asyncio
+    async def test_stop_voice_agent_url(self, client, mock_redis, active_meeting):
+        """PATCH /voice-agent-settings with null url → publishes voice_agent_stop."""
+        with _patch_find_active(active_meeting):
+            resp = await client.patch(
+                f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/voice-agent-settings",
+                json={"url": None},
+            )
+
+        assert resp.status_code == 202
+        parsed = json.loads(mock_redis.publish.call_args[0][1])
+        assert parsed["action"] == "voice_agent_stop"
