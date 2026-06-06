@@ -244,6 +244,12 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} invalid time format: {time_err} - Segment: {segment}")
                      continue
 
+                 # Skip empty-text segments — endpoint and db_writer both filter them;
+                 # storing them causes Redis→PG data loss (db_writer deletes without persisting).
+                 if not text_content.strip():
+                     logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} with empty text.")
+                     continue
+
                  # Fix inverted timestamps
                  if end_time_float < start_time_float:
                      start_time_float, end_time_float = end_time_float, start_time_float
@@ -291,9 +297,9 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                 try:
                     async with redis_c.pipeline(transaction=True) as pipe:
                         pipe.sadd(f"active_meetings", str(internal_meeting_id))
-                        pipe.expire(hash_key, REDIS_SEGMENT_TTL)
                         if segments_to_store:
                             pipe.hset(hash_key, mapping=segments_to_store)
+                        pipe.expire(hash_key, REDIS_SEGMENT_TTL)
                         results = await pipe.execute()
                         if any(res is None for res in results):
                             logger.error(f"Redis pipeline command failed critically for message {message_id}. Results: {results}")
