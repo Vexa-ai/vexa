@@ -101,6 +101,10 @@ env:
 preflight:
 	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if [ "$$TX_TOKEN" = "ci-placeholder" ]; then \
+		echo "  CI mode: skipping transcription validation (ci-placeholder token)"; \
+		exit 0; \
+	fi; \
 	if [ -z "$$TX_TOKEN" ] || [ "$$TX_TOKEN" = "your-token" ]; then \
 		echo ""; \
 		echo "  Vexa uses transcription.vexa.ai to process meeting audio."; \
