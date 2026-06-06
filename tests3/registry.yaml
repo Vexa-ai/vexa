@@ -92,6 +92,19 @@ BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS:
   - helm
   state: stateless
   max_duration_sec: 5
+GMEET_JOIN_CALLBACK_RESILIENT:
+  proves: "callJoiningCallback proceeds on transient blips (5xx/timeout → err.transient=true) and aborts on deliberate server rejections (4xx → err.transient=false) — control-plane restart during bot join no longer kills an otherwise-fine session (#3)"
+  symptom: "bot join aborted on meeting-api 5xx during rollout; 4xx (bad-request / invalid transition) correctly aborted but was indistinguishable from transient at the call site"
+  found: '2026-06-06'
+  type: script
+  script: tests/gmeet-join-callback-resilient.sh
+  step: join_callback_resilient
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 15
 BOT_GMEET_RECORDING_ENABLED_SURVIVES_TRACK_EVENT:
   proves: "bot dispatched against a GMeet meeting with recording_enabled=true survives the first video track event AND remains in 'active' for ≥120s — confirms screen-content.ts:1218-1228 SDP-munge site-2 is removed (v0.10.6 #291/#284)"
   symptom: "bot reaches active, runs 1-4 minutes, then crashes with 'page.evaluate Execution context destroyed' at recording.js:102 — site-2 transceiver.direction mutation produces malformed offer SDP, Chrome rejects setLocalDescription, peer enters degraded state, page navigates"
