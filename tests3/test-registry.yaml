@@ -779,3 +779,15 @@ tests:
       - startup_breadcrumb         # docker.ts has startupBreadcrumb()
       - startup_failure_reporter   # docker.ts has reportStartupFailure + X-Internal-Secret
       - GMEET_BOT_STARTUP_LOGGED   # compose: invalid-config bot → failure in DB
+
+  gmeet-join-callback-resilient:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/gmeet-join-callback-resilient.sh
+    features: [bot-lifecycle, realtime-transcription/gmeet]
+    max_duration_sec: 15
+    steps:
+      - 5xx_proceed
+      - 4xx_abort
+      - transient_flag_thrown
+      - joining_catches_transient
