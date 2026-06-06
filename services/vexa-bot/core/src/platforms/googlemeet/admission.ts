@@ -8,6 +8,23 @@ import {
   googleRejectionIndicators
 } from "./selectors";
 
+/**
+ * Distinct admission outcomes emitted by the detector.
+ * denial        — host explicitly rejected the bot from the waiting room.
+ * lobby_timeout — bot stayed in the waiting room past the admission timeout.
+ * join_failure  — bot never reached the lobby / no admission indicators appeared.
+ */
+export type AdmissionOutcome = "denial" | "lobby_timeout" | "join_failure";
+
+export class AdmissionError extends Error {
+  readonly outcome: AdmissionOutcome;
+  constructor(outcome: AdmissionOutcome, message: string) {
+    super(message);
+    this.name = "AdmissionError";
+    this.outcome = outcome;
+  }
+}
+
 // Function to check if bot has been rejected from the meeting
 export async function checkForGoogleRejection(page: Page): Promise<boolean> {
   try {
@@ -88,7 +105,7 @@ async function throwIfGoogleAdmissionRejected(page: Page, context: string): Prom
   const isRejected = await checkForGoogleRejection(page);
   if (isRejected) {
     log(`🚨 Bot was rejected from the Google Meet meeting by admin (${context})`);
-    throw new Error("Bot admission was rejected by meeting admin");
+    throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
   }
 }
 
@@ -220,7 +237,7 @@ export async function waitForGoogleMeetingAdmission(
         const isRejected = await checkForGoogleRejection(page);
         if (isRejected) {
           log("🚨 Bot was rejected from the Google Meet meeting by admin (polling mode)");
-          throw new Error("Bot admission was rejected by meeting admin");
+          throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
         }
 
         // Admission indicators — if meeting controls are visible, bot is admitted
@@ -293,15 +310,22 @@ export async function waitForGoogleMeetingAdmission(
     log("No admission indicators after timeout - checking rejection one last time...");
     const finalRejected = await checkForGoogleRejection(page);
     if (finalRejected) {
-      throw new Error("Bot admission was rejected by meeting admin");
+      throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
     }
 
+    // Distinguish lobby-timeout from join-failure by checking waiting-room state
+    const lobbyStillVisible = await checkForWaitingRoomIndicators(page);
     await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-3-no-indicators.png', fullPage: true });
     log("📸 Screenshot taken: No meeting indicators found after timeout");
-    throw new Error("Bot failed to join the Google Meet meeting - no meeting indicators found within timeout");
-    
+    if (lobbyStillVisible) {
+      throw new AdmissionError("lobby_timeout", "Bot is still in the Google Meet waiting room after timeout — host did not admit");
+    }
+    throw new AdmissionError("join_failure", "Bot failed to join the Google Meet meeting — no meeting indicators found within timeout");
+
   } catch (error: any) {
-    throw new Error(
+    // Re-throw AdmissionError instances unchanged so callers can inspect outcome.
+    if (error instanceof AdmissionError) throw error;
+    throw new AdmissionError("join_failure",
       `Bot was not admitted into the Google Meet meeting within the timeout period: ${error.message}`
     );
   }
