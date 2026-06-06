@@ -1,0 +1,57 @@
+# .harness rung-writer — the single rung carrier is written HERE, from actual results.
+# Kills the 407 'ready-below-floor' drift: stage (PR draft) cannot outrun rung (this label).
+name: rung
+on:
+  pull_request:
+    branches: [tests3-stateless]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+concurrency:
+  group: rung-${{ github.event.number }}
+  cancel-in-progress: true
+jobs:
+  rung:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # static + synthetic — cheap, always runs, no heavy infra (~30s)
+      - id: smoke
+        continue-on-error: true
+        run: make smoke
+
+      # compose floor — faithful stack on a throwaway VM. Reachable ONLY when CI secrets exist
+      # (LINODE_TOKEN to provision, SOPS_AGE_KEY to decrypt env). Absent -> skipped, rung caps at synthetic.
+      - id: compose
+        if: ${{ env.LINODE_TOKEN != '' && env.SOPS_AGE_KEY != '' }}
+        continue-on-error: true
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          set -e
+          make provision MODE=compose
+          make deploy   MODE=compose ENV=throwaway
+          make validate MODE=compose
+      - id: compose-teardown
+        if: ${{ always() && env.LINODE_TOKEN != '' && env.SOPS_AGE_KEY != '' }}
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+        run: make teardown || true
+
+      - name: stamp single rung carrier
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          rung=static
+          [ "${{ steps.smoke.outcome }}" = "success" ] && rung=synthetic
+          [ "${{ steps.compose.outcome }}" = "success" ] && rung=compose
+          for r in static synthetic compose clean-room live; do
+            gh pr edit "$PR" --repo "$REPO" --remove-label "rung:$r" 2>/dev/null || true
+          done
+          gh pr edit "$PR" --repo "$REPO" --add-label "rung:$rung"
+          echo "rung:$rung stamped on PR #$PR"
