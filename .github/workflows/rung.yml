@@ -31,16 +31,31 @@ jobs:
           echo "safe targets: ${SAFE_TARGETS:-<none>}"
           make --no-print-directory -C tests3 $SAFE_TARGETS
 
-      # compose — faithful stack on a throwaway VM. Reachable only when CI secrets exist.
+      # compose — local docker-compose on the CI runner (no cloud credentials needed).
+      # Uses pre-built images (IMAGE_TAG=latest from DockerHub). SOPS/Linode VM path
+      # remains available when those secrets are configured (takes precedence via env check).
       - id: compose
-        if: ${{ env.LINODE_TOKEN != '' && env.SOPS_AGE_KEY != '' }}
         continue-on-error: true
-        env: { LINODE_TOKEN: "${{ secrets.LINODE_TOKEN }}", SOPS_AGE_KEY: "${{ secrets.SOPS_AGE_KEY }}" }
         run: |
           set -e
-          make provision MODE=compose
-          make deploy   MODE=compose ENV=throwaway
-          make validate MODE=compose
+          if [ -n "$LINODE_TOKEN" ] && [ -n "$SOPS_AGE_KEY" ]; then
+            # Cloud VM path (when secrets are configured)
+            make provision MODE=compose
+            make deploy   MODE=compose ENV=throwaway
+            make validate MODE=compose
+          else
+            # Local CI path — pre-built images, no cloud credentials needed
+            cp deploy/env-example .env
+            sed -i 's|TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=ci-placeholder|' .env
+            make -C deploy/compose up
+            # Wait for services to be healthy
+            sleep 30
+            make -C tests3 validate-compose || exit 1
+            make -C deploy/compose down || true
+          fi
+        env:
+          LINODE_TOKEN: "${{ secrets.LINODE_TOKEN }}"
+          SOPS_AGE_KEY: "${{ secrets.SOPS_AGE_KEY }}"
       - if: ${{ always() && env.LINODE_TOKEN != '' }}
         env: { LINODE_TOKEN: "${{ secrets.LINODE_TOKEN }}" }
         run: make teardown || true
