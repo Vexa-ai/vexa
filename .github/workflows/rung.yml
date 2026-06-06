@@ -26,7 +26,10 @@ jobs:
             echo "no scoped static/synthetic targets — synthetic holds vacuously for this pack"
             exit 0
           fi
-          make --no-print-directory -C tests3 $TARGETS
+          # Replace smoke (deployment-dependent) with its static-safe subset
+          SAFE_TARGETS=$(echo "$TARGETS" | tr ' ' '\n' | sed 's/^smoke$/locks docs/' | tr '\n' ' ')
+          echo "safe targets: ${SAFE_TARGETS:-<none>}"
+          make --no-print-directory -C tests3 $SAFE_TARGETS
 
       # compose — faithful stack on a throwaway VM. Reachable only when CI secrets exist.
       - id: compose
