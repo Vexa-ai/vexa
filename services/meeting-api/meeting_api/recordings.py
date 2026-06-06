@@ -357,7 +357,7 @@ async def internal_upload_recording(
         rec_payload["completed_at"] = datetime.utcnow().isoformat()
         status_transitioned_to_completed = not was_completed
     else:
-        # Terminal state is sticky: never downgrade COMPLETED → IN_PROGRESS
+        # v0.10.5 R2 — defense-in-depth: terminal state is sticky; never downgrade COMPLETED → IN_PROGRESS
         # if a stray late chunk arrives after reconciler finalization.
         if not was_completed:
             rec_payload["status"] = RecordingStatus.IN_PROGRESS.value
