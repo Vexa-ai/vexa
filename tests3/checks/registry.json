@@ -1544,6 +1544,39 @@
       "file": "services/vexa-bot/core/src/platforms/googlemeet/humanized/humanizedInteraction.ts",
       "must_match": "pointerHitsTarget",
       "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_BOT_NO_CERT_ERROR_FLAGS",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "v0.10.7",
+      "proves": "baseBrowserArgs in constans.ts does NOT contain --ignore-certificate-errors as a string literal — the flag is detectable by Google and triggers the 'You can't join this meeting' interstitial on k8s/datacenter egress IPs (Pack F diagnosis)",
+      "symptom": "Bot launched from k8s (Linode LKE datacenter IP) hits Google's 'You can't join this meeting' interstitial instead of the lobby — Chrome fingerprint flags --ignore-certificate-errors / --disable-web-security are detected by Google bot-detection",
+      "file": "services/vexa-bot/core/src/constans.ts",
+      "must_not_match": "\"--ignore-certificate-errors\"",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_BOT_ANTI_AUTOMATION_FLAG",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "v0.10.7",
+      "proves": "baseBrowserArgs in constans.ts contains --disable-blink-features=AutomationControlled — suppresses Chrome's navigator.webdriver=true automation flag which Google uses as a bot signal",
+      "symptom": "Chrome launched with navigator.webdriver=true (automation flag exposed); Google Meet fingerprints the bot session as automated and blocks admission on datacenter IPs",
+      "file": "services/vexa-bot/core/src/constans.ts",
+      "must_match": "disable-blink-features=AutomationControlled",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_K8S_EGRESS_PROXY_KNOB",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "v0.10.7",
+      "proves": "runtimeProfiles in values.yaml exposes HTTP_PROXY/HTTPS_PROXY env knobs for bot pods — operators can route k8s bot egress through a residential or less-flagged proxy to pass Google IP-reputation checks",
+      "symptom": "No operator knob exists to route bot pod traffic through a proxy; k8s datacenter IPs have no escape route from Google IP-reputation blocks even after Chrome flag cleanup",
+      "file": "deploy/helm/charts/vexa/values.yaml",
+      "must_match": "BOT_HTTP_PROXY",
+      "max_duration_sec": 5
     }
   ]
 }
