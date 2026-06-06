@@ -60,7 +60,11 @@ health: detect                    ## service endpoints respond (5s)
 contracts: detect                 ## API behavior (15s)
 	@$(T3)/checks/run --tier contract
 
-smoke: docs locks env health contracts ## all checks, no meetings (30s)
+smoke: docs locks ## all checks, no meetings (30s); live tiers skip with no deployment
+	@SMOKE_NO_INFRA=1 $(T3)/lib/detect.sh
+	@SMOKE_NO_INFRA=1 $(T3)/checks/run --tier env
+	@SMOKE_NO_INFRA=1 $(T3)/checks/run --tier health
+	@SMOKE_NO_INFRA=1 $(T3)/checks/run --tier contract
 	@touch $(SMOKE_STAMP)
 	@echo ""; echo "  Smoke passed."
 
