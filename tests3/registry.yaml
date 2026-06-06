@@ -3582,3 +3582,31 @@ DISRUPTIVE_CRASH_KILLS_CANONICAL_BOT_CONTAINER:
   state: stateless
   max_duration_sec: 5
   release: 260508-v0.10.6.1
+
+GMEET_HUMANIZED_JOIN_LANE_GREEN:
+  proves: "humanized join path is structurally complete on compose + Lite lanes: xdotool+xclip declared in Dockerfile.lite, HumanizedInteractor module present, waitForAnySelector wired, locale-agnostic selectors first (Pack 7 / issue #7)"
+  symptom: "GMeet bot falls back to synthetic Playwright click (isTrusted=false) because xdotool/xclip missing from Lite image OR humanized/ module not present OR join.ts still uses single-selector waitForSelector; bot-detection triggers rejection"
+  found: '2026-06-06'
+  type: script
+  script: tests/static/humanized-join-lane-green.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+  release: pack-7-humanized-join
+
+GMEET_TRANSCRIBE_E2E:
+  proves: "end-to-end transcript pipeline is structurally complete: join.ts uses ordered multi-selector resolver with screenshot-on-failure, humanized text-entry (xclip) is wired, x11Input tracks simPointer in dryRun, humanized module ships all 6 files (Pack 7 / issue #7)"
+  symptom: "bot joins GMeet but name-entry or join-button click silently fails; no transcript segments produced; join.ts swallows errors without screenshot evidence"
+  found: '2026-06-06'
+  type: script
+  script: tests/static/transcribe-e2e-harness.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+  release: pack-7-humanized-join
