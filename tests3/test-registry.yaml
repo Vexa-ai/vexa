@@ -747,3 +747,17 @@ tests:
     script: tests/local-human-mechanical-gate.sh
     features: [dashboard, infrastructure, post-meeting-transcription, realtime-transcription]
     max_duration_sec: 30
+
+  bot-startup-crash:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/bot-startup-crash.sh
+    features: [bot-lifecycle, realtime-transcription/gmeet]
+    max_duration_sec: 90
+    steps:
+      - display_exported           # entrypoint.sh exports DISPLAY
+      - start_log                  # entrypoint.sh echoes start breadcrumb
+      - exit_code_log              # entrypoint.sh captures + echoes exit code
+      - startup_breadcrumb         # docker.ts has startupBreadcrumb()
+      - startup_failure_reporter   # docker.ts has reportStartupFailure + X-Internal-Secret
+      - GMEET_BOT_STARTUP_LOGGED   # compose: invalid-config bot → failure in DB

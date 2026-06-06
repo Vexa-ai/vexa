@@ -79,6 +79,58 @@ BOT_CREATE_OK:
   - helm
   state: stateful
   max_duration_sec: 30
+BOT_ENTRYPOINT_DISPLAY_EXPORTED:
+  proves: "entrypoint.sh exports DISPLAY before starting node — bot finds Xvfb (:99) on the humanized XTEST path (#407 407-C)"
+  symptom: "bot crashes at startup with DISPLAY not set; Xvfb (:99) is running but node process cannot find it because DISPLAY was never exported"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/entrypoint.sh
+  must_match: export DISPLAY
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_ENTRYPOINT_EXIT_CODE_LOGGED:
+  proves: "entrypoint.sh captures node exit code and echoes it — a zero-log instant crash is visible in container stdout (#407 407-C)"
+  symptom: "bot container exits silently; no exit code in stdout; operator cannot determine whether node crashed or was OOM-killed"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/entrypoint.sh
+  must_match: EXIT_CODE=\$\?
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_STARTUP_BREADCRUMB_IN_DOCKER_TS:
+  proves: "docker.ts emits a structured startup breadcrumb JSON on the very first line of main() — pre-config crashes are never zero-log (#407 407-C)"
+  symptom: "bot container crashes before config parsing; container stdout is empty; no structured log line to signal the process even started"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/src/docker.ts
+  must_match: startupBreadcrumb
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_STARTUP_FAILURE_REPORTER_HAS_SECRET:
+  proves: "reportStartupFailure in docker.ts includes X-Internal-Secret header so the failure callback reaches meeting-api on authenticated stacks (#407 407-C)"
+  symptom: "reportStartupFailure sends the failure payload but meeting-api returns 403 (missing X-Internal-Secret); failure reason is lost silently"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/src/docker.ts
+  must_match: X-Internal-Secret
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS:
   proves: "bot's in-process failure_stage tracker advances on each successful status_change callback for joining/awaiting_admission/active — crashes past joining no longer get persisted as failure_stage='joining' (v0.10.6 #294)"
   symptom: "every meeting that fails post-admission shows failure_stage='joining' in JSONB; #276's server-side derivation hides the user-visible impact but raw data->>'failure_stage' is still wrong; analytics + 3rd-party consumers see the wrong value"
@@ -660,6 +712,17 @@ GATEWAY_UP:
   - helm
   state: stateless
   max_duration_sec: 30
+GMEET_BOT_STARTUP_LOGGED:
+  proves: "vexa-bot emits a structured startup breadcrumb before config parsing and reports the failure reason to meeting-api on invalid-config crash \u2014 zero-log silent startup crashes are eliminated (#407 407-C)"
+  symptom: "bot container crashes on startup with an invalid BOT_CONFIG; meetings.data.bot_logs is empty; operator cannot diagnose the failure cause (3 such crashes seen post-hotfix)"
+  found: '2026-06-06'
+  type: script
+  script: tests/bot-startup-crash.sh
+  step: GMEET_BOT_STARTUP_LOGGED
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 90
 GMEET_URL_PARSED:
   proves: "Google Meet URL accepted by POST /bots \u2014 parser handles GMeet format"
   symptom: Google Meet URL not accepted by POST /bots
