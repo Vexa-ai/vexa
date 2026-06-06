@@ -1580,6 +1580,31 @@ def main():
             _write_json_report(json_out, tier_filter, [], 0)
         return
 
+    # Smoke is a static+synthetic-only contract (no heavy infra). When invoked
+    # from `make smoke` with no deployment present (SMOKE_NO_INFRA=1 and detect
+    # resolved mode=none), the live tiers (env/health/contract) have no stack to
+    # talk to: skip them cleanly as "no deployment" rather than hard-failing.
+    # The static tier never touches a deployment, so it always runs.
+    LIVE_TIERS = ("env", "health", "contract")
+    if (os.environ.get("SMOKE_NO_INFRA") == "1"
+            and tier_filter in LIVE_TIERS
+            and (state_read("deploy_mode") or "none") == "none"):
+        print()
+        print(f"  {tier_filter} checks")
+        print(f"  {'─' * 46}")
+        steps = []
+        for lock in locks:
+            lid = lock["id"]
+            print(f"  {dim('skip')}  {lid}  (no deployment)")
+            steps.append({"id": lid, "status": "skip",
+                          "message": "no deployment — deferred to compose rung"})
+        print(f"  {'─' * 46}")
+        print(f"  {dim(f'{len(locks)} {tier_filter} checks skipped — no deployment (deferred to compose rung)')}")
+        print()
+        if json_out:
+            _write_json_report(json_out, tier_filter, steps, 0)
+        return
+
     # Bootstrap credentials for tiers that need them
     if tier_filter in ("contract", None):
         bootstrap_creds()
