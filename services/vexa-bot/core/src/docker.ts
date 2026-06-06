@@ -66,35 +66,86 @@ export const BotConfigSchema = z.object({
 });
 
 
-(function main() {
-const rawConfig = process.env.BOT_CONFIG;
-if (!rawConfig) {
-  console.error("BOT_CONFIG environment variable is not set");
-  process.exit(1);
+// #407 407-C: a crash BEFORE runBot (missing/invalid BOT_CONFIG, schema-validation
+// throw, module-import failure) otherwise leaves meetings.data.bot_logs EMPTY — a silent
+// "zero-log" failure the operator can't diagnose (3 such crashes seen post-hotfix). Two
+// guards: (1) a structured startup breadcrumb on the very first line, and (2) best-effort
+// report the failure reason to meeting-api so the crash is RECORDED, never invisible.
+function startupBreadcrumb(): void {
+  try {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(), level: "info", subsystem: "startup",
+      msg: "bot container starting (docker.ts main, pre-config)",
+    }));
+  } catch { /* never let the breadcrumb throw */ }
 }
+
+async function reportStartupFailure(rawConfig: string | undefined, error: any): Promise<void> {
+  try {
+    let cfg: any = {};
+    if (rawConfig) { try { cfg = JSON.parse(rawConfig); } catch { /* not even JSON */ } }
+    const url = cfg?.meetingApiCallbackUrl;
+    const connectionId = cfg?.connectionId;
+    if (!url || !connectionId) return; // can't reach meeting-api without these — nothing to do
+    const endpoint = String(url).replace("/exited", "/status_change");
+    const internalSecret = cfg?.internalSecret;
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 5000);
+    await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(internalSecret ? { "X-Internal-Secret": internalSecret } : {}),
+      },
+      body: JSON.stringify({
+        connection_id: connectionId,
+        container_id: cfg?.container_name,
+        status: "failed",
+        reason: "startup_failure",
+        failure_stage: "requested",
+        completion_reason: "validation_error",
+        error_details: { message: String(error?.message ?? error), where: "docker.ts:main (pre-runBot)" },
+        bot_logs: [`[startup] FATAL pre-runBot failure: ${String(error?.message ?? error)}`],
+        timestamp: new Date().toISOString(),
+      }),
+      signal: controller.signal,
+    }).catch(() => { /* swallow — best-effort */ });
+    clearTimeout(t);
+  } catch { /* the reporter must never throw */ }
+}
+
+(async function main() {
+  startupBreadcrumb();
+  const rawConfig = process.env.BOT_CONFIG;
+  if (!rawConfig) {
+    console.error("BOT_CONFIG environment variable is not set");
+    await reportStartupFailure(rawConfig, new Error("BOT_CONFIG environment variable is not set"));
+    process.exit(1);
+  }
 
   try {
-  const parsedConfig = JSON.parse(rawConfig);
+    const parsedConfig = JSON.parse(rawConfig);
 
-  // Check mode BEFORE Zod validation — each mode has its own schema
-  if (parsedConfig.mode === "browser_session") {
-    const sessionConfig = BrowserSessionConfigSchema.parse(parsedConfig);
-    import('./browser-session').then(({ runBrowserSession }) => {
-      runBrowserSession(sessionConfig).catch((error) => {
-        console.error("Error running browser session:", error);
+    // Check mode BEFORE Zod validation — each mode has its own schema
+    if (parsedConfig.mode === "browser_session") {
+      const sessionConfig = BrowserSessionConfigSchema.parse(parsedConfig);
+      import('./browser-session').then(({ runBrowserSession }) => {
+        runBrowserSession(sessionConfig).catch((error) => {
+          console.error("Error running browser session:", error);
+          process.exit(1);
+        });
+      });
+    } else {
+      const validatedConfig = BotConfigSchema.parse(parsedConfig);
+      const botConfig: BotConfig = validatedConfig as BotConfig;
+      runBot(botConfig).catch((error) => {
+        console.error("Error running bot:", error);
         process.exit(1);
       });
-    });
-  } else {
-    const validatedConfig = BotConfigSchema.parse(parsedConfig);
-    const botConfig: BotConfig = validatedConfig as BotConfig;
-    runBot(botConfig).catch((error) => {
-      console.error("Error running bot:", error);
-      process.exit(1);
-    });
+    }
+  } catch (error) {
+    console.error("Invalid BOT_CONFIG:", error);
+    await reportStartupFailure(rawConfig, error);  // record the reason in the DB, not a silent zero-log crash
+    process.exit(1);
   }
-} catch (error) {
-  console.error("Invalid BOT_CONFIG:", error);
-  process.exit(1);
-}
 })()
