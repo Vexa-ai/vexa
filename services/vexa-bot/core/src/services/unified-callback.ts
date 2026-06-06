@@ -15,7 +15,9 @@ export type CompletionReason =
   | "awaiting_admission_rejected"
   | "left_alone"
   | "evicted"
-  | "max_bot_time_exceeded";
+  | "max_bot_time_exceeded"
+  // Pack D (#5): distinct pre-lobby join failure (fast fail before reaching waiting room)
+  | "join_failure";
 
 export type FailureStage =
   | "requested"
@@ -269,6 +271,11 @@ export function mapExitReasonToStatus(
         return { status: "failed", failureStage: "requested" };
       case "validation_error":
         return { status: "failed", failureStage: "requested" };
+      case "join_meeting_error":
+        // Pack D (#5): bot failed to navigate to the meeting URL (pre-lobby
+        // fast fail). Distinct from stopped_before_admission (user-stopped)
+        // and awaiting_admission_timeout (waited full lobby timeout).
+        return { status: "failed", failureStage: trackedStage, completionReason: "join_failure" };
       case "teams_error":
       case "google_meet_error":
       case "zoom_error":

@@ -119,6 +119,7 @@ async def _classify_stopped_exit(
         MeetingCompletionReason.VALIDATION_ERROR,
         MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
         MeetingCompletionReason.STOPPED_WITH_NO_AUDIO,
+        MeetingCompletionReason.JOIN_FAILURE,
     }
     if requested_reason in _explicit_failure_reasons:
         return (MeetingStatus.FAILED, requested_reason)
@@ -446,7 +447,7 @@ async def bot_exit_callback(
                 "admission_false_positive": MeetingCompletionReason.STOPPED,
                 "stop_requested_pre_admission": MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
                 "missing_meeting_url": MeetingCompletionReason.VALIDATION_ERROR,
-                "join_meeting_error": MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+                "join_meeting_error": MeetingCompletionReason.JOIN_FAILURE,
             }
             unknown_reason = bool(
                 payload.reason and payload.reason not in _BOT_REASON_TO_COMPLETION
@@ -842,6 +843,31 @@ async def bot_status_change_callback(
                 "meeting_status": meeting.status,
             }
 
+        # Pack D (#5) — completion_reason canonicalization.
+        # For non-STOPPING states (AWAITING_ADMISSION, JOINING, etc.) the bot
+        # sends status=COMPLETED with an explicit failure reason (e.g.
+        # awaiting_admission_rejected, awaiting_admission_timeout, join_failure).
+        # These must route to FAILED — same semantics as the STOPPING path's
+        # Pack J _explicit_failure_reasons check, but without the deferred-
+        # orphan-window detour (non-STOPPING exits land here directly).
+        _canonical_failure_reasons = {
+            MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
+            MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
+            MeetingCompletionReason.JOIN_FAILURE,
+            MeetingCompletionReason.EVICTED,
+            MeetingCompletionReason.MAX_BOT_TIME_EXCEEDED,
+            MeetingCompletionReason.VALIDATION_ERROR,
+            MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+            MeetingCompletionReason.STOPPED_WITH_NO_AUDIO,
+        }
+        if classified_reason in _canonical_failure_reasons:
+            target_status = MeetingStatus.FAILED
+            logger.info(
+                f"status_change canonical (Pack D): meeting {meeting.id} "
+                f"reason={classified_reason.value} → FAILED "
+                f"(from state={meeting.status}, non-STOPPING explicit failure)"
+            )
+
         success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
         if success:
             meeting.end_time = datetime.utcnow()
@@ -864,10 +890,18 @@ async def bot_status_change_callback(
         # propagates: dashboards/observers grouping by completion_reason
         # see the bot-reported value (or null when bot didn't supply
         # one — caller responsibility to provide a meaningful reason).
+        #
+        # Pack D (#5) — failure_stage accuracy: derive failure_stage
+        # server-side from meeting.status at write-time instead of
+        # trusting payload.failure_stage from the bot. The bot's in-
+        # process tracker (v0.10.6 #294) is correct when all callbacks
+        # succeed, but if an intermediate callback was rejected the bot
+        # tracker can lag behind the server's view. Server-side derivation
+        # (same approach as exit_callback else-branch) removes the drift.
         success = await update_meeting_status(
             meeting, MeetingStatus.FAILED, db,
             completion_reason=payload.completion_reason,
-            failure_stage=payload.failure_stage,
+            failure_stage=_failure_stage_from_status(meeting.status),
             error_details=str(payload.error_details) if payload.error_details else None,
         )
         if success:
@@ -1039,3 +1073,50 @@ async def synthetic_session_bootstrap(
         f"meeting_id={payload.meeting_id}"
     )
     return {"session_uid": session_uid, "meeting_id": payload.meeting_id, "created": True}
+
+
+class SyntheticSeedTranscription(BaseModel):
+    meeting_id: int
+    count: int = 1  # number of synthetic rows to insert
+
+
+@router.post("/bots/internal/test/seed-transcription", status_code=201, include_in_schema=False)
+async def synthetic_seed_transcription(
+    payload: SyntheticSeedTranscription,
+    db: AsyncSession = Depends(get_db),
+):
+    """Insert synthetic Transcription rows for a meeting — test harness only.
+
+    Lets the synthetic rig simulate a meeting that captured audio so the
+    Pack J classifier (_classify_stopped_exit) counts > 0 segments and
+    routes the exit to COMPLETED. Gated by VEXA_ENV != 'production'.
+    """
+    import os
+    if os.getenv("VEXA_ENV") == "production":
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    meeting = await db.get(Meeting, payload.meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail=f"Meeting {payload.meeting_id} not found")
+
+    now = datetime.utcnow()
+    inserted = 0
+    for i in range(max(1, payload.count)):
+        row = Transcription(
+            meeting_id=payload.meeting_id,
+            start_time=float(i),
+            end_time=float(i + 1),
+            text=f"[synthetic segment {i}]",
+            speaker="synthetic",
+            language="en",
+            created_at=now,
+        )
+        db.add(row)
+        inserted += 1
+
+    await db.commit()
+    logger.info(
+        f"[Pack X synthetic] Seeded {inserted} transcription row(s) "
+        f"for meeting_id={payload.meeting_id}"
+    )
+    return {"meeting_id": payload.meeting_id, "inserted": inserted}
