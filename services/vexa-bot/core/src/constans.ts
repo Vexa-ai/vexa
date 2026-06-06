@@ -16,6 +16,15 @@
 export const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
 // Base browser launch arguments (shared across all modes).
+//
+// Pack F (2026-06-06): Removed --ignore-certificate-errors, --ignore-ssl-errors,
+// --ignore-certificate-errors-spki-list, --disable-web-security, and
+// --allow-running-insecure-content. These flags are detectable by Google's
+// bot-detection layer and directly cause the "You can't join this meeting"
+// interstitial on datacenter egress IPs (k8s / Linode LKE). Replaced with
+// --disable-blink-features=AutomationControlled (mirrors getAuthenticatedBrowserArgs).
+// Google Meet uses valid TLS certs; the certificate-error flags were never needed
+// for meet.google.com and init-scripts are injected via CDP (unaffected by CSP).
 const baseBrowserArgs = [
   "--incognito",
   "--no-sandbox",
@@ -43,12 +52,8 @@ const baseBrowserArgs = [
   "--in-process-gpu",
   "--use-fake-ui-for-media-stream",
   "--use-file-for-fake-video-capture=/dev/null",
-  "--allow-running-insecure-content",
-  "--disable-web-security",
+  "--disable-blink-features=AutomationControlled",
   "--disable-features=VizDisplayCompositor",
-  "--ignore-certificate-errors",
-  "--ignore-ssl-errors",
-  "--ignore-certificate-errors-spki-list",
   "--disable-site-isolation-trials"
 ];
 
