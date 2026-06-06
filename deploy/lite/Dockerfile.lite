@@ -45,6 +45,8 @@ RUN apt-get update && \
     g++ \
     xvfb \
     x11vnc \
+    xdotool \
+    xclip \
     novnc \
     python3-websockify \
     fluxbox \

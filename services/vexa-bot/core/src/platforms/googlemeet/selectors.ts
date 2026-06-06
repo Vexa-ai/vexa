@@ -252,9 +252,12 @@ export const googleRemovalIndicators: string[] = [
 // Google Meet UI interaction selectors.
 //
 // Locale-agnostic FIRST (structure / jsname / role), then English text as a
-// fallback. The English-literal has-text locators only match an English UI, so
-// a Hungarian (or any non-English) Meet lobby never found the join button —
-// the bot sat in the lobby until manual_leave (prod ids 13951 13952 14018 14153).
+// fallback. The English-literal `text()="Ask to join"` / has-text locators only
+// match an English UI, so a Hungarian (or any non-English) Meet lobby never
+// found the join button — the bot sat in the lobby until manual_leave
+// (prod ids 13951 13952 14018 14153). The primary admission CTA in the Meet
+// lobby is the last/right-most jsname-tagged <button> in the lobby controls;
+// it carries a jsname and is the only enabled <button> with non-icon text.
 export const googleJoinButtonSelectors: string[] = [
   // Locale-agnostic: a real <button> carrying Google's jsname token whose label
   // text is non-empty (excludes icon-only mic/camera toggles which have no text
@@ -283,7 +286,8 @@ export const googleMicrophoneButtonSelectors: string[] = [
 // Name input — locale-agnostic FIRST. `aria-label="Your name"` is English-only,
 // so the non-English lobby (Hungarian: "A neved") never matched and the bot
 // could not fill its name. The lobby has exactly one editable text input, so
-// match by structure/role; keep the English aria-label + placeholder as fallbacks.
+// match by structure/role; keep the English aria-label + placeholder as
+// fallbacks.
 export const googleNameInputSelectors: string[] = [
   // Locale-agnostic: the single text input in the pre-join lobby form.
   'input[jsname][type="text"]',
