@@ -14,13 +14,48 @@ logger = logging.getLogger(__name__)
 # These are the accepted language codes from the faster-whisper library
 # Source: faster_whisper.tokenizer._LANGUAGE_CODES
 ACCEPTED_LANGUAGE_CODES = {
-    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", 
-    "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw", 
-    "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", 
-    "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", 
-    "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", 
-    "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", 
+    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy",
+    "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw",
+    "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn",
+    "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
+    "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si",
+    "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl",
     "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh", "yue"
+}
+
+# Whisper (and whisper-large-v3-turbo) returns language as a full English name.
+# Map these to ISO codes so TranscriptionSegment validators accept them.
+_WHISPER_FULL_NAME_TO_ISO: dict[str, str] = {
+    "Afrikaans": "af", "Albanian": "sq", "Amharic": "am", "Arabic": "ar",
+    "Armenian": "hy", "Assamese": "as", "Azerbaijani": "az",
+    "Bashkir": "ba", "Basque": "eu", "Belarusian": "be", "Bengali": "bn",
+    "Bosnian": "bs", "Breton": "br", "Bulgarian": "bg",
+    "Cantonese": "yue", "Catalan": "ca", "Chinese": "zh", "Croatian": "hr", "Czech": "cs",
+    "Danish": "da", "Dutch": "nl",
+    "English": "en", "Estonian": "et",
+    "Faroese": "fo", "Finnish": "fi", "French": "fr",
+    "Galician": "gl", "Georgian": "ka", "German": "de", "Greek": "el", "Gujarati": "gu",
+    "Haitian Creole": "ht", "Hausa": "ha", "Hawaiian": "haw", "Hebrew": "he",
+    "Hindi": "hi", "Hungarian": "hu",
+    "Icelandic": "is", "Indonesian": "id", "Italian": "it",
+    "Japanese": "ja", "Javanese": "jw",
+    "Kannada": "kn", "Kazakh": "kk", "Khmer": "km", "Korean": "ko",
+    "Lao": "lo", "Latin": "la", "Latvian": "lv", "Lingala": "ln",
+    "Lithuanian": "lt", "Luxembourgish": "lb",
+    "Macedonian": "mk", "Malagasy": "mg", "Malay": "ms", "Malayalam": "ml",
+    "Maltese": "mt", "Maori": "mi", "Marathi": "mr", "Mongolian": "mn", "Myanmar": "my",
+    "Nepali": "ne", "Norwegian": "no",
+    "Occitan": "oc",
+    "Pashto": "ps", "Persian": "fa", "Polish": "pl", "Portuguese": "pt", "Punjabi": "pa",
+    "Romanian": "ro", "Russian": "ru",
+    "Sanskrit": "sa", "Serbian": "sr", "Shona": "sn", "Sindhi": "sd",
+    "Sinhala": "si", "Slovak": "sk", "Slovenian": "sl", "Somali": "so",
+    "Spanish": "es", "Sundanese": "su", "Swahili": "sw", "Swedish": "sv",
+    "Tagalog": "tl", "Tajik": "tg", "Tamil": "ta", "Tatar": "tt",
+    "Telugu": "te", "Thai": "th", "Tibetan": "bo", "Turkish": "tr", "Turkmen": "tk",
+    "Ukrainian": "uk", "Urdu": "ur", "Uzbek": "uz",
+    "Vietnamese": "vi", "Welsh": "cy",
+    "Yiddish": "yi", "Yoruba": "yo", "Yue Chinese": "yue",
 }
 
 # --- Allowed Tasks ---
@@ -1053,9 +1088,13 @@ class TranscriptionSegment(BaseModel):
     @field_validator('language')
     @classmethod
     def validate_language(cls, v):
-        """Validate that the language code is one of the accepted faster-whisper codes."""
-        if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
-            raise ValueError(f"Invalid language code '{v}'. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
+        """Normalise Whisper full-name languages to ISO codes; drop truly unknown values."""
+        if v is None or v == "":
+            return v
+        if v in _WHISPER_FULL_NAME_TO_ISO:
+            return _WHISPER_FULL_NAME_TO_ISO[v]
+        if v not in ACCEPTED_LANGUAGE_CODES:
+            return None
         return v
 
     class Config:
