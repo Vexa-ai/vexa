@@ -54,6 +54,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteract
     x11vnc \
     socat \
     autocutsel \
+    xdotool \
+    xclip \
     openssh-server \
     sshpass \
     unzip \
