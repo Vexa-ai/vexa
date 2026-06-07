@@ -8,6 +8,40 @@ import {
   googleRejectionIndicators
 } from "./selectors";
 
+/**
+ * Distinct admission outcomes emitted by the detector.
+ * denial        — host explicitly rejected the bot from the waiting room.
+ * lobby_timeout — bot stayed in the waiting room past the admission timeout.
+ * join_failure  — bot never reached the lobby / no admission indicators appeared.
+ */
+export type AdmissionOutcome = "denial" | "lobby_timeout" | "join_failure";
+
+export class AdmissionError extends Error {
+  readonly outcome: AdmissionOutcome;
+  constructor(outcome: AdmissionOutcome, message: string) {
+    super(message);
+    this.name = "AdmissionError";
+    this.outcome = outcome;
+  }
+}
+
+// Detect an active reCAPTCHA (enterprise) challenge. Google renders it in iframes whose
+// URL contains "/recaptcha/"; it can sit on the same screen as a "Return to home screen"
+// button, which otherwise reads exactly like an admin rejection. Used to keep the bot ON
+// the page (instead of quitting) so the challenge can be solved by a human over VNC or an
+// agent over CDP — after which the normal admission poll proceeds into the meeting.
+export async function hasRecaptchaChallenge(page: Page): Promise<boolean> {
+  try {
+    for (const frame of page.frames()) {
+      if ((frame.url() || "").includes("/recaptcha/")) return true;
+    }
+    const iframe = page.locator('iframe[src*="recaptcha"]').first();
+    return await iframe.isVisible().catch(() => false);
+  } catch {
+    return false;
+  }
+}
+
 // Function to check if bot has been rejected from the meeting
 export async function checkForGoogleRejection(page: Page): Promise<boolean> {
   try {
@@ -16,6 +50,15 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
       try {
         const element = await page.locator(selector).first();
         if (await element.isVisible()) {
+          // A reCAPTCHA challenge renders the SAME "Return to home screen" affordance as
+          // an admin rejection. If a captcha is on screen, this is Google bot-detection,
+          // NOT a host denial — classifying it as a rejection makes the bot quit before
+          // the captcha can be solved. Stay instead; the admission poll keeps running so a
+          // solve (human via VNC / agent via CDP) leads straight into admission.
+          if (await hasRecaptchaChallenge(page)) {
+            log(`🤖 reCAPTCHA present alongside rejection indicator "${selector}" — treating as bot-detection, NOT admin rejection. Staying for manual/agent solve.`);
+            return false;
+          }
           log(`🚨 Google Meet admission rejection detected: Found rejection indicator "${selector}"`);
           return true;
         }
@@ -41,41 +84,12 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
     return false;
   }
 
-  // Wake the UI before probing. Google Meet auto-hides the in-call toolbar
-  // (mic/camera/present/leave) after a few seconds of no pointer activity — and the
-  // bot never moves a real mouse. Once admitted (especially when a participant is
-  // *presenting*, which restyles the chrome), every toolbar selector reads
-  // isVisible:false, so the bot wrongly concludes "not admitted", keeps polling, and
-  // false-escalates to unknown_blocking_state / needs_human_help while actually sitting
-  // in the call (observed live: meeting in-progress, "X (Presenting)" visible, 0
-  // transcripts). A synthetic pointer move re-reveals the toolbar so isVisible() is
-  // meaningful again. Best-effort; ignore failures.
-  try {
-    await page.mouse.move(640, 360);
-    await page.mouse.move(960, 540);
-  } catch { /* headless/no-input edge — fall through to presence checks */ }
-
   // 2. DOM SELECTORS: participant tiles, self-name, share/present buttons.
   // NOTE: MediaStream-based detection was tested but Google Meet's lobby has
   // active media elements (self-preview audio tracks), causing false positives.
   // Filtering self vs. remote streams is needed — tracked as follow-up.
-  //
-  // Structural selectors ([data-participant-id], [data-self-name]) do NOT exist in the
-  // lobby (see selectors.ts) and do NOT auto-hide — so DOM PRESENCE (count>0), not
-  // visibility, is the reliable admitted signal. The waiting-room negative guard above
-  // already rules out the lobby, so presence here means we're in the call. Toolbar
-  // buttons remain visibility-gated (they legitimately exist disabled in some states).
-  const presenceSelectors = new Set(['[data-participant-id]', '[data-self-name]']);
   for (const selector of googleInitialAdmissionIndicators) {
     try {
-      if (presenceSelectors.has(selector)) {
-        const count = await page.locator(selector).count();
-        if (count > 0) {
-          log(`✅ Found Google Meet admission indicator (DOM presence, auto-hide-proof): ${selector}`);
-          return true;
-        }
-        continue;
-      }
       const element = page.locator(selector).first();
       const isVisible = await element.isVisible();
       if (isVisible) {
@@ -111,6 +125,14 @@ export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean
     }
   }
   return false;
+}
+
+async function throwIfGoogleAdmissionRejected(page: Page, context: string): Promise<void> {
+  const isRejected = await checkForGoogleRejection(page);
+  if (isRejected) {
+    log(`🚨 Bot was rejected from the Google Meet meeting by admin (${context})`);
+    throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
+  }
 }
 
 // New function to wait for Google Meet meeting admission (canonical Teams-style)
@@ -187,19 +209,16 @@ export async function waitForGoogleMeetingAdmission(
       const effectiveTimeout = () => timeout + getEscalationExtensionMs();
 
       while (Date.now() - startTime < effectiveTimeout()) {
+        // Host denial can leave stale waiting-room text in the DOM. Check the
+        // terminal rejection state before treating the page as still waiting.
+        await throwIfGoogleAdmissionRejected(page, "waiting-room polling");
+
         // Check if we're still in waiting room using visibility
         const stillWaiting = await checkForWaitingRoomIndicators(page);
 
         if (!stillWaiting) {
           log("Google Meet waiting room indicator disappeared - checking if bot was admitted or rejected...");
           unknownStateDuration += checkInterval;
-
-          // CRITICAL: Check for rejection first since that's a definitive outcome
-          const isRejected = await checkForGoogleRejection(page);
-          if (isRejected) {
-            log("🚨 Bot was rejected from the Google Meet meeting by admin");
-            throw new Error("Bot admission was rejected by meeting admin");
-          }
 
           // Check for admission indicators since waiting room disappeared and no rejection found
           const admissionFound = await checkForGoogleAdmissionIndicators(page);
@@ -244,7 +263,7 @@ export async function waitForGoogleMeetingAdmission(
         const isRejected = await checkForGoogleRejection(page);
         if (isRejected) {
           log("🚨 Bot was rejected from the Google Meet meeting by admin (polling mode)");
-          throw new Error("Bot admission was rejected by meeting admin");
+          throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
         }
 
         // Admission indicators — if meeting controls are visible, bot is admitted
@@ -290,10 +309,10 @@ export async function waitForGoogleMeetingAdmission(
         const checkInterval = 2000;
         const startTime2 = Date.now();
         while (Date.now() - startTime2 < timeout) {
+          await throwIfGoogleAdmissionRejected(page, "late waiting-room polling");
+
           const stillWaiting = await checkForWaitingRoomIndicators(page);
           if (!stillWaiting) {
-            const isRejected2 = await checkForGoogleRejection(page);
-            if (isRejected2) throw new Error("Bot admission was rejected by meeting admin");
             const admissionFound2 = await checkForGoogleAdmissionIndicators(page);
             if (admissionFound2) return true;
           }
@@ -317,15 +336,22 @@ export async function waitForGoogleMeetingAdmission(
     log("No admission indicators after timeout - checking rejection one last time...");
     const finalRejected = await checkForGoogleRejection(page);
     if (finalRejected) {
-      throw new Error("Bot admission was rejected by meeting admin");
+      throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
     }
 
+    // Distinguish lobby-timeout from join-failure by checking waiting-room state
+    const lobbyStillVisible = await checkForWaitingRoomIndicators(page);
     await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-3-no-indicators.png', fullPage: true });
     log("📸 Screenshot taken: No meeting indicators found after timeout");
-    throw new Error("Bot failed to join the Google Meet meeting - no meeting indicators found within timeout");
-    
+    if (lobbyStillVisible) {
+      throw new AdmissionError("lobby_timeout", "Bot is still in the Google Meet waiting room after timeout — host did not admit");
+    }
+    throw new AdmissionError("join_failure", "Bot failed to join the Google Meet meeting — no meeting indicators found within timeout");
+
   } catch (error: any) {
-    throw new Error(
+    // Re-throw AdmissionError instances unchanged so callers can inspect outcome.
+    if (error instanceof AdmissionError) throw error;
+    throw new AdmissionError("join_failure",
       `Bot was not admitted into the Google Meet meeting within the timeout period: ${error.message}`
     );
   }
