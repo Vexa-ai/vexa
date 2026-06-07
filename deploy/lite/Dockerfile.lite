@@ -138,6 +138,14 @@ COPY services/vexa-bot/core/ /app/vexa-bot/
 RUN chmod +x /app/vexa-bot/entrypoint.sh
 # Entrypoint references /app/vexa-bot/core/ — symlink to self for compatibility
 RUN ln -sf /app/vexa-bot /app/vexa-bot/core
+# LITE-ONLY: per-bot X display isolation so concurrent in-process bots don't
+# collide on the shared :99 (humanized XTEST is screen-global). Override the bot
+# entrypoint with a wrapper that claims a dedicated Xvfb display, then execs the
+# UNMODIFIED core entrypoint. Confined to the lite image — core/compose/helm untouched.
+COPY deploy/lite/bot-slot-wrapper.sh /app/vexa-bot/bot-slot-wrapper.sh
+RUN mv /app/vexa-bot/entrypoint.sh /app/vexa-bot/entrypoint.real.sh \
+ && cp /app/vexa-bot/bot-slot-wrapper.sh /app/vexa-bot/entrypoint.sh \
+ && chmod +x /app/vexa-bot/entrypoint.sh /app/vexa-bot/entrypoint.real.sh
 WORKDIR /app/vexa-bot
 RUN npm ci --omit=dev 2>/dev/null || npm install \
     && npm run build
