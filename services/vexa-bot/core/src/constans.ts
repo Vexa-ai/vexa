@@ -61,8 +61,20 @@ const baseBrowserArgs = [
  * - Teams UI: mic muted after join (join.ts)
  * - TTS: unmutes pactl + UI mic before speaking, re-mutes after
  */
+// CDP debug args — shared by EVERY browser launch (meeting + browser-session) so an
+// agent can attach over the gateway /b/{token}/cdp proxy to clear captcha/blocking
+// states. Chrome opens 9222 alongside Playwright's own --remote-debugging-pipe (the
+// pipe is NOT removed — removing it severs Playwright's connection and the bot dies on
+// launch). Chrome still binds 9222 on 127.0.0.1 only; the entrypoint socat relay
+// re-exposes it on 0.0.0.0:9223 for the gateway to reach across the docker network.
+export const CDP_DEBUG_ARGS = [
+  '--remote-debugging-port=9222',
+  '--remote-debugging-address=0.0.0.0',
+  '--remote-allow-origins=*',
+];
+
 export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
-  return [...baseBrowserArgs];
+  return [...baseBrowserArgs, ...CDP_DEBUG_ARGS];
 }
 
 /**
@@ -101,9 +113,7 @@ export function getBrowserSessionArgs(): string[] {
     '--start-maximized',
     '--window-size=1920,1080',
     '--window-position=0,0',
-    '--remote-debugging-port=9222',
-    '--remote-debugging-address=0.0.0.0',
-    '--remote-allow-origins=*',
+    ...CDP_DEBUG_ARGS,
     '--password-store=basic',
   ];
 }

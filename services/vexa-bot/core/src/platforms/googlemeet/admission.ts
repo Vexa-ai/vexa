@@ -25,6 +25,23 @@ export class AdmissionError extends Error {
   }
 }
 
+// Detect an active reCAPTCHA (enterprise) challenge. Google renders it in iframes whose
+// URL contains "/recaptcha/"; it can sit on the same screen as a "Return to home screen"
+// button, which otherwise reads exactly like an admin rejection. Used to keep the bot ON
+// the page (instead of quitting) so the challenge can be solved by a human over VNC or an
+// agent over CDP — after which the normal admission poll proceeds into the meeting.
+export async function hasRecaptchaChallenge(page: Page): Promise<boolean> {
+  try {
+    for (const frame of page.frames()) {
+      if ((frame.url() || "").includes("/recaptcha/")) return true;
+    }
+    const iframe = page.locator('iframe[src*="recaptcha"]').first();
+    return await iframe.isVisible().catch(() => false);
+  } catch {
+    return false;
+  }
+}
+
 // Function to check if bot has been rejected from the meeting
 export async function checkForGoogleRejection(page: Page): Promise<boolean> {
   try {
@@ -33,6 +50,15 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
       try {
         const element = await page.locator(selector).first();
         if (await element.isVisible()) {
+          // A reCAPTCHA challenge renders the SAME "Return to home screen" affordance as
+          // an admin rejection. If a captcha is on screen, this is Google bot-detection,
+          // NOT a host denial — classifying it as a rejection makes the bot quit before
+          // the captcha can be solved. Stay instead; the admission poll keeps running so a
+          // solve (human via VNC / agent via CDP) leads straight into admission.
+          if (await hasRecaptchaChallenge(page)) {
+            log(`🤖 reCAPTCHA present alongside rejection indicator "${selector}" — treating as bot-detection, NOT admin rejection. Staying for manual/agent solve.`);
+            return false;
+          }
           log(`🚨 Google Meet admission rejection detected: Found rejection indicator "${selector}"`);
           return true;
         }
