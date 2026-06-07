@@ -41,6 +41,13 @@ profiles:
       TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
       TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
       INTERNAL_API_SECRET: "${INTERNAL_API_SECRET}"
+    # HOT-MOUNT (local bot debug): bind the host's compiled bot dist into the
+    # spawned bot so a `tsc` rebuild on the host is picked up by the NEXT bot —
+    # no image rebuild. Host path = the stitch-debug worktree. Remove for prod.
+    mounts:
+      - "/home/dima/dev/vexa-stitch-debug/services/vexa-bot/core/dist:/app/vexa-bot/core/dist:ro"
+      - "/home/dima/dev/vexa-stitch-debug/.bot-debug-screenshots:/app/storage/screenshots:rw"
+      - "/home/dima/dev/vexa-stitch-debug/services/vexa-bot/core/entrypoint.sh:/app/vexa-bot/entrypoint.sh:ro"
     ports:
       "9222/tcp": {}         # CDP debug port
 

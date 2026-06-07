@@ -1,5 +1,5 @@
 .PHONY: all lite build up down lite-down docs docs-dev smoke test what-changed full \
-       collect score \
+       collect score bot-debug \
        vm-compose vm-lite vm-destroy vm-ssh \
        deploy validate provision teardown promote publish-packages helm-upgrade-safe \
        help
@@ -18,6 +18,9 @@ build:                             ## build + push the :dev artifact (image tag)
 
 up:                                ## start compose stack (alias for all)
 	@$(MAKE) --no-print-directory -C deploy/compose all
+
+bot-debug:                         ## spawn a bot to MEET_URL in the local stack + tail logs (hot-mounted bot dist)
+	@MEET_URL="$(MEET_URL)" bash scripts/bot-debug.sh
 
 down:                              ## stop compose stack
 	@$(MAKE) --no-print-directory -C deploy/compose down
