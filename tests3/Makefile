@@ -152,13 +152,13 @@ auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, joi
 # validate-<mode>: run tests for that mode.
 # With no SCOPE: runs ALL cheap-tier tests registered for the mode (full matrix).
 # With SCOPE=<path>: runs only the tests scope.issues[].proves[] lists for this mode.
-validate-lite:                     ## run tests for lite mode + write JSON reports
+validate-lite: detect              ## run tests for lite mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh lite $(if $(SCOPE),--scope $(SCOPE),)
 
-validate-compose:                  ## run tests for compose mode + write JSON reports
+validate-compose: detect           ## run tests for compose mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh compose $(if $(SCOPE),--scope $(SCOPE),)
 
-validate-helm:                     ## run tests for helm mode + write JSON reports
+validate-helm: detect              ## run tests for helm mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh helm $(if $(SCOPE),--scope $(SCOPE),)
 
 report:                            ## aggregate .state/reports/* → tests3/.state/reports/release-<tag>.md + update feature READMEs

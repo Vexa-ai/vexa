@@ -8,8 +8,11 @@ LINODE_CLI="${LINODE_CLI:-linode-cli}"
 VM_TYPE="${VM_TYPE:-g6-standard-6}"
 VM_IMAGE="${VM_IMAGE:-linode/ubuntu24.04}"
 VM_REGION="${VM_REGION:-us-ord}"
-REPO_URL="${REPO_URL:-https://github.com/Vexa-ai/vexa.git}"
 BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+# Derive the clone URL from the branch's OWN remote so a fork branch (e.g. on a
+# contributor fork) is validated from where it actually lives — not hardcoded upstream,
+# which doesn't have the branch. Override with REPO_URL=...; falls back to upstream.
+REPO_URL="${REPO_URL:-$(git remote get-url "$(git config "branch.${BRANCH}.remote" 2>/dev/null || echo origin)" 2>/dev/null || echo https://github.com/Vexa-ai/vexa.git)}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_rsa.pub}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
 
