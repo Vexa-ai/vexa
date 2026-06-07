@@ -1,5 +1,19 @@
-// User Agent for consistency - Updated to modern Chrome version for Google Meet compatibility
-export const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
+// User Agent — MUST stay consistent with the bundled Chromium's real version AND
+// platform, or Google Meet's anti-abuse flags the UA↔Client-Hints mismatch and serves
+// a reCAPTCHA + "You can't join this video call" (then redirects to
+// workspace.google.com/products/meet/).
+//
+// The bot runs Chromium on Linux (headful under Xvfb). navigator.userAgentData
+// (Client Hints) reports the *real* platform (Linux x86_64) and major version, which
+// CANNOT be spoofed by a plain userAgent string. A stale/cross-platform override (the
+// old "Windows ... Chrome/129" string, kept while the bundled Chromium advanced to 141)
+// produced exactly that mismatch and blocked every Google Meet join.
+//
+// 2026-06-07: aligned to the bundled Chromium (playwright chromium-1194 = Chrome 141)
+// on Linux x86_64 so UA and Client-Hints agree. If the Playwright/Chromium bundle is
+// bumped, update the major version here to match (or remove the override entirely so the
+// native, self-consistent UA flows through).
+export const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
 // Base browser launch arguments (shared across all modes).
 const baseBrowserArgs = [
