@@ -2395,6 +2395,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const stealthPlugin = StealthPlugin();
     stealthPlugin.enabledEvasions.delete("iframe.contentWindow");
     stealthPlugin.enabledEvasions.delete("media.codecs");
+    // Drop the user-agent-override evasion: it forces a *Windows* UA + Client-Hints
+    // onto our *Linux* Chromium. Google Meet's anti-abuse cross-checks the claimed
+    // platform against deeper signals (WebGL renderer, fonts, etc.) that still read
+    // Linux — and the Windows-on-Linux contradiction triggers reCAPTCHA + "You can't
+    // join this video call". Removing it lets the honest Linux UA we set on the
+    // context (see `userAgent` in constans.ts) flow through with matching Client-Hints.
+    // Verified 2026-06-07: with this evasion enabled the bot is bounced to
+    // workspace.google.com/products/meet/; with it deleted the bot reaches the
+    // waiting room. Both the constans.ts Linux UA AND this delete are required.
+    stealthPlugin.enabledEvasions.delete("user-agent-override");
     chromium.use(stealthPlugin);
 
     browserInstance = await chromium.launch({
