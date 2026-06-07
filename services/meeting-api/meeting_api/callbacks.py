@@ -949,22 +949,28 @@ async def bot_status_change_callback(
             d = dict(meeting.data)
             escalation_reason = payload.reason or "unknown"
             escalated_at = payload.timestamp or datetime.utcnow().isoformat()
+            # SECURITY: the VNC surface is browser-opened and cannot carry an API key, so it
+            # is gated by an UNGUESSABLE capability token in the URL — NEVER the guessable
+            # meeting_id. (The previous code set session_token = str(meeting.id), which left
+            # /b/{meeting_id}/vnc world-reachable by guessing the integer.)
+            session_token = (meeting.data or {}).get("session_token") or secrets.token_urlsafe(24)
+            d["session_token"] = session_token
             d["escalation"] = {
                 "reason": escalation_reason,
                 "escalated_at": escalated_at,
-                "session_token": str(meeting.id),
-                "vnc_url": f"/b/{meeting.id}",
+                "session_token": session_token,
+                "vnc_url": f"/b/{session_token}",
             }
             meeting.data = d
             attributes.flag_modified(meeting, "data")
 
-            # Ensure container is registered in Redis for gateway VNC proxy (by meeting ID)
+            # Register the container under the SECRET token (the VNC capability URL). The
+            # meeting_id alias is also registered for CDP, which is separately gated by
+            # X-API-Key + ownership in the gateway.
             if redis_client:
-                await redis_client.set(
-                    f"browser_session:{meeting.id}",
-                    json.dumps({"container_name": payload.container_id or meeting.bot_container_id, "meeting_id": meeting.id, "user_id": meeting.user_id, "escalation": True}),
-                    ex=86400,
-                )
+                sess_val = json.dumps({"container_name": payload.container_id or meeting.bot_container_id, "meeting_id": meeting.id, "user_id": meeting.user_id, "escalation": True})
+                await redis_client.set(f"browser_session:{session_token}", sess_val, ex=86400)
+                await redis_client.set(f"browser_session:{meeting.id}", sess_val, ex=86400)
             await db.commit()
             await db.refresh(meeting)
 

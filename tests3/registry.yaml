@@ -424,6 +424,97 @@ CDP_WS_SCHEME_PRESERVED:
   - compose
   state: stateless
   max_duration_sec: 5
+BOT_MEETING_CDP_ARGS:
+  proves: "meeting + browser bots share CDP_DEBUG_ARGS (remote-debugging-port=9222) so an agent can attach over /b/{meeting_id}/cdp"
+  symptom: "meeting bots launch with no CDP port; /b/{id}/cdp has nothing to proxy; agent/human cannot attach to a stuck bot"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/src/constans.ts
+  must_match: CDP_DEBUG_ARGS
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_CDP_RELAY_SHARED:
+  proves: "entrypoint starts the socat CDP relay (127.0.0.1:9222 -> 0.0.0.0:9223) via the shared helper, so the gateway can reach CDP across the docker network in BOTH meeting + browser_session modes"
+  symptom: "Chrome binds CDP to 127.0.0.1 only; gateway /b/{id}/cdp gets connection-refused; meeting-bot CDP attach impossible"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/entrypoint.sh
+  must_match: start_cdp_relay
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_CAPTCHA_NOT_REJECTION:
+  proves: "a reCAPTCHA challenge is NOT classified as an admin rejection (hasRecaptchaChallenge guard) — the bot stays on the page and escalates instead of self-quitting"
+  symptom: "captcha-blocked bot reads the 'Return to home screen' affordance as a host denial and quits in ~2s, losing the meeting before a human/agent can solve the captcha"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/admission.ts
+  must_match: hasRecaptchaChallenge
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_GRACEFUL_LEAVE_BOOLEAN:
+  proves: "leaveGoogleMeet returns a strict boolean (Boolean(result)) per its Promise<boolean> contract, not undefined on a black/captcha page"
+  symptom: "page.evaluate returns undefined on a black/captcha page and propagates as 'result: undefined' to callers that treat leave as a tri-state"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/leave.ts
+  must_match: return Boolean\(result\)
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+CDP_ATTACH_REQUIRES_OWNER_TOKEN:
+  proves: "the /b/{token}/cdp proxy gates on _authorize_browser_token — a valid X-API-Key for the OWNING user, not the guessable meeting_id alone"
+  symptom: "anyone who guesses the integer meeting_id can connectOverCDP to a live bot's browser (read the meeting, drive the page) with no API key — full account-crossing browser takeover"
+  found: '2026-06-07'
+  type: grep
+  file: services/api-gateway/main.py
+  must_match: _authorize_browser_token
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+VNC_REJECTS_GUESSABLE_TOKEN:
+  proves: "the browser-opened /b/{token} routes (vnc / dashboard / save / storage) reject the numeric meeting_id and require the unguessable capability token"
+  symptom: "anyone who guesses the integer meeting_id can open /b/{id}/vnc and watch or drive the bot's live browser with no auth"
+  found: '2026-06-07'
+  type: grep
+  file: services/api-gateway/main.py
+  must_match: requires the unguessable session token
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ESCALATION_USES_SECRET_TOKEN:
+  proves: "needs_human_help escalation issues an unguessable session_token (secrets.token_urlsafe) for the VNC capability URL, never the guessable meeting_id"
+  symptom: "escalation set session_token=str(meeting.id) → /b/{meeting_id}/vnc world-reachable by guessing the integer"
+  found: '2026-06-07'
+  type: grep
+  file: services/meeting-api/meeting_api/callbacks.py
+  must_match: token_urlsafe
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 CHART_PUBLISH_WORKFLOW_EXISTS:
   proves: .github/workflows/chart-release.yml exists, references helm/chart-releaser-action, parses as valid YAML
   symptom: No gh-pages Helm repo; consumers must clone + helm package locally (#228)
