@@ -41,12 +41,41 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
     return false;
   }
 
+  // Wake the UI before probing. Google Meet auto-hides the in-call toolbar
+  // (mic/camera/present/leave) after a few seconds of no pointer activity — and the
+  // bot never moves a real mouse. Once admitted (especially when a participant is
+  // *presenting*, which restyles the chrome), every toolbar selector reads
+  // isVisible:false, so the bot wrongly concludes "not admitted", keeps polling, and
+  // false-escalates to unknown_blocking_state / needs_human_help while actually sitting
+  // in the call (observed live: meeting in-progress, "X (Presenting)" visible, 0
+  // transcripts). A synthetic pointer move re-reveals the toolbar so isVisible() is
+  // meaningful again. Best-effort; ignore failures.
+  try {
+    await page.mouse.move(640, 360);
+    await page.mouse.move(960, 540);
+  } catch { /* headless/no-input edge — fall through to presence checks */ }
+
   // 2. DOM SELECTORS: participant tiles, self-name, share/present buttons.
   // NOTE: MediaStream-based detection was tested but Google Meet's lobby has
   // active media elements (self-preview audio tracks), causing false positives.
   // Filtering self vs. remote streams is needed — tracked as follow-up.
+  //
+  // Structural selectors ([data-participant-id], [data-self-name]) do NOT exist in the
+  // lobby (see selectors.ts) and do NOT auto-hide — so DOM PRESENCE (count>0), not
+  // visibility, is the reliable admitted signal. The waiting-room negative guard above
+  // already rules out the lobby, so presence here means we're in the call. Toolbar
+  // buttons remain visibility-gated (they legitimately exist disabled in some states).
+  const presenceSelectors = new Set(['[data-participant-id]', '[data-self-name]']);
   for (const selector of googleInitialAdmissionIndicators) {
     try {
+      if (presenceSelectors.has(selector)) {
+        const count = await page.locator(selector).count();
+        if (count > 0) {
+          log(`✅ Found Google Meet admission indicator (DOM presence, auto-hide-proof): ${selector}`);
+          return true;
+        }
+        continue;
+      }
       const element = page.locator(selector).first();
       const isVisible = await element.isVisible();
       if (isVisible) {
