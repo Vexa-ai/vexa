@@ -20,6 +20,7 @@ import { ScreenShareService } from "./services/screen-share"; // kept for Teams;
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser, BrowserContext } from 'playwright-core';
 import { execSync } from 'child_process';
+import * as net from 'net';
 import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR } from './s3-sync';
 // HTTP imports removed - using unified callback service instead
 
@@ -2149,8 +2150,48 @@ function startBotResourceSampler(): BotResourceSampler {
 
 // ==================================================================
 
+// CDP relay — expose Chrome's 127.0.0.1:9222 DevTools endpoint on 0.0.0.0:9223 so the
+// api-gateway can proxy /b/{token}/cdp to it across the docker network.
+//
+// This MUST live in the bot's own Node process (not entrypoint.sh) so it runs in BOTH
+// execution models:
+//   - containerized bot (compose/helm): entrypoint.sh used to start a socat relay
+//   - in-process bot (vexa-lite all-in-one): entrypoint.sh never runs, so the relay
+//     was missing → gateway CDP proxy hit a dead :9223 and returned 502.
+// A pure-Node TCP proxy (no socat dependency) works identically in both.
+let __cdpRelayStarted = false;
+function startCdpRelay(listenPort = 9223, targetPort = 9222): void {
+  if (__cdpRelayStarted) return;
+  __cdpRelayStarted = true;
+  try {
+    const server = net.createServer((client) => {
+      const upstream = net.connect(targetPort, '127.0.0.1');
+      const kill = () => { try { client.destroy(); } catch {} try { upstream.destroy(); } catch {} };
+      client.on('error', kill);
+      upstream.on('error', kill);
+      client.pipe(upstream);
+      upstream.pipe(client);
+    });
+    server.on('error', (e: any) => {
+      // EADDRINUSE = a relay (socat from entrypoint.sh, or a prior run) already owns
+      // 9223; that's fine — the endpoint is reachable either way.
+      log(`[CDP relay] not started on :${listenPort}: ${e?.message || e}`);
+    });
+    server.listen(listenPort, '0.0.0.0', () => {
+      log(`[CDP relay] forwarding 0.0.0.0:${listenPort} -> 127.0.0.1:${targetPort} (Node TCP proxy)`);
+    });
+  } catch (e: any) {
+    log(`[CDP relay] failed to start: ${e?.message || e}`);
+  }
+}
+
 export async function runBot(botConfig: BotConfig): Promise<void> {// Store botConfig globally for command validation
   (globalThis as any).botConfig = botConfig;
+  // Start the CDP relay early. It accepts connections lazily and dials 9222 per
+  // incoming connection, so it is safe to start before Chrome is up — by the time the
+  // gateway attaches, Chrome's DevTools endpoint is listening. Idempotent + harmless if
+  // entrypoint.sh's socat already bound 9223 (EADDRINUSE is swallowed).
+  startCdpRelay();
 
   // --- UPDATED: Parse and store config values ---
   currentLanguage = botConfig.language;
@@ -2395,6 +2436,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const stealthPlugin = StealthPlugin();
     stealthPlugin.enabledEvasions.delete("iframe.contentWindow");
     stealthPlugin.enabledEvasions.delete("media.codecs");
+    // Drop the user-agent-override evasion: it forces a *Windows* UA + Client-Hints
+    // onto our *Linux* Chromium. Google Meet's anti-abuse cross-checks the claimed
+    // platform against deeper signals (WebGL renderer, fonts, etc.) that still read
+    // Linux — and the Windows-on-Linux contradiction triggers reCAPTCHA + "You can't
+    // join this video call". Removing it lets the honest Linux UA we set on the
+    // context (see `userAgent` in constans.ts) flow through with matching Client-Hints.
+    // Verified 2026-06-07: with this evasion enabled the bot is bounced to
+    // workspace.google.com/products/meet/; with it deleted the bot reaches the
+    // waiting room. Both the constans.ts Linux UA AND this delete are required.
+    stealthPlugin.enabledEvasions.delete("user-agent-override");
     chromium.use(stealthPlugin);
 
     browserInstance = await chromium.launch({

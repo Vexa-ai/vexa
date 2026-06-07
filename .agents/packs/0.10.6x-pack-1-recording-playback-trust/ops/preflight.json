@@ -1,9 +1,0 @@
-{
-  "status": "pass",
-  "pack_json": ".agents/packs/0.10.6x-pack-1-recording-playback-trust/pack.json",
-  "runtime_json": ".agents/packs/0.10.6x-pack-1-recording-playback-trust/runtime.json",
-  "repo_root": "/home/dima/dev/vexa-agents-pack-pipeline-strategy",
-  "worktree": "",
-  "errors": [],
-  "warnings": []
-}

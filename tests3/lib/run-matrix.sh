@@ -152,6 +152,7 @@ echo "  ═══ run-matrix mode=$MODE ═══"
 # We keep running even if a test fails — partial reports are more useful than nothing.
 FAILED_TESTS=()
 MISSING_REPORTS=()
+SKIPPED_ABSENT=()
 
 while IFS=$'\t' read -r NAME SCRIPT; do
     [ -z "$NAME" ] && continue
@@ -164,6 +165,16 @@ while IFS=$'\t' read -r NAME SCRIPT; do
 
     echo ""
     echo "  ── $NAME ──"
+    # A registered test whose script was reverted/removed from this branch (its file is
+    # absent) can never run — skip it cleanly instead of erroring "No such file" and
+    # counting it as a missing report. Surfaced separately so the registry drift stays
+    # visible for cleanup (e.g. the reverted v0.10.6.1-* scripts).
+    SCRIPT_FILE="${SCRIPT_EXPANDED%% *}"
+    if [ ! -f "$T3/$SCRIPT_FILE" ]; then
+        SKIPPED_ABSENT+=("$NAME")
+        echo "  ~~ skip: script absent ($SCRIPT_FILE) — registry references a removed/reverted script"
+        continue
+    fi
     # Don't let a test's non-zero exit abort the matrix (set -e would).
     # We still care about the exit code for the summary.
     set +e
@@ -187,6 +198,7 @@ with open('$REPORT') as f:
 
     case "$STATUS" in
         pass) ;;  # Good.
+        skip) ;;  # Test not applicable in this env (e.g. browser-E2E without playwright on a headless VM) — not a failure.
         fail) FAILED_TESTS+=("$NAME") ;;
         *)    FAILED_TESTS+=("$NAME($STATUS)") ;;
     esac
@@ -194,6 +206,10 @@ done <<< "$TESTS"
 
 echo ""
 echo "  ═══ run-matrix summary mode=$MODE ═══"
+if [ ${#SKIPPED_ABSENT[@]} -gt 0 ]; then
+    echo "  skipped (script absent on branch — pre-existing registry drift, not a regression): ${#SKIPPED_ABSENT[@]}"
+    echo "    ${SKIPPED_ABSENT[*]}"
+fi
 if [ ${#MISSING_REPORTS[@]} -gt 0 ]; then
     echo "  missing reports: ${MISSING_REPORTS[*]}"
 fi

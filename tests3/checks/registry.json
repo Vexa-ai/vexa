@@ -1053,36 +1053,6 @@
       "method": "WEBHOOK_SSRF_CHECK"
     },
     {
-      "id": "TESTS3_LABEL_RELEASE_TRACEABLE",
-      "tier": "static",
-      "found": "2026-04-22",
-      "proves": "release_label helper emits labels of shape PREFIX-<release_id|adhoc>-<6-hex-char-suffix>; two calls produce distinct suffixes",
-      "symptom": "tests3/lib/vm.sh and lib/lke.sh use date +%H%M \u2014 collides between parallel devs (#229)",
-      "method": "SHELL_CHECK",
-      "script": "tests3/checks/scripts/tests3-label-release-traceable.sh",
-      "max_duration_sec": 5
-    },
-    {
-      "id": "TESTS3_RELEASE_KEY_CONSISTENT",
-      "tier": "static",
-      "found": "2026-04-22",
-      "proves": "four-way single-key invariant: basename(worktree)=vexa-<id>, branch=release/<id>, tests3/releases/<id>/ exists, all match .current-stage.release_id",
-      "symptom": "release_id drifts across branch / worktree / .current-stage without any check catching it",
-      "method": "SHELL_CHECK",
-      "script": "tests3/checks/scripts/tests3-release-key-consistent.sh",
-      "max_duration_sec": 5
-    },
-    {
-      "id": "TESTS3_WORKTREE_BOOTSTRAP",
-      "tier": "static",
-      "found": "2026-04-22",
-      "proves": "make release-worktree ID=<id> creates ../vexa-<id>, seeds stage=idle, branch release/<id>, and stage.py next reports groom",
-      "symptom": "No standard way to bootstrap a per-release worktree; manual git worktree add + hand-seeded stage state is undocumented and error-prone",
-      "method": "SHELL_CHECK",
-      "script": "tests3/checks/scripts/tests3-worktree-bootstrap.sh",
-      "max_duration_sec": 30
-    },
-    {
       "id": "CHART_VERSION_CURRENT",
       "tier": "static",
       "found": "2026-04-22",
@@ -1518,6 +1488,94 @@
       "symptom": "Intermittent Teams join failures: bot navigates to meeting URL, sees the prejoin page never become ready, times out at the readiness check, and exits without typing its name. Modal text 'Continue without audio or video' is visible in VNC during the timeout window. Symptom is platform-wide for Teams since it depends on Chromium media-permission state, not meeting state.",
       "file": "services/vexa-bot/core/src/platforms/msteams/join.ts",
       "must_match": "continueWithoutMediaClickAttempts",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK2_GMEET_LOCALE_AGNOSTIC_JOIN_SELECTOR",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "pack/2",
+      "proves": "googlemeet/selectors.ts: googleJoinButtonSelectors has a locale-agnostic structural selector (button[jsname]) as its first entry, before any English has-text fallback. Pre-fix: only English-text selectors existed; Hungarian/non-EN lobby never matched the join button (prod ids 13951 13952 14018 14153).",
+      "symptom": "Bot sits in non-English Google Meet lobby until manual_leave — join button never found because all selectors required English text.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/selectors.ts",
+      "must_match": "button[jsname]",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK2_GMEET_LOCALE_AGNOSTIC_NAME_SELECTOR",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "pack/2",
+      "proves": "googlemeet/selectors.ts: googleNameInputSelectors has a locale-agnostic structural selector (input[jsname][type=\"text\"]) as its first entry, before the English aria-label=\"Your name\" fallback. Pre-fix: only English aria-label/placeholder selectors existed; non-English lobby name input was never found.",
+      "symptom": "Bot cannot fill its name in non-English Google Meet lobby — name input field never matched because selectors required English aria-label.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/selectors.ts",
+      "must_match": "input[jsname][type=\"text\"]",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK2_GMEET_WAIT_FOR_ANY_SELECTOR",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "pack/2",
+      "proves": "googlemeet/join.ts exports waitForAnySelector which races all selectors in parallel and screenshots + throws loudly on total miss (no silent skip). Used for both name-input and join-button resolution so a locale-agnostic selector fires first on any UI locale.",
+      "symptom": "Join failure on non-English Meet lobby is silent — bot uses only the first selector from the list, never trying locale-agnostic alternatives, and no diagnostic screenshot is taken on miss.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/join.ts",
+      "must_match": "waitForAnySelector",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK2_GMEET_ADMISSION_OUTCOME_TYPED",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "pack/2",
+      "proves": "googlemeet/admission.ts exports AdmissionError with typed AdmissionOutcome (denial | lobby_timeout | join_failure). Each throw site uses the correct outcome so callers can distinguish host rejection from lobby timeout from total join failure without parsing error message text.",
+      "symptom": "All admission failures surface identical Error objects; callers cannot distinguish host denial from lobby timeout, causing uniform retry behaviour regardless of root cause.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/admission.ts",
+      "must_match": "AdmissionOutcome",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK2_GMEET_HUMANIZED_ENDPOINT_VERIFY",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "pack/2",
+      "proves": "googlemeet/humanized/humanizedInteraction.ts implements pointerHitsTarget endpoint verification: reads the REAL X11 pointer after trajectory replay, asserts it is inside the live button rect, and throws (with miss screenshot) if not — recalibrate-or-fail-loud, never a self-blind click.",
+      "symptom": "Humanized click lands off-target silently: trajectory replay ends near but not on the button (wrong screen-page offset), button-down is emitted at the wrong coordinates, Google Meet registers a click on empty space or a different element.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/humanized/humanizedInteraction.ts",
+      "must_match": "pointerHitsTarget",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_BOT_NO_CERT_ERROR_FLAGS",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "v0.10.7",
+      "proves": "baseBrowserArgs in constans.ts does NOT contain --ignore-certificate-errors as a string literal — the flag is detectable by Google and triggers the 'You can't join this meeting' interstitial on k8s/datacenter egress IPs (Pack F diagnosis)",
+      "symptom": "Bot launched from k8s (Linode LKE datacenter IP) hits Google's 'You can't join this meeting' interstitial instead of the lobby — Chrome fingerprint flags --ignore-certificate-errors / --disable-web-security are detected by Google bot-detection",
+      "file": "services/vexa-bot/core/src/constans.ts",
+      "must_not_match": "\"--ignore-certificate-errors\"",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_BOT_ANTI_AUTOMATION_FLAG",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "v0.10.7",
+      "proves": "baseBrowserArgs in constans.ts contains --disable-blink-features=AutomationControlled — suppresses Chrome's navigator.webdriver=true automation flag which Google uses as a bot signal",
+      "symptom": "Chrome launched with navigator.webdriver=true (automation flag exposed); Google Meet fingerprints the bot session as automated and blocks admission on datacenter IPs",
+      "file": "services/vexa-bot/core/src/constans.ts",
+      "must_match": "disable-blink-features=AutomationControlled",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_K8S_EGRESS_PROXY_KNOB",
+      "tier": "static",
+      "found": "2026-06-06",
+      "fix_release": "v0.10.7",
+      "proves": "runtimeProfiles in values.yaml exposes HTTP_PROXY/HTTPS_PROXY env knobs for bot pods — operators can route k8s bot egress through a residential or less-flagged proxy to pass Google IP-reputation checks",
+      "symptom": "No operator knob exists to route bot pod traffic through a proxy; k8s datacenter IPs have no escape route from Google IP-reputation blocks even after Chrome flag cleanup",
+      "file": "deploy/helm/charts/vexa/values.yaml",
+      "must_match": "BOT_HTTP_PROXY",
       "max_duration_sec": 5
     }
   ]

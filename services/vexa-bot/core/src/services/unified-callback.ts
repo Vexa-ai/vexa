@@ -15,7 +15,9 @@ export type CompletionReason =
   | "awaiting_admission_rejected"
   | "left_alone"
   | "evicted"
-  | "max_bot_time_exceeded";
+  | "max_bot_time_exceeded"
+  // Pack D (#5): distinct pre-lobby join failure (fast fail before reaching waiting room)
+  | "join_failure";
 
 export type FailureStage =
   | "requested"
@@ -119,10 +121,19 @@ export async function callStatusChangeCallback(
     return;
   }
 
-  // Retry logic: try up to 3 times with exponential backoff
-  const maxRetries = 3;
+  // Retry logic with exponential backoff.
+  // #407 407-B: joining/awaiting_admission/active are the critical pre-/in-meeting
+  // lifecycle callbacks. A TRANSIENT meeting-api blip here (timeout / 5xx / network —
+  // e.g. during a meeting-api rollout, which is where these failures clustered) must
+  // NOT abort an otherwise-fine join. Give the critical statuses a wider budget, and
+  // classify transient vs DELIBERATE (4xx / explicit reject body) so the caller can
+  // proceed on transient and only abort on a deliberate server rejection.
+  const critical = status === "joining" || status === "awaiting_admission" || status === "active";
+  const maxRetries = critical ? 5 : 3;
   const baseDelay = 1000; // 1 second
-  
+  const maxDelay = 4000;  // cap backoff so the total budget stays bounded
+  let sawDeliberate = false; // true once the server deliberately rejects (4xx / explicit non-accepted body)
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     let timeoutId: NodeJS.Timeout | null = null;
     try {
@@ -189,9 +200,10 @@ export async function callStatusChangeCallback(
           }
           return; // Success, exit retry loop
         } else {log(`Callback returned unexpected status: ${responseBody.status}, detail: ${responseBody.detail || 'none'}`);
+          sawDeliberate = true; // 200 OK with an explicit non-accepted status = deliberate server rejection
           // If not last attempt, retry
           if (attempt < maxRetries - 1) {
-            const delay = baseDelay * Math.pow(2, attempt);
+            const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
             log(`Retrying in ${delay}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
             continue;
@@ -199,9 +211,11 @@ export async function callStatusChangeCallback(
         }
       } else {
         const errorText = await response.text().catch(() => 'Unable to read error response');log(`Callback failed with HTTP ${response.status}: ${errorText}`);
+        // 4xx = the server deliberately refused (bad request / invalid transition); 5xx = transient.
+        if (response.status >= 400 && response.status < 500) sawDeliberate = true;
         // If not last attempt, retry
         if (attempt < maxRetries - 1) {
-          const delay = baseDelay * Math.pow(2, attempt);
+          const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
           log(`Retrying in ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
@@ -213,16 +227,20 @@ export async function callStatusChangeCallback(
       
       // If not last attempt, retry
       if (attempt < maxRetries - 1) {
-        const delay = baseDelay * Math.pow(2, attempt);
+        const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
         log(`Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {log(`All ${maxRetries} callback attempts failed for ${status} status change.`);
-        throw new Error(`All ${maxRetries} callback attempts failed for ${status} status change`);
+        const err: any = new Error(`All ${maxRetries} callback attempts failed for ${status} status change`);
+        err.transient = !sawDeliberate;   // timeout/network exhaustion = transient unless a deliberate reject was seen
+        throw err;
       }
     }
   }
   // If we get here without returning (success), all retries were exhausted via non-exception path
-  throw new Error(`${status} callback failed: server rejected after ${maxRetries} attempts`);
+  const err: any = new Error(`${status} callback failed: server rejected after ${maxRetries} attempts`);
+  err.transient = !sawDeliberate;   // 5xx-only exhaustion is transient; a 4xx/explicit-reject sets sawDeliberate
+  throw err;
 }
 
 /**
@@ -269,6 +287,11 @@ export function mapExitReasonToStatus(
         return { status: "failed", failureStage: "requested" };
       case "validation_error":
         return { status: "failed", failureStage: "requested" };
+      case "join_meeting_error":
+        // Pack D (#5): bot failed to navigate to the meeting URL (pre-lobby
+        // fast fail). Distinct from stopped_before_admission (user-stopped)
+        // and awaiting_admission_timeout (waited full lobby timeout).
+        return { status: "failed", failureStage: trackedStage, completionReason: "join_failure" };
       case "teams_error":
       case "google_meet_error":
       case "zoom_error":

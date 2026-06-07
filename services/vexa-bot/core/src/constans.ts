@@ -1,7 +1,30 @@
-// User Agent for consistency - Updated to modern Chrome version for Google Meet compatibility
-export const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
+// User Agent — MUST stay consistent with the bundled Chromium's real version AND
+// platform, or Google Meet's anti-abuse flags the UA↔Client-Hints mismatch and serves
+// a reCAPTCHA + "You can't join this video call" (then redirects to
+// workspace.google.com/products/meet/).
+//
+// The bot runs Chromium on Linux (headful under Xvfb). navigator.userAgentData
+// (Client Hints) reports the *real* platform (Linux x86_64) and major version, which
+// CANNOT be spoofed by a plain userAgent string. A stale/cross-platform override (the
+// old "Windows ... Chrome/129" string, kept while the bundled Chromium advanced to 141)
+// produced exactly that mismatch and blocked every Google Meet join.
+//
+// 2026-06-07: aligned to the bundled Chromium (playwright chromium-1194 = Chrome 141)
+// on Linux x86_64 so UA and Client-Hints agree. If the Playwright/Chromium bundle is
+// bumped, update the major version here to match (or remove the override entirely so the
+// native, self-consistent UA flows through).
+export const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
 // Base browser launch arguments (shared across all modes).
+//
+// Pack F (2026-06-06): Removed --ignore-certificate-errors, --ignore-ssl-errors,
+// --ignore-certificate-errors-spki-list, --disable-web-security, and
+// --allow-running-insecure-content. These flags are detectable by Google's
+// bot-detection layer and directly cause the "You can't join this meeting"
+// interstitial on datacenter egress IPs (k8s / Linode LKE). Replaced with
+// --disable-blink-features=AutomationControlled (mirrors getAuthenticatedBrowserArgs).
+// Google Meet uses valid TLS certs; the certificate-error flags were never needed
+// for meet.google.com and init-scripts are injected via CDP (unaffected by CSP).
 const baseBrowserArgs = [
   "--incognito",
   "--no-sandbox",
@@ -29,12 +52,8 @@ const baseBrowserArgs = [
   "--in-process-gpu",
   "--use-fake-ui-for-media-stream",
   "--use-file-for-fake-video-capture=/dev/null",
-  "--allow-running-insecure-content",
-  "--disable-web-security",
+  "--disable-blink-features=AutomationControlled",
   "--disable-features=VizDisplayCompositor",
-  "--ignore-certificate-errors",
-  "--ignore-ssl-errors",
-  "--ignore-certificate-errors-spki-list",
   "--disable-site-isolation-trials"
 ];
 
@@ -56,8 +75,20 @@ const baseBrowserArgs = [
  * - Teams UI: mic muted after join (join.ts)
  * - TTS: unmutes pactl + UI mic before speaking, re-mutes after
  */
+// CDP debug args — shared by EVERY browser launch (meeting + browser-session) so an
+// agent can attach over the gateway /b/{token}/cdp proxy to clear captcha/blocking
+// states. Chrome opens 9222 alongside Playwright's own --remote-debugging-pipe (the
+// pipe is NOT removed — removing it severs Playwright's connection and the bot dies on
+// launch). Chrome still binds 9222 on 127.0.0.1 only; the entrypoint socat relay
+// re-exposes it on 0.0.0.0:9223 for the gateway to reach across the docker network.
+export const CDP_DEBUG_ARGS = [
+  '--remote-debugging-port=9222',
+  '--remote-debugging-address=0.0.0.0',
+  '--remote-allow-origins=*',
+];
+
 export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
-  return [...baseBrowserArgs];
+  return [...baseBrowserArgs, ...CDP_DEBUG_ARGS];
 }
 
 /**
@@ -96,9 +127,7 @@ export function getBrowserSessionArgs(): string[] {
     '--start-maximized',
     '--window-size=1920,1080',
     '--window-position=0,0',
-    '--remote-debugging-port=9222',
-    '--remote-debugging-address=0.0.0.0',
-    '--remote-allow-origins=*',
+    ...CDP_DEBUG_ARGS,
     '--password-store=basic',
   ];
 }

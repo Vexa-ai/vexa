@@ -80,6 +80,8 @@ class MeetingCompletionReason(str, Enum):
     # v0.10.5 Pack J — prod-derived (data on #255):
     STOPPED_BEFORE_ADMISSION = "stopped_before_admission"  # User stopped bot before it reached active (432 cases / 30d)
     STOPPED_WITH_NO_AUDIO = "stopped_with_no_audio"  # Bot ran ≥30s with transcribe enabled but produced 0 segments (125 cases / 30d)
+    # Pack D (#5) — canonicalized pre-admission failure reasons:
+    JOIN_FAILURE = "join_failure"  # Bot failed to navigate to the meeting (pre-lobby fast fail, distinct from user-stopped)
 
 class MeetingFailureStage(str, Enum):
     """

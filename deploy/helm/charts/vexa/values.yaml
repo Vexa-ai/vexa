@@ -498,6 +498,16 @@ runtimeProfiles: |
         MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
         MINIO_BUCKET: "${MINIO_BUCKET:-vexa}"
         MINIO_SECURE: "${MINIO_SECURE:-false}"
+        # Pack F (2026-06-06): Egress proxy knobs for datacenter k8s deployments.
+        # Google flags datacenter IPs as bot-likely. Route bot pod traffic through
+        # a residential or less-flagged proxy to pass Google's IP-reputation check.
+        # Set HTTP_PROXY/HTTPS_PROXY in your values overlay (e.g. via operator secret
+        # injection) to enable routing. Leave empty (default) for compose/dev where
+        # the host IP is already residential or less scrutinized.
+        # Example: HTTP_PROXY: "socks5://user:pass@proxy.residential.example:1080"
+        HTTP_PROXY: "${BOT_HTTP_PROXY:-}"
+        HTTPS_PROXY: "${BOT_HTTPS_PROXY:-}"
+        NO_PROXY: "${BOT_NO_PROXY:-localhost,127.0.0.1}"
       ports:
         "9222/tcp": {}
     browser-session:

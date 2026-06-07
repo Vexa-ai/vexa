@@ -175,6 +175,14 @@ class ProcessBackend(Backend):
             labels=proc_data.get("labels", {}),
             created_at=proc_data.get("created_at"),
             image=proc_data.get("image", ""),
+            # A process bot runs on the same host as the gateway (vexa-lite is a single
+            # all-in-one container on --network host), and its CDP relay + VNC bind the
+            # host's loopback. Report 127.0.0.1 so meeting-api registers a reachable
+            # container_ip and the gateway's /b/{token}/cdp + /vnc proxies dial
+            # 127.0.0.1:9223 / :6080 instead of an unresolvable container hostname.
+            # Without this, container_ip is None → proxies fall back to container_name
+            # (e.g. "meeting-7-...") which does not exist in the process model → 502.
+            ip="127.0.0.1",
         )
 
     async def list(self, labels: dict[str, str] | None = None) -> list[ContainerInfo]:

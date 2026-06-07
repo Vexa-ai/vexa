@@ -81,7 +81,7 @@ def svc_exec(svc, cmd):
     """Run command inside a service container. Returns (exit_code, stdout)."""
     mode = state_read("deploy_mode", required=True)
     if mode == "compose":
-        full = ["docker", "exec", f"vexa-{svc}-1"] + cmd
+        full = ["docker", "exec", f"{os.environ.get('COMPOSE_PROJECT', 'vexa')}-{svc}-1"] + cmd
     elif mode == "lite":
         # Container may be named "vexa" or "vexa-lite"
         r = subprocess.run(
@@ -572,10 +572,11 @@ def check_health(lock):
     if url == "RUNTIME_API_HEALTH":
         mode = state_read("deploy_mode", required=True)
         if mode in ("compose", "lite"):
-            code, body = http_check("http://localhost:8090/health")
+            runtime_url = os.environ.get("RUNTIME_API_URL", "http://localhost:8090")
+            code, body = http_check(f"{runtime_url}/health")
             if code == 200:
                 return True, ""
-            return False, f"HTTP {code} from localhost:8090/health"
+            return False, f"HTTP {code} from {runtime_url}/health"
         elif mode == "helm":
             if not kubectl_available():
                 return True, "skipped (no kubectl access)"
@@ -1577,6 +1578,31 @@ def main():
         # doesn't have to special-case "tier had no checks".
         if json_out:
             _write_json_report(json_out, tier_filter, [], 0)
+        return
+
+    # Smoke is a static+synthetic-only contract (no heavy infra). When invoked
+    # from `make smoke` with no deployment present (SMOKE_NO_INFRA=1 and detect
+    # resolved mode=none), the live tiers (env/health/contract) have no stack to
+    # talk to: skip them cleanly as "no deployment" rather than hard-failing.
+    # The static tier never touches a deployment, so it always runs.
+    LIVE_TIERS = ("env", "health", "contract")
+    if (os.environ.get("SMOKE_NO_INFRA") == "1"
+            and tier_filter in LIVE_TIERS
+            and (state_read("deploy_mode") or "none") == "none"):
+        print()
+        print(f"  {tier_filter} checks")
+        print(f"  {'─' * 46}")
+        steps = []
+        for lock in locks:
+            lid = lock["id"]
+            print(f"  {dim('skip')}  {lid}  (no deployment)")
+            steps.append({"id": lid, "status": "skip",
+                          "message": "no deployment — deferred to compose rung"})
+        print(f"  {'─' * 46}")
+        print(f"  {dim(f'{len(locks)} {tier_filter} checks skipped — no deployment (deferred to compose rung)')}")
+        print()
+        if json_out:
+            _write_json_report(json_out, tier_filter, steps, 0)
         return
 
     # Bootstrap credentials for tiers that need them

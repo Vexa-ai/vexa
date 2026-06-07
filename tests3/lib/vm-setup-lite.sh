@@ -26,7 +26,7 @@ pass "local creds: TX_URL=${TX_URL:0:40}..."
 
 # ── 2. Install prereqs ───────────────────────────
 info "installing prereqs..."
-vm_ssh "apt-get update -qq && apt-get install -y -qq make git curl jq python3 python3-pip && pip3 install --break-system-packages websockets 2>/dev/null" 2>&1 | tail -1
+vm_ssh "apt-get update -qq && apt-get install -y -qq make git curl jq ripgrep python3 python3-pip && pip3 install --break-system-packages websockets 2>/dev/null" 2>&1 | tail -1
 pass "prereqs: make, git, curl, jq, python3"
 
 info "installing docker..."
@@ -35,8 +35,9 @@ vm_ssh "docker --version"
 pass "docker installed"
 
 # ── 3. Clone repo ────────────────────────────────
+# Idempotent: wipe any pre-existing /root/vexa first (reused/dirty VM safety).
 info "cloning repo (branch=$BRANCH)..."
-vm_ssh "git clone --branch $BRANCH $REPO_URL /root/vexa" 2>&1 | tail -1
+vm_ssh "rm -rf /root/vexa && git clone --branch $BRANCH $REPO_URL /root/vexa" 2>&1 | tail -1
 pass "repo cloned at /root/vexa"
 
 # ── 4. Configure .env ────────────────────────────

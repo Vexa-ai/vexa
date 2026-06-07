@@ -2,6 +2,19 @@
 
 # Vexa Release System
 
+> ⚠️ **SUPERSEDED IN PART (2026-06-04): the stage state machine is removed.**
+> This engine is now **stateless** — there is no `.current-stage`, no `lib/stage.py`,
+> no `stages/*.md`, and no `release-{groom,plan,…,ship,teardown}` Makefile targets.
+> Orchestration (*which* step *when*) now lives in the external **pipeline** skills;
+> the engine only exposes pure **verb-targets** (`build`/`deploy`/`validate`/`provision`/
+> `teardown`/`promote`) documented in [`CONTRACT.md`](./CONTRACT.md). State lives in the
+> substrate (pack issue-tags, PRs, branches, image tags), not a marker file.
+>
+> **Still accurate below:** the registry / regression-corpus (Part 5.x), the three-phase
+> validate, deploy/test mechanics, fresh-infra. **Now obsolete below:** §5.5 "Stage state
+> machine", the Part 4 migration plan, and any `make release-*` / `.current-stage` flow.
+> (A full prose rewrite is pending; git history keeps the original.)
+
 # Part 1 — Why
 
 ---

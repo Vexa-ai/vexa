@@ -1,0 +1,59 @@
+# .harness/target.yaml — substrate conformance contract.
+# Read by skills/cto (the blind orchestrator) to drive THIS repo. One machine-written
+# carrier per axis (stateless-orchestration); position is derived, never stored.
+# Authored at P2 for scope `gmeet-join-restore` (signed 2026-06-06).
+
+substrate: DmitriyG228/vexa
+base_branch: tests3-stateless        # develop base: packs branch from it and PR into it (the conformant tree)
+
+# --- Substrate adapter: the position carriers (read/written by the harness) ---
+carriers:
+  pack_label: pack
+  status_labels:
+    available:    status:available
+    in_progress:  status:in-progress
+    released:     status:released
+  rung_labels: [rung:static, rung:synthetic, rung:compose, rung:clean-room, rung:live]
+  blessed_label: blessed
+  blocked_label: blocked
+  branch_pattern: "pack/{id}"
+  pr_base: tests3-stateless
+
+# --- Rung ladder + recipe (maps to the infra verbs = Makefile targets on this tree) ---
+rungs:
+  ladder: [static, synthetic, compose, clean-room, live]
+  develop_floor: compose             # a pack is ready-for-review (P5) only at >= compose
+  stitch_floor:  clean-room
+  ship_floor:    live                # `live` is human-earned at P8; never by CI
+  recipe:
+    build:     "make build"                                   # the ONLY place bytes are made (:dev)
+    deploy:    "make deploy MODE={mode} ENV={env}"            # mode=lite|compose|helm  env=local|throwaway|staging|prod
+    test:      "make validate MODE={mode}"                    # registry checks vs a live stack
+    smoke:     "make smoke"                                   # static+synthetic, ~30s, no heavy infra
+    provision: "make provision MODE={mode}"
+    teardown:  "make teardown"                                # mandatory after any throwaway cycle
+    promote:   "make promote"                                 # re-tag :dev->:latest, never rebuild
+    secrets:   "vexa-secrets (SOPS+age), by env — never in this repo"
+  writer: .github/workflows/rung.yml # CI writes the single rung carrier from actual validate results — NOT by hand
+
+# --- The only human-facing outputs (filled from substrate facts, emitted verbatim) ---
+gates:
+  P2: templates/gate-P2-scope-sign.md
+  P5: templates/gate-P5-code-review.md
+  P8: templates/gate-P8-eyeball-live.md
+
+# --- Worker delivery contract: the blind develop worker knows ONLY this ---
+worker:
+  delivery_contract: |
+    You are a development worker for pack {id} in repo {substrate}. `gh` and `docker` are authenticated.
+    1. Clone {substrate} to a fresh /tmp dir; checkout {base_branch}; create branch pack/{id}.
+    2. Read acceptance criteria from issue #{issue}: the pack body's proves[] and its Validate plan.
+       If the body names a SEED branch, reuse its diff as CONTENT only — trust no prior status/green.
+    3. Implement until every proves[] entry holds.
+    4. Validate on a FAITHFUL substrate (engine-produced, never hand-rolled): `make build`, then
+       `make deploy MODE=compose ENV=local`, then `make validate MODE=compose`. Must be green
+       (the compose develop floor). Fix transient obstacles in-loop; never exit on them.
+    5. Commit, push, open a DRAFT PR into {base_branch} referencing issue #{issue}.
+    6. Do NOT set the rung label — CI (.github/workflows/rung.yml) stamps it from the validate run.
+    7. Return JSON {pack, branch, pr, validate: "pass"|"fail"}.
+    A `live-required` pack documents in its PR that the `live` rung is owed at P8 (human), not earned in CI.

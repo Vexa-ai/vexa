@@ -59,8 +59,10 @@ fi
 # Extract mode from BOT_CONFIG JSON (defaults to "meeting" if not set)
 BOT_MODE=$(echo "$BOT_CONFIG" | node -e "try{const c=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));console.log(c.mode||'meeting')}catch{console.log('meeting')}" 2>/dev/null || echo "meeting")
 
-if [ "$BOT_MODE" = "browser_session" ]; then
-  echo "[entrypoint] Browser session mode — starting VNC stack"
+# --- Shared browser-bringup helpers (used by BOTH meeting + browser_session modes) ---
+# Kept DRY: the VNC stack and the CDP relay are identical across modes — the only
+# per-mode differences (autocutsel, SSH, keep-alive) stay in their branches below.
+start_vnc_stack() {
   mkdir -p /root/.fluxbox
   cat > /root/.fluxbox/apps <<'FBAPPS'
 [app] (name=.*) (class=.*)
@@ -69,23 +71,30 @@ if [ "$BOT_MODE" = "browser_session" ]; then
 FBAPPS
   fluxbox &
   x11vnc -display :99 -forever -nopw -shared -rfbport 5900 &
-  autocutsel -s PRIMARY &
-  autocutsel -s CLIPBOARD &
-
-  # websockify bridges VNC (port 5900) to web (port 6080) for noVNC
-  # Use --web only if novnc is installed, otherwise plain WebSocket proxy
   if [ -d /usr/share/novnc ]; then
     websockify --web /usr/share/novnc 6080 localhost:5900 &
   else
     websockify 6080 localhost:5900 &
   fi
-  echo "[entrypoint] websockify started on port 6080"
+  echo "[entrypoint] VNC stack started (x11vnc:5900 → websockify:6080)"
+}
 
-  # CDP proxy: Chromium binds CDP to 127.0.0.1 only. Socat exposes it on 0.0.0.0:9223
-  # so the api-gateway can reach it from the Docker network.
+# CDP relay: Chrome binds CDP to 127.0.0.1:9222 only (even with --remote-debugging-address);
+# socat re-exposes it on 0.0.0.0:9223 so the api-gateway /b/{token}/cdp proxy can reach it
+# across the docker network — letting an agent attach (connectOverCDP) to clear captcha /
+# blocking states. The 9222 port comes from CDP_DEBUG_ARGS (constans.ts), shared by both modes.
+start_cdp_relay() {
   (while ! curl -s http://localhost:9222/json/version > /dev/null 2>&1; do sleep 1; done
-  echo "[entrypoint] CDP ready, starting socat proxy on 0.0.0.0:9223"
-  socat TCP-LISTEN:9223,fork,reuseaddr,bind=0.0.0.0 TCP:localhost:9222) &
+   echo "[entrypoint] CDP ready, starting socat proxy on 0.0.0.0:9223"
+   socat TCP-LISTEN:9223,fork,reuseaddr,bind=0.0.0.0 TCP:localhost:9222) &
+}
+
+if [ "$BOT_MODE" = "browser_session" ]; then
+  echo "[entrypoint] Browser session mode — starting VNC stack"
+  start_vnc_stack
+  autocutsel -s PRIMARY &   # clipboard sync so a human can paste over VNC
+  autocutsel -s CLIPBOARD &
+  start_cdp_relay
 
   # SSH server — password is the session token (unique per session)
   SSH_PASS=$(echo "$BOT_CONFIG" | node -e "try{const c=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));console.log(c.session_token||'vexa')}catch{console.log('vexa')}" 2>/dev/null || echo "vexa")
@@ -103,20 +112,17 @@ FBAPPS
 else
   # Meeting mode — start VNC for browser view on dashboard
   echo "[entrypoint] Meeting mode — starting VNC for browser view"
-  mkdir -p /root/.fluxbox
-  cat > /root/.fluxbox/apps <<'FBAPPS'
-[app] (name=.*) (class=.*)
-  [Maximized]  {yes}
-[end]
-FBAPPS
-  fluxbox &
-  x11vnc -display :99 -forever -nopw -shared -rfbport 5900 &
-  if [ -d /usr/share/novnc ]; then
-    websockify --web /usr/share/novnc 6080 localhost:5900 &
-  else
-    websockify 6080 localhost:5900 &
-  fi
+  start_vnc_stack
+  start_cdp_relay
 
-  # Run the bot
+  # Run the bot.
+  # #407 407-C: export DISPLAY so the humanized XTEST path finds Xvfb (:99); and always
+  # emit a start + exit-code breadcrumb so a zero-log instant crash is never silent in
+  # container stdout (meeting mode previously ran node with no exit logging).
+  export DISPLAY="${DISPLAY:-:99}"
+  echo "[entrypoint] Meeting mode — starting bot node process (DISPLAY=$DISPLAY)"
   node dist/docker.js
+  EXIT_CODE=$?
+  echo "[entrypoint] node dist/docker.js exited with code $EXIT_CODE"
+  exit $EXIT_CODE
 fi

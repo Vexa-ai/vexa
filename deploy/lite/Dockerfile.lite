@@ -45,6 +45,8 @@ RUN apt-get update && \
     g++ \
     xvfb \
     x11vnc \
+    xdotool \
+    xclip \
     novnc \
     python3-websockify \
     fluxbox \
@@ -136,9 +138,28 @@ COPY services/vexa-bot/core/ /app/vexa-bot/
 RUN chmod +x /app/vexa-bot/entrypoint.sh
 # Entrypoint references /app/vexa-bot/core/ — symlink to self for compatibility
 RUN ln -sf /app/vexa-bot /app/vexa-bot/core
+# LITE-ONLY: per-bot X display isolation so concurrent in-process bots don't
+# collide on the shared :99 (humanized XTEST is screen-global). Override the bot
+# entrypoint with a wrapper that claims a dedicated Xvfb display, then execs the
+# UNMODIFIED core entrypoint. Confined to the lite image — core/compose/helm untouched.
+COPY deploy/lite/bot-slot-wrapper.sh /app/vexa-bot/bot-slot-wrapper.sh
+RUN mv /app/vexa-bot/entrypoint.sh /app/vexa-bot/entrypoint.real.sh \
+ && cp /app/vexa-bot/bot-slot-wrapper.sh /app/vexa-bot/entrypoint.sh \
+ && chmod +x /app/vexa-bot/entrypoint.sh /app/vexa-bot/entrypoint.real.sh
 WORKDIR /app/vexa-bot
 RUN npm ci --omit=dev 2>/dev/null || npm install \
     && npm run build
+# LITE-ONLY: make Chrome's CDP debug port (9222) and the Node relay (9223) per-bot so
+# concurrent in-process bots don't collide. The 9222 collision is FATAL (Chrome: "Cannot
+# start http server for devtools" → launch timeout → bot dies). Patch the COMPILED dist
+# in the lite image only — core source and compose/helm bot images are untouched, so they
+# need no re-test. The wrapper sets VEXA_CDP_PORT/VEXA_RELAY_PORT per slot; defaults
+# (9222/9223) preserve single-bot behaviour. grep-guarded so a string drift fails the build
+# loudly instead of silently no-op'ing.
+RUN sed -i "s#'--remote-debugging-port=9222'#('--remote-debugging-port=' + (process.env.VEXA_CDP_PORT || '9222'))#" /app/vexa-bot/dist/constans.js \
+ && grep -q "process.env.VEXA_CDP_PORT" /app/vexa-bot/dist/constans.js \
+ && sed -i "s#function startCdpRelay(listenPort = 9223, targetPort = 9222)#function startCdpRelay(listenPort = (Number(process.env.VEXA_RELAY_PORT) || 9223), targetPort = (Number(process.env.VEXA_CDP_PORT) || 9222))#" /app/vexa-bot/dist/index.js \
+ && grep -q "process.env.VEXA_RELAY_PORT" /app/vexa-bot/dist/index.js
 RUN npx playwright install msedge --with-deps || true
 RUN node build-browser-utils.js || true
 
