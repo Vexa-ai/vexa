@@ -235,7 +235,15 @@ export const googleRemovalIndicators: string[] = [
 
 // Google Meet UI interaction selectors
 export const googleJoinButtonSelectors: string[] = [
-  // English
+  // Locale-agnostic: a real <button> carrying Google's jsname token whose label
+  // text is non-empty (excludes icon-only mic/camera toggles which have no text
+  // node). Matches "Ask to join"/"Join now"/localized equivalents alike.
+  'button[jsname]:not([aria-label]):has(span)',
+  // NB: must exclude [aria-label] — the lobby 3-dot "more options" menu is also a
+  // div[jscontroller] button[jsname] with a span; without this filter it matched
+  // FIRST and the humanized click landed on the menu, never "Ask to join".
+  'div[jscontroller] button[jsname]:not([aria-label]):has(span)',
+  // English fallbacks (kept for resilience on English UIs).
   '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
