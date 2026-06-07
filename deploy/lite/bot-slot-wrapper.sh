@@ -36,7 +36,15 @@ if [ "${DISPLAY:-:99}" = ":99" ]; then
     if kill -0 "$xpid" 2>/dev/null && [ -e "/tmp/.X$n-lock" ]; then
       export DISPLAY=":$n"
       claimed=":$n"
-      echo "[lite-slot] bot assigned dedicated DISPLAY=:$n (xvfb pid $xpid)"
+      # Derive a per-bot CDP + relay port from the slot so concurrent bots don't
+      # collide on Chrome's --remote-debugging-port (9222) — that collision is FATAL
+      # (Chrome: "Cannot start http server for devtools" → launch timeout → bot dies).
+      # constans.js/index.js in the lite image are patched (Dockerfile.lite) to read
+      # these env vars; defaults (9222/9223) keep container mode unchanged.
+      slot=$(( n - 100 ))
+      export VEXA_CDP_PORT=$(( 9222 + slot * 10 ))
+      export VEXA_RELAY_PORT=$(( 9223 + slot * 10 ))
+      echo "[lite-slot] bot DISPLAY=:$n CDP=$VEXA_CDP_PORT RELAY=$VEXA_RELAY_PORT (xvfb pid $xpid)"
       break
     fi
     kill "$xpid" 2>/dev/null
