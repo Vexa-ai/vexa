@@ -34,8 +34,10 @@ vm_ssh "docker --version"
 pass "docker installed"
 
 # ── 3. Clone repo ────────────────────────────────
+# Idempotent: wipe any pre-existing /root/vexa first so a reused/dirty VM doesn't fail
+# the clone ("destination already exists") and silently leave a stale checkout.
 info "cloning repo (branch=$BRANCH)..."
-vm_ssh "git clone --branch $BRANCH $REPO_URL /root/vexa" 2>&1 | tail -1
+vm_ssh "rm -rf /root/vexa && git clone --branch $BRANCH $REPO_URL /root/vexa" 2>&1 | tail -1
 pass "repo cloned at /root/vexa"
 
 # ── 4. Configure .env ────────────────────────────
