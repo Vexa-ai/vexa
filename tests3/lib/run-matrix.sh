@@ -198,6 +198,7 @@ with open('$REPORT') as f:
 
     case "$STATUS" in
         pass) ;;  # Good.
+        skip) ;;  # Test not applicable in this env (e.g. browser-E2E without playwright on a headless VM) — not a failure.
         fail) FAILED_TESTS+=("$NAME") ;;
         *)    FAILED_TESTS+=("$NAME($STATUS)") ;;
     esac
