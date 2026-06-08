@@ -163,7 +163,11 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
       leave_result: Boolean(result),
       leave_reason: reason,
     });
-    return result;
+    // Contract: this function is typed Promise<boolean>. page.evaluate can return
+    // undefined (e.g. a black/captcha page where performLeaveAction never resolves a
+    // value), which otherwise propagates as `result: undefined` to callers that treat
+    // it as a tri-state. Coerce to match the declared boolean (and the log above).
+    return Boolean(result);
   } catch (error: any) {
     logJSON({
       level: "error",

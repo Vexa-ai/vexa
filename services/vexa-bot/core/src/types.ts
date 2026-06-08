@@ -39,6 +39,11 @@ export type BotConfig = {
   videoReceiveEnabled?: boolean;  // Receive+decode video from participants (default: false)
   cameraEnabled?: boolean;        // Outgoing virtual camera/avatar (default: false)
 
+  // UI interaction mode: "humanized" uses OS-level XTEST input (xdotool/xclip),
+  // "synthetic" uses Playwright CDP events (isTrusted=false). Defaults to
+  // "humanized" for google_meet, "synthetic" for all other platforms.
+  uiInteractionMode?: "humanized" | "synthetic";
+
   // Authenticated meeting mode (uses persistent browser context with stored userdata)
   authenticated?: boolean;
   userdataS3Path?: string;   // e.g. "users/123/browser-userdata"

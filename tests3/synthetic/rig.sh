@@ -25,6 +25,12 @@ set -uo pipefail
 
 : "${BASE:=http://localhost:8056}"
 : "${ADMIN_TOKEN:=changeme}"
+: "${INTERNAL_SECRET:=vexa-internal-secret}"
+# Redis container name — auto-detected from running containers if not set.
+if [ -z "${REDIS_CONTAINER:-}" ]; then
+    REDIS_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E 'redis' | head -1 || echo "vexa-redis-1")
+fi
+export REDIS_CONTAINER
 
 # ─── Internal helpers ──────────────────────────────────────────────
 
@@ -67,6 +73,19 @@ EOF
         -d "$body" | _rig_jq 'd["id"]'
 }
 
+rig_seed_transcription() {
+    # Insert N synthetic Transcription rows for a meeting so the Pack J
+    # classifier counts > 0 segments. Used by fm001 and similar scenarios
+    # to simulate a meeting that captured audio.
+    # Args: meeting_id [count=1]
+    local meeting_id=$1
+    local count=${2:-1}
+    curl -sf -X POST "$BASE/bots/internal/test/seed-transcription" \
+        -H "Content-Type: application/json" \
+        -H "X-Internal-Secret: $INTERNAL_SECRET" \
+        -d "{\"meeting_id\": $meeting_id, \"count\": $count}" | _rig_jq 'd["inserted"]'
+}
+
 rig_session_bootstrap() {
     # Pack X synthetic endpoint: create MeetingSession row directly.
     # Returns session_uid (auto-generated if not provided).
@@ -80,6 +99,7 @@ rig_session_bootstrap() {
     fi
     curl -sf -X POST "$BASE/bots/internal/test/session-bootstrap" \
         -H "Content-Type: application/json" \
+        -H "X-Internal-Secret: $INTERNAL_SECRET" \
         -d "$body" | _rig_jq 'd["session_uid"]'
 }
 
@@ -106,6 +126,7 @@ rig_callback() {
     body="{\"connection_id\": \"$session_uid\"$extra}"
     curl -sf -X POST "$BASE/bots/internal/callback/$endpoint" \
         -H "Content-Type: application/json" \
+        -H "X-Internal-Secret: $INTERNAL_SECRET" \
         -d "$body"
 }
 
@@ -259,7 +280,7 @@ rig_baseline_redis_keys() {
     # Capture the baseline count of Redis keys (or only matching pattern).
     # Use rig_assert_no_redis_leak <baseline> [pattern] after scenario.
     local pattern=${1:-*}
-    docker exec vexa-redis-1 redis-cli --scan --pattern "$pattern" 2>/dev/null | wc -l
+    docker exec "${REDIS_CONTAINER:-vexa-redis-1}" redis-cli --scan --pattern "$pattern" 2>/dev/null | wc -l
 }
 
 rig_assert_no_redis_leak() {

@@ -1243,13 +1243,23 @@ async def request_bot(
     await db.commit()
     await db.refresh(new_meeting)
 
-    # Register container in Redis for gateway VNC proxy (keyed by meeting ID)
+    # Register container in Redis for the gateway browser proxy.
+    # Two keys, two surfaces (see api-gateway security):
+    #   - browser_session:{session_token} — UNGUESSABLE capability token for the
+    #     browser-opened VNC/dashboard routes (the meeting_id is guessable and rejected there).
+    #   - browser_session:{meeting_id} — for CDP, which is separately gated by X-API-Key+ownership.
+    # The secret token is persisted to meeting.data so the dashboard builds /b/{session_token}/vnc.
     if redis_client:
-        await redis_client.set(
-            f"browser_session:{meeting_id}",
-            json.dumps({"container_name": container_name, "meeting_id": meeting_id, "user_id": current_user.id}),
-            ex=86400,
-        )
+        session_token = (new_meeting.data or {}).get("session_token") or secrets.token_urlsafe(24)
+        if (new_meeting.data or {}).get("session_token") != session_token:
+            current_data = dict(new_meeting.data or {})
+            current_data["session_token"] = session_token
+            new_meeting.data = current_data
+            await db.commit()
+            await db.refresh(new_meeting)
+        sess_val = json.dumps({"container_name": container_name, "meeting_id": meeting_id, "user_id": current_user.id})
+        await redis_client.set(f"browser_session:{session_token}", sess_val, ex=86400)
+        await redis_client.set(f"browser_session:{meeting_id}", sess_val, ex=86400)
 
     # Schedule bot timeout job (max_bot_time enforcement via scheduler)
     scheduler_job_id = await _schedule_bot_timeout(

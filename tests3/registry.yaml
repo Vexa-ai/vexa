@@ -79,6 +79,58 @@ BOT_CREATE_OK:
   - helm
   state: stateful
   max_duration_sec: 30
+BOT_ENTRYPOINT_DISPLAY_EXPORTED:
+  proves: "entrypoint.sh exports DISPLAY before starting node — bot finds Xvfb (:99) on the humanized XTEST path (#407 407-C)"
+  symptom: "bot crashes at startup with DISPLAY not set; Xvfb (:99) is running but node process cannot find it because DISPLAY was never exported"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/entrypoint.sh
+  must_match: export DISPLAY
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_ENTRYPOINT_EXIT_CODE_LOGGED:
+  proves: "entrypoint.sh captures node exit code and echoes it — a zero-log instant crash is visible in container stdout (#407 407-C)"
+  symptom: "bot container exits silently; no exit code in stdout; operator cannot determine whether node crashed or was OOM-killed"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/entrypoint.sh
+  must_match: EXIT_CODE=\$\?
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_STARTUP_BREADCRUMB_IN_DOCKER_TS:
+  proves: "docker.ts emits a structured startup breadcrumb JSON on the very first line of main() — pre-config crashes are never zero-log (#407 407-C)"
+  symptom: "bot container crashes before config parsing; container stdout is empty; no structured log line to signal the process even started"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/src/docker.ts
+  must_match: startupBreadcrumb
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_STARTUP_FAILURE_REPORTER_HAS_SECRET:
+  proves: "reportStartupFailure in docker.ts includes X-Internal-Secret header so the failure callback reaches meeting-api on authenticated stacks (#407 407-C)"
+  symptom: "reportStartupFailure sends the failure payload but meeting-api returns 403 (missing X-Internal-Secret); failure reason is lost silently"
+  found: '2026-06-06'
+  type: grep
+  file: services/vexa-bot/core/src/docker.ts
+  must_match: X-Internal-Secret
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS:
   proves: "bot's in-process failure_stage tracker advances on each successful status_change callback for joining/awaiting_admission/active — crashes past joining no longer get persisted as failure_stage='joining' (v0.10.6 #294)"
   symptom: "every meeting that fails post-admission shows failure_stage='joining' in JSONB; #276's server-side derivation hides the user-visible impact but raw data->>'failure_stage' is still wrong; analytics + 3rd-party consumers see the wrong value"
@@ -92,6 +144,19 @@ BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS:
   - helm
   state: stateless
   max_duration_sec: 5
+GMEET_JOIN_CALLBACK_RESILIENT:
+  proves: "callJoiningCallback proceeds on transient blips (5xx/timeout → err.transient=true) and aborts on deliberate server rejections (4xx → err.transient=false) — control-plane restart during bot join no longer kills an otherwise-fine session (#3)"
+  symptom: "bot join aborted on meeting-api 5xx during rollout; 4xx (bad-request / invalid transition) correctly aborted but was indistinguishable from transient at the call site"
+  found: '2026-06-06'
+  type: script
+  script: tests/gmeet-join-callback-resilient.sh
+  step: join_callback_resilient
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 15
 BOT_GMEET_RECORDING_ENABLED_SURVIVES_TRACK_EVENT:
   proves: "bot dispatched against a GMeet meeting with recording_enabled=true survives the first video track event AND remains in 'active' for ≥120s — confirms screen-content.ts:1218-1228 SDP-munge site-2 is removed (v0.10.6 #291/#284)"
   symptom: "bot reaches active, runs 1-4 minutes, then crashes with 'page.evaluate Execution context destroyed' at recording.js:102 — site-2 transceiver.direction mutation produces malformed offer SDP, Chrome rejects setLocalDescription, peer enters degraded state, page navigates"
@@ -357,6 +422,97 @@ CDP_WS_SCHEME_PRESERVED:
   modes:
   - lite
   - compose
+  state: stateless
+  max_duration_sec: 5
+BOT_MEETING_CDP_ARGS:
+  proves: "meeting + browser bots share CDP_DEBUG_ARGS (remote-debugging-port=9222) so an agent can attach over /b/{meeting_id}/cdp"
+  symptom: "meeting bots launch with no CDP port; /b/{id}/cdp has nothing to proxy; agent/human cannot attach to a stuck bot"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/src/constans.ts
+  must_match: CDP_DEBUG_ARGS
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_CDP_RELAY_SHARED:
+  proves: "entrypoint starts the socat CDP relay (127.0.0.1:9222 -> 0.0.0.0:9223) via the shared helper, so the gateway can reach CDP across the docker network in BOTH meeting + browser_session modes"
+  symptom: "Chrome binds CDP to 127.0.0.1 only; gateway /b/{id}/cdp gets connection-refused; meeting-bot CDP attach impossible"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/entrypoint.sh
+  must_match: start_cdp_relay
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_CAPTCHA_NOT_REJECTION:
+  proves: "a reCAPTCHA challenge is NOT classified as an admin rejection (hasRecaptchaChallenge guard) — the bot stays on the page and escalates instead of self-quitting"
+  symptom: "captcha-blocked bot reads the 'Return to home screen' affordance as a host denial and quits in ~2s, losing the meeting before a human/agent can solve the captcha"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/admission.ts
+  must_match: hasRecaptchaChallenge
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_GRACEFUL_LEAVE_BOOLEAN:
+  proves: "leaveGoogleMeet returns a strict boolean (Boolean(result)) per its Promise<boolean> contract, not undefined on a black/captcha page"
+  symptom: "page.evaluate returns undefined on a black/captcha page and propagates as 'result: undefined' to callers that treat leave as a tri-state"
+  found: '2026-06-07'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/leave.ts
+  must_match: return Boolean\(result\)
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+CDP_ATTACH_REQUIRES_OWNER_TOKEN:
+  proves: "the /b/{token}/cdp proxy gates on _authorize_browser_token — a valid X-API-Key for the OWNING user, not the guessable meeting_id alone"
+  symptom: "anyone who guesses the integer meeting_id can connectOverCDP to a live bot's browser (read the meeting, drive the page) with no API key — full account-crossing browser takeover"
+  found: '2026-06-07'
+  type: grep
+  file: services/api-gateway/main.py
+  must_match: _authorize_browser_token
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+VNC_REJECTS_GUESSABLE_TOKEN:
+  proves: "the browser-opened /b/{token} routes (vnc / dashboard / save / storage) reject the numeric meeting_id and require the unguessable capability token"
+  symptom: "anyone who guesses the integer meeting_id can open /b/{id}/vnc and watch or drive the bot's live browser with no auth"
+  found: '2026-06-07'
+  type: grep
+  file: services/api-gateway/main.py
+  must_match: requires the unguessable session token
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ESCALATION_USES_SECRET_TOKEN:
+  proves: "needs_human_help escalation issues an unguessable session_token (secrets.token_urlsafe) for the VNC capability URL, never the guessable meeting_id"
+  symptom: "escalation set session_token=str(meeting.id) → /b/{meeting_id}/vnc world-reachable by guessing the integer"
+  found: '2026-06-07'
+  type: grep
+  file: services/meeting-api/meeting_api/callbacks.py
+  must_match: token_urlsafe
+  modes:
+  - lite
+  - compose
+  - helm
   state: stateless
   max_duration_sec: 5
 CHART_PUBLISH_WORKFLOW_EXISTS:
@@ -660,6 +816,17 @@ GATEWAY_UP:
   - helm
   state: stateless
   max_duration_sec: 30
+GMEET_BOT_STARTUP_LOGGED:
+  proves: "vexa-bot emits a structured startup breadcrumb before config parsing and reports the failure reason to meeting-api on invalid-config crash \u2014 zero-log silent startup crashes are eliminated (#407 407-C)"
+  symptom: "bot container crashes on startup with an invalid BOT_CONFIG; meetings.data.bot_logs is empty; operator cannot diagnose the failure cause (3 such crashes seen post-hotfix)"
+  found: '2026-06-06'
+  type: script
+  script: tests/bot-startup-crash.sh
+  step: GMEET_BOT_STARTUP_LOGGED
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 90
 GMEET_URL_PARSED:
   proves: "Google Meet URL accepted by POST /bots \u2014 parser handles GMeet format"
   symptom: Google Meet URL not accepted by POST /bots
@@ -1499,46 +1666,6 @@ TEAMS_URL_STANDARD:
   - helm
   state: stateful
   max_duration_sec: 30
-TESTS3_LABEL_RELEASE_TRACEABLE:
-  proves: release_label helper emits labels of shape PREFIX-<release_id|adhoc>-<6-hex-char-suffix>; two calls produce distinct
-    suffixes
-  symptom: "tests3/lib/vm.sh and lib/lke.sh use date +%H%M \u2014 collides between parallel devs (#229)"
-  found: '2026-04-22'
-  type: script
-  dispatch: SHELL_CHECK
-  script: tests3/checks/scripts/tests3-label-release-traceable.sh
-  from_tier: static
-  modes:
-  - lite
-  state: stateless
-  max_duration_sec: 5
-TESTS3_RELEASE_KEY_CONSISTENT:
-  proves: 'four-way single-key invariant: basename(worktree)=vexa-<id>, branch=release/<id>, tests3/releases/<id>/ exists,
-    all match .current-stage.release_id'
-  symptom: release_id drifts across branch / worktree / .current-stage without any check catching it
-  found: '2026-04-22'
-  type: script
-  dispatch: SHELL_CHECK
-  script: tests3/checks/scripts/tests3-release-key-consistent.sh
-  from_tier: static
-  modes:
-  - lite
-  state: stateless
-  max_duration_sec: 5
-TESTS3_WORKTREE_BOOTSTRAP:
-  proves: make release-worktree ID=<id> creates ../vexa-<id>, seeds stage=idle, branch release/<id>, and stage.py next reports
-    groom
-  symptom: No standard way to bootstrap a per-release worktree; manual git worktree add + hand-seeded stage state is undocumented
-    and error-prone
-  found: '2026-04-22'
-  type: script
-  dispatch: SHELL_CHECK
-  script: tests3/checks/scripts/tests3-worktree-bootstrap.sh
-  from_tier: static
-  modes:
-  - lite
-  state: stateless
-  max_duration_sec: 30
 TRANSCRIPTION_TOKEN_VALID:
   proves: "transcription API token accepted \u2014 bots can convert audio to text"
   symptom: "Transcription returns 403 \u2014 TRANSCRIPTION_SERVICE_TOKEN expired or invalid. Bots capture audio but produce\
@@ -1759,19 +1886,6 @@ MEETING_BOT_RESOURCES_FIELD_PRESENT:
   - helm
   state: stateful
   max_duration_sec: 120
-STAGE_DOC_DEVELOP_NO_FALLBACKS_RULE:
-  proves: "tests3/stages/03-develop.md contains the 'No fallbacks unless explicitly decided' rule under May NOT"
-  symptom: "fallback patterns added to OSS code without scope-stage decision-record (Pack M's chunk-buffer leak was committed exactly this way)"
-  found: '2026-05-01'
-  type: grep
-  file: tests3/stages/03-develop.md
-  must_match: '(?i)no fallback.*explicit.*decision'
-  modes:
-  - lite
-  - compose
-  - helm
-  state: stateless
-  max_duration_sec: 5
 BOT_NO_UNJUSTIFIED_FALLBACKS:
   proves: "soft-grep across services/vexa-bot/core/src/ surfaces fallback patterns; pass with WARN on existing 117 patterns; develop-stage rule is primary enforcement"
   symptom: "new fallback added without #NNN issue ref \u2014 repeats the v0.10.5.2 chunk-buffer leak pattern"
@@ -3635,3 +3749,31 @@ DISRUPTIVE_CRASH_KILLS_CANONICAL_BOT_CONTAINER:
   state: stateless
   max_duration_sec: 5
   release: 260508-v0.10.6.1
+
+GMEET_HUMANIZED_JOIN_LANE_GREEN:
+  proves: "humanized join path is structurally complete on compose + Lite lanes: xdotool+xclip declared in Dockerfile.lite, HumanizedInteractor module present, waitForAnySelector wired, locale-agnostic selectors first (Pack 7 / issue #7)"
+  symptom: "GMeet bot falls back to synthetic Playwright click (isTrusted=false) because xdotool/xclip missing from Lite image OR humanized/ module not present OR join.ts still uses single-selector waitForSelector; bot-detection triggers rejection"
+  found: '2026-06-06'
+  type: script
+  script: tests/static/humanized-join-lane-green.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+  release: pack-7-humanized-join
+
+GMEET_TRANSCRIBE_E2E:
+  proves: "end-to-end transcript pipeline is structurally complete: join.ts uses ordered multi-selector resolver with screenshot-on-failure, humanized text-entry (xclip) is wired, x11Input tracks simPointer in dryRun, humanized module ships all 6 files (Pack 7 / issue #7)"
+  symptom: "bot joins GMeet but name-entry or join-button click silently fails; no transcript segments produced; join.ts swallows errors without screenshot evidence"
+  found: '2026-06-06'
+  type: script
+  script: tests/static/transcribe-e2e-harness.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+  release: pack-7-humanized-join

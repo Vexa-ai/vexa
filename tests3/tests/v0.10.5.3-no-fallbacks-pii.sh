@@ -69,15 +69,14 @@ case "$step" in
       exit 0
     fi
 
-    # Soft check per scope.yaml: surface as warnings, do NOT fail.
-    # The develop-stage text rule (tests3/stages/03-develop.md "May NOT")
-    # is primary enforcement. Operators reviewing PRs are expected to
-    # challenge any NEW fallback pattern; this check supplies the data.
+    # Soft check: surface as warnings, do NOT fail.
+    # Primary enforcement is PR review + the no-fallbacks doctrine:
+    # reviewers challenge any NEW fallback pattern; this check supplies the data.
     #
     # If a future v0.10.5.3+ cycle wants this to FAIL on diff-introduced
     # fallbacks specifically, swap to: `git diff --diff-filter=A
     # base..HEAD ...` to count NEW lines only and fail when > 0.
-    echo "  WARN: $n unjustified fallback patterns (informational; primary enforcement is develop.md May NOT rule):"
+    echo "  WARN: $n unjustified fallback patterns (informational; primary enforcement is PR review):"
     echo "$unjustified" | head -10 | sed 's|^|    |'
     if [ "$n" -gt 10 ]; then
       echo "    ... ($n total; see full list with: $0 bot_fallback_audit | grep -vE '#[0-9]+|Pack [MP]')"

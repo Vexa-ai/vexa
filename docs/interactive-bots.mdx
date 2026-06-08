@@ -252,6 +252,54 @@ No OpenAI key is required for default speech. The default `provider` is `piper`,
 
 PulseAudio is already configured in the bot container (`entrypoint.sh`). No manual setup is needed.
 
+## Direct browser control (CDP / Playwright)
+
+Beyond the REST `speak`/`chat`/`screen` commands, you can attach a real
+**Chrome DevTools Protocol (CDP)** client — e.g. [Playwright](https://playwright.dev)
+— directly to a running bot's browser and drive it like any page: click, type,
+navigate, read the DOM. This is the lowest level of control, and the escape hatch
+for situations the REST API doesn't cover — most importantly **clearing a join
+blocker** (a captcha or a "verify you're human" challenge), either by a human over
+VNC or by an AI agent over CDP.
+
+Every meeting bot exposes a CDP endpoint through the gateway, keyed by `meeting_id`:
+
+```
+{GATEWAY}/b/{meeting_id}/cdp
+```
+
+<Warning>
+**This endpoint is access-controlled — `meeting_id` alone is NOT access.**
+`meeting_id` is a short, guessable integer, so it can never be the only gate.
+Every CDP request (HTTP **and** WebSocket) requires a valid **`X-API-Key`** whose
+user **owns that meeting**. Anything else — no key, or a key belonging to a
+different user — is rejected with **`403 Forbidden`**. There is no way to attach to
+someone else's bot.
+</Warning>
+
+Attach with Playwright (pass your API key as a header):
+
+```js
+import { chromium } from 'playwright-core';
+
+const browser = await chromium.connectOverCDP(
+  `${GATEWAY}/b/${meetingId}/cdp`,
+  { headers: { 'X-API-Key': process.env.VEXA_API_KEY } }  // owning user's key — required
+);
+
+const page = browser.contexts()[0].pages()[0];
+console.log(await page.title());          // read the live meeting tab
+// drive it directly — e.g. solve a challenge, click a control:
+await page.getByRole('button', { name: 'Ask to join' }).click();
+```
+
+When a bot hits a blocking state it can't clear on its own, it escalates to
+`needs_human_help` and brings up its remote-browser surface (see
+[Concepts](concepts)); a human can take over via VNC, or an agent can attach via
+the CDP endpoint above and resolve it programmatically. Because the bot is a real,
+self-hostable browser, both paths stay inside **your** infrastructure and under
+**your** API key — there is no third party in the loop.
+
 ## Known Limitations
 
 1. **Virtual camera is experimental** -- the canvas-based virtual camera works intermittently on Google Meet. Screen share is more reliable for displaying visual content.

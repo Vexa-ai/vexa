@@ -1,6 +1,0 @@
-{
-  "scenario_dir": "scenario-05-force-kill",
-  "completed_at": "2026-05-25T17:14:35Z",
-  "pass": true,
-  "note": "force-kill converged: status=failed callbacks=0"
-}

@@ -1,0 +1,75 @@
+# .harness rung-writer — writes the single rung carrier from ACTUAL results.
+# Develop scope = checks AFFECTED by the pack (doctrine: scope-filtered for develop's inner
+# loop; the FULL corpus is stitch's gate). Pre-existing base reds must NOT block a pack.
+name: rung
+on:
+  pull_request:
+    branches: [tests3-stateless]
+permissions: { contents: read, pull-requests: write, issues: write }
+concurrency: { group: "rung-${{ github.event.number }}", cancel-in-progress: true }
+jobs:
+  rung:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      # synthetic — only the static/synthetic checks this pack's diff affects (scope-filtered)
+      - id: synthetic
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          git fetch origin tests3-stateless --depth=0 || git fetch origin tests3-stateless
+          TARGETS=$(git diff --name-only origin/tests3-stateless...HEAD | python3 tests3/resolve.py 2>/dev/null | tr '\n' ' ')
+          echo "affected targets: ${TARGETS:-<none>}"
+          if [ -z "${TARGETS// }" ]; then
+            echo "no scoped static/synthetic targets — synthetic holds vacuously for this pack"
+            exit 0
+          fi
+          # Replace smoke (deployment-dependent) with its static-safe subset
+          SAFE_TARGETS=$(echo "$TARGETS" | tr ' ' '\n' | sed 's/^smoke$/locks docs/' | tr '\n' ' ')
+          echo "safe targets: ${SAFE_TARGETS:-<none>}"
+          make --no-print-directory -C tests3 $SAFE_TARGETS
+
+      # compose — local docker-compose on the CI runner (no cloud credentials needed).
+      # Uses pre-built images (IMAGE_TAG=latest from DockerHub). SOPS/Linode VM path
+      # remains available when those secrets are configured (takes precedence via env check).
+      - id: compose
+        continue-on-error: true
+        run: |
+          set -e
+          if [ -n "$LINODE_TOKEN" ] && [ -n "$SOPS_AGE_KEY" ]; then
+            # Cloud VM path (when secrets are configured)
+            make provision MODE=compose
+            make deploy   MODE=compose ENV=throwaway
+            make validate MODE=compose
+          else
+            # Local CI path — pre-built images, no cloud credentials needed
+            cp deploy/env-example .env
+            sed -i 's|TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=ci-placeholder|' .env
+            make -C deploy/compose up
+            # Wait for services to be healthy
+            sleep 30
+            make -C tests3 validate-compose || exit 1
+            make -C deploy/compose down || true
+          fi
+        env:
+          LINODE_TOKEN: "${{ secrets.LINODE_TOKEN }}"
+          SOPS_AGE_KEY: "${{ secrets.SOPS_AGE_KEY }}"
+      - if: ${{ always() && env.LINODE_TOKEN != '' }}
+        env: { LINODE_TOKEN: "${{ secrets.LINODE_TOKEN }}" }
+        run: make teardown || true
+
+      - name: stamp single rung carrier
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", PR: "${{ github.event.number }}", REPO: "${{ github.repository }}" }
+        run: |
+          set +e
+          rung=static
+          [ "${{ steps.synthetic.outcome }}" = "success" ] && rung=synthetic
+          [ "${{ steps.compose.outcome }}" = "success" ] && rung=compose
+          for r in static synthetic compose clean-room live; do
+            gh pr edit "$PR" --repo "$REPO" --remove-label "rung:$r" >/dev/null 2>&1
+          done
+          gh pr edit "$PR" --repo "$REPO" --add-label "rung:$rung" >/dev/null 2>&1
+          echo "rung:$rung stamped on PR #$PR"
+          exit 0

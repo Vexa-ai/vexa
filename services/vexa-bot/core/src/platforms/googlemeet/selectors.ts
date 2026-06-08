@@ -249,8 +249,25 @@ export const googleRemovalIndicators: string[] = [
   '.meeting-error'
 ];
 
-// Google Meet UI interaction selectors
+// Google Meet UI interaction selectors.
+//
+// Locale-agnostic FIRST (structure / jsname / role), then English text as a
+// fallback. The English-literal `text()="Ask to join"` / has-text locators only
+// match an English UI, so a Hungarian (or any non-English) Meet lobby never
+// found the join button — the bot sat in the lobby until manual_leave
+// (prod ids 13951 13952 14018 14153). The primary admission CTA in the Meet
+// lobby is the last/right-most jsname-tagged <button> in the lobby controls;
+// it carries a jsname and is the only enabled <button> with non-icon text.
 export const googleJoinButtonSelectors: string[] = [
+  // Locale-agnostic: a real <button> carrying Google's jsname token whose label
+  // text is non-empty (excludes icon-only mic/camera toggles which have no text
+  // node). Matches "Ask to join"/"Join now"/localized equivalents alike.
+  'button[jsname]:not([aria-label]):has(span)',
+  // NB: must exclude [aria-label] — the lobby 3-dot "more options" menu is also a
+  // div[jscontroller] button[jsname] with a span; without this filter it matched
+  // FIRST and the humanized click landed on the menu, never "Ask to join".
+  'div[jscontroller] button[jsname]:not([aria-label]):has(span)',
+  // English fallbacks (kept for resilience on English UIs).
   '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
@@ -269,7 +286,17 @@ export const googleMicrophoneButtonSelectors: string[] = [
   'button[aria-label*="Turn on microphone"]'
 ];
 
+// Name input — locale-agnostic FIRST. `aria-label="Your name"` is English-only,
+// so the non-English lobby (Hungarian: "A neved") never matched and the bot
+// could not fill its name. The lobby has exactly one editable text input, so
+// match by structure/role; keep the English aria-label + placeholder as
+// fallbacks.
 export const googleNameInputSelectors: string[] = [
+  // Locale-agnostic: the single text input in the pre-join lobby form.
+  'input[jsname][type="text"]',
+  'input[type="text"]:not([aria-hidden="true"])',
+  'div[jscontroller] input[type="text"]',
+  // English fallbacks.
   'input[type="text"][aria-label="Your name"]',
   'input[placeholder*="name"]',
   'input[placeholder*="Name"]'

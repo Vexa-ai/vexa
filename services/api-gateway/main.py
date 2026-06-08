@@ -1713,7 +1713,9 @@ def _browser_dashboard_html(token: str, session: dict) -> str:
 @app.get("/b/{token}", tags=["Remote Browser"], summary="Browser session dashboard",
          response_class=HTMLResponse)
 async def browser_session_page(token: str):
-    """Serve the remote browser dashboard UI. Token is the auth."""
+    """Serve the remote browser dashboard UI. Token must be the unguessable capability token."""
+    if token.isdigit():
+        raise HTTPException(status_code=403, detail="This route requires the unguessable session token, not the guessable meeting id")
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found or expired")
@@ -1725,6 +1727,8 @@ async def browser_session_page(token: str):
                include_in_schema=False)
 async def browser_vnc_proxy(token: str, path: str, request: Request):
     """Proxy HTTP requests (noVNC static files) to the container's port 6080."""
+    if token.isdigit():
+        raise HTTPException(status_code=403, detail="This route requires the unguessable session token, not the guessable meeting id")
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found or expired")
@@ -1760,6 +1764,9 @@ async def browser_vnc_proxy(token: str, path: str, request: Request):
 @app.websocket("/b/{token}/vnc/websockify")
 async def browser_vnc_ws(websocket: WebSocket, token: str):
     """Bidirectional WebSocket proxy for VNC (noVNC <-> websockify on container:6080)."""
+    if token.isdigit():
+        await websocket.close(code=4403)  # guessable meeting_id not allowed — needs the capability token
+        return
     session = await resolve_browser_session(token)
     if not session:
         await websocket.close(code=4404)
@@ -1827,11 +1834,31 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
             pass
 
 
+async def _authorize_browser_token(session: dict, api_key: str) -> bool:
+    """Authorize a /b/{token} browser-control request.
+
+    SECURITY: the {token} alone is NOT sufficient. meeting_id is registered as a
+    guessable alias for the session, so possession of the path must never grant control
+    of the bot's live browser. Require a valid X-API-Key whose user OWNS the session.
+    """
+    if not api_key:
+        return False
+    user = await _resolve_token(app.state.http_client, api_key)
+    if not user:
+        return False
+    sess_uid = str(session.get("user_id", "") or "")
+    uid = str(user.get("id", user.get("user_id", "")) or "")
+    return bool(sess_uid) and sess_uid == uid
+
+
 async def _proxy_cdp_http(token: str, path: str, request: Request) -> Response:
     """Shared CDP HTTP proxy body used by both /cdp and /cdp/{path} routes."""
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found")
+    api_key = request.headers.get("x-api-key", "") or request.query_params.get("api_key", "")
+    if not await _authorize_browser_token(session, api_key):
+        raise HTTPException(status_code=403, detail="Forbidden: a valid X-API-Key for the owning user is required to attach to this CDP session")
     container = session.get("container_ip") or session["container_name"]
     try:
         qs = f"?{request.url.query}" if request.url.query else ""
@@ -1898,6 +1925,13 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
     session = await resolve_browser_session(token)
     if not session:
         await websocket.close(code=4404)
+        return
+
+    # SECURITY: require a valid X-API-Key for the owning user (header on the WS handshake,
+    # or ?api_key= for browser clients) — the guessable {token} alone must not grant control.
+    api_key = websocket.headers.get("x-api-key", "") or websocket.query_params.get("api_key", "")
+    if not await _authorize_browser_token(session, api_key):
+        await websocket.close(code=4403)
         return
 
     container = session.get("container_ip") or session["container_name"]
@@ -1981,6 +2015,8 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
 @app.post("/b/{token}/save", tags=["Remote Browser"], summary="Save browser storage to MinIO")
 async def browser_save_storage(token: str):
     """Convenience proxy: save browser userdata to MinIO via meeting-api."""
+    if token.isdigit():
+        raise HTTPException(status_code=403, detail="This route requires the unguessable session token, not the guessable meeting id")
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found or expired")
@@ -2005,6 +2041,8 @@ async def browser_save_storage(token: str):
 @app.delete("/b/{token}/storage", tags=["Remote Browser"], summary="Delete stored browser data from S3")
 async def browser_delete_storage(token: str):
     """Delete stored browser userdata from S3 so user can start clean."""
+    if token.isdigit():
+        raise HTTPException(status_code=403, detail="This route requires the unguessable session token, not the guessable meeting id")
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found or expired")

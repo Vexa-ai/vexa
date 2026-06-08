@@ -31,6 +31,7 @@ echo "    meeting reached terminal status=$status"
 code=$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "$BASE/bots/internal/callback/exited" \
     -H "Content-Type: application/json" \
+    -H "X-Internal-Secret: ${INTERNAL_SECRET:-vexa-internal-secret}" \
     -d "{\"connection_id\":\"$session_uid\",\"exit_code\":0,\"reason\":\"self_initiated_leave\",\"completion_reason\":\"stopped\"}")
 case "$code" in
     200|201|202) echo "    ✓ re-fire returned $code (idempotent terminal acceptance)" ;;

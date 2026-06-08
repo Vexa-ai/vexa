@@ -747,3 +747,47 @@ tests:
     script: tests/local-human-mechanical-gate.sh
     features: [dashboard, infrastructure, post-meeting-transcription, realtime-transcription]
     max_duration_sec: 30
+
+  pack-2-gmeet-join:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/pack-2-gmeet-join.sh
+    features: [realtime-transcription/gmeet, bot-lifecycle]
+    max_duration_sec: 60
+    steps:
+      - gmeet.localized_join_selectors.join_jsname_before_english
+      - gmeet.localized_join_selectors.name_jsname_before_english
+      - gmeet.admission_outcome_classified.type_exported
+      - gmeet.admission_outcome_classified.denial
+      - gmeet.admission_outcome_classified.lobby_timeout
+      - gmeet.admission_outcome_classified.join_failure
+      - gmeet.humanized_join_click_hits.endpoint_verify_present
+      - gmeet.humanized_join_click_hits.fail_loud
+      - gmeet.humanized_join_click_hits.unit_tests
+      - gmeet.admission_outcome_classified.admission_tests
+
+  bot-startup-crash:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/bot-startup-crash.sh
+    features: [bot-lifecycle, realtime-transcription/gmeet]
+    max_duration_sec: 90
+    steps:
+      - display_exported           # entrypoint.sh exports DISPLAY
+      - start_log                  # entrypoint.sh echoes start breadcrumb
+      - exit_code_log              # entrypoint.sh captures + echoes exit code
+      - startup_breadcrumb         # docker.ts has startupBreadcrumb()
+      - startup_failure_reporter   # docker.ts has reportStartupFailure + X-Internal-Secret
+      - GMEET_BOT_STARTUP_LOGGED   # compose: invalid-config bot → failure in DB
+
+  gmeet-join-callback-resilient:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/gmeet-join-callback-resilient.sh
+    features: [bot-lifecycle, realtime-transcription/gmeet]
+    max_duration_sec: 15
+    steps:
+      - 5xx_proceed
+      - 4xx_abort
+      - transient_flag_thrown
+      - joining_catches_transient

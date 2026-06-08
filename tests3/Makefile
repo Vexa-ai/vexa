@@ -60,7 +60,11 @@ health: detect                    ## service endpoints respond (5s)
 contracts: detect                 ## API behavior (15s)
 	@$(T3)/checks/run --tier contract
 
-smoke: docs locks env health contracts ## all checks, no meetings (30s)
+smoke: docs locks ## all checks, no meetings (30s); live tiers skip with no deployment
+	@SMOKE_NO_INFRA=1 $(T3)/lib/detect.sh
+	@SMOKE_NO_INFRA=1 $(T3)/checks/run --tier env
+	@SMOKE_NO_INFRA=1 $(T3)/checks/run --tier health
+	@SMOKE_NO_INFRA=1 $(T3)/checks/run --tier contract
 	@touch $(SMOKE_STAMP)
 	@echo ""; echo "  Smoke passed."
 
@@ -143,30 +147,30 @@ auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, joi
 # ═══ Matrix validation (reads test-registry.yaml) ══════════════
 # validate-<mode> runs every cheap-tier test registered for that mode,
 # writes .state/reports/<mode>/<test>.json, exits non-zero on any failure.
-# Reports drive the aggregator (Phase C+) and release-ship gate (Phase D).
+# Reports drive the aggregator + the gate verdict.
 
 # validate-<mode>: run tests for that mode.
 # With no SCOPE: runs ALL cheap-tier tests registered for the mode (full matrix).
 # With SCOPE=<path>: runs only the tests scope.issues[].proves[] lists for this mode.
-validate-lite:                     ## run tests for lite mode + write JSON reports
+validate-lite: detect              ## run tests for lite mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh lite $(if $(SCOPE),--scope $(SCOPE),)
 
-validate-compose:                  ## run tests for compose mode + write JSON reports
+validate-compose: detect           ## run tests for compose mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh compose $(if $(SCOPE),--scope $(SCOPE),)
 
-validate-helm:                     ## run tests for helm mode + write JSON reports
+validate-helm: detect              ## run tests for helm mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh helm $(if $(SCOPE),--scope $(SCOPE),)
 
-report:                            ## aggregate .state/reports/* → tests3/reports/release-<tag>.md + update feature READMEs
-	@mkdir -p $(ROOT)/tests3/reports
+report:                            ## aggregate .state/reports/* → tests3/.state/reports/release-<tag>.md + update feature READMEs
+	@mkdir -p $(ROOT)/tests3/.state/reports
 	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
-	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/reports/release-$$TAG.md; \
-	echo "  report → tests3/reports/release-$$TAG.md"
+	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/.state/reports/release-$$TAG.md; \
+	echo "  report → tests3/.state/reports/release-$$TAG.md"
 
 report-gate:                       ## like `report` but exits non-zero if any feature is below its confidence_min
-	@mkdir -p $(ROOT)/tests3/reports
+	@mkdir -p $(ROOT)/tests3/.state/reports
 	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
-	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/reports/release-$$TAG.md --gate-check
+	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/.state/reports/release-$$TAG.md --gate-check
 
 validate-all: validate-lite validate-compose validate-helm report  ## run all cheap tests on all modes + aggregate
 
