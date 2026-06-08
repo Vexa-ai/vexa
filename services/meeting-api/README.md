@@ -38,8 +38,8 @@ Bot lifecycle management service. Handles meeting CRUD, voice agent controls (TT
 - `GET /recordings/{recording_id}/media/{media_file_id}/download` — get download URL
 
 #### Browser Sessions
-- `POST /internal/browser-sessions/{token}/save` — trigger browser data save to S3
-- `DELETE /internal/browser-sessions/{user_id}/storage` — delete stored browser data from S3
+- `POST /internal/browser-sessions/{token}/save` — trigger browser data save to S3 or HTTP cookie service (depending on `COOKIE_STORAGE_BACKEND`)
+- `DELETE /internal/browser-sessions/{user_id}/storage` — delete stored browser data from S3 (S3 mode only)
 
 #### Internal Callbacks
 - `POST /bots/internal/callback/exited` — bot exit
@@ -65,6 +65,14 @@ Bot lifecycle management service. Handles meeting CRUD, voice agent controls (TT
 | `CORS_ORIGINS` | no | `http://localhost:3000,...` | Comma-separated CORS origins |
 | `ADMIN_TOKEN` | yes | — | Secret for minting meeting JWTs |
 | `TRANSCRIPTION_COLLECTOR_URL` | no | `http://transcription-collector:8000` | Transcription collector |
+| `MINIO_ENDPOINT` | no | — | MinIO/S3 endpoint for cookie storage (S3 mode) |
+| `MINIO_ACCESS_KEY` | no | — | MinIO access key (S3 mode) |
+| `MINIO_SECRET_KEY` | no | — | MinIO secret key (S3 mode) |
+| `MINIO_BUCKET` | no | `vexa-recordings` | MinIO bucket name (S3 mode) |
+| `MINIO_SECURE` | no | `false` | Use HTTPS for MinIO (S3 mode) |
+| `COOKIE_STORAGE_BACKEND` | no | `s3` | Cookie storage backend for authenticated bots: `s3` (MinIO) or `http` (external cookie service) |
+| `COOKIE_SERVICE_URL` | no | — | Base URL of the HTTP cookie service, e.g. `http://localhost:9001` (HTTP mode only) |
+| `COOKIE_SERVICE_TOKEN` | no | — | Bearer token for the HTTP cookie service (HTTP mode only, omit to disable auth) |
 
 ## Production Readiness
 

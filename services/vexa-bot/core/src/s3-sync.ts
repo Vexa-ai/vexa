@@ -1,8 +1,9 @@
 import { execSync } from 'child_process';
-import { existsSync, unlinkSync, mkdirSync } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
+import { BROWSER_DATA_DIR, AUTH_ESSENTIAL_FILES, AUTH_ESSENTIAL_DIRS, cleanStaleLocks, ensureBrowserDataDir } from './browser-profile';
 
-export const BROWSER_DATA_DIR = '/tmp/browser-data';
+export { BROWSER_DATA_DIR, AUTH_ESSENTIAL_FILES, AUTH_ESSENTIAL_DIRS, cleanStaleLocks, ensureBrowserDataDir };
 
 export const BROWSER_CACHE_EXCLUDES = [
   '*/Cache/*', '*/Code Cache/*', '*/GrShaderCache/*', '*/ShaderCache/*', '*/GraphiteDawnCache/*',
@@ -45,27 +46,6 @@ export function syncBrowserDataFromS3(config: S3Config): void {
   s3Sync(BROWSER_DATA_DIR, `${config.userdataS3Path}/browser-data`, config, 'down', BROWSER_CACHE_EXCLUDES);
 }
 
-// Upload only auth-essential files via individual cp commands.
-// ~200KB total, takes <2 seconds vs minutes for full sync.
-const AUTH_ESSENTIAL_FILES = [
-  'Local State',
-  'Default/Cookies',
-  'Default/Cookies-journal',
-  'Default/Preferences',
-  'Default/Secure Preferences',
-  'Default/Login Data',
-  'Default/Login Data-journal',
-  'Default/Login Data For Account',
-  'Default/Login Data For Account-journal',
-  'Default/Network Persistent State',
-  'Default/Web Data',
-];
-
-const AUTH_ESSENTIAL_DIRS = [
-  'Default/Local Storage',
-  'Default/Session Storage',
-];
-
 export function syncBrowserDataToS3(config: S3Config): void {
   if (!config.userdataS3Path || !config.s3Endpoint || !config.s3Bucket) return;
   const s3Base = `s3://${config.s3Bucket}/${config.userdataS3Path}/browser-data`;
@@ -100,17 +80,3 @@ export function syncBrowserDataToS3(config: S3Config): void {
   console.log(`[s3-sync] Uploaded ${uploaded} auth-essential items`);
 }
 
-export function cleanStaleLocks(dir: string = BROWSER_DATA_DIR): void {
-  const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-  for (const f of lockFiles) {
-    const p = join(dir, f);
-    if (existsSync(p)) {
-      try { unlinkSync(p); } catch {}
-      console.log(`[s3-sync] Removed stale lock: ${f}`);
-    }
-  }
-}
-
-export function ensureBrowserDataDir(): void {
-  mkdirSync(BROWSER_DATA_DIR, { recursive: true });
-}

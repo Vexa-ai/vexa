@@ -46,6 +46,10 @@ export type BotConfig = {
   s3Bucket?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  cookieStorageBackend?: 'http';
+  cookieServiceUrl?: string;
+  cookieServiceToken?: string;
+  userId?: string;
 }
 
 export type BrowserSessionConfig = {
@@ -59,6 +63,10 @@ export type BrowserSessionConfig = {
   s3AccessKey?: string;
   s3SecretKey?: string;
   userdataS3Path?: string; // e.g. "users/123/browser-userdata"
+  cookieStorageBackend?: 'http';
+  cookieServiceUrl?: string;
+  cookieServiceToken?: string;
+  userId?: string;
   // Git-based workspace (optional — if set, workspace syncs via git instead of S3)
   workspaceGitRepo?: string;  // e.g. "https://github.com/user/bot-workspace.git"
   workspaceGitToken?: string; // PAT for private repos

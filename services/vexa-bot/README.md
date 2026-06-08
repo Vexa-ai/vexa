@@ -48,7 +48,7 @@ All platforms feed into the same shared transcription pipeline.
 | **Google Meet failures** | Known | 7.8% failure rate — join-stage "No active media elements" error. |
 | **Teams regressions** | Active | Current prod works (0% fail), but new code has open issues (#171, #189, #190, #191). |
 | **Zoom production** | Self-hosted only | Requires your own Zoom Marketplace app + SDK. Not available on hosted service. Web app mode (Playwright, no SDK) in development. |
-| **Authenticated bot support** | Google Meet ✅, Teams 🔴 | Google Meet: bots join as authenticated Google user via stored browser credentials (`authenticated: true` in BOT_CONFIG). Uses persistent browser context with userdata synced from/to S3. Teams: blocked — consumer Microsoft accounts (Gmail-linked) get locked by anti-automation detection. Requires Microsoft 365 Business Basic tenant (~$6/mo) with MFA disabled. S3 sync infrastructure already covers Teams sessions; gap is account provisioning only. See `conductor/missions/research-msteams-auth.md`. Zoom: not started. |
+| **Authenticated bot support** | Google Meet ✅, Teams 🔴 | Google Meet: bots join as authenticated Google user via stored browser credentials (`authenticated: true` in BOT_CONFIG). Two cookie storage backends available: S3/MinIO (default) or external HTTP cookie service (`COOKIE_STORAGE_BACKEND=http`). Teams: blocked — consumer Microsoft accounts (Gmail-linked) get locked by anti-automation detection. Requires Microsoft 365 Business Basic tenant (~$6/mo) with MFA disabled. Infrastructure covers Teams sessions; gap is account provisioning only. See `conductor/missions/research-msteams-auth.md`. Zoom: not started. |
 
 ## How
 
@@ -106,7 +106,7 @@ make rebuild                 # after editing TS (~10s, no image rebuild)
 
 | Variable                    | Description                                     |
 |-----------------------------|-------------------------------------------------|
-| `BOT_CONFIG`                | JSON with full bot config (platform, meetingUrl, botName, meeting_id, redisUrl, automaticLeave, authenticated, userdataS3Path, s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey) |
+| `BOT_CONFIG`                | JSON with full bot config (platform, meetingUrl, botName, meeting_id, redisUrl, automaticLeave, authenticated, userdataS3Path, s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey, cookieStorageBackend, cookieServiceUrl, cookieServiceToken, userId) |
 | `TRANSCRIPTION_SERVICE_URL` | HTTP URL of transcription-service endpoint       |
 | `REDIS_URL`                 | [Redis](../redis.md) connection URL              |
 | `ZOOM_CLIENT_ID`            | Zoom SDK client ID (Zoom only)                   |
@@ -180,9 +180,40 @@ Typical configurations:
 | **Full voice agent** (avatar + TTS + screen reading) | on | on | on |
 | **Authenticated recorder** (no lobby wait) | off | off | off |
 
-Authenticated bots additionally set `authenticated: true` + S3 credentials in BOT_CONFIG. The bot downloads stored browser userdata from S3, launches a persistent Chromium context (no incognito), and joins as the signed-in user — skipping name entry and lobby wait. Browser data is synced back to S3 on exit to keep credentials fresh.
+Authenticated bots set `authenticated: true` in BOT_CONFIG and use one of two cookie storage backends:
 
-**Platform support:** Google Meet authenticated join is implemented and validated. MS Teams authenticated join requires a Microsoft 365 Business Basic account (consumer accounts get locked). The S3 sync and persistent context infrastructure is shared — Teams needs the same cookies/localStorage files that `s3-sync.ts` already handles.
+**Backend 1 — S3/MinIO** (default):
+
+```json
+{
+  "authenticated": true,
+  "userdataS3Path": "users/42/browser-userdata",
+  "s3Endpoint": "http://minio:9000",
+  "s3Bucket": "vexa-recordings",
+  "s3AccessKey": "...",
+  "s3SecretKey": "..."
+}
+```
+
+The bot downloads stored browser userdata from S3 via `aws s3 sync`, launches a persistent Chromium context (no incognito), and joins as the signed-in user — skipping name entry and lobby wait. On exit, only auth-essential files (cookies, login data, local storage) are synced back to keep credentials fresh.
+
+**Backend 2 — HTTP cookie service** (`COOKIE_STORAGE_BACKEND=http` in meeting-api env):
+
+```json
+{
+  "authenticated": true,
+  "cookieStorageBackend": "http",
+  "cookieServiceUrl": "http://localhost:9001",
+  "cookieServiceToken": "secret",
+  "userId": "42"
+}
+```
+
+The bot downloads a tar.gz of the browser profile from the cookie service (`GET /userdata/{userId}`), unpacks it to `/tmp/browser-data`, and uploads it back on exit (`PUT /userdata/{userId}`). The cookie service must implement the contract: `GET /health → 200`, `GET /userdata/{id} → 200|404`, `PUT /userdata/{id} → 200`. Vexa verifies the contract at bot startup and fails fast if the service is unreachable or returns unexpected status codes.
+
+The backend is selected by `meeting-api` based on the `COOKIE_STORAGE_BACKEND` env var (`s3` by default). `BOT_CONFIG` fields are set accordingly — the bot itself does not read `COOKIE_STORAGE_BACKEND` from the environment.
+
+**Platform support:** Google Meet authenticated join is implemented and validated. MS Teams authenticated join requires a Microsoft 365 Business Basic account (consumer accounts get locked). Both cookie storage backends cover Teams sessions — the gap is account provisioning only.
 
 ## Supported Platforms
 
