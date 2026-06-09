@@ -2,10 +2,11 @@
   "manifest_version": 3,
   "name": "Vexa — in-tab transcription",
   "version": "0.1.0",
-  "description": "Transcribe the Google Meet you are already in — no bot, no waiting room. Captures audio in your own tab and streams it to your Vexa pipeline.",
+  "description": "Transcribe the Google Meet or Zoom meeting you are already in — no bot, no waiting room. Captures audio in your own tab and streams it to your Vexa pipeline.",
   "permissions": ["storage", "tabs"],
   "host_permissions": [
     "https://meet.google.com/*",
+    "https://*.zoom.us/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "ws://localhost/*",
@@ -15,13 +16,13 @@
   "action": { "default_popup": "popup.html", "default_title": "Vexa in-tab transcription" },
   "content_scripts": [
     {
-      "matches": ["https://meet.google.com/*"],
+      "matches": ["https://meet.google.com/*", "https://*.zoom.us/wc/*"],
       "js": ["inpage.js"],
       "world": "MAIN",
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://meet.google.com/*"],
+      "matches": ["https://meet.google.com/*", "https://*.zoom.us/wc/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

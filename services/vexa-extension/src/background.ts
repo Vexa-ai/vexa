@@ -11,10 +11,13 @@
  * tab's content script to begin/end capture.
  */
 
+import { detectMeeting } from './meeting';
+
 interface SessionState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
   tabId: number | null;
   meetingId: number | null;
+  platform: string | null;
   nativeMeetingId: string | null;
   streams: number;
   error: string | null;
@@ -24,6 +27,7 @@ const state: SessionState = {
   status: 'idle',
   tabId: null,
   meetingId: null,
+  platform: null,
   nativeMeetingId: null,
   streams: 0,
   error: null,
@@ -35,26 +39,12 @@ function broadcastStatus(): void {
   chrome.runtime.sendMessage({ type: 'STATUS', state }).catch(() => { /* popup may be closed */ });
 }
 
-/** Extract the native meeting id from a Google Meet tab URL. */
-function parseNativeMeetingId(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (!u.hostname.endsWith('meet.google.com')) return null;
-    const seg = u.pathname.split('/').filter(Boolean)[0];
-    // Meet codes look like abc-defg-hij; reject landing/other paths.
-    if (seg && /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(seg)) return seg;
-    return seg || null;
-  } catch {
-    return null;
-  }
-}
-
 async function startCaptureForTab(tabId: number, url: string): Promise<void> {
   if (state.status === 'capturing' || state.status === 'connecting') return;
 
-  const nativeMeetingId = parseNativeMeetingId(url);
-  if (!nativeMeetingId) {
-    state.status = 'error'; state.error = 'Not a Google Meet meeting'; broadcastStatus(); return;
+  const meeting = detectMeeting(url);
+  if (!meeting) {
+    state.status = 'error'; state.error = 'Not a supported meeting (Google Meet or Zoom Web)'; broadcastStatus(); return;
   }
 
   const cfg = await chrome.storage.local.get(['apiKey', 'ingestUrl', 'language']);
@@ -64,13 +54,14 @@ async function startCaptureForTab(tabId: number, url: string): Promise<void> {
 
   state.status = 'connecting';
   state.tabId = tabId;
-  state.nativeMeetingId = nativeMeetingId;
+  state.platform = meeting.platform;
+  state.nativeMeetingId = meeting.nativeMeetingId;
   state.error = null;
   broadcastStatus();
 
   const qs = new URLSearchParams({
-    platform: 'google_meet',
-    native_meeting_id: nativeMeetingId,
+    platform: meeting.platform,
+    native_meeting_id: meeting.nativeMeetingId,
     api_key: apiKey,
     language,
   });
@@ -126,7 +117,7 @@ async function maybeAutoStart(tabId?: number, url?: string): Promise<void> {
   const cfg = await chrome.storage.local.get(['autoStart', 'apiKey']);
   if (cfg.autoStart === false) return;          // default ON
   if (!cfg.apiKey) return;                       // need an API key configured first
-  if (!parseNativeMeetingId(url)) return;
+  if (!detectMeeting(url)) return;
   startCaptureForTab(tabId, url);
 }
 

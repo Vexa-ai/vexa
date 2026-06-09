@@ -10,6 +10,8 @@
  * governed by the extension's host permissions, not Google Meet's page CSP.
  */
 
+import { detectMeeting } from './meeting';
+
 const VEXA = '[vexa-content]';
 
 // The capture loop (inpage.ts) is registered as a MAIN-world content script in
@@ -54,19 +56,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
-// --- Auto-start: when this tab is in an actual Meet meeting, ask the
-// background to start capturing. Meet is a SPA, so the URL can change from the
-// landing page to a meeting code without a reload — poll for that transition.
-function isMeetingUrl(): boolean {
-  const seg = location.pathname.split('/').filter(Boolean)[0];
-  return !!seg && /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(seg);
-}
-
+// --- Auto-start: when this tab is in an actual meeting (Google Meet or Zoom
+// Web), ask the background to start capturing. These are SPAs, so the URL can
+// change from a landing page to a meeting without a reload — poll for that.
 let lastSeenUrl = '';
 function checkAutoStart(): void {
   if (location.href === lastSeenUrl) return;
   lastSeenUrl = location.href;
-  if (isMeetingUrl()) {
+  if (detectMeeting(location.href)) {
     // Give the meeting UI / media a moment to come up, then request auto-start.
     setTimeout(() => chrome.runtime.sendMessage({ type: 'AUTO_START' }).catch(() => { /* sw asleep */ }), 1500);
   }
