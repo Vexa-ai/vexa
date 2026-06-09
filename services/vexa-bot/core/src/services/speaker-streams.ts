@@ -205,7 +205,7 @@ export class SpeakerStreamManager {
       let prefixLen = 0;
       const maxLen = Math.min(currentWords.length, prevWords.length);
       for (let i = 0; i < maxLen; i++) {
-        if (currentWords[i] === prevWords[i]) {
+        if (currentWords[i].toLowerCase() === prevWords[i].toLowerCase()) {
           prefixLen = i + 1;
         } else {
           break;
@@ -261,7 +261,22 @@ export class SpeakerStreamManager {
 
     // Full string match — text must be identical across consecutive submissions.
     // Ensures Whisper has fully stabilized before we confirm and advance the offset.
-    if (trimmed === buffer.lastTranscript) {
+    //
+    // AIS-157 fix: normalize text for comparison (lowercase, remove punctuation,
+    // normalize whitespace) because whisper-large-v3-turbo introduces
+    // variability. The ORIGINAL text is still emitted — we only normalize for comparison.
+    const normalizeText = (text: string): string => {
+      return text
+        .toLowerCase()
+        .replace(/[^\w\s]/g, '')  // remove punctuation
+        .replace(/\s+/g, ' ')      // normalize whitespace
+        .trim();
+    };
+
+    const normalizedCurrent = normalizeText(trimmed);
+    const normalizedLast = normalizeText(buffer.lastTranscript);
+
+    if (normalizedCurrent === normalizedLast) {
       buffer.confirmCount++;
     } else {
       buffer.lastTranscript = trimmed;

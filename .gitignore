@@ -180,3 +180,8 @@ tests3/.state-helm
 tests3/.state-*
 
 tests3/.current-stage
+
+# Local-only files (added by Aleix session 2026-05-23)
+.env.backup-*
+deploy/compose/*.backup-*
+ruvector.db

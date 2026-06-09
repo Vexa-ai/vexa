@@ -90,6 +90,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && apt-get install -
     x11vnc \
     novnc \
     python3-websockify \
+    xdotool \
+    xclip \
     awscli \
     socat \
     curl \

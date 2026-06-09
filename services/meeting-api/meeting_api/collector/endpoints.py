@@ -344,7 +344,30 @@ async def get_transcript_by_native_id(
 
     meeting_details = MeetingResponse.model_validate(meeting)
     response_data = meeting_details.model_dump()
-    response_data["recordings"] = (meeting.data or {}).get("recordings", []) if isinstance(meeting.data, dict) else []
+
+    # Extract recordings from meeting.data.recordings
+    raw_recordings = (meeting.data or {}).get("recordings", []) if isinstance(meeting.data, dict) else []
+
+    # Derive playback_url from media_files for backwards compatibility (mirrors dashboard logic)
+    recordings_with_playback = []
+    for rec in raw_recordings:
+        if not isinstance(rec, dict):
+            recordings_with_playback.append(rec)
+            continue
+
+        # Find master audio and video files
+        media_files = rec.get("media_files", []) if isinstance(rec.get("media_files"), list) else []
+        audio_file = next((mf for mf in media_files if mf.get("type") == "audio" and "/master." in mf.get("storage_path", "")), None)
+        video_file = next((mf for mf in media_files if mf.get("type") == "video" and "/master." in mf.get("storage_path", "")), None)
+
+        rec_with_playback = dict(rec)
+        rec_with_playback["playback_url"] = {
+            "audio": f"/api/vexa/recordings/{rec.get('id')}/media/{audio_file.get('id')}/download" if audio_file else None,
+            "video": f"/api/vexa/recordings/{rec.get('id')}/media/{video_file.get('id')}/download" if video_file else None,
+        }
+        recordings_with_playback.append(rec_with_playback)
+
+    response_data["recordings"] = recordings_with_playback
     response_data["notes"] = (meeting.data or {}).get("notes") if isinstance(meeting.data, dict) else None
     response_data["data"] = dict(meeting.data) if isinstance(meeting.data, dict) else {}
     response_data["speaker_events"] = (meeting.data or {}).get("speaker_events", []) if isinstance(meeting.data, dict) else []

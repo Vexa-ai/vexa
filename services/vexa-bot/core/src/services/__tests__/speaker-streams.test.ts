@@ -304,9 +304,65 @@ test('onSegmentReady fires when buffer has enough audio', () => {
       failed++;
     }
     mgr.removeAll();
-
-    // --- Summary ---
-    console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
-    if (failed > 0) process.exit(1);
   }, 150);
 });
+
+// --- AIS-157 Tests ---
+
+test("AIS-157: whisper-large-v3-turbo variability confirms after normalization", () => {
+  const mgr = createManager();
+  let emitted: string | null = null;
+  mgr.onSegmentConfirmed = (_id, _name, text) => { emitted = text; };
+  mgr.addSpeaker("s1", "Alice");
+
+  // Simulate whisper-large-v3-turbo variability: lowercase + different punctuation
+  const submission1 = "Hello everyone, welcome to the meeting today.";
+  const submission2 = "hello everyone, welcome to the meeting today!"; // lowercase + different end punct
+
+  mgr.handleTranscriptionResult("s1", submission1);
+  mgr.handleTranscriptionResult("s1", submission2);
+
+  // Fix AIS-157: normalization (lowercase + strip punct) makes these match
+  // Emitted text will be the LAST submission that caused confirmation
+  assert.strictEqual(emitted, submission2, "Should confirm despite case/punctuation differences");
+
+  mgr.removeAll();
+});
+
+test("AIS-157: trailing punctuation only difference confirms after normalization", () => {
+  const mgr = createManager();
+  let emitted: string | null = null;
+  mgr.onSegmentConfirmed = (_id, _name, text) => { emitted = text; };
+  mgr.addSpeaker("s1", "Alice");
+
+  const submission1 = "The quick brown fox jumps over the lazy dog";
+  const submission2 = "The quick brown fox jumps over the lazy dog.";
+
+  mgr.handleTranscriptionResult("s1", submission1);
+  mgr.handleTranscriptionResult("s1", submission2);
+
+  assert.strictEqual(emitted, submission2, "Should confirm despite trailing period");
+
+  mgr.removeAll();
+});
+
+test("AIS-157: whitespace differences confirm after normalization", () => {
+  const mgr = createManager();
+  let emitted: string | null = null;
+  mgr.onSegmentConfirmed = (_id, _name, text) => { emitted = text; };
+  mgr.addSpeaker("s1", "Alice");
+
+  const submission1 = "This is a  sentence with extra spaces";
+  const submission2 = "This is a sentence with extra spaces";
+
+  mgr.handleTranscriptionResult("s1", submission1);
+  mgr.handleTranscriptionResult("s1", submission2);
+
+  assert.strictEqual(emitted, submission2, "Should confirm despite whitespace differences");
+
+  mgr.removeAll();
+});
+
+// --- Summary ---
+console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
+if (failed > 0) process.exit(1);

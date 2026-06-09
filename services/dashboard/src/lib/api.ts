@@ -6,6 +6,8 @@ import type {
   BotConfigUpdate,
   Platform,
   RecordingData,
+  RecordingFrame,
+  RecordingFrameListResponse,
 } from "@/types/vexa";
 
 class VexaAPIError extends Error {
@@ -197,7 +199,19 @@ export const vexaAPI = {
     }));
 
     // Extract recordings from response (populated from meeting.data.recordings by backend)
-    const recordings: RecordingData[] = data.recordings || [];
+    // Derive playback_url from media_files for backwards compatibility
+    const rawRecordings: RecordingData[] = data.recordings || [];
+    const recordings: RecordingData[] = rawRecordings.map(r => {
+      const audioFile = r.media_files?.find(mf => mf.type === "audio" && mf.storage_path?.includes("/master."));
+      const videoFile = r.media_files?.find(mf => mf.type === "video" && mf.storage_path?.includes("/master."));
+      return {
+        ...r,
+        playback_url: {
+          audio: audioFile ? `/api/vexa/recordings/${r.id}/media/${audioFile.id}/download` : undefined,
+          video: videoFile ? `/api/vexa/recordings/${r.id}/media/${videoFile.id}/download` : undefined,
+        },
+      };
+    });
 
     return { meeting, segments, recordings };
   },
@@ -390,6 +404,40 @@ export const vexaAPI = {
     return this.getRecordingAudioStreamUrl(recordingId, mediaFileId);
   },
 
+  // Master stream URL resolver: looks up the master media file by type
+  // and returns its presigned download URL + duration.
+  // This bridges the gap between the page.tsx playback_url pattern and
+  // the existing media_files-based API.
+  async getRecordingMasterStreamUrl(
+    recordingId: number,
+    type: "audio" | "video"
+  ): Promise<{ url: string; duration_seconds?: number | null } | null> {
+    // Fetch recording details to get media_files
+    const response = await fetch(
+      withBasePath(`/api/vexa/recordings/${recordingId}`)
+    );
+    if (!response.ok) return null;
+    const rec = (await response.json()) as RecordingData;
+
+    // Find the master media file for the requested type
+    // Master files have storage_path ending in /master.{format}
+    const masterFile = rec.media_files?.find(
+      mf => mf.type === type && mf.storage_path?.includes("/master.")
+    );
+
+    if (!masterFile) {
+      // Fallback: find any media file of the requested type
+      const anyFile = rec.media_files?.find(mf => mf.type === type);
+      if (!anyFile) return null;
+
+      const url = await this.getRecordingAudioStreamUrl(recordingId, anyFile.id);
+      return { url, duration_seconds: anyFile.duration_seconds };
+    }
+
+    const url = await this.getRecordingAudioStreamUrl(recordingId, masterFile.id);
+    return { url, duration_seconds: masterFile.duration_seconds };
+  },
+
   // Legacy synchronous helpers — return the /raw proxy URL directly.
   // Kept for callers that can't await (e.g. JSX `src=` on first paint).
   // New code should prefer getRecordingAudioStreamUrl (presigned URL +
@@ -400,6 +448,17 @@ export const vexaAPI = {
 
   getRecordingVideoUrl(recordingId: number, mediaFileId: number): string {
     return withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`);
+  },
+
+  // Frame Snapshots
+  async getRecordingFrames(recordingId: number): Promise<RecordingFrameListResponse> {
+    const response = await fetch(withBasePath(`/api/vexa/recordings/${recordingId}/frames`));
+    return handleResponse<RecordingFrameListResponse>(response);
+  },
+
+  async getFrameUrl(recordingId: number, frameId: number): Promise<{ url: string; expires_at: string }> {
+    const response = await fetch(withBasePath(`/api/vexa/recordings/${recordingId}/frames/${frameId}/url`));
+    return handleResponse<{ url: string; expires_at: string }>(response);
   },
 
   // Transcribe a recorded meeting (deferred transcription)

@@ -732,6 +732,26 @@ async def delete_recording_proxy(recording_id: int, request: Request):
     url = f"{MEETING_API_URL}/recordings/{recording_id}"
     return await forward_request(app.state.http_client, "DELETE", url, request)
 
+@app.get("/recordings/{recording_id}/frames",
+         tags=["Recordings"],
+         summary="Get frame snapshots for a recording",
+         description="Returns extraction status and presigned URLs for video frame thumbnails.",
+         dependencies=[Depends(api_key_scheme)])
+async def get_recording_frames_proxy(recording_id: int, request: Request):
+    """Forward request to meeting-api for frame snapshots."""
+    url = f"{MEETING_API_URL}/recordings/{recording_id}/frames"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.get("/recordings/{recording_id}/frames/{frame_id}/url",
+         tags=["Recordings"],
+         summary="Get a freshly-signed URL for a single frame",
+         description="Returns a single presigned URL for a specific frame thumbnail.",
+         dependencies=[Depends(api_key_scheme)])
+async def get_frame_url_proxy(recording_id: int, frame_id: int, request: Request):
+    """Forward request to meeting-api for a single frame URL."""
+    url = f"{MEETING_API_URL}/recordings/{recording_id}/frames/{frame_id}/url"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
 @app.get("/recording-config",
          tags=["Recordings"],
          summary="Get recording configuration",

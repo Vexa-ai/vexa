@@ -747,3 +747,13 @@ tests:
     script: tests/local-human-mechanical-gate.sh
     features: [dashboard, infrastructure, post-meeting-transcription, realtime-transcription]
     max_duration_sec: 30
+
+  # ── snapshots feature (Phase 5 — real assertions) ──────────────
+  # SHIP-03: step_skip stubs replaced with real step_pass/step_fail
+  # assertions. Evidence checks wired to dods.yaml via check IDs.
+  snapshots:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/snapshots.sh
+    features: [snapshots]
+    max_duration_sec: 60

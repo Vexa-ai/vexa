@@ -292,6 +292,7 @@ services:
       - TRANSCRIPTION_GATEWAY_URL=${TRANSCRIPTION_GATEWAY_URL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SNAPSHOTS_ENABLED=${SNAPSHOTS_ENABLED:-false}
     volumes:
       - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
     init: true
@@ -407,34 +408,34 @@ services:
       - vexa
     restart: unless-stopped
 
-  # calendar-service: NO-SHIP for 0.10 — not included in release
-  # calendar-service:
-  #   build:
-  #     context: ../..
-  #     dockerfile: services/calendar-service/Dockerfile
-  #   image: vexaai/calendar-service:${IMAGE_TAG}
-  #   ports:
-  #     - "${CALENDAR_SERVICE_PORT:-8050}:8050"
-  #   environment:
-  #     - DB_HOST=postgres
-  #     - DB_PORT=5432
-  #     - DB_NAME=${DB_NAME:-vexa}
-  #     - DB_USER=${DB_USER:-postgres}
-  #     - DB_PASSWORD=${DB_PASSWORD:-postgres}
-  #     - DB_SSL_MODE=disable
-  #     - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-  #     - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-  #     - MEETING_API_URL=http://meeting-api:8080
-  #     - BOT_API_TOKEN=${BOT_API_TOKEN:-}
-  #     - SYNC_INTERVAL_SECONDS=${CALENDAR_SYNC_INTERVAL:-300}
-  #     - DEFAULT_LEAD_TIME_MINUTES=${CALENDAR_LEAD_TIME:-2}
-  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
-  #   depends_on:
-  #     - postgres
-  #     - meeting-api
-  #   networks:
-  #     - vexa
-  #   restart: unless-stopped
+  calendar-service:
+    build:
+      context: ../..
+      dockerfile: services/calendar-service/Dockerfile
+    image: vexaai/calendar-service:local
+    ports:
+      - "127.0.0.1:8050:8050"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=vexa
+      - DB_USER=postgres
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=disable
+      - GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET
+      - GOOGLE_REFRESH_TOKEN
+      - MEETING_API_URL=http://meeting-api:8080
+      - BOT_API_TOKEN
+      - SYNC_INTERVAL_SECONDS=300
+      - DEFAULT_LEAD_TIME_MINUTES=2
+      - LOG_LEVEL=INFO
+    depends_on:
+      - postgres
+      - meeting-api
+    networks:
+      - vexa
+    restart: unless-stopped
 
 volumes:
   redis-data:

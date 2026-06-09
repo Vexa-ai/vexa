@@ -48,6 +48,8 @@ RUN apt-get update && \
     novnc \
     python3-websockify \
     fluxbox \
+    xdotool \
+    xclip \
     pulseaudio \
     ffmpeg \
     libsndfile1 \
