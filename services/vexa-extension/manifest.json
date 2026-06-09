@@ -5,8 +5,12 @@
   "description": "Transcribe the Google Meet, Zoom, or Microsoft Teams meeting you are already in \u2014 no bot, no waiting room. Captures audio in your own tab and streams it to your Vexa pipeline.",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "sidePanel"
   ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "host_permissions": [
     "https://meet.google.com/*",
     "https://*.zoom.us/*",
@@ -22,7 +26,6 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Vexa in-tab transcription"
   },
   "content_scripts": [

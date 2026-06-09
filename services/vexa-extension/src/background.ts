@@ -178,3 +178,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === state.tabId) stopCapture();
 });
+
+// Toolbar click opens the side panel (replaces the old popup).
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => { /* older Chrome */ });

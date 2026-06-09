@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root {
+      --background: #ffffff;
+      --foreground: #252525;
+      --muted: #f7f7f7;
+      --muted-foreground: #8e8e8e;
+      --border: #ebebeb;
+      --destructive: #d4183d;
+      --radius: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #252525;
+        --foreground: #fbfbfb;
+        --muted: #2f2f2f;
+        --muted-foreground: #b5b5b5;
+        --border: #3a3a3a;
+        --destructive: #ff6467;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--background);
+      color: var(--foreground);
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px; border-bottom: 0.5px solid var(--border);
+      flex-shrink: 0;
+    }
+    .header img { width: 22px; height: 22px; border-radius: 5px; }
+    .header .name { font-size: 14px; font-weight: 500; }
+    .pill {
+      margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; padding: 1px 8px; border-radius: 999px;
+      border: 0.5px solid var(--border); color: var(--muted-foreground);
+    }
+    .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .pill.live { color: var(--destructive); border-color: var(--destructive); font-weight: 500; }
+    .pill.live .dot { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: 0.3; } }
+    .icon-btn {
+      background: none; border: none; padding: 4px; cursor: pointer;
+      color: var(--muted-foreground); font-size: 16px; line-height: 1;
+    }
+    .icon-btn:hover { color: var(--foreground); }
+    .meetingbar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 12px; border-bottom: 0.5px solid var(--border);
+      font-size: 12px; color: var(--muted-foreground); flex-shrink: 0;
+    }
+    .meetingbar .platdot { width: 8px; height: 8px; border-radius: 50%; }
+    .meetingbar .mono { font-family: ui-monospace, monospace; font-size: 11px; }
+    .meetingbar .elapsed { margin-left: auto; }
+    #feed { flex: 1; overflow-y: auto; padding: 8px 4px; }
+    .turn { padding: 8px 12px 2px; }
+    .turn .head { margin: 0 0 2px; font-size: 13px; }
+    .turn .speaker { font-weight: 500; }
+    .turn .time { font-size: 11px; color: var(--muted-foreground); margin-left: 6px; }
+    .turn p.seg { margin: 0 0 2px; font-size: 13px; line-height: 1.45; }
+    .turn p.seg.pending { color: var(--muted-foreground); font-style: italic; }
+    .empty {
+      height: 100%; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 8px; color: var(--muted-foreground);
+      text-align: center; padding: 0 24px; font-size: 13px;
+    }
+    .footer {
+      padding: 10px 12px; border-top: 0.5px solid var(--border);
+      display: flex; gap: 8px; flex-shrink: 0;
+    }
+    .btn {
+      flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      font-size: 13px; padding: 7px 10px; border-radius: var(--radius);
+      border: 0.5px solid var(--border); background: none; color: var(--foreground);
+      cursor: pointer;
+    }
+    .btn:hover { background: var(--muted); }
+    .btn.danger { color: var(--destructive); border-color: var(--destructive); }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    #settings { flex: 1; padding: 14px 12px; display: none; flex-direction: column; gap: 13px; overflow-y: auto; }
+    #settings label { font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px; }
+    #settings input, #settings select {
+      width: 100%; font-size: 13px; padding: 7px 9px;
+      border: 0.5px solid var(--border); border-radius: var(--radius);
+      background: var(--background); color: var(--foreground);
+    }
+    #settings input.mono { font-family: ui-monospace, monospace; }
+    .togglerow {
+      display: flex; align-items: center; justify-content: space-between;
+      border: 0.5px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
+    }
+    .togglerow .title { margin: 0; font-size: 13px; font-weight: 500; }
+    .togglerow .sub { margin: 1px 0 0; font-size: 11px; color: var(--muted-foreground); }
+    .switch { position: relative; width: 34px; height: 20px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch .track {
+      position: absolute; inset: 0; border-radius: 999px;
+      background: var(--border); transition: background 0.15s; cursor: pointer;
+    }
+    .switch .track::after {
+      content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px;
+      border-radius: 50%; background: var(--background); transition: transform 0.15s;
+    }
+    .switch input:checked + .track { background: var(--foreground); }
+    .switch input:checked + .track::after { transform: translateX(14px); }
+    .connrow {
+      display: flex; align-items: center; gap: 7px; font-size: 12px;
+      color: var(--muted-foreground); border: 0.5px solid var(--border);
+      border-radius: var(--radius); padding: 9px 12px;
+    }
+    .connrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-foreground); }
+    .connrow.ok .dot { background: #1d9e75; }
+    .hint { margin: 0; font-size: 11px; color: var(--muted-foreground); text-align: center; padding: 10px 12px; border-top: 0.5px solid var(--border); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img id="logo" src="assets/vexadark.svg" alt="Vexa" />
+    <span class="name">Vexa</span>
+    <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Idle</span></span>
+    <button class="icon-btn" id="gearBtn" aria-label="Settings">&#9881;</button>
+  </div>
+
+  <div class="meetingbar" id="meetingBar" style="display:none;">
+    <span class="platdot" id="platDot"></span>
+    <span id="platName"></span>
+    <span class="mono" id="meetingCode"></span>
+    <span class="elapsed" id="elapsed"></span>
+  </div>
+
+  <div id="feed">
+    <div class="empty" id="emptyState">
+      <div style="font-size: 22px;">&#127911;</div>
+      <div>Join a Google Meet, Zoom, or Teams meeting and Vexa will transcribe it here.</div>
+    </div>
+  </div>
+
+  <div id="settings">
+    <div>
+      <label>API key</label>
+      <input id="apiKey" type="password" placeholder="vxa_..." />
+    </div>
+    <div>
+      <label>Capture server</label>
+      <input id="ingestUrl" type="text" class="mono" placeholder="ws://localhost:8092/ingest" />
+    </div>
+    <div>
+      <label>API gateway</label>
+      <input id="gatewayUrl" type="text" class="mono" placeholder="http://localhost:8056" />
+    </div>
+    <div>
+      <label>Dashboard</label>
+      <input id="dashboardUrl" type="text" class="mono" placeholder="http://localhost:3001" />
+    </div>
+    <div>
+      <label>Language</label>
+      <select id="language">
+        <option value="auto">Auto-detect</option>
+        <option value="en">English</option>
+        <option value="ru">Russian</option>
+        <option value="es">Spanish</option>
+        <option value="pt">Portuguese</option>
+        <option value="de">German</option>
+        <option value="fr">French</option>
+      </select>
+    </div>
+    <div class="togglerow">
+      <div>
+        <p class="title">Auto-start in meetings</p>
+        <p class="sub">Meet &middot; Zoom &middot; Teams</p>
+      </div>
+      <label class="switch"><input id="autoStart" type="checkbox" /><span class="track"></span></label>
+    </div>
+    <div class="connrow" id="connRow"><span class="dot"></span><span id="connText">Not verified</span></div>
+    <p class="hint" style="border: none; padding: 4px 0 0;">Settings save automatically</p>
+  </div>
+
+  <div class="footer">
+    <button class="btn danger" id="stopBtn" disabled>&#9632; Stop</button>
+    <button class="btn" id="startBtn">&#9654; Start</button>
+    <button class="btn" id="dashBtn">Dashboard &#8599;</button>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

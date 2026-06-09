@@ -10,7 +10,7 @@ await build({
     background: 'src/background.ts',
     content: 'src/content.ts',
     inpage: 'src/inpage.ts',
-    popup: 'src/popup.ts',
+    sidepanel: 'src/sidepanel.ts',
   },
   outdir,
   bundle: true,
@@ -20,6 +20,7 @@ await build({
 });
 
 cpSync('manifest.json', `${outdir}/manifest.json`);
-cpSync('src/popup.html', `${outdir}/popup.html`);
+cpSync('src/sidepanel.html', `${outdir}/sidepanel.html`);
+cpSync('assets', `${outdir}/assets`, { recursive: true });
 
 console.log('Built vexa-extension → dist/. Load that folder as an unpacked extension.');
