@@ -64,8 +64,11 @@ function checkAutoStart(): void {
   if (location.href === lastSeenUrl) return;
   lastSeenUrl = location.href;
   if (detectMeeting(location.href)) {
-    // Give the meeting UI / media a moment to come up, then request auto-start.
-    setTimeout(() => chrome.runtime.sendMessage({ type: 'AUTO_START' }).catch(() => { /* sw asleep */ }), 1500);
+    // Capture the URL now — SPAs (especially Teams) can navigate away from the
+    // /meet/<id> path after joining, losing the meeting id. Then give the
+    // meeting UI / media a moment to come up before requesting auto-start.
+    const detectedUrl = location.href;
+    setTimeout(() => chrome.runtime.sendMessage({ type: 'AUTO_START', url: detectedUrl }).catch(() => { /* sw asleep */ }), 1500);
   }
 }
 checkAutoStart();

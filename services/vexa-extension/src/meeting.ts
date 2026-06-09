@@ -5,7 +5,7 @@
  */
 
 export interface MeetingRef {
-  platform: 'google_meet' | 'zoom';
+  platform: 'google_meet' | 'zoom' | 'teams';
   nativeMeetingId: string;
 }
 
@@ -31,6 +31,15 @@ export function detectMeeting(url: string): MeetingRef | null {
   if (u.hostname.endsWith('zoom.us')) {
     const m = u.pathname.match(/\/wc\/(?:join\/)?(\d{9,12})/);
     if (m) return { platform: 'zoom', nativeMeetingId: m[1] };
+    return null;
+  }
+
+  // Microsoft Teams — teams.live.com/meet/<id> (consumer) or
+  // teams.microsoft.com/meet/<id> (enterprise short URL). meeting-api expects
+  // the 10-15 digit numeric id (Platform.construct_meeting_url).
+  if (u.hostname.endsWith('teams.live.com') || u.hostname.endsWith('teams.microsoft.com')) {
+    const m = u.pathname.match(/\/meet\/(\d{10,15})/);
+    if (m) return { platform: 'teams', nativeMeetingId: m[1] };
     return null;
   }
 

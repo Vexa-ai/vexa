@@ -147,7 +147,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'START':
       startCaptureActiveTab(); sendResponse({ ok: true }); break;
     case 'AUTO_START':
-      maybeAutoStart(sender.tab?.id, sender.tab?.url); sendResponse({ ok: true }); break;
+      // Prefer the URL the content script saw at detection time — SPAs (Teams)
+      // can navigate off the /meet/<id> path by the time this message arrives.
+      maybeAutoStart(sender.tab?.id, msg.url || sender.tab?.url); sendResponse({ ok: true }); break;
     case 'STOP':
       stopCapture(); sendResponse({ ok: true }); break;
     case 'STATUS':
