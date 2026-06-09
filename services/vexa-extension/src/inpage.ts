@@ -33,6 +33,87 @@
     window.postMessage({ __vexa: true, type, ...payload }, '*');
   }
 
+  // ── Speaker identity (Google Meet) ─────────────────────────────────────
+  // Port of the bot's speaker-identity vote/lock: when audio arrives on track
+  // N while exactly one participant's speaking indicator is lit, vote
+  // "track N = that name"; lock after 2 consistent votes (≥70% of votes).
+  // Locked names are pushed upstream so transcripts show real names instead
+  // of "Speaker N". Selectors mirror vexa-bot googlemeet/selectors.ts.
+  const GM_PARTICIPANT_SELECTORS = ['div[data-participant-id]', '[data-participant-id]'];
+  const GM_SPEAKING_CLASSES = ['Oaajhc', 'HX2H7', 'wEsLMd', 'OgVli', 'speaking', 'active-speaker', 'speaker-active', 'speaking-indicator'];
+  const LOCK_THRESHOLD = 2;
+  const LOCK_RATIO = 0.7;
+  const trackVotes = new Map<number, Map<string, number>>();
+  const lockedNames = new Map<number, string>();
+  const announcedNames = new Map<number, string>();
+  const trackLastAudio = new Map<number, number>();
+
+  function gmTileName(el: HTMLElement): string | null {
+    const nt = el.querySelector('span.notranslate') as HTMLElement | null;
+    const t = nt?.textContent?.trim();
+    if (t && t.length > 1 && t.length < 50) return t;
+    return null;
+  }
+
+  function gmSpeakingNames(): string[] {
+    if (!location.hostname.endsWith('meet.google.com')) return [];
+    const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)?.getAttribute('data-self-name') || '';
+    const speaking: string[] = [];
+    const seen = new Set<string>();
+    for (const sel of GM_PARTICIPANT_SELECTORS) {
+      document.querySelectorAll(sel).forEach(el => {
+        const elh = el as HTMLElement;
+        const id = elh.getAttribute('data-participant-id') || '';
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        const name = gmTileName(elh);
+        if (!name || name === selfName) return; // self is the mic stream ("You"), never a remote track
+        const lit = GM_SPEAKING_CLASSES.some(c => elh.classList.contains(c) || !!elh.querySelector('.' + c));
+        if (lit) speaking.push(name);
+      });
+    }
+    return [...new Set(speaking)];
+  }
+
+  function nameTaken(name: string, except: number): boolean {
+    for (const [i, n] of lockedNames) if (i !== except && n === name) return true;
+    return false;
+  }
+
+  function vote(index: number, name: string, weight: number): void {
+    if (lockedNames.has(index) || nameTaken(name, index)) return;
+    let v = trackVotes.get(index);
+    if (!v) { v = new Map(); trackVotes.set(index, v); }
+    v.set(name, (v.get(name) || 0) + weight);
+    const total = [...v.values()].reduce((a, b) => a + b, 0);
+    const top = [...v.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (top[1] >= LOCK_THRESHOLD && top[1] / total >= LOCK_RATIO && !nameTaken(top[0], index)) {
+      lockedNames.set(index, top[0]);
+      console.log(`${TAG} locked track ${index} = "${top[0]}"`);
+    }
+  }
+
+  setInterval(() => {
+    if (!running) return;
+    const now = Date.now();
+    const speaking = gmSpeakingNames();
+    if (speaking.length >= 1 && speaking.length <= 2) {
+      for (const [index, last] of trackLastAudio) {
+        if (index >= MIC_INDEX) continue;        // mic is always "You"
+        if (now - last > 700) continue;           // only tracks with audio right now
+        if (lockedNames.has(index)) continue;
+        if (speaking.length === 1) vote(index, speaking[0], 1.0);
+        else for (const n of speaking) vote(index, n, 0.5);
+      }
+    }
+    // Push newly locked (or top-voted) names upstream
+    const updates: Record<string, string> = {};
+    for (const [index, name] of lockedNames) {
+      if (announcedNames.get(index) !== name) { updates[String(index)] = name; announcedNames.set(index, name); }
+    }
+    if (Object.keys(updates).length > 0) post('speakers', { speakers: updates });
+  }, 500);
+
   function streamCount(): number {
     return connectedStreamIds.size + (micStream ? 1 : 0);
   }
@@ -98,6 +179,7 @@
           if (a > maxVal) maxVal = a;
         }
         if (maxVal > 0.005) {
+          trackLastAudio.set(index, Date.now());
           post('audio', { index, pcm: Array.from(data) });
         }
       };
