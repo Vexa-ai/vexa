@@ -32,6 +32,12 @@ import { SegmentPublisher, TranscriptionSegment } from './services/segment-publi
 import { isHallucination } from './services/hallucination-filter';
 
 const PORT = parseInt(process.env.INGEST_PORT || '8090', 10);
+
+function envNum(name: string, fallback: number): number {
+  const v = process.env[name];
+  const n = v ? parseFloat(v) : NaN;
+  return Number.isFinite(n) ? n : fallback;
+}
 const MEETING_API_URL = process.env.MEETING_API_URL || 'http://meeting-api:8080';
 const REDIS_URL = process.env.REDIS_URL || 'redis://redis:6379';
 const TRANSCRIPTION_SERVICE_URL = process.env.TRANSCRIPTION_SERVICE_URL || 'http://transcription-service:8083';
@@ -97,13 +103,18 @@ class CaptureSession {
       platform: session.platform,
     });
 
+    // Tuned for live UX (lower latency than the bot's defaults), env-overridable.
+    // - minAudioDuration 2s: first draft ~2s sooner than the bot's 3s.
+    // - idleTimeoutSec 5s: trailing audio flushes 5s after you stop talking,
+    //   not 15s — the bot's 15s was the dominant perceived latency for short
+    //   utterances (the tail sat silent for 15s before the final submit).
     this.speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
-      minAudioDuration: 3,
-      submitInterval: 2,
-      confirmThreshold: 2,
-      maxBufferDuration: 30,
-      idleTimeoutSec: 15,
+      minAudioDuration: envNum('INGEST_MIN_AUDIO_SEC', 2),
+      submitInterval: envNum('INGEST_SUBMIT_INTERVAL_SEC', 2),
+      confirmThreshold: envNum('INGEST_CONFIRM_THRESHOLD', 2),
+      maxBufferDuration: envNum('INGEST_MAX_BUFFER_SEC', 30),
+      idleTimeoutSec: envNum('INGEST_IDLE_TIMEOUT_SEC', 5),
     });
 
     this.wirePipeline();
