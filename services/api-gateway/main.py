@@ -422,6 +422,20 @@ async def root():
     return {"message": "Welcome to the Vexa API Gateway"}
 
 # --- Bot Manager Routes --- 
+@app.post("/extension/sessions",
+         tags=["Extension"],
+         summary="Bind an in-tab extension capture to a meeting + MeetingToken",
+         description="Get-or-create a meeting for the authenticated user and mint a MeetingToken so the in-tab extension's captured audio is attributed to that user.",
+         status_code=status.HTTP_201_CREATED,
+         dependencies=[Depends(api_key_scheme)])
+async def extension_session_proxy(request: Request):
+    """Forward to meeting-api /extension/sessions. The gateway resolves the API
+    key to a real user and injects X-User-ID, so the meeting is owned by that
+    user (not the dev fallback)."""
+    url = f"{MEETING_API_URL}/extension/sessions"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
 @app.post("/bots",
          tags=["Bot Management"],
          summary="Request a new bot to join a meeting",

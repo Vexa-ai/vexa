@@ -320,7 +320,10 @@ services:
     environment:
       - INGEST_PORT=8090
       - REDIS_URL=redis://redis:6379/0
-      - MEETING_API_URL=http://meeting-api:8080
+      # Route session creation through the gateway so the extension's API key
+      # resolves to a real user (the gateway injects X-User-ID). Falls back to
+      # meeting-api direct (dev user) when unset.
+      - MEETING_API_URL=${INGEST_MEETING_API_URL:-http://meeting-api:8080}
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - MIN_SILENCE_DURATION_MS=${MIN_SILENCE_DURATION_MS:-100}

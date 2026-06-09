@@ -24,8 +24,49 @@
   const contexts: AudioContext[] = [];
   let nextStreamIndex = 0;
 
+  // Reserved high index for the local microphone ("You"), kept clear of the
+  // 0-based participant element indices.
+  const MIC_INDEX = 1000;
+  let micStream: MediaStream | null = null;
+
   function post(type: string, payload: any) {
     window.postMessage({ __vexa: true, type, ...payload }, '*');
+  }
+
+  function streamCount(): number {
+    return connectedStreamIds.size + (micStream ? 1 : 0);
+  }
+
+  /**
+   * Capture the LOCAL microphone (your own voice). Remote participants live in
+   * page media elements; your own voice does not, so we grab it directly. The
+   * Meet origin already holds mic permission, so this won't re-prompt.
+   */
+  async function startMic(): Promise<void> {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+      const source = ctx.createMediaStreamSource(micStream);
+      const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+      processor.onaudioprocess = (e: AudioProcessingEvent) => {
+        if (!running) return;
+        const data = e.inputBuffer.getChannelData(0);
+        let maxVal = 0;
+        for (let i = 0; i < data.length; i++) {
+          const a = Math.abs(data[i]);
+          if (a > maxVal) maxVal = a;
+        }
+        if (maxVal > 0.005) post('audio', { index: MIC_INDEX, pcm: Array.from(data) });
+      };
+      source.connect(processor);
+      processor.connect(ctx.destination);
+      contexts.push(ctx);
+      post('speakers', { speakers: { [MIC_INDEX]: 'You' } });
+      console.log(`${TAG} microphone capture started ("You")`);
+    } catch (err: any) {
+      console.log(`${TAG} mic capture unavailable: ${err.message}`);
+      micStream = null;
+    }
   }
 
   function findMediaElements(): HTMLMediaElement[] {
@@ -84,6 +125,10 @@
     running = true;
     console.log(`${TAG} starting capture`);
 
+    // Your own voice first — it doesn't depend on other participants being present.
+    await startMic();
+    post('capture-started', { streams: streamCount() });
+
     let mediaElements: HTMLMediaElement[] = [];
     for (let attempt = 0; attempt < 10 && running; attempt++) {
       mediaElements = findMediaElements();
@@ -108,14 +153,15 @@
       }
     }, 15000);
 
-    post('capture-started', { streams: connectedStreamIds.size });
-    console.log(`${TAG} capture started with ${connectedStreamIds.size} streams`);
+    post('capture-started', { streams: streamCount() });
+    console.log(`${TAG} capture started with ${streamCount()} stream(s) (mic + participants)`);
   }
 
   function stop() {
     if (!running) return;
     running = false;
     if (rescanInterval !== null) { clearInterval(rescanInterval); rescanInterval = null; }
+    if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }
     contexts.length = 0;
     connectedStreamIds.clear();

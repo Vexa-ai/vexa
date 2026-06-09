@@ -7,10 +7,11 @@ const statusText = () => document.getElementById('statusText') as HTMLSpanElemen
 const FIELDS = ['apiKey', 'ingestUrl', 'language'];
 
 async function loadConfig(): Promise<void> {
-  const cfg = await chrome.storage.local.get(FIELDS);
+  const cfg = await chrome.storage.local.get([...FIELDS, 'autoStart']);
   $('apiKey').value = cfg.apiKey || '';
   $('ingestUrl').value = cfg.ingestUrl || 'ws://localhost:8092/ingest';
   $('language').value = cfg.language || 'auto';
+  ($('autoStart') as HTMLInputElement).checked = cfg.autoStart !== false; // default ON
 }
 
 function saveField(name: string): void {
@@ -21,7 +22,10 @@ function render(state: any): void {
   const box = statusBox();
   box.className = state.status;
   let txt = state.status.charAt(0).toUpperCase() + state.status.slice(1);
-  if (state.status === 'capturing') txt += ` — meeting ${state.meetingId ?? '?'}, ${state.streams} stream(s)`;
+  if (state.status === 'capturing') {
+    txt += ` — meeting ${state.meetingId ?? '?'}, ${state.streams} stream(s)`;
+    if (state.streams === 0) txt += ' · no remote audio yet — is another participant talking?';
+  }
   if (state.status === 'error' && state.error) txt += ` — ${state.error}`;
   statusText().textContent = txt;
   ($('start') as unknown as HTMLButtonElement).disabled = state.status === 'capturing' || state.status === 'connecting';
@@ -37,6 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   refreshStatus();
   for (const f of FIELDS) $(f).addEventListener('change', () => saveField(f));
+  $('autoStart').addEventListener('change', () =>
+    chrome.storage.local.set({ autoStart: ($('autoStart') as HTMLInputElement).checked }));
   document.getElementById('start')!.addEventListener('click', () => {
     for (const f of FIELDS) saveField(f);
     chrome.runtime.sendMessage({ type: 'START' });

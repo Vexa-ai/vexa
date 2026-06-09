@@ -49,25 +49,21 @@ function parseNativeMeetingId(url: string): string | null {
   }
 }
 
-async function startCapture(): Promise<void> {
+async function startCaptureForTab(tabId: number, url: string): Promise<void> {
   if (state.status === 'capturing' || state.status === 'connecting') return;
+
+  const nativeMeetingId = parseNativeMeetingId(url);
+  if (!nativeMeetingId) {
+    state.status = 'error'; state.error = 'Not a Google Meet meeting'; broadcastStatus(); return;
+  }
 
   const cfg = await chrome.storage.local.get(['apiKey', 'ingestUrl', 'language']);
   const apiKey: string = cfg.apiKey || '';
   const ingestUrl: string = cfg.ingestUrl || 'ws://localhost:8092/ingest';
   const language: string = cfg.language || 'auto';
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id || !tab.url) {
-    state.status = 'error'; state.error = 'No active tab'; broadcastStatus(); return;
-  }
-  const nativeMeetingId = parseNativeMeetingId(tab.url);
-  if (!nativeMeetingId) {
-    state.status = 'error'; state.error = 'Active tab is not a Google Meet meeting'; broadcastStatus(); return;
-  }
-
   state.status = 'connecting';
-  state.tabId = tab.id;
+  state.tabId = tabId;
   state.nativeMeetingId = nativeMeetingId;
   state.error = null;
   broadcastStatus();
@@ -114,6 +110,26 @@ async function startCapture(): Promise<void> {
   };
 }
 
+/** Manual start from the popup — targets the active tab. */
+async function startCaptureActiveTab(): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.id || !tab.url) {
+    state.status = 'error'; state.error = 'No active tab'; broadcastStatus(); return;
+  }
+  return startCaptureForTab(tab.id, tab.url);
+}
+
+/** Auto-start when a Meet tab reports it's in a meeting (if enabled + configured). */
+async function maybeAutoStart(tabId?: number, url?: string): Promise<void> {
+  if (!tabId || !url) return;
+  if (state.status === 'capturing' || state.status === 'connecting') return;
+  const cfg = await chrome.storage.local.get(['autoStart', 'apiKey']);
+  if (cfg.autoStart === false) return;          // default ON
+  if (!cfg.apiKey) return;                       // need an API key configured first
+  if (!parseNativeMeetingId(url)) return;
+  startCaptureForTab(tabId, url);
+}
+
 async function stopCapture(): Promise<void> {
   if (state.tabId !== null) {
     chrome.tabs.sendMessage(state.tabId, { type: 'END_CAPTURE' }).catch(() => { /* tab gone */ });
@@ -138,13 +154,18 @@ function sendAudio(index: number, pcm: number[]): void {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
     case 'START':
-      startCapture(); sendResponse({ ok: true }); break;
+      startCaptureActiveTab(); sendResponse({ ok: true }); break;
+    case 'AUTO_START':
+      maybeAutoStart(sender.tab?.id, sender.tab?.url); sendResponse({ ok: true }); break;
     case 'STOP':
       stopCapture(); sendResponse({ ok: true }); break;
     case 'STATUS':
       sendResponse({ state }); break;
     case 'audio':
       sendAudio(msg.index, msg.pcm); break;
+    case 'speakers':
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'speakers', speakers: msg.speakers }));
+      break;
     case 'capture-started':
       state.streams = msg.streams || 0; broadcastStatus(); break;
     case 'capture-stopped':

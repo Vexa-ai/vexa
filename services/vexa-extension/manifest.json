@@ -16,14 +16,14 @@
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
+      "js": ["inpage.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["inpage.js"],
-      "matches": ["https://meet.google.com/*"]
     }
   ]
 }
