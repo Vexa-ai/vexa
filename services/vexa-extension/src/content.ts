@@ -10,7 +10,7 @@
  * governed by the extension's host permissions, not Google Meet's page CSP.
  */
 
-import { detectMeeting } from './meeting';
+import { detectMeeting, isTeamsHost, TEAMS_IN_MEETING_SELECTORS } from './meeting';
 
 const VEXA = '[vexa-content]';
 
@@ -73,5 +73,40 @@ function checkAutoStart(): void {
 }
 checkAutoStart();
 setInterval(checkAutoStart, 2000);
+
+// --- Teams app flow (teams.cloud.microsoft / the /v2/ SPA): the URL never
+// carries a meeting id, so detect "in a meeting" from the DOM — the same
+// hangup-button selectors the bot's admission check uses — and synthesize a
+// per-meeting native id. Also auto-STOP when the call ends, otherwise the mic
+// would keep streaming while the user sits in Teams chat.
+const TEAMS_ID_KEY = '__vexaTeamsNativeId';
+let teamsInMeeting = false;
+
+function checkTeamsDom(): void {
+  if (!isTeamsHost(location.hostname)) return;
+  if (detectMeeting(location.href)) return; // URL carries the id — URL flow owns it
+  const inMeeting = TEAMS_IN_MEETING_SELECTORS.some(s => !!document.querySelector(s));
+
+  if (inMeeting && !teamsInMeeting) {
+    let nativeId = sessionStorage.getItem(TEAMS_ID_KEY);
+    if (!nativeId) {
+      nativeId = `cloud-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      sessionStorage.setItem(TEAMS_ID_KEY, nativeId);
+    }
+    console.log(`${VEXA} Teams meeting detected (DOM), native id ${nativeId}`);
+    chrome.runtime.sendMessage({
+      type: 'AUTO_START',
+      meeting: { platform: 'teams', nativeMeetingId: nativeId },
+    }).catch(() => { /* sw asleep */ });
+  } else if (!inMeeting && teamsInMeeting) {
+    // Call ended — stop capture and drop the id so the next call in this tab
+    // becomes a fresh meeting.
+    sessionStorage.removeItem(TEAMS_ID_KEY);
+    console.log(`${VEXA} Teams meeting ended (DOM), stopping capture`);
+    chrome.runtime.sendMessage({ type: 'AUTO_STOP' }).catch(() => { /* sw asleep */ });
+  }
+  teamsInMeeting = inMeeting;
+}
+setInterval(checkTeamsDom, 2000);
 
 console.log(`${VEXA} ready on ${location.href}`);

@@ -11,7 +11,7 @@
  * tab's content script to begin/end capture.
  */
 
-import { detectMeeting } from './meeting';
+import { detectMeeting, MeetingRef } from './meeting';
 
 interface SessionState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
@@ -39,12 +39,14 @@ function broadcastStatus(): void {
   chrome.runtime.sendMessage({ type: 'STATUS', state }).catch(() => { /* popup may be closed */ });
 }
 
-async function startCaptureForTab(tabId: number, url: string): Promise<void> {
+async function startCaptureForTab(tabId: number, url: string, meetingRef?: MeetingRef): Promise<void> {
   if (state.status === 'capturing' || state.status === 'connecting') return;
 
-  const meeting = detectMeeting(url);
+  // An explicit ref wins — the Teams app flow detects the meeting from the DOM
+  // and synthesizes the id, because its URL carries none.
+  const meeting = meetingRef || detectMeeting(url);
   if (!meeting) {
-    state.status = 'error'; state.error = 'Not a supported meeting (Google Meet or Zoom Web)'; broadcastStatus(); return;
+    state.status = 'error'; state.error = 'Not a supported meeting (Google Meet, Zoom Web, or Teams)'; broadcastStatus(); return;
   }
 
   const cfg = await chrome.storage.local.get(['apiKey', 'ingestUrl', 'language']);
@@ -110,15 +112,15 @@ async function startCaptureActiveTab(): Promise<void> {
   return startCaptureForTab(tab.id, tab.url);
 }
 
-/** Auto-start when a Meet tab reports it's in a meeting (if enabled + configured). */
-async function maybeAutoStart(tabId?: number, url?: string): Promise<void> {
+/** Auto-start when a meeting tab reports it's in a meeting (if enabled + configured). */
+async function maybeAutoStart(tabId?: number, url?: string, meetingRef?: MeetingRef): Promise<void> {
   if (!tabId || !url) return;
   if (state.status === 'capturing' || state.status === 'connecting') return;
   const cfg = await chrome.storage.local.get(['autoStart', 'apiKey']);
   if (cfg.autoStart === false) return;          // default ON
   if (!cfg.apiKey) return;                       // need an API key configured first
-  if (!detectMeeting(url)) return;
-  startCaptureForTab(tabId, url);
+  if (!meetingRef && !detectMeeting(url)) return;
+  startCaptureForTab(tabId, url, meetingRef);
 }
 
 async function stopCapture(): Promise<void> {
@@ -149,7 +151,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'AUTO_START':
       // Prefer the URL the content script saw at detection time — SPAs (Teams)
       // can navigate off the /meet/<id> path by the time this message arrives.
-      maybeAutoStart(sender.tab?.id, msg.url || sender.tab?.url); sendResponse({ ok: true }); break;
+      maybeAutoStart(sender.tab?.id, msg.url || sender.tab?.url, msg.meeting); sendResponse({ ok: true }); break;
+    case 'AUTO_STOP':
+      // Teams app flow: the call ended (hangup button gone) — stop so the mic
+      // doesn't keep streaming while the user sits in Teams chat.
+      if (sender.tab?.id === state.tabId) stopCapture();
+      sendResponse({ ok: true }); break;
     case 'STOP':
       stopCapture(); sendResponse({ ok: true }); break;
     case 'STATUS':
