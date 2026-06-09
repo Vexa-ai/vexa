@@ -712,6 +712,87 @@ async def _find_meeting_any_status(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+class ExtensionSessionRequest(BaseModel):
+    platform: Platform = Field(default=Platform.GOOGLE_MEET, description="Meeting platform")
+    native_meeting_id: str = Field(..., description="Platform-native meeting id (read from the tab URL)")
+
+
+class ExtensionSessionResponse(BaseModel):
+    meeting_id: int
+    token: str
+    platform: str
+    native_meeting_id: str
+
+
+@router.post(
+    "/extension/sessions",
+    response_model=ExtensionSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Get-or-create a meeting for an in-tab extension capture and mint a MeetingToken",
+    dependencies=[Depends(get_user_and_token)],
+)
+async def create_extension_session(
+    req: ExtensionSessionRequest,
+    request: Request,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """The extension captures audio inside the user's own already-joined meeting
+    tab — there is no bot and no admission. This binds that capture to a real
+    meeting row + MeetingToken so the existing transcription pipeline and
+    dashboard work unchanged. Idempotent: returns the active meeting if one
+    already exists for (user, platform, native_meeting_id)."""
+    _user_token, current_user = auth_data
+    platform = req.platform.value
+    native_meeting_id = req.native_meeting_id.strip()
+    if not native_meeting_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="native_meeting_id required")
+
+    existing_stmt = (
+        select(Meeting)
+        .where(
+            Meeting.user_id == current_user.id,
+            Meeting.platform == platform,
+            Meeting.platform_specific_id == native_meeting_id,
+            Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+        )
+        .order_by(desc(Meeting.created_at))
+        .limit(1)
+    )
+    meeting = (await db.execute(existing_stmt)).scalars().first()
+
+    if meeting is None:
+        meeting = Meeting(
+            user_id=current_user.id,
+            platform=platform,
+            platform_specific_id=native_meeting_id,
+            status=MeetingStatus.ACTIVE.value,
+            data={"transcribe_enabled": True, "source": "extension"},
+        )
+        db.add(meeting)
+        await db.commit()
+        await db.refresh(meeting)
+        try:
+            await publish_meeting_status_change(
+                meeting.id, MeetingStatus.ACTIVE.value, redis_client, platform, native_meeting_id, current_user.id
+            )
+        except Exception:
+            pass
+
+    try:
+        token = mint_meeting_token(meeting.id, current_user.id, platform, native_meeting_id, ttl_seconds=7200)
+    except Exception as e:
+        logger.error(f"Failed to mint MeetingToken for extension session (meeting {meeting.id}): {e}")
+        raise HTTPException(status_code=500, detail="Failed to mint meeting token")
+
+    return ExtensionSessionResponse(
+        meeting_id=meeting.id,
+        token=token,
+        platform=platform,
+        native_meeting_id=native_meeting_id,
+    )
+
+
 @router.post(
     "/bots",
     response_model=MeetingResponse,

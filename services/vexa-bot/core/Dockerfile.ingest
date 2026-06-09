@@ -1,0 +1,27 @@
+# Ingest server — the bot's Node transcription pipeline behind a WebSocket.
+# Deliberately lightweight: no Playwright, no Edge, no native Zoom addon. The
+# ingest path only needs Node + ws + redis, so this is a plain node:20-slim
+# build, NOT the heavy vexa-bot browser image.
+
+FROM node:20-slim AS build
+WORKDIR /app
+# Don't pull Playwright/Puppeteer browser binaries — the ingest server never
+# launches a browser; the user's own Chrome is the browser.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PUPPETEER_SKIP_DOWNLOAD=1
+COPY package*.json tsconfig.json ./
+RUN npm install --ignore-scripts
+COPY src/ ./src/
+COPY tsconfig.ingest.json ./
+# Compile only the ingest-server's import graph (no Playwright in it), then
+# bring the hallucination phrase lists alongside the output.
+RUN npx tsc -p tsconfig.ingest.json && cp -r src/services/hallucinations dist/services/hallucinations
+
+FROM node:20-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    INGEST_PORT=8090
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+EXPOSE 8090
+CMD ["node", "dist/ingest-server.js"]

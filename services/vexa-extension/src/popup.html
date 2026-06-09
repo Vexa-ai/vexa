@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; width: 300px; margin: 0; padding: 14px; color: #1a1a1a; }
+    h1 { font-size: 15px; margin: 0 0 10px; }
+    label { display: block; font-size: 11px; color: #555; margin: 8px 0 2px; }
+    input { width: 100%; box-sizing: border-box; padding: 6px; font-size: 12px; border: 1px solid #ccc; border-radius: 5px; }
+    .row { display: flex; gap: 8px; margin-top: 12px; }
+    button { flex: 1; padding: 8px; font-size: 13px; border: 0; border-radius: 6px; cursor: pointer; }
+    #start { background: #1a73e8; color: #fff; }
+    #stop { background: #eee; color: #333; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #status { margin-top: 12px; font-size: 12px; padding: 8px; border-radius: 6px; background: #f4f4f4; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #999; }
+    .idle .dot { background: #999; } .connecting .dot { background: #e8a31a; }
+    .capturing .dot { background: #1ea64a; } .error .dot { background: #d93025; }
+  </style>
+</head>
+<body>
+  <h1>Vexa — in-tab transcription</h1>
+  <label>Vexa API key</label>
+  <input id="apiKey" type="password" placeholder="your API key" />
+  <label>Ingest server URL</label>
+  <input id="ingestUrl" type="text" placeholder="ws://localhost:8092/ingest" />
+  <label>Language (or "auto")</label>
+  <input id="language" type="text" placeholder="auto" />
+  <div class="row">
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+  </div>
+  <div id="status" class="idle"><span class="dot"></span><span id="statusText">Idle</span></div>
+  <script src="popup.js"></script>
+</body>
+</html>

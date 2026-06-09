@@ -111,6 +111,10 @@ Run everything including your own GPU transcription service.
 
 ## What's new
 
+**Unreleased**
+
+- **In-tab extension** *(experimental, Google Meet)* — transcribe a meeting you're already in, with no bot and no admission. A Chrome extension captures audio inside your own tab and streams it to the same transcription pipeline. See [services/vexa-extension/](./services/vexa-extension/).
+
 **v0.10.4**
 
 - **Zoom (via web)** — `platform=zoom` works out of the box, no SDK setup.
@@ -199,6 +203,34 @@ See [features/browser-session/](./features/browser-session/) and [features/remot
 
 ---
 
+## In-Tab Extension — Transcribe Without a Bot *(experimental)*
+
+Sometimes you don't want to send a bot at all — you're already in the meeting.
+The [vexa-extension](./services/vexa-extension/) is a Chrome extension that
+captures audio **inside your own already-joined Google Meet tab** and streams it
+to the same transcription pipeline. Because you are a real, admitted
+participant, there is **no bot and no waiting-room admission** — the join and
+admission phases simply don't exist.
+
+It runs the *same* pipeline as the bot. The bot is two halves — browser-side
+per-speaker capture and a Node transcription pipeline — bridged in-process by
+Playwright. The extension keeps both halves and replaces only that bridge with a
+WebSocket: the capture half becomes a content script in your tab, and the
+pipeline half runs as the `ingest-server` (a WebSocket front door on
+[services/vexa-bot/core](./services/vexa-bot/core)). Transcripts land on the
+same Redis channel the dashboard already reads, so live view works with no extra
+UI.
+
+```
+Your Meet tab (already admitted) → extension → WebSocket → ingest-server
+   → SpeakerStreamManager → transcription-service → Redis → dashboard (live)
+```
+
+See [services/vexa-extension/README.md](./services/vexa-extension/README.md) for
+build and setup.
+
+---
+
 ## MCP Server — Meeting Tools for AI Agents
 
 17 tools that let AI agents join meetings, read transcripts, speak, chat, and share screen. Works with Claude, Cursor, Windsurf, and any MCP-compatible client.
@@ -237,7 +269,7 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 
 Each service and feature has its own README with architecture, DoD table, and evidence-based confidence scores.
 
-- **Services:** [api-gateway](./services/api-gateway) • [meeting-api](./services/meeting-api) • [admin-api](./services/admin-api) • [runtime-api](./services/runtime-api) • [vexa-bot](./services/vexa-bot) • [transcription-service](./services/transcription-service) • [tts-service](./services/tts-service) • [mcp](./services/mcp) • [dashboard](./services/dashboard) • [agent-api](./services/agent-api) *(experimental)*
+- **Services:** [api-gateway](./services/api-gateway) • [meeting-api](./services/meeting-api) • [admin-api](./services/admin-api) • [runtime-api](./services/runtime-api) • [vexa-bot](./services/vexa-bot) • [transcription-service](./services/transcription-service) • [tts-service](./services/tts-service) • [mcp](./services/mcp) • [dashboard](./services/dashboard) • [agent-api](./services/agent-api) *(experimental)* • [vexa-extension](./services/vexa-extension) *(experimental)*
 - **Features:** [realtime-transcription](./features/realtime-transcription) • [bot-lifecycle](./features/bot-lifecycle) • [browser-session](./features/browser-session) • [remote-browser](./features/remote-browser) • [speaking-bot](./features/speaking-bot) • [meeting-chat](./features/meeting-chat) • [webhooks](./features/webhooks) • [authenticated-meetings](./features/authenticated-meetings)
 - **Deploy:** [Docker Compose](./deploy/compose) • [Vexa Lite](./deploy/lite) • [Helm/K8s](./deploy/helm)
 - **Guides:** [Vexa Lite Deployment](https://docs.vexa.ai/vexa-lite-deployment) • [Docker Compose Deployment](https://docs.vexa.ai/deployment) • [Self-Hosted Management](https://docs.vexa.ai/self-hosted-management) • [Recording Storage](https://docs.vexa.ai/recording-storage)
