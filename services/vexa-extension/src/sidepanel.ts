@@ -159,9 +159,19 @@ function toSegment(s: any): Segment {
   };
 }
 
+function feedStatus(text: string, isError = false): void {
+  const el = $('feedStatus');
+  el.textContent = text;
+  el.style.display = text ? 'block' : 'none';
+  el.style.color = isError ? 'var(--destructive)' : 'var(--muted-foreground)';
+  console.log(`[vexa-panel] ${text}`);
+}
+
 async function startLive(platform: string, nativeId: string): Promise<void> {
   const key = `${platform}/${nativeId}`;
-  if (liveFor === key && liveWs && liveWs.readyState === WebSocket.OPEN) return;
+  // CONNECTING(0) or OPEN(1) for the same meeting → leave it alone. Tearing
+  // down a CONNECTING socket on every 3s status poll caused reconnect churn.
+  if (liveFor === key && liveWs && liveWs.readyState <= WebSocket.OPEN) return;
   stopLive();
   liveFor = key;
   confirmed = new Map();
@@ -169,6 +179,7 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
   speakerOrder = [];
 
   // 1. REST bootstrap (history)
+  feedStatus('Loading transcript…');
   try {
     const resp = await fetch(`${cfg.gatewayUrl}/transcripts/${platform}/${nativeId}`, {
       headers: { 'X-API-Key': cfg.apiKey },
@@ -179,13 +190,24 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
         const seg = toSegment(raw);
         if (seg.text && seg.segment_id) confirmed.set(seg.segment_id, seg);
       }
+      feedStatus('');
+    } else {
+      feedStatus(`History fetch failed: HTTP ${resp.status} from ${cfg.gatewayUrl}`, true);
     }
-  } catch { /* WS will still feed live segments */ }
+  } catch (err: any) {
+    feedStatus(`History fetch failed: ${err.message} (${cfg.gatewayUrl})`, true);
+  }
   render();
 
   // 2. WS live subscribe
   const wsBase = cfg.gatewayUrl.replace(/^http/, 'ws');
-  const ws = new WebSocket(`${wsBase}/ws?api_key=${encodeURIComponent(cfg.apiKey)}`);
+  let ws: WebSocket;
+  try {
+    ws = new WebSocket(`${wsBase}/ws?api_key=${encodeURIComponent(cfg.apiKey)}`);
+  } catch (err: any) {
+    feedStatus(`Live socket failed to open: ${err.message}`, true);
+    return;
+  }
   liveWs = ws;
   ws.onopen = () => {
     ws.send(JSON.stringify({ action: 'subscribe', meetings: [{ platform, native_id: nativeId }] }));
@@ -196,6 +218,8 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
   ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data);
+      if (msg.type === 'subscribed') { feedStatus(''); return; }
+      if (msg.type === 'error') { feedStatus(`Live feed error: ${msg.error}${msg.details ? ` — ${JSON.stringify(msg.details)}` : ''}`, true); return; }
       if (msg.type !== 'transcript') return;
       const speaker = msg.speaker || '';
       for (const raw of msg.confirmed || []) {
@@ -207,10 +231,11 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
       render();
     } catch { /* ignore malformed frame */ }
   };
-  ws.onclose = () => {
+  ws.onerror = () => feedStatus(`Live socket error (${wsBase}/ws)`, true);
+  ws.onclose = (ev) => {
     if (livePing) { clearInterval(livePing); livePing = null; }
-    // Reconnect while still capturing this meeting
     if (liveFor === key && state.status === 'capturing') {
+      feedStatus(`Live socket closed (code ${ev.code}) — reconnecting…`, ev.code !== 1000);
       setTimeout(() => { if (liveFor === key && state.status === 'capturing') startLive(platform, nativeId); }, 2000);
     }
   };
