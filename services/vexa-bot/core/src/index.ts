@@ -2171,7 +2171,7 @@ function startBotResourceSampler(): BotResourceSampler {
 //     was missing → gateway CDP proxy hit a dead :9223 and returned 502.
 // A pure-Node TCP proxy (no socat dependency) works identically in both.
 let __cdpRelayStarted = false;
-function startCdpRelay(listenPort = 9223, targetPort = 9222): void {
+function startCdpRelay(listenPort = (Number(process.env.VEXA_RELAY_PORT) || 9223), targetPort = (Number(process.env.VEXA_CDP_PORT) || 9222)): void {
   if (__cdpRelayStarted) return;
   __cdpRelayStarted = true;
   try {

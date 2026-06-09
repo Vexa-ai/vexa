@@ -142,6 +142,33 @@ preflight:
 		echo "  ⚠ Transcription unreachable ($$TX_URL). Continuing..."; \
 	else \
 		echo "  ⚠ Transcription HTTP $$HTTP. Continuing..."; \
+	fi; \
+	COOKIE_BACKEND=$$(grep -E '^COOKIE_STORAGE_BACKEND=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	COOKIE_BACKEND=$${COOKIE_BACKEND:-s3}; \
+	if [ "$$COOKIE_BACKEND" != "http" ]; then exit 0; fi; \
+	COOKIE_URL=$$(grep -E '^COOKIE_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	COOKIE_TOKEN=$$(grep -E '^COOKIE_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if [ -z "$$COOKIE_URL" ]; then \
+		echo "  ✗ COOKIE_STORAGE_BACKEND=http but COOKIE_SERVICE_URL not set in .env"; exit 1; \
+	fi; \
+	HEALTH=$$(curl -s -o /dev/null -w '%{http_code}' "$$COOKIE_URL/health" --max-time 5 2>/dev/null); \
+	if [ "$$HEALTH" != "200" ]; then \
+		echo "  ✗ Cookie service unreachable at $$COOKIE_URL/health (HTTP $$HEALTH)"; exit 1; \
+	fi; \
+	if [ -n "$$COOKIE_TOKEN" ]; then \
+		PROBE=$$(curl -s -o /dev/null -w '%{http_code}' \
+			-H "Authorization: Bearer $$COOKIE_TOKEN" \
+			"$$COOKIE_URL/userdata/__contract_probe__" --max-time 5 2>/dev/null); \
+	else \
+		PROBE=$$(curl -s -o /dev/null -w '%{http_code}' \
+			"$$COOKIE_URL/userdata/__contract_probe__" --max-time 5 2>/dev/null); \
+	fi; \
+	if [ "$$PROBE" = "200" ] || [ "$$PROBE" = "404" ]; then \
+		echo "  ✓ Cookie service contract valid ($$COOKIE_URL)"; \
+	elif [ "$$PROBE" = "401" ]; then \
+		echo "  ✗ Cookie service returned 401 — check COOKIE_SERVICE_TOKEN in .env"; exit 1; \
+	else \
+		echo "  ✗ Cookie service contract violation at $$COOKIE_URL (HTTP $$PROBE)"; exit 1; \
 	fi
 
 # --- Docker check ---
