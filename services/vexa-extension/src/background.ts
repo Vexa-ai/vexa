@@ -181,3 +181,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // Toolbar click opens the side panel (replaces the old popup).
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => { /* older Chrome */ });
+
+// Dev auto-reload: build.mjs rewrites build-stamp.txt on every build; when the
+// on-disk stamp changes (e.g. dist/ is an SSHFS/rsync mirror of a remote build),
+// reload the extension from disk. Cheap local-resource fetch; inert for any
+// packaged build where the stamp never changes.
+const stampUrl = chrome.runtime.getURL('build-stamp.txt');
+let knownStamp: string | null = null;
+fetch(stampUrl).then(r => r.text()).then(s => { knownStamp = s; }).catch(() => { /* no stamp */ });
+setInterval(async () => {
+  try {
+    const cur = await fetch(stampUrl, { cache: 'no-store' }).then(r => r.text());
+    if (knownStamp && cur && cur !== knownStamp) chrome.runtime.reload();
+  } catch { /* stamp unreadable; skip */ }
+}, 2000);

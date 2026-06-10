@@ -331,6 +331,19 @@ function applyLogo(): void {
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyLogo);
 
+// Dev auto-reload (same stamp the background watches): the MV3 service worker
+// can idle out, but this page lives while the panel is open — between them the
+// reload always lands.
+const stampUrl = chrome.runtime.getURL('build-stamp.txt');
+let knownStamp: string | null = null;
+fetch(stampUrl).then(r => r.text()).then(s => { knownStamp = s; }).catch(() => { /* no stamp */ });
+setInterval(async () => {
+  try {
+    const cur = await fetch(stampUrl, { cache: 'no-store' }).then(r => r.text());
+    if (knownStamp && cur && cur !== knownStamp) chrome.runtime.reload();
+  } catch { /* stamp unreadable; skip */ }
+}, 2000);
+
 (async () => {
   applyLogo();
   await loadConfig();

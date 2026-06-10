@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { cpSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 
 const outdir = 'dist';
 rmSync(outdir, { recursive: true, force: true });
@@ -22,5 +22,6 @@ await build({
 cpSync('manifest.json', `${outdir}/manifest.json`);
 cpSync('src/sidepanel.html', `${outdir}/sidepanel.html`);
 cpSync('assets', `${outdir}/assets`, { recursive: true });
+writeFileSync(`${outdir}/build-stamp.txt`, String(Date.now()));
 
 console.log('Built vexa-extension → dist/. Load that folder as an unpacked extension.');
