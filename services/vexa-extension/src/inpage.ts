@@ -26,6 +26,7 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
   const BUFFER_SIZE = 4096;
 
   let running = false;
+  let countTimer: number | null = null;
   const contexts: AudioContext[] = [];
 
   // Per-participant Meet capture — SHARED vexa-bot module (one codebase).
@@ -71,6 +72,10 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
         // is a participant. Vote track→name via the active-speaker DOM and
         // relabel that track once locked.
         onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
+        // Mixed fallback: when remote audio arrives as ONE tabCapture track
+        // (Zoom's WASM audio mode — no WebRTC ontrack), it lives at index 999
+        // in the offscreen doc. Label it temporally with the active speaker.
+        onSpeakerChange: (name) => post('speakers', { speakers: { '999': name || 'Participant' } }),
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
       console.log(`${TAG} shared zoom-speakers attribution started (multi-channel, self="${selfName || 'unknown'}")`);
@@ -160,6 +165,9 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
 
     post('capture-started', { streams: streamCount() });
     console.log(`${TAG} capture started with ${streamCount()} stream(s) (mic + participants)`);
+
+    // Keep the panel's stream count live — the rescan discovers late joiners.
+    countTimer = window.setInterval(() => { if (running) post('capture-started', { streams: streamCount() }); }, 5000);
   }
 
   function stop() {
@@ -168,6 +176,7 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
+    if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     labeledTracks.clear();
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }

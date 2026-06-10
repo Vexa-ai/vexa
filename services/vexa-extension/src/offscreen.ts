@@ -13,9 +13,10 @@
 
 const MIC_INDEX = 1000;
 // Mixed tab audio (all remote participants) — used where the page doesn't expose
-// per-participant media elements (Zoom web, Teams). One track, named by the
-// current active speaker from the page DOM.
-const TAB_INDEX = 0;
+// per-participant media elements (Zoom web, Teams). One track, named live by
+// the page's active-speaker attribution (zoom-speakers onSpeakerChange).
+// 999: distinct from per-participant element indexes (0..N) and the mic (1000).
+const TAB_INDEX = 999;
 const TARGET_SAMPLE_RATE = 16000;
 const BUFFER_SIZE = 4096;
 

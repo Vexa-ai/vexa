@@ -169,7 +169,9 @@ function applyState(s: PanelState): void {
   // the service worker handles (mints the stream id + attaches tab audio).
   if ((s.platform === 'zoom' || s.platform === 'teams') && s.status === 'capturing') {
     const ta = s.tabAudio || 'none';
-    if (ta === 'on') { feedStatus(''); }
+    // Remote audio is fine if EITHER the mixed tab capture is on OR per-
+    // participant tracks were captured in-page (streams counts mic + remote).
+    if (ta === 'on' || s.streams > 1) { feedStatus(''); }
     else if (ta === 'pending') { feedStatus('Connecting tab audio…'); }
     else {
       feedStatus('Remote audio NOT captured — only your mic is being transcribed. '
