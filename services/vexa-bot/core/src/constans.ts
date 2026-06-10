@@ -57,7 +57,20 @@ const baseBrowserArgs = [
  * - TTS: unmutes pactl + UI mic before speaking, re-mutes after
  */
 export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
-  return [...baseBrowserArgs];
+  const args = [...baseBrowserArgs];
+  // Opt-in CDP exposure for the hot-debug loop. Inert unless BOT_DEBUG_CDP=true,
+  // so prod meeting bots are unaffected. When enabled, hot-debug.js can attach
+  // over CDP (DOM inspect / chat-send / speaker / screenshot / eval) while a
+  // human watches/clicks via noVNC. Bind 0.0.0.0 so the published port reaches
+  // the host; allow all origins because the client connects by IP, not localhost.
+  if (process.env.BOT_DEBUG_CDP === 'true') {
+    args.push(
+      '--remote-debugging-port=9222',
+      '--remote-debugging-address=0.0.0.0',
+      '--remote-allow-origins=*'
+    );
+  }
+  return args;
 }
 
 /**

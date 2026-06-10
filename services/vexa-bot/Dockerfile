@@ -136,6 +136,9 @@ RUN chmod +x /app/vexa-bot/entrypoint.sh
 
 # Set environment
 ENV DISPLAY=:99
+# Hot-debug build: expose Chromium CDP (opt-in flag, see core/src/constans.ts) so a
+# human can drive the bot in via CDP. Harmless on prod images that don't set it.
+ENV BOT_DEBUG_CDP=true
 
 # Expose noVNC web interface and SSH for browser session mode
 EXPOSE 6080 22

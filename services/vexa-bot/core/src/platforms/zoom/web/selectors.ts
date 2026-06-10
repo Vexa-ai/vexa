@@ -3,11 +3,15 @@
 
 // ---- Pre-join page ----
 
-// Name input: <input id="input-for-name">
-export const zoomNameInputSelector = '#input-for-name';
+// Name input — two web-client variants:
+//   React client  (app.zoom.us/wc/<id>/join):  <input id="input-for-name">
+//   Classic client(app.zoom.us/wc/join/<id>):  <input id="inputname" placeholder="Your Name">
+// Zoom redirects guest joins to the classic client for some meetings, so match both.
+export const zoomNameInputSelector = '#input-for-name, #inputname, input[placeholder="Your Name" i]';
 
-// Join button: <button class="zm-btn preview-join-button ..."> — disabled until name entered
-export const zoomJoinButtonSelector = 'button.preview-join-button';
+// Join button — React: <button class="zm-btn preview-join-button ..."> (disabled until name);
+//               Classic: <button id="joinBtn" class="btn btn-primary ... submit">Join</button>
+export const zoomJoinButtonSelector = 'button.preview-join-button, #joinBtn';
 
 // Mute button in preview: <button id="preview-audio-control-button" aria-label="Mute">
 export const zoomPreviewMuteSelector = '#preview-audio-control-button';
