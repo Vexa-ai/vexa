@@ -322,16 +322,36 @@ function showSettings(show: boolean): void {
 }
 
 $('gearBtn').addEventListener('click', () => showSettings($('settings').style.display !== 'flex'));
-$('toggleBtn').addEventListener('click', () => {
+$('toggleBtn').addEventListener('click', async () => {
   if (state.status === 'capturing' || state.status === 'connecting') {
     chrome.runtime.sendMessage({ type: 'STOP' });
-  } else {
-    // START always fires immediately. Note mode acquires the mic in the
-    // offscreen document; if permission is missing it fails fast and we show
-    // the "Allow microphone" action below — no flaky side-panel getUserMedia.
-    chrome.runtime.sendMessage({ type: 'START' });
-    showSettings(false);
+    return;
   }
+  // Zoom/Teams don't expose per-participant audio to the DOM — mint a
+  // tabCapture stream id HERE (the Start click is the required user gesture;
+  // the background SW has none) so the offscreen doc can capture the tab's
+  // mixed remote audio. getMediaStreamId must run under this gesture.
+  let streamId: string | undefined;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const host = tab?.url ? new URL(tab.url).hostname : '';
+    const needsTab = host.endsWith('zoom.us') || host.endsWith('teams.live.com')
+      || host.endsWith('teams.microsoft.com') || host === 'teams.cloud.microsoft';
+    if (needsTab && tab?.id != null) {
+      streamId = await new Promise<string>((resolve, reject) =>
+        chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id! }, (id) =>
+          chrome.runtime.lastError ? reject(chrome.runtime.lastError) : resolve(id)));
+    }
+  } catch (e: any) {
+    const m = String(e?.message || e);
+    if (m.includes('not been invoked') || m.includes('activeTab')) {
+      feedStatus('Click the Vexa toolbar icon first (grants tab access), then press Start.', true);
+      return; // don't start a mic-only session that mislabels everyone as "You"
+    }
+    feedStatus(`Tab audio unavailable: ${m} — only your mic will be captured.`, true);
+  }
+  chrome.runtime.sendMessage({ type: 'START', streamId });
+  showSettings(false);
 });
 $('dashBtn').addEventListener('click', () => {
   const url = state.meetingId ? `${cfg.dashboardUrl}/meetings/${state.meetingId}` : cfg.dashboardUrl;

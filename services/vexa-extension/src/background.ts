@@ -33,6 +33,9 @@ const state: SessionState = {
   error: null,
 };
 
+/** tabCapture stream id (minted in the panel on the Start gesture) for Zoom/Teams. */
+let tabStreamId: string | null = null;
+
 let ws: WebSocket | null = null;
 
 function broadcastStatus(): void {
@@ -106,8 +109,22 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
               }
             })
             .catch((e) => { state.status = 'error'; state.error = `Offscreen failed: ${e.message}`; broadcastStatus(); });
-        } else if (state.tabId !== null) {
-          chrome.tabs.sendMessage(state.tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready */ });
+        } else {
+          // Page-side capture: local mic ("You") everywhere; per-participant
+          // <audio> elements on Google Meet.
+          if (state.tabId !== null) {
+            chrome.tabs.sendMessage(state.tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready */ });
+          }
+          // Zoom/Teams don't expose per-participant audio to the DOM — capture
+          // the tab's mixed output (all remote participants) via tabCapture.
+          if ((state.platform === 'zoom' || state.platform === 'teams') && tabStreamId) {
+            ensureOffscreen()
+              .then(() => chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_START', streamId: tabStreamId }))
+              .then((res: any) => {
+                if (res && res.ok === false) { state.error = `Tab audio failed: ${res.error}`; broadcastStatus(); }
+              })
+              .catch((e) => { state.error = `Tab capture failed: ${e.message}`; broadcastStatus(); });
+          }
         }
       } else if (msg.type === 'error') {
         state.status = 'error'; state.error = msg.message; broadcastStatus();
@@ -149,9 +166,15 @@ async function maybeAutoStart(tabId?: number, url?: string, meetingRef?: Meeting
 async function stopCapture(): Promise<void> {
   if (state.platform === 'note') {
     chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
-  } else if (state.tabId !== null) {
-    chrome.tabs.sendMessage(state.tabId, { type: 'END_CAPTURE' }).catch(() => { /* tab gone */ });
+  } else {
+    if (state.tabId !== null) {
+      chrome.tabs.sendMessage(state.tabId, { type: 'END_CAPTURE' }).catch(() => { /* tab gone */ });
+    }
+    if (state.platform === 'zoom' || state.platform === 'teams') {
+      chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
+    }
   }
+  tabStreamId = null;
   if (ws) { try { ws.close(); } catch { /* ignore */ } ws = null; }
   state.status = 'idle';
   state.meetingId = null;
@@ -172,6 +195,7 @@ function sendAudio(index: number, pcm: number[]): void {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
     case 'START':
+      tabStreamId = msg.streamId || null; // tab audio stream id minted in the panel (Zoom/Teams)
       startCaptureActiveTab(); sendResponse({ ok: true }); break;
     case 'AUTO_START':
       // Prefer the URL the content script saw at detection time — SPAs (Teams)
