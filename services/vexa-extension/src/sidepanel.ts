@@ -121,7 +121,8 @@ function applyState(s: PanelState): void {
     el.style.display = 'block';
     el.style.color = 'var(--destructive)';
     el.innerHTML = `⚠ Background is running an old build — fixes won't apply. `
-      + `<button class="btn" id="reloadSwBtn" style="display:inline-block;padding:3px 10px;font-size:12px;margin-left:6px;">Reload now</button>`;
+      + `<button class="btn" id="reloadSwBtn" style="display:inline-block;padding:3px 10px;font-size:12px;margin-left:6px;">Reload now</button>`
+      + `<div style="margin-top:6px;font-size:11px;opacity:.85;">After it reloads, also refresh the meeting tab (Cmd/Ctrl+R) — an extension reload orphans the page's capture scripts.</div>`;
     const b = document.getElementById('reloadSwBtn');
     if (b && !(b as any).__wired) {
       (b as any).__wired = true;
