@@ -257,8 +257,34 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === state.tabId) stopCapture();
 });
 
-// Toolbar click opens the side panel (replaces the old popup).
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => { /* older Chrome */ });
+// Toolbar click handling. We do NOT use openPanelOnActionClick, because the
+// click on the toolbar icon is the ONLY event that grants activeTab on the
+// meeting tab — and chrome.tabCapture.getMediaStreamId needs that activeTab.
+// So on every toolbar click we: (1) mint the tab-capture stream id for the
+// active tab under this invocation, (2) attach tab audio to a running
+// Zoom/Teams session (or stash it for the next Start), and (3) open the panel.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => { /* older Chrome */ });
+chrome.action.onClicked.addListener(async (tab) => {
+  if (tab?.id == null) return;
+  const host = tab.url ? new URL(tab.url).hostname : '';
+  const needsTab = host.endsWith('zoom.us') || host.endsWith('teams.live.com')
+    || host.endsWith('teams.microsoft.com') || host === 'teams.cloud.microsoft';
+  if (needsTab) {
+    // Mint FIRST, before any await consumes the gesture/activeTab window.
+    try {
+      const sid = await new Promise<string>((resolve, reject) =>
+        chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id! }, (id) =>
+          chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(id)));
+      tabStreamId = sid;
+      if (state.status === 'capturing' && (state.platform === 'zoom' || state.platform === 'teams')) {
+        startTabAudio();
+      }
+    } catch (e: any) {
+      state.tabAudio = `error:${e.message}`; broadcastStatus();
+    }
+  }
+  try { await chrome.sidePanel.open({ tabId: tab.id }); } catch { /* older Chrome / already open */ }
+});
 
 // Dev auto-reload: build.mjs rewrites build-stamp.txt on every build; when the
 // on-disk stamp changes (e.g. dist/ is an SSHFS/rsync mirror of a remote build),

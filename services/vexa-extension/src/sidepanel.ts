@@ -139,38 +139,18 @@ function applyState(s: PanelState): void {
   } else if (s.status === 'idle' && liveWs) {
     stopLive();
   }
-  // Zoom/Teams: remote audio comes from tabCapture — surface its state loudly,
-  // with a one-click fix (the click IS the required user gesture).
+  // Zoom/Teams: remote audio comes from tabCapture. getMediaStreamId needs the
+  // activeTab grant that ONLY a toolbar-icon click produces — a button inside
+  // the panel can't grant it. So the fix is: click the Vexa toolbar icon, which
+  // the service worker handles (mints the stream id + attaches tab audio).
   if ((s.platform === 'zoom' || s.platform === 'teams') && s.status === 'capturing') {
     const ta = s.tabAudio || 'none';
     if (ta === 'on') { feedStatus(''); }
     else if (ta === 'pending') { feedStatus('Connecting tab audio…'); }
     else {
-      const el = $('feedStatus');
-      el.style.display = 'block';
-      el.style.color = 'var(--destructive)';
-      el.innerHTML = `Remote audio NOT captured — only your mic is being transcribed. `
-        + `<button class="btn" id="enableTabAudioBtn" style="display:inline-block;padding:3px 10px;font-size:12px;margin-left:6px;">Enable remote audio</button>`;
-      const b = document.getElementById('enableTabAudioBtn');
-      if (b && !(b as any).__wired) {
-        (b as any).__wired = true;
-        b.addEventListener('click', async () => {
-          try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.id) throw new Error('no active tab');
-            const sid = await new Promise<string>((res, rej) =>
-              chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id! }, (id) =>
-                chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res(id)));
-            chrome.runtime.sendMessage({ type: 'ATTACH_TAB_AUDIO', streamId: sid });
-            feedStatus('Connecting tab audio…');
-          } catch (e: any) {
-            const m = String(e?.message || e);
-            feedStatus(m.includes('invoked') || m.includes('activeTab')
-              ? 'Tab access not granted — click the Vexa toolbar icon on the meeting tab, then press Enable again.'
-              : `Tab audio failed: ${m}`, true);
-          }
-        });
-      }
+      feedStatus('Remote audio NOT captured — only your mic is being transcribed. '
+        + 'Click the Vexa toolbar icon (top-right of Chrome) on this meeting tab — '
+        + 'that grants tab access and starts remote audio automatically.', true);
     }
   }
 
