@@ -139,11 +139,11 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
           if (state.tabId !== null) {
             chrome.tabs.sendMessage(state.tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready */ });
           }
-          // Zoom/Teams don't expose per-participant audio to the DOM — capture
-          // the tab's mixed output (all remote participants) via tabCapture.
-          if (state.platform === 'zoom' || state.platform === 'teams') {
-            startTabAudio();
-          }
+          // Zoom/Teams: remote audio is captured PER-PARTICIPANT in-page now —
+          // the document_start WebRTC hook mirrors each remote track into a
+          // hidden <audio> that inpage's per-element capture picks up (multi-
+          // channel). No mixed tabCapture. (startTabAudio remains available as a
+          // manual fallback via the toolbar path if ever needed.)
         }
       } else if (msg.type === 'error') {
         state.status = 'error'; state.error = msg.message; broadcastStatus();

@@ -10,6 +10,7 @@ await build({
     background: 'src/background.ts',
     content: 'src/content.ts',
     inpage: 'src/inpage.ts',
+    'webrtc-hook': 'src/webrtc-hook.ts',
     sidepanel: 'src/sidepanel.ts',
     offscreen: 'src/offscreen.ts',
     'mic-permission': 'src/mic-permission.ts',

@@ -19,16 +19,27 @@
 export interface ZoomSpeakersOptions {
   /** Local participant display name — never reported as the remote speaker. */
   selfName?: string;
-  /** Fired when the active speaker changes (name or null when nobody is active). */
+  /** Fired when the active speaker changes (name or null when nobody is active).
+   *  Legacy single-track mode (used when remote audio is one mixed track). */
   onSpeakerChange?: (name: string | null) => void;
+  /** Per-track naming (multi-channel mode): fired when a track index is mapped/
+   *  locked to a participant name via active-speaker voting. */
+  onName?: (index: number, name: string) => void;
   log?: (msg: string) => void;
   /** Poll interval (ms). Default 250 — matches the bot. */
   pollMs?: number;
+  /** Votes needed to lock a track→name mapping. Default 2 (matches the bot). */
+  lockVotes?: number;
 }
 
 export interface ZoomSpeakers {
   /** Current active speaker name, or null. */
   getActiveSpeaker(): string | null;
+  /** Multi-channel mode: report that WebRTC track `index` just had audio. The
+   *  module correlates this with the active speaker to vote/lock track→name. */
+  reportTrackAudio(index: number): void;
+  /** Locked name for a track, if any. */
+  getTrackName(index: number): string | null;
   /** Live forensics — call window.__vexaZoomSpeakers.getState() on a real call
    *  to confirm the selectors match the current Zoom DOM (or find what does). */
   getState(): ZoomSpeakersState;
@@ -61,7 +72,40 @@ const NAME_FOOTER_SELECTOR = '.video-avatar__avatar-footer';
 export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers {
   const log = opts.log || (() => { /* silent */ });
   const pollMs = opts.pollMs ?? 250;
+  const lockVotes = opts.lockVotes ?? 2;
   let active: string | null = null;
+
+  // ── Multi-channel track→name voting (same vote/lock idea as gmeet-speakers
+  //    and the bot's speaker-identity.ts) ──────────────────────────────────
+  const lastTrackAudio = new Map<number, number>();          // index → ts (ms)
+  const votes = new Map<number, Map<string, number>>();      // index → name → count
+  const lockedTrack = new Map<number, string>();             // index → locked name
+  const nameToTrack = new Map<string, number>();             // name → index (1:1)
+  const AUDIO_RECENT_MS = 400;
+
+  function now(): number { return (globalThis.performance?.now?.() ?? 0) || +new Date(); }
+
+  function voteOnce(): void {
+    // Vote only when exactly one track has had recent audio AND there is a
+    // single active speaker — that's an unambiguous track↔name correlation.
+    if (!active) return;
+    const t = now();
+    const recent: number[] = [];
+    for (const [idx, ts] of lastTrackAudio) if (t - ts <= AUDIO_RECENT_MS) recent.push(idx);
+    if (recent.length !== 1) return;
+    const index = recent[0];
+    if (lockedTrack.has(index)) return;
+    if (nameToTrack.has(active) && nameToTrack.get(active) !== index) return; // name already owned
+
+    let m = votes.get(index); if (!m) { m = new Map(); votes.set(index, m); }
+    const c = (m.get(active) || 0) + 1; m.set(active, c);
+    if (c >= lockVotes) {
+      lockedTrack.set(index, active);
+      nameToTrack.set(active, index);
+      log(`LOCK track ${index} → "${active}"`);
+      try { opts.onName?.(index, active); } catch { /* consumer error */ }
+    }
+  }
 
   function nameFromContainer(container: Element | null): string | null {
     if (!container) return null;
@@ -92,6 +136,8 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
       if (name) log(`SPEAKER_START: ${name}`);
       try { opts.onSpeakerChange?.(active); } catch { /* consumer error */ }
     }
+    // Multi-channel: correlate the active speaker with the track that's audible.
+    if (opts.onName) { try { voteOnce(); } catch { /* ignore */ } }
   }, pollMs);
 
   const HINT_RE = /speak|talk|active|audio|volume|voice/i;
@@ -128,6 +174,8 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
 
   return {
     getActiveSpeaker(): string | null { return active; },
+    reportTrackAudio(index: number): void { lastTrackAudio.set(index, now()); },
+    getTrackName(index: number): string | null { return lockedTrack.get(index) ?? null; },
     getState,
     destroy(): void { clearInterval(timer); },
   };

@@ -62,19 +62,34 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
       console.log(`${TAG} shared gmeet-speakers attribution started (self="${selfName || 'unknown'}")`);
     } else if (location.hostname.endsWith('zoom.us')) {
       if (zoomSpeakers) return;
+      const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
+        ?.getAttribute('data-self-name')?.trim() || undefined;
       zoomSpeakers = createZoomSpeakers({
+        selfName,
         log: (m) => console.log(`${TAG} [zoom] ${m}`),
-        // Relabel the mixed tab-audio track (TAB_INDEX = 0) with the current
-        // active speaker. Falls back to "Participant" between speakers.
-        onSpeakerChange: (name) => post('speakers', { speakers: { '0': name || 'Participant' } }),
+        // Multi-channel: each WebRTC track (injected by the document_start hook)
+        // is a participant. Vote track→name via the active-speaker DOM and
+        // relabel that track once locked.
+        onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
-      console.log(`${TAG} shared zoom-speakers attribution started`);
+      console.log(`${TAG} shared zoom-speakers attribution started (multi-channel, self="${selfName || 'unknown'}")`);
     }
   }
 
   function streamCount(): number {
     return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0);
+  }
+
+  // Placeholder label for a freshly-seen participant track until attribution
+  // locks a real name. Meet names its own tracks via gmeet-speakers, so skip
+  // there; Zoom/Teams tracks (injected by the WebRTC hook) start as "Speaker N".
+  const labeledTracks = new Set<number>();
+  function labelTrack(index: number): void {
+    if (index === MIC_INDEX || location.hostname.endsWith('meet.google.com')) return;
+    if (labeledTracks.has(index)) return;
+    labeledTracks.add(index);
+    post('speakers', { speakers: { [String(index)]: `Speaker ${index + 1}` } });
   }
 
   /**
@@ -120,14 +135,23 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
     await startMic();
     post('capture-started', { streams: streamCount() });
 
-    // Per-participant Meet capture via the SHARED vexa-bot module. (Zoom/Teams
-    // have no per-participant elements — their remote audio is the mixed
-    // tabCapture track handled in the offscreen doc.)
-    if (location.hostname.endsWith('meet.google.com')) {
+    // Per-participant capture via the SHARED vexa-bot module — runs on ALL
+    // meeting platforms. Google Meet exposes native per-participant <audio>
+    // elements; Zoom/Teams get equivalent ones from the document_start WebRTC
+    // hook (each remote track mirrored into a hidden <audio>). So this captures
+    // MULTI-CHANNEL everywhere — no mixed tabCapture.
+    const isMeeting = location.hostname.endsWith('meet.google.com')
+      || location.hostname.endsWith('zoom.us')
+      || location.hostname.endsWith('teams.live.com')
+      || location.hostname.endsWith('teams.microsoft.com')
+      || location.hostname === 'teams.cloud.microsoft';
+    if (isMeeting) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
         onAudio: (index, pcm) => {
-          speakers?.reportTrackAudio(index);
+          speakers?.reportTrackAudio(index);       // Meet per-track voting
+          zoomSpeakers?.reportTrackAudio(index);   // Zoom per-track voting
+          labelTrack(index);                       // placeholder until a name locks
           post('audio', { index, pcm: Array.from(pcm) });
         },
       });
@@ -144,6 +168,7 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
+    labeledTracks.clear();
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }
     contexts.length = 0;

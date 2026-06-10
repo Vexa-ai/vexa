@@ -39,6 +39,20 @@
   "content_scripts": [
     {
       "matches": [
+        "https://*.zoom.us/wc/*",
+        "https://teams.live.com/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.cloud.microsoft/*"
+      ],
+      "js": [
+        "webrtc-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
         "https://meet.google.com/*",
         "https://*.zoom.us/wc/*",
         "https://teams.live.com/*",
