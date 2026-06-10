@@ -50,6 +50,32 @@ interface ExtensionSession {
   native_meeting_id: string;
 }
 
+/** Live WS sessions per meeting — drives the deferred finalize below. */
+const liveSessionsByMeeting = new Map<number, Set<string>>();
+const FINALIZE_GRACE_MS = envNum('INGEST_FINALIZE_GRACE_MS', 60_000);
+
+/**
+ * Finalize the meeting (active → completed) after the grace period, unless a
+ * new session for it reconnected (pause/resume, tab reload). Extension
+ * meetings have no bot container, so nothing else ever completes them.
+ */
+function scheduleFinalize(meetingId: number, apiKey: string, platform: string, nativeMeetingId: string): void {
+  setTimeout(async () => {
+    const live = liveSessionsByMeeting.get(meetingId);
+    if (live && live.size > 0) return; // resumed — keep the meeting active
+    try {
+      const resp = await fetch(`${MEETING_API_URL}/extension/sessions/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+        body: JSON.stringify({ platform, native_meeting_id: nativeMeetingId }),
+      });
+      log(`[Ingest] Finalized meeting ${meetingId} (${nativeMeetingId}): ${resp.status}`);
+    } catch (err: any) {
+      log(`[Ingest] Finalize failed for meeting ${meetingId}: ${err.message}`);
+    }
+  }, FINALIZE_GRACE_MS);
+}
+
 /**
  * Ask meeting-api to get-or-create the meeting row for this user+meeting and
  * mint a MeetingToken. Identity is the user's API key, forwarded verbatim.
@@ -288,12 +314,16 @@ export function runIngestServer(): void {
     }
 
     let capture: CaptureSession | null = null;
+    let boundMeetingId: number | null = null;
     try {
       const session = await resolveSession(apiKey, platform, nativeMeetingId);
       capture = new CaptureSession(session, connectionId, explicitLanguage && explicitLanguage !== 'auto' ? explicitLanguage : null);
       await capture.start();
       ws.send(JSON.stringify({ type: 'ready', meeting_id: session.meeting_id }));
       log(`[Ingest] Connection ready meeting=${session.meeting_id} native=${nativeMeetingId}`);
+      boundMeetingId = session.meeting_id;
+      if (!liveSessionsByMeeting.has(session.meeting_id)) liveSessionsByMeeting.set(session.meeting_id, new Set());
+      liveSessionsByMeeting.get(session.meeting_id)!.add(connectionId);
     } catch (err: any) {
       log(`[Ingest] Session bootstrap failed: ${err.message}`);
       ws.send(JSON.stringify({ type: 'error', message: err.message }));
@@ -316,6 +346,13 @@ export function runIngestServer(): void {
 
     const cleanup = async () => {
       if (capture) { await capture.stop(); capture = null; }
+      if (boundMeetingId !== null) {
+        liveSessionsByMeeting.get(boundMeetingId)?.delete(connectionId);
+        // Defer the active→completed transition: a pause/reload reconnects
+        // within the grace window and keeps the meeting alive.
+        scheduleFinalize(boundMeetingId, apiKey, platform, nativeMeetingId);
+        boundMeetingId = null;
+      }
     };
     ws.on('close', cleanup);
     ws.on('error', cleanup);

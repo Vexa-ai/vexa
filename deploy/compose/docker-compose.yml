@@ -327,6 +327,9 @@ services:
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - MIN_SILENCE_DURATION_MS=${MIN_SILENCE_DURATION_MS:-100}
+      # Grace before an ended capture transitions the meeting active→completed
+      # (pause/reload reconnects within this window keep the meeting alive).
+      - INGEST_FINALIZE_GRACE_MS=${INGEST_FINALIZE_GRACE_MS:-60000}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     init: true
     depends_on:

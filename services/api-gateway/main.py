@@ -436,6 +436,17 @@ async def extension_session_proxy(request: Request):
     return await forward_request(app.state.http_client, "POST", url, request)
 
 
+@app.post("/extension/sessions/end",
+         tags=["Extension"],
+         summary="Finalize an extension capture meeting",
+         status_code=status.HTTP_202_ACCEPTED,
+         dependencies=[Depends(api_key_scheme)])
+async def extension_session_end_proxy(request: Request):
+    """Forward to meeting-api /extension/sessions/end (active → completed)."""
+    url = f"{MEETING_API_URL}/extension/sessions/end"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
 @app.post("/bots",
          tags=["Bot Management"],
          summary="Request a new bot to join a meeting",
