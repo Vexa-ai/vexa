@@ -378,13 +378,12 @@ $('toggleBtn').addEventListener('click', async () => {
         chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id! }, (id) =>
           chrome.runtime.lastError ? reject(chrome.runtime.lastError) : resolve(id)));
     }
-  } catch (e: any) {
-    const m = String(e?.message || e);
-    if (m.includes('not been invoked') || m.includes('activeTab')) {
-      feedStatus('Click the Vexa toolbar icon first (grants tab access), then press Start.', true);
-      return; // don't start a mic-only session that mislabels everyone as "You"
-    }
-    feedStatus(`Tab audio unavailable: ${m} — only your mic will be captured.`, true);
+  } catch {
+    // Stream id couldn't be minted now (no gesture / panel not opened from the
+    // toolbar icon). Don't block Start — begin capture anyway; the "Enable
+    // remote audio" button in the warning attaches tab audio later under its
+    // own click gesture.
+    streamId = undefined;
   }
   chrome.runtime.sendMessage({ type: 'START', streamId });
   showSettings(false);
