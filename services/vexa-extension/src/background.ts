@@ -311,6 +311,19 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === state.tabId) stopCapture();
 });
 
+// If the captured tab RELOADS mid-session (user refresh, SPA hard nav), the
+// fresh page never saw BEGIN_CAPTURE — rewire it automatically so capture and
+// attribution resume without manual Stop/Start.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (tabId !== state.tabId || changeInfo.status !== 'complete') return;
+  if (state.status !== 'capturing' && state.status !== 'connecting') return;
+  if (state.platform === 'note') return;
+  setTimeout(() => {
+    chrome.tabs.sendMessage(tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready yet */ });
+    shipTelemetry('tab-reloaded-rewire');
+  }, 1500);
+});
+
 // Toolbar click handling. We do NOT use openPanelOnActionClick, because the
 // click on the toolbar icon is the ONLY event that grants activeTab on the
 // meeting tab — and chrome.tabCapture.getMediaStreamId needs that activeTab.

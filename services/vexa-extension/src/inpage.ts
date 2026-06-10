@@ -240,6 +240,11 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
   }
   setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
 
+  // Attribution runs from page load (not capture start): diagnostics see the
+  // DOM state immediately, and Zoom's temporal naming is live before/without
+  // capture. Idempotent — start() calls it again harmlessly.
+  try { startSpeakerAttribution(); } catch (e: any) { console.log(`${TAG} attribution at load failed: ${e?.message}`); }
+
   post('inpage-ready', {});
   console.log(`${TAG} loaded`);
 })();
