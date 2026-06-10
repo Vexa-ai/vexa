@@ -352,7 +352,10 @@ fetch(stampUrl).then(r => r.text()).then(s => { knownStamp = s; }).catch(() => {
 setInterval(async () => {
   try {
     const cur = await fetch(stampUrl, { cache: 'no-store' }).then(r => r.text());
-    if (knownStamp && cur && cur !== knownStamp) chrome.runtime.reload();
+    if (knownStamp && cur && cur !== knownStamp) {
+      if (state.status === 'capturing' || state.status === 'connecting') return; // never reload mid-capture
+      chrome.runtime.reload();
+    }
   } catch { /* stamp unreadable; skip */ }
 }, 2000);
 
