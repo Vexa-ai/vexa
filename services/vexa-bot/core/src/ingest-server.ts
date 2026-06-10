@@ -123,6 +123,7 @@ class CaptureSession {
   // into the unmodified SpeakerStreamManager.
   private mixedPipeline: MixedAudioPipeline | null = null;
   private mixedPipelineReady: Promise<void> | null = null;
+  private diarStatsTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private session: ExtensionSession,
@@ -168,6 +169,11 @@ class CaptureSession {
       // pipeline exists before the first audio frame — no frames dropped.
       this.mixedPipelineReady = this.initMixedPipeline();
       await this.mixedPipelineReady;
+      // Phase 6 soak signal: periodic diarization stats (names only, no text).
+      this.diarStatsTimer = setInterval(() => {
+        const st = this.mixedPipeline?.stats();
+        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} clusters=${st.binder.clustersWithVotes} resolved=${st.binder.resolvedClusters} pending=${st.pendingFrames} hints=${JSON.stringify(st.binder.hintTurns)}`);
+      }, 30000);
     }
     log(`[Ingest] Session started meeting=${this.session.meeting_id} uid=${this.connectionId}`);
   }
@@ -241,6 +247,7 @@ class CaptureSession {
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    if (this.diarStatsTimer) { clearInterval(this.diarStatsTimer); this.diarStatsTimer = null; }
     try { this.mixedPipeline?.dispose(); } catch { /* best effort */ }
     try { this.speakerManager.removeAll(); } catch { /* best effort */ }
     try { await this.segmentPublisher.publishSessionEnd(); } catch { /* best effort */ }
