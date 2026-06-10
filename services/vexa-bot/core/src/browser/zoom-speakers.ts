@@ -59,6 +59,11 @@ export interface ZoomSpeakersState {
   tiles: Array<{ name: string; tileClasses: string[]; speakingHints: string[] }>;
   /** Footer selector currently used to read names. */
   nameFooterSelector: string;
+  /** When tiles is empty (stale selectors), a generic DOM survey: elements that
+   *  plausibly carry participant names (short text / aria-label on name-ish,
+   *  avatar-ish, or video-adjacent nodes) with their classes — the raw material
+   *  to derive the current Zoom version's selectors. */
+  survey?: Array<{ cls: string; aria: string; text: string }>;
 }
 
 // Active-speaker containers (normal view + screen-share view), and the avatar
@@ -169,7 +174,31 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
       });
       tiles.push({ name, tileClasses, speakingHints });
     }
-    return { active, matchedSelector: matched, probe, tiles, nameFooterSelector: NAME_FOOTER_SELECTOR };
+    // Selector self-discovery material: when the known footer selector matches
+    // nothing, sweep name-ish/avatar-ish/video-adjacent nodes carrying short
+    // text or aria-labels. Short strings only (names), never paragraphs.
+    let survey: ZoomSpeakersState['survey'];
+    if (tiles.length === 0) {
+      survey = [];
+      const seen = new Set<string>();
+      const sweep = document.querySelectorAll(
+        '[class*="name"],[class*="avatar"],[class*="footer"],[class*="participant"],[class*="tile"],[aria-label]');
+      for (let i = 0; i < sweep.length && survey.length < 25; i++) {
+        const el = sweep[i] as HTMLElement;
+        const aria = (el.getAttribute('aria-label') || '').slice(0, 60);
+        // Own text only (not descendants') so we find the leaf carrying the name.
+        let own = '';
+        for (const n of Array.from(el.childNodes)) if (n.nodeType === 3) own += (n.textContent || '');
+        own = own.trim();
+        const text = own && own.length <= 40 ? own : '';
+        if (!text && !aria) continue;
+        const key = `${el.className}|${text}|${aria}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        survey.push({ cls: String(el.className).slice(0, 120), aria, text });
+      }
+    }
+    return { active, matchedSelector: matched, probe, tiles, nameFooterSelector: NAME_FOOTER_SELECTOR, survey };
   }
 
   return {

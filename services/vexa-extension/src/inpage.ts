@@ -214,6 +214,9 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
             name: (t.name || '').length <= 40 ? t.name : scrub(t.name),
             speakingHints: t.speakingHints,
           })),
+          survey: (st.survey || []).map((e: any) => ({
+            cls: e.cls, aria: e.aria, text: (e.text || '').length <= 40 ? e.text : scrub(e.text),
+          })),
         };
       } catch (e: any) { return { error: String(e?.message || e) }; }
     })() : null;
