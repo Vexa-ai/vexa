@@ -23,6 +23,9 @@ interface SessionState {
   error: string | null;
   /** Mixed remote-audio capture state (Zoom/Teams): none | pending | on | error:<msg> */
   tabAudio: string;
+  /** build-stamp.txt as read when THIS service worker loaded. The panel compares
+   *  it to the on-disk stamp to detect a stale SW (reload deferred during capture). */
+  swBuild: string;
 }
 
 const state: SessionState = {
@@ -34,6 +37,7 @@ const state: SessionState = {
   streams: 0,
   error: null,
   tabAudio: 'none',
+  swBuild: '',
 };
 
 /** tabCapture stream id (minted in the panel on the Start gesture) for Zoom/Teams. */
@@ -230,6 +234,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true }); break;
     case 'STOP':
       stopCapture(); sendResponse({ ok: true }); break;
+    case 'RELOAD_NOW':
+      // Dev escape hatch: force the deferred reload even mid-capture so a stale
+      // background can be replaced on demand.
+      stopCapture().finally(() => chrome.runtime.reload());
+      sendResponse({ ok: true }); break;
     case 'STATUS':
       sendResponse({ state }); break;
     case 'PREFLIGHT':
@@ -292,14 +301,16 @@ chrome.action.onClicked.addListener(async (tab) => {
 // packaged build where the stamp never changes.
 const stampUrl = chrome.runtime.getURL('build-stamp.txt');
 let knownStamp: string | null = null;
-fetch(stampUrl).then(r => r.text()).then(s => { knownStamp = s; }).catch(() => { /* no stamp */ });
+fetch(stampUrl).then(r => r.text()).then(s => { knownStamp = s; state.swBuild = s; }).catch(() => { /* no stamp */ });
 setInterval(async () => {
   try {
     const cur = await fetch(stampUrl, { cache: 'no-store' }).then(r => r.text());
     if (knownStamp && cur && cur !== knownStamp) {
       // Never hot-reload mid-capture — reload() restarts capture, churns the
       // ingest session, and resets the transcription buffer. Defer until idle.
-      if (state.status === 'capturing' || state.status === 'connecting') return;
+      // The panel surfaces a "background stale → Reload now" banner so the dev
+      // isn't stuck on old code (esp. with auto-start keeping capture on).
+      if (state.status === 'capturing' || state.status === 'connecting') { broadcastStatus(); return; }
       chrome.runtime.reload();
     }
   } catch { /* stamp unreadable; skip */ }

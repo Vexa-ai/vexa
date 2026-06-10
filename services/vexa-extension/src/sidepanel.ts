@@ -31,7 +31,13 @@ interface PanelState {
   streams: number;
   error: string | null;
   tabAudio?: string;
+  swBuild?: string;
 }
+
+// build-stamp.txt as this panel doc loaded — compared to the SW's swBuild to
+// detect a stale background (reload deferred during capture).
+let panelBuild = '';
+fetch(chrome.runtime.getURL('build-stamp.txt')).then(r => r.text()).then(s => { panelBuild = s; }).catch(() => { /* none */ });
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -106,6 +112,23 @@ async function verifyConnection(): Promise<void> {
 function applyState(s: PanelState): void {
   const prev = state;
   state = s;
+
+  // Stale-background guard: if the running service worker loaded an older build
+  // than this panel, capture-control code (e.g. the toolbar-click handler) is
+  // out of date. Surface a blocking banner with a one-click forced reload.
+  if (s.swBuild && panelBuild && s.swBuild !== panelBuild) {
+    const el = $('feedStatus');
+    el.style.display = 'block';
+    el.style.color = 'var(--destructive)';
+    el.innerHTML = `⚠ Background is running an old build — fixes won't apply. `
+      + `<button class="btn" id="reloadSwBtn" style="display:inline-block;padding:3px 10px;font-size:12px;margin-left:6px;">Reload now</button>`;
+    const b = document.getElementById('reloadSwBtn');
+    if (b && !(b as any).__wired) {
+      (b as any).__wired = true;
+      b.addEventListener('click', () => { feedStatus('Reloading…'); chrome.runtime.sendMessage({ type: 'RELOAD_NOW' }); });
+    }
+    return; // don't let other status lines overwrite this — it's the blocker
+  }
   const pill = $('statusPill'), pillText = $('statusText');
   pill.classList.toggle('live', s.status === 'capturing');
   pillText.textContent =
