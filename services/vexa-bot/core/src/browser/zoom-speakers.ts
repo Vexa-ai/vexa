@@ -29,7 +29,25 @@ export interface ZoomSpeakersOptions {
 export interface ZoomSpeakers {
   /** Current active speaker name, or null. */
   getActiveSpeaker(): string | null;
+  /** Live forensics — call window.__vexaZoomSpeakers.getState() on a real call
+   *  to confirm the selectors match the current Zoom DOM (or find what does). */
+  getState(): ZoomSpeakersState;
   destroy(): void;
+}
+
+export interface ZoomSpeakersState {
+  active: string | null;
+  /** Which known container selector currently matches, if any. */
+  matchedSelector: string | null;
+  /** Per known selector: present in DOM? name read? — to spot stale selectors. */
+  probe: Array<{ selector: string; present: boolean; name: string | null }>;
+  /** Every name-bearing participant tile: the name we read, the tile's own
+   *  class chain (self + nearest ancestors), and whether any class on the tile
+   *  or its descendants hints "speaking/active/talking/audio". This is the raw
+   *  material to write a robust speaking-tile selector that works in any view. */
+  tiles: Array<{ name: string; tileClasses: string[]; speakingHints: string[] }>;
+  /** Footer selector currently used to read names. */
+  nameFooterSelector: string;
 }
 
 // Active-speaker containers (normal view + screen-share view), and the avatar
@@ -76,8 +94,41 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
     }
   }, pollMs);
 
+  const HINT_RE = /speak|talk|active|audio|volume|voice/i;
+
+  function getState(): ZoomSpeakersState {
+    const probe = ACTIVE_CONTAINER_SELECTORS.map(selector => {
+      const el = document.querySelector(selector);
+      return { selector, present: !!el, name: nameFromContainer(el) };
+    });
+    const matched = probe.find(p => p.name)?.selector || null;
+
+    // For every name footer in the DOM, walk up a few ancestors collecting class
+    // names, and flag any class (self or descendant) hinting "speaking". This
+    // reveals which tile class marks the active speaker — robust across views.
+    const tiles: ZoomSpeakersState['tiles'] = [];
+    const footers = document.querySelectorAll(NAME_FOOTER_SELECTOR);
+    for (let i = 0; i < footers.length && tiles.length < 30; i++) {
+      const footer = footers[i] as HTMLElement;
+      const name = (footer.querySelector('span')?.textContent?.trim() || footer.innerText?.trim() || '');
+      if (!name) continue;
+      const tileClasses: string[] = [];
+      let cur: HTMLElement | null = footer;
+      for (let up = 0; up < 5 && cur; up++) { if (cur.className) tileClasses.push(String(cur.className)); cur = cur.parentElement; }
+      const speakingHints: string[] = [];
+      const scope = footer.closest('[class*="video"],[class*="participant"],[class*="tile"]') || footer.parentElement || footer;
+      scope.querySelectorAll('[class]').forEach(el => {
+        const c = String((el as HTMLElement).className);
+        if (HINT_RE.test(c)) c.split(/\s+/).forEach(tok => { if (HINT_RE.test(tok) && !speakingHints.includes(tok)) speakingHints.push(tok); });
+      });
+      tiles.push({ name, tileClasses, speakingHints });
+    }
+    return { active, matchedSelector: matched, probe, tiles, nameFooterSelector: NAME_FOOTER_SELECTOR };
+  }
+
   return {
     getActiveSpeaker(): string | null { return active; },
+    getState,
     destroy(): void { clearInterval(timer); },
   };
 }
