@@ -361,6 +361,41 @@ function showSettings(show: boolean): void {
   if (show) verifyConnection();
 }
 
+// ── Theme (System / Light / Dark) ───────────────────────────────
+type Theme = 'system' | 'light' | 'dark';
+const THEME_ORDER: Theme[] = ['system', 'light', 'dark'];
+const THEME_ICON: Record<Theme, string> = { system: '☾', light: '☀', dark: '☽' };
+const darkMql = window.matchMedia('(prefers-color-scheme: dark)');
+let theme: Theme = 'system';
+
+function effectiveDark(): boolean {
+  return theme === 'dark' || (theme === 'system' && darkMql.matches);
+}
+
+function applyTheme(): void {
+  document.documentElement.setAttribute('data-theme', theme);
+  // Logo: light-colored logo on dark bg, dark-colored logo on light bg.
+  const logo = document.getElementById('logo') as HTMLImageElement | null;
+  if (logo) logo.src = effectiveDark() ? 'assets/vexalight.svg' : 'assets/vexadark.svg';
+  const btn = $('themeBtn');
+  btn.textContent = THEME_ICON[theme];
+  btn.title = `Theme: ${theme[0].toUpperCase()}${theme.slice(1)}`;
+}
+
+async function initTheme(): Promise<void> {
+  const { theme: stored } = await chrome.storage.local.get('theme');
+  theme = (stored as Theme) || 'system';
+  applyTheme();
+  // Follow OS changes only while on System.
+  darkMql.addEventListener('change', () => { if (theme === 'system') applyTheme(); });
+}
+
+$('themeBtn').addEventListener('click', () => {
+  theme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
+  chrome.storage.local.set({ theme });
+  applyTheme();
+});
+
 $('gearBtn').addEventListener('click', () => showSettings($('settings').style.display !== 'flex'));
 $('toggleBtn').addEventListener('click', async () => {
   if (state.status === 'capturing' || state.status === 'connecting') {
@@ -437,6 +472,7 @@ setInterval(async () => {
     $('buildTag').textContent = `build ${stamp.human}`;
     $('buildHeader').textContent = stamp.human;
   } catch { $('buildTag').textContent = 'build unknown'; }
+  await initTheme();
   await loadConfig();
   bindSettings();
   await pollStatus();
