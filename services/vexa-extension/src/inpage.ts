@@ -18,6 +18,7 @@
 
 import { createGmeetSpeakers, GmeetSpeakers } from '../../vexa-bot/core/src/browser/gmeet-speakers';
 import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browser/zoom-speakers';
+import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browser/gmeet-capture';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -25,10 +26,10 @@ import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browse
   const BUFFER_SIZE = 4096;
 
   let running = false;
-  let rescanInterval: number | null = null;
-  const connectedStreamIds = new Set<string>();
   const contexts: AudioContext[] = [];
-  let nextStreamIndex = 0;
+
+  // Per-participant Meet capture — SHARED vexa-bot module (one codebase).
+  let gmeetCapture: GmeetCapture | null = null;
 
   // Reserved high index for the local microphone ("You"), kept clear of the
   // 0-based participant element indices.
@@ -73,7 +74,7 @@ import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browse
   }
 
   function streamCount(): number {
-    return connectedStreamIds.size + (micStream ? 1 : 0);
+    return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0);
   }
 
   /**
@@ -108,58 +109,6 @@ import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browse
     }
   }
 
-  function findMediaElements(): HTMLMediaElement[] {
-    return Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
-      !el.paused &&
-      el.srcObject instanceof MediaStream &&
-      el.srcObject.getAudioTracks().length > 0
-    ) as HTMLMediaElement[];
-  }
-
-  function connectElement(el: HTMLMediaElement, index: number): boolean {
-    try {
-      const stream: MediaStream = (el as any).srcObject;
-      if (!stream || stream.getAudioTracks().length === 0) return false;
-      const streamId = stream.id;
-      if (connectedStreamIds.has(streamId)) return false;
-
-      const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-      const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
-
-      processor.onaudioprocess = (e: AudioProcessingEvent) => {
-        if (!running) return;
-        const data = e.inputBuffer.getChannelData(0);
-        // Only send when there is actual audio (silence gate) — mirrors the bot.
-        let maxVal = 0;
-        for (let i = 0; i < data.length; i++) {
-          const a = Math.abs(data[i]);
-          if (a > maxVal) maxVal = a;
-        }
-        if (maxVal > 0.005) {
-          speakers?.reportTrackAudio(index);
-          post('audio', { index, pcm: Array.from(data) });
-        }
-      };
-
-      source.connect(processor);
-      processor.connect(ctx.destination);
-      connectedStreamIds.add(streamId);
-      contexts.push(ctx);
-
-      const track = stream.getAudioTracks()[0];
-      track.addEventListener('ended', () => {
-        connectedStreamIds.delete(streamId);
-      });
-
-      console.log(`${TAG} stream ${index} connected (track ${track.id.substring(0, 8)})`);
-      return true;
-    } catch (err: any) {
-      console.log(`${TAG} stream ${index} error: ${err.message}`);
-      return false;
-    }
-  }
-
   async function start() {
     if (running) return;
     running = true;
@@ -171,29 +120,19 @@ import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browse
     await startMic();
     post('capture-started', { streams: streamCount() });
 
-    let mediaElements: HTMLMediaElement[] = [];
-    for (let attempt = 0; attempt < 10 && running; attempt++) {
-      mediaElements = findMediaElements();
-      if (mediaElements.length > 0) break;
-      await new Promise(r => setTimeout(r, 2000));
+    // Per-participant Meet capture via the SHARED vexa-bot module. (Zoom/Teams
+    // have no per-participant elements — their remote audio is the mixed
+    // tabCapture track handled in the offscreen doc.)
+    if (location.hostname.endsWith('meet.google.com')) {
+      gmeetCapture = createGmeetCapture({
+        log: (m) => console.log(`${TAG} ${m}`),
+        onAudio: (index, pcm) => {
+          speakers?.reportTrackAudio(index);
+          post('audio', { index, pcm: Array.from(pcm) });
+        },
+      });
+      await gmeetCapture.start();
     }
-    if (!running) return;
-
-    for (let i = 0; i < mediaElements.length; i++) {
-      if (connectElement(mediaElements[i], i)) nextStreamIndex = i + 1;
-    }
-    nextStreamIndex = Math.max(nextStreamIndex, mediaElements.length);
-
-    // Periodic re-scan: late joiners / element recycling.
-    rescanInterval = window.setInterval(() => {
-      if (!running) return;
-      for (const el of findMediaElements()) {
-        const stream: MediaStream = (el as any).srcObject;
-        if (stream && !connectedStreamIds.has(stream.id)) {
-          if (connectElement(el, nextStreamIndex)) nextStreamIndex++;
-        }
-      }
-    }, 15000);
 
     post('capture-started', { streams: streamCount() });
     console.log(`${TAG} capture started with ${streamCount()} stream(s) (mic + participants)`);
@@ -204,12 +143,10 @@ import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browse
     running = false;
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
-    if (rescanInterval !== null) { clearInterval(rescanInterval); rescanInterval = null; }
+    if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }
     contexts.length = 0;
-    connectedStreamIds.clear();
-    nextStreamIndex = 0;
     console.log(`${TAG} capture stopped`);
     post('capture-stopped', {});
   }

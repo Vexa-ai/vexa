@@ -1738,13 +1738,19 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
   }
   activeSpeakerStreamHandles = [];
 
-  // Clean up browser-side monitoring intervals
+  // Tear down the shared in-page capture + attribution modules
   if (page && !page.isClosed()) {
     try {
       await page.evaluate(() => {
-        const intervals = (window as any).__vexaPerSpeakerIntervals || [];
+        const w = window as any;
+        try { w.__vexaGmeetCapture?.stop(); } catch { /* ignore */ }
+        try { w.__vexaGmeetSpeakers?.destroy?.(); } catch { /* ignore */ }
+        try { w.__vexaZoomSpeakers?.destroy?.(); } catch { /* ignore */ }
+        w.__vexaGmeetCapture = null;
+        // Legacy: clear any old interval handles if a stale page is in play
+        const intervals = w.__vexaPerSpeakerIntervals || [];
         intervals.forEach((id: any) => clearInterval(id));
-        (window as any).__vexaPerSpeakerIntervals = [];
+        w.__vexaPerSpeakerIntervals = [];
       });
     } catch {}
   }
@@ -1932,128 +1938,25 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     }
   }
 
-  // Set up per-speaker audio streams inside the browser using raw Web Audio API
+  // Set up per-speaker audio streams via the SHARED vexa-bot/core/src/browser
+  // /gmeet-capture module (the SAME code the extension runs). onAudio feeds the
+  // Playwright bridge + the shared gmeet-speakers attribution.
   const handleCount = await pageToCaptureFrom.evaluate(async () => {
-    const TARGET_SAMPLE_RATE = 16000;
-    const BUFFER_SIZE = 4096;
-
-    // Find active media elements with audio tracks (retry up to 10 times)
-    let mediaElements: HTMLMediaElement[] = [];
-    for (let attempt = 0; attempt < 10; attempt++) {
-      mediaElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
-        !el.paused &&
-        el.srcObject instanceof MediaStream &&
-        el.srcObject.getAudioTracks().length > 0
-      ) as HTMLMediaElement[];
-      if (mediaElements.length > 0) break;
-      await new Promise(r => setTimeout(r, 2000));
-      (window as any).logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
-    }
-
-    if (mediaElements.length === 0) {
-      (window as any).logBot?.('[PerSpeaker] No active media elements with audio found');
+    const w = window as any;
+    if (!w.VexaBrowserUtils?.createGmeetCapture) {
+      w.logBot?.('[PerSpeaker] createGmeetCapture missing from bundle — capture not started');
       return 0;
     }
-
-    (window as any).logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
-
-    // Track connected streams by MediaStream ID to avoid double-binding
-    const connectedStreamIds = new Set<string>();
-    // Track per-stream audio activity for health monitoring
-    const streamCallCounts = new Map<number, number>();
-    const streamLastActive = new Map<number, number>();
-    let nextStreamIndex = 0;
-
-    function connectElement(el: HTMLMediaElement, index: number): boolean {
-      try {
-        const stream: MediaStream = (el as any).srcObject;
-        if (!stream || stream.getAudioTracks().length === 0) return false;
-        const streamId = stream.id;
-        if (connectedStreamIds.has(streamId)) return false;
-
-        const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-        const source = ctx.createMediaStreamSource(stream);
-        const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
-
-        streamCallCounts.set(index, 0);
-        streamLastActive.set(index, Date.now());
-
-        processor.onaudioprocess = (e: AudioProcessingEvent) => {
-          const data = e.inputBuffer.getChannelData(0);
-          streamCallCounts.set(index, (streamCallCounts.get(index) || 0) + 1);
-          // Only send if there's actual audio (not silence)
-          const maxVal = Math.max(...Array.from(data).map(Math.abs));
-          if (maxVal > 0.005) {
-            streamLastActive.set(index, Date.now());
-            (window as any).__vexaGmeetSpeakers?.reportTrackAudio(index);
-            (window as any).__vexaPerSpeakerAudioData(index, Array.from(data));
-          }
-        };
-
-        source.connect(processor);
-        processor.connect(ctx.destination);
-        connectedStreamIds.add(streamId);
-
-        // Monitor track ending — log when MediaStreamTrack becomes "ended"
-        const track = stream.getAudioTracks()[0];
-        track.addEventListener('ended', () => {
-          (window as any).logBot?.(`[PerSpeaker] Track ${index} ENDED (streamId=${streamId.substring(0, 12)})`);
-          connectedStreamIds.delete(streamId);
-        });
-
-        (window as any).logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)}, streamId: ${streamId.substring(0, 12)})`);
-        return true;
-      } catch (err: any) {
-        (window as any).logBot?.(`[PerSpeaker] Stream ${index} error: ${err.message}`);
-        return false;
-      }
-    }
-
-    let streamCount = 0;
-    for (let i = 0; i < mediaElements.length; i++) {
-      if (connectElement(mediaElements[i], i)) streamCount++;
-    }
-    nextStreamIndex = mediaElements.length;
-
-    // Periodic re-scan: discover new audio elements (late joiners, element recycling)
-    const rescanInterval = setInterval(() => {
-      const currentElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
-        !el.paused &&
-        el.srcObject instanceof MediaStream &&
-        el.srcObject.getAudioTracks().length > 0
-      ) as HTMLMediaElement[];
-
-      let newStreams = 0;
-      for (const el of currentElements) {
-        const stream: MediaStream = (el as any).srcObject;
-        if (stream && !connectedStreamIds.has(stream.id)) {
-          if (connectElement(el, nextStreamIndex)) {
-            newStreams++;
-            nextStreamIndex++;
-          }
-        }
-      }
-      if (newStreams > 0) {
-        (window as any).logBot?.(`[PerSpeaker] Re-scan: connected ${newStreams} new stream(s) (total tracked: ${connectedStreamIds.size})`);
-      }
-    }, 15000);
-
-    // Health monitoring: detect stale streams
-    const healthInterval = setInterval(() => {
-      const now = Date.now();
-      for (const [idx, lastActive] of streamLastActive) {
-        const silentMs = now - lastActive;
-        if (silentMs > 30000) {
-          const calls = streamCallCounts.get(idx) || 0;
-          (window as any).logBot?.(`[PerSpeaker] Stream ${idx} silent for ${(silentMs/1000).toFixed(0)}s (onaudioprocess calls: ${calls})`);
-        }
-      }
-    }, 30000);
-
-    // Store intervals for cleanup
-    (window as any).__vexaPerSpeakerIntervals = [rescanInterval, healthInterval];
-
-    return streamCount;
+    if (w.__vexaGmeetCapture) return w.__vexaGmeetCapture.streamCount();
+    w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
+      log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
+      onAudio: (index: number, pcm: Float32Array) => {
+        w.__vexaGmeetSpeakers?.reportTrackAudio(index);
+        w.__vexaPerSpeakerAudioData(index, Array.from(pcm));
+      },
+    });
+    await w.__vexaGmeetCapture.start();
+    return w.__vexaGmeetCapture.streamCount();
   });
 
   log(`[PerSpeaker] Browser-side audio capture started with ${handleCount} streams`);

@@ -16,6 +16,8 @@ const gmeetSpeakersPath = path.join(__dirname, 'dist', 'browser', 'gmeet-speaker
 const gmeetSpeakersContent = fs.readFileSync(gmeetSpeakersPath, 'utf8');
 const zoomSpeakersPath = path.join(__dirname, 'dist', 'browser', 'zoom-speakers.js');
 const zoomSpeakersContent = fs.readFileSync(zoomSpeakersPath, 'utf8');
+const gmeetCapturePath = path.join(__dirname, 'dist', 'browser', 'gmeet-capture.js');
+const gmeetCaptureContent = fs.readFileSync(gmeetCapturePath, 'utf8');
 
 // Create the browser bundle content using a safe CommonJS wrapper
 const browserBundleContent = `
@@ -44,6 +46,12 @@ ${gmeetSpeakersContent}
 ${zoomSpeakersContent}
   })(zmExports, zmModule);
 
+  var gcExports = {};
+  var gcModule = { exports: gcExports };
+  (function(exports, module) {
+${gmeetCaptureContent}
+  })(gcExports, gcModule);
+
   // Expose utilities on window object for browser context
   var utils = module.exports || {};
   var gm = gmModule.exports || {};
@@ -54,7 +62,8 @@ ${zoomSpeakersContent}
     BrowserWhisperLiveService: utils.BrowserWhisperLiveService,
     generateBrowserUUID: utils.generateBrowserUUID,
     createGmeetSpeakers: gm.createGmeetSpeakers,
-    createZoomSpeakers: zm.createZoomSpeakers
+    createZoomSpeakers: zm.createZoomSpeakers,
+    createGmeetCapture: (gcModule.exports || {}).createGmeetCapture
   };
 
   // Also expose performLeaveAction for platform-specific leave UX
