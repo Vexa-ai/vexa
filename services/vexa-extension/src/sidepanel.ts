@@ -138,8 +138,14 @@ function applyState(s: PanelState): void {
   } else if (s.status === 'idle' && liveWs) {
     stopLive();
   }
-  if (s.status === 'error' && s.error) {
-    $('emptyState').innerHTML = `<div>&#9888;</div><div>${escapeHtml(s.error)}</div>`;
+  if (s.status === 'error' && s.error === 'mic-permission') {
+    $('feed').innerHTML = `<div class="empty"><div style="font-size:22px;">&#127908;</div>`
+      + `<div>Microphone access is needed for voice notes.</div>`
+      + `<button class="btn" id="micGrantBtn" style="max-width:200px;margin-top:6px;">Allow microphone</button></div>`;
+    const b = document.getElementById('micGrantBtn');
+    if (b) b.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('mic-permission.html') }));
+  } else if (s.status === 'error' && s.error) {
+    $('feed').innerHTML = `<div class="empty"><div>&#9888;</div><div>${escapeHtml(s.error)}</div></div>`;
   }
 }
 
@@ -316,28 +322,16 @@ function showSettings(show: boolean): void {
 }
 
 $('gearBtn').addEventListener('click', () => showSettings($('settings').style.display !== 'flex'));
-$('toggleBtn').addEventListener('click', async () => {
+$('toggleBtn').addEventListener('click', () => {
   if (state.status === 'capturing' || state.status === 'connecting') {
     chrome.runtime.sendMessage({ type: 'STOP' });
-    return;
+  } else {
+    // START always fires immediately. Note mode acquires the mic in the
+    // offscreen document; if permission is missing it fails fast and we show
+    // the "Allow microphone" action below — no flaky side-panel getUserMedia.
+    chrome.runtime.sendMessage({ type: 'START' });
+    showSettings(false);
   }
-  // Note mode records via the offscreen document, which cannot show permission
-  // prompts — pre-grant mic permission for the extension origin from here.
-  const pre = await chrome.runtime.sendMessage({ type: 'PREFLIGHT' }).catch(() => null);
-  if (pre?.mode === 'note') {
-    try {
-      const perm = await (navigator.permissions as any).query({ name: 'microphone' }).catch(() => null);
-      if (!perm || perm.state !== 'granted') {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-        s.getTracks().forEach(t => t.stop());
-      }
-    } catch {
-      feedStatus('Microphone permission denied — voice notes need mic access.', true);
-      return;
-    }
-  }
-  chrome.runtime.sendMessage({ type: 'START' });
-  showSettings(false);
 });
 $('dashBtn').addEventListener('click', () => {
   const url = state.meetingId ? `${cfg.dashboardUrl}/meetings/${state.meetingId}` : cfg.dashboardUrl;

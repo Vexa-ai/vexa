@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 460px; margin: 64px auto; padding: 0 24px; color: #252525; }
+    h1 { font-size: 18px; font-weight: 500; }
+    p { line-height: 1.6; color: #555; }
+    #status { margin-top: 16px; font-size: 14px; padding: 12px 14px; border-radius: 10px; background: #f4f4f4; }
+    .ok { color: #1d9e75; } .err { color: #d4183d; }
+    button { margin-top: 16px; padding: 9px 16px; font-size: 14px; border: 0.5px solid #ddd; border-radius: 10px; background: #fff; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Enable microphone for Vexa voice notes</h1>
+  <p>Vexa needs microphone access to transcribe voice notes. Click the button and choose <b>Allow</b> when Chrome asks.</p>
+  <button id="grant">Enable microphone</button>
+  <div id="status">Not requested yet.</div>
+  <script src="mic-permission.js"></script>
+</body>
+</html>

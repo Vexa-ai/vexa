@@ -12,6 +12,7 @@ await build({
     inpage: 'src/inpage.ts',
     sidepanel: 'src/sidepanel.ts',
     offscreen: 'src/offscreen.ts',
+    'mic-permission': 'src/mic-permission.ts',
   },
   outdir,
   bundle: true,
@@ -22,6 +23,7 @@ await build({
 
 cpSync('src/sidepanel.html', `${outdir}/sidepanel.html`);
 cpSync('src/offscreen.html', `${outdir}/offscreen.html`);
+cpSync('src/mic-permission.html', `${outdir}/mic-permission.html`);
 cpSync('assets', `${outdir}/assets`, { recursive: true });
 
 const now = new Date();
