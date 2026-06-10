@@ -66,12 +66,36 @@ export interface GmeetSpeakersState {
   };
 }
 
+/** One recorded event: a tile snapshot (per poll tick, on change) or an audio arrival. */
+export interface GmeetTraceEvent {
+  /** ms since trace start */
+  t: number;
+  kind: 'tiles' | 'audio';
+  /** kind=tiles: tile states incl. REAL class strings (for selector-fidelity replay) */
+  tiles?: Array<{ id: string; name: string | null; self: boolean; rootClasses: string; indicatorClasses: string[] }>;
+  /** kind=audio: which track received an audible chunk */
+  track?: number;
+}
+
+export interface GmeetTrace {
+  version: 1;
+  selfName?: string;
+  durationMs: number;
+  /** Timing/threshold params the module ran with — replay must scale FROM these. */
+  params: { pollMs: number; audioWindowMs: number; lockThreshold: number; lockRatio: number };
+  events: GmeetTraceEvent[];
+  /** Locks held when the trace was dumped — replay ground truth. */
+  finalLocks: Record<number, string>;
+}
+
 export interface GmeetSpeakers {
   reportTrackAudio(trackIndex: number): void;
   /** Locked name, else top-voted untaken name, else null. */
   resolve(trackIndex: number): { name: string | null; locked: boolean };
   isLocked(trackIndex: number): boolean;
   getState(): GmeetSpeakersState;
+  /** Dump the rolling trace (always recording, bounded) for offline replay. */
+  dumpTrace(): GmeetTrace;
   invalidate(trackIndex?: number): void;
   destroy(): void;
 }
@@ -101,6 +125,20 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
   const announced = new Map<number, string>();
   const trackLastAudio = new Map<number, number>();
   let lastParticipantCount = 0;
+
+  // Trace recorder — always on, rolling buffer (~30 min at 500ms ticks).
+  // Captures REAL tile class strings + audio timing so a single real meeting
+  // becomes a permanent offline replay fixture (dev/test-gmeet-replay.mjs).
+  const TRACE_MAX_EVENTS = 20_000;
+  const traceStartMs = Date.now();
+  const traceEvents: GmeetTraceEvent[] = [];
+  let lastTileSig = '';
+  let lastAudioTraceMs = new Map<number, number>();
+
+  function tracePush(ev: GmeetTraceEvent): void {
+    traceEvents.push(ev);
+    if (traceEvents.length > TRACE_MAX_EVENTS) traceEvents.splice(0, traceEvents.length - TRACE_MAX_EVENTS);
+  }
 
   // Self-healing state
   const knownClassHits: Record<string, number> = {};
@@ -155,8 +193,16 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
     return false;
   }
 
-  function scanTiles(): GmeetTileInfo[] {
-    const out: GmeetTileInfo[] = [];
+  function indicatorClassesIn(el: HTMLElement): string[] {
+    const hits: string[] = [];
+    for (const cls of activeSpeakingClasses()) {
+      if (el.classList.contains(cls) || el.querySelector('.' + CSS.escape(cls))) hits.push(cls);
+    }
+    return hits;
+  }
+
+  function scanTilesDetailed(): Array<{ info: GmeetTileInfo; rootClasses: string; indicatorClasses: string[] }> {
+    const out: Array<{ info: GmeetTileInfo; rootClasses: string; indicatorClasses: string[] }> = [];
     const seen = new Set<string>();
     for (const sel of PARTICIPANT_SELECTORS) {
       document.querySelectorAll(sel).forEach(node => {
@@ -165,10 +211,18 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
         if (!id || seen.has(id)) return;
         seen.add(id);
         const name = tileName(el);
-        out.push({ id, name, self: isSelf(el, name), speaking: tileSpeaking(el) });
+        out.push({
+          info: { id, name, self: isSelf(el, name), speaking: tileSpeaking(el) },
+          rootClasses: el.className || '',
+          indicatorClasses: indicatorClassesIn(el),
+        });
       });
     }
     return out;
+  }
+
+  function scanTiles(): GmeetTileInfo[] {
+    return scanTilesDetailed().map(d => d.info);
   }
 
   // ── Vote / lock ─────────────────────────────────────────────────
@@ -239,7 +293,19 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
 
   const timer = setInterval(() => {
     const now = Date.now();
-    const tiles = scanTiles();
+    const detailed = scanTilesDetailed();
+    const tiles = detailed.map(d => d.info);
+
+    // Trace: record tile state when it changes (names/classes/speaking)
+    const sig = detailed.map(d => `${d.info.id}|${d.info.name}|${d.info.self ? 1 : 0}|${d.rootClasses}|${d.indicatorClasses.join(',')}`).join('§');
+    if (sig !== lastTileSig) {
+      lastTileSig = sig;
+      tracePush({
+        t: now - traceStartMs,
+        kind: 'tiles',
+        tiles: detailed.map(d => ({ id: d.info.id, name: d.info.name, self: d.info.self, rootClasses: d.rootClasses, indicatorClasses: d.indicatorClasses })),
+      });
+    }
 
     // Participant-count change: clear UNLOCKED votes only. (The legacy bot
     // cleared locks too, discarding correct mappings on every join/leave.)
@@ -275,6 +341,12 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
       const now = Date.now();
       trackLastAudio.set(trackIndex, now);
       creditAudioCorrelation(now);
+      // Trace: downsample to one audio event per track per 100ms
+      const lastT = lastAudioTraceMs.get(trackIndex) || 0;
+      if (now - lastT >= 100) {
+        lastAudioTraceMs.set(trackIndex, now);
+        tracePush({ t: now - traceStartMs, kind: 'audio', track: trackIndex });
+      }
     },
     resolve(trackIndex: number): { name: string | null; locked: boolean } {
       const locked = locks.get(trackIndex);
@@ -303,6 +375,16 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
           candidateScores: Object.fromEntries(candidateScores),
           lastKnownHitMs,
         },
+      };
+    },
+    dumpTrace(): GmeetTrace {
+      return {
+        version: 1,
+        selfName: opts.selfName,
+        durationMs: Date.now() - traceStartMs,
+        params: { pollMs, audioWindowMs, lockThreshold, lockRatio },
+        events: [...traceEvents],
+        finalLocks: Object.fromEntries(locks),
       };
     },
     invalidate(trackIndex?: number): void {
