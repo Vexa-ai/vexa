@@ -32,6 +32,7 @@ interface PanelState {
   error: string | null;
   tabAudio?: string;
   swBuild?: string;
+  diskBuild?: string;
 }
 
 // build-stamp.txt as this panel doc loaded — compared to the SW's swBuild to
@@ -116,7 +117,8 @@ function applyState(s: PanelState): void {
   // Stale-background guard: if the running service worker loaded an older build
   // than this panel, capture-control code (e.g. the toolbar-click handler) is
   // out of date. Surface a blocking banner with a one-click forced reload.
-  if (s.swBuild && panelBuild && s.swBuild !== panelBuild) {
+  const newerOnDisk = s.diskBuild && s.swBuild && s.diskBuild !== s.swBuild;
+  if (newerOnDisk || (s.swBuild && panelBuild && s.swBuild !== panelBuild)) {
     const el = $('feedStatus');
     el.style.display = 'block';
     el.style.color = 'var(--destructive)';

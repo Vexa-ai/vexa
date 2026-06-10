@@ -26,6 +26,10 @@ interface SessionState {
   /** build-stamp.txt as read when THIS service worker loaded. The panel compares
    *  it to the on-disk stamp to detect a stale SW (reload deferred during capture). */
   swBuild: string;
+  /** Newer build sitting on disk while reload is deferred (set by the stamp
+   *  watcher). Lets the panel show "Reload now" even when the panel itself is
+   *  equally stale (panelBuild == swBuild blind spot). */
+  diskBuild: string;
 }
 
 const state: SessionState = {
@@ -38,6 +42,7 @@ const state: SessionState = {
   error: null,
   tabAudio: 'none',
   swBuild: '',
+  diskBuild: '',
 };
 
 /** tabCapture stream id (minted in the panel on the Start gesture) for Zoom/Teams. */
@@ -371,7 +376,9 @@ setInterval(async () => {
       // ingest session, and resets the transcription buffer. Defer until idle.
       // The panel surfaces a "background stale → Reload now" banner so the dev
       // isn't stuck on old code (esp. with auto-start keeping capture on).
-      if (state.status === 'capturing' || state.status === 'connecting') { broadcastStatus(); return; }
+      if (state.status === 'capturing' || state.status === 'connecting') {
+        state.diskBuild = cur; broadcastStatus(); return;
+      }
       chrome.runtime.reload();
     }
   } catch { /* stamp unreadable; skip */ }
