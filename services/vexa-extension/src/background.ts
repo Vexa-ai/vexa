@@ -209,7 +209,7 @@ async function stopCapture(): Promise<void> {
   shipTelemetry('session-stop');
   trackFrames.clear();
   lastSpeakerMap = {};
-  lastPageDiag = null;
+  for (const k of Object.keys(pageDiags)) delete pageDiags[k];
 }
 
 // Pack and forward one per-speaker PCM chunk.
@@ -232,7 +232,7 @@ function sendAudio(index: number, pcm: number[]): void {
 // status changes). Server keeps a ring buffer readable via GET /telemetry —
 // debugging needs no client-side copy-paste. Transcript text never enters
 // telemetry (page diag scrubs DOM free-text to random words on exit).
-let lastPageDiag: any = null;
+const pageDiags: Record<string, any> = {};
 let lastSpeakerMap: Record<string, string> = {};
 async function shipTelemetry(reason: string): Promise<void> {
   try {
@@ -250,7 +250,8 @@ async function shipTelemetry(reason: string): Promise<void> {
         speakerMap: lastSpeakerMap,
         trackFrames: frames,
         wsOpen: !!ws && ws.readyState === WebSocket.OPEN,
-        page: lastPageDiag,
+        page: Object.values(pageDiags).find((d: any) => d?.top) || null,
+        frames: pageDiags,
       }),
     });
   } catch { /* telemetry must never break capture */ }
@@ -302,7 +303,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'speakers', speakers: msg.speakers }));
       break;
     case 'diag':
-      lastPageDiag = msg.diag; break;
+      if (msg.diag) pageDiags[`${msg.diag.top ? 'top' : 'sub'}:${msg.diag.frame || '?'}`] = msg.diag;
+      break;
     case 'capture-started':
       state.streams = msg.streams || 0; broadcastStatus(); break;
     case 'capture-stopped':

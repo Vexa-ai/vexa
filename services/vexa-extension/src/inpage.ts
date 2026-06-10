@@ -103,6 +103,7 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
    * Meet origin already holds mic permission, so this won't re-prompt.
    */
   async function startMic(): Promise<void> {
+    if (window !== window.top) return; // mic belongs to the top frame only
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
@@ -226,6 +227,8 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
     })() : null;
     return {
       host: location.hostname,
+      frame: location.pathname.slice(0, 60),
+      top: window === window.top,
       running,
       streams: streamCount(),
       micActive: !!micStream,
