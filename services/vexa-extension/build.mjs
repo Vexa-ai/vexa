@@ -11,6 +11,7 @@ await build({
     content: 'src/content.ts',
     inpage: 'src/inpage.ts',
     sidepanel: 'src/sidepanel.ts',
+    offscreen: 'src/offscreen.ts',
   },
   outdir,
   bundle: true,
@@ -20,6 +21,7 @@ await build({
 });
 
 cpSync('src/sidepanel.html', `${outdir}/sidepanel.html`);
+cpSync('src/offscreen.html', `${outdir}/offscreen.html`);
 cpSync('assets', `${outdir}/assets`, { recursive: true });
 
 const now = new Date();

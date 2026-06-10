@@ -39,15 +39,26 @@ function broadcastStatus(): void {
   chrome.runtime.sendMessage({ type: 'STATUS', state }).catch(() => { /* popup may be closed */ });
 }
 
+/** Ensure the offscreen mic-capture document exists (voice-notepad mode). */
+async function ensureOffscreen(): Promise<void> {
+  const has = await (chrome.offscreen as any).hasDocument?.().catch(() => false);
+  if (has) return;
+  await chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    reasons: [chrome.offscreen.Reason.USER_MEDIA],
+    justification: 'Microphone capture for voice notes',
+  }).catch((e) => { if (!String(e).includes('single offscreen')) throw e; });
+}
+
 async function startCaptureForTab(tabId: number, url: string, meetingRef?: MeetingRef): Promise<void> {
   if (state.status === 'capturing' || state.status === 'connecting') return;
 
   // An explicit ref wins — the Teams app flow detects the meeting from the DOM
   // and synthesizes the id, because its URL carries none.
-  const meeting = meetingRef || detectMeeting(url);
-  if (!meeting) {
-    state.status = 'error'; state.error = 'Not a supported meeting (Google Meet, Zoom Web, or Teams)'; broadcastStatus(); return;
-  }
+  // No meeting anywhere → voice-notepad mode: capture the mic via the
+  // offscreen document under the synthetic 'note' platform.
+  const meeting = meetingRef || detectMeeting(url)
+    || { platform: 'note' as any, nativeMeetingId: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` };
 
   const cfg = await chrome.storage.local.get(['apiKey', 'ingestUrl', 'language']);
   const apiKey: string = cfg.apiKey || '';
@@ -83,7 +94,19 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
         state.meetingId = msg.meeting_id;
         state.status = 'capturing';
         broadcastStatus();
-        if (state.tabId !== null) {
+        if (state.platform === 'note') {
+          ensureOffscreen()
+            .then(() => chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_START' }))
+            .then((res: any) => {
+              if (res && res.ok === false) {
+                state.status = 'error';
+                state.error = res.error === 'NotAllowedError' ? 'mic-permission' : `Mic capture failed: ${res.error}`;
+                broadcastStatus();
+                stopCapture();
+              }
+            })
+            .catch((e) => { state.status = 'error'; state.error = `Offscreen failed: ${e.message}`; broadcastStatus(); });
+        } else if (state.tabId !== null) {
           chrome.tabs.sendMessage(state.tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready */ });
         }
       } else if (msg.type === 'error') {
@@ -124,7 +147,9 @@ async function maybeAutoStart(tabId?: number, url?: string, meetingRef?: Meeting
 }
 
 async function stopCapture(): Promise<void> {
-  if (state.tabId !== null) {
+  if (state.platform === 'note') {
+    chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
+  } else if (state.tabId !== null) {
     chrome.tabs.sendMessage(state.tabId, { type: 'END_CAPTURE' }).catch(() => { /* tab gone */ });
   }
   if (ws) { try { ws.close(); } catch { /* ignore */ } ws = null; }
@@ -161,6 +186,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       stopCapture(); sendResponse({ ok: true }); break;
     case 'STATUS':
       sendResponse({ state }); break;
+    case 'PREFLIGHT':
+      // Tell the panel what Start would do, so it can pre-grant mic permission
+      // for note mode (offscreen documents can't show permission prompts).
+      chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        sendResponse({ mode: tab?.url && detectMeeting(tab.url) ? 'meeting' : 'note' });
+      }).catch(() => sendResponse({ mode: 'note' }));
+      return true;
     case 'audio':
       sendAudio(msg.index, msg.pcm); break;
     case 'speakers':

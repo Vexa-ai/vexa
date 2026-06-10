@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "tabs",
-    "sidePanel"
+    "sidePanel",
+    "offscreen"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"

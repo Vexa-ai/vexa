@@ -40,6 +40,7 @@ const PLATFORMS: Record<string, { name: string; color: string }> = {
   google_meet: { name: 'Google Meet', color: '#22c55e' },
   zoom: { name: 'Zoom', color: '#3b82f6' },
   teams: { name: 'Teams', color: '#8b5cf6' },
+  note: { name: 'Voice note', color: '#f59e0b' },
 };
 
 const FIELDS = ['apiKey', 'ingestUrl', 'gatewayUrl', 'dashboardUrl', 'language'] as const;
@@ -315,13 +316,28 @@ function showSettings(show: boolean): void {
 }
 
 $('gearBtn').addEventListener('click', () => showSettings($('settings').style.display !== 'flex'));
-$('toggleBtn').addEventListener('click', () => {
+$('toggleBtn').addEventListener('click', async () => {
   if (state.status === 'capturing' || state.status === 'connecting') {
     chrome.runtime.sendMessage({ type: 'STOP' });
-  } else {
-    chrome.runtime.sendMessage({ type: 'START' });
-    showSettings(false);
+    return;
   }
+  // Note mode records via the offscreen document, which cannot show permission
+  // prompts — pre-grant mic permission for the extension origin from here.
+  const pre = await chrome.runtime.sendMessage({ type: 'PREFLIGHT' }).catch(() => null);
+  if (pre?.mode === 'note') {
+    try {
+      const perm = await (navigator.permissions as any).query({ name: 'microphone' }).catch(() => null);
+      if (!perm || perm.state !== 'granted') {
+        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+        s.getTracks().forEach(t => t.stop());
+      }
+    } catch {
+      feedStatus('Microphone permission denied — voice notes need mic access.', true);
+      return;
+    }
+  }
+  chrome.runtime.sendMessage({ type: 'START' });
+  showSettings(false);
 });
 $('dashBtn').addEventListener('click', () => {
   const url = state.meetingId ? `${cfg.dashboardUrl}/meetings/${state.meetingId}` : cfg.dashboardUrl;
