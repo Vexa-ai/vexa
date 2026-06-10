@@ -181,7 +181,25 @@ async function resolveGoogleMeetSpeakerName(
   const locked = getLockedMapping(elementIndex);
   if (locked) return locked;
 
-  // Query browser
+  // Preferred: the shared in-page module (browser/gmeet-speakers.ts — the SAME
+  // code the extension runs). It votes continuously in-page with millisecond
+  // audio/indicator correlation; we mirror its locks into the Node maps so
+  // isTrackLocked()/getLockedMapping() consumers keep working unchanged.
+  try {
+    const res = await page.evaluate((i: number) => {
+      const sp = (window as any).__vexaGmeetSpeakers;
+      return sp ? sp.resolve(i) : null;
+    }, elementIndex) as { name: string | null; locked: boolean } | null;
+    if (res) {
+      if (res.locked && res.name && !isNameTaken(res.name, elementIndex)) {
+        lockedMappings.set(elementIndex, res.name);
+        log(`[SpeakerIdentity] Track ${elementIndex} locked in-page → "${res.name}" (mirrored to Node)`);
+      }
+      return res.name;
+    }
+  } catch { /* page gone or module absent — legacy path below */ }
+
+  // Legacy fallback (module not installed): Node-side voting over page snapshots
   const state = await queryBrowserState(page, botName);
   if (!state) return null;
 

@@ -1,6 +1,7 @@
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { log } from "./utils";
 import { logJSON, setLogContext } from "./utils/log";
+import { ensureBrowserUtils } from "./utils/injection";
 import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unified-callback";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
@@ -1627,9 +1628,17 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
           return 0;
         });
         if (lastParticipantCount > 0 && currentCount !== lastParticipantCount) {
-          log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount}. Invalidating all mappings (including locks).`);
-          clearSpeakerNameCache();
-          locked = false; // Force re-resolve below
+          if (platformKey === 'googlemeet') {
+            // The shared in-page module handles count changes itself (clears
+            // unlocked votes, KEEPS locks — per-tile streams end on leave, so
+            // locked mappings stay valid). Nuking locks here discarded correct
+            // names on every join/leave.
+            log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount} (gmeet: in-page module handles it; locks kept).`);
+          } else {
+            log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount}. Invalidating all mappings (including locks).`);
+            clearSpeakerNameCache();
+            locked = false; // Force re-resolve below
+          }
         }
         lastParticipantCount = currentCount;
       } catch {}
@@ -1651,36 +1660,20 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
         log(`[📡 SPEAKER EVENT] "${newName}" joined → Redis`);
       }
 
-      // Fallback: if unmapped for 15s+ and GMeet, assign by participant list order.
-      // This handles the case where speaking detection is completely broken (stale CSS selectors).
+      // Participant-order fallback REMOVED for gmeet: track index has no
+      // relationship to participant-list order, so it systematically assigned
+      // WRONG names whenever speaking detection was broken — exactly when it
+      // fired. Unmapped ("") is strictly better than misattributed. The shared
+      // in-page module's self-learning indicator detection (gmeet-speakers.ts)
+      // now covers the stale-CSS-selector case the fallback was meant to patch;
+      // its forensic dump is available via __vexaGmeetSpeakers.getState().
       if (!currentName && platformKey === 'googlemeet') {
         const firstAudio = speakerLastAudioMs.get(speakerId) || Date.now();
-        if (Date.now() - firstAudio > 15_000) {
+        if (Date.now() - firstAudio > 15_000 && Math.random() < 0.05) {
           try {
-            const state = await page.evaluate((selfName: string) => {
-              const getNames = (window as any).__vexaGetAllParticipantNames;
-              if (typeof getNames !== 'function') return null;
-              const data = getNames() as { names: Record<string, string>; speaking: string[] };
-              const selfLower = selfName.toLowerCase();
-              return Object.values(data.names).filter(n => {
-                const lower = n.toLowerCase();
-                return !(lower.includes(selfLower) || selfLower.includes(lower));
-              });
-            }, currentBotConfig?.botName || 'Vexa Bot');
-
-            if (state && speakerIndex < state.length) {
-              const fallbackName = state[speakerIndex];
-              if (fallbackName && !isDuplicateSpeakerName(fallbackName, speakerId)) {
-                log(`[🔄 SPEAKER FALLBACK] Track ${speakerIndex}: assigning "${fallbackName}" by participant order (no votes after 15s)`);
-                speakerManager.updateSpeakerName(speakerId, fallbackName);
-                await segmentPublisher.publishSpeakerEvent({
-                  speaker: fallbackName,
-                  type: 'joined',
-                  timestamp: Date.now(),
-                });
-              }
-            }
-          } catch {}
+            const diag = await page.evaluate(() => (window as any).__vexaGmeetSpeakers?.getState?.() ?? null);
+            log(`[SpeakerIdentity] Track ${speakerIndex} unmapped 15s+. Attribution state: ${JSON.stringify(diag)?.slice(0, 600)}`);
+          } catch { /* page gone */ }
         }
       }
     }
@@ -1908,6 +1901,27 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     return;
   }
 
+  // Google Meet: ensure the shared speaker-attribution module is installed
+  // in-page (browser-utils bundle), then create it idempotently. The same
+  // module (browser/gmeet-speakers.ts) runs in the extension — one codebase.
+  if (currentPlatform === 'google_meet') {
+    try {
+      await ensureBrowserUtils(pageToCaptureFrom, require('path').join(__dirname, 'browser-utils.global.js'));
+      await pageToCaptureFrom.evaluate((selfName: string) => {
+        const w = window as any;
+        if (!w.__vexaGmeetSpeakers && w.VexaBrowserUtils?.createGmeetSpeakers) {
+          w.__vexaGmeetSpeakers = w.VexaBrowserUtils.createGmeetSpeakers({
+            selfName,
+            log: (m: string) => w.logBot?.(m),
+          });
+          w.logBot?.('[PerSpeaker] shared gmeet-speakers attribution installed');
+        }
+      }, currentBotConfig?.botName || 'Vexa Bot');
+    } catch (err: any) {
+      log(`[PerSpeaker] gmeet-speakers install failed (legacy resolution will be used): ${err.message}`);
+    }
+  }
+
   // Google Meet: expose per-element callback and set up per-element streams
   try {
     await pageToCaptureFrom.exposeFunction('__vexaPerSpeakerAudioData', handlePerSpeakerAudioData);
@@ -1971,6 +1985,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
           const maxVal = Math.max(...Array.from(data).map(Math.abs));
           if (maxVal > 0.005) {
             streamLastActive.set(index, Date.now());
+            (window as any).__vexaGmeetSpeakers?.reportTrackAudio(index);
             (window as any).__vexaPerSpeakerAudioData(index, Array.from(data));
           }
         };

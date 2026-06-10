@@ -8,9 +8,12 @@
 const fs = require('fs');
 const path = require('path');
 
-// Read the compiled browser utilities JavaScript file
+// Read the compiled browser-side modules (each is a self-contained CommonJS
+// file — no cross-file requires — wrapped in its own shim below)
 const browserUtilsPath = path.join(__dirname, 'dist', 'utils', 'browser.js');
 const browserUtilsContent = fs.readFileSync(browserUtilsPath, 'utf8');
+const gmeetSpeakersPath = path.join(__dirname, 'dist', 'browser', 'gmeet-speakers.js');
+const gmeetSpeakersContent = fs.readFileSync(gmeetSpeakersPath, 'utf8');
 
 // Create the browser bundle content using a safe CommonJS wrapper
 const browserBundleContent = `
@@ -27,13 +30,21 @@ const browserBundleContent = `
 ${browserUtilsContent}
   })(exports, module);
 
+  var gmExports = {};
+  var gmModule = { exports: gmExports };
+  (function(exports, module) {
+${gmeetSpeakersContent}
+  })(gmExports, gmModule);
+
   // Expose utilities on window object for browser context
   var utils = module.exports || {};
+  var gm = gmModule.exports || {};
   window.VexaBrowserUtils = {
     BrowserAudioService: utils.BrowserAudioService,
     BrowserMediaRecorderPipeline: utils.BrowserMediaRecorderPipeline,
     BrowserWhisperLiveService: utils.BrowserWhisperLiveService,
-    generateBrowserUUID: utils.generateBrowserUUID
+    generateBrowserUUID: utils.generateBrowserUUID,
+    createGmeetSpeakers: gm.createGmeetSpeakers
   };
 
   // Also expose performLeaveAction for platform-specific leave UX
