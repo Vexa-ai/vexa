@@ -152,6 +152,30 @@ let redisPublisher: RedisClientType | null = null;
 let transcriptionClient: TranscriptionClient | null = null;
 let segmentPublisher: SegmentPublisher | null = null;
 export function getSegmentPublisher(): SegmentPublisher | null { return segmentPublisher; }
+
+/** Mixed-audio (single-channel) bridge for platforms whose remote audio is one
+ *  stream (zoom web). MixedAudioPipeline turns land here; the cluster id is
+ *  the stable stream identity, the resolved name is display-only. */
+export function feedMixedTurn(clusterId: string, resolvedName: string, audio: Float32Array, provisional: boolean): void {
+  if (!speakerManager) return;
+  if (!speakerManager.hasSpeaker(clusterId)) {
+    speakerManager.addSpeaker(clusterId, resolvedName);
+    log(`[MixedPipeline] new cluster ${clusterId} → "${resolvedName}"${provisional ? ' (provisional)' : ''}`);
+  } else if (!provisional) {
+    speakerManager.updateSpeakerName(clusterId, resolvedName);
+  }
+  speakerManager.feedAudio(clusterId, audio);
+}
+
+/** Late-resolve rename for a mixed-audio cluster (idempotent). */
+export function renameMixedCluster(clusterId: string, resolvedName: string): void {
+  if (!speakerManager?.hasSpeaker(clusterId)) return;
+  log(`[MixedPipeline] late-resolve: ${clusterId} → "${resolvedName}"`);
+  speakerManager.updateSpeakerName(clusterId, resolvedName);
+}
+
+/** Is the per-speaker transcription pipeline initialized? */
+export function hasPerSpeakerPipeline(): boolean { return !!speakerManager; }
 let speakerManager: SpeakerStreamManager | null = null;
 let vadModel: SileroVAD | null = null;
 /** Per-speaker VAD states for streaming mode (GMeet only) */
