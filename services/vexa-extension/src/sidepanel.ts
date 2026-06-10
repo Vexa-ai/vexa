@@ -111,8 +111,14 @@ function applyState(s: PanelState): void {
     : s.status === 'connecting' ? 'Connecting'
     : s.status === 'error' ? 'Error'
     : 'Idle';
-  ($('stopBtn') as HTMLButtonElement).disabled = s.status === 'idle';
-  ($('startBtn') as HTMLButtonElement).disabled = s.status === 'capturing' || s.status === 'connecting';
+  const toggle = $('toggleBtn') as HTMLButtonElement;
+  if (s.status === 'capturing' || s.status === 'connecting') {
+    toggle.innerHTML = '&#9632; Stop';
+    toggle.classList.add('danger');
+  } else {
+    toggle.innerHTML = '&#9654; Start';
+    toggle.classList.remove('danger');
+  }
 
   const bar = $('meetingBar');
   if (s.platform && s.nativeMeetingId && s.status !== 'idle') {
@@ -309,8 +315,14 @@ function showSettings(show: boolean): void {
 }
 
 $('gearBtn').addEventListener('click', () => showSettings($('settings').style.display !== 'flex'));
-$('startBtn').addEventListener('click', () => { chrome.runtime.sendMessage({ type: 'START' }); showSettings(false); });
-$('stopBtn').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'STOP' }));
+$('toggleBtn').addEventListener('click', () => {
+  if (state.status === 'capturing' || state.status === 'connecting') {
+    chrome.runtime.sendMessage({ type: 'STOP' });
+  } else {
+    chrome.runtime.sendMessage({ type: 'START' });
+    showSettings(false);
+  }
+});
 $('dashBtn').addEventListener('click', () => {
   const url = state.meetingId ? `${cfg.dashboardUrl}/meetings/${state.meetingId}` : cfg.dashboardUrl;
   chrome.tabs.create({ url });
