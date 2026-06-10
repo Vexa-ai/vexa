@@ -343,6 +343,26 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }, 1500);
 });
 
+// On service-worker startup (extension load OR reload), re-inject the capture
+// scripts into meeting tabs that are ALREADY open: an extension reload orphans
+// every existing tab's content scripts (they can't reach the new SW), which
+// repeatedly cost us live sessions silently running stale code. inpage.ts does
+// a graceful takeover of any orphaned instance.
+async function reinjectIntoOpenMeetingTabs(): Promise<void> {
+  const urls = ['https://meet.google.com/*', 'https://*.zoom.us/*',
+    'https://teams.live.com/*', 'https://teams.microsoft.com/*', 'https://teams.cloud.microsoft/*'];
+  let tabs: chrome.tabs.Tab[] = [];
+  try { tabs = await chrome.tabs.query({ url: urls }); } catch { return; }
+  for (const t of tabs) {
+    if (t.id == null) continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ['content.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ['inpage.js'], world: 'MAIN' });
+    } catch { /* chrome:// or unloadable frame — skip */ }
+  }
+}
+reinjectIntoOpenMeetingTabs();
+
 // Toolbar click handling. We do NOT use openPanelOnActionClick, because the
 // click on the toolbar icon is the ONLY event that grants activeTab on the
 // meeting tab — and chrome.tabCapture.getMediaStreamId needs that activeTab.

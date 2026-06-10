@@ -8,7 +8,8 @@
     "tabs",
     "sidePanel",
     "offscreen",
-    "tabCapture"
+    "tabCapture",
+    "scripting"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"

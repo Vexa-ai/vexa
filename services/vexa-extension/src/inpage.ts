@@ -22,6 +22,11 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
 
 (() => {
   const TAG = '[vexa-inpage]';
+
+  // Takeover: if an older inpage instance is alive in this page (extension was
+  // reloaded and re-injected), stop it completely before installing this one —
+  // otherwise both capture and post duplicate audio/diag messages.
+  try { (window as any).__vexaInpageTeardown?.(); } catch { /* old instance gone */ }
   const TARGET_SAMPLE_RATE = 16000;
   const BUFFER_SIZE = 4096;
 
@@ -242,12 +247,21 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
       gmeetSpeakers: gs,
     };
   }
-  setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
+  const diagTimer = setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
 
   // Attribution runs from page load (not capture start): diagnostics see the
   // DOM state immediately, and Zoom's temporal naming is live before/without
   // capture. Idempotent — start() calls it again harmlessly.
   try { startSpeakerAttribution(); } catch (e: any) { console.log(`${TAG} attribution at load failed: ${e?.message}`); }
+
+  // Registered teardown for the next instance's takeover (see top of IIFE).
+  (window as any).__vexaInpageTeardown = () => {
+    try { stop(); } catch { /* not running */ }
+    if (diagTimer !== null) { clearInterval(diagTimer); }
+    if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
+    if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
+    console.log(`${TAG} instance torn down (superseded)`);
+  };
 
   post('inpage-ready', {});
   console.log(`${TAG} loaded`);
