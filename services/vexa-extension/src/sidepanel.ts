@@ -351,6 +351,7 @@ setInterval(async () => {
     const raw = await fetch(stampUrl).then(r => r.text());
     const stamp = JSON.parse(raw);
     $('buildTag').textContent = `build ${stamp.human}`;
+    $('buildHeader').textContent = stamp.human;
   } catch { $('buildTag').textContent = 'build unknown'; }
   await loadConfig();
   bindSettings();
