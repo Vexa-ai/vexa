@@ -346,6 +346,12 @@ setInterval(async () => {
 
 (async () => {
   applyLogo();
+  // Visible build identity — confirms which build is loaded after hot reload
+  try {
+    const raw = await fetch(stampUrl).then(r => r.text());
+    const stamp = JSON.parse(raw);
+    $('buildTag').textContent = `build ${stamp.human}`;
+  } catch { $('buildTag').textContent = 'build unknown'; }
   await loadConfig();
   bindSettings();
   await pollStatus();
