@@ -113,8 +113,8 @@ function applyState(s: PanelState): void {
     : 'Idle';
   const toggle = $('toggleBtn') as HTMLButtonElement;
   if (s.status === 'capturing' || s.status === 'connecting') {
-    toggle.innerHTML = '&#9632; Stop';
-    toggle.classList.add('danger');
+    toggle.innerHTML = '&#10074;&#10074; Pause';
+    toggle.classList.remove('danger');
   } else {
     toggle.innerHTML = '&#9654; Start';
     toggle.classList.remove('danger');
