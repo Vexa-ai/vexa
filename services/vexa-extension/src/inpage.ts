@@ -17,6 +17,7 @@
  */
 
 import { createGmeetSpeakers, GmeetSpeakers } from '../../vexa-bot/core/src/browser/gmeet-speakers';
+import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browser/zoom-speakers';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -38,22 +39,37 @@ import { createGmeetSpeakers, GmeetSpeakers } from '../../vexa-bot/core/src/brow
     window.postMessage({ __vexa: true, type, ...payload }, '*');
   }
 
-  // Speaker attribution — shared vexa-bot module (one codebase for bot + extension).
-  // Created on start (Meet only), exposed on window for live forensics:
-  //   window.__vexaGmeetSpeakers.getState()
+  // Speaker attribution — shared vexa-bot modules (one codebase for bot + extension).
+  //   Meet: gmeet-speakers (per-track vote/lock)  → window.__vexaGmeetSpeakers
+  //   Zoom: zoom-speakers (active-speaker DOM)     → window.__vexaZoomSpeakers
+  // Zoom audio is the mixed tabCapture track at TAB_INDEX; we relabel it with
+  // whoever Zoom currently renders as the active speaker.
   let speakers: GmeetSpeakers | null = null;
+  let zoomSpeakers: ZoomSpeakers | null = null;
 
   function startSpeakerAttribution(): void {
-    if (speakers || !location.hostname.endsWith('meet.google.com')) return;
-    const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
-      ?.getAttribute('data-self-name')?.trim() || undefined;
-    speakers = createGmeetSpeakers({
-      selfName,
-      log: (m) => console.log(`${TAG} ${m}`),
-      onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
-    });
-    (window as any).__vexaGmeetSpeakers = speakers;
-    console.log(`${TAG} shared gmeet-speakers attribution started (self="${selfName || 'unknown'}")`);
+    if (location.hostname.endsWith('meet.google.com')) {
+      if (speakers) return;
+      const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
+        ?.getAttribute('data-self-name')?.trim() || undefined;
+      speakers = createGmeetSpeakers({
+        selfName,
+        log: (m) => console.log(`${TAG} ${m}`),
+        onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
+      });
+      (window as any).__vexaGmeetSpeakers = speakers;
+      console.log(`${TAG} shared gmeet-speakers attribution started (self="${selfName || 'unknown'}")`);
+    } else if (location.hostname.endsWith('zoom.us')) {
+      if (zoomSpeakers) return;
+      zoomSpeakers = createZoomSpeakers({
+        log: (m) => console.log(`${TAG} [zoom] ${m}`),
+        // Relabel the mixed tab-audio track (TAB_INDEX = 0) with the current
+        // active speaker. Falls back to "Participant" between speakers.
+        onSpeakerChange: (name) => post('speakers', { speakers: { '0': name || 'Participant' } }),
+      });
+      (window as any).__vexaZoomSpeakers = zoomSpeakers;
+      console.log(`${TAG} shared zoom-speakers attribution started`);
+    }
   }
 
   function streamCount(): number {
@@ -187,6 +203,7 @@ import { createGmeetSpeakers, GmeetSpeakers } from '../../vexa-bot/core/src/brow
     if (!running) return;
     running = false;
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
+    if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (rescanInterval !== null) { clearInterval(rescanInterval); rescanInterval = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }

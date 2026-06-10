@@ -7,6 +7,7 @@ import { PulseAudioCapture, UnifiedRecordingPipeline } from '../../../services/a
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';
 import { startZoomRichObservation } from './observe';
+import { ensureBrowserUtils } from '../../../utils/injection';
 
 let recordingService: RecordingService | null = null;
 let recordingStopResolver: (() => void) | null = null;
@@ -130,10 +131,30 @@ export function getZoomWebRecordingService(): RecordingService | null {
 // ---- Speaker detection via DOM polling ----
 
 function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
+  // Install the SHARED zoom-speakers module in-page (the SAME DOM active-speaker
+  // logic the extension runs) — one codebase for the Zoom attribution layer.
+  ensureBrowserUtils(page, require('path').join(__dirname, '../../../browser-utils.global.js'))
+    .then(() => page.evaluate((selfName: string) => {
+      const w = window as any;
+      if (!w.__vexaZoomSpeakers && w.VexaBrowserUtils?.createZoomSpeakers) {
+        w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
+          selfName,
+          log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
+        });
+        w.logBot?.('[Zoom Web] shared zoom-speakers attribution installed');
+      }
+    }, botConfig.botName || 'Vexa').catch(() => { /* best-effort; inline fallback below */ }))
+    .catch(() => { /* bundle inject failed; inline fallback below */ });
+
   speakerPollInterval = setInterval(async () => {
     if (!page || page.isClosed()) return;
     try {
       const speakerName = await page.evaluate((footerSelector: string) => {
+        // Preferred: the shared module's current active speaker (one codebase).
+        const shared = (window as any).__vexaZoomSpeakers;
+        if (shared) return shared.getActiveSpeaker();
+
+        // Fallback (module not yet installed): identical inline DOM read.
         function nameFromContainer(container: Element | null): string | null {
           if (!container) return null;
           const footer = container.querySelector(footerSelector);

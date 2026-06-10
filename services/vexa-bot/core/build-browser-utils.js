@@ -14,6 +14,8 @@ const browserUtilsPath = path.join(__dirname, 'dist', 'utils', 'browser.js');
 const browserUtilsContent = fs.readFileSync(browserUtilsPath, 'utf8');
 const gmeetSpeakersPath = path.join(__dirname, 'dist', 'browser', 'gmeet-speakers.js');
 const gmeetSpeakersContent = fs.readFileSync(gmeetSpeakersPath, 'utf8');
+const zoomSpeakersPath = path.join(__dirname, 'dist', 'browser', 'zoom-speakers.js');
+const zoomSpeakersContent = fs.readFileSync(zoomSpeakersPath, 'utf8');
 
 // Create the browser bundle content using a safe CommonJS wrapper
 const browserBundleContent = `
@@ -36,15 +38,23 @@ ${browserUtilsContent}
 ${gmeetSpeakersContent}
   })(gmExports, gmModule);
 
+  var zmExports = {};
+  var zmModule = { exports: zmExports };
+  (function(exports, module) {
+${zoomSpeakersContent}
+  })(zmExports, zmModule);
+
   // Expose utilities on window object for browser context
   var utils = module.exports || {};
   var gm = gmModule.exports || {};
+  var zm = zmModule.exports || {};
   window.VexaBrowserUtils = {
     BrowserAudioService: utils.BrowserAudioService,
     BrowserMediaRecorderPipeline: utils.BrowserMediaRecorderPipeline,
     BrowserWhisperLiveService: utils.BrowserWhisperLiveService,
     generateBrowserUUID: utils.generateBrowserUUID,
-    createGmeetSpeakers: gm.createGmeetSpeakers
+    createGmeetSpeakers: gm.createGmeetSpeakers,
+    createZoomSpeakers: zm.createZoomSpeakers
   };
 
   // Also expose performLeaveAction for platform-specific leave UX
