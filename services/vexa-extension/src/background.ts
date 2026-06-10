@@ -273,26 +273,29 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // active tab under this invocation, (2) attach tab audio to a running
 // Zoom/Teams session (or stash it for the next Start), and (3) open the panel.
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => { /* older Chrome */ });
-chrome.action.onClicked.addListener(async (tab) => {
+// NOTE: listener is intentionally NOT async, and sidePanel.open() is the FIRST
+// statement — it must run synchronously within the click gesture or Chrome
+// rejects it ("must be called in response to a user gesture"). Minting the
+// tab-capture stream id can happen after: it needs the activeTab grant (which
+// the invocation gives and which persists), not the live gesture.
+chrome.action.onClicked.addListener((tab) => {
   if (tab?.id == null) return;
-  const host = tab.url ? new URL(tab.url).hostname : '';
+  chrome.sidePanel.open({ tabId: tab.id }).catch(() => { /* older Chrome / already open */ });
+
+  const host = tab.url ? (() => { try { return new URL(tab.url!).hostname; } catch { return ''; } })() : '';
   const needsTab = host.endsWith('zoom.us') || host.endsWith('teams.live.com')
     || host.endsWith('teams.microsoft.com') || host === 'teams.cloud.microsoft';
   if (needsTab) {
-    // Mint FIRST, before any await consumes the gesture/activeTab window.
-    try {
-      const sid = await new Promise<string>((resolve, reject) =>
-        chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id! }, (id) =>
-          chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(id)));
-      tabStreamId = sid;
+    chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id) => {
+      if (chrome.runtime.lastError || !id) {
+        state.tabAudio = `error:${chrome.runtime.lastError?.message || 'no stream id'}`; broadcastStatus(); return;
+      }
+      tabStreamId = id;
       if (state.status === 'capturing' && (state.platform === 'zoom' || state.platform === 'teams')) {
         startTabAudio();
       }
-    } catch (e: any) {
-      state.tabAudio = `error:${e.message}`; broadcastStatus();
-    }
+    });
   }
-  try { await chrome.sidePanel.open({ tabId: tab.id }); } catch { /* older Chrome / already open */ }
 });
 
 // Dev auto-reload: build.mjs rewrites build-stamp.txt on every build; when the
