@@ -56,6 +56,23 @@ async function ensureOffscreen(): Promise<void> {
   }).catch((e) => { if (!String(e).includes('single offscreen')) throw e; });
 }
 
+/** Start (or attach) the mixed tab-audio capture for the current session. */
+function startTabAudio(): void {
+  if (!tabStreamId) {
+    state.tabAudio = 'error:tab audio needs a click — use "Enable remote audio" in the panel';
+    broadcastStatus();
+    return;
+  }
+  state.tabAudio = 'pending'; broadcastStatus();
+  ensureOffscreen()
+    .then(() => chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_START', streamId: tabStreamId }))
+    .then((res: any) => {
+      state.tabAudio = (res && res.ok) ? 'on' : `error:${res?.error || 'no response from offscreen'}`;
+      broadcastStatus();
+    })
+    .catch((e) => { state.tabAudio = `error:${e.message}`; broadcastStatus(); });
+}
+
 async function startCaptureForTab(tabId: number, url: string, meetingRef?: MeetingRef): Promise<void> {
   if (state.status === 'capturing' || state.status === 'connecting') return;
 
@@ -121,19 +138,7 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
           // Zoom/Teams don't expose per-participant audio to the DOM — capture
           // the tab's mixed output (all remote participants) via tabCapture.
           if (state.platform === 'zoom' || state.platform === 'teams') {
-            if (!tabStreamId) {
-              state.tabAudio = 'error:no stream id (open the panel via the toolbar icon, then Start)';
-              broadcastStatus();
-            } else {
-              state.tabAudio = 'pending'; broadcastStatus();
-              ensureOffscreen()
-                .then(() => chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_START', streamId: tabStreamId }))
-                .then((res: any) => {
-                  state.tabAudio = (res && res.ok) ? 'on' : `error:${res?.error || 'no response from offscreen'}`;
-                  broadcastStatus();
-                })
-                .catch((e) => { state.tabAudio = `error:${e.message}`; broadcastStatus(); });
-            }
+            startTabAudio();
           }
         }
       } else if (msg.type === 'error') {
@@ -208,6 +213,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'START':
       tabStreamId = msg.streamId || null; // tab audio stream id minted in the panel (Zoom/Teams)
       startCaptureActiveTab(); sendResponse({ ok: true }); break;
+    case 'ATTACH_TAB_AUDIO':
+      // Mid-session attach (auto-start sessions have no gesture, so no stream
+      // id — the panel mints one on the "Enable remote audio" click).
+      tabStreamId = msg.streamId || null;
+      if (state.status === 'capturing' && (state.platform === 'zoom' || state.platform === 'teams')) startTabAudio();
+      sendResponse({ ok: true }); break;
     case 'AUTO_START':
       // Prefer the URL the content script saw at detection time — SPAs (Teams)
       // can navigate off the /meet/<id> path by the time this message arrives.
