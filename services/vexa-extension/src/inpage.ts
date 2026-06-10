@@ -72,10 +72,11 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
         // is a participant. Vote track→name via the active-speaker DOM and
         // relabel that track once locked.
         onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
-        // Mixed fallback: when remote audio arrives as ONE tabCapture track
-        // (Zoom's WASM audio mode — no WebRTC ontrack), it lives at index 999
-        // in the offscreen doc. Label it temporally with the active speaker.
-        onSpeakerChange: (name) => post('speakers', { speakers: { '999': name || 'Participant' } }),
+        // Mixed tab-audio track (999, Zoom WASM mode): temporal attribution.
+        // Only relabel when a NEW active speaker appears — on null (gap between
+        // speakers) keep the last name; segments in flight belong to whoever
+        // just spoke, and "Participant" must never clobber a real name.
+        onSpeakerChange: (name) => { if (name) post('speakers', { speakers: { '999': name } }); },
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
       console.log(`${TAG} shared zoom-speakers attribution started (multi-channel, self="${selfName || 'unknown'}")`);

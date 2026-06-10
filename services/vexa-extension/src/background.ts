@@ -321,10 +321,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // If the captured tab RELOADS mid-session (user refresh, SPA hard nav), the
 // fresh page never saw BEGIN_CAPTURE — rewire it automatically so capture and
 // attribution resume without manual Stop/Start.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (tabId !== state.tabId || changeInfo.status !== 'complete') return;
   if (state.status !== 'capturing' && state.status !== 'connecting') return;
   if (state.platform === 'note') return;
+  // Same tab, DIFFERENT meeting (user joined a new call) → the session must
+  // restart bound to the new native id, not keep writing into the old meeting.
+  const detected = tab?.url ? detectMeeting(tab.url) : null;
+  if (detected && state.nativeMeetingId && detected.nativeMeetingId !== state.nativeMeetingId) {
+    shipTelemetry('meeting-changed-restart');
+    stopCapture().then(() => maybeAutoStart(tabId, tab!.url!));
+    return;
+  }
   setTimeout(() => {
     chrome.tabs.sendMessage(tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready yet */ });
     shipTelemetry('tab-reloaded-rewire');
