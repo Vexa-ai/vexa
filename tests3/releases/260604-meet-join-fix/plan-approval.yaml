@@ -1,0 +1,26 @@
+# Plan gate — tests3/README §3.1. The `approved` fields are HUMAN-ONLY (pipeline:0-pack invariant).
+# pipeline:0-pack prepares this proposal; the human approves line-by-line and fills approver/approved_at.
+release_id: 260604-meet-join-fix
+approved_at: 2026-06-05T12:26:09Z   # signed: `approve P2` in chat, recorded verbatim
+approver: dmitry@vexa.ai
+
+scope_approved:
+  - issue: gmeet-humanized-join-completion
+    hypothesis: true
+    proves: true
+    required_modes: true
+  - issue: meeting-api-join-callback
+    hypothesis: true
+    proves: true
+    required_modes: true
+  - issue: bot-zero-log-crash
+    hypothesis: true
+    proves: true
+    required_modes: true
+
+# New permanent Registry checks this release adds (registry_changes_approved — human):
+registry_changes_approved:
+  - {check: gmeet.humanized_join_click_hits, approved: true}
+  - {check: gmeet.localized_join_selectors,  approved: true}
+  - {check: gmeet.join_callback_resilient,   approved: true}
+  - {check: gmeet.bot_startup_logged,        approved: true}
