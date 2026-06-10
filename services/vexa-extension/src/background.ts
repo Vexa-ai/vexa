@@ -309,6 +309,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'diag':
       if (msg.diag) pageDiags[`${msg.diag.top ? 'top' : 'sub'}:${msg.diag.frame || '?'}`] = msg.diag;
       break;
+    case 'speaker_activity':
+      // Timestamped DOM hint for the server-side cluster↔name binder.
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'speaker_activity', name: msg.name, kind: msg.kind || 'dom-active', isEnd: !!msg.isEnd, tMs: Date.now() }));
+      }
+      break;
     case 'capture-started':
       state.streams = msg.streams || 0; broadcastStatus(); break;
     case 'capture-stopped':

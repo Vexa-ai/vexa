@@ -77,11 +77,11 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
         // is a participant. Vote track→name via the active-speaker DOM and
         // relabel that track once locked.
         onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
-        // Mixed tab-audio track (999, Zoom WASM mode): temporal attribution.
-        // Only relabel when a NEW active speaker appears — on null (gap between
-        // speakers) keep the last name; segments in flight belong to whoever
-        // just spoke, and "Participant" must never clobber a real name.
-        onSpeakerChange: (name) => { if (name) post('speakers', { speakers: { '999': name } }); },
+        // Mixed tab-audio track (999): the server diarizes it into per-speaker
+        // clusters; the DOM active-speaker timeline is sent as timestamped
+        // HINTS that name those clusters (ClusterNameBinder) — never as direct
+        // track relabels.
+        onSpeakerChange: (name) => post('speaker_activity', { name: name || '', isEnd: !name, kind: 'dom-active' }),
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
       console.log(`${TAG} shared zoom-speakers attribution started (multi-channel, self="${selfName || 'unknown'}")`);

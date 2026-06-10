@@ -44,6 +44,9 @@ window.addEventListener('message', (event) => {
     case 'diag':
       chrome.runtime.sendMessage({ type: 'diag', diag: data.diag });
       break;
+    case 'speaker_activity':
+      chrome.runtime.sendMessage({ type: 'speaker_activity', name: data.name, kind: data.kind, isEnd: data.isEnd });
+      break;
   }
 });
 

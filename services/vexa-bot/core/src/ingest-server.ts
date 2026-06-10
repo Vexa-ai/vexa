@@ -31,6 +31,9 @@ import { SpeakerStreamManager } from './services/speaker-streams';
 import { TranscriptionClient } from './services/transcription-client';
 import { SegmentPublisher, TranscriptionSegment } from './services/segment-publisher';
 import { isHallucination } from './services/hallucination-filter';
+import { OnnxLocalDiarizer, CommitEvent } from './services/diarization/onnx-local-diarizer';
+import { TurnGate, DEFAULT_TURN_GATE } from './services/diarization/turn-gate';
+import { ClusterNameBinder } from './services/cluster-name-binder';
 
 const PORT = parseInt(process.env.INGEST_PORT || '8090', 10);
 
@@ -102,6 +105,11 @@ async function resolveSession(apiKey: string, platform: string, nativeMeetingId:
  * Mirrors the per-speaker wiring in index.ts (onSegmentReady / onSegmentConfirmed),
  * minus telemetry and Playwright-specific bits.
  */
+/** The extension's mixed remote-audio track index (Zoom WASM mode / Teams
+ *  tab capture). Audio on this index carries ALL remote participants and is
+ *  attributed by diarization, never by direct labeling. */
+const MIXED_TRACK_INDEX = 999;
+
 class CaptureSession {
   private speakerManager: SpeakerStreamManager;
   private transcriptionClient: TranscriptionClient;
@@ -110,6 +118,18 @@ class CaptureSession {
   private lastDetectedLanguage: Map<string, string> = new Map();
   private knownSpeakers: Set<number> = new Set();
   private closed = false;
+
+  // ── Mixed-track diarization (Zoom/Teams) ─────────────────────────────
+  // Segmentation→embedding→clustering cuts the mixed stream into turns with
+  // stable cluster ids (TurnGate names them speaker_N); the ClusterNameBinder
+  // converges those clusters with the platform's DOM hint timeline into real
+  // display names. Wrong names are cosmetic (rename via updateSpeakerName);
+  // the audio cut is never wrong-routed.
+  private diarizer: OnnxLocalDiarizer | null = null;
+  private turnGate: TurnGate | null = null;
+  private binder: ClusterNameBinder | null = null;
+  private pendingFrames: Float32Array[] = [];
+  private diarizerReady: Promise<void> | null = null;
 
   constructor(
     private session: ExtensionSession,
@@ -150,14 +170,82 @@ class CaptureSession {
   async start(): Promise<void> {
     this.segmentPublisher.resetSessionStart();
     await this.segmentPublisher.publishSessionStart();
+    if (this.usesMixedDiarization()) this.diarizerReady = this.initDiarization();
     log(`[Ingest] Session started meeting=${this.session.meeting_id} uid=${this.connectionId}`);
   }
 
-  /** index → name map from the content script's in-page DOM resolution. */
+  private usesMixedDiarization(): boolean {
+    return this.session.platform === 'zoom' || this.session.platform === 'teams';
+  }
+
+  /** Build the diarizer + turn gate + binder for the mixed track. Thresholds
+   *  are the pack's OFFLINE-EVAL-derived values (AMI corpus sweep) — see
+   *  pack-msteams-diarization-cutover index.ts for the full derivation. */
+  private async initDiarization(): Promise<void> {
+    this.binder = new ClusterNameBinder({
+      onLateResolve: (clusterId, resolvedName) => {
+        if (!this.speakerManager.hasSpeaker(clusterId)) return;
+        log(`[Diarize] late-resolve: ${clusterId} → "${resolvedName}"`);
+        this.speakerManager.updateSpeakerName(clusterId, resolvedName);
+      },
+    });
+    const gate = new TurnGate(DEFAULT_TURN_GATE, (clusterId, audio, tStartMs) => {
+      const tEndMs = tStartMs + (audio.length / 16000) * 1000;
+      const resolved = this.binder!.resolve({ clusterId, tStartMs, tEndMs });
+      if (!this.speakerManager.hasSpeaker(clusterId)) {
+        this.speakerManager.addSpeaker(clusterId, resolved.speakerName);
+        log(`[Diarize] new cluster ${clusterId} → "${resolved.speakerName}" (${resolved.source})`);
+      } else if (resolved.source !== 'provisional-cluster-id') {
+        this.speakerManager.updateSpeakerName(clusterId, resolved.speakerName);
+      }
+      this.speakerManager.feedAudio(clusterId, audio);
+    });
+    this.turnGate = gate;
+    this.diarizer = await OnnxLocalDiarizer.create({
+      maxUtteranceMs: 3000,
+      newSpeakerThreshold: 0.55,
+      veryFarThreshold: 0.90,
+      newClusterCooldownMs: 2000,
+      minSeedUtteranceMs: 1500,
+      pyannoteInferIntervalMs: 250,
+      onCommit: (ev: CommitEvent) => {
+        // Drain this commit's frames (FIFO; commits are in order) and hand
+        // (embedding, audio) to the TurnGate, which owns turn boundaries and
+        // naming. Same drain logic as the pack's Teams wiring.
+        const MIN_TOTAL_SAMPLES = Math.ceil(0.2 * 16000);
+        const wantSamples = Math.round(((ev.tEndMs - ev.tStartMs) / 1000) * 16000);
+        const inRange: Float32Array[] = [];
+        let drained = 0;
+        let collected = 0;
+        while (drained < this.pendingFrames.length && collected < wantSamples) {
+          const pcm = this.pendingFrames[drained];
+          inRange.push(pcm);
+          collected += pcm.length;
+          drained++;
+        }
+        if (drained > 0) this.pendingFrames.splice(0, drained);
+        if (collected < MIN_TOTAL_SAMPLES) return;
+        let audio: Float32Array;
+        if (inRange.length === 1) audio = inRange[0];
+        else {
+          audio = new Float32Array(collected);
+          let o = 0;
+          for (const p of inRange) { audio.set(p, o); o += p.length; }
+        }
+        gate.onCommit(new Float32Array(ev.emb), audio, ev.tStartMs, ev.tEndMs);
+      },
+    });
+    log('[Diarize] OnnxLocalDiarizer ready (pyannote-segmentation-3.0 + wespeaker)');
+  }
+
+  /** index → name map from the content script's in-page DOM resolution.
+   *  On diarized platforms the mixed track's name is owned by the binder —
+   *  direct relabels of it are ignored. */
   updateSpeakers(speakers: Record<string, string>): void {
     for (const [idxStr, name] of Object.entries(speakers)) {
       const index = parseInt(idxStr, 10);
       if (Number.isNaN(index) || !name) continue;
+      if (index === MIXED_TRACK_INDEX && this.usesMixedDiarization()) continue;
       const speakerId = `spk-${index}`;
       if (this.speakerManager.hasSpeaker(speakerId)) {
         this.speakerManager.updateSpeakerName(speakerId, name);
@@ -168,8 +256,28 @@ class CaptureSession {
     }
   }
 
+  /** Timestamped platform hint: who the UI showed as speaking. Server arrival
+   *  time is the timebase (client clocks skew; binder tolerance absorbs the
+   *  transport jitter). */
+  recordSpeakerActivity(name: string, kind: 'dom-active' | 'caption' | 'dom-outline' = 'dom-active', isEnd = false): void {
+    this.binder?.recordHint({ name, tMs: Date.now(), kind, isEnd });
+  }
+
   /** One per-speaker audio chunk from the page. */
   feedAudio(speakerIndex: number, pcm: Float32Array): void {
+    if (speakerIndex === MIXED_TRACK_INDEX && this.usesMixedDiarization()) {
+      // Mixed remote audio → diarizer. Frames buffer until a commit drains
+      // them; the TurnGate flushes named turns into the speaker manager.
+      this.pendingFrames.push(pcm);
+      if (this.diarizer) {
+        this.diarizer.process(pcm, Date.now()).catch((e) => log(`[Diarize] process error: ${e?.message}`));
+      } else if (this.pendingFrames.length > 2000) {
+        // Diarizer still loading and frames piling up — drop oldest (~4 min
+        // of audio would have to pile up first; this is a safety valve).
+        this.pendingFrames.splice(0, this.pendingFrames.length - 2000);
+      }
+      return;
+    }
     const speakerId = `spk-${speakerIndex}`;
     if (!this.speakerManager.hasSpeaker(speakerId)) {
       // Audio before a name arrived — register with a placeholder, renamed later.
@@ -182,6 +290,9 @@ class CaptureSession {
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    try { this.turnGate?.finish(); } catch { /* best effort */ }
+    try { this.diarizer?.reset(); } catch { /* best effort */ }
+    this.pendingFrames.length = 0;
     try { this.speakerManager.removeAll(); } catch { /* best effort */ }
     try { await this.segmentPublisher.publishSessionEnd(); } catch { /* best effort */ }
     try { await this.segmentPublisher.close(); } catch { /* best effort */ }
@@ -382,6 +493,11 @@ export function runIngestServer(): void {
       try {
         const msg = JSON.parse(data.toString('utf8'));
         if (msg.type === 'speakers' && msg.speakers) capture.updateSpeakers(msg.speakers);
+        // Timestamped platform hint stream (Zoom active-speaker / Teams
+        // captions+outline) — feeds the cluster↔name binder.
+        if (msg.type === 'speaker_activity' && (msg.name || msg.isEnd)) {
+          capture.recordSpeakerActivity(msg.name || '', msg.kind || 'dom-active', !!msg.isEnd);
+        }
       } catch { /* ignore malformed control frame */ }
     });
 
