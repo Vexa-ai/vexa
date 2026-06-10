@@ -1938,25 +1938,109 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     }
   }
 
-  // Set up per-speaker audio streams via the SHARED vexa-bot/core/src/browser
-  // /gmeet-capture module (the SAME code the extension runs). onAudio feeds the
-  // Playwright bridge + the shared gmeet-speakers attribution.
+  // Set up per-speaker audio streams. PREFERRED: the SHARED vexa-bot/core/src
+  // /browser/gmeet-capture module (the SAME code the extension runs), with
+  // onAudio feeding the Playwright bridge + shared gmeet-speakers attribution.
+  // FALLBACK: if the bundle isn't available in-page for any reason, run the
+  // original inline loop verbatim — the bot must never lose capture.
   const handleCount = await pageToCaptureFrom.evaluate(async () => {
     const w = window as any;
-    if (!w.VexaBrowserUtils?.createGmeetCapture) {
-      w.logBot?.('[PerSpeaker] createGmeetCapture missing from bundle — capture not started');
+
+    // ── Preferred: shared module ───────────────────────────────────────────
+    if (w.VexaBrowserUtils?.createGmeetCapture) {
+      if (w.__vexaGmeetCapture) return w.__vexaGmeetCapture.streamCount();
+      w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
+        log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
+        onAudio: (index: number, pcm: Float32Array) => {
+          w.__vexaGmeetSpeakers?.reportTrackAudio(index);
+          w.__vexaPerSpeakerAudioData(index, Array.from(pcm));
+        },
+      });
+      await w.__vexaGmeetCapture.start();
+      return w.__vexaGmeetCapture.streamCount();
+    }
+
+    // ── Fallback: original inline loop (legacy copy of gmeet-capture.ts) ───
+    w.logBot?.('[PerSpeaker] shared gmeet-capture unavailable — using inline fallback');
+    const TARGET_SAMPLE_RATE = 16000;
+    const BUFFER_SIZE = 4096;
+
+    let mediaElements: HTMLMediaElement[] = [];
+    for (let attempt = 0; attempt < 10; attempt++) {
+      mediaElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
+        !el.paused &&
+        el.srcObject instanceof MediaStream &&
+        el.srcObject.getAudioTracks().length > 0
+      ) as HTMLMediaElement[];
+      if (mediaElements.length > 0) break;
+      await new Promise(r => setTimeout(r, 2000));
+      w.logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
+    }
+    if (mediaElements.length === 0) {
+      w.logBot?.('[PerSpeaker] No active media elements with audio found');
       return 0;
     }
-    if (w.__vexaGmeetCapture) return w.__vexaGmeetCapture.streamCount();
-    w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
-      log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
-      onAudio: (index: number, pcm: Float32Array) => {
-        w.__vexaGmeetSpeakers?.reportTrackAudio(index);
-        w.__vexaPerSpeakerAudioData(index, Array.from(pcm));
-      },
-    });
-    await w.__vexaGmeetCapture.start();
-    return w.__vexaGmeetCapture.streamCount();
+    w.logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
+
+    const connectedStreamIds = new Set<string>();
+    const streamLastActive = new Map<number, number>();
+    let nextStreamIndex = 0;
+
+    function connectElement(el: HTMLMediaElement, index: number): boolean {
+      try {
+        const stream: MediaStream = (el as any).srcObject;
+        if (!stream || stream.getAudioTracks().length === 0) return false;
+        const streamId = stream.id;
+        if (connectedStreamIds.has(streamId)) return false;
+
+        const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+        streamLastActive.set(index, Date.now());
+
+        processor.onaudioprocess = (e: AudioProcessingEvent) => {
+          const data = e.inputBuffer.getChannelData(0);
+          const maxVal = Math.max(...Array.from(data).map(Math.abs));
+          if (maxVal > 0.005) {
+            streamLastActive.set(index, Date.now());
+            w.__vexaGmeetSpeakers?.reportTrackAudio(index);
+            w.__vexaPerSpeakerAudioData(index, Array.from(data));
+          }
+        };
+
+        source.connect(processor);
+        processor.connect(ctx.destination);
+        connectedStreamIds.add(streamId);
+        const track = stream.getAudioTracks()[0];
+        track.addEventListener('ended', () => { connectedStreamIds.delete(streamId); });
+        w.logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)})`);
+        return true;
+      } catch (err: any) {
+        w.logBot?.(`[PerSpeaker] Stream ${index} error: ${err.message}`);
+        return false;
+      }
+    }
+
+    let streamCount = 0;
+    for (let i = 0; i < mediaElements.length; i++) {
+      if (connectElement(mediaElements[i], i)) streamCount++;
+    }
+    nextStreamIndex = mediaElements.length;
+
+    const rescanInterval = setInterval(() => {
+      const currentElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
+        !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0
+      ) as HTMLMediaElement[];
+      for (const el of currentElements) {
+        const stream: MediaStream = (el as any).srcObject;
+        if (stream && !connectedStreamIds.has(stream.id)) {
+          if (connectElement(el, nextStreamIndex)) nextStreamIndex++;
+        }
+      }
+    }, 15000);
+    w.__vexaPerSpeakerIntervals = [rescanInterval];
+
+    return streamCount;
   });
 
   log(`[PerSpeaker] Browser-side audio capture started with ${handleCount} streams`);
