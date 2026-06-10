@@ -193,6 +193,50 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
     else if (data.command === 'vexa-stop') stop();
   });
 
+  // ── Telemetry: page-context diagnostics, posted every 5s ────────────────
+  // PRIVACY: scrub() replaces every word of any DOM-derived free text with a
+  // random word ON EXIT, so transcript/caption content never leaves the page
+  // readable. Short speaker names pass through (attribution debugging needs
+  // them); anything longer is randomized.
+  function scrub(s: string): string {
+    return s.replace(/\S+/g, (w) => Array.from({ length: Math.min(w.length, 8) },
+      () => 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)]).join(''));
+  }
+  function pageDiag(): any {
+    const w = window as any;
+    const zs = w.__vexaZoomSpeakers ? (() => {
+      try {
+        const st = w.__vexaZoomSpeakers.getState();
+        return {
+          active: st.active,
+          matchedSelector: st.matchedSelector,
+          tiles: (st.tiles || []).slice(0, 10).map((t: any) => ({
+            name: (t.name || '').length <= 40 ? t.name : scrub(t.name),
+            speakingHints: t.speakingHints,
+          })),
+        };
+      } catch (e: any) { return { error: String(e?.message || e) }; }
+    })() : null;
+    const gs = w.__vexaGmeetSpeakers ? (() => {
+      try { const st = w.__vexaGmeetSpeakers.getState(); return { locks: st.locks ?? st.locked ?? null, tilesSeen: st.tiles?.length }; }
+      catch (e: any) { return { error: String(e?.message || e) }; }
+    })() : null;
+    return {
+      host: location.hostname,
+      running,
+      streams: streamCount(),
+      micActive: !!micStream,
+      hookInstalled: !!w.__vexaRemoteAudioHookInstalled,
+      injectedAudioEls: document.querySelectorAll('audio[data-vexa-injected]').length,
+      peerConnections: (w.__vexa_peer_connections || []).length,
+      mediaElsWithAudio: Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
+        !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0).length,
+      zoomSpeakers: zs,
+      gmeetSpeakers: gs,
+    };
+  }
+  setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
+
   post('inpage-ready', {});
   console.log(`${TAG} loaded`);
 })();

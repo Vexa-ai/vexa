@@ -121,6 +121,7 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
         state.meetingId = msg.meeting_id;
         state.status = 'capturing';
         broadcastStatus();
+        shipTelemetry('session-ready');
         if (state.platform === 'note') {
           ensureOffscreen()
             .then(() => chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_START' }))
@@ -200,10 +201,18 @@ async function stopCapture(): Promise<void> {
   state.streams = 0;
   state.tabAudio = 'none';
   broadcastStatus();
+  shipTelemetry('session-stop');
+  trackFrames.clear();
+  lastSpeakerMap = {};
+  lastPageDiag = null;
 }
 
 // Pack and forward one per-speaker PCM chunk.
+const trackFrames = new Map<number, { frames: number; lastAt: number }>();
 function sendAudio(index: number, pcm: number[]): void {
+  const t = trackFrames.get(index) || { frames: 0, lastAt: 0 };
+  t.frames++; t.lastAt = Date.now();
+  trackFrames.set(index, t);
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const samples = Float32Array.from(pcm);
   const buf = new ArrayBuffer(4 + samples.byteLength);
@@ -211,6 +220,39 @@ function sendAudio(index: number, pcm: number[]): void {
   new Float32Array(buf, 4).set(samples);
   ws.send(buf);
 }
+
+// ── Telemetry: merged extension state → ingest server /telemetry ──────────
+// Page diag (hook/attribution/captured-element state) + session state + per-
+// track frame counters, POSTed every 10s while a session is live (plus on
+// status changes). Server keeps a ring buffer readable via GET /telemetry —
+// debugging needs no client-side copy-paste. Transcript text never enters
+// telemetry (page diag scrubs DOM free-text to random words on exit).
+let lastPageDiag: any = null;
+let lastSpeakerMap: Record<string, string> = {};
+async function shipTelemetry(reason: string): Promise<void> {
+  try {
+    const cfg = await chrome.storage.local.get(['ingestUrl']);
+    const ingest: string = cfg.ingestUrl || 'ws://localhost:8092/ingest';
+    const url = ingest.replace(/^ws/, 'http').replace(/\/ingest.*$/, '/telemetry');
+    const frames: Record<string, any> = {};
+    for (const [idx, t] of trackFrames) frames[idx] = { frames: t.frames, msSinceAudio: Date.now() - t.lastAt };
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        reason,
+        state: { ...state },
+        speakerMap: lastSpeakerMap,
+        trackFrames: frames,
+        wsOpen: !!ws && ws.readyState === WebSocket.OPEN,
+        page: lastPageDiag,
+      }),
+    });
+  } catch { /* telemetry must never break capture */ }
+}
+setInterval(() => {
+  if (state.status === 'capturing' || state.status === 'connecting' || state.status === 'error') shipTelemetry('interval');
+}, 10000);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
@@ -251,8 +293,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'audio':
       sendAudio(msg.index, msg.pcm); break;
     case 'speakers':
+      Object.assign(lastSpeakerMap, msg.speakers || {});
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'speakers', speakers: msg.speakers }));
       break;
+    case 'diag':
+      lastPageDiag = msg.diag; break;
     case 'capture-started':
       state.streams = msg.streams || 0; broadcastStatus(); break;
     case 'capture-stopped':

@@ -41,6 +41,9 @@ window.addEventListener('message', (event) => {
     case 'inpage-ready':
       chrome.runtime.sendMessage({ type: data.type, streams: data.streams });
       break;
+    case 'diag':
+      chrome.runtime.sendMessage({ type: 'diag', diag: data.diag });
+      break;
   }
 });
 

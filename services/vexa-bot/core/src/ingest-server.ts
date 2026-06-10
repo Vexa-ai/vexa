@@ -24,6 +24,7 @@
  * meeting_id is what the existing dashboard already renders live.
  */
 
+import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { log } from './utils';
 import { SpeakerStreamManager } from './services/speaker-streams';
@@ -296,8 +297,41 @@ function parseAudioFrame(buf: Buffer): { speakerIndex: number; pcm: Float32Array
 }
 
 export function runIngestServer(): void {
-  const wss = new WebSocketServer({ port: PORT, path: '/ingest' });
-  log(`[Ingest] WebSocket server listening on :${PORT}/ingest`);
+  // Explicit HTTP server: /ingest (WS upgrade) + extension telemetry endpoints.
+  // Telemetry exists so extension state (WebRTC hook, captured tracks, speaker
+  // attribution, builds, errors) is inspectable server-side — no client-side
+  // copy-paste needed: POST /telemetry from the extension background, GET
+  // /telemetry?n=20 to read the most recent snapshots.
+  const TELEMETRY_MAX = 200;
+  const telemetry: any[] = [];
+  const httpServer = http.createServer((req, res) => {
+    const path = (req.url || '').split('?')[0];
+    if (req.method === 'POST' && path === '/telemetry') {
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 256 * 1024) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const snap = JSON.parse(body);
+          snap.received_at = new Date().toISOString();
+          telemetry.push(snap);
+          if (telemetry.length > TELEMETRY_MAX) telemetry.splice(0, telemetry.length - TELEMETRY_MAX);
+          log(`[ExtTelemetry] ${JSON.stringify(snap)}`);
+          res.writeHead(204).end();
+        } catch { res.writeHead(400).end('bad json'); }
+      });
+      return;
+    }
+    if (req.method === 'GET' && path === '/telemetry') {
+      const n = Math.min(parseInt(new URL(req.url || '', 'http://x').searchParams.get('n') || '20', 10) || 20, TELEMETRY_MAX);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(telemetry.slice(-n), null, 2));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  const wss = new WebSocketServer({ server: httpServer, path: '/ingest' });
+  httpServer.listen(PORT);
+  log(`[Ingest] WebSocket server listening on :${PORT}/ingest (+ /telemetry)`);
 
   wss.on('connection', async (ws: WebSocket, req) => {
     const url = new URL(req.url || '', `http://localhost:${PORT}`);
