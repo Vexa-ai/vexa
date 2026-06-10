@@ -306,6 +306,13 @@ export function runIngestServer(): void {
   const telemetry: any[] = [];
   const httpServer = http.createServer((req, res) => {
     const path = (req.url || '').split('?')[0];
+    // CORS: the extension's service worker fetch()es from its own origin
+    // (chrome-extension://…) with no host permission for this host — the
+    // telemetry endpoint must opt in. JSON POSTs trigger a preflight.
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'content-type');
+    if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
     if (req.method === 'POST' && path === '/telemetry') {
       let body = '';
       req.on('data', (c) => { body += c; if (body.length > 256 * 1024) req.destroy(); });
@@ -378,7 +385,32 @@ export function runIngestServer(): void {
       } catch { /* ignore malformed control frame */ }
     });
 
+    // Server→extension stop feedback: the dashboard (or API) can stop/delete
+    // the meeting at any time; without this watch the session keeps streaming
+    // into a finalized meeting and the user sees "stopped" + live transcripts
+    // simultaneously. Poll the meeting status with the session's own API key;
+    // on any non-live status, notify the extension and close.
+    const LIVE_STATUSES = new Set(['active', 'requested', 'joining', 'awaiting_admission']);
+    const statusWatch = setInterval(async () => {
+      if (boundMeetingId === null) return;
+      try {
+        const resp = await fetch(`${MEETING_API_URL}/bots/id/${boundMeetingId}`, {
+          headers: { 'X-API-Key': apiKey },
+        });
+        if (!resp.ok) return; // transient API trouble must not kill a live session
+        const meeting: any = await resp.json();
+        const status = meeting?.status || meeting?.data?.status;
+        if (status && !LIVE_STATUSES.has(status)) {
+          log(`[Ingest] Meeting ${boundMeetingId} is '${status}' — ending session ${connectionId}`);
+          ws.send(JSON.stringify({ type: 'ended', reason: `meeting ${status}` }));
+          boundMeetingId = null; // already finalized server-side; skip scheduleFinalize
+          ws.close(1000);
+        }
+      } catch { /* network blip; check again next tick */ }
+    }, 15000);
+
     const cleanup = async () => {
+      clearInterval(statusWatch);
       if (capture) { await capture.stop(); capture = null; }
       if (boundMeetingId !== null) {
         liveSessionsByMeeting.get(boundMeetingId)?.delete(connectionId);
