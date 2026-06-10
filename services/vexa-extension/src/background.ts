@@ -21,6 +21,8 @@ interface SessionState {
   nativeMeetingId: string | null;
   streams: number;
   error: string | null;
+  /** Mixed remote-audio capture state (Zoom/Teams): none | pending | on | error:<msg> */
+  tabAudio: string;
 }
 
 const state: SessionState = {
@@ -31,6 +33,7 @@ const state: SessionState = {
   nativeMeetingId: null,
   streams: 0,
   error: null,
+  tabAudio: 'none',
 };
 
 /** tabCapture stream id (minted in the panel on the Start gesture) for Zoom/Teams. */
@@ -117,13 +120,20 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
           }
           // Zoom/Teams don't expose per-participant audio to the DOM — capture
           // the tab's mixed output (all remote participants) via tabCapture.
-          if ((state.platform === 'zoom' || state.platform === 'teams') && tabStreamId) {
-            ensureOffscreen()
-              .then(() => chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_START', streamId: tabStreamId }))
-              .then((res: any) => {
-                if (res && res.ok === false) { state.error = `Tab audio failed: ${res.error}`; broadcastStatus(); }
-              })
-              .catch((e) => { state.error = `Tab capture failed: ${e.message}`; broadcastStatus(); });
+          if (state.platform === 'zoom' || state.platform === 'teams') {
+            if (!tabStreamId) {
+              state.tabAudio = 'error:no stream id (open the panel via the toolbar icon, then Start)';
+              broadcastStatus();
+            } else {
+              state.tabAudio = 'pending'; broadcastStatus();
+              ensureOffscreen()
+                .then(() => chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_START', streamId: tabStreamId }))
+                .then((res: any) => {
+                  state.tabAudio = (res && res.ok) ? 'on' : `error:${res?.error || 'no response from offscreen'}`;
+                  broadcastStatus();
+                })
+                .catch((e) => { state.tabAudio = `error:${e.message}`; broadcastStatus(); });
+            }
           }
         }
       } else if (msg.type === 'error') {
@@ -179,6 +189,7 @@ async function stopCapture(): Promise<void> {
   state.status = 'idle';
   state.meetingId = null;
   state.streams = 0;
+  state.tabAudio = 'none';
   broadcastStatus();
 }
 

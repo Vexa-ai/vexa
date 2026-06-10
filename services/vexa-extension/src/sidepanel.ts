@@ -30,6 +30,7 @@ interface PanelState {
   meetingId: number | null;
   streams: number;
   error: string | null;
+  tabAudio?: string;
 }
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -52,7 +53,7 @@ const DEFAULTS: Record<string, string> = {
 };
 
 let cfg: Record<string, string> = { ...DEFAULTS };
-let state: PanelState = { status: 'idle', platform: null, nativeMeetingId: null, meetingId: null, streams: 0, error: null };
+let state: PanelState = { status: 'idle', platform: null, nativeMeetingId: null, meetingId: null, streams: 0, error: null, tabAudio: 'none' };
 
 // Transcript state — the dashboard's two-map model
 let confirmed: Map<string, Segment> = new Map();
@@ -138,6 +139,14 @@ function applyState(s: PanelState): void {
   } else if (s.status === 'idle' && liveWs) {
     stopLive();
   }
+  // Zoom/Teams: remote audio comes from tabCapture — surface its state loudly.
+  if ((s.platform === 'zoom' || s.platform === 'teams') && s.status === 'capturing') {
+    const ta = s.tabAudio || 'none';
+    if (ta === 'on') feedStatus('');
+    else if (ta === 'pending') feedStatus('Connecting tab audio…');
+    else feedStatus(`Remote audio NOT captured (${ta.replace('error:', '')}) — only your mic is being transcribed. Open the panel via the Vexa toolbar icon on the meeting tab, then press Start.`, true);
+  }
+
   if (s.status === 'error' && s.error === 'mic-permission') {
     $('feed').innerHTML = `<div class="empty"><div style="font-size:22px;">&#127908;</div>`
       + `<div>Microphone access is needed for voice notes.</div>`
