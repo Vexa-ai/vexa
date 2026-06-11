@@ -241,6 +241,15 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
       hookInstalled: !!w.__vexaRemoteAudioHookInstalled,
       injectedAudioEls: document.querySelectorAll('audio[data-vexa-injected]').length,
       peerConnections: (w.__vexa_peer_connections || []).length,
+      // Receiver-level probe: do the page's RTCPeerConnections carry AUDIO
+      // receivers (per-participant tracks that never fired ontrack)? If yes,
+      // true multichannel Zoom is possible via receiver.track mirroring.
+      audioReceivers: (w.__vexa_peer_connections || []).slice(0, 16).map((pc: RTCPeerConnection) => {
+        try {
+          const rs = pc.getReceivers().filter((r: RTCRtpReceiver) => r.track && r.track.kind === 'audio');
+          return { state: pc.connectionState, audio: rs.length, live: rs.filter((r: RTCRtpReceiver) => r.track.readyState === 'live').length };
+        } catch { return null; }
+      }).filter(Boolean),
       mediaElsWithAudio: Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
         !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0).length,
       zoomSpeakers: zs,
