@@ -42,6 +42,10 @@ interface SpeakerBuffer {
   lastAudioTimestamp: number;
   /** Whether we already submitted a final idle attempt */
   idleSubmitted: boolean;
+  /** Segmentation closed this buffer while a draft request was in flight:
+   *  that response's text covers the pre-trim window — discard it and
+   *  resubmit the owned (trimmed) audio as the final window. */
+  pendingFinal: boolean;
   /** Samples inherited from a previous speaker via carry-forward */
   carryForwardSamples: number;
   /** Generation counter — incremented on full reset to detect stale responses */
@@ -113,6 +117,7 @@ export class SpeakerStreamManager {
       sequenceNumber: 0,
       lastAudioTimestamp: now,
       idleSubmitted: false,
+      pendingFinal: false,
       carryForwardSamples: 0,
       generation: 0,
       lastConfirmedText: '',
@@ -197,6 +202,21 @@ export class SpeakerStreamManager {
     // from a previous segment.
     const submitGen = this.submitGeneration.get(speakerId);
     if (submitGen !== undefined && submitGen < buffer.generation) {
+      return;
+    }
+
+    // Segmentation closed this buffer while this request was in flight: the
+    // text covers the pre-trim window (may include the next segment's audio).
+    // Discard it and submit the owned audio as the final window.
+    if (buffer.pendingFinal) {
+      buffer.pendingFinal = false;
+      if (this.unconfirmedSamples(buffer) === 0) {
+        this.fullReset(buffer);
+        return;
+      }
+      buffer.idleSubmitted = true;
+      log(`[SpeakerStreams] Final resubmit for "${buffer.speakerName}" after deferred close (${(this.unconfirmedSamples(buffer) / this.sampleRate).toFixed(1)}s audio)`);
+      void this.submitBuffer(buffer);
       return;
     }
 
@@ -397,7 +417,16 @@ export class SpeakerStreamManager {
     }
 
     // Have audio but no transcript — final Whisper submit
-    if (this.unconfirmedSamples(buffer) > 0 && !buffer.inFlight) {
+    if (this.unconfirmedSamples(buffer) > 0) {
+      if (buffer.inFlight) {
+        // A draft request is in flight for the PRE-TRIM window. Discarding
+        // the buffer here loses the whole segment's audio (multi-second
+        // transcript holes). Instead: when the response lands, its text is
+        // discarded and the owned audio resubmitted as the final window.
+        buffer.pendingFinal = true;
+        log(`[SpeakerStreams] Close while in-flight for "${buffer.speakerName}" — finalize deferred to response (${unconfirmedSec.toFixed(1)}s audio held)`);
+        return;
+      }
       buffer.idleSubmitted = true;
       log(`[SpeakerStreams] Flush-submit for "${buffer.speakerName}" (${unconfirmedSec.toFixed(1)}s audio, no transcript yet)`);
       await this.submitBuffer(buffer);
@@ -640,6 +669,7 @@ export class SpeakerStreamManager {
     buffer.bufferStartMs = Date.now();
     buffer.lastAudioTimestamp = Date.now();
     buffer.idleSubmitted = false;
+    buffer.pendingFinal = false;
     buffer.carryForwardSamples = 0;
     buffer.generation++;
   }
