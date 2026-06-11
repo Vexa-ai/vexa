@@ -64,7 +64,13 @@ const RING_MS = 120_000;
 /** Cap on the prompt fed to the next call (Whisper prompt window is small). */
 const PROMPT_TAIL_CHARS = 200;
 /** Unresolved turns kept for late hint renames. */
-const MAX_UNRESOLVED = 100;
+/** Closed turns retained for retroactive relabeling (hints + re-clustering). */
+const MAX_TURN_RECORDS = 500;
+/** Cosine-distance merge threshold for the turn-level re-pass. Same semantic
+ *  scale as the online clusterer's newSpeakerThreshold (0.45 default), but
+ *  applied to duration-weighted TURN embeddings, which are far less noisy
+ *  than per-utterance ones. */
+const RECLUSTER_THRESHOLD = 0.45;
 /** A silence gap between commits longer than this closes the turn. */
 const TURN_GAP_MS = 2500;
 /** Cap on the UNCONFIRMED window — if stability stalls this long, the turn
@@ -110,7 +116,7 @@ export interface ChunkedTranscriberCallbacks {
 }
 
 interface RingFrame { pcm: Float32Array; tMs: number }
-interface PendingChunk { t0: number; t1: number; clusterId: string }
+interface PendingChunk { t0: number; t1: number; clusterId: string; emb?: number[] }
 interface Turn {
   clusterId: string;
   turnId: number;
@@ -131,8 +137,30 @@ interface Turn {
   pendingName: string | null;
   /** Last unconfirmed tail — promoted if the closing pass returns nothing. */
   pendingTail: ChunkSegment[];
+  /** Duration-weighted sum of the commits' wespeaker embeddings — the
+   *  turn-level voice print (far cleaner than any single utterance's). */
+  embSum: Float64Array | null;
+  embDurMs: number;
 }
-interface UnresolvedTurn { speaker: string; t0: number; t1: number; segments: ChunkSegment[] }
+
+/** A closed turn retained for retroactive relabeling: hint evidence (strong,
+ *  locks the label) and turn-level re-clustering (corrects the online
+ *  clusterer's irreversible oversplits/merges). */
+interface TurnRecord {
+  turnId: number;
+  t0: number;
+  t1: number;
+  /** Unit-norm turn-level embedding (duration-weighted commit mean). */
+  emb: Float64Array | null;
+  embDurMs: number;
+  /** The online clusterer's original id — stable group naming. */
+  onlineCluster: string;
+  /** Current published label. */
+  label: string;
+  /** Hint evidence resolved this turn — clustering must not override it. */
+  hintLocked: boolean;
+  segments: ChunkSegment[];
+}
 
 function rms(s: Float32Array): number {
   if (s.length === 0) return 0;
@@ -178,8 +206,8 @@ export class ChunkedTranscriber {
   private lastChunkWallMs = 0;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
 
-  /** Turns published under a provisional cluster id, awaiting hint evidence. */
-  private unresolved: UnresolvedTurn[] = [];
+  /** Closed turns — the substrate for retroactive relabeling. */
+  private turnRecords: TurnRecord[] = [];
 
   /** High-water mark of CONFIRMED audio. The diarizer duplicates
    *  overlap-region commits to both the outgoing and incoming cluster, and
@@ -242,25 +270,32 @@ export class ChunkedTranscriber {
   }
 
   /** Timestamped platform hint ("who's lit"). Also re-resolves turns that
-   *  published provisionally — overlap evidence only, never inheritance. */
+   *  published provisionally — overlap evidence only, never inheritance.
+   *  Hint evidence LOCKS a turn's label: clustering never overrides it. */
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
-    if (!name || this.unresolved.length === 0) return;
-    const still: UnresolvedTurn[] = [];
-    for (const u of this.unresolved) {
-      const winner = this.binder.bestOverlapName({ tStartMs: u.t0, tEndMs: u.t1 });
-      if (winner && winner.name !== u.speaker) {
-        this.cb.rename(u.speaker, winner.name, u.segments);
-        this.log(`[ChunkedTranscriber] late-resolved turn [${u.t0}..${u.t1}] "${u.speaker}" → "${winner.name}"`);
-      } else if (!winner) {
-        still.push(u);
+    if (!name) return;
+    for (const r of this.turnRecords) {
+      if (r.hintLocked) continue;
+      const winner = this.binder.bestOverlapName({ tStartMs: r.t0, tEndMs: r.t1 });
+      if (winner) {
+        if (winner.name !== r.label) {
+          this.cb.rename(r.label, winner.name, r.segments);
+          this.log(`[ChunkedTranscriber] late-resolved turn [${r.t0}..${r.t1}] "${r.label}" → "${winner.name}"`);
+          r.label = winner.name;
+        }
+        r.hintLocked = true;
       }
     }
-    this.unresolved = still.slice(-MAX_UNRESOLVED);
   }
 
-  stats(): { commits: number; turns: number; queued: number; unresolved: number; binder: ReturnType<ClusterNameBinder['stats']> } {
-    return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, binder: this.binder.stats() };
+  stats(): { commits: number; turns: number; queued: number; unresolved: number; clusters: number; binder: ReturnType<ClusterNameBinder['stats']> } {
+    const labels = new Set(this.turnRecords.map(r => r.label));
+    return {
+      commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length,
+      unresolved: this.turnRecords.filter(r => !r.hintLocked).length,
+      clusters: labels.size, binder: this.binder.stats(),
+    };
   }
 
   /** Session end: flush the carried span and close the open turn. */
@@ -309,11 +344,11 @@ export class ChunkedTranscriber {
     }
 
     if (t1 - t0 < MIN_CHUNK_MS) {
-      this.carry = { t0, t1, clusterId: ev.speakerId };
+      this.carry = { t0, t1, clusterId: ev.speakerId, emb: ev.emb };
       return;
     }
 
-    this.queue.push({ t0, t1, clusterId: ev.speakerId });
+    this.queue.push({ t0, t1, clusterId: ev.speakerId, emb: ev.emb });
     void this.pump();
   }
 
@@ -397,9 +432,17 @@ export class ChunkedTranscriber {
         clusterId: chunk.clusterId, turnId: this.turnCounter++,
         t0, t1: chunk.t1, confirmedUpToMs: t0,
         lastWords: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
+        embSum: null, embDurMs: 0,
       };
     } else {
       this.turn.t1 = Math.max(this.turn.t1, chunk.t1);
+    }
+    // Turn-level voice print: duration-weighted mean of commit embeddings.
+    if (chunk.emb && chunk.emb.length > 0) {
+      const w = chunk.t1 - chunk.t0;
+      if (!this.turn.embSum) this.turn.embSum = new Float64Array(chunk.emb.length);
+      for (let i = 0; i < chunk.emb.length; i++) this.turn.embSum[i] += chunk.emb[i] * w;
+      this.turn.embDurMs += w;
     }
     this.lastChunkWallMs = Date.now();
 
@@ -553,9 +596,81 @@ export class ChunkedTranscriber {
     if (turn.pendingName) this.cb.clearPending(turn.pendingName);
     if (turn.allConfirmed.length > 0) {
       const winner = this.binder.bestOverlapName({ tStartMs: turn.t0, tEndMs: turn.t1 });
-      if (!winner) {
-        this.unresolved.push({ speaker: turn.clusterId, t0: turn.t0, t1: turn.t1, segments: turn.allConfirmed });
-        if (this.unresolved.length > MAX_UNRESOLVED) this.unresolved.shift();
+      let emb: Float64Array | null = null;
+      if (turn.embSum && turn.embDurMs > 0) {
+        emb = new Float64Array(turn.embSum.length);
+        let norm = 0;
+        for (let i = 0; i < turn.embSum.length; i++) { emb[i] = turn.embSum[i] / turn.embDurMs; norm += emb[i] * emb[i]; }
+        norm = Math.sqrt(norm) || 1;
+        for (let i = 0; i < emb.length; i++) emb[i] /= norm;
+      }
+      this.turnRecords.push({
+        turnId: turn.turnId, t0: turn.t0, t1: turn.t1,
+        emb, embDurMs: turn.embDurMs,
+        onlineCluster: turn.clusterId,
+        label: winner?.name || turn.clusterId,
+        hintLocked: !!winner,
+        segments: turn.allConfirmed,
+      });
+      if (this.turnRecords.length > MAX_TURN_RECORDS) this.turnRecords.shift();
+      this.recluster();
+    }
+  }
+
+  /** Retroactive turn-level re-clustering. The online clusterer decides
+   *  greedily on noisy per-utterance embeddings and never revisits — the
+   *  source of both oversplits (spurious speaker_N) and bad merges. This
+   *  re-pass clusters TURN embeddings (duration-weighted means) over the
+   *  whole session and republishes corrected labels through the existing
+   *  rename path (same segment_ids, PG upsert). Hint-locked labels are
+   *  ground truth: never overridden, and they NAME their whole group —
+   *  free must-link supervision on hinted platforms. */
+  private recluster(): void {
+    const recs = this.turnRecords.filter(r => r.emb !== null);
+    if (recs.length < 3) return;
+
+    interface Group { cent: Float64Array; durMs: number; members: TurnRecord[] }
+    const groups: Group[] = [];
+    const dist = (g: Group, e: Float64Array): number => {
+      let dot = 0; let gn = 0;
+      for (let i = 0; i < e.length; i++) { dot += g.cent[i] * e[i]; gn += g.cent[i] * g.cent[i]; }
+      const n = Math.sqrt(gn) || 1;
+      return 1 - dot / n; // e is unit-norm
+    };
+    // Chronological greedy pass with duration-weighted centroids — the
+    // online algorithm's shape, but over clean turn-level embeddings and
+    // re-run from scratch every time (mistakes are not sticky).
+    for (const r of recs) {
+      let best: Group | null = null;
+      let bestD = RECLUSTER_THRESHOLD;
+      for (const g of groups) {
+        const d = dist(g, r.emb!);
+        if (d < bestD) { bestD = d; best = g; }
+      }
+      if (best) {
+        for (let i = 0; i < best.cent.length; i++) best.cent[i] = (best.cent[i] * best.durMs + r.emb![i] * r.embDurMs) / (best.durMs + r.embDurMs);
+        best.durMs += r.embDurMs;
+        best.members.push(r);
+      } else {
+        groups.push({ cent: Float64Array.from(r.emb!), durMs: r.embDurMs, members: [r] });
+      }
+    }
+
+    // Group labels: a hint-locked member names the group (earliest wins);
+    // otherwise the earliest member's ORIGINAL online cluster id — stable
+    // across re-passes, no label churn. A label may name only one group.
+    const taken = new Set<string>();
+    for (const g of groups) {
+      const locked = g.members.find(m => m.hintLocked);
+      let label = locked?.label
+        ?? g.members.map(m => m.onlineCluster).find(c => !taken.has(c));
+      if (!label || (taken.has(label))) continue; // no stable label available — leave as-is
+      taken.add(label);
+      for (const m of g.members) {
+        if (m.hintLocked || m.label === label) continue;
+        this.cb.rename(m.label, label, m.segments);
+        this.log(`[ChunkedTranscriber] recluster: turn ${m.turnId} "${m.label}" → "${label}"`);
+        m.label = label;
       }
     }
   }
