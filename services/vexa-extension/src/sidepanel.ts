@@ -25,6 +25,7 @@ interface Segment {
 
 interface PanelState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
+  paused?: boolean;
   platform: string | null;
   nativeMeetingId: string | null;
   meetingId: number | null;
@@ -133,19 +134,24 @@ function applyState(s: PanelState): void {
     return; // don't let other status lines overwrite this — it's the blocker
   }
   const pill = $('statusPill'), pillText = $('statusText');
-  pill.classList.toggle('live', s.status === 'capturing');
+  pill.classList.toggle('live', s.status === 'capturing' && !s.paused);
   pillText.textContent =
-    s.status === 'capturing' ? 'LIVE'
+    s.status === 'capturing' ? (s.paused ? 'Paused' : 'LIVE')
     : s.status === 'connecting' ? 'Connecting'
     : s.status === 'error' ? 'Error'
     : 'Idle';
   const toggle = $('toggleBtn') as HTMLButtonElement;
+  const stopBtn = $('stopBtn') as HTMLButtonElement;
   if (s.status === 'capturing' || s.status === 'connecting') {
-    toggle.innerHTML = '&#10074;&#10074; Pause';
+    // Live: Pause suspends (session stays alive, Resume continues the same
+    // meeting); Stop ends it. Two distinct verbs, two buttons.
+    toggle.innerHTML = s.paused ? '&#9654; Resume' : '&#10074;&#10074; Pause';
     toggle.classList.remove('danger');
+    stopBtn.style.display = '';
   } else {
     toggle.innerHTML = '&#9654; Start';
     toggle.classList.remove('danger');
+    stopBtn.style.display = 'none';
   }
 
   const bar = $('meetingBar');
@@ -419,9 +425,10 @@ $('themeBtn').addEventListener('click', () => {
 });
 
 $('gearBtn').addEventListener('click', () => showSettings($('settings').style.display !== 'flex'));
+$('stopBtn').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'STOP' }));
 $('toggleBtn').addEventListener('click', async () => {
   if (state.status === 'capturing' || state.status === 'connecting') {
-    chrome.runtime.sendMessage({ type: 'STOP' });
+    chrome.runtime.sendMessage({ type: state.paused ? 'RESUME' : 'PAUSE' });
     return;
   }
   // Zoom/Teams don't expose per-participant audio to the DOM — mint a

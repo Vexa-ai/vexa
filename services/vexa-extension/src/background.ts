@@ -15,6 +15,9 @@ import { detectMeeting, detectMediaTab, MeetingRef } from './meeting';
 
 interface SessionState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
+  /** Capture suspended (audio/hints dropped) but the session stays alive —
+   *  resume continues the SAME meeting. Stop ends it. */
+  paused: boolean;
   tabId: number | null;
   meetingId: number | null;
   platform: string | null;
@@ -34,6 +37,7 @@ interface SessionState {
 
 const state: SessionState = {
   status: 'idle',
+  paused: false,
   tabId: null,
   meetingId: null,
   platform: null,
@@ -104,6 +108,7 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
   const language: string = cfg.language || 'auto';
 
   state.status = 'connecting';
+  state.paused = false;
   state.tabId = tabId;
   state.platform = meeting.platform;
   state.nativeMeetingId = meeting.nativeMeetingId;
@@ -236,6 +241,7 @@ async function stopCapture(): Promise<void> {
   tabStreamId = null;
   if (ws) { try { ws.close(); } catch { /* ignore */ } ws = null; }
   state.status = 'idle';
+  state.paused = false;
   state.meetingId = null;
   state.streams = 0;
   state.tabAudio = 'none';
@@ -249,6 +255,7 @@ async function stopCapture(): Promise<void> {
 // Pack and forward one per-speaker PCM chunk.
 const trackFrames = new Map<number, { frames: number; lastAt: number }>();
 function sendAudio(index: number, pcm: number[]): void {
+  if (state.paused) return; // paused: capture runs, nothing ships
   const t = trackFrames.get(index) || { frames: 0, lastAt: 0 };
   t.frames++; t.lastAt = Date.now();
   trackFrames.set(index, t);
@@ -316,6 +323,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true }); break;
     case 'STOP':
       stopCapture(); sendResponse({ ok: true }); break;
+    case 'PAUSE':
+      state.paused = true; broadcastStatus(); shipTelemetry('pause');
+      sendResponse({ ok: true }); break;
+    case 'RESUME':
+      state.paused = false; broadcastStatus(); shipTelemetry('resume');
+      sendResponse({ ok: true }); break;
     case 'RELOAD_NOW':
       // Dev escape hatch: force the deferred reload even mid-capture so a stale
       // background can be replaced on demand.
@@ -341,6 +354,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       break;
     case 'speaker_activity':
       // Timestamped DOM hint for the server-side cluster↔name binder.
+      // Dropped while paused — hints must not describe un-shipped audio.
+      if (state.paused) break;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'speaker_activity', name: msg.name, kind: msg.kind || 'dom-active', isEnd: !!msg.isEnd, tMs: Date.now() }));
       }
