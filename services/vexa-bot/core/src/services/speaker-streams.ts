@@ -135,6 +135,32 @@ export class SpeakerStreamManager {
     const buffer = this.buffers.get(speakerId);
     if (!buffer) return;
 
+    // Gap guard for batch feeders: turns of one speaker arrive separated by
+    // other speakers' turns. Concatenating non-contiguous audio into one
+    // buffer maps Whisper offsets onto a gapless timeline — the second turn's
+    // words get stamped near the first turn's end instead of when they were
+    // actually spoken, shuffling cross-speaker order. If the new audio is not
+    // contiguous with what's buffered (>2s gap), flush the buffer first so
+    // each contiguous stretch keeps a truthful time base.
+    if (atMs !== undefined && buffer.totalSamples > 0) {
+      const bufferedEndMs = buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000;
+      if (atMs - bufferedEndMs > 2000) {
+        // Detach the buffered stretch and finish it asynchronously on the
+        // snapshot, then reset the live buffer NOW — the new turn must never
+        // append to (or race with) the old stretch. fullReset() assigns fresh
+        // arrays, so the snapshot keeps the old chunks untouched.
+        const detached: SpeakerBuffer = { ...buffer };
+        this.fullReset(buffer);
+        if (detached.lastTranscript) {
+          this.emitSegment(detached, detached.lastTranscript);
+        } else if (detached.totalSamples - detached.confirmedSamples > 0 && !detached.inFlight) {
+          void this.submitBuffer(detached).then(() => {
+            if (detached.lastTranscript) this.emitSegment(detached, detached.lastTranscript);
+          }).catch(() => { /* transcription failed; stretch dropped */ });
+        }
+      }
+    }
+
     // Set window start on first audio after reset — this ensures the segment's
     // start time reflects when the audio was actually spoken, not when the
     // buffer was cleared. Critical for speaker-mapper and cross-speaker order.
