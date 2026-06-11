@@ -322,16 +322,26 @@ class CaptureSession {
         const lastSeg = result.segments?.[result.segments.length - 1];
         const segEndSec = lastSeg?.end;
         const whisperSegs = result.segments?.map(s => ({ text: s.text, start: s.start, end: s.end }));
-        this.speakerManager.handleTranscriptionResult(speakerId, result.text, segEndSec, whisperSegs);
+        const accepted = this.speakerManager.handleTranscriptionResult(speakerId, result.text, segEndSec, whisperSegs);
+        // Rejected result (stale generation / deferred-close discard): its
+        // text covers audio this buffer no longer owns — publishing a draft
+        // for it would resurrect a bundle nothing ever clears.
+        if (!accepted) return;
 
-        // Publish: drained confirmed batch + current draft (pending).
+        // Publish: drained confirmed batch + current draft (pending) — under
+        // the buffer's CURRENT name. `speakerName` was captured at submit
+        // time; the segment is often renamed (seg-N → real name) while the
+        // request is in flight, and a draft published under the stale name
+        // becomes a permanent "seg-N" ghost in the live view (the rename's
+        // clear already ran, and no later event targets that name again).
+        const currentName = this.speakerManager.getSpeakerName(speakerId) || speakerName;
         const segLang = this.explicitLanguage || result.language || 'en';
         const bufStart = this.speakerManager.getBufferStartMs(speakerId);
         const startSec = (bufStart - this.segmentPublisher.sessionStartMs) / 1000;
         const whisperSegments = result.segments || [{ text: result.text, start: 0, end: 0 }];
         const pendingSegs: TranscriptionSegment[] = whisperSegments
           .map(ws => ({
-            speaker: speakerName,
+            speaker: currentName,
             text: (ws.text || '').trim(),
             start: startSec + (ws.start || 0),
             end: startSec + (ws.end || 0),
@@ -352,7 +362,7 @@ class CaptureSession {
           const pt = p.text.trim();
           return !confirmedTextList.some(ct => pt === ct || pt.startsWith(ct) || ct.startsWith(pt));
         });
-        await this.segmentPublisher.publishTranscript(speakerName, speakerConfirmed, pending);
+        await this.segmentPublisher.publishTranscript(currentName, speakerConfirmed, pending);
       } catch (err: any) {
         log(`[Ingest] transcribe failed for ${speakerName}: ${err.message}`);
         this.speakerManager.handleTranscriptionResult(speakerId, '');

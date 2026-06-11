@@ -189,10 +189,15 @@ export class SpeakerStreamManager {
    *                   falls back to full-text confirmation using transcript param.
    * @param segmentEndSec - end time (seconds) of the last segment Whisper returned,
    *                        relative to the start of the submitted audio.
+   * @returns true if the result was accepted into the confirmation pipeline;
+   *          false if it was discarded (stale generation, or a deferred-close
+   *          finalization superseded it). Callers must NOT publish a pending
+   *          draft for a rejected result — its text describes audio this
+   *          buffer no longer owns.
    */
-  handleTranscriptionResult(speakerId: string, transcript: string, segmentEndSec?: number, segments?: WhisperSegment[]): void {
+  handleTranscriptionResult(speakerId: string, transcript: string, segmentEndSec?: number, segments?: WhisperSegment[]): boolean {
     const buffer = this.buffers.get(speakerId);
-    if (!buffer) return;
+    if (!buffer) return false;
 
     buffer.inFlight = false;
 
@@ -202,7 +207,7 @@ export class SpeakerStreamManager {
     // from a previous segment.
     const submitGen = this.submitGeneration.get(speakerId);
     if (submitGen !== undefined && submitGen < buffer.generation) {
-      return;
+      return false;
     }
 
     // Segmentation closed this buffer while this request was in flight: the
@@ -212,19 +217,19 @@ export class SpeakerStreamManager {
       buffer.pendingFinal = false;
       if (this.unconfirmedSamples(buffer) === 0) {
         this.fullReset(buffer);
-        return;
+        return false;
       }
       buffer.idleSubmitted = true;
       log(`[SpeakerStreams] Final resubmit for "${buffer.speakerName}" after deferred close (${(this.unconfirmedSamples(buffer) / this.sampleRate).toFixed(1)}s audio)`);
       void this.submitBuffer(buffer);
-      return;
+      return false;
     }
 
     if (!transcript || transcript.trim().length === 0) {
       if (buffer.idleSubmitted) {
         this.fullReset(buffer);
       }
-      return;
+      return false;
     }
 
     const trimmed = transcript.trim();
@@ -235,14 +240,14 @@ export class SpeakerStreamManager {
       if (buffer.idleSubmitted) {
         this.fullReset(buffer);
       }
-      return;
+      return false;
     }
 
     // Idle/flush submit — emit immediately, this is the last chance
     if (buffer.idleSubmitted) {
       this.emitSegment(buffer, trimmed);
       this.fullReset(buffer);
-      return;
+      return true;
     }
 
     // Word-level prefix confirmation (LocalAgreement-2, UFAL whisper_streaming).
@@ -305,7 +310,7 @@ export class SpeakerStreamManager {
           const lastConfirmedSeg = segments[confirmedSegCount - 1];
           this.advanceOffset(buffer, lastConfirmedSeg.end);
           buffer.windowStartMs = baseWindowMs + Math.floor(lastConfirmedSeg.end * 1000);
-          return;
+          return true;
         }
       }
 
@@ -326,6 +331,7 @@ export class SpeakerStreamManager {
       this.emitSegment(buffer, trimmed);
       this.advanceOffset(buffer, segmentEndSec);
     }
+    return true;
   }
 
   removeSpeaker(speakerId: string): void {
