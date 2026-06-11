@@ -113,14 +113,14 @@ export class ChunkedTranscriber {
 
   static async create(cb: ChunkedTranscriberCallbacks): Promise<ChunkedTranscriber> {
     const t = new ChunkedTranscriber(cb);
+    // Native defaults (tab-audio tuned), NOT the old pipeline's AMI-pack
+    // overrides: those forced 3s commits to bound commit lag — irrelevant
+    // here (the ring makes lag free) — and split/seeded clusters far more
+    // aggressively (0.55 split / 1.5s seed / 2s cooldown), which sprays
+    // spurious speaker_N labels on compressed single-channel audio. The
+    // defaults are uniformly more conservative (0.45 / 3s / 4s) and allow
+    // 10s utterances → fewer, larger chunks with better Whisper context.
     t.diarizer = await OnnxLocalDiarizer.create({
-      // Pack's AMI-eval-tuned values — change only with eval numbers (core/eval/).
-      maxUtteranceMs: 3000,
-      newSpeakerThreshold: 0.55,
-      veryFarThreshold: 0.90,
-      newClusterCooldownMs: 2000,
-      minSeedUtteranceMs: 1500,
-      pyannoteInferIntervalMs: 250,
       onCommit: (ev: CommitEvent) => t.handleCommit(ev),
     });
     t.log('[ChunkedTranscriber] ready (model-cut chunks, one-shot serialized transcription)');
