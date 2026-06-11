@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+
 /**
  * Build script to create browser-utils.global.js bundle
  * This script takes the compiled TypeScript output and creates a browser-compatible bundle
@@ -18,6 +19,8 @@ const zoomSpeakersPath = path.join(__dirname, 'dist', 'browser', 'zoom-speakers.
 const zoomSpeakersContent = fs.readFileSync(zoomSpeakersPath, 'utf8');
 const gmeetCapturePath = path.join(__dirname, 'dist', 'browser', 'gmeet-capture.js');
 const gmeetCaptureContent = fs.readFileSync(gmeetCapturePath, 'utf8');
+const teamsSpeakersPath = path.join(__dirname, 'dist', 'browser', 'msteams-speakers.js');
+const teamsSpeakersContent = fs.readFileSync(teamsSpeakersPath, 'utf8');
 
 // Create the browser bundle content using a safe CommonJS wrapper
 const browserBundleContent = `
@@ -52,6 +55,12 @@ ${zoomSpeakersContent}
 ${gmeetCaptureContent}
   })(gcExports, gcModule);
 
+  var tsExports = {};
+  var tsModule = { exports: tsExports };
+  (function(exports, module) {
+${teamsSpeakersContent}
+  })(tsExports, tsModule);
+
   // Expose utilities on window object for browser context
   var utils = module.exports || {};
   var gm = gmModule.exports || {};
@@ -63,7 +72,8 @@ ${gmeetCaptureContent}
     generateBrowserUUID: utils.generateBrowserUUID,
     createGmeetSpeakers: gm.createGmeetSpeakers,
     createZoomSpeakers: zm.createZoomSpeakers,
-    createGmeetCapture: (gcModule.exports || {}).createGmeetCapture
+    createGmeetCapture: (gcModule.exports || {}).createGmeetCapture,
+    createTeamsSpeakers: (tsModule.exports || {}).createTeamsSpeakers
   };
 
   // Also expose performLeaveAction for platform-specific leave UX

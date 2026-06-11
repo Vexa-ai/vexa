@@ -216,348 +216,37 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
 
           // Unified Teams speaker detection - NO FALLBACKS (signal-only approach)
           const initializeTeamsSpeakerDetection = (audioService: any, botConfigData: any) => {
-            (window as any).logBot("Setting up ROBUST Teams speaker detection (NO FALLBACKS - signal-only)...");
-
-            // Teams-specific configuration for speaker detection
-            const participantSelectors = selectors.participantSelectors;
-
-            // ============================================================================
-            // UNIFIED SPEAKER DETECTION SYSTEM (NO FALLBACKS)
-            // ============================================================================
-
-            // Participant Identity Cache
-            interface ParticipantIdentity {
-              id: string;
-              name: string;
-              element: HTMLElement;
-              lastSeen: number;
+            // Blue-squares detection lives in the SHARED msteams-speakers
+            // module (browser-utils bundle) — the SAME code the extension
+            // runs. One implementation, no drift: debug it once, both hosts
+            // get the fix.
+            const w = window as any;
+            if (!w.VexaBrowserUtils?.createTeamsSpeakers) {
+              w.logBot('❌ [TeamsSpeakers] VexaBrowserUtils.createTeamsSpeakers missing — stale browser-utils bundle');
+              return;
             }
-
-            class ParticipantRegistry {
-              private cache = new Map<HTMLElement, ParticipantIdentity>();
-              private idToElement = new Map<string, HTMLElement>();
-
-              getIdentity(element: HTMLElement): ParticipantIdentity {
-                if (!this.cache.has(element)) {
-                  const id = this.extractId(element);
-                  const name = this.extractName(element);
-
-                  const identity: ParticipantIdentity = {
-                    id,
-                    name,
-                    element,
-                    lastSeen: Date.now()
-                  };
-
-                  this.cache.set(element, identity);
-                  this.idToElement.set(id, element);
+            const selfName = (botConfigData as any)?.botName || (botConfigData as any)?.name || undefined;
+            w.__vexaTeamsSpeakers = w.VexaBrowserUtils.createTeamsSpeakers({
+              selfName,
+              log: (m: string) => w.logBot?.(m),
+              onSpeaking: (name: string, id: string, isEnd: boolean, tMs: number) => {
+                // 1. Exit-callback speaker events (relative to audio session
+                //    start) — persisted by the bot on leave.
+                const sessionStartTime = audioService?.getSessionAudioStartTime?.() ?? null;
+                if (sessionStartTime !== null) {
+                  w.__vexaSpeakerEvents = w.__vexaSpeakerEvents || [];
+                  w.__vexaSpeakerEvents.push({
+                    event_type: isEnd ? 'SPEAKER_END' : 'SPEAKER_START',
+                    participant_name: name,
+                    participant_id: id,
+                    relative_timestamp_ms: tMs - sessionStartTime,
+                  });
                 }
-
-                return this.cache.get(element)!;
-              }
-
-              invalidate(element: HTMLElement) {
-                const identity = this.cache.get(element);
-                if (identity) {
-                  this.idToElement.delete(identity.id);
-                  this.cache.delete(element);
-                }
-              }
-
-              private extractId(element: HTMLElement): string {
-                // data-acc-element-id is the most stable Teams id attribute
-                let id = element.getAttribute('data-acc-element-id') ||
-                         element.getAttribute('data-tid') ||
-                         element.getAttribute('data-participant-id') ||
-                         element.getAttribute('data-user-id') ||
-                         element.getAttribute('data-object-id') ||
-                         element.getAttribute('id');
-                if (!id) {
-                  const stableChild = element.querySelector(selectorsTyped.participantIdSelectors?.join(', ') || '[data-tid]');
-                  if (stableChild) {
-                    id = stableChild.getAttribute('data-tid') ||
-                         stableChild.getAttribute('data-participant-id') ||
-                         stableChild.getAttribute('data-user-id');
-                  }
-                }
-                if (!id) {
-                  if (!(element as any).dataset.vexaGeneratedId) {
-                    (element as any).dataset.vexaGeneratedId = 'teams-id-' + Math.random().toString(36).substr(2, 9);
-                  }
-                  id = (element as any).dataset.vexaGeneratedId as string;
-                }
-                return id!;
-              }
-
-              private extractName(element: HTMLElement): string {
-                const nameSelectors = selectors.nameSelectors || [];
-                const forbiddenSubstrings = [
-                  "more_vert", "mic_off", "mic", "videocam", "videocam_off",
-                  "present_to_all", "devices", "speaker", "speakers", "microphone",
-                  "camera", "camera_off", "share", "chat", "participant", "user"
-                ];
-                for (const selector of nameSelectors) {
-                  const nameElement = element.querySelector(selector) as HTMLElement;
-                  if (!nameElement) continue;
-                  let nameText = nameElement.textContent ||
-                                 nameElement.innerText ||
-                                 nameElement.getAttribute('title') ||
-                                 nameElement.getAttribute('aria-label');
-                  if (!nameText || !nameText.trim()) continue;
-                  nameText = nameText.trim();
-                  if (forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
-                  if (nameText.length > 1 && nameText.length < 50) return nameText;
-                }
-                const ariaLabel = element.getAttribute('aria-label');
-                if (ariaLabel && ariaLabel.includes('name')) {
-                  const nameMatch = ariaLabel.match(/name[:\s]+([^,]+)/i);
-                  if (nameMatch && nameMatch[1]) {
-                    const nameText = nameMatch[1].trim();
-                    if (nameText.length > 1 && nameText.length < 50) return nameText;
-                  }
-                }
-                return `Teams Participant (${this.extractId(element)})`;
-              }
-            }
-
-            // Unified State Machine
-            type SpeakingState = 'speaking' | 'silent' | 'unknown';
-
-            interface ParticipantState {
-              state: SpeakingState;
-              hasSignal: boolean;
-              lastChangeTime: number;
-              lastEventTime: number;
-            }
-
-            class SpeakerStateMachine {
-              private state = new Map<string, ParticipantState>();
-              private readonly MIN_STATE_CHANGE_MS = 200;
-
-              updateState(participantId: string, detectionResult: { isSpeaking: boolean; hasSignal: boolean }): boolean {
-                const current = this.state.get(participantId);
-                const now = Date.now();
-                if (!detectionResult.hasSignal) {
-                  if (current?.hasSignal) {
-                    this.state.set(participantId, { state: 'unknown', hasSignal: false, lastChangeTime: now, lastEventTime: current.lastEventTime });
-                  }
-                  return false;
-                }
-                const newState: SpeakingState = detectionResult.isSpeaking ? 'speaking' : 'silent';
-                if (current?.state === newState && current?.hasSignal) return false;
-                if (current && (now - current.lastChangeTime) < this.MIN_STATE_CHANGE_MS) return false;
-                this.state.set(participantId, { state: newState, hasSignal: true, lastChangeTime: now, lastEventTime: current?.lastEventTime || 0 });
-                return true;
-              }
-
-              getState(participantId: string): SpeakingState | null {
-                return this.state.get(participantId)?.state || null;
-              }
-
-              remove(participantId: string) {
-                this.state.delete(participantId);
-              }
-            }
-
-            // Detection: voice-level-stream-outline + vdi-frame-occlusion (NO FALLBACKS)
-            class TeamsSpeakingDetector {
-              private readonly VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
-
-              detectSpeakingState(element: HTMLElement): { isSpeaking: boolean; hasSignal: boolean } {
-                const voiceOutline = element.querySelector(this.VOICE_LEVEL_SELECTOR) as HTMLElement | null;
-                if (!voiceOutline) return { isSpeaking: false, hasSignal: false };
-                // vdi-frame-occlusion class presence (on voiceOutline or any
-                // ancestor) = speaking; absence = not speaking.
-                let current: HTMLElement | null = voiceOutline;
-                while (current) {
-                  if (current.classList.contains('vdi-frame-occlusion')) return { isSpeaking: true, hasSignal: true };
-                  current = current.parentElement;
-                }
-                return { isSpeaking: false, hasSignal: true };
-              }
-
-              hasRequiredSignal(element: HTMLElement): boolean {
-                return element.querySelector(this.VOICE_LEVEL_SELECTOR) !== null;
-              }
-            }
-
-            class EventDebouncer {
-              private timers = new Map<string, number>();
-              constructor(private readonly delayMs: number = 300) {}
-              debounce(key: string, fn: () => void) {
-                if (this.timers.has(key)) clearTimeout(this.timers.get(key)!);
-                const timer = setTimeout(() => { fn(); this.timers.delete(key); }, this.delayMs) as unknown as number;
-                this.timers.set(key, timer);
-              }
-              cancel(key: string) {
-                if (this.timers.has(key)) { clearTimeout(this.timers.get(key)!); this.timers.delete(key); }
-              }
-            }
-
-            // Initialize components
-            const registry = new ParticipantRegistry();
-            const stateMachine = new SpeakerStateMachine();
-            const detector = new TeamsSpeakingDetector();
-            const debouncer = new EventDebouncer(300);
-            const observers = new Map<HTMLElement, MutationObserver[]>();
-            const rafHandles = new Map<string, number>();
-
-            // State for tracking speaking status (for cleanup)
-            const speakingStates = new Map<string, SpeakingState>();
-
-            // Event emission helper
-            function sendTeamsSpeakerEvent(eventType: string, identity: ParticipantIdentity) {
-              const eventAbsoluteTimeMs = Date.now();
-              const sessionStartTime = audioService?.getSessionAudioStartTime?.() ?? null;
-
-              if (sessionStartTime === null) {
-                return;
-              }
-
-              const relativeTimestampMs = eventAbsoluteTimeMs - sessionStartTime;
-
-              // Accumulate for persistence (direct bot accumulation)
-              (window as any).__vexaSpeakerEvents = (window as any).__vexaSpeakerEvents || [];
-              (window as any).__vexaSpeakerEvents.push({
-                event_type: eventType,
-                participant_name: identity.name,
-                participant_id: identity.id,
-                relative_timestamp_ms: relativeTimestampMs,
-              });
-            }
-            // Unified Observer System
-            function observeParticipant(element: HTMLElement) {
-              if ((element as any).dataset.vexaObserverAttached) return;
-              // Only observe if voice-level-stream-outline signal exists
-              if (!detector.hasRequiredSignal(element)) {
-                (window as any).logBot(`⚠️ [Unified] Skipping participant - no voice-level-stream-outline signal found`);
-                return;
-              }
-              const identity = registry.getIdentity(element);
-              (element as any).dataset.vexaObserverAttached = 'true';
-              (window as any).logBot(`👁️ [Unified] Observing: ${identity.name} (ID: ${identity.id}) - signal present`);
-              const voiceOutline = element.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement;
-              if (!voiceOutline) {
-                (window as any).logBot(`❌ [Unified] Voice outline disappeared for ${identity.name}`);
-                return;
-              }
-              // Observer on voice-level element (PRIMARY SIGNAL)
-              const voiceObserver = new MutationObserver(() => checkAndEmit(identity));
-              voiceObserver.observe(voiceOutline, { attributes: true, attributeFilter: ['style', 'class', 'aria-hidden'] });
-              // Observer on container (detect signal loss)
-              const containerObserver = new MutationObserver(() => {
-                if (!detector.hasRequiredSignal(element)) {
-                  (window as any).logBot(`⚠️ [Unified] Voice-level signal lost for ${identity.name} - stopping observation`);
-                  handleParticipantRemoved(identity);
-                  return;
-                }
-                checkAndEmit(identity);
-              });
-              containerObserver.observe(element, { childList: true, subtree: true });
-              observers.set(element, [voiceObserver, containerObserver]);
-              scheduleRAFCheck(identity);
-              checkAndEmit(identity);
-            }
-
-            function checkAndEmit(identity: ParticipantIdentity) {
-              if (!identity.element.isConnected) { handleParticipantRemoved(identity); return; }
-              const detectionResult = detector.detectSpeakingState(identity.element);
-              if (stateMachine.updateState(identity.id, detectionResult) && detectionResult.hasSignal) {
-                const newState: SpeakingState = detectionResult.isSpeaking ? 'speaking' : 'silent';
-                speakingStates.set(identity.id, newState);
-                debouncer.debounce(identity.id, () => emitEvent(newState, identity));
-              }
-            }
-
-            function scheduleRAFCheck(identity: ParticipantIdentity) {
-              const check = () => {
-                if (!identity.element.isConnected) { handleParticipantRemoved(identity); return; }
-                checkAndEmit(identity);
-                rafHandles.set(identity.id, requestAnimationFrame(check));
-              };
-              rafHandles.set(identity.id, requestAnimationFrame(check));
-            }
-
-            function handleParticipantRemoved(identity: ParticipantIdentity) {
-              debouncer.cancel(identity.id);
-              if (stateMachine.getState(identity.id) === 'speaking') emitEvent('silent', identity);
-              const obs = observers.get(identity.element);
-              if (obs) { obs.forEach(o => o.disconnect()); observers.delete(identity.element); }
-              const rafHandle = rafHandles.get(identity.id);
-              if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandles.delete(identity.id); }
-              stateMachine.remove(identity.id);
-              speakingStates.delete(identity.id);
-              registry.invalidate(identity.element);
-              delete (identity.element as any).dataset.vexaObserverAttached;
-              (window as any).logBot(`🗑️ [Unified] Removed: ${identity.name} (ID: ${identity.id})`);
-            }
-
-            function emitEvent(state: SpeakingState, identity: ParticipantIdentity) {
-              if (state === 'unknown') return;
-              const eventType = state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END';
-              const emoji = state === 'speaking' ? '🎤' : '🔇';
-              (window as any).logBot(`${emoji} [Unified] ${eventType}: ${identity.name} (ID: ${identity.id}) [signal-based]`);
-              sendTeamsSpeakerEvent(eventType, identity);
-              // Blue-squares hint for the mixed-channel core's name binder —
-              // the ONLY attribution signal (captions deliberately unused:
-              // they may not be enabled).
-              try {
-                (window as any).__vexaTeamsSpeakerHint?.(identity.name, state !== 'speaking', Date.now());
-              } catch { /* exposed fn not ready yet */ }
-            }
-
-            function scanAndObserveAll() {
-              let foundCount = 0, observedCount = 0;
-              // Include [role="menuitem"] directly (most reliable selector)
-              const allSelectors = [...participantSelectors, '[role="menuitem"]'];
-              const seenElements = new WeakSet<HTMLElement>();
-              for (const selector of allSelectors) {
-                document.querySelectorAll(selector).forEach(el => {
-                  if (el instanceof HTMLElement && !seenElements.has(el)) {
-                    seenElements.add(el);
-                    foundCount++;
-                    if (detector.hasRequiredSignal(el)) { observeParticipant(el); observedCount++; }
-                  }
-                });
-              }
-              (window as any).logBot(`🔍 [Unified] Scanned ${foundCount} participants, observing ${observedCount} with signal`);
-            }
-
-            // Initialize speaker detection
-            scanAndObserveAll();
-
-            // Monitor for new/removed participants
-            const bodyObserver = new MutationObserver((mutationsList) => {
-              const allSelectors = [...participantSelectors, '[role="menuitem"]'];
-              for (const mutation of mutationsList) {
-                if (mutation.type !== 'childList') continue;
-                mutation.addedNodes.forEach(node => {
-                  if (node.nodeType !== Node.ELEMENT_NODE) return;
-                  const elementNode = node as HTMLElement;
-                  for (const selector of allSelectors) {
-                    if (elementNode.matches(selector)) observeParticipant(elementNode);
-                    elementNode.querySelectorAll(selector).forEach(childEl => {
-                      if (childEl instanceof HTMLElement) observeParticipant(childEl);
-                    });
-                  }
-                });
-                mutation.removedNodes.forEach(node => {
-                  if (node.nodeType !== Node.ELEMENT_NODE) return;
-                  const elementNode = node as HTMLElement;
-                  for (const selector of participantSelectors) {
-                    if (!elementNode.matches(selector)) continue;
-                    const identity = registry.getIdentity(elementNode);
-                    if (speakingStates.get(identity.id) === 'speaking') {
-                      (window as any).logBot(`🔇 [Unified] SPEAKER_END (Participant removed while speaking): ${identity.name} (ID: ${identity.id})`);
-                      emitEvent('silent', identity);
-                    }
-                    handleParticipantRemoved(identity);
-                  }
-                });
-              }
+                // 2. dom-outline hint for the mixed-channel core's name binder.
+                try { w.__vexaTeamsSpeakerHint?.(name, isEnd, tMs); } catch { /* not ready */ }
+              },
             });
-            const meetingContainer = document.querySelector(selectorsTyped.meetingContainerSelectors[0]) || document.body;
-            bodyObserver.observe(meetingContainer, { childList: true, subtree: true });
+            w.logBot('[TeamsSpeakers] shared blue-squares detection started (self="' + (selfName || 'unknown') + '")');
 
             // Simple participant counting - poll every 5 seconds using ARIA list
             let currentParticipantCount = 0;

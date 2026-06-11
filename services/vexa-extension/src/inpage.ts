@@ -18,6 +18,7 @@
 
 import { createGmeetSpeakers, GmeetSpeakers } from '../../vexa-bot/core/src/browser/gmeet-speakers';
 import { createZoomSpeakers, ZoomSpeakers } from '../../vexa-bot/core/src/browser/zoom-speakers';
+import { createTeamsSpeakers, TeamsSpeakers } from '../../vexa-bot/core/src/browser/msteams-speakers';
 import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browser/gmeet-capture';
 
 (() => {
@@ -53,6 +54,13 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
   // whoever Zoom currently renders as the active speaker.
   let speakers: GmeetSpeakers | null = null;
   let zoomSpeakers: ZoomSpeakers | null = null;
+  let teamsSpeakers: TeamsSpeakers | null = null;
+
+  function isTeamsHost(): boolean {
+    return location.hostname.endsWith('teams.live.com')
+      || location.hostname.endsWith('teams.microsoft.com')
+      || location.hostname === 'teams.cloud.microsoft';
+  }
 
   function startSpeakerAttribution(): void {
     if (location.hostname.endsWith('meet.google.com')) {
@@ -85,6 +93,19 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
       console.log(`${TAG} shared zoom-speakers attribution started (multi-channel, self="${selfName || 'unknown'}")`);
+    } else if (isTeamsHost()) {
+      if (teamsSpeakers) return;
+      // Blue-squares (voice-level-stream-outline) detection — the SAME shared
+      // module the bot injects. Debounced speaking start/stop per name feeds
+      // the server's binder as timestamped dom-outline hints; the mixed
+      // tabCapture track's clusters resolve to these names retroactively.
+      teamsSpeakers = createTeamsSpeakers({
+        log: (m) => console.log(`${TAG} [teams] ${m}`),
+        onSpeaking: (name, _id, isEnd) =>
+          post('speaker_activity', { name, isEnd, kind: 'dom-outline' }),
+      });
+      (window as any).__vexaTeamsSpeakers = teamsSpeakers;
+      console.log(`${TAG} shared msteams-speakers attribution started (blue squares)`);
     }
   }
 
@@ -182,6 +203,7 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
     running = false;
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
+    if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     labeledTracks.clear();
@@ -269,6 +291,7 @@ import { createGmeetCapture, GmeetCapture } from '../../vexa-bot/core/src/browse
     if (diagTimer !== null) { clearInterval(diagTimer); }
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
+    if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     console.log(`${TAG} instance torn down (superseded)`);
   };
 
