@@ -329,11 +329,15 @@ function fmtTime(seg: Segment): string {
 
 function render(): void {
   const feed = $('feed');
-  const all: Segment[] = [...confirmed.values()].sort((a, b) =>
-    (a.absolute_start_time || '').localeCompare(b.absolute_start_time || '') || a.start - b.start);
+  // ONE combined timestamp ordering for confirmed + pending — appending
+  // pending after the sort rendered drafts out of order at the bottom.
+  // Segments without an absolute time sink to the end (newest drafts).
+  const all: Segment[] = [...confirmed.values()];
   for (const segs of pendingBySpeaker.values()) {
     for (const s of segs) all.push({ ...s, completed: false });
   }
+  all.sort((a, b) =>
+    (a.absolute_start_time || '\uffff').localeCompare(b.absolute_start_time || '\uffff') || a.start - b.start);
   if (all.length === 0) {
     feed.innerHTML = `<div class="empty" id="emptyState"><div style="font-size:22px;">&#127911;</div><div>Listening… speak and the transcript appears here.</div></div>`;
     return;
