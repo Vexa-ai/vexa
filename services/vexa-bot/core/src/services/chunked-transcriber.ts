@@ -181,6 +181,13 @@ export class ChunkedTranscriber {
   /** Turns published under a provisional cluster id, awaiting hint evidence. */
   private unresolved: UnresolvedTurn[] = [];
 
+  /** High-water mark of CONFIRMED audio. The diarizer duplicates
+   *  overlap-region commits to both the outgoing and incoming cluster, and
+   *  flicker can open a new turn inside audio the previous turn already
+   *  confirmed — without this clamp the same sentences publish twice under
+   *  two labels (identical timestamps, different speakers). */
+  private confirmedHighWaterMs = 0;
+
   private constructor(private readonly cb: ChunkedTranscriberCallbacks) {
     this.log = cb.log || (() => { /* silent */ });
   }
@@ -365,6 +372,9 @@ export class ChunkedTranscriber {
 
   private async handleChunk(chunk: PendingChunk): Promise<void> {
     this.commitCounter++;
+    // Never re-enter confirmed audio (overlap-duplicated commits, flicker).
+    if (chunk.t1 <= this.confirmedHighWaterMs + 250) return;
+    chunk = { ...chunk, t0: Math.max(chunk.t0, this.confirmedHighWaterMs) };
     // Turn membership FIRST — a closed turn fully confirms before the next
     // turn's first submission, keeping confirmed output strictly ordered.
     if (this.turn) {
@@ -379,9 +389,13 @@ export class ChunkedTranscriber {
       }
     }
     if (!this.turn) {
+      // Re-clamp: the close above may have advanced the high-water mark
+      // past this chunk's start (overlap-duplicated commits).
+      const t0 = Math.max(chunk.t0, this.confirmedHighWaterMs);
+      if (chunk.t1 - t0 < 250) return;
       this.turn = {
         clusterId: chunk.clusterId, turnId: this.turnCounter++,
-        t0: chunk.t0, t1: chunk.t1, confirmedUpToMs: chunk.t0,
+        t0, t1: chunk.t1, confirmedUpToMs: t0,
         lastWords: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
       };
     } else {
@@ -501,6 +515,7 @@ export class ChunkedTranscriber {
       this.cb.publish(name, confirmed, closing ? [] : tail);
       turn.allConfirmed.push(...confirmed);
       turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
+      this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.confirmedUpToMs);
       const txt = confirmed.map(s => s.text).join(' ');
       this.lastConfirmedText = (this.lastConfirmedText + ' ' + txt).slice(-PROMPT_TAIL_CHARS * 2);
       turn.pendingName = !closing && tail.length > 0 ? name : null;
@@ -524,6 +539,9 @@ export class ChunkedTranscriber {
   /** Turn epilogue: promote a lost tail if the closing pass yielded nothing,
    *  clear pending, register for late renames. */
   private closeOut(turn: Turn): void {
+    // The whole turn span is adjudicated once closed — later commits
+    // (overlap duplicates) must not re-transcribe any of it.
+    this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.t1, turn.confirmedUpToMs);
     if (turn.seq === 0 && turn.allConfirmed.length === 0 && turn.pendingTail.length > 0) {
       // Closing pass produced nothing but drafts existed — never lose a turn.
       const name = this.resolveName(turn);

@@ -74,6 +74,7 @@ async function makeT(fake?: Fake) {
     ring: [], ringMs: 0, carry: null, queue: [], pumping: false,
     lastConfirmedText: '', commitCounter: 0, turnCounter: 0, disposed: false,
     turn: null, lastChunkWallMs: 0, idleTimer: null, unresolved: [],
+    latestAudioMs: 0, confirmedHighWaterMs: 0,
   });
   return { t, calls, confirmed, pending, cleared, renamed };
 }
@@ -83,14 +84,14 @@ async function drain() {
 }
 
 (async () => {
-  // 1. first submission: nothing stable yet → pending only
+  // 1. first submission: nothing stable yet → pending only (live-edge window)
   {
     const { t, calls, confirmed, pending } = await makeT();
-    t.feedAudio(tone(6000), 0);
+    t.feedAudio(tone(5000), 0);
     t.recordHint('Alice', 'dom-active', 100);
     t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 4000 });
     await drain();
-    check('first: one whisper call over the window', calls.length === 1 && calls[0].samples === 4 * SR, `${calls[0]?.samples}`);
+    check('first: one whisper call to the live edge', calls.length === 1 && calls[0].samples === 5 * SR, `${calls[0]?.samples}`);
     check('first: pending only', pending.length === 1 && confirmed.length === 0);
     check('first: pending under hint name', pending[0]?.speaker === 'Alice');
   }
@@ -98,18 +99,20 @@ async function drain() {
   // 2. second submission with stable head → head CONFIRMS mid-turn, tail pending
   {
     const { t, calls, confirmed, pending } = await makeT();
-    t.feedAudio(tone(12000), 0);
+    t.feedAudio(tone(5000), 0);
     t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    t.feedAudio(tone(4000), 5000);
     t.handleCommit({ speakerId: 's0', tStartMs: 4200, tEndMs: 8000 });
     await drain();
     check('confirm: head confirmed mid-turn', confirmed.length === 1, `${confirmed.length}`);
     check('confirm: sentence text', confirmed[0]?.segments[0]?.text === 'we finished the quarterly numbers today.');
     check('confirm: turn-scoped id', confirmed[0]?.segments[0]?.segmentId === 'turn:0:0');
     check('confirm: tail still pending', pending[pending.length - 1]?.segments.some(s => s.text.includes('keeps forming')));
-    // window advanced: third commit submits from confirmedUpTo (2s), not 0
+    // window advanced: next submission starts at confirmedUpTo (2s), not 0
+    t.feedAudio(tone(2000), 9000);
     t.handleCommit({ speakerId: 's0', tStartMs: 8200, tEndMs: 10000 });
     await drain();
-    check('confirm: window advanced past confirmed audio', calls[2].samples === 8 * SR, `${calls[2]?.samples}`);
+    check('confirm: window advanced past confirmed audio', calls[2].samples === 9 * SR, `${calls[2]?.samples}`);
   }
 
   // 3. cluster change closes the turn → closing pass confirms everything
@@ -166,16 +169,38 @@ async function drain() {
   // 7. prompt chains from confirmed text
   {
     const { t, calls } = await makeT();
-    t.feedAudio(tone(16000), 0);
+    t.feedAudio(tone(5000), 0);
     t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    t.feedAudio(tone(4000), 5000);
     t.handleCommit({ speakerId: 's0', tStartMs: 4200, tEndMs: 8000 });  // confirms head
+    await drain();
+    t.feedAudio(tone(3000), 9000);
     t.handleCommit({ speakerId: 's0', tStartMs: 8200, tEndMs: 12000 });
     await drain();
     check('prompt: first has none', calls[0]?.prompt === undefined);
     check('prompt: chained after confirm', !!calls[2]?.prompt && calls[2].prompt!.includes('quarterly numbers'), calls[2]?.prompt);
   }
 
-  // 8. strict serialization across drafts and closing passes
+  // 8. overlap-duplicated commit never re-confirms audio (high-water clamp)
+  {
+    const { t, confirmed } = await makeT();
+    t.feedAudio(tone(12000), 0);
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    // diarizer overlap duplication: incoming cluster gets a commit whose
+    // span reaches back INSIDE the previous turn
+    t.handleCommit({ speakerId: 's1', tStartMs: 2000, tEndMs: 7000 });
+    await drain();
+    const s0segs = confirmed.filter(c => c.speaker === 's0').flatMap(c => c.segments);
+    const s1segs = confirmed.filter(c => c.speaker === 's1').flatMap(c => c.segments);
+    const s0max = Math.max(...s0segs.map(s => s.endMs));
+    check('highwater: s0 confirmed to its boundary', s0segs.length > 0 && s0max <= 4001, `${s0max}`);
+    check('highwater: s1 never re-enters confirmed audio',
+      s1segs.every(s => s.startMs >= 4000) &&
+      ((t as any).turn === null || (t as any).turn.t0 >= 4000),
+      JSON.stringify(s1segs.map(s => [s.startMs, s.endMs])));
+  }
+
+  // 9. strict serialization across drafts and closing passes
   {
     let active = 0; let overlapped = false; let count = 0;
     const { t } = await makeT();
@@ -191,7 +216,8 @@ async function drain() {
     t.handleCommit({ speakerId: 's1', tStartMs: 8200, tEndMs: 12000 });
     await new Promise(r => setTimeout(r, 120));
     check('serial: never concurrent', !overlapped);
-    check('serial: all passes ran', count === 4, `${count}`); // 2 drafts + 1 close + 1 new-turn draft
+    // draft (to live edge), identical-window skip, closing pass, new-turn draft
+    check('serial: all passes ran', count === 3, `${count}`);
   }
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
