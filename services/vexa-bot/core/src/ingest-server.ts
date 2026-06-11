@@ -197,8 +197,12 @@ class CaptureSession {
       language: this.explicitLanguage || undefined,
       transcribe: (pcm, prompt) =>
         this.transcriptionClient.transcribe(pcm, this.explicitLanguage || undefined, prompt),
-      publish: (speaker, segments) => {
-        void this.segmentPublisher.publishTranscript(speaker, this.mapChunkSegments(speaker, segments), []);
+      publish: (speaker, confirmed, pending) => {
+        void this.segmentPublisher.publishTranscript(
+          speaker,
+          this.mapChunkSegments(speaker, confirmed),
+          this.mapChunkSegments(speaker, pending, false),
+        );
       },
       publishPending: (speaker, segments) => {
         void this.segmentPublisher.publishTranscript(speaker, [], this.mapChunkSegments(speaker, segments, false));

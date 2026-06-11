@@ -51,7 +51,6 @@
 import { OnnxLocalDiarizer, CommitEvent } from './diarization/onnx-local-diarizer';
 import { ClusterNameBinder, HintKind } from './cluster-name-binder';
 import { TranscriptionResult } from './transcription-client';
-import { isHallucination } from './hallucination-filter';
 
 const SAMPLE_RATE = 16000;
 /** Spans shorter than this carry into the next contiguous span. */
@@ -93,9 +92,12 @@ export interface ChunkSegment {
 export interface ChunkedTranscriberCallbacks {
   /** One Whisper round-trip. Called strictly serially. */
   transcribe: (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
-  /** Confirmed, sentence-shaped segments. Persisted. */
-  publish: (speaker: string, segments: ChunkSegment[]) => void;
-  /** Low-latency still-forming tail of the open turn — full replace per speaker. */
+  /** ONE atomic bundle: newly confirmed segments (persisted) + the speaker's
+   *  surviving pending tail (full replace). They MUST travel together — a
+   *  confirm published with empty pending deletes the client's draft block
+   *  and the text visibly vanishes until the next submission. */
+  publish: (speaker: string, confirmed: ChunkSegment[], pending: ChunkSegment[]) => void;
+  /** Pending-only refresh of the open turn (nothing confirmed this pass). */
   publishPending: (speaker: string, segments: ChunkSegment[]) => void;
   /** Drop a speaker's pending drafts (turn moved to another name / closed). */
   clearPending: (speaker: string) => void;
@@ -472,37 +474,40 @@ export class ChunkedTranscriber {
     }
 
     const name = this.resolveName(turn);
-
-    if (confirmCount > 0) {
-      const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
-        text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
-        segmentId: `turn:${turn.turnId}:${turn.seq++}`,
-      }));
-      if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
-      this.cb.publish(name, confirmed);
-      turn.allConfirmed.push(...confirmed);
-      turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
-      const txt = confirmed.map(s => s.text).join(' ');
-      this.lastConfirmedText = (this.lastConfirmedText + ' ' + txt).slice(-PROMPT_TAIL_CHARS * 2);
-    }
+    if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
 
     const tail: ChunkSegment[] = mapped.slice(confirmCount).map((s, i) => ({
       text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
       segmentId: `turn:${turn.turnId}:p${i}`,
     }));
 
-    if (closing) {
-      this.closeOut(turn);
-    } else {
+    if (confirmCount > 0) {
+      const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
+        text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
+        segmentId: `turn:${turn.turnId}:${turn.seq++}`,
+      }));
+      // ONE bundle: confirmed + surviving tail. Splitting them deletes the
+      // client's pending block for seconds (the "vanishing transcript" bug).
+      this.cb.publish(name, confirmed, closing ? [] : tail);
+      turn.allConfirmed.push(...confirmed);
+      turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
+      const txt = confirmed.map(s => s.text).join(' ');
+      this.lastConfirmedText = (this.lastConfirmedText + ' ' + txt).slice(-PROMPT_TAIL_CHARS * 2);
+      turn.pendingName = !closing && tail.length > 0 ? name : null;
+      turn.pendingTail = closing ? [] : tail;
+    } else if (!closing) {
       turn.pendingTail = tail;
       if (tail.length > 0) {
-        if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
         turn.pendingName = name;
         this.cb.publishPending(name, tail);
       } else if (turn.pendingName) {
         this.cb.clearPending(turn.pendingName);
         turn.pendingName = null;
       }
+    }
+
+    if (closing) {
+      this.closeOut(turn);
     }
   }
 
@@ -513,7 +518,7 @@ export class ChunkedTranscriber {
       // Closing pass produced nothing but drafts existed — never lose a turn.
       const name = this.resolveName(turn);
       const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
-      this.cb.publish(name, promoted);
+      this.cb.publish(name, promoted, []);
       turn.allConfirmed.push(...promoted);
       this.log(`[ChunkedTranscriber] turn ${turn.turnId}: promoted ${promoted.length} draft segment(s) on close`);
     }
@@ -545,13 +550,13 @@ export class ChunkedTranscriber {
       const duration = (seg0.end || 0) - (seg0.start || 0);
       if ((noSpeech > 0.5 && logProb < -0.7) || (logProb < -0.8 && duration < 2.0) || compression > 2.4) return null;
     }
-    // Phrase-list hallucination filter ONLY on short windows: that's where
-    // whisper invents "Thank you."-class junk. On longer RMS-vouched real
-    // speech the same phrases ("Yes.") are legitimate answers.
-    if (windowMs < 2000 && isHallucination(result.text)) {
-      this.log(`[ChunkedTranscriber] [FILTERED] "${result.text.substring(0, 60)}"`);
-      return null;
-    }
+    // NO phrase-list hallucination filter here — live monitoring showed it
+    // killing real interview answers ("Yes.", "Okay.", "Right?", "Thank
+    // you.") even on short windows. The hallucination vector it was built
+    // for (whisper inventing phrases on silence) is closed upstream: spans
+    // are model-cut SPEECH regions and RMS-gated, and the no_speech/logprob/
+    // compression gates above catch acoustic junk. Prompt-echo is filtered
+    // separately at the segment level.
     return (result.segments && result.segments.length > 0)
       ? result.segments
       : [{ text: result.text, start: 0, end: 0 } as any];

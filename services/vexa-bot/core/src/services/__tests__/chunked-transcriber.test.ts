@@ -46,7 +46,7 @@ function stableHeadFake(pcm: Float32Array, n: number): TranscriptionResult {
 
 async function makeT(fake?: Fake) {
   const calls: Call[] = [];
-  const confirmed: Array<{ speaker: string; segments: ChunkSegment[] }> = [];
+  const confirmed: Array<{ speaker: string; segments: ChunkSegment[]; tailLen: number }> = [];
   const pending: Array<{ speaker: string; segments: ChunkSegment[] }> = [];
   const cleared: string[] = [];
   const renamed: Array<{ from: string; to: string; segments: ChunkSegment[] }> = [];
@@ -60,7 +60,10 @@ async function makeT(fake?: Fake) {
         calls.push({ samples: pcm.length, prompt });
         return (fake || stableHeadFake)(pcm, n++);
       },
-      publish: (speaker: string, segments: ChunkSegment[]) => confirmed.push({ speaker, segments: [...segments] }),
+      publish: (speaker: string, segments: ChunkSegment[], tail: ChunkSegment[]) => {
+        confirmed.push({ speaker, segments: [...segments], tailLen: tail.length });
+        if (tail.length > 0) pending.push({ speaker, segments: [...tail] });
+      },
       publishPending: (speaker: string, segments: ChunkSegment[]) => pending.push({ speaker, segments: [...segments] }),
       clearPending: (speaker: string) => cleared.push(speaker),
       rename: (from: string, to: string, segments: ChunkSegment[]) => renamed.push({ from, to, segments }),
@@ -118,7 +121,10 @@ async function drain() {
     await drain();
     const s0segs = confirmed.filter(c => c.speaker === 's0').flatMap(c => c.segments);
     check('close: everything confirmed on cluster change', s0segs.length === 2, `${s0segs.length}`);
-    check('close: pending cleared', cleared.includes('s0'));
+    // pending clears via the ATOMIC close publish (confirmed + empty tail in
+    // one bundle) — a separate clearPending would race the client's view.
+    const lastS0 = [...confirmed].reverse().find(c => c.speaker === 's0');
+    check('close: closing bundle carries empty tail', !!lastS0 && lastS0.tailLen === 0);
   }
 
   // 4. RMS gate: silent window never reaches Whisper
