@@ -559,6 +559,11 @@ export class ChunkedTranscriber {
       const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
       this.cb.publish(name, promoted, []);
       turn.allConfirmed.push(...promoted);
+      // Drafts come from LIVE-EDGE submissions and can extend past the
+      // committed boundary — the high-water mark must cover everything
+      // PUBLISHED, or the next turn re-transcribes the promoted audio and
+      // the same sentence appears under two turns.
+      this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, promoted[promoted.length - 1].endMs);
       this.log(`[ChunkedTranscriber] turn ${turn.turnId}: promoted ${promoted.length} draft segment(s) on close`);
     }
     if (turn.pendingName) this.cb.clearPending(turn.pendingName);

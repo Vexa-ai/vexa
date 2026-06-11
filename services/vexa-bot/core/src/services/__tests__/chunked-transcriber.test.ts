@@ -222,6 +222,18 @@ async function drain() {
     check('serial: all passes ran', count === 3, `${count}`);
   }
 
+  // 10. async dispose resolves only AFTER the closing publish (bot leave
+  // paths await it before session_end goes out)
+  {
+    const { t, confirmed } = await makeT();
+    t.feedAudio(tone(5000), 0);
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    await drain();
+    check('dispose: nothing confirmed while turn open', confirmed.length === 0);
+    await t.dispose();
+    check('dispose: final turn confirmed by the time dispose resolves', confirmed.length >= 1, `${confirmed.length}`);
+  }
+
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
   process.exit(failed > 0 ? 1 : 0);
 })();
