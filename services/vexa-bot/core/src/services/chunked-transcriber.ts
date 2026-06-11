@@ -74,6 +74,11 @@ const TURN_MAX_MS = 28_000;
 /** Don't bother Whisper with unconfirmed windows shorter than this unless
  *  the turn is closing. */
 const MIN_SUBMIT_MS = 800;
+/** Time-based resubmission cadence for the OPEN turn (the bot's
+ *  submitInterval): pending refreshes and LocalAgreement stability build at
+ *  this pace instead of waiting for the next diarizer commit (which can be
+ *  10s away inside a monologue). Pending ≈ tick + RTT; confirm ≈ 2 ticks. */
+const SUBMIT_TICK_MS = 2000;
 
 export interface ChunkSegment {
   text: string;
@@ -116,6 +121,8 @@ interface Turn {
   lastWords: string[];
   /** Confirmed-segment counter → stable ids turn:{turnId}:{seq}. */
   seq: number;
+  /** Live edge of the last submission — ticks skip when no new audio. */
+  lastSubmitEndMs: number;
   /** Everything confirmed in this turn — for late hint renames. */
   allConfirmed: ChunkSegment[];
   /** Name the pending tail was last published under. */
@@ -152,8 +159,10 @@ export class ChunkedTranscriber {
   private firstAudioMs: number | null = null;
   private firstCommitSeen = false;
 
-  /** Serialized work queue (commit-triggered submissions). */
-  private queue: PendingChunk[] = [];
+  /** Serialized work queue: commits and time-tick resubmissions. */
+  private queue: Array<PendingChunk | 'tick'> = [];
+  /** Timestamp of the freshest audio in the ring (the live edge). */
+  private latestAudioMs = 0;
   private pumping = false;
   private lastConfirmedText = '';
   private commitCounter = 0;
@@ -181,12 +190,20 @@ export class ChunkedTranscriber {
     t.diarizer = await OnnxLocalDiarizer.create({
       onCommit: (ev: CommitEvent) => t.handleCommit(ev),
     });
-    // Silence after a turn produces no further commits, so nothing would
-    // close it — close once the turn has been idle past the gap window.
+    // One 1s heartbeat drives two things:
+    //  - TICK: resubmit the open turn up to the live audio edge on a fixed
+    //    cadence (latency decoupled from commit timing),
+    //  - IDLE CLOSE: silence after a turn produces no further commits, so
+    //    nothing would close it — close once idle past the gap window.
     t.idleTimer = setInterval(() => {
-      if (t.turn && !t.pumping && t.queue.length === 0
-        && Date.now() - t.lastChunkWallMs > TURN_GAP_MS + 1500) {
+      if (!t.turn || t.pumping || t.queue.length > 0) return;
+      if (Date.now() - t.lastChunkWallMs > TURN_GAP_MS + 1500) {
         void t.pump(true);
+        return;
+      }
+      if (t.latestAudioMs - Math.max(t.turn.lastSubmitEndMs, t.turn.confirmedUpToMs) >= SUBMIT_TICK_MS) {
+        t.queue.push('tick');
+        void t.pump();
       }
     }, 1000);
     t.log('[ChunkedTranscriber] ready (model-cut turns, continuous LocalAgreement-2 confirmation)');
@@ -197,6 +214,7 @@ export class ChunkedTranscriber {
   feedAudio(pcm: Float32Array, tsMs: number): void {
     if (this.disposed) return;
     if (this.firstAudioMs === null) this.firstAudioMs = tsMs;
+    this.latestAudioMs = Math.max(this.latestAudioMs, tsMs + (pcm.length / SAMPLE_RATE) * 1000);
     this.ring.push({ pcm, tMs: tsMs });
     this.ringMs += (pcm.length / SAMPLE_RATE) * 1000;
     while (this.ring.length > 0 && this.ringMs > RING_MS) {
@@ -310,11 +328,16 @@ export class ChunkedTranscriber {
     this.pumping = true;
     try {
       while (this.queue.length > 0) {
-        const chunk = this.queue.shift()!;
+        const item = this.queue.shift()!;
         try {
-          await this.handleChunk(chunk);
+          if (item === 'tick') {
+            if (this.turn) await this.submitTurn(this.turn, false);
+          } else {
+            await this.handleChunk(item);
+          }
         } catch (e: any) {
-          this.log(`[ChunkedTranscriber] commit [${chunk.t0}..${chunk.t1}] failed: ${e?.message}`);
+          const span = item === 'tick' ? 'tick' : `[${item.t0}..${item.t1}]`;
+          this.log(`[ChunkedTranscriber] ${span} failed: ${e?.message}`);
         }
       }
       if ((closeAtEnd || this.disposed) && this.turn) {
@@ -347,7 +370,7 @@ export class ChunkedTranscriber {
       this.turn = {
         clusterId: chunk.clusterId, turnId: this.turnCounter++,
         t0: chunk.t0, t1: chunk.t1, confirmedUpToMs: chunk.t0,
-        lastWords: [], seq: 0, allConfirmed: [], pendingName: null, pendingTail: [],
+        lastWords: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
       };
     } else {
       this.turn.t1 = Math.max(this.turn.t1, chunk.t1);
@@ -362,11 +385,21 @@ export class ChunkedTranscriber {
    *  close everything confirms. */
   private async submitTurn(turn: Turn, closing: boolean): Promise<void> {
     const spanStart = turn.confirmedUpToMs;
-    const spanEnd = turn.t1;
+    // Open turns read to the LIVE AUDIO EDGE, not the last commit — pending
+    // tracks speech in near-real-time and stability builds at tick cadence.
+    // The trailing un-committed second may belong to the next speaker; the
+    // LocalAgreement tail guard (the last forming words never confirm) keeps
+    // that bleed out of confirmed output until segmentation rules on it.
+    // Closing turns read exactly to the committed boundary.
+    const spanEnd = closing ? turn.t1 : Math.max(turn.t1, this.latestAudioMs || turn.t1);
     if (spanEnd - spanStart < (closing ? 250 : MIN_SUBMIT_MS)) {
       if (closing) this.closeOut(turn);
       return;
     }
+    // No new audio since the last pass — an identical window returns
+    // identical text and confirms nothing; don't waste the call.
+    if (!closing && spanEnd - turn.lastSubmitEndMs < 500) return;
+    turn.lastSubmitEndMs = spanEnd;
 
     const pcm = this.cut(spanStart, spanEnd);
     if (pcm.length < SAMPLE_RATE * 0.2 || rms(pcm) < DROP_RMS) {
@@ -431,6 +464,9 @@ export class ChunkedTranscriber {
           if (remaining >= n) { remaining -= n; confirmCount++; }
           else break; // partial segment — don't emit partial
         }
+        // Never confirm past the committed boundary: audio after turn.t1 is
+        // un-adjudicated by segmentation and may belong to the next speaker.
+        while (confirmCount > 0 && mapped[confirmCount - 1].endMs > turn.t1 + 1000) confirmCount--;
       }
       turn.lastWords = confirmCount > 0 ? [] : currentWords; // bot resets on advance
     }
