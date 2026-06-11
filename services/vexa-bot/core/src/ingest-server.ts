@@ -208,14 +208,20 @@ class CaptureSession {
           this.speakerManager.addSpeaker(segKey, displayName);
           return;
         }
+        const oldName = this.speakerManager.getSpeakerName(segKey);
         this.speakerManager.updateSpeakerName(segKey, displayName);
-        // Rename ⇒ republish this stream's already-published segments with the
-        // SAME segment_ids and the new name: PG UPSERTs them, the live bundle
-        // replaces them in clients. Identity is the buffer; name is mutable.
+        if (!oldName || oldName === displayName) return;
+        // Rename within the FROZEN envelope, via key formation only:
+        //  1. clear the OLD name's pending (empty bundle → clients replace
+        //     that speaker's drafts with nothing — no orphans)
+        //  2. republish already-confirmed segments with the SAME segment_ids
+        //     (formed from the stream key, not the name) under the NEW name —
+        //     PG UPSERTs them, clients update in place.
+        void this.segmentPublisher.publishTranscript(oldName, [], []);
         const published = this.publishedByStream.get(segKey);
-        if (published && published.length > 0 && published[0].speaker !== displayName) {
+        if (published && published.length > 0) {
           for (const seg of published) seg.speaker = displayName;
-          void this.segmentPublisher.publishTranscript(displayName, published, [], segKey);
+          void this.segmentPublisher.publishTranscript(displayName, published, []);
           log(`[Diarize] republished ${published.length} segment(s) of ${segKey} as "${displayName}"`);
         }
       },
@@ -346,7 +352,7 @@ class CaptureSession {
           const pt = p.text.trim();
           return !confirmedTextList.some(ct => pt === ct || pt.startsWith(ct) || ct.startsWith(pt));
         });
-        await this.segmentPublisher.publishTranscript(speakerName, speakerConfirmed, pending, speakerId);
+        await this.segmentPublisher.publishTranscript(speakerName, speakerConfirmed, pending);
       } catch (err: any) {
         log(`[Ingest] transcribe failed for ${speakerName}: ${err.message}`);
         this.speakerManager.handleTranscriptionResult(speakerId, '');
