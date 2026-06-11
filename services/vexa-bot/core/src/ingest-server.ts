@@ -54,6 +54,9 @@ interface ExtensionSession {
 
 /** Live WS sessions per meeting — drives the deferred finalize below. */
 const liveSessionsByMeeting = new Map<number, Set<string>>();
+/** Live sockets per meeting — a NEW session supersedes (closes) older ones so
+ *  SW reloads / reconnects never leave zombies double-writing one meeting. */
+const liveSocketsByMeeting = new Map<number, Map<string, WebSocket>>();
 const FINALIZE_GRACE_MS = envNum('INGEST_FINALIZE_GRACE_MS', 60_000);
 
 /**
@@ -187,14 +190,14 @@ class CaptureSession {
   private async initMixedPipeline(): Promise<void> {
     this.mixedPipeline = await MixedAudioPipeline.create({
       log: (m) => log(m),
-      onTurn: (clusterId, resolvedName, audio, resolution) => {
+      onTurn: (clusterId, resolvedName, audio, resolution, tStartMs) => {
         if (!this.speakerManager.hasSpeaker(clusterId)) {
           this.speakerManager.addSpeaker(clusterId, resolvedName);
           log(`[Diarize] new cluster ${clusterId} → "${resolvedName}" (${resolution.source})`);
         } else if (resolution.source !== 'provisional-cluster-id') {
           this.speakerManager.updateSpeakerName(clusterId, resolvedName);
         }
-        this.speakerManager.feedAudio(clusterId, audio);
+        this.speakerManager.feedAudio(clusterId, audio, tStartMs);
       },
       onRename: (clusterId, resolvedName) => {
         if (!this.speakerManager.hasSpeaker(clusterId)) return;
@@ -432,6 +435,18 @@ export function runIngestServer(): void {
       boundMeetingId = session.meeting_id;
       if (!liveSessionsByMeeting.has(session.meeting_id)) liveSessionsByMeeting.set(session.meeting_id, new Set());
       liveSessionsByMeeting.get(session.meeting_id)!.add(connectionId);
+      // Supersede any prior live session for this meeting (zombie from a SW
+      // reload, an abrupt disconnect, or a duplicate AUTO_START): one writer
+      // per meeting, the newest wins.
+      if (!liveSocketsByMeeting.has(session.meeting_id)) liveSocketsByMeeting.set(session.meeting_id, new Map());
+      const peers = liveSocketsByMeeting.get(session.meeting_id)!;
+      for (const [oldId, oldWs] of peers) {
+        log(`[Ingest] Superseding session ${oldId} for meeting ${session.meeting_id} (new session ${connectionId})`);
+        try { oldWs.send(JSON.stringify({ type: 'superseded' })); } catch { /* dying socket */ }
+        try { oldWs.close(1000); } catch { /* already closed */ }
+      }
+      peers.clear();
+      peers.set(connectionId, ws);
     } catch (err: any) {
       log(`[Ingest] Session bootstrap failed: ${err.message}`);
       ws.send(JSON.stringify({ type: 'error', message: err.message }));
@@ -486,6 +501,7 @@ export function runIngestServer(): void {
       if (capture) { await capture.stop(); capture = null; }
       if (boundMeetingId !== null) {
         liveSessionsByMeeting.get(boundMeetingId)?.delete(connectionId);
+        liveSocketsByMeeting.get(boundMeetingId)?.delete(connectionId);
         // Defer the active→completed transition: a pause/reload reconnects
         // within the grace window and keeps the meeting alive.
         scheduleFinalize(boundMeetingId, apiKey, platform, nativeMeetingId);

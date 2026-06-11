@@ -156,7 +156,7 @@ export function getSegmentPublisher(): SegmentPublisher | null { return segmentP
 /** Mixed-audio (single-channel) bridge for platforms whose remote audio is one
  *  stream (zoom web). MixedAudioPipeline turns land here; the cluster id is
  *  the stable stream identity, the resolved name is display-only. */
-export function feedMixedTurn(clusterId: string, resolvedName: string, audio: Float32Array, provisional: boolean): void {
+export function feedMixedTurn(clusterId: string, resolvedName: string, audio: Float32Array, provisional: boolean, tStartMs?: number): void {
   if (!speakerManager) return;
   if (!speakerManager.hasSpeaker(clusterId)) {
     speakerManager.addSpeaker(clusterId, resolvedName);
@@ -164,7 +164,7 @@ export function feedMixedTurn(clusterId: string, resolvedName: string, audio: Fl
   } else if (!provisional) {
     speakerManager.updateSpeakerName(clusterId, resolvedName);
   }
-  speakerManager.feedAudio(clusterId, audio);
+  speakerManager.feedAudio(clusterId, audio, tStartMs);
 }
 
 /** Late-resolve rename for a mixed-audio cluster (idempotent). */

@@ -42,8 +42,8 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
     try {
       mixedPipeline = await MixedAudioPipeline.create({
         log: (m) => log(m),
-        onTurn: (clusterId, resolvedName, audio, resolution) =>
-          feedMixedTurn(clusterId, resolvedName, audio, resolution.source === 'provisional-cluster-id'),
+        onTurn: (clusterId, resolvedName, audio, resolution, tStartMs) =>
+          feedMixedTurn(clusterId, resolvedName, audio, resolution.source === 'provisional-cluster-id', tStartMs),
         onRename: (clusterId, resolvedName) => renameMixedCluster(clusterId, resolvedName),
       });
       pulseSource = new PulseAudioCapture();

@@ -124,16 +124,23 @@ export class SpeakerStreamManager {
     log(`[SpeakerStreams] Added speaker "${speakerName}" (${speakerId})`);
   }
 
-  feedAudio(speakerId: string, audioData: Float32Array): void {
+  /**
+   * @param atMs Optional wall-clock time the audio was actually SPOKEN
+   *             (turn start). Batch feeders (MixedAudioPipeline turns arrive
+   *             seconds after speech, all at once) pass it so published
+   *             segment times reflect speech time, not feed time. Live
+   *             streamers omit it (feed time ≈ speech time).
+   */
+  feedAudio(speakerId: string, audioData: Float32Array, atMs?: number): void {
     const buffer = this.buffers.get(speakerId);
     if (!buffer) return;
 
     // Set window start on first audio after reset — this ensures the segment's
-    // start time reflects when audio actually arrived, not when the buffer was
-    // cleared. Critical for speaker-mapper: offset words use this as their base.
+    // start time reflects when the audio was actually spoken, not when the
+    // buffer was cleared. Critical for speaker-mapper and cross-speaker order.
     if (buffer.totalSamples === 0) {
-      buffer.windowStartMs = Date.now();
-      buffer.bufferStartMs = Date.now();
+      buffer.windowStartMs = atMs ?? Date.now();
+      buffer.bufferStartMs = atMs ?? Date.now();
     }
 
     buffer.chunks.push(audioData);

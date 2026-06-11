@@ -32,8 +32,10 @@ import { ClusterNameBinder, HintKind, ResolvedAttribution } from './cluster-name
 
 export interface MixedAudioPipelineCallbacks {
   /** A named turn is ready: feed `audio` into the speaker stream `clusterId`
-   *  displayed as `resolvedName` (provisional cluster id until hints bind). */
-  onTurn: (clusterId: string, resolvedName: string, audio: Float32Array, resolution: ResolvedAttribution) => void;
+   *  displayed as `resolvedName` (provisional cluster id until hints bind).
+   *  tStartMs = wall-clock when the turn's audio was SPOKEN — pass it to
+   *  speakerManager.feedAudio so segment times reflect speech time. */
+  onTurn: (clusterId: string, resolvedName: string, audio: Float32Array, resolution: ResolvedAttribution, tStartMs: number) => void;
   /** A previously-provisional cluster gained a real name — rename its stream
    *  (already-published segments self-correct via stable segment_id UPSERT). */
   onRename: (clusterId: string, resolvedName: string) => void;
@@ -58,7 +60,7 @@ export class MixedAudioPipeline {
     this.turnGate = new TurnGate(DEFAULT_TURN_GATE, (clusterId, audio, tStartMs) => {
       const tEndMs = tStartMs + (audio.length / 16000) * 1000;
       const resolved = this.binder.resolve({ clusterId, tStartMs, tEndMs });
-      this.cb.onTurn(clusterId, resolved.speakerName, audio, resolved);
+      this.cb.onTurn(clusterId, resolved.speakerName, audio, resolved, tStartMs);
     });
   }
 

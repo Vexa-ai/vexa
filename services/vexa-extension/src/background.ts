@@ -151,6 +151,10 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
           // channel). No mixed tabCapture. (startTabAudio remains available as a
           // manual fallback via the toolbar path if ever needed.)
         }
+      } else if (msg.type === 'superseded') {
+        // A newer session took over this meeting (SW reload / reconnect race).
+        // Stop quietly — the successor is already capturing.
+        stopCapture();
       } else if (msg.type === 'ended') {
         // Meeting was stopped server-side (dashboard Stop / API delete) — end
         // capture so the panel and the dashboard agree.
