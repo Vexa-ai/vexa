@@ -2,6 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel jaraco.context
+
 # Copy source and install
 COPY pyproject.toml README.md ./
 COPY runtime_api/ runtime_api/
