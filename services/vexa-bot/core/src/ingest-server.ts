@@ -225,8 +225,8 @@ class CaptureSession {
           log(`[Diarize] republished ${published.length} segment(s) of ${segKey} as "${displayName}"`);
         }
       },
-      onSegmentClose: (segKey) => {
-        void this.speakerManager.flushSpeaker(segKey, true);
+      onSegmentClose: (segKey, boundaryMs) => {
+        void this.speakerManager.flushSpeaker(segKey, true, boundaryMs);
       },
     });
   }

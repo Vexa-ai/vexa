@@ -367,10 +367,20 @@ export class SpeakerStreamManager {
    */
   /**
    * @param force - if true, flush regardless of minAudioDuration (end-of-stream)
+   * @param trimAtMs - segmentation boundary (audio-time ms): audio after this
+   *                   belongs to the NEXT segment buffer (the pipeline re-feeds
+   *                   it there) — drop it here so the same frames are never
+   *                   transcribed under both segments.
    */
-  async flushSpeaker(speakerId: string, force: boolean = false): Promise<void> {
+  async flushSpeaker(speakerId: string, force: boolean = false, trimAtMs?: number): Promise<void> {
     const buffer = this.buffers.get(speakerId);
     if (!buffer) return;
+
+    if (trimAtMs !== undefined) this.trimTailAfter(buffer, trimAtMs);
+    if (buffer.totalSamples === 0) {
+      this.fullReset(buffer);
+      return;
+    }
 
     const unconfirmedSec = this.unconfirmedSamples(buffer) / this.sampleRate;
 
@@ -501,7 +511,12 @@ export class SpeakerStreamManager {
       log(`[SpeakerStreams] Dedup skip for "${buffer.speakerName}": "${text.substring(0, 50)}" (same as last confirmed)`);
       return;
     }
-    const endMs = Date.now();
+    // Audio-time end via the buffer's gapless timeline — NOT Date.now(),
+    // which is submit/commit ARRIVAL time and overstates the span by the
+    // whole commit lag (segments then visually overlap their successors).
+    const endMs = buffer.totalSamples > 0
+      ? buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000
+      : Date.now();
     const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
     this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, buffer.windowStartMs, endMs, segmentId);
     buffer.sequenceNumber++;
@@ -541,6 +556,44 @@ export class SpeakerStreamManager {
     buffer.windowStartMs = Date.now();
 
     log(`[SpeakerStreams] Offset advanced for "${buffer.speakerName}" (confirmed=${buffer.confirmedSamples}, total=${buffer.totalSamples}, trimmed to ${buffer.chunks.length} chunks)`);
+  }
+
+  /**
+   * Drop buffered audio AFTER an audio-time boundary (segmentation close).
+   * The buffer's gapless timeline maps samples to windowStartMs + offset, so
+   * everything past `tMs` is excess that streamed in during commit lag. Any
+   * draft transcript described the untrimmed audio, so it is invalidated —
+   * the flush that follows re-submits only the owned window.
+   */
+  private trimTailAfter(buffer: SpeakerBuffer, tMs: number): void {
+    if (buffer.totalSamples === 0) return;
+    const keep = Math.floor(((tMs - buffer.windowStartMs) / 1000) * this.sampleRate);
+    if (keep >= buffer.totalSamples) return;
+    if (keep <= 0) {
+      // Boundary predates this window (offset drift or stale commit) — an
+      // over-trim would discard real speech; keeping it only risks one
+      // duplicated segment. Keep.
+      log(`[SpeakerStreams] trimTailAfter skipped for "${buffer.speakerName}": boundary ${tMs} <= windowStart ${buffer.windowStartMs}`);
+      return;
+    }
+    let excess = buffer.totalSamples - keep;
+    const droppedSec = excess / this.sampleRate;
+    while (excess > 0 && buffer.chunks.length > 0) {
+      const last = buffer.chunks[buffer.chunks.length - 1];
+      if (last.length <= excess) {
+        excess -= last.length;
+        buffer.chunks.pop();
+      } else {
+        buffer.chunks[buffer.chunks.length - 1] = last.subarray(0, last.length - excess);
+        excess = 0;
+      }
+    }
+    buffer.totalSamples = keep;
+    if (buffer.confirmedSamples > keep) buffer.confirmedSamples = keep;
+    buffer.lastTranscript = '';
+    buffer.confirmCount = 0;
+    buffer.lastWords = [];
+    log(`[SpeakerStreams] Boundary trim for "${buffer.speakerName}": dropped ${droppedSec.toFixed(2)}s past segmentation boundary`);
   }
 
   /**

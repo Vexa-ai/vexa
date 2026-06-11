@@ -40,15 +40,20 @@ export interface MixedAudioPipelineCallbacks {
   /** Set/refresh the display name of a segment buffer (cluster resolved via
    *  hints, or the provisional cluster id). Idempotent. */
   onSegmentLabel: (segKey: string, displayName: string, resolution: ResolvedAttribution) => void;
-  /** Segmentation closed this buffer — force-flush its stream. */
-  onSegmentClose: (segKey: string) => void;
+  /** Segmentation closed this buffer — force-flush its stream. boundaryMs
+   *  (when present) is the commit's audio-time end: the host must trim audio
+   *  past it before flushing (those frames are re-fed to the next buffer). */
+  onSegmentClose: (segKey: string, boundaryMs?: number) => void;
   log?: (msg: string) => void;
 }
 
 /** Keep this much recent audio for boundary tail re-feed (the frames of the
  *  NEW speaker that streamed into the old buffer before the switch-commit
- *  arrived — pyannote cadence 250 ms + utterance close ≈ ≤1 s). */
-const TAIL_RING_MS = 1500;
+ *  arrived). Commit lag is bounded by the diarizer's utterance window
+ *  (maxUtteranceMs 3000) + pyannote cadence (250 ms) + inference — observed
+ *  up to ~3 s live, so the ring must cover more than that or the new
+ *  buffer's head is lost when the old buffer trims at the boundary. */
+const TAIL_RING_MS = 4500;
 const SAMPLE_RATE = 16000;
 
 interface TailFrame { pcm: Float32Array; tMs: number }
@@ -166,7 +171,7 @@ export class MixedAudioPipeline {
       // arrive (rename→republish keeps segment_ids stable). Never inherit.
       this.unnamedClosed.push({ segKey: closingKey, tStartMs: spanStart, tEndMs: ev.tEndMs });
     }
-    this.cb.onSegmentClose(closingKey);
+    this.cb.onSegmentClose(closingKey, ev.tEndMs);
 
     // Next buffer opens at the boundary; frames already streamed past t1
     // (commit lag) are re-fed so the new buffer starts at the true boundary.
