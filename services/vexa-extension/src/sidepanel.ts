@@ -278,13 +278,16 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
       if (msg.type === 'subscribed') { feedStatus(''); return; }
       if (msg.type === 'error') { feedStatus(`Live feed error: ${msg.error}${msg.details ? ` — ${JSON.stringify(msg.details)}` : ''}`, true); return; }
       if (msg.type !== 'transcript') return;
-      const speaker = msg.speaker || '';
+      // Bundles are keyed by STREAM (stable buffer identity) — display names
+      // are mutable and can change at segment close (winner-at-close), so
+      // keying drafts by name would orphan them on rename.
+      const streamKey = msg.stream || msg.speaker || '';
       for (const raw of msg.confirmed || []) {
         const seg = toSegment(raw);
         if (seg.text && seg.segment_id) confirmed.set(seg.segment_id, seg);
       }
       const pend = (msg.pending || []).map(toSegment).filter((s: Segment) => s.text);
-      pendingBySpeaker.set(speaker, pend);
+      pendingBySpeaker.set(streamKey, pend);
       render();
     } catch { /* ignore malformed frame */ }
   };

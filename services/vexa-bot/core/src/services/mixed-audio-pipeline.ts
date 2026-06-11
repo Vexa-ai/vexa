@@ -14,15 +14,17 @@
  *     platform's "who's lit" hint timeline; segment labels resolve to real
  *     names, retroactively when evidence arrives late.
  *
- *   mixed PCM ──────────────► onSegmentAudio(segKey, pcm, atMs)   [live]
- *   diarizer commit (cluster, t0..t1)
- *        ├─ same cluster ──► onSegmentLabel(segKey, name)          [refresh]
- *        └─ cluster change ► onSegmentClose(segKey)                [flush]
- *                            + tail re-feed since boundary → next segKey
- *   binder late-resolve ───► onSegmentLabel for every segment of the cluster
+ *   mixed PCM ────────────► onSegmentAudio(segKey, pcm, atMs)     [live]
+ *   diarizer commit (t0..t1) = SEGMENTATION SIGNAL:
+ *        1. winner = max-overlap lit name over the buffer's full span
+ *        2. onSegmentLabel(segKey, winner)   [authoritative, at close]
+ *        3. onSegmentClose(segKey)           [flush]
+ *        4. next buffer opens at t1 (+ tail re-feed of frames after t1);
+ *           provisionally labeled with the latest lit name for live drafts
  *
- * The diarizer is used for boundaries + embeddings + clustering only; no
- * TurnGate holding in the live path.
+ * LIT-ONLY EXPERIMENT (operator-decided): segmentation cuts the buffers; the
+ * who's-lit timeline only NAMES them — the winner is chosen when the buffer
+ * CLOSES, never the other way around. Clustering is unused for assignment.
  */
 
 import { OnnxLocalDiarizer, CommitEvent } from './diarization/onnx-local-diarizer';
@@ -55,9 +57,10 @@ export class MixedAudioPipeline {
 
   private segCounter = 0;
   private currentSegKey: string;
-  private currentCluster: string | null = null;
-  /** cluster id → segment keys labeled with it (for retroactive renames). */
-  private clusterSegments = new Map<string, Set<string>>();
+  /** Wall-clock when the current buffer opened (first audio in it). */
+  private currentSegStartMs: number | null = null;
+  /** Latest lit name seen — provisional label for the OPEN buffer's drafts. */
+  private lastLitName: string | null = null;
   /** Recent frames for boundary tail re-feed. */
   private tail: TailFrame[] = [];
   private tailMs = 0;
@@ -65,18 +68,7 @@ export class MixedAudioPipeline {
   private constructor(private readonly cb: MixedAudioPipelineCallbacks) {
     this.log = cb.log || (() => { /* silent */ });
     this.currentSegKey = this.nextSegKey();
-    this.binder = new ClusterNameBinder({
-      onLateResolve: (clusterId, resolvedName) => {
-        // Rename EVERY segment this cluster labeled — published segments
-        // self-correct via stable segment_id UPSERT downstream.
-        const segs = this.clusterSegments.get(clusterId);
-        if (!segs) return;
-        this.log(`[MixedPipeline] late-resolve: ${clusterId} → "${resolvedName}" (${segs.size} segment(s))`);
-        for (const segKey of segs) {
-          this.cb.onSegmentLabel(segKey, resolvedName, { speakerName: resolvedName, source: 'cluster-vote', confidence: 1 });
-        }
-      },
-    });
+    this.binder = new ClusterNameBinder({});
   }
 
   static async create(cb: MixedAudioPipelineCallbacks): Promise<MixedAudioPipeline> {
@@ -97,6 +89,7 @@ export class MixedAudioPipeline {
 
   /** One mixed-audio chunk — streams LIVE into the current segment buffer. */
   feedAudio(pcm: Float32Array, tsMs: number): void {
+    if (this.currentSegStartMs === null) this.currentSegStartMs = tsMs;
     this.cb.onSegmentAudio(this.currentSegKey, pcm, tsMs);
     // Tail ring for boundary re-feed.
     this.tail.push({ pcm, tMs: tsMs });
@@ -113,10 +106,11 @@ export class MixedAudioPipeline {
   /** Timestamped platform hint: who the UI showed as speaking. */
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
+    if (name && !isEnd) this.lastLitName = name;
   }
 
-  stats(): { binder: ReturnType<ClusterNameBinder['stats']>; segments: number; currentCluster: string | null } {
-    return { binder: this.binder.stats(), segments: this.segCounter, currentCluster: this.currentCluster };
+  stats(): { binder: ReturnType<ClusterNameBinder['stats']>; segments: number; lastLit: string | null } {
+    return { binder: this.binder.stats(), segments: this.segCounter, lastLit: this.lastLitName };
   }
 
   /** Close the live buffer and reset (session end). */
@@ -124,7 +118,6 @@ export class MixedAudioPipeline {
     try { this.cb.onSegmentClose(this.currentSegKey); } catch { /* best effort */ }
     try { this.diarizer?.reset(); } catch { /* best effort */ }
     this.binder.reset();
-    this.clusterSegments.clear();
     this.tail = [];
     this.tailMs = 0;
   }
@@ -133,37 +126,41 @@ export class MixedAudioPipeline {
     return `seg-${this.segCounter++}`;
   }
 
-  /** A diarizer commit = segmentation signal + cluster evidence for the audio
-   *  that just streamed into the current buffer. */
+  /** A diarizer commit = THE segmentation signal: the utterance that just
+   *  streamed into the current buffer is over. Choose the winner NOW (max
+   *  lit-overlap across the buffer's full span), label, close, open next. */
   private handleCommit(ev: CommitEvent): void {
-    const resolved = this.binder.resolve({ clusterId: ev.speakerId, tStartMs: ev.tStartMs, tEndMs: ev.tEndMs });
+    const closingKey = this.currentSegKey;
+    const spanStart = this.currentSegStartMs ?? ev.tStartMs;
+    const winner = this.binder.bestOverlapName({ tStartMs: spanStart, tEndMs: ev.tEndMs });
+    const name = winner?.name ?? this.lastLitName;
 
-    if (this.currentCluster === null || this.currentCluster === ev.speakerId) {
-      // Same voice continues — (re)label the live buffer, keep streaming.
-      this.currentCluster = ev.speakerId;
-      this.labelSegment(this.currentSegKey, ev.speakerId, resolved);
-      return;
+    if (name) {
+      this.cb.onSegmentLabel(closingKey, name, {
+        speakerName: name,
+        source: 'window-match',
+        confidence: winner?.confidence ?? 0,
+      });
     }
+    this.cb.onSegmentClose(closingKey);
 
-    // Cluster changed: the speaker switched at ev.tStartMs. Close the old
-    // buffer and open the next one under the new cluster. Frames spoken by
-    // the NEW speaker that already streamed into the old buffer (commit lag)
-    // are re-fed from the tail ring so the new buffer starts at the true
-    // boundary; the old buffer's unconfirmed tail overlap is Whisper noise at
-    // worst (a word), never lost audio.
-    const oldKey = this.currentSegKey;
-    this.cb.onSegmentClose(oldKey);
+    // Next buffer opens at the boundary; frames already streamed past t1
+    // (commit lag) are re-fed so the new buffer starts at the true boundary.
     this.currentSegKey = this.nextSegKey();
-    this.currentCluster = ev.speakerId;
-    this.labelSegment(this.currentSegKey, ev.speakerId, resolved);
-    for (const f of this.tail) {
-      if (f.tMs >= ev.tStartMs) this.cb.onSegmentAudio(this.currentSegKey, f.pcm, f.tMs);
+    this.currentSegStartMs = null;
+    if (this.lastLitName) {
+      // Provisional label so live drafts carry a plausible name until close.
+      this.cb.onSegmentLabel(this.currentSegKey, this.lastLitName, {
+        speakerName: this.lastLitName,
+        source: 'window-match',
+        confidence: 0,
+      });
     }
-  }
-
-  private labelSegment(segKey: string, clusterId: string, resolved: ResolvedAttribution): void {
-    if (!this.clusterSegments.has(clusterId)) this.clusterSegments.set(clusterId, new Set());
-    this.clusterSegments.get(clusterId)!.add(segKey);
-    this.cb.onSegmentLabel(segKey, resolved.speakerName, resolved);
+    for (const f of this.tail) {
+      if (f.tMs >= ev.tEndMs) {
+        if (this.currentSegStartMs === null) this.currentSegStartMs = f.tMs;
+        this.cb.onSegmentAudio(this.currentSegKey, f.pcm, f.tMs);
+      }
+    }
   }
 }

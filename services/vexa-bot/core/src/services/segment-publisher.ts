@@ -222,7 +222,11 @@ export class SegmentPublisher {
    * - XADD confirmed to stream (collector persists to Postgres)
    * - PUBLISH bundle to WS channel (gateway forwards to dashboard)
    */
-  async publishTranscript(speaker: string, confirmed: TranscriptionSegment[], pending: TranscriptionSegment[]): Promise<void> {
+  /** @param stream Stable stream key (buffer identity). Pending snapshots and
+   *   WS bundles are keyed by it so renames never orphan drafts published
+   *   under an earlier display name. Falls back to `speaker` for callers that
+   *   don't use per-buffer streams (bot legacy paths). */
+  async publishTranscript(speaker: string, confirmed: TranscriptionSegment[], pending: TranscriptionSegment[], stream?: string): Promise<void> {
     try {
       const client = await this.ensureConnected();
 
@@ -246,8 +250,8 @@ export class SegmentPublisher {
         await client.xAdd(this.segmentStreamKey, '*', { payload });
       }
 
-      // Store pending snapshot in Redis (full replace per speaker, short TTL)
-      const pendingKey = `meeting:${this.meetingId}:pending:${speaker}`;
+      // Store pending snapshot in Redis (full replace per STREAM, short TTL)
+      const pendingKey = `meeting:${this.meetingId}:pending:${stream ?? speaker}`;
       if (pending.length > 0) {
         await client.set(pendingKey, JSON.stringify(pending.map(mapSeg)), { EX: 60 });
       } else {
@@ -260,6 +264,7 @@ export class SegmentPublisher {
         type: 'transcript',
         meeting: { id: parseInt(this.meetingId) },
         speaker,
+        stream: stream ?? speaker,
         confirmed: confirmed.map(mapSeg),
         pending: pending.map(mapSeg),
         ts: new Date().toISOString(),

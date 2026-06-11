@@ -116,6 +116,9 @@ class CaptureSession {
   private transcriptionClient: TranscriptionClient;
   private segmentPublisher: SegmentPublisher;
   private confirmedBatches: Map<string, TranscriptionSegment[]> = new Map();
+  /** Everything ever confirmed per stream — republished on rename so PG
+   *  (UPSERT by segment_id) and the live UI self-correct retroactively. */
+  private publishedByStream: Map<string, TranscriptionSegment[]> = new Map();
   private lastDetectedLanguage: Map<string, string> = new Map();
   private knownSpeakers: Set<number> = new Set();
   private closed = false;
@@ -176,7 +179,7 @@ class CaptureSession {
       // Phase 6 soak signal: periodic diarization stats (names only, no text).
       this.diarStatsTimer = setInterval(() => {
         const st = this.mixedPipeline?.stats();
-        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} clusters=${st.binder.clustersWithVotes} resolved=${st.binder.resolvedClusters} segments=${st.segments} current=${st.currentCluster} hints=${JSON.stringify(st.binder.hintTurns)}`);
+        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} segments=${st.segments} lastLit=${st.lastLit} hints=${JSON.stringify(st.binder.hintTurns)}`);
       }, 30000);
     }
     log(`[Ingest] Session started meeting=${this.session.meeting_id} uid=${this.connectionId}`);
@@ -203,11 +206,18 @@ class CaptureSession {
       onSegmentLabel: (segKey, displayName, resolution) => {
         if (!this.speakerManager.hasSpeaker(segKey)) {
           this.speakerManager.addSpeaker(segKey, displayName);
-        } else {
-          this.speakerManager.updateSpeakerName(segKey, displayName);
+          return;
         }
-        if (resolution.source === 'window-match') return; // routine
-        log(`[Diarize] ${segKey} → "${displayName}" (${resolution.source})`);
+        this.speakerManager.updateSpeakerName(segKey, displayName);
+        // Rename ⇒ republish this stream's already-published segments with the
+        // SAME segment_ids and the new name: PG UPSERTs them, the live bundle
+        // replaces them in clients. Identity is the buffer; name is mutable.
+        const published = this.publishedByStream.get(segKey);
+        if (published && published.length > 0 && published[0].speaker !== displayName) {
+          for (const seg of published) seg.speaker = displayName;
+          void this.segmentPublisher.publishTranscript(displayName, published, [], segKey);
+          log(`[Diarize] republished ${published.length} segment(s) of ${segKey} as "${displayName}"`);
+        }
       },
       onSegmentClose: (segKey) => {
         void this.speakerManager.flushSpeaker(segKey, true);
@@ -321,6 +331,9 @@ class CaptureSession {
             end: startSec + (ws.end || 0),
             language: segLang,
             completed: false,
+            // Deterministic id: same draft keeps the same identity across
+            // re-submissions AND renames (offset within the buffer is stable).
+            segment_id: `${this.segmentPublisher.sessionUid}:${speakerId}:p${Math.round((ws.start || 0) * 10)}`,
             absolute_start_time: new Date(bufStart + (ws.start || 0) * 1000).toISOString(),
             absolute_end_time: new Date(bufStart + (ws.end || 0) * 1000).toISOString(),
           }))
@@ -333,7 +346,7 @@ class CaptureSession {
           const pt = p.text.trim();
           return !confirmedTextList.some(ct => pt === ct || pt.startsWith(ct) || ct.startsWith(pt));
         });
-        await this.segmentPublisher.publishTranscript(speakerName, speakerConfirmed, pending);
+        await this.segmentPublisher.publishTranscript(speakerName, speakerConfirmed, pending, speakerId);
       } catch (err: any) {
         log(`[Ingest] transcribe failed for ${speakerName}: ${err.message}`);
         this.speakerManager.handleTranscriptionResult(speakerId, '');
@@ -349,7 +362,7 @@ class CaptureSession {
       const endSec = (bufferEndMs - this.segmentPublisher.sessionStartMs) / 1000;
       const fullSegmentId = `${this.segmentPublisher.sessionUid}:${segmentId}`;
       if (!this.confirmedBatches.has(speakerId)) this.confirmedBatches.set(speakerId, []);
-      this.confirmedBatches.get(speakerId)!.push({
+      const seg: TranscriptionSegment = {
         speaker: speakerName,
         text: transcript,
         start: startSec,
@@ -359,7 +372,10 @@ class CaptureSession {
         segment_id: fullSegmentId,
         absolute_start_time: new Date(bufferStartMs).toISOString(),
         absolute_end_time: new Date(bufferEndMs).toISOString(),
-      });
+      };
+      this.confirmedBatches.get(speakerId)!.push(seg);
+      if (!this.publishedByStream.has(speakerId)) this.publishedByStream.set(speakerId, []);
+      this.publishedByStream.get(speakerId)!.push(seg);
     };
   }
 }

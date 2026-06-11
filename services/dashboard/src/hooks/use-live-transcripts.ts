@@ -230,8 +230,10 @@ export function useLiveTranscripts(
 
           switch (message.type) {
             case "transcript": {
-              // New format: per-speaker bundle with confirmed + pending
-              const speaker = (message as any).speaker || "";
+              // Bundles are keyed by STREAM (stable buffer identity); the
+              // display name is mutable (winner-at-close renames). Key the
+              // pending replacement by stream so renames don't orphan drafts.
+              const speaker = (message as any).stream || (message as any).speaker || "";
               const confirmedSegs = ((message as any).confirmed || [])
                 .filter((s: any) => s.text?.trim())
                 .map((s: any) => convertWebSocketSegment(s));
