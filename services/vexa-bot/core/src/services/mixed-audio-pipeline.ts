@@ -61,6 +61,9 @@ export class MixedAudioPipeline {
   private currentSegStartMs: number | null = null;
   /** Latest lit name seen — provisional label for the OPEN buffer's drafts. */
   private lastLitName: string | null = null;
+  /** Segments closed before ANY hint existed — back-filled and relabeled
+   *  (rename → republish path) once hints arrive. */
+  private unnamedClosed: Array<{ segKey: string; tStartMs: number; tEndMs: number }> = [];
   /** Recent frames for boundary tail re-feed. */
   private tail: TailFrame[] = [];
   private tailMs = 0;
@@ -107,6 +110,18 @@ export class MixedAudioPipeline {
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
     if (name && !isEnd) this.lastLitName = name;
+    // Back-fill segments that closed before any hint existed: best overlap if
+    // the hint log now covers their span, else this first-known name.
+    if (name && this.unnamedClosed.length > 0) {
+      for (const u of this.unnamedClosed.splice(0)) {
+        const winner = this.binder.bestOverlapName({ tStartMs: u.tStartMs, tEndMs: u.tEndMs });
+        const resolvedName = winner?.name ?? name;
+        this.cb.onSegmentLabel(u.segKey, resolvedName, {
+          speakerName: resolvedName, source: 'window-match', confidence: winner?.confidence ?? 0,
+        });
+        this.log(`[MixedPipeline] back-filled ${u.segKey} → "${resolvedName}"`);
+      }
+    }
   }
 
   stats(): { binder: ReturnType<ClusterNameBinder['stats']>; segments: number; lastLit: string | null } {
@@ -141,6 +156,10 @@ export class MixedAudioPipeline {
         source: 'window-match',
         confidence: winner?.confidence ?? 0,
       });
+    } else {
+      // No hint has EVER arrived — remember this segment; the first hint
+      // back-fills and republishes it (rename path keeps segment_ids stable).
+      this.unnamedClosed.push({ segKey: closingKey, tStartMs: spanStart, tEndMs: ev.tEndMs });
     }
     this.cb.onSegmentClose(closingKey);
 
