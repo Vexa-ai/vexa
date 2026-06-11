@@ -39,6 +39,15 @@ Google Meet tab (you, already admitted)
 
 ## Build
 
+Containerized (canonical — no host Node/npm, no mac binaries, same output
+on any OS):
+
+```bash
+services/vexa-extension/build-docker.sh   # → dist/  (load as unpacked extension)
+```
+
+Or directly, if you have Node locally:
+
 ```bash
 cd services/vexa-extension
 npm install
