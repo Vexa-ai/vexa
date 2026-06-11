@@ -178,7 +178,7 @@ class CaptureSession {
       // Soak signal: periodic chunking stats (names only, no text).
       this.diarStatsTimer = setInterval(() => {
         const st = this.chunked?.stats();
-        if (st) log(`[ChunkStats] meeting=${this.session.meeting_id} chunks=${st.chunks} queued=${st.queued} unresolved=${st.unresolved} hints=${JSON.stringify(st.binder.hintTurns)}`);
+        if (st) log(`[ChunkStats] meeting=${this.session.meeting_id} commits=${st.commits} turns=${st.turns} queued=${st.queued} unresolved=${st.unresolved} hints=${JSON.stringify(st.binder.hintTurns)}`);
       }, 30000);
     }
     log(`[Ingest] Session started meeting=${this.session.meeting_id} uid=${this.connectionId}`);

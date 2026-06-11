@@ -1,6 +1,6 @@
 /**
- * ChunkedTranscriber unit tests — drives the cut/merge/turn/attribution
- * logic directly via handleCommit (no ONNX models, fake Whisper).
+ * ChunkedTranscriber unit tests — drives the cut/turn/LocalAgreement logic
+ * directly via handleCommit (no ONNX models, fake Whisper).
  *
  * Run: npx tsx src/services/__tests__/chunked-transcriber.test.ts
  */
@@ -29,8 +29,22 @@ function silence(ms: number): Float32Array {
 }
 
 interface Call { samples: number; prompt?: string }
+type Fake = (pcm: Float32Array, call: number) => TranscriptionResult;
 
-async function makeT(opts?: { text?: (call: number) => string }) {
+/** Default fake: a stable leading sentence + a changing tail — the exact
+ *  shape LocalAgreement-2 needs to confirm the head and hold the tail. */
+function stableHeadFake(pcm: Float32Array, n: number): TranscriptionResult {
+  const span = pcm.length / SR;
+  const segs = span >= 3.5
+    ? [
+      { text: 'we finished the quarterly numbers today.', start: 0, end: 2 },
+      { text: `and the next part keeps forming ${n}`, start: 2, end: span },
+    ]
+    : [{ text: `and the next part keeps forming ${n}`, start: 0, end: span }];
+  return { text: segs.map(s => s.text).join(' '), language: 'en', duration: span, segments: segs };
+}
+
+async function makeT(fake?: Fake) {
   const calls: Call[] = [];
   const confirmed: Array<{ speaker: string; segments: ChunkSegment[] }> = [];
   const pending: Array<{ speaker: string; segments: ChunkSegment[] }> = [];
@@ -44,10 +58,9 @@ async function makeT(opts?: { text?: (call: number) => string }) {
       language: 'en',
       transcribe: async (pcm: Float32Array, prompt?: string): Promise<TranscriptionResult> => {
         calls.push({ samples: pcm.length, prompt });
-        const text = opts?.text ? opts.text(n++) : `so we kept talking about point number ${n++} for a while`;
-        return { text, language: 'en', duration: pcm.length / SR, segments: [{ text, start: 0, end: pcm.length / SR }] };
+        return (fake || stableHeadFake)(pcm, n++);
       },
-      publish: (speaker: string, segments: ChunkSegment[]) => confirmed.push({ speaker, segments }),
+      publish: (speaker: string, segments: ChunkSegment[]) => confirmed.push({ speaker, segments: [...segments] }),
       publishPending: (speaker: string, segments: ChunkSegment[]) => pending.push({ speaker, segments: [...segments] }),
       clearPending: (speaker: string) => cleared.push(speaker),
       rename: (from: string, to: string, segments: ChunkSegment[]) => renamed.push({ from, to, segments }),
@@ -56,14 +69,10 @@ async function makeT(opts?: { text?: (call: number) => string }) {
     binder: new (await import('../cluster-name-binder')).ClusterNameBinder({}),
     diarizer: null,
     ring: [], ringMs: 0, carry: null, queue: [], pumping: false,
-    lastFinalText: '', chunkCounter: 0, turnCounter: 0, disposed: false,
+    lastConfirmedText: '', commitCounter: 0, turnCounter: 0, disposed: false,
     turn: null, lastChunkWallMs: 0, idleTimer: null, unresolved: [],
   });
   return { t, calls, confirmed, pending, cleared, renamed };
-}
-
-function feed(t: any, tMs: number, pcm: Float32Array) {
-  t.feedAudio(pcm, tMs);
 }
 
 async function drain() {
@@ -71,110 +80,112 @@ async function drain() {
 }
 
 (async () => {
-  // 1. chunk → PENDING draft (fast path), nothing confirmed while turn open
+  // 1. first submission: nothing stable yet → pending only
   {
     const { t, calls, confirmed, pending } = await makeT();
-    feed(t, 0, tone(3000));
+    t.feedAudio(tone(6000), 0);
     t.recordHint('Alice', 'dom-active', 100);
-    t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 2000 });
+    t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 4000 });
     await drain();
-    check('draft: one whisper call', calls.length === 1);
-    check('draft: exact span samples', calls[0]?.samples === 2 * SR, `got ${calls[0]?.samples}`);
-    check('draft: published as pending', pending.length === 1 && pending[0].speaker === 'Alice');
-    check('draft: nothing confirmed yet', confirmed.length === 0);
+    check('first: one whisper call over the window', calls.length === 1 && calls[0].samples === 4 * SR, `${calls[0]?.samples}`);
+    check('first: pending only', pending.length === 1 && confirmed.length === 0);
+    check('first: pending under hint name', pending[0]?.speaker === 'Alice');
   }
 
-  // 2. cluster change closes the turn → ONE final pass over the whole turn → confirmed
+  // 2. second submission with stable head → head CONFIRMS mid-turn, tail pending
   {
     const { t, calls, confirmed, pending } = await makeT();
-    feed(t, 0, tone(8000));
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });
-    t.handleCommit({ speakerId: 's0', tStartMs: 2200, tEndMs: 4000 });
-    t.handleCommit({ speakerId: 's1', tStartMs: 4200, tEndMs: 6000 });   // closes s0's turn
+    t.feedAudio(tone(12000), 0);
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    t.handleCommit({ speakerId: 's0', tStartMs: 4200, tEndMs: 8000 });
     await drain();
-    // calls: draft c1, draft c2, FINAL turn(s0) [0..4000], draft c3
-    check('turn: final pass fired on cluster change', calls.length === 4, `got ${calls.length}`);
-    check('turn: final spans whole turn', calls[2]?.samples === 4 * SR, `got ${calls[2]?.samples}`);
-    check('turn: confirmed once, turn ids', confirmed.length === 1 && confirmed[0].segments[0].segmentId.startsWith('turn:0:'));
-    check('turn: confirmed under cluster id (no hints)', confirmed[0]?.speaker === 's0');
-    check('turn: drafts accumulated pending', pending.length >= 2 && pending[1].segments.length === 2);
+    check('confirm: head confirmed mid-turn', confirmed.length === 1, `${confirmed.length}`);
+    check('confirm: sentence text', confirmed[0]?.segments[0]?.text === 'we finished the quarterly numbers today.');
+    check('confirm: turn-scoped id', confirmed[0]?.segments[0]?.segmentId === 'turn:0:0');
+    check('confirm: tail still pending', pending[pending.length - 1]?.segments.some(s => s.text.includes('keeps forming')));
+    // window advanced: third commit submits from confirmedUpTo (2s), not 0
+    t.handleCommit({ speakerId: 's0', tStartMs: 8200, tEndMs: 10000 });
+    await drain();
+    check('confirm: window advanced past confirmed audio', calls[2].samples === 8 * SR, `${calls[2]?.samples}`);
   }
 
-  // 3. silence gap closes the turn
+  // 3. cluster change closes the turn → closing pass confirms everything
   {
-    const { t, confirmed } = await makeT();
-    feed(t, 0, tone(12000));
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });
-    t.handleCommit({ speakerId: 's0', tStartMs: 8000, tEndMs: 10000 }); // gap 6s > 2.5s
+    const { t, confirmed, cleared } = await makeT();
+    t.feedAudio(tone(12000), 0);
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    t.handleCommit({ speakerId: 's1', tStartMs: 4200, tEndMs: 8000 });
     await drain();
-    check('gap: turn finalized on silence gap', confirmed.length === 1);
-    check('gap: new turn open for second chunk', (t as any).turn !== null && (t as any).turn.t0 === 8000);
+    const s0segs = confirmed.filter(c => c.speaker === 's0').flatMap(c => c.segments);
+    check('close: everything confirmed on cluster change', s0segs.length === 2, `${s0segs.length}`);
+    check('close: pending cleared', cleared.includes('s0'));
   }
 
-  // 4. RMS gate: silent chunk never reaches Whisper
+  // 4. RMS gate: silent window never reaches Whisper
   {
     const { t, calls } = await makeT();
-    feed(t, 0, silence(3000));
+    t.feedAudio(silence(4000), 0);
     t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });
     await drain();
     check('gate: silence dropped before whisper', calls.length === 0);
   }
 
-  // 5. prompt chains from the LAST FINAL text
+  // 5. closing pass empty → pending tail promoted, never lose the turn
   {
-    const { t, calls } = await makeT();
-    feed(t, 0, tone(10000));
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });
-    t.handleCommit({ speakerId: 's1', tStartMs: 2200, tEndMs: 4000 });  // finalizes s0 turn
+    const { t, confirmed } = await makeT((pcm, n) =>
+      n === 1
+        ? { text: '', language: 'en', duration: 0, segments: [] }
+        : stableHeadFake(pcm, n));
+    t.feedAudio(tone(12000), 0);
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });   // pending tail
+    t.handleCommit({ speakerId: 's1', tStartMs: 4200, tEndMs: 8000 }); // close → empty pass
     await drain();
-    check('prompt: drafts before any final have none', calls[0]?.prompt === undefined);
-    // calls: draft c1, FINAL s0-turn (prompt undefined), draft c2 (prompt = final text)
-    check('prompt: post-final draft chained', !!calls[2]?.prompt && calls[2].prompt!.includes('point number 1'), calls[2]?.prompt);
+    const s0 = confirmed.find(c => c.speaker === 's0');
+    check('promote: drafts published on empty closing pass', !!s0 && s0.segments.length > 0);
   }
 
-  // 6. final pass empty → drafts promoted, never lose the turn
-  {
-    const { t, confirmed } = await makeT({
-      text: (i) => (i === 1 ? '' : 'we definitely said something meaningful here'),
-    });
-    feed(t, 0, tone(8000));
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });   // draft (call 0)
-    t.handleCommit({ speakerId: 's1', tStartMs: 2200, tEndMs: 4000 }); // final (call 1 → empty)
-    await drain();
-    check('fallback: drafts promoted on empty final', confirmed.length === 1 && confirmed[0].segments[0].segmentId.startsWith('mix:'));
-  }
-
-  // 7. late hint renames a finalized turn, same segment ids
+  // 6. late hint renames a closed provisional turn, same ids
   {
     const { t, confirmed, renamed } = await makeT();
-    feed(t, 0, tone(8000));
-    t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 2000 });
-    t.handleCommit({ speakerId: 'speaker_1', tStartMs: 2200, tEndMs: 4000 });
+    t.feedAudio(tone(12000), 0);
+    t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 4000 });
+    t.handleCommit({ speakerId: 'speaker_1', tStartMs: 4200, tEndMs: 8000 });
     await drain();
-    check('late: provisional turn confirmed', confirmed[0]?.speaker === 'speaker_0');
+    check('late: provisional cluster name used', confirmed[0]?.speaker === 'speaker_0');
     t.recordHint('Bob', 'dom-active', 500);
     check('late: renamed on hint', renamed.length === 1 && renamed[0].to === 'Bob');
-    check('late: same segment ids', renamed[0]?.segments[0]?.segmentId === confirmed[0]?.segments[0]?.segmentId);
+    check('late: same ids', renamed[0]?.segments[0]?.segmentId === confirmed[0]?.segments[0]?.segmentId);
   }
 
-  // 8. strict serialization (drafts + finals share one queue)
+  // 7. prompt chains from confirmed text
   {
-    const order: number[] = [];
+    const { t, calls } = await makeT();
+    t.feedAudio(tone(16000), 0);
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    t.handleCommit({ speakerId: 's0', tStartMs: 4200, tEndMs: 8000 });  // confirms head
+    t.handleCommit({ speakerId: 's0', tStartMs: 8200, tEndMs: 12000 });
+    await drain();
+    check('prompt: first has none', calls[0]?.prompt === undefined);
+    check('prompt: chained after confirm', !!calls[2]?.prompt && calls[2].prompt!.includes('quarterly numbers'), calls[2]?.prompt);
+  }
+
+  // 8. strict serialization across drafts and closing passes
+  {
+    let active = 0; let overlapped = false; let count = 0;
     const { t } = await makeT();
-    let active = 0; let overlapped = false;
     (t as any).cb.transcribe = async (pcm: Float32Array) => {
       active++; if (active > 1) overlapped = true;
       await new Promise(r => setTimeout(r, 5));
-      order.push(pcm.length); active--;
-      return { text: 'we said real words here', language: 'en', duration: 1, segments: [{ text: 'we said real words here', start: 0, end: 1 }] };
+      active--; count++;
+      return stableHeadFake(pcm, count);
     };
-    feed(t, 0, tone(10000));
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 1000 });
-    t.handleCommit({ speakerId: 's0', tStartMs: 1200, tEndMs: 3000 });
-    t.handleCommit({ speakerId: 's1', tStartMs: 3200, tEndMs: 5000 });
-    await new Promise(r => setTimeout(r, 100));
+    t.feedAudio(tone(16000), 0);
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    t.handleCommit({ speakerId: 's0', tStartMs: 4200, tEndMs: 8000 });
+    t.handleCommit({ speakerId: 's1', tStartMs: 8200, tEndMs: 12000 });
+    await new Promise(r => setTimeout(r, 120));
     check('serial: never concurrent', !overlapped);
-    check('serial: draft,draft,final,draft order', order.length === 4 && order[2] === 3 * SR, JSON.stringify(order));
+    check('serial: all passes ran', count === 4, `${count}`); // 2 drafts + 1 close + 1 new-turn draft
   }
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);

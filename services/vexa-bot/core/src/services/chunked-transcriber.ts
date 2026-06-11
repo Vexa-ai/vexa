@@ -2,10 +2,10 @@
  * ChunkedTranscriber — THE single-channel transcription core, shared by every
  * mixed-audio source (in-tab extension, bot tab-audio, Zoom, MS Teams).
  *
- * Two-tier output, exactly what the frozen WS envelope was built for
- * ({type:'transcript', speaker, confirmed[], pending[]} on
- * tc:meeting:{id}:mutable — pending is full-replace per speaker and never
- * persisted; confirmed XADDs to the collector and upserts into PG):
+ * Output rides the frozen WS envelope ({type:'transcript', speaker,
+ * confirmed[], pending[]} on tc:meeting:{id}:mutable — pending is
+ * full-replace per speaker and never persisted; confirmed XADDs to the
+ * collector and upserts into PG):
  *
  *   PCM frames ──► RING BUFFER (passive, audio-time indexed)
  *      │              never submitted, never trimmed mid-flight
@@ -15,34 +15,37 @@
  *               │  commit lag is harmless: the ring holds the audio and the
  *               │  cut is applied RETROACTIVELY to an exact span
  *               ▼
- *           CUT ring[t0, t1]   (spans < MIN_CHUNK_MS carry forward;
- *               │               near-silent spans are RMS-gated)
+ *           TURN — contiguous same-cluster commits. Closes on cluster
+ *               change, silence gap > TURN_GAP_MS, an unconfirmed window
+ *               past TURN_MAX_MS, idle timeout, or dispose.
  *               ▼
- *           one-shot Whisper per chunk (serialized FIFO, prompt-chained)
- *               │
- *               ├──► publish as PENDING — low latency (~commit lag + one
- *               │    Whisper RTT); mid-sentence cuts are fine, it's a draft
+ *           CONTINUOUS CONFIRMATION (the bot's LocalAgreement-2, ported
+ *           from SpeakerStreamManager.handleTranscriptionResult):
+ *               every commit resubmits the turn's UNCONFIRMED window
+ *               [confirmedUpTo..t1] from the ring — one serialized Whisper
+ *               call. Leading whisper segments whose words are STABLE
+ *               across two consecutive submissions CONFIRM immediately
+ *               (sentence-shaped, punctuated — whisper segments well with
+ *               growing context); the still-forming tail publishes as
+ *               PENDING. Confirmation advances the window, so long
+ *               monologues confirm continuously — nobody waits for the
+ *               turn to end.
  *               ▼
- *           TURN AGGREGATION — contiguous same-cluster chunks accumulate.
- *               Turn closes on: cluster change | silence gap > TURN_GAP_MS |
- *               TURN_MAX_MS cap | dispose.
- *               ▼
- *           RESUBMIT the whole turn's audio from the ring — ONE Whisper
- *               call over the full turn → sentence-shaped segments with
- *               punctuation (Whisper segments well given full context).
- *               A chunk whose solo draft failed the quality gates is still
- *               covered here — per-chunk gating can no longer lose audio.
- *               ▼
- *           publish as CONFIRMED (clears the drafts via the envelope's
- *               replace semantics). Speaker = max-overlap lit-hint turn over
- *               the turn span (ClusterNameBinder); no evidence → the cluster
- *               id as a provisional name, renamed in place when hints arrive
- *               (same segment_ids, PG upsert).
+ *           On turn close: one last submission of the remaining window,
+ *               everything confirms (last chance), pending clears. An empty
+ *               final pass promotes the pending tail — turns are never lost.
  *
- * What is deliberately ABSENT: LocalAgreement confirmation, buffer trimming,
- * in-flight reconciliation. Audio → text is a pure function per span (chunk
- * draft + turn final); ordering and prompt chaining fall out of the
- * serialized queue. Each second of audio costs at most two Whisper calls.
+ *   WHO: speaker = max-overlap lit-hint turn over the turn span
+ *        (ClusterNameBinder); no evidence → the diarizer's cluster id as a
+ *        provisional name, renamed in place when hints arrive (same
+ *        segment_ids, PG upsert).
+ *
+ * Prompt chaining: every submission carries the tail of the confirmed text
+ * (across turns too) as initial_prompt.
+ *
+ * What is deliberately ABSENT: live mutable buffers and trim/in-flight
+ * reconciliation. Audio→text is a pure function of the ring span; ordering
+ * falls out of the strictly serialized queue.
  */
 
 import { OnnxLocalDiarizer, CommitEvent } from './diarization/onnx-local-diarizer';
@@ -55,19 +58,22 @@ const SAMPLE_RATE = 16000;
 const MIN_CHUNK_MS = 700;
 /** A carried span merges with the next one only if the gap is below this. */
 const MERGE_GAP_MS = 1000;
-/** Near-silent chunks are dropped before Whisper (desktop's DROP_RMS). */
+/** Near-silent spans are dropped before Whisper (desktop's DROP_RMS). */
 const DROP_RMS = 0.006;
-/** Ring capacity — must hold a full turn plus commit lag. */
+/** Ring capacity — must hold a full unconfirmed window plus commit lag. */
 const RING_MS = 120_000;
 /** Cap on the prompt fed to the next call (Whisper prompt window is small). */
 const PROMPT_TAIL_CHARS = 200;
 /** Unresolved turns kept for late hint renames. */
 const MAX_UNRESOLVED = 100;
-/** A silence gap between chunks longer than this closes the turn. */
+/** A silence gap between commits longer than this closes the turn. */
 const TURN_GAP_MS = 2500;
-/** Hard cap on turn length — bounds finalize latency and stays well inside
- *  Whisper's input window. */
+/** Cap on the UNCONFIRMED window — if stability stalls this long, the turn
+ *  force-closes (everything confirms). Stays inside Whisper's input window. */
 const TURN_MAX_MS = 28_000;
+/** Don't bother Whisper with unconfirmed windows shorter than this unless
+ *  the turn is closing. */
+const MIN_SUBMIT_MS = 800;
 
 export interface ChunkSegment {
   text: string;
@@ -82,11 +88,11 @@ export interface ChunkSegment {
 export interface ChunkedTranscriberCallbacks {
   /** One Whisper round-trip. Called strictly serially. */
   transcribe: (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
-  /** Final, sentence-shaped segments for a closed turn. Persisted. */
+  /** Confirmed, sentence-shaped segments. Persisted. */
   publish: (speaker: string, segments: ChunkSegment[]) => void;
-  /** Low-latency draft state of the OPEN turn — full replace per speaker. */
+  /** Low-latency still-forming tail of the open turn — full replace per speaker. */
   publishPending: (speaker: string, segments: ChunkSegment[]) => void;
-  /** Drop a speaker's pending drafts (turn finalized under another name). */
+  /** Drop a speaker's pending drafts (turn moved to another name / closed). */
   clearPending: (speaker: string) => void;
   /** Late hint evidence renamed a provisionally-labeled turn: republish the
    *  SAME segment ids under the new name (and clear the old name's pending). */
@@ -100,12 +106,22 @@ interface RingFrame { pcm: Float32Array; tMs: number }
 interface PendingChunk { t0: number; t1: number; clusterId: string }
 interface Turn {
   clusterId: string;
+  turnId: number;
   t0: number;
+  /** Latest committed end (audio ms). */
   t1: number;
-  /** Draft segments accumulated from per-chunk transcriptions. */
-  drafts: ChunkSegment[];
-  /** Name the drafts were last published under (for clearing). */
+  /** Audio confirmed & published up to here. */
+  confirmedUpToMs: number;
+  /** Previous submission's words (LocalAgreement-2). Reset on confirm. */
+  lastWords: string[];
+  /** Confirmed-segment counter → stable ids turn:{turnId}:{seq}. */
+  seq: number;
+  /** Everything confirmed in this turn — for late hint renames. */
+  allConfirmed: ChunkSegment[];
+  /** Name the pending tail was last published under. */
   pendingName: string | null;
+  /** Last unconfirmed tail — promoted if the closing pass returns nothing. */
+  pendingTail: ChunkSegment[];
 }
 interface UnresolvedTurn { speaker: string; t0: number; t1: number; segments: ChunkSegment[] }
 
@@ -114,6 +130,10 @@ function rms(s: Float32Array): number {
   let sum = 0;
   for (let i = 0; i < s.length; i++) sum += s[i] * s[i];
   return Math.sqrt(sum / s.length);
+}
+
+function words(text: string): string[] {
+  return text.trim().split(/\s+/).filter(w => w.length > 0);
 }
 
 export class ChunkedTranscriber {
@@ -127,18 +147,18 @@ export class ChunkedTranscriber {
   /** Short span carried forward to merge with the next contiguous commit. */
   private carry: PendingChunk | null = null;
 
-  /** Serialized work queue (chunk drafts + turn finalizations). */
+  /** Serialized work queue (commit-triggered submissions). */
   private queue: PendingChunk[] = [];
   private pumping = false;
-  private lastFinalText = '';
-  private chunkCounter = 0;
+  private lastConfirmedText = '';
+  private commitCounter = 0;
   private turnCounter = 0;
   private disposed = false;
 
-  /** The open turn (drafts published as pending, finalized on close). */
+  /** The open turn. */
   private turn: Turn | null = null;
-  /** Wall-clock of the last chunk that touched the open turn — the idle
-   *  timer finalizes a turn that silence (no further commits) left open. */
+  /** Wall-clock of the last commit that touched the open turn — the idle
+   *  timer closes a turn that silence (no further commits) left open. */
   private lastChunkWallMs = 0;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -151,23 +171,20 @@ export class ChunkedTranscriber {
 
   static async create(cb: ChunkedTranscriberCallbacks): Promise<ChunkedTranscriber> {
     const t = new ChunkedTranscriber(cb);
-    // Native defaults (tab-audio tuned), NOT the old pipeline's AMI-pack
-    // overrides: those forced 3s commits to bound commit lag — irrelevant
-    // here (the ring makes lag free) — and split/seeded clusters far more
-    // aggressively, which sprays spurious speaker_N labels on compressed
-    // single-channel audio.
+    // Native defaults (tab-audio tuned) — see commit history for why the old
+    // pipeline's AMI-pack overrides are wrong here.
     t.diarizer = await OnnxLocalDiarizer.create({
       onCommit: (ev: CommitEvent) => t.handleCommit(ev),
     });
     // Silence after a turn produces no further commits, so nothing would
-    // close it — finalize once the turn has been idle past the gap window.
+    // close it — close once the turn has been idle past the gap window.
     t.idleTimer = setInterval(() => {
       if (t.turn && !t.pumping && t.queue.length === 0
         && Date.now() - t.lastChunkWallMs > TURN_GAP_MS + 1500) {
         void t.pump(true);
       }
     }, 1000);
-    t.log('[ChunkedTranscriber] ready (model-cut chunks → pending drafts → turn-final resubmission)');
+    t.log('[ChunkedTranscriber] ready (model-cut turns, continuous LocalAgreement-2 confirmation)');
     return t;
   }
 
@@ -202,12 +219,11 @@ export class ChunkedTranscriber {
     this.unresolved = still.slice(-MAX_UNRESOLVED);
   }
 
-  stats(): { chunks: number; turns: number; queued: number; unresolved: number; binder: ReturnType<ClusterNameBinder['stats']> } {
-    return { chunks: this.chunkCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, binder: this.binder.stats() };
+  stats(): { commits: number; turns: number; queued: number; unresolved: number; binder: ReturnType<ClusterNameBinder['stats']> } {
+    return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, binder: this.binder.stats() };
   }
 
-  /** Session end: flush the carried span and finalize the open turn. The
-   *  queue drains — queued chunks still draft, then the turn finalizes. */
+  /** Session end: flush the carried span and close the open turn. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -268,9 +284,9 @@ export class ChunkedTranscriber {
     return out;
   }
 
-  // ── Serialized pipeline: chunk drafts + turn finalization ──────
+  // ── Serialized pipeline ────────────────────────────────────────
 
-  private async pump(finalizeAtEnd = false): Promise<void> {
+  private async pump(closeAtEnd = false): Promise<void> {
     if (this.pumping) return;
     this.pumping = true;
     try {
@@ -279,14 +295,14 @@ export class ChunkedTranscriber {
         try {
           await this.handleChunk(chunk);
         } catch (e: any) {
-          this.log(`[ChunkedTranscriber] chunk [${chunk.t0}..${chunk.t1}] failed: ${e?.message}`);
+          this.log(`[ChunkedTranscriber] commit [${chunk.t0}..${chunk.t1}] failed: ${e?.message}`);
         }
       }
-      if ((finalizeAtEnd || this.disposed) && this.turn) {
+      if ((closeAtEnd || this.disposed) && this.turn) {
         const t = this.turn;
         this.turn = null;
-        await this.finalizeTurn(t).catch((e: any) =>
-          this.log(`[ChunkedTranscriber] finalize failed: ${e?.message}`));
+        await this.submitTurn(t, true).catch((e: any) =>
+          this.log(`[ChunkedTranscriber] turn close failed: ${e?.message}`));
       }
     } finally {
       this.pumping = false;
@@ -294,111 +310,185 @@ export class ChunkedTranscriber {
   }
 
   private async handleChunk(chunk: PendingChunk): Promise<void> {
-    // Turn membership FIRST — a closed turn finalizes before this chunk's
-    // draft publishes, keeping confirmed output strictly ordered.
+    this.commitCounter++;
+    // Turn membership FIRST — a closed turn fully confirms before the next
+    // turn's first submission, keeping confirmed output strictly ordered.
     if (this.turn) {
       const closes =
         chunk.clusterId !== this.turn.clusterId ||
         chunk.t0 - this.turn.t1 > TURN_GAP_MS ||
-        chunk.t1 - this.turn.t0 > TURN_MAX_MS;
+        chunk.t1 - this.turn.confirmedUpToMs > TURN_MAX_MS;
       if (closes) {
         const t = this.turn;
         this.turn = null;
-        await this.finalizeTurn(t);
+        await this.submitTurn(t, true);
       }
     }
     if (!this.turn) {
-      this.turn = { clusterId: chunk.clusterId, t0: chunk.t0, t1: chunk.t1, drafts: [], pendingName: null };
+      this.turn = {
+        clusterId: chunk.clusterId, turnId: this.turnCounter++,
+        t0: chunk.t0, t1: chunk.t1, confirmedUpToMs: chunk.t0,
+        lastWords: [], seq: 0, allConfirmed: [], pendingName: null, pendingTail: [],
+      };
     } else {
       this.turn.t1 = Math.max(this.turn.t1, chunk.t1);
     }
     this.lastChunkWallMs = Date.now();
 
-    // One-shot draft for THIS chunk → pending (fast path). Gate failures are
-    // fine: the audio is still inside the turn span for the final pass.
-    const segments = await this.transcribeSpan(chunk.t0, chunk.t1, (i) => `mix:${this.chunkCounter}:${i}`);
-    this.chunkCounter++;
-    if (segments.length === 0) return;
-
-    this.turn.drafts.push(...segments);
-    const winner = this.binder.bestOverlapName({ tStartMs: this.turn.t0, tEndMs: this.turn.t1 });
-    const name = winner?.name || this.turn.clusterId;
-    if (this.turn.pendingName && this.turn.pendingName !== name) {
-      this.cb.clearPending(this.turn.pendingName);
-    }
-    this.turn.pendingName = name;
-    this.cb.publishPending(name, this.turn.drafts);
+    await this.submitTurn(this.turn, false);
   }
 
-  /** The whole turn's audio in ONE Whisper pass — sentence-shaped confirmed
-   *  segments with punctuation; replaces the turn's pending drafts. */
-  private async finalizeTurn(turn: Turn): Promise<void> {
-    const turnId = this.turnCounter++;
-    let segments = await this.transcribeSpan(turn.t0, turn.t1, (i) => `turn:${turnId}:${i}`);
-    if (segments.length === 0 && turn.drafts.length > 0) {
-      // Final pass produced nothing (transient service error / gate edge) —
-      // promote the drafts rather than lose the turn.
-      segments = turn.drafts;
-      this.log(`[ChunkedTranscriber] turn ${turnId}: final pass empty — promoting ${segments.length} draft segment(s)`);
-    }
-    if (segments.length === 0) {
-      if (turn.pendingName) this.cb.clearPending(turn.pendingName);
+  /** One submission of the turn's unconfirmed window. While the turn is open,
+   *  confirmation is LocalAgreement-2 (the bot's word-prefix stability); on
+   *  close everything confirms. */
+  private async submitTurn(turn: Turn, closing: boolean): Promise<void> {
+    const spanStart = turn.confirmedUpToMs;
+    const spanEnd = turn.t1;
+    if (spanEnd - spanStart < (closing ? 250 : MIN_SUBMIT_MS)) {
+      if (closing) this.closeOut(turn);
       return;
     }
 
-    const winner = this.binder.bestOverlapName({ tStartMs: turn.t0, tEndMs: turn.t1 });
-    const speaker = winner?.name || turn.clusterId;
-    if (turn.pendingName && turn.pendingName !== speaker) {
-      this.cb.clearPending(turn.pendingName);
+    const pcm = this.cut(spanStart, spanEnd);
+    if (pcm.length < SAMPLE_RATE * 0.2 || rms(pcm) < DROP_RMS) {
+      if (closing) this.closeOut(turn);
+      return;
     }
-    this.cb.publish(speaker, segments);
-    this.lastFinalText = segments.map(s => s.text).join(' ');
-    if (!winner) {
-      this.unresolved.push({ speaker, t0: turn.t0, t1: turn.t1, segments });
-      if (this.unresolved.length > MAX_UNRESOLVED) this.unresolved.shift();
+
+    const prompt = this.lastConfirmedText ? this.lastConfirmedText.slice(-PROMPT_TAIL_CHARS) : undefined;
+    let result: TranscriptionResult | null = null;
+    try {
+      result = await this.cb.transcribe(pcm, prompt);
+    } catch (e: any) {
+      this.log(`[ChunkedTranscriber] transcribe failed: ${e?.message}`);
+    }
+    const gated = result ? this.applyGates(result) : null;
+    if (!gated || gated.length === 0) {
+      if (closing) this.closeOut(turn);
+      return;
+    }
+
+    // Map whisper segments (relative to spanStart) to audio time.
+    const lang = this.cb.language || result!.language || 'en';
+    const mapped = gated.map((ws) => ({
+      text: ws.text.trim(),
+      startMs: spanStart + (ws.start || 0) * 1000,
+      endMs: Math.min(spanEnd, spanStart + (ws.end || 0) * 1000) || spanEnd,
+      language: lang,
+      relEnd: ws.end || 0,
+    })).filter(s => s.text && !isHallucination(s.text));
+    if (mapped.length === 0) {
+      if (closing) this.closeOut(turn);
+      return;
+    }
+
+    let confirmCount: number;
+    if (closing) {
+      confirmCount = mapped.length; // last chance — everything confirms
+    } else {
+      // LocalAgreement-2 (ported from SpeakerStreamManager): longest common
+      // word prefix across consecutive submissions; confirm whole segments
+      // fully inside the stable prefix, never the still-forming tail.
+      const currentWords = mapped.flatMap(s => words(s.text));
+      const prevWords = turn.lastWords;
+      let prefixLen = 0;
+      const maxLen = Math.min(currentWords.length, prevWords.length);
+      for (let i = 0; i < maxLen; i++) {
+        if (currentWords[i] === prevWords[i]) prefixLen = i + 1;
+        else break;
+      }
+      confirmCount = 0;
+      if (prefixLen > 0 && prefixLen < currentWords.length) {
+        let remaining = prefixLen;
+        for (const s of mapped) {
+          const n = words(s.text).length;
+          if (remaining >= n) { remaining -= n; confirmCount++; }
+          else break; // partial segment — don't emit partial
+        }
+      }
+      turn.lastWords = confirmCount > 0 ? [] : currentWords; // bot resets on advance
+    }
+
+    const name = this.resolveName(turn);
+
+    if (confirmCount > 0) {
+      const confirmed: ChunkSegment[] = mapped.slice(0, confirmCount).map(s => ({
+        text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
+        segmentId: `turn:${turn.turnId}:${turn.seq++}`,
+      }));
+      if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
+      this.cb.publish(name, confirmed);
+      turn.allConfirmed.push(...confirmed);
+      turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
+      const txt = confirmed.map(s => s.text).join(' ');
+      this.lastConfirmedText = (this.lastConfirmedText + ' ' + txt).slice(-PROMPT_TAIL_CHARS * 2);
+    }
+
+    const tail: ChunkSegment[] = mapped.slice(confirmCount).map((s, i) => ({
+      text: s.text, startMs: s.startMs, endMs: s.endMs, language: s.language,
+      segmentId: `turn:${turn.turnId}:p${i}`,
+    }));
+
+    if (closing) {
+      this.closeOut(turn);
+    } else {
+      turn.pendingTail = tail;
+      if (tail.length > 0) {
+        if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
+        turn.pendingName = name;
+        this.cb.publishPending(name, tail);
+      } else if (turn.pendingName) {
+        this.cb.clearPending(turn.pendingName);
+        turn.pendingName = null;
+      }
     }
   }
 
-  /** One serialized Whisper pass over ring[t0..t1] with the quality gates.
-   *  Returns mapped segments (possibly empty when gated). */
-  private async transcribeSpan(t0: number, t1: number, segId: (i: number) => string): Promise<ChunkSegment[]> {
-    const pcm = this.cut(t0, t1);
-    if (pcm.length < SAMPLE_RATE * 0.2) return [];
-    if (rms(pcm) < DROP_RMS) return []; // silence — never reaches Whisper
+  /** Turn epilogue: promote a lost tail if the closing pass yielded nothing,
+   *  clear pending, register for late renames. */
+  private closeOut(turn: Turn): void {
+    if (turn.seq === 0 && turn.allConfirmed.length === 0 && turn.pendingTail.length > 0) {
+      // Closing pass produced nothing but drafts existed — never lose a turn.
+      const name = this.resolveName(turn);
+      const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
+      this.cb.publish(name, promoted);
+      turn.allConfirmed.push(...promoted);
+      this.log(`[ChunkedTranscriber] turn ${turn.turnId}: promoted ${promoted.length} draft segment(s) on close`);
+    }
+    if (turn.pendingName) this.cb.clearPending(turn.pendingName);
+    if (turn.allConfirmed.length > 0) {
+      const winner = this.binder.bestOverlapName({ tStartMs: turn.t0, tEndMs: turn.t1 });
+      if (!winner) {
+        this.unresolved.push({ speaker: turn.clusterId, t0: turn.t0, t1: turn.t1, segments: turn.allConfirmed });
+        if (this.unresolved.length > MAX_UNRESOLVED) this.unresolved.shift();
+      }
+    }
+  }
 
-    const prompt = this.lastFinalText ? this.lastFinalText.slice(-PROMPT_TAIL_CHARS) : undefined;
-    const result = await this.cb.transcribe(pcm, prompt);
-    if (!result || !result.text || !result.text.trim()) return [];
+  private resolveName(turn: Turn): string {
+    const winner = this.binder.bestOverlapName({ tStartMs: turn.t0, tEndMs: turn.t1 });
+    return winner?.name || turn.clusterId;
+  }
 
-    // Quality gates (the bot's production thresholds).
+  /** The bot's production quality gates. Returns whisper segments or null. */
+  private applyGates(result: TranscriptionResult): TranscriptionResult['segments'] | null {
+    if (!result.text || !result.text.trim()) return null;
     const prob = result.language_probability ?? 0;
-    if (!this.cb.language && prob > 0 && prob < 0.3) return [];
+    if (!this.cb.language && prob > 0 && prob < 0.3) return null;
     const seg0 = result.segments?.[0];
     if (seg0) {
       const noSpeech = seg0.no_speech_prob ?? 0;
       const logProb = seg0.avg_logprob ?? 0;
       const compression = seg0.compression_ratio ?? 1;
       const duration = (seg0.end || 0) - (seg0.start || 0);
-      if ((noSpeech > 0.5 && logProb < -0.7) || (logProb < -0.8 && duration < 2.0) || compression > 2.4) return [];
+      if ((noSpeech > 0.5 && logProb < -0.7) || (logProb < -0.8 && duration < 2.0) || compression > 2.4) return null;
     }
     if (isHallucination(result.text)) {
       this.log(`[ChunkedTranscriber] [FILTERED] "${result.text.substring(0, 60)}"`);
-      return [];
+      return null;
     }
-
-    const lang = this.cb.language || result.language || 'en';
-    const whisperSegs = (result.segments && result.segments.length > 0)
+    return (result.segments && result.segments.length > 0)
       ? result.segments
-      : [{ text: result.text, start: 0, end: (t1 - t0) / 1000 }];
-
-    return whisperSegs
-      .map((ws, i) => ({
-        text: (ws.text || '').trim(),
-        startMs: t0 + (ws.start || 0) * 1000,
-        endMs: Math.min(t1, t0 + (ws.end || 0) * 1000) || t1,
-        language: lang,
-        segmentId: segId(i),
-      }))
-      .filter(s => s.text && !isHallucination(s.text));
+      : [{ text: result.text, start: 0, end: 0 } as any];
   }
 }
