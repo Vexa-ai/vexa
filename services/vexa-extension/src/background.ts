@@ -157,9 +157,22 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
           // channel). No mixed tabCapture. (startTabAudio remains available as a
           // manual fallback via the toolbar path if ever needed.)
           // Media tabs (YouTube): no content script, no WebRTC hook — mixed
-          // tabCapture IS the audio. The toolbar click that started this
-          // session already minted the stream id; use it now.
-          if (isMediaTab) startTabAudio();
+          // tabCapture IS the remote audio. The toolbar click that started
+          // this session already minted the stream id; use it now. The local
+          // mic has no in-page captor here either, so it rides the offscreen
+          // path (voice-notepad mode's captor) → "You" track.
+          if (isMediaTab) {
+            startTabAudio();
+            ensureOffscreen()
+              .then(() => chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_START' }))
+              .then((res: any) => {
+                if (res && res.ok === false) {
+                  state.error = res.error === 'NotAllowedError' ? 'mic-permission' : `Mic capture failed: ${res.error}`;
+                  broadcastStatus();
+                }
+              })
+              .catch(() => { /* tab audio continues without the mic */ });
+          }
         }
       } else if (msg.type === 'superseded') {
         // A newer session took over this meeting (SW reload / reconnect race).
@@ -215,6 +228,9 @@ async function stopCapture(): Promise<void> {
     }
     if (state.platform === 'zoom' || state.platform === 'teams') {
       chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
+    }
+    if (isMediaTab) {
+      chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
     }
   }
   tabStreamId = null;
