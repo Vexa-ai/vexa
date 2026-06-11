@@ -2,7 +2,7 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { RecordingService } from "../../services/recording";
-import { getSegmentPublisher } from "../../index";
+import { getSegmentPublisher, disposeMixedChunkedPipeline } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import { MediaRecorderCapture, UnifiedRecordingPipeline } from "../../services/audio-pipeline";
 import {
@@ -498,6 +498,12 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               const emoji = state === 'speaking' ? '🎤' : '🔇';
               (window as any).logBot(`${emoji} [Unified] ${eventType}: ${identity.name} (ID: ${identity.id}) [signal-based]`);
               sendTeamsSpeakerEvent(eventType, identity);
+              // Blue-squares hint for the mixed-channel core's name binder —
+              // the ONLY attribution signal (captions deliberately unused:
+              // they may not be enabled).
+              try {
+                (window as any).__vexaTeamsSpeakerHint?.(identity.name, state !== 'speaking', Date.now());
+              } catch { /* exposed fn not ready yet */ }
             }
 
             function scanAndObserveAll() {
@@ -570,198 +576,47 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             countParticipants();
             setInterval(countParticipants, 5000);
 
-            // Per-speaker audio routing: Teams has ONE mixed stream. Caption
-            // text drives speaker boundaries (captions only fire on real
-            // speech, so no false activations). A ring buffer holds recent
-            // audio to look back across the caption delay; flush on text
-            // growth (new words) — refinements (punctuation/case) are ignored.
-            const MAX_QUEUE_AGE_MS = 10000;
-            const MIN_TEXT_GROWTH = 3; // chars — below this = refinement
-            interface QueuedChunk {
-              data: Float32Array;
-              timestamp: number;
-            }
-            const audioQueue: QueuedChunk[] = [];
-            let captionsEnabled = false;
-            let lastCaptionSpeaker: string | null = null;
-            let lastFlushedTextLength: number = 0;
-
-            const setupPerSpeakerAudioRouting = () => {
+            // Mixed-channel capture: Teams has ONE mixed stream. Ship it
+            // CONTINUOUSLY to Node — no in-page routing, no ring buffer, no
+            // RMS gate (the ChunkedTranscriber core owns segmentation,
+            // silence gating, and attribution via the blue-squares hints).
+            const setupMixedAudioCapture = () => {
               const audioEl = document.querySelector('audio') as HTMLAudioElement | null;
               if (!audioEl || !(audioEl.srcObject instanceof MediaStream)) {
-                (window as any).logBot?.('[Teams PerSpeaker] No audio element found, skipping per-speaker routing');
+                (window as any).logBot?.('[Teams Mixed] No audio element found, skipping mixed capture');
                 return;
               }
 
               const stream = audioEl.srcObject as MediaStream;
               if (stream.getAudioTracks().length === 0) {
-                (window as any).logBot?.('[Teams PerSpeaker] Audio stream has no tracks');
+                (window as any).logBot?.('[Teams Mixed] Audio stream has no tracks');
                 return;
               }
 
               const ctx = new AudioContext({ sampleRate: 16000 });
               const source = ctx.createMediaStreamSource(stream);
               const processor = ctx.createScriptProcessor(4096, 1, 1);
-              const botNameLower = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
 
               processor.onaudioprocess = (e: AudioProcessingEvent) => {
                 const data = e.inputBuffer.getChannelData(0);
-                const now = Date.now();
-
-                // Skip silence — don't queue chunks with no speech energy.
-                // This prevents silence from being flushed to the wrong speaker
-                // on speaker transitions.
-                let sum = 0;
-                for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-                const rms = Math.sqrt(sum / data.length);
-                if (rms < 0.01) return;
-
-                audioQueue.push({ data: new Float32Array(data), timestamp: now });
-
-                // Drop entries older than MAX_QUEUE_AGE_MS
-                while (audioQueue.length > 0 && now - audioQueue[0].timestamp > MAX_QUEUE_AGE_MS) {
-                  audioQueue.shift();
-                }
+                // onaudioprocess fires at buffer END — timestamp the START.
+                const tsMs = Date.now() - (data.length / 16000) * 1000;
+                try {
+                  (window as any).__vexaTeamsMixedAudio?.(Array.from(data), tsMs);
+                } catch { /* exposed fn not ready yet */ }
               };
 
               source.connect(processor);
               processor.connect(ctx.destination);
-              (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (caption-aware with ring buffer)');
+              (window as any).logBot?.('[Teams Mixed] Continuous mixed-stream capture active (ChunkedTranscriber)');
             };
 
-            // Caption observer: watches Teams live captions for speaker name +
-            // text. Caption DOM differs host vs guest (host has items-renderer
-            // wrapper, guest doesn't), but [data-tid="author"] +
-            // [data-tid="closed-caption-text"] are stable across both. We pair
-            // them by document order — robust to container restructuring.
-            const captionSels = selectorsTyped.captionSelectors;
-            let captionObserver: MutationObserver | null = null;
-
-            let lastProcessedCaptionKey = '';
-
-            const processCaptions = () => {
-              const wrapper = document.querySelector(captionSels.rendererWrapper);
-              if (!wrapper) return;
-
-              // Find author/text atoms directly — the only stable data-tids
-              const authorEls = wrapper.querySelectorAll('[data-tid="author"]');
-              const textEls = wrapper.querySelectorAll('[data-tid="closed-caption-text"]');
-
-              if (authorEls.length === 0 || textEls.length === 0) return;
-
-              // Use the LAST pair — most recent caption entry.
-              // Authors and texts appear in matched pairs in document order.
-              const lastAuthor = authorEls[authorEls.length - 1];
-              const lastText = textEls[textEls.length - 1];
-
-              const speaker = (lastAuthor.textContent || '').trim();
-              const text = (lastText.textContent || '').trim();
-              if (!speaker || !text) return;
-
-              // Deduplicate: Teams updates text in-place as ASR refines.
-              // Only process when speaker changes or text grows significantly.
-              const captionKey = speaker + '::' + text;
-              if (captionKey === lastProcessedCaptionKey) return;
-              lastProcessedCaptionKey = captionKey;
-
-              const now = Date.now();
-              const botNameLower2 = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
-              const speakerLower = speaker.toLowerCase();
-              if (speakerLower.includes(botNameLower2) || speakerLower.includes('vexa')) return;
-
-              if (speaker !== lastCaptionSpeaker) {
-                // Speaker changed. Queue contains new speaker's audio
-                // (~1-1.5s accumulated during caption delay). Flush to
-                // new speaker to preserve their opening words.
-                lastFlushedTextLength = 0;
-                const queued = audioQueue.length;
-                if (queued > 0 && !speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
-                  // Only flush recent chunks (last 2s) — the caption delay lookback.
-                  // Older chunks are stale silence from the gap between speakers.
-                  const lookbackCutoff = now - 2000;
-                  let discarded = 0;
-                  while (audioQueue.length > 0 && audioQueue[0].timestamp < lookbackCutoff) {
-                    audioQueue.shift();
-                    discarded++;
-                  }
-                  let flushed = 0;
-                  while (audioQueue.length > 0) {
-                    const entry = audioQueue.shift()!;
-                    if (typeof (window as any).__vexaTeamsAudioData === 'function') {
-                      (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
-                    }
-                    flushed++;
-                  }
-                  (window as any).logBot?.('[Teams Captions] Speaker change: ' +
-                    (lastCaptionSpeaker || '(none)') + ' → ' + speaker +
-                    ' (flushed ' + flushed + ' chunks, discarded ' + discarded + ' stale)');
-                } else {
-                  (window as any).logBot?.('[Teams Captions] Speaker change: ' +
-                    (lastCaptionSpeaker || '(none)') + ' → ' + speaker);
-                }
-              }
-
-              lastCaptionSpeaker = speaker;
-
-              // Flush only when text GREW (new words). Refinements
-              // (punctuation/case) change text by 1-2 chars; new words grow by
-              // 5+. Compare against PREVIOUS text length, not cumulative max
-              // (Teams replaces caption text per entry, not appends).
-              const textGrowth = text.length - lastFlushedTextLength;
-              if (textGrowth > MIN_TEXT_GROWTH || text.length < lastFlushedTextLength) {
-                if (!speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
-                  let flushed = 0;
-                  while (audioQueue.length > 0) {
-                    const entry = audioQueue.shift()!;
-                    if (typeof (window as any).__vexaTeamsAudioData === 'function') {
-                      (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
-                    }
-                    flushed++;
-                  }
-                  if (flushed > 0) {
-                    (window as any).logBot?.('[Teams Captions] Flushed ' + flushed + ' chunks to ' + speaker +
-                      ' (text ' + (textGrowth > 0 ? '+' + textGrowth : textGrowth) + ' chars)');
-                  }
-                }
-                lastFlushedTextLength = text.length;
-              }
-
-              if (typeof (window as any).__vexaTeamsCaptionData === 'function') {
-                (window as any).__vexaTeamsCaptionData(speaker, text, now);
-              }
-            };
-
-            const startCaptionObserver = () => {
-              const wrapper = document.querySelector(captionSels.rendererWrapper);
-              if (!wrapper) return false; // captions not enabled yet — check again later
-              captionsEnabled = true;
-              (window as any).logBot?.('[Teams Captions] Caption wrapper found — caption-driven routing ACTIVE');
-              captionObserver = new MutationObserver(processCaptions);
-              captionObserver.observe(wrapper, { childList: true, subtree: true, characterData: true });
-              processCaptions();
-              // Backup poll in case MutationObserver misses virtual-DOM updates.
-              setInterval(processCaptions, 200);
-              return true;
-            };
-
-            // Try to detect if captions are already enabled; poll until found or give up
-            const captionDetectionInterval = setInterval(() => {
-              if (startCaptionObserver()) {
-                clearInterval(captionDetectionInterval);
-              }
-            }, 2000);
-
-            // Also watch for the wrapper to appear via body mutation
-            const captionWrapperWatcher = new MutationObserver(() => {
-              if (!captionsEnabled && startCaptionObserver()) {
-                captionWrapperWatcher.disconnect();
-                clearInterval(captionDetectionInterval);
-              }
-            });
-            captionWrapperWatcher.observe(document.body, { childList: true, subtree: true });
+            // Captions are deliberately NOT consumed for transcription:
+            // they may be unavailable (require manual enabling) and the
+            // mixed-channel core attributes via the blue-squares signal.
 
             // Delay slightly to ensure audio element is ready
-            setTimeout(setupPerSpeakerAudioRouting, 2000);
+            setTimeout(setupMixedAudioCapture, 2000);
 
             // ARIA-roles-based participant collection (find menuitems in
             // Participants panel that contain an avatar/image).
@@ -980,6 +835,16 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
  * exits.
  */
 export async function stopTeamsRecording(): Promise<void> {
+  // Close the mixed-channel core first — its closing pass publishes the
+  // final turn; this MUST complete before session_end goes out. Bounded so a
+  // wedged transcription service can't hang the leave.
+  try {
+    await Promise.race([
+      disposeMixedChunkedPipeline(),
+      new Promise<void>(r => setTimeout(r, 10_000)),
+    ]);
+  } catch { /* best effort */ }
+
   if (!pipeline) {
     log("[Teams Recording] stopTeamsRecording: no active pipeline");
     return;

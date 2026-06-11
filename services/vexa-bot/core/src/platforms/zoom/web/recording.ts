@@ -1,10 +1,9 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
 import { RecordingService } from '../../../services/recording';
-import { getRawCaptureService, getSegmentPublisher, feedMixedSegmentAudio, labelMixedSegment, closeMixedSegment, hasPerSpeakerPipeline } from '../../../index';
+import { getRawCaptureService, getSegmentPublisher, feedMixedAudio, recordMixedHint, hasMixedChunkedPipeline, disposeMixedChunkedPipeline } from '../../../index';
 import { log } from '../../../utils';
 import { PulseAudioCapture, UnifiedRecordingPipeline } from '../../../services/audio-pipeline';
-import { MixedAudioPipeline } from '../../../services/mixed-audio-pipeline';
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';
 import { startZoomRichObservation } from './observe';
@@ -16,7 +15,7 @@ let pipeline: UnifiedRecordingPipeline | null = null;
 let speakerPollInterval: NodeJS.Timeout | null = null;
 let lastActiveSpeaker: string | null = null;
 let popupDismissInterval: NodeJS.Timeout | null = null;
-let mixedPipeline: MixedAudioPipeline | null = null;
+let feedingChunked = false;
 let pulseSource: PulseAudioCapture | null = null;
 let ownsPulseSource = false;
 
@@ -33,34 +32,24 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
     (!Array.isArray(botConfig.captureModes) || botConfig.captureModes.includes('audio'));
   const sessionUid = botConfig.connectionId || `zoom-web-${Date.now()}`;
 
-  // ── Live transcription (MixedAudioPipeline — the single-channel core) ──
+  // ── Live transcription (ChunkedTranscriber — THE single-channel core) ──
   // Zoom web delivers ONE mixed remote stream (PulseAudio sink monitor).
-  // Diarize it into named turns; the DOM active-speaker poll provides the
-  // naming hints. This is the same pipeline the ingest server runs for the
-  // extension's mixed track — one core, two hosts.
-  if (botConfig.transcribeEnabled !== false && hasPerSpeakerPipeline()) {
-    try {
-      mixedPipeline = await MixedAudioPipeline.create({
-        log: (m) => log(m),
-        onSegmentAudio: (segKey, pcm, atMs) => feedMixedSegmentAudio(segKey, pcm, atMs),
-        onSegmentLabel: (segKey, displayName) => labelMixedSegment(segKey, displayName),
-        onSegmentClose: (segKey) => closeMixedSegment(segKey),
-      });
-      pulseSource = new PulseAudioCapture();
-      ownsPulseSource = true;
-      pulseSource.on('pcm', (buf: Buffer) => {
-        if (!mixedPipeline) return;
-        // s16le mono 16 kHz → Float32 [-1, 1]
-        const n = Math.floor(buf.length / 2);
-        const f32 = new Float32Array(n);
-        for (let i = 0; i < n; i++) f32[i] = buf.readInt16LE(i * 2) / 32768;
-        mixedPipeline.feedAudio(f32, Date.now());
-      });
-      log('[Zoom Web] MixedAudioPipeline ready — live transcription on the mixed stream');
-    } catch (err: any) {
-      log(`[Zoom Web] FATAL: MixedAudioPipeline failed to load: ${err.message}`);
-      throw err;
-    }
+  // Raw PCM goes straight into the core (created by initPerSpeakerPipeline);
+  // the DOM active-speaker poll provides timestamped naming hints. Same
+  // algorithm + host wiring as the in-tab extension's ingest server.
+  if (botConfig.transcribeEnabled !== false && hasMixedChunkedPipeline()) {
+    feedingChunked = true;
+    pulseSource = new PulseAudioCapture();
+    ownsPulseSource = true;
+    pulseSource.on('pcm', (buf: Buffer) => {
+      if (!feedingChunked) return;
+      // s16le mono 16 kHz → Float32 [-1, 1]
+      const n = Math.floor(buf.length / 2);
+      const f32 = new Float32Array(n);
+      for (let i = 0; i < n; i++) f32[i] = buf.readInt16LE(i * 2) / 32768;
+      feedMixedAudio(f32, Date.now());
+    });
+    log('[Zoom Web] ChunkedTranscriber feed ready — live transcription on the mixed stream');
   }
 
   if (wantsAudioCapture) {
@@ -127,9 +116,16 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
 export async function stopZoomWebRecording(): Promise<void> {
   log('[Zoom Web] Stopping recording');
 
-  // Flush + reset the single-channel transcription core first so the last
-  // held turn reaches the speaker manager before session teardown.
-  if (mixedPipeline) { try { mixedPipeline.dispose(); } catch { /* best effort */ } mixedPipeline = null; }
+  // Close the single-channel core first — its closing pass publishes the
+  // final turn; this MUST complete before session_end goes out. Bounded so a
+  // wedged transcription service can't hang the leave.
+  feedingChunked = false;
+  try {
+    await Promise.race([
+      disposeMixedChunkedPipeline(),
+      new Promise<void>(r => setTimeout(r, 10_000)),
+    ]);
+  } catch { /* best effort */ }
   if (ownsPulseSource && pulseSource) { try { await pulseSource.stop(); } catch { /* best effort */ } }
   pulseSource = null;
   ownsPulseSource = false;
@@ -225,8 +221,8 @@ function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
       // Hint for the cluster↔name binder (single-channel core): the DOM's
       // current active speaker, timestamped. Null = the open turn ended.
       if (speakerName !== lastActiveSpeaker) {
-        if (speakerName) mixedPipeline?.recordHint(speakerName, 'dom-active', Date.now());
-        else mixedPipeline?.recordHint('', 'dom-active', Date.now(), true);
+        if (speakerName) recordMixedHint(speakerName, 'dom-active', Date.now());
+        else recordMixedHint('', 'dom-active', Date.now(), true);
       }
       if (speakerName && speakerName !== lastActiveSpeaker) {
         // Speaker changed — log to raw capture if active

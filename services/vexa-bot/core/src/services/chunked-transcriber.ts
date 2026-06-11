@@ -263,8 +263,10 @@ export class ChunkedTranscriber {
     return { commits: this.commitCounter, turns: this.turnCounter, queued: this.queue.length, unresolved: this.unresolved.length, binder: this.binder.stats() };
   }
 
-  /** Session end: flush the carried span and close the open turn. */
-  dispose(): void {
+  /** Session end: flush the carried span and close the open turn. Resolves
+   *  AFTER the final turn has published — callers that publish session_end
+   *  (the bot's graceful leave) must await it or the closing words are lost. */
+  async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     if (this.carry && this.carry.t1 - this.carry.t0 >= 300) {
@@ -272,7 +274,11 @@ export class ChunkedTranscriber {
     }
     this.carry = null;
     if (this.idleTimer) { clearInterval(this.idleTimer); this.idleTimer = null; }
-    void this.pump(true);
+    // An in-flight pump owns the queue — wait it out, then run the closing
+    // pass (pump(true) returns immediately while another pump holds the lock).
+    while (this.pumping) await new Promise(r => setTimeout(r, 50));
+    await this.pump(true);
+    while (this.pumping) await new Promise(r => setTimeout(r, 50));
     try { this.diarizer?.reset(); } catch { /* best effort */ }
   }
 

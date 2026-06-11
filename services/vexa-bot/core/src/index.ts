@@ -28,6 +28,8 @@ import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, clean
 import { TranscriptionClient } from './services/transcription-client';
 import { SegmentPublisher } from './services/segment-publisher';
 import { SpeakerStreamManager } from './services/speaker-streams';
+import { ChunkedTranscriber } from './services/chunked-transcriber';
+import { createChunkedHost } from './services/chunked-host';
 import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken, reportTrackAudio, getLockedMapping } from './services/speaker-identity';
 import { SileroVAD } from './services/vad';
 import { isHallucination } from './services/hallucination-filter';
@@ -65,29 +67,6 @@ let botPaSinkModuleId: string | null = null; // PulseAudio module ID for per-bot
 let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
   activeRecordingService = svc;
-}
-
-/**
- * Feed mixed PulseAudio audio into the per-speaker transcription pipeline.
- * Used by Zoom Web: single mixed stream + DOM speaker polling for attribution.
- * Mirrors handleTeamsAudioData but called from Node.js (not browser).
- */
-export async function feedZoomAudio(speakerName: string, audioData: Float32Array): Promise<void> {
-  if (!speakerManager || !segmentPublisher) return;
-
-  const speakerId = `zoom-${speakerName.replace(/\s+/g, '_')}`;
-
-  if (!speakerManager.hasSpeaker(speakerId)) {
-    log(`[🎙️ ZOOM SPEAKER] "${speakerName}" — first audio received`);
-    speakerManager.addSpeaker(speakerId, speakerName);
-    await segmentPublisher.publishSpeakerEvent({
-      speaker: speakerName,
-      type: 'joined',
-      timestamp: Date.now(),
-    });
-  }
-
-  speakerManager.feedAudio(speakerId, audioData);
 }
 
 /**
@@ -153,28 +132,36 @@ let transcriptionClient: TranscriptionClient | null = null;
 let segmentPublisher: SegmentPublisher | null = null;
 export function getSegmentPublisher(): SegmentPublisher | null { return segmentPublisher; }
 
-/** Mixed-audio (single-channel) bridge for platforms whose remote audio is one
- *  stream (zoom web). Segmentation-driven buffers: audio streams live into the
- *  segment's stream; labels only rename it. */
-export function feedMixedSegmentAudio(segKey: string, pcm: Float32Array, atMs: number): void {
-  if (!speakerManager) return;
-  if (!speakerManager.hasSpeaker(segKey)) speakerManager.addSpeaker(segKey, segKey);
-  speakerManager.feedAudio(segKey, pcm, atMs);
+// ── Mixed-channel core (Zoom web + MS Teams) — ChunkedTranscriber ──────────
+// THE single validated single-channel algorithm (shared verbatim with the
+// in-tab extension's ingest server): passive ring + segmentation-model cuts,
+// LocalAgreement-2 continuous confirmation, hint-overlap attribution with
+// retroactive renames. Platforms feed raw mixed PCM + timestamped "who's lit"
+// hints; everything else happens inside the core + shared host factory.
+let chunked: ChunkedTranscriber | null = null;
+let chunkStatsTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Raw mixed PCM (16 kHz mono f32), wall-clock ms of the chunk START. */
+export function feedMixedAudio(pcm: Float32Array, tsMs: number): void {
+  chunked?.feedAudio(pcm, tsMs);
 }
 
-export function labelMixedSegment(segKey: string, displayName: string): void {
-  if (!speakerManager) return;
-  if (!speakerManager.hasSpeaker(segKey)) speakerManager.addSpeaker(segKey, displayName);
-  else speakerManager.updateSpeakerName(segKey, displayName);
+/** Timestamped platform speaker hint ("who's lit"). */
+export function recordMixedHint(name: string, kind: 'dom-active' | 'caption' | 'dom-outline', tMs: number, isEnd = false): void {
+  chunked?.recordHint(name, kind, tMs, isEnd);
 }
 
-export function closeMixedSegment(segKey: string): void {
-  if (!speakerManager) return;
-  void speakerManager.flushSpeaker(segKey, true);
+export function hasMixedChunkedPipeline(): boolean { return !!chunked; }
+
+/** Idempotent. Resolves after the final turn published — callers on the
+ *  leave path MUST await before session_end goes out. */
+export async function disposeMixedChunkedPipeline(): Promise<void> {
+  if (chunkStatsTimer) { clearInterval(chunkStatsTimer); chunkStatsTimer = null; }
+  const c = chunked;
+  chunked = null;
+  if (c) await c.dispose();
 }
 
-/** Is the per-speaker transcription pipeline initialized? */
-export function hasPerSpeakerPipeline(): boolean { return !!speakerManager; }
 let speakerManager: SpeakerStreamManager | null = null;
 let vadModel: SileroVAD | null = null;
 /** Per-speaker VAD states for streaming mode (GMeet only) */
@@ -1309,6 +1296,27 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     await segmentPublisher.publishSessionStart();
     log('[PerSpeaker] Session start published');
 
+    // Mixed-channel platforms (Zoom web, MS Teams): the validated
+    // ChunkedTranscriber core, wired through the shared host factory —
+    // identical publishing semantics to the in-tab extension's ingest server.
+    if (botConfig.platform === 'zoom' || botConfig.platform === 'teams') {
+      chunked = await ChunkedTranscriber.create(createChunkedHost({
+        transcriptionClient,
+        segmentPublisher,
+        language: () => {
+          const explicit = currentLanguage && currentLanguage !== 'auto' ? currentLanguage : null;
+          const single = !explicit && allowedLanguages && allowedLanguages.length === 1 ? allowedLanguages[0] : null;
+          return explicit || single || undefined;
+        },
+        log: (m) => log(m),
+      }));
+      chunkStatsTimer = setInterval(() => {
+        const st = chunked?.stats();
+        if (st) log(`[ChunkStats] meeting=${meetingId} commits=${st.commits} turns=${st.turns} queued=${st.queued} unresolved=${st.unresolved} hints=${JSON.stringify(st.binder.hintTurns)}`);
+      }, 30000);
+      log('[PerSpeaker] ChunkedTranscriber ready (mixed-channel core)');
+    }
+
     try {
       vadModel = await SileroVAD.create();
       log('[PerSpeaker] Silero VAD loaded');
@@ -1750,6 +1758,10 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
     pipelineTelemetryInterval = null;
   }
 
+  // Defensive: crash paths can skip the platform leave hooks — close the
+  // mixed-channel core (final turn publishes) before session_end goes out.
+  try { await disposeMixedChunkedPipeline(); } catch { /* best effort */ }
+
   // Stop browser-side audio capture
   for (const handle of activeSpeakerStreamHandles) {
     try {
@@ -1814,80 +1826,33 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
   log('[PerSpeaker] Pipeline cleaned up');
 }
 
-/**
- * Handle audio from Teams' single mixed stream, routed by speaker name.
- * Teams has one audio element; the browser routes chunks based on either:
- *   - Caption-driven routing (primary): captions identify speaker with real speech
- *   - DOM blue squares (fallback): voice-level-stream-outline + vdi-frame-occlusion
- * Speaker name is known from DOM/caption events — no voting/locking needed.
- */
-async function handleTeamsAudioData(speakerName: string, audioDataArray: number[]): Promise<void> {
-  if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
-
-  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
-  const audioData = new Float32Array(audioDataArray);
-
-  // Add speaker if new — name is already known from DOM/caption
-  if (!speakerManager.hasSpeaker(speakerId)) {
-    log(`[🎙️ TEAMS SPEAKER] "${speakerName}" — first audio received`);
-    speakerManager.addSpeaker(speakerId, speakerName);
-    await segmentPublisher.publishSpeakerEvent({
-      speaker: speakerName,
-      type: 'joined',
-      timestamp: Date.now(),
-    });
-  }
-
-  // No VAD for Teams — caption-driven routing already gates audio.
-  // Small ring buffer chunks are too short for Silero VAD to reliably detect speech.
-  speakerManager.feedAudio(speakerId, audioData);
-}
-
-/**
- * Handle caption data from Teams live captions.
- * Captions provide speaker-attributed text directly from Teams' ASR.
- * Used for:
- *   1. Speaker boundary detection (triggers ring buffer lookback)
- *   2. Caption text storage alongside audio transcription
- *   3. Future: fuzzy text matching for segment reconciliation
- */
-let lastCaptionSpeakerId: string | null = null;
-/** Accumulated caption events for speaker-mapper boundaries (Teams only) */
-const captionEventLog: { speaker: string; text: string; timestamp: number }[] = [];
 /** Latest word timestamps from Whisper (replaced on each submission) */
 let latestWhisperWords: { word: string; start: number; end: number; probability: number }[] = [];
 
-async function handleTeamsCaptionData(speakerName: string, captionText: string, timestampMs: number): Promise<void> {
-  if (!segmentPublisher || !page || page.isClosed()) return;
+/**
+ * Teams mixed-channel callbacks (ChunkedTranscriber path).
+ * The browser ships the SINGLE mixed stream continuously plus blue-square
+ * (voice-level-stream-outline) speaker hints — no captions dependency, no
+ * in-page routing. Attribution is the core's hint-overlap + retroactive
+ * renames, exactly like the in-tab extension.
+ */
+let lastHintSpeaker: string | null = null;
+async function handleTeamsMixedAudio(audioDataArray: number[], tsMs: number): Promise<void> {
+  feedMixedAudio(new Float32Array(audioDataArray), tsMs);
+}
 
-  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
-
-  // When caption speaker changes, flush the PREVIOUS speaker's buffer immediately.
-  // This prevents cross-speaker contamination — the old speaker's buffer gets emitted
-  // before any of the new speaker's audio leaks into it.
-  if (lastCaptionSpeakerId && lastCaptionSpeakerId !== speakerId && speakerManager) {
-    log(`[PerSpeaker] Caption speaker change: flushing "${speakerManager.getSpeakerName(lastCaptionSpeakerId) || lastCaptionSpeakerId}" buffer`);
-    await speakerManager.flushSpeaker(lastCaptionSpeakerId);
+async function handleTeamsSpeakerHint(speakerName: string, isEnd: boolean, tsMs: number): Promise<void> {
+  recordMixedHint(speakerName, 'dom-outline', tsMs, isEnd);
+  // Timeline UX feature (speaker_events_relative stream) — independent of
+  // transcription; fire on speaker change only.
+  if (!isEnd && speakerName && speakerName !== lastHintSpeaker && segmentPublisher) {
+    lastHintSpeaker = speakerName;
+    await segmentPublisher.publishSpeakerEvent({
+      speaker: speakerName,
+      type: 'started_speaking',
+      timestamp: tsMs,
+    });
   }
-  lastCaptionSpeakerId = speakerId;
-
-  // Accumulate for speaker-mapper boundaries.
-  // Store timestamp as session-relative seconds to match Whisper word timestamps
-  // (which are offset by bufferStartMs - sessionStartMs). Absolute wall-clock
-  // timestamps would be in a completely different domain (~1.7B vs ~200s).
-  const sessionRelativeSec = segmentPublisher.sessionStartMs
-    ? (timestampMs - segmentPublisher.sessionStartMs) / 1000
-    : timestampMs / 1000;
-  captionEventLog.push({ speaker: speakerName, text: captionText, timestamp: sessionRelativeSec });
-
-  // Publish caption as a speaker event for downstream consumers
-  await segmentPublisher.publishSpeakerEvent({
-    speaker: speakerName,
-    type: 'started_speaking',
-    timestamp: timestampMs,
-  });
-
-  log(`[📝 TEAMS CAPTION] "${speakerName}": ${captionText.substring(0, 80)}${captionText.length > 80 ? '...' : ''}`);
 }
 
 /**
@@ -1907,26 +1872,27 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
   const isTeams = currentPlatform === 'teams';
 
-  // Expose Teams audio callback — browser routes single stream by speaker name
-  // and caption callback for caption-driven speaker detection
+  // Teams: continuous MIXED stream + blue-square speaker hints — the
+  // ChunkedTranscriber core owns segmentation and attribution. No captions,
+  // no in-page routing.
   if (isTeams) {
     try {
-      await pageToCaptureFrom.exposeFunction('__vexaTeamsAudioData', handleTeamsAudioData);
-      log('[PerSpeaker] Teams audio callback exposed — browser-side routing via DOM/caption speaker events');
+      await pageToCaptureFrom.exposeFunction('__vexaTeamsMixedAudio', handleTeamsMixedAudio);
+      log('[PerSpeaker] Teams mixed-audio callback exposed (ChunkedTranscriber)');
     } catch (err: any) {
       if (!err.message.includes('has been already registered')) {
-        log(`[PerSpeaker] Failed to expose Teams audio callback: ${err.message}`);
+        log(`[PerSpeaker] Failed to expose Teams mixed-audio callback: ${err.message}`);
       }
     }
     try {
-      await pageToCaptureFrom.exposeFunction('__vexaTeamsCaptionData', handleTeamsCaptionData);
-      log('[PerSpeaker] Teams caption callback exposed — caption text will be stored for reconciliation');
+      await pageToCaptureFrom.exposeFunction('__vexaTeamsSpeakerHint', handleTeamsSpeakerHint);
+      log('[PerSpeaker] Teams speaker-hint callback exposed (blue squares → dom-outline hints)');
     } catch (err: any) {
       if (!err.message.includes('has been already registered')) {
-        log(`[PerSpeaker] Failed to expose Teams caption callback: ${err.message}`);
+        log(`[PerSpeaker] Failed to expose Teams speaker-hint callback: ${err.message}`);
       }
     }
-    // Teams audio routing + caption observer is set up in recording.ts page.evaluate
+    // The mixed emitter + hint detector are installed in recording.ts page.evaluate
     return;
   }
 

@@ -31,7 +31,8 @@ import { SpeakerStreamManager } from './services/speaker-streams';
 import { TranscriptionClient } from './services/transcription-client';
 import { SegmentPublisher, TranscriptionSegment } from './services/segment-publisher';
 import { isHallucination } from './services/hallucination-filter';
-import { ChunkedTranscriber, ChunkSegment } from './services/chunked-transcriber';
+import { ChunkedTranscriber } from './services/chunked-transcriber';
+import { createChunkedHost } from './services/chunked-host';
 
 const PORT = parseInt(process.env.INGEST_PORT || '8090', 10);
 
@@ -189,51 +190,14 @@ class CaptureSession {
   }
 
   /** The single-channel core: ring + segmentation cuts + serialized one-shot
-   *  Whisper + hint attribution live in ChunkedTranscriber; this host only
-   *  maps its immutable emits onto the frozen publisher envelope. */
+   *  Whisper + hint attribution live in ChunkedTranscriber; the shared host
+   *  factory maps its emits onto the frozen publisher envelope. */
   private async initChunkedTranscriber(): Promise<void> {
-    this.chunked = await ChunkedTranscriber.create({
+    this.chunked = await ChunkedTranscriber.create(createChunkedHost({
+      transcriptionClient: this.transcriptionClient,
+      segmentPublisher: this.segmentPublisher,
+      language: () => this.explicitLanguage || undefined,
       log: (m) => log(m),
-      language: this.explicitLanguage || undefined,
-      transcribe: (pcm, prompt) =>
-        this.transcriptionClient.transcribe(pcm, this.explicitLanguage || undefined, prompt),
-      publish: (speaker, confirmed, pending) => {
-        void this.segmentPublisher.publishTranscript(
-          speaker,
-          this.mapChunkSegments(speaker, confirmed),
-          this.mapChunkSegments(speaker, pending, false),
-        );
-      },
-      publishPending: (speaker, segments) => {
-        void this.segmentPublisher.publishTranscript(speaker, [], this.mapChunkSegments(speaker, segments, false));
-      },
-      clearPending: (speaker) => {
-        void this.segmentPublisher.publishTranscript(speaker, [], []);
-      },
-      rename: (oldSpeaker, newSpeaker, segments) => {
-        // Rename within the FROZEN envelope, via key formation only:
-        //  1. clear the OLD name's pending key (empty bundle)
-        //  2. republish the SAME segment_ids under the NEW name — PG UPSERTs
-        //     on (meeting_id, segment_id), clients update in place.
-        void this.segmentPublisher.publishTranscript(oldSpeaker, [], []);
-        void this.segmentPublisher.publishTranscript(newSpeaker, this.mapChunkSegments(newSpeaker, segments), []);
-        log(`[Chunked] republished ${segments.length} segment(s) "${oldSpeaker}" → "${newSpeaker}"`);
-      },
-    });
-  }
-
-  /** ChunkSegment (audio-time ms) → publisher TranscriptionSegment. */
-  private mapChunkSegments(speaker: string, segments: ChunkSegment[], completed = true): TranscriptionSegment[] {
-    return segments.map(s => ({
-      speaker,
-      text: s.text,
-      start: (s.startMs - this.segmentPublisher.sessionStartMs) / 1000,
-      end: (s.endMs - this.segmentPublisher.sessionStartMs) / 1000,
-      language: s.language,
-      completed,
-      segment_id: `${this.segmentPublisher.sessionUid}:${s.segmentId}`,
-      absolute_start_time: new Date(s.startMs).toISOString(),
-      absolute_end_time: new Date(s.endMs).toISOString(),
     }));
   }
 
@@ -281,7 +245,8 @@ class CaptureSession {
     if (this.closed) return;
     this.closed = true;
     if (this.diarStatsTimer) { clearInterval(this.diarStatsTimer); this.diarStatsTimer = null; }
-    try { this.chunked?.dispose(); } catch { /* best effort */ }
+    // Await the closing pass so the final turn publishes before session_end.
+    try { await this.chunked?.dispose(); } catch { /* best effort */ }
     try { this.speakerManager.removeAll(); } catch { /* best effort */ }
     try { await this.segmentPublisher.publishSessionEnd(); } catch { /* best effort */ }
     try { await this.segmentPublisher.close(); } catch { /* best effort */ }
