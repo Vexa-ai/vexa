@@ -73,7 +73,7 @@ async function makeT(fake?: Fake) {
     diarizer: null,
     ring: [], ringMs: 0, carry: null, queue: [], pumping: false,
     lastConfirmedText: '', commitCounter: 0, turnCounter: 0, disposed: false,
-    turn: null, lastChunkWallMs: 0, idleTimer: null, turnRecords: [],
+    turn: null, lastChunkWallMs: 0, idleTimer: null, unresolved: [],
     latestAudioMs: 0, confirmedHighWaterMs: 0,
   });
   return { t, calls, confirmed, pending, cleared, renamed };
@@ -202,26 +202,7 @@ async function drain() {
       JSON.stringify(s1segs.map(s => [s.startMs, s.endMs])));
   }
 
-  // 9. turn-level re-clustering merges an oversplit cluster (same voice)
-  {
-    const { t, renamed } = await makeT();
-    const embA = [1, 0, 0];
-    const embB = [0, 1, 0];
-    t.feedAudio(tone(5000), 0);
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000, emb: embA });
-    t.feedAudio(tone(4000), 5000);
-    t.handleCommit({ speakerId: 's1', tStartMs: 4500, tEndMs: 8000, emb: embA }); // SAME voice, oversplit id
-    t.feedAudio(tone(4000), 9000);
-    t.handleCommit({ speakerId: 's2', tStartMs: 8500, tEndMs: 12000, emb: embB }); // different voice
-    await drain();
-    t.dispose(); // closes the last turn → 3 records → recluster
-    await drain();
-    check('recluster: oversplit merged back', renamed.some(r => r.from === 's1' && r.to === 's0'),
-      JSON.stringify(renamed.map(r => [r.from, r.to])));
-    check('recluster: different voice untouched', !renamed.some(r => r.from === 's2' || r.to === 's2'));
-  }
-
-  // 10. strict serialization across drafts and closing passes
+  // 9. strict serialization across drafts and closing passes
   {
     let active = 0; let overlapped = false; let count = 0;
     const { t } = await makeT();
