@@ -22,9 +22,12 @@
  *        4. next buffer opens at t1 (+ tail re-feed of frames after t1);
  *           provisionally labeled with the latest lit name for live drafts
  *
- * LIT-ONLY EXPERIMENT (operator-decided): segmentation cuts the buffers; the
- * who's-lit timeline only NAMES them — the winner is chosen when the buffer
- * CLOSES, never the other way around. Clustering is unused for assignment.
+ * LIT-ONLY (operator-decided): segmentation cuts the buffers (the reliable
+ * signal); each cut segment gets its OWN best lit match over its span at
+ * close — NO inheritance across segmentation boundaries (a lit gap is "no
+ * evidence", back-filled when hints cover the span; never the previous
+ * segment's name). Flicker is absorbed by overlap mass within the segment.
+ * Clustering is unused for assignment.
  */
 
 import { OnnxLocalDiarizer, CommitEvent } from './diarization/onnx-local-diarizer';
@@ -59,10 +62,8 @@ export class MixedAudioPipeline {
   private currentSegKey: string;
   /** Wall-clock when the current buffer opened (first audio in it). */
   private currentSegStartMs: number | null = null;
-  /** Latest lit name seen — provisional label for the OPEN buffer's drafts. */
-  private lastLitName: string | null = null;
-  /** Segments closed before ANY hint existed — back-filled and relabeled
-   *  (rename → republish path) once hints arrive. */
+  /** Segments closed without overlap evidence — re-resolved on every new hint
+   *  (overlap-only; never name inheritance) via the rename→republish path. */
   private unnamedClosed: Array<{ segKey: string; tStartMs: number; tEndMs: number }> = [];
   /** Recent frames for boundary tail re-feed. */
   private tail: TailFrame[] = [];
@@ -109,23 +110,28 @@ export class MixedAudioPipeline {
   /** Timestamped platform hint: who the UI showed as speaking. */
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
-    if (name && !isEnd) this.lastLitName = name;
-    // Back-fill segments that closed before any hint existed: best overlap if
-    // the hint log now covers their span, else this first-known name.
+    // Re-try unresolved segments: overlap evidence ONLY — a segment is named
+    // by hints covering ITS span, never by whatever name happens to be lit
+    // now. Segments stay queued until evidence arrives.
     if (name && this.unnamedClosed.length > 0) {
-      for (const u of this.unnamedClosed.splice(0)) {
+      const still: typeof this.unnamedClosed = [];
+      for (const u of this.unnamedClosed) {
         const winner = this.binder.bestOverlapName({ tStartMs: u.tStartMs, tEndMs: u.tEndMs });
-        const resolvedName = winner?.name ?? name;
-        this.cb.onSegmentLabel(u.segKey, resolvedName, {
-          speakerName: resolvedName, source: 'window-match', confidence: winner?.confidence ?? 0,
-        });
-        this.log(`[MixedPipeline] back-filled ${u.segKey} → "${resolvedName}"`);
+        if (winner) {
+          this.cb.onSegmentLabel(u.segKey, winner.name, {
+            speakerName: winner.name, source: 'window-match', confidence: winner.confidence,
+          });
+          this.log(`[MixedPipeline] back-filled ${u.segKey} → "${winner.name}"`);
+        } else {
+          still.push(u);
+        }
       }
+      this.unnamedClosed = still.slice(-50); // bounded
     }
   }
 
-  stats(): { binder: ReturnType<ClusterNameBinder['stats']>; segments: number; lastLit: string | null } {
-    return { binder: this.binder.stats(), segments: this.segCounter, lastLit: this.lastLitName };
+  stats(): { binder: ReturnType<ClusterNameBinder['stats']>; segments: number; unresolved: number } {
+    return { binder: this.binder.stats(), segments: this.segCounter, unresolved: this.unnamedClosed.length };
   }
 
   /** Close the live buffer and reset (session end). */
@@ -142,23 +148,22 @@ export class MixedAudioPipeline {
   }
 
   /** A diarizer commit = THE segmentation signal: the utterance that just
-   *  streamed into the current buffer is over. Choose the winner NOW (max
-   *  lit-overlap across the buffer's full span), label, close, open next. */
+   *  streamed into the current buffer is over. Find this segment's OWN best
+   *  lit match over its span — no inheritance across the boundary. */
   private handleCommit(ev: CommitEvent): void {
     const closingKey = this.currentSegKey;
     const spanStart = this.currentSegStartMs ?? ev.tStartMs;
     const winner = this.binder.bestOverlapName({ tStartMs: spanStart, tEndMs: ev.tEndMs });
-    const name = winner?.name ?? this.lastLitName;
 
-    if (name) {
-      this.cb.onSegmentLabel(closingKey, name, {
-        speakerName: name,
+    if (winner) {
+      this.cb.onSegmentLabel(closingKey, winner.name, {
+        speakerName: winner.name,
         source: 'window-match',
-        confidence: winner?.confidence ?? 0,
+        confidence: winner.confidence,
       });
     } else {
-      // No hint has EVER arrived — remember this segment; the first hint
-      // back-fills and republishes it (rename path keeps segment_ids stable).
+      // No overlap evidence for THIS span — queue for re-resolution as hints
+      // arrive (rename→republish keeps segment_ids stable). Never inherit.
       this.unnamedClosed.push({ segKey: closingKey, tStartMs: spanStart, tEndMs: ev.tEndMs });
     }
     this.cb.onSegmentClose(closingKey);
@@ -167,14 +172,6 @@ export class MixedAudioPipeline {
     // (commit lag) are re-fed so the new buffer starts at the true boundary.
     this.currentSegKey = this.nextSegKey();
     this.currentSegStartMs = null;
-    if (this.lastLitName) {
-      // Provisional label so live drafts carry a plausible name until close.
-      this.cb.onSegmentLabel(this.currentSegKey, this.lastLitName, {
-        speakerName: this.lastLitName,
-        source: 'window-match',
-        confidence: 0,
-      });
-    }
     for (const f of this.tail) {
       if (f.tMs >= ev.tEndMs) {
         if (this.currentSegStartMs === null) this.currentSegStartMs = f.tMs;

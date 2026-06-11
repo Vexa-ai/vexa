@@ -179,7 +179,7 @@ class CaptureSession {
       // Phase 6 soak signal: periodic diarization stats (names only, no text).
       this.diarStatsTimer = setInterval(() => {
         const st = this.mixedPipeline?.stats();
-        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} segments=${st.segments} lastLit=${st.lastLit} hints=${JSON.stringify(st.binder.hintTurns)}`);
+        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} segments=${st.segments} unresolved=${st.unresolved} hints=${JSON.stringify(st.binder.hintTurns)}`);
       }, 30000);
     }
     log(`[Ingest] Session started meeting=${this.session.meeting_id} uid=${this.connectionId}`);
