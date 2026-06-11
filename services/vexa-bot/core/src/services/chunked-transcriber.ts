@@ -198,7 +198,14 @@ export class ChunkedTranscriber {
     //  - IDLE CLOSE: silence after a turn produces no further commits, so
     //    nothing would close it — close once idle past the gap window.
     t.idleTimer = setInterval(() => {
-      if (!t.turn || t.pumping || t.queue.length > 0) return;
+      if (t.pumping) return;
+      // Liveness: an item enqueued during the pump's closing pass misses the
+      // drain loop; with no further commits nothing would re-pump it.
+      if (t.queue.length > 0) {
+        void t.pump();
+        return;
+      }
+      if (!t.turn) return;
       if (Date.now() - t.lastChunkWallMs > TURN_GAP_MS + 1500) {
         void t.pump(true);
         return;
@@ -351,6 +358,9 @@ export class ChunkedTranscriber {
     } finally {
       this.pumping = false;
     }
+    // Items enqueued during the closing pass (after the drain loop exited)
+    // would otherwise strand until the next commit.
+    if (this.queue.length > 0) void this.pump(closeAtEnd);
   }
 
   private async handleChunk(chunk: PendingChunk): Promise<void> {
