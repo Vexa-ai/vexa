@@ -182,10 +182,20 @@ function applyState(s: PanelState): void {
     }
   }
 
-  if (s.status === 'error' && s.error === 'mic-permission') {
-    $('feed').innerHTML = `<div class="empty"><div style="font-size:22px;">&#127908;</div>`
-      + `<div>Microphone access is needed for voice notes.</div>`
-      + `<button class="btn" id="micGrantBtn" style="max-width:200px;margin-top:6px;">Allow microphone</button></div>`;
+  if (s.error === 'mic-permission') {
+    // Mic blocked at the extension origin. May happen while CAPTURING (media
+    // tabs: tab audio flows, mic doesn't) — surface the grant either way.
+    if (s.status === 'capturing') {
+      feedStatus('Your mic is NOT captured (tab audio is). '
+        + 'Click "Allow microphone", grant it, then Stop/Start the capture.', true);
+      const wrap = document.createElement('div');
+      wrap.innerHTML = `<button class="btn" id="micGrantBtn" style="max-width:200px;margin:6px auto;">Allow microphone</button>`;
+      $('feed').prepend(wrap);
+    } else {
+      $('feed').innerHTML = `<div class="empty"><div style="font-size:22px;">&#127908;</div>`
+        + `<div>Microphone access is needed.</div>`
+        + `<button class="btn" id="micGrantBtn" style="max-width:200px;margin-top:6px;">Allow microphone</button></div>`;
+    }
     const b = document.getElementById('micGrantBtn');
     if (b) b.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('mic-permission.html') }));
   } else if (s.status === 'error' && s.error) {
