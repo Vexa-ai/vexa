@@ -194,17 +194,28 @@ function applyState(s: PanelState): void {
     if (s.status === 'capturing') {
       feedStatus('Your mic is NOT captured (tab audio is). '
         + 'Click "Allow microphone", grant it, then Stop/Start the capture.', true);
-      const wrap = document.createElement('div');
-      wrap.innerHTML = `<button class="btn" id="micGrantBtn" style="max-width:200px;margin:6px auto;">Allow microphone</button>`;
-      $('feed').prepend(wrap);
+      if (!document.getElementById('micGrantBtn')) {
+        const wrap = document.createElement('div');
+        wrap.id = 'micGrantWrap';
+        wrap.innerHTML = `<button class="btn" id="micGrantBtn" style="max-width:200px;margin:6px auto;">Allow microphone</button>`;
+        $('feed').prepend(wrap);
+        wrap.querySelector('#micGrantBtn')!.addEventListener('click',
+          () => chrome.tabs.create({ url: chrome.runtime.getURL('mic-permission.html') }));
+      }
     } else {
       $('feed').innerHTML = `<div class="empty"><div style="font-size:22px;">&#127908;</div>`
         + `<div>Microphone access is needed.</div>`
         + `<button class="btn" id="micGrantBtn" style="max-width:200px;margin-top:6px;">Allow microphone</button></div>`;
     }
-    const b = document.getElementById('micGrantBtn');
-    if (b) b.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('mic-permission.html') }));
-  } else if (s.status === 'error' && s.error) {
+    if (s.status !== 'capturing') {
+      // Full-feed takeover recreated the button — (re)attach its handler.
+      const b = document.getElementById('micGrantBtn');
+      if (b) b.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('mic-permission.html') }));
+    }
+  } else {
+    document.getElementById('micGrantWrap')?.remove(); // granted / cleared
+  }
+  if (s.error !== 'mic-permission' && s.status === 'error' && s.error) {
     $('feed').innerHTML = `<div class="empty"><div>&#9888;</div><div>${escapeHtml(s.error)}</div></div>`;
   }
 }
