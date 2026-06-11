@@ -41,8 +41,10 @@ const KIND_LAG_MS: Record<HintKind, number> = {
   'dom-outline': 200,
 };
 
-/** A turn with no successor is considered over after this long. */
-const MAX_TURN_MS = 5000;
+/** Open turns (no successor, no explicit end) are STILL ACTIVE — the lit
+ *  signal sends an explicit end (isEnd) when the speaker stops, so an open
+ *  turn extends until then. Used only as the open-turn horizon. */
+const OPEN_TURN_HORIZON_MS = Number.MAX_SAFE_INTEGER;
 const DEFAULT_MATCH_TOLERANCE_MS = 2500;
 const DEFAULT_HINT_LOG_LIMIT = 2000;
 
@@ -133,6 +135,13 @@ export class ClusterNameBinder {
     if (log.length > this.hintLogLimit) log.splice(0, log.length - this.hintLogLimit);
   }
 
+  /** LIT-ONLY resolution (experiment, operator-decided): the name with the
+   *  maximum hint-overlap for this time span — no cluster votes, no
+   *  provisional ids. Returns null when no hint overlaps the window. */
+  bestOverlapName(commit: { tStartMs: number; tEndMs: number }): { name: string; confidence: number } | null {
+    return this.windowMatch({ clusterId: '', tStartMs: commit.tStartMs, tEndMs: commit.tEndMs });
+  }
+
   /** Resolve a diarizer commit to its final speaker name. */
   resolve(commit: CommitInfo): ResolvedAttribution {
     const winnerByOverlap = this.windowMatch(commit);
@@ -156,7 +165,7 @@ export class ClusterNameBinder {
 
     for (const log of this.turns.values()) {
       for (const turn of log) {
-        const turnEnd = turn.tEndMs ?? (turn.tStartMs + MAX_TURN_MS);
+        const turnEnd = turn.tEndMs ?? OPEN_TURN_HORIZON_MS;
         const o = Math.max(0, Math.min(turnEnd, windowEnd) - Math.max(turn.tStartMs, windowStart));
         if (o <= 0) continue;
         overlapMs.set(turn.name, (overlapMs.get(turn.name) ?? 0) + o);
