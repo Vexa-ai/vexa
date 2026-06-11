@@ -121,9 +121,10 @@ class CaptureSession {
   private closed = false;
 
   // ── Mixed-track diarization (Zoom/Teams) — the SINGLE single-channel core.
-  // MixedAudioPipeline cuts the mixed stream into named turns (diarizer +
-  // TurnGate + ClusterNameBinder); this session just routes its callbacks
-  // into the unmodified SpeakerStreamManager.
+  // Segmentation-driven buffers: MixedAudioPipeline streams audio live into
+  // per-segment streams, closes them at segmentation boundaries, and labels
+  // them via clustering + hint correlation. This session just maps callbacks
+  // onto the unmodified SpeakerStreamManager.
   private mixedPipeline: MixedAudioPipeline | null = null;
   private mixedPipelineReady: Promise<void> | null = null;
   private diarStatsTimer: ReturnType<typeof setInterval> | null = null;
@@ -175,7 +176,7 @@ class CaptureSession {
       // Phase 6 soak signal: periodic diarization stats (names only, no text).
       this.diarStatsTimer = setInterval(() => {
         const st = this.mixedPipeline?.stats();
-        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} clusters=${st.binder.clustersWithVotes} resolved=${st.binder.resolvedClusters} pending=${st.pendingFrames} hints=${JSON.stringify(st.binder.hintTurns)}`);
+        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} clusters=${st.binder.clustersWithVotes} resolved=${st.binder.resolvedClusters} segments=${st.segments} current=${st.currentCluster} hints=${JSON.stringify(st.binder.hintTurns)}`);
       }, 30000);
     }
     log(`[Ingest] Session started meeting=${this.session.meeting_id} uid=${this.connectionId}`);
@@ -190,19 +191,26 @@ class CaptureSession {
   private async initMixedPipeline(): Promise<void> {
     this.mixedPipeline = await MixedAudioPipeline.create({
       log: (m) => log(m),
-      onTurn: (clusterId, resolvedName, audio, resolution, tStartMs) => {
-        if (!this.speakerManager.hasSpeaker(clusterId)) {
-          this.speakerManager.addSpeaker(clusterId, resolvedName);
-          log(`[Diarize] new cluster ${clusterId} → "${resolvedName}" (${resolution.source})`);
-        } else if (resolution.source !== 'provisional-cluster-id') {
-          this.speakerManager.updateSpeakerName(clusterId, resolvedName);
+      // Segmentation-driven buffers: audio streams LIVE into the segment's
+      // stream (drafts while talking); segmentation closes it; cluster labels
+      // (and late hint-resolves) only rename the stream — never move audio.
+      onSegmentAudio: (segKey, pcm, atMs) => {
+        if (!this.speakerManager.hasSpeaker(segKey)) {
+          this.speakerManager.addSpeaker(segKey, segKey);
         }
-        this.speakerManager.feedAudio(clusterId, audio, tStartMs);
+        this.speakerManager.feedAudio(segKey, pcm, atMs);
       },
-      onRename: (clusterId, resolvedName) => {
-        if (!this.speakerManager.hasSpeaker(clusterId)) return;
-        log(`[Diarize] late-resolve: ${clusterId} → "${resolvedName}"`);
-        this.speakerManager.updateSpeakerName(clusterId, resolvedName);
+      onSegmentLabel: (segKey, displayName, resolution) => {
+        if (!this.speakerManager.hasSpeaker(segKey)) {
+          this.speakerManager.addSpeaker(segKey, displayName);
+        } else {
+          this.speakerManager.updateSpeakerName(segKey, displayName);
+        }
+        if (resolution.source === 'window-match') return; // routine
+        log(`[Diarize] ${segKey} → "${displayName}" (${resolution.source})`);
+      },
+      onSegmentClose: (segKey) => {
+        void this.speakerManager.flushSpeaker(segKey, true);
       },
     });
   }

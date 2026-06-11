@@ -1,7 +1,7 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
 import { RecordingService } from '../../../services/recording';
-import { getRawCaptureService, getSegmentPublisher, feedMixedTurn, renameMixedCluster, hasPerSpeakerPipeline } from '../../../index';
+import { getRawCaptureService, getSegmentPublisher, feedMixedSegmentAudio, labelMixedSegment, closeMixedSegment, hasPerSpeakerPipeline } from '../../../index';
 import { log } from '../../../utils';
 import { PulseAudioCapture, UnifiedRecordingPipeline } from '../../../services/audio-pipeline';
 import { MixedAudioPipeline } from '../../../services/mixed-audio-pipeline';
@@ -42,9 +42,9 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
     try {
       mixedPipeline = await MixedAudioPipeline.create({
         log: (m) => log(m),
-        onTurn: (clusterId, resolvedName, audio, resolution, tStartMs) =>
-          feedMixedTurn(clusterId, resolvedName, audio, resolution.source === 'provisional-cluster-id', tStartMs),
-        onRename: (clusterId, resolvedName) => renameMixedCluster(clusterId, resolvedName),
+        onSegmentAudio: (segKey, pcm, atMs) => feedMixedSegmentAudio(segKey, pcm, atMs),
+        onSegmentLabel: (segKey, displayName) => labelMixedSegment(segKey, displayName),
+        onSegmentClose: (segKey) => closeMixedSegment(segKey),
       });
       pulseSource = new PulseAudioCapture();
       ownsPulseSource = true;

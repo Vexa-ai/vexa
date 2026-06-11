@@ -1,72 +1,88 @@
 /**
  * MixedAudioPipeline — THE single core for single-channel (mixed) meeting
- * audio. Every consumer that receives one stream carrying all remote
- * participants (Zoom web — bot PulseAudio or extension tabCapture; MS Teams
- * downlink) runs this exact pipeline:
+ * audio. Architecture (operator-specified): SEGMENTATION CONTROLS THE
+ * CONFIRMATION BUFFER.
  *
- *   mixed 16 kHz PCM ─→ OnnxLocalDiarizer (pyannote boundaries + wespeaker
- *   embeddings + online clustering) ─→ commits ─→ TurnGate (turns stabilize
- *   before naming; wrong names cosmetic, audio never cross-routed)
- *                                         │
- *   platform hints (DOM active-speaker /  ▼
- *   captions / voice-outline) ──→ ClusterNameBinder.resolve(turn)
- *                                         │
- *                                         ▼
- *                       onTurn(clusterId, resolvedName, audio, source)
- *                       onRename(clusterId, resolvedName)   [late-resolve]
+ *   - Audio streams LIVE into the current segment buffer (the host's
+ *     SpeakerStreamManager stream) — Whisper reconsiders it on its normal
+ *     submit cadence, so drafts appear while the person is still talking.
+ *   - A segmentation signal (diarizer commit at a pyannote boundary) labels
+ *     the buffer with the commit's CLUSTER; a cluster CHANGE closes the
+ *     buffer and starts the next one. The buffer is the unit; the label is
+ *     revisable metadata — audio is never re-routed, never held back.
+ *   - In parallel the ClusterNameBinder correlates cluster activity with the
+ *     platform's "who's lit" hint timeline; segment labels resolve to real
+ *     names, retroactively when evidence arrives late.
  *
- * The host owns the SpeakerStreamManager (and everything downstream:
- * TranscriptionClient → SegmentPublisher) and wires:
- *   onTurn   → ensure speaker stream `clusterId` named `resolvedName`,
- *              then speakerManager.feedAudio(clusterId, audio)
- *   onRename → speakerManager.updateSpeakerName(clusterId, name)
+ *   mixed PCM ──────────────► onSegmentAudio(segKey, pcm, atMs)   [live]
+ *   diarizer commit (cluster, t0..t1)
+ *        ├─ same cluster ──► onSegmentLabel(segKey, name)          [refresh]
+ *        └─ cluster change ► onSegmentClose(segKey)                [flush]
+ *                            + tail re-feed since boundary → next segKey
+ *   binder late-resolve ───► onSegmentLabel for every segment of the cluster
  *
- * Diarizer/clustering thresholds are the pack's OFFLINE-EVAL-derived values
- * (AMI corpus sweep — see pack-msteams-diarization-cutover); change them only
- * with eval numbers from core/eval/.
+ * The diarizer is used for boundaries + embeddings + clustering only; no
+ * TurnGate holding in the live path.
  */
 
 import { OnnxLocalDiarizer, CommitEvent } from './diarization/onnx-local-diarizer';
-import { TurnGate, DEFAULT_TURN_GATE } from './diarization/turn-gate';
 import { ClusterNameBinder, HintKind, ResolvedAttribution } from './cluster-name-binder';
 
 export interface MixedAudioPipelineCallbacks {
-  /** A named turn is ready: feed `audio` into the speaker stream `clusterId`
-   *  displayed as `resolvedName` (provisional cluster id until hints bind).
-   *  tStartMs = wall-clock when the turn's audio was SPOKEN — pass it to
-   *  speakerManager.feedAudio so segment times reflect speech time. */
-  onTurn: (clusterId: string, resolvedName: string, audio: Float32Array, resolution: ResolvedAttribution, tStartMs: number) => void;
-  /** A previously-provisional cluster gained a real name — rename its stream
-   *  (already-published segments self-correct via stable segment_id UPSERT). */
-  onRename: (clusterId: string, resolvedName: string) => void;
+  /** Live audio for the current segment buffer — feed the host stream NOW
+   *  (atMs = wall-clock the audio was spoken; stream key = segKey). */
+  onSegmentAudio: (segKey: string, pcm: Float32Array, atMs: number) => void;
+  /** Set/refresh the display name of a segment buffer (cluster resolved via
+   *  hints, or the provisional cluster id). Idempotent. */
+  onSegmentLabel: (segKey: string, displayName: string, resolution: ResolvedAttribution) => void;
+  /** Segmentation closed this buffer — force-flush its stream. */
+  onSegmentClose: (segKey: string) => void;
   log?: (msg: string) => void;
 }
 
+/** Keep this much recent audio for boundary tail re-feed (the frames of the
+ *  NEW speaker that streamed into the old buffer before the switch-commit
+ *  arrived — pyannote cadence 250 ms + utterance close ≈ ≤1 s). */
+const TAIL_RING_MS = 1500;
+const SAMPLE_RATE = 16000;
+
+interface TailFrame { pcm: Float32Array; tMs: number }
+
 export class MixedAudioPipeline {
   private diarizer: OnnxLocalDiarizer | null = null;
-  private readonly turnGate: TurnGate;
   private readonly binder: ClusterNameBinder;
-  private pendingFrames: Float32Array[] = [];
   private readonly log: (msg: string) => void;
+
+  private segCounter = 0;
+  private currentSegKey: string;
+  private currentCluster: string | null = null;
+  /** cluster id → segment keys labeled with it (for retroactive renames). */
+  private clusterSegments = new Map<string, Set<string>>();
+  /** Recent frames for boundary tail re-feed. */
+  private tail: TailFrame[] = [];
+  private tailMs = 0;
 
   private constructor(private readonly cb: MixedAudioPipelineCallbacks) {
     this.log = cb.log || (() => { /* silent */ });
+    this.currentSegKey = this.nextSegKey();
     this.binder = new ClusterNameBinder({
       onLateResolve: (clusterId, resolvedName) => {
-        this.log(`[MixedPipeline] late-resolve: ${clusterId} → "${resolvedName}"`);
-        this.cb.onRename(clusterId, resolvedName);
+        // Rename EVERY segment this cluster labeled — published segments
+        // self-correct via stable segment_id UPSERT downstream.
+        const segs = this.clusterSegments.get(clusterId);
+        if (!segs) return;
+        this.log(`[MixedPipeline] late-resolve: ${clusterId} → "${resolvedName}" (${segs.size} segment(s))`);
+        for (const segKey of segs) {
+          this.cb.onSegmentLabel(segKey, resolvedName, { speakerName: resolvedName, source: 'cluster-vote', confidence: 1 });
+        }
       },
-    });
-    this.turnGate = new TurnGate(DEFAULT_TURN_GATE, (clusterId, audio, tStartMs) => {
-      const tEndMs = tStartMs + (audio.length / 16000) * 1000;
-      const resolved = this.binder.resolve({ clusterId, tStartMs, tEndMs });
-      this.cb.onTurn(clusterId, resolved.speakerName, audio, resolved, tStartMs);
     });
   }
 
   static async create(cb: MixedAudioPipelineCallbacks): Promise<MixedAudioPipeline> {
     const p = new MixedAudioPipeline(cb);
     p.diarizer = await OnnxLocalDiarizer.create({
+      // Pack's AMI-eval-tuned values — change only with eval numbers (core/eval/).
       maxUtteranceMs: 3000,
       newSpeakerThreshold: 0.55,
       veryFarThreshold: 0.90,
@@ -75,18 +91,22 @@ export class MixedAudioPipeline {
       pyannoteInferIntervalMs: 250,
       onCommit: (ev: CommitEvent) => p.handleCommit(ev),
     });
-    p.log('[MixedPipeline] diarizer ready (pyannote-segmentation-3.0 + wespeaker)');
+    p.log('[MixedPipeline] diarizer ready (segmentation-driven buffers; pyannote + wespeaker)');
     return p;
   }
 
-  /** One mixed-audio chunk (16 kHz mono Float32). tsMs: host wall-clock. */
+  /** One mixed-audio chunk — streams LIVE into the current segment buffer. */
   feedAudio(pcm: Float32Array, tsMs: number): void {
-    this.pendingFrames.push(pcm);
+    this.cb.onSegmentAudio(this.currentSegKey, pcm, tsMs);
+    // Tail ring for boundary re-feed.
+    this.tail.push({ pcm, tMs: tsMs });
+    this.tailMs += (pcm.length / SAMPLE_RATE) * 1000;
+    while (this.tail.length > 0 && this.tailMs > TAIL_RING_MS) {
+      const f = this.tail.shift()!;
+      this.tailMs -= (f.pcm.length / SAMPLE_RATE) * 1000;
+    }
     if (this.diarizer) {
       this.diarizer.process(pcm, tsMs).catch((e: any) => this.log(`[MixedPipeline] process error: ${e?.message}`));
-    } else if (this.pendingFrames.length > 2000) {
-      // Safety valve while the diarizer loads (~200 ms) — never grow unbounded.
-      this.pendingFrames.splice(0, this.pendingFrames.length - 2000);
     }
   }
 
@@ -95,42 +115,55 @@ export class MixedAudioPipeline {
     this.binder.recordHint({ name, tMs, kind, isEnd });
   }
 
-  /** Diagnostics for telemetry. */
-  stats(): { binder: ReturnType<ClusterNameBinder['stats']>; pendingFrames: number } {
-    return { binder: this.binder.stats(), pendingFrames: this.pendingFrames.length };
+  stats(): { binder: ReturnType<ClusterNameBinder['stats']>; segments: number; currentCluster: string | null } {
+    return { binder: this.binder.stats(), segments: this.segCounter, currentCluster: this.currentCluster };
   }
 
-  /** Flush the held turn and reset all state (session end). */
+  /** Close the live buffer and reset (session end). */
   dispose(): void {
-    try { this.turnGate.finish(); } catch { /* best effort */ }
+    try { this.cb.onSegmentClose(this.currentSegKey); } catch { /* best effort */ }
     try { this.diarizer?.reset(); } catch { /* best effort */ }
     this.binder.reset();
-    this.pendingFrames.length = 0;
+    this.clusterSegments.clear();
+    this.tail = [];
+    this.tailMs = 0;
   }
 
-  /** Drain this commit's frames (FIFO; commits arrive in order) and hand
-   *  (embedding, audio) to the TurnGate — verbatim drain from the pack. */
+  private nextSegKey(): string {
+    return `seg-${this.segCounter++}`;
+  }
+
+  /** A diarizer commit = segmentation signal + cluster evidence for the audio
+   *  that just streamed into the current buffer. */
   private handleCommit(ev: CommitEvent): void {
-    const MIN_TOTAL_SAMPLES = Math.ceil(0.2 * 16000); // Whisper needs ≥200 ms
-    const wantSamples = Math.round(((ev.tEndMs - ev.tStartMs) / 1000) * 16000);
-    const inRange: Float32Array[] = [];
-    let drained = 0;
-    let collected = 0;
-    while (drained < this.pendingFrames.length && collected < wantSamples) {
-      const pcm = this.pendingFrames[drained];
-      inRange.push(pcm);
-      collected += pcm.length;
-      drained++;
+    const resolved = this.binder.resolve({ clusterId: ev.speakerId, tStartMs: ev.tStartMs, tEndMs: ev.tEndMs });
+
+    if (this.currentCluster === null || this.currentCluster === ev.speakerId) {
+      // Same voice continues — (re)label the live buffer, keep streaming.
+      this.currentCluster = ev.speakerId;
+      this.labelSegment(this.currentSegKey, ev.speakerId, resolved);
+      return;
     }
-    if (drained > 0) this.pendingFrames.splice(0, drained);
-    if (collected < MIN_TOTAL_SAMPLES) return;
-    let audio: Float32Array;
-    if (inRange.length === 1) audio = inRange[0];
-    else {
-      audio = new Float32Array(collected);
-      let o = 0;
-      for (const p of inRange) { audio.set(p, o); o += p.length; }
+
+    // Cluster changed: the speaker switched at ev.tStartMs. Close the old
+    // buffer and open the next one under the new cluster. Frames spoken by
+    // the NEW speaker that already streamed into the old buffer (commit lag)
+    // are re-fed from the tail ring so the new buffer starts at the true
+    // boundary; the old buffer's unconfirmed tail overlap is Whisper noise at
+    // worst (a word), never lost audio.
+    const oldKey = this.currentSegKey;
+    this.cb.onSegmentClose(oldKey);
+    this.currentSegKey = this.nextSegKey();
+    this.currentCluster = ev.speakerId;
+    this.labelSegment(this.currentSegKey, ev.speakerId, resolved);
+    for (const f of this.tail) {
+      if (f.tMs >= ev.tStartMs) this.cb.onSegmentAudio(this.currentSegKey, f.pcm, f.tMs);
     }
-    this.turnGate.onCommit(new Float32Array(ev.emb), audio, ev.tStartMs, ev.tEndMs);
+  }
+
+  private labelSegment(segKey: string, clusterId: string, resolved: ResolvedAttribution): void {
+    if (!this.clusterSegments.has(clusterId)) this.clusterSegments.set(clusterId, new Set());
+    this.clusterSegments.get(clusterId)!.add(segKey);
+    this.cb.onSegmentLabel(segKey, resolved.speakerName, resolved);
   }
 }

@@ -154,24 +154,23 @@ let segmentPublisher: SegmentPublisher | null = null;
 export function getSegmentPublisher(): SegmentPublisher | null { return segmentPublisher; }
 
 /** Mixed-audio (single-channel) bridge for platforms whose remote audio is one
- *  stream (zoom web). MixedAudioPipeline turns land here; the cluster id is
- *  the stable stream identity, the resolved name is display-only. */
-export function feedMixedTurn(clusterId: string, resolvedName: string, audio: Float32Array, provisional: boolean, tStartMs?: number): void {
+ *  stream (zoom web). Segmentation-driven buffers: audio streams live into the
+ *  segment's stream; labels only rename it. */
+export function feedMixedSegmentAudio(segKey: string, pcm: Float32Array, atMs: number): void {
   if (!speakerManager) return;
-  if (!speakerManager.hasSpeaker(clusterId)) {
-    speakerManager.addSpeaker(clusterId, resolvedName);
-    log(`[MixedPipeline] new cluster ${clusterId} → "${resolvedName}"${provisional ? ' (provisional)' : ''}`);
-  } else if (!provisional) {
-    speakerManager.updateSpeakerName(clusterId, resolvedName);
-  }
-  speakerManager.feedAudio(clusterId, audio, tStartMs);
+  if (!speakerManager.hasSpeaker(segKey)) speakerManager.addSpeaker(segKey, segKey);
+  speakerManager.feedAudio(segKey, pcm, atMs);
 }
 
-/** Late-resolve rename for a mixed-audio cluster (idempotent). */
-export function renameMixedCluster(clusterId: string, resolvedName: string): void {
-  if (!speakerManager?.hasSpeaker(clusterId)) return;
-  log(`[MixedPipeline] late-resolve: ${clusterId} → "${resolvedName}"`);
-  speakerManager.updateSpeakerName(clusterId, resolvedName);
+export function labelMixedSegment(segKey: string, displayName: string): void {
+  if (!speakerManager) return;
+  if (!speakerManager.hasSpeaker(segKey)) speakerManager.addSpeaker(segKey, displayName);
+  else speakerManager.updateSpeakerName(segKey, displayName);
+}
+
+export function closeMixedSegment(segKey: string): void {
+  if (!speakerManager) return;
+  void speakerManager.flushSpeaker(segKey, true);
 }
 
 /** Is the per-speaker transcription pipeline initialized? */
