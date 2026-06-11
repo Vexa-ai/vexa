@@ -101,6 +101,7 @@ async function drain() {
     const { t, calls, confirmed, pending } = await makeT();
     t.feedAudio(tone(5000), 0);
     t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    await drain(); // real commits arrive seconds apart (sync ones coalesce)
     t.feedAudio(tone(4000), 5000);
     t.handleCommit({ speakerId: 's0', tStartMs: 4200, tEndMs: 8000 });
     await drain();
@@ -171,6 +172,7 @@ async function drain() {
     const { t, calls } = await makeT();
     t.feedAudio(tone(5000), 0);
     t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 4000 });
+    await drain();
     t.feedAudio(tone(4000), 5000);
     t.handleCommit({ speakerId: 's0', tStartMs: 4200, tEndMs: 8000 });  // confirms head
     await drain();

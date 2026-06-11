@@ -381,11 +381,14 @@ export class ChunkedTranscriber {
       while (this.queue.length > 0) {
         const item = this.queue.shift()!;
         try {
-          if (item === 'tick') {
-            if (this.turn) await this.submitTurn(this.turn, false);
-          } else {
-            await this.handleChunk(item);
-          }
+          if (item !== 'tick') await this.applyChunk(item);
+          // COALESCE: with a backlog, every same-turn item would submit the
+          // same [confirmedUpTo..liveEdge] window — N identical, ever-larger
+          // Whisper calls that spiral the queue (observed queued=12 live).
+          // Apply state for all of them; submit once per drain batch.
+          const next = this.queue[0];
+          const moreSameTurn = next !== undefined && (next === 'tick' || !this.turnCloses(next));
+          if (!moreSameTurn && this.turn) await this.submitTurn(this.turn, false);
         } catch (e: any) {
           const span = item === 'tick' ? 'tick' : `[${item.t0}..${item.t1}]`;
           this.log(`[ChunkedTranscriber] ${span} failed: ${e?.message}`);
@@ -405,23 +408,27 @@ export class ChunkedTranscriber {
     if (this.queue.length > 0) void this.pump(closeAtEnd);
   }
 
-  private async handleChunk(chunk: PendingChunk): Promise<void> {
+  /** Does this chunk close the open turn? (Shared by apply + coalescing.) */
+  private turnCloses(chunk: PendingChunk): boolean {
+    if (!this.turn) return false;
+    return chunk.clusterId !== this.turn.clusterId ||
+      chunk.t0 - this.turn.t1 > TURN_GAP_MS ||
+      chunk.t1 - this.turn.confirmedUpToMs > TURN_MAX_MS;
+  }
+
+  /** Apply a commit to turn state (closing the previous turn if needed).
+   *  Does NOT submit the open turn — the pump submits once per drain batch. */
+  private async applyChunk(chunk: PendingChunk): Promise<void> {
     this.commitCounter++;
     // Never re-enter confirmed audio (overlap-duplicated commits, flicker).
     if (chunk.t1 <= this.confirmedHighWaterMs + 250) return;
     chunk = { ...chunk, t0: Math.max(chunk.t0, this.confirmedHighWaterMs) };
     // Turn membership FIRST — a closed turn fully confirms before the next
     // turn's first submission, keeping confirmed output strictly ordered.
-    if (this.turn) {
-      const closes =
-        chunk.clusterId !== this.turn.clusterId ||
-        chunk.t0 - this.turn.t1 > TURN_GAP_MS ||
-        chunk.t1 - this.turn.confirmedUpToMs > TURN_MAX_MS;
-      if (closes) {
-        const t = this.turn;
-        this.turn = null;
-        await this.submitTurn(t, true);
-      }
+    if (this.turnCloses(chunk)) {
+      const t = this.turn!;
+      this.turn = null;
+      await this.submitTurn(t, true);
     }
     if (!this.turn) {
       // Re-clamp: the close above may have advanced the high-water mark
@@ -445,8 +452,6 @@ export class ChunkedTranscriber {
       this.turn.embDurMs += w;
     }
     this.lastChunkWallMs = Date.now();
-
-    await this.submitTurn(this.turn, false);
   }
 
   /** One submission of the turn's unconfirmed window. While the turn is open,
