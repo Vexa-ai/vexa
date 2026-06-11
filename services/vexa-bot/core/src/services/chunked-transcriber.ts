@@ -146,6 +146,11 @@ export class ChunkedTranscriber {
 
   /** Short span carried forward to merge with the next contiguous commit. */
   private carry: PendingChunk | null = null;
+  /** First audio frame's timestamp — the FIRST commit back-extends to here
+   *  (bounded): the model needs seconds to lock on, but speech from t=0 is
+   *  already in the ring. Without this the session opens with a hole. */
+  private firstAudioMs: number | null = null;
+  private firstCommitSeen = false;
 
   /** Serialized work queue (commit-triggered submissions). */
   private queue: PendingChunk[] = [];
@@ -191,6 +196,7 @@ export class ChunkedTranscriber {
   /** One mixed-audio frame. Ring + segmentation model — nothing else. */
   feedAudio(pcm: Float32Array, tsMs: number): void {
     if (this.disposed) return;
+    if (this.firstAudioMs === null) this.firstAudioMs = tsMs;
     this.ring.push({ pcm, tMs: tsMs });
     this.ringMs += (pcm.length / SAMPLE_RATE) * 1000;
     while (this.ring.length > 0 && this.ringMs > RING_MS) {
@@ -245,6 +251,19 @@ export class ChunkedTranscriber {
     let t0 = ev.tStartMs;
     const t1 = ev.tEndMs;
     if (t1 <= t0) return;
+
+    // Cold start: the model needs seconds of audio to lock on, so its first
+    // commit opens well after capture began — but the speech from frame one
+    // is in the ring. Back-extend the FIRST commit to the first audio frame
+    // (bounded; leading silence is harmless to Whisper and the RMS gate
+    // still protects a truly silent prefix-heavy span).
+    if (!this.firstCommitSeen) {
+      this.firstCommitSeen = true;
+      if (this.firstAudioMs !== null && t0 - this.firstAudioMs > 0 && t0 - this.firstAudioMs <= 12_000) {
+        this.log(`[ChunkedTranscriber] first commit back-extended ${t0 - this.firstAudioMs}ms to session start`);
+        t0 = this.firstAudioMs;
+      }
+    }
 
     if (this.carry) {
       if (t0 - this.carry.t1 <= MERGE_GAP_MS) {
@@ -362,7 +381,7 @@ export class ChunkedTranscriber {
     } catch (e: any) {
       this.log(`[ChunkedTranscriber] transcribe failed: ${e?.message}`);
     }
-    const gated = result ? this.applyGates(result) : null;
+    const gated = result ? this.applyGates(result, spanEnd - spanStart) : null;
     if (!gated || gated.length === 0) {
       if (closing) this.closeOut(turn);
       return;
@@ -376,7 +395,14 @@ export class ChunkedTranscriber {
       endMs: Math.min(spanEnd, spanStart + (ws.end || 0) * 1000) || spanEnd,
       language: lang,
       relEnd: ws.end || 0,
-    })).filter(s => s.text && !isHallucination(s.text));
+    })).filter(s => {
+      if (!s.text) return false;
+      // Prompt echo — whisper parroting the initial_prompt back. Targeted
+      // check; the blanket phrase list would also kill legit short answers
+      // ("Yes.") inside real-speech windows the RMS gate already vouched for.
+      if (prompt && s.text.length > 6 && prompt.includes(s.text)) return false;
+      return true;
+    });
     if (mapped.length === 0) {
       if (closing) this.closeOut(turn);
       return;
@@ -471,7 +497,7 @@ export class ChunkedTranscriber {
   }
 
   /** The bot's production quality gates. Returns whisper segments or null. */
-  private applyGates(result: TranscriptionResult): TranscriptionResult['segments'] | null {
+  private applyGates(result: TranscriptionResult, windowMs: number): TranscriptionResult['segments'] | null {
     if (!result.text || !result.text.trim()) return null;
     const prob = result.language_probability ?? 0;
     if (!this.cb.language && prob > 0 && prob < 0.3) return null;
@@ -483,7 +509,10 @@ export class ChunkedTranscriber {
       const duration = (seg0.end || 0) - (seg0.start || 0);
       if ((noSpeech > 0.5 && logProb < -0.7) || (logProb < -0.8 && duration < 2.0) || compression > 2.4) return null;
     }
-    if (isHallucination(result.text)) {
+    // Phrase-list hallucination filter ONLY on short windows: that's where
+    // whisper invents "Thank you."-class junk. On longer RMS-vouched real
+    // speech the same phrases ("Yes.") are legitimate answers.
+    if (windowMs < 2000 && isHallucination(result.text)) {
       this.log(`[ChunkedTranscriber] [FILTERED] "${result.text.substring(0, 60)}"`);
       return null;
     }
