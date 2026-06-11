@@ -9,6 +9,33 @@ export interface MeetingRef {
   nativeMeetingId: string;
 }
 
+/**
+ * Media tabs usable as a transcription-debug source (YouTube). Deliberately
+ * SEPARATE from detectMeeting so auto-start never fires on normal browsing —
+ * capture on these is toolbar-click only. Rides the zoom tab-capture flow
+ * (mixed single-channel → ingest's ChunkedTranscriber); the platform is
+ * reported as 'zoom' because meeting-api's Platform enum has no media kind
+ * and the WS contract stays frozen.
+ */
+export function detectMediaTab(url: string): MeetingRef | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (u.hostname === 'www.youtube.com' || u.hostname === 'youtube.com' || u.hostname === 'm.youtube.com') {
+    const v = u.searchParams.get('v') || u.pathname.match(/^\/(?:shorts|live)\/([\w-]{6,})/)?.[1];
+    if (v) return { platform: 'zoom', nativeMeetingId: `yt-${v}` };
+    return null;
+  }
+  if (u.hostname === 'youtu.be') {
+    const v = u.pathname.split('/').filter(Boolean)[0];
+    if (v) return { platform: 'zoom', nativeMeetingId: `yt-${v}` };
+  }
+  return null;
+}
+
 export function detectMeeting(url: string): MeetingRef | null {
   let u: URL;
   try {

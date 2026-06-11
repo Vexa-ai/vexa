@@ -11,7 +11,7 @@
  * tab's content script to begin/end capture.
  */
 
-import { detectMeeting, MeetingRef } from './meeting';
+import { detectMeeting, detectMediaTab, MeetingRef } from './meeting';
 
 interface SessionState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
@@ -66,6 +66,10 @@ async function ensureOffscreen(): Promise<void> {
 }
 
 /** Start (or attach) the mixed tab-audio capture for the current session. */
+/** True when the current capture target is a media tab (YouTube) — no content
+ *  script, no WebRTC hook: mixed tabCapture is the ONLY audio source there. */
+let isMediaTab = false;
+
 function startTabAudio(): void {
   if (!tabStreamId) {
     state.tabAudio = 'error:tab audio needs a click — use "Enable remote audio" in the panel';
@@ -89,7 +93,9 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
   // and synthesizes the id, because its URL carries none.
   // No meeting anywhere → voice-notepad mode: capture the mic via the
   // offscreen document under the synthetic 'note' platform.
-  const meeting = meetingRef || detectMeeting(url)
+  const mediaTab = !meetingRef && !detectMeeting(url) ? detectMediaTab(url) : null;
+  isMediaTab = !!mediaTab;
+  const meeting = meetingRef || detectMeeting(url) || mediaTab
     || { platform: 'note' as any, nativeMeetingId: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` };
 
   const cfg = await chrome.storage.local.get(['apiKey', 'ingestUrl', 'language']);
@@ -150,6 +156,10 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
           // hidden <audio> that inpage's per-element capture picks up (multi-
           // channel). No mixed tabCapture. (startTabAudio remains available as a
           // manual fallback via the toolbar path if ever needed.)
+          // Media tabs (YouTube): no content script, no WebRTC hook — mixed
+          // tabCapture IS the audio. The toolbar click that started this
+          // session already minted the stream id; use it now.
+          if (isMediaTab) startTabAudio();
         }
       } else if (msg.type === 'superseded') {
         // A newer session took over this meeting (SW reload / reconnect race).
@@ -391,7 +401,9 @@ chrome.action.onClicked.addListener((tab) => {
 
   const host = tab.url ? (() => { try { return new URL(tab.url!).hostname; } catch { return ''; } })() : '';
   const needsTab = host.endsWith('zoom.us') || host.endsWith('teams.live.com')
-    || host.endsWith('teams.microsoft.com') || host === 'teams.cloud.microsoft';
+    || host.endsWith('teams.microsoft.com') || host === 'teams.cloud.microsoft'
+    // Media-tab debug source (YouTube) — tab audio is the whole capture.
+    || !!(tab.url && detectMediaTab(tab.url));
   if (needsTab) {
     chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id) => {
       if (chrome.runtime.lastError || !id) {
