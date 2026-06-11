@@ -31,7 +31,7 @@ import { SpeakerStreamManager } from './services/speaker-streams';
 import { TranscriptionClient } from './services/transcription-client';
 import { SegmentPublisher, TranscriptionSegment } from './services/segment-publisher';
 import { isHallucination } from './services/hallucination-filter';
-import { MixedAudioPipeline } from './services/mixed-audio-pipeline';
+import { ChunkedTranscriber, ChunkSegment } from './services/chunked-transcriber';
 
 const PORT = parseInt(process.env.INGEST_PORT || '8090', 10);
 
@@ -123,13 +123,12 @@ class CaptureSession {
   private knownSpeakers: Set<number> = new Set();
   private closed = false;
 
-  // ── Mixed-track diarization (Zoom/Teams) — the SINGLE single-channel core.
-  // Segmentation-driven buffers: MixedAudioPipeline streams audio live into
-  // per-segment streams, closes them at segmentation boundaries, and labels
-  // them via clustering + hint correlation. This session just maps callbacks
-  // onto the unmodified SpeakerStreamManager.
-  private mixedPipeline: MixedAudioPipeline | null = null;
-  private mixedPipelineReady: Promise<void> | null = null;
+  // ── Mixed-track core (Zoom/Teams) — THE single single-channel algorithm.
+  // ChunkedTranscriber: segmentation-model cuts applied retroactively to a
+  // passive ring, one serialized Whisper call per chunk (prompt-chained),
+  // hint-overlap attribution, immutable emits. No live buffers, no drafts.
+  private chunked: ChunkedTranscriber | null = null;
+  private chunkedReady: Promise<void> | null = null;
   private diarStatsTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -174,12 +173,12 @@ class CaptureSession {
     if (this.usesMixedDiarization()) {
       // Await model load (~200 ms, models pre-baked in the image) so the
       // pipeline exists before the first audio frame — no frames dropped.
-      this.mixedPipelineReady = this.initMixedPipeline();
-      await this.mixedPipelineReady;
-      // Phase 6 soak signal: periodic diarization stats (names only, no text).
+      this.chunkedReady = this.initChunkedTranscriber();
+      await this.chunkedReady;
+      // Soak signal: periodic chunking stats (names only, no text).
       this.diarStatsTimer = setInterval(() => {
-        const st = this.mixedPipeline?.stats();
-        if (st) log(`[DiarizeStats] meeting=${this.session.meeting_id} segments=${st.segments} unresolved=${st.unresolved} hints=${JSON.stringify(st.binder.hintTurns)}`);
+        const st = this.chunked?.stats();
+        if (st) log(`[ChunkStats] meeting=${this.session.meeting_id} chunks=${st.chunks} queued=${st.queued} unresolved=${st.unresolved} hints=${JSON.stringify(st.binder.hintTurns)}`);
       }, 30000);
     }
     log(`[Ingest] Session started meeting=${this.session.meeting_id} uid=${this.connectionId}`);
@@ -189,46 +188,43 @@ class CaptureSession {
     return this.session.platform === 'zoom' || this.session.platform === 'teams';
   }
 
-  /** The single-channel core: diarizer+gate+binder live in MixedAudioPipeline;
-   *  this host wires its turns/renames into the SpeakerStreamManager. */
-  private async initMixedPipeline(): Promise<void> {
-    this.mixedPipeline = await MixedAudioPipeline.create({
+  /** The single-channel core: ring + segmentation cuts + serialized one-shot
+   *  Whisper + hint attribution live in ChunkedTranscriber; this host only
+   *  maps its immutable emits onto the frozen publisher envelope. */
+  private async initChunkedTranscriber(): Promise<void> {
+    this.chunked = await ChunkedTranscriber.create({
       log: (m) => log(m),
-      // Segmentation-driven buffers: audio streams LIVE into the segment's
-      // stream (drafts while talking); segmentation closes it; cluster labels
-      // (and late hint-resolves) only rename the stream — never move audio.
-      onSegmentAudio: (segKey, pcm, atMs) => {
-        if (!this.speakerManager.hasSpeaker(segKey)) {
-          this.speakerManager.addSpeaker(segKey, segKey);
-        }
-        this.speakerManager.feedAudio(segKey, pcm, atMs);
+      language: this.explicitLanguage || undefined,
+      transcribe: (pcm, prompt) =>
+        this.transcriptionClient.transcribe(pcm, this.explicitLanguage || undefined, prompt),
+      publish: (speaker, segments) => {
+        void this.segmentPublisher.publishTranscript(speaker, this.mapChunkSegments(speaker, segments), []);
       },
-      onSegmentLabel: (segKey, displayName, resolution) => {
-        if (!this.speakerManager.hasSpeaker(segKey)) {
-          this.speakerManager.addSpeaker(segKey, displayName);
-          return;
-        }
-        const oldName = this.speakerManager.getSpeakerName(segKey);
-        this.speakerManager.updateSpeakerName(segKey, displayName);
-        if (!oldName || oldName === displayName) return;
+      rename: (oldSpeaker, newSpeaker, segments) => {
         // Rename within the FROZEN envelope, via key formation only:
-        //  1. clear the OLD name's pending (empty bundle → clients replace
-        //     that speaker's drafts with nothing — no orphans)
-        //  2. republish already-confirmed segments with the SAME segment_ids
-        //     (formed from the stream key, not the name) under the NEW name —
-        //     PG UPSERTs them, clients update in place.
-        void this.segmentPublisher.publishTranscript(oldName, [], []);
-        const published = this.publishedByStream.get(segKey);
-        if (published && published.length > 0) {
-          for (const seg of published) seg.speaker = displayName;
-          void this.segmentPublisher.publishTranscript(displayName, published, []);
-          log(`[Diarize] republished ${published.length} segment(s) of ${segKey} as "${displayName}"`);
-        }
-      },
-      onSegmentClose: (segKey, boundaryMs) => {
-        void this.speakerManager.flushSpeaker(segKey, true, boundaryMs);
+        //  1. clear the OLD name's pending key (empty bundle)
+        //  2. republish the SAME segment_ids under the NEW name — PG UPSERTs
+        //     on (meeting_id, segment_id), clients update in place.
+        void this.segmentPublisher.publishTranscript(oldSpeaker, [], []);
+        void this.segmentPublisher.publishTranscript(newSpeaker, this.mapChunkSegments(newSpeaker, segments), []);
+        log(`[Chunked] republished ${segments.length} segment(s) "${oldSpeaker}" → "${newSpeaker}"`);
       },
     });
+  }
+
+  /** ChunkSegment (audio-time ms) → publisher TranscriptionSegment. */
+  private mapChunkSegments(speaker: string, segments: ChunkSegment[]): TranscriptionSegment[] {
+    return segments.map(s => ({
+      speaker,
+      text: s.text,
+      start: (s.startMs - this.segmentPublisher.sessionStartMs) / 1000,
+      end: (s.endMs - this.segmentPublisher.sessionStartMs) / 1000,
+      language: s.language,
+      completed: true,
+      segment_id: `${this.segmentPublisher.sessionUid}:${s.segmentId}`,
+      absolute_start_time: new Date(s.startMs).toISOString(),
+      absolute_end_time: new Date(s.endMs).toISOString(),
+    }));
   }
 
   /** index → name map from the content script's in-page DOM resolution.
@@ -253,13 +249,13 @@ class CaptureSession {
    *  time is the timebase (client clocks skew; binder tolerance absorbs the
    *  transport jitter). */
   recordSpeakerActivity(name: string, kind: 'dom-active' | 'caption' | 'dom-outline' = 'dom-active', isEnd = false): void {
-    this.mixedPipeline?.recordHint(name, kind, Date.now(), isEnd);
+    this.chunked?.recordHint(name, kind, Date.now(), isEnd);
   }
 
   /** One per-speaker audio chunk from the page. */
   feedAudio(speakerIndex: number, pcm: Float32Array): void {
     if (speakerIndex === MIXED_TRACK_INDEX && this.usesMixedDiarization()) {
-      if (this.mixedPipeline) this.mixedPipeline.feedAudio(pcm, Date.now());
+      if (this.chunked) this.chunked.feedAudio(pcm, Date.now());
       return;
     }
     const speakerId = `spk-${speakerIndex}`;
@@ -275,7 +271,7 @@ class CaptureSession {
     if (this.closed) return;
     this.closed = true;
     if (this.diarStatsTimer) { clearInterval(this.diarStatsTimer); this.diarStatsTimer = null; }
-    try { this.mixedPipeline?.dispose(); } catch { /* best effort */ }
+    try { this.chunked?.dispose(); } catch { /* best effort */ }
     try { this.speakerManager.removeAll(); } catch { /* best effort */ }
     try { await this.segmentPublisher.publishSessionEnd(); } catch { /* best effort */ }
     try { await this.segmentPublisher.close(); } catch { /* best effort */ }
