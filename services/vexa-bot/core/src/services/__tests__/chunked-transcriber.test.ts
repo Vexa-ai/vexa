@@ -1,5 +1,5 @@
 /**
- * ChunkedTranscriber unit tests — drives the cut/merge/queue/attribution
+ * ChunkedTranscriber unit tests — drives the cut/merge/turn/attribution
  * logic directly via handleCommit (no ONNX models, fake Whisper).
  *
  * Run: npx tsx src/services/__tests__/chunked-transcriber.test.ts
@@ -17,7 +17,6 @@ function check(name: string, cond: boolean, detail = '') {
   else { failed++; console.log(`  FAIL  ${name} ${detail}`); }
 }
 
-/** Tone frame (non-silent) of `ms` at wall-time tMs. */
 function tone(ms: number): Float32Array {
   const n = Math.round((ms / 1000) * SR);
   const a = new Float32Array(n);
@@ -33,7 +32,9 @@ interface Call { samples: number; prompt?: string }
 
 async function makeT(opts?: { text?: (call: number) => string }) {
   const calls: Call[] = [];
-  const published: Array<{ speaker: string; segments: ChunkSegment[] }> = [];
+  const confirmed: Array<{ speaker: string; segments: ChunkSegment[] }> = [];
+  const pending: Array<{ speaker: string; segments: ChunkSegment[] }> = [];
+  const cleared: string[] = [];
   const renamed: Array<{ from: string; to: string; segments: ChunkSegment[] }> = [];
   let n = 0;
   const t: any = Object.create(ChunkedTranscriber.prototype);
@@ -46,16 +47,19 @@ async function makeT(opts?: { text?: (call: number) => string }) {
         const text = opts?.text ? opts.text(n++) : `so we kept talking about point number ${n++} for a while`;
         return { text, language: 'en', duration: pcm.length / SR, segments: [{ text, start: 0, end: pcm.length / SR }] };
       },
-      publish: (speaker: string, segments: ChunkSegment[]) => published.push({ speaker, segments }),
+      publish: (speaker: string, segments: ChunkSegment[]) => confirmed.push({ speaker, segments }),
+      publishPending: (speaker: string, segments: ChunkSegment[]) => pending.push({ speaker, segments: [...segments] }),
+      clearPending: (speaker: string) => cleared.push(speaker),
       rename: (from: string, to: string, segments: ChunkSegment[]) => renamed.push({ from, to, segments }),
     },
     log: () => {},
     binder: new (await import('../cluster-name-binder')).ClusterNameBinder({}),
     diarizer: null,
     ring: [], ringMs: 0, carry: null, queue: [], pumping: false,
-    lastEmittedText: '', chunkCounter: 0, disposed: false, unresolved: [],
+    lastFinalText: '', chunkCounter: 0, turnCounter: 0, disposed: false,
+    turn: null, lastChunkWallMs: 0, idleTimer: null, unresolved: [],
   });
-  return { t, calls, published, renamed };
+  return { t, calls, confirmed, pending, cleared, renamed };
 }
 
 function feed(t: any, tMs: number, pcm: Float32Array) {
@@ -63,38 +67,51 @@ function feed(t: any, tMs: number, pcm: Float32Array) {
 }
 
 async function drain() {
-  await new Promise(r => setTimeout(r, 10));
+  await new Promise(r => setTimeout(r, 15));
 }
 
 (async () => {
-  // 1. basic cut: commit ≥ MIN_CHUNK → one transcribe with exact samples
+  // 1. chunk → PENDING draft (fast path), nothing confirmed while turn open
   {
-    const { t, calls, published } = await makeT();
+    const { t, calls, confirmed, pending } = await makeT();
     feed(t, 0, tone(3000));
     t.recordHint('Alice', 'dom-active', 100);
     t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 2000 });
     await drain();
-    check('cut: one whisper call per commit', calls.length === 1);
-    check('cut: exact span samples', calls[0]?.samples === 2 * SR, `got ${calls[0]?.samples}`);
-    check('cut: published once', published.length === 1);
-    check('cut: hint-resolved speaker', published[0]?.speaker === 'Alice', published[0]?.speaker);
-    check('cut: stable segment id', published[0]?.segments[0]?.segmentId === 'mix:0:0');
+    check('draft: one whisper call', calls.length === 1);
+    check('draft: exact span samples', calls[0]?.samples === 2 * SR, `got ${calls[0]?.samples}`);
+    check('draft: published as pending', pending.length === 1 && pending[0].speaker === 'Alice');
+    check('draft: nothing confirmed yet', confirmed.length === 0);
   }
 
-  // 2. short commit carries, merges into next contiguous commit
+  // 2. cluster change closes the turn → ONE final pass over the whole turn → confirmed
   {
-    const { t, calls } = await makeT();
-    feed(t, 0, tone(4000));
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 400 });       // < 700 → carry
+    const { t, calls, confirmed, pending } = await makeT();
+    feed(t, 0, tone(8000));
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });
+    t.handleCommit({ speakerId: 's0', tStartMs: 2200, tEndMs: 4000 });
+    t.handleCommit({ speakerId: 's1', tStartMs: 4200, tEndMs: 6000 });   // closes s0's turn
     await drain();
-    check('merge: short span not transcribed alone', calls.length === 0);
-    t.handleCommit({ speakerId: 's0', tStartMs: 500, tEndMs: 2500 });     // gap 100ms → merge
-    await drain();
-    check('merge: merged into one call', calls.length === 1);
-    check('merge: span covers both', calls[0]?.samples === Math.round(2.5 * SR), `got ${calls[0]?.samples}`);
+    // calls: draft c1, draft c2, FINAL turn(s0) [0..4000], draft c3
+    check('turn: final pass fired on cluster change', calls.length === 4, `got ${calls.length}`);
+    check('turn: final spans whole turn', calls[2]?.samples === 4 * SR, `got ${calls[2]?.samples}`);
+    check('turn: confirmed once, turn ids', confirmed.length === 1 && confirmed[0].segments[0].segmentId.startsWith('turn:0:'));
+    check('turn: confirmed under cluster id (no hints)', confirmed[0]?.speaker === 's0');
+    check('turn: drafts accumulated pending', pending.length >= 2 && pending[1].segments.length === 2);
   }
 
-  // 3. RMS gate: silent chunk never reaches Whisper
+  // 3. silence gap closes the turn
+  {
+    const { t, confirmed } = await makeT();
+    feed(t, 0, tone(12000));
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });
+    t.handleCommit({ speakerId: 's0', tStartMs: 8000, tEndMs: 10000 }); // gap 6s > 2.5s
+    await drain();
+    check('gap: turn finalized on silence gap', confirmed.length === 1);
+    check('gap: new turn open for second chunk', (t as any).turn !== null && (t as any).turn.t0 === 8000);
+  }
+
+  // 4. RMS gate: silent chunk never reaches Whisper
   {
     const { t, calls } = await makeT();
     feed(t, 0, silence(3000));
@@ -103,30 +120,44 @@ async function drain() {
     check('gate: silence dropped before whisper', calls.length === 0);
   }
 
-  // 4. prompt chaining: chunk N+1 gets chunk N's text
+  // 5. prompt chains from the LAST FINAL text
   {
     const { t, calls } = await makeT();
-    feed(t, 0, tone(6000));
-    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 1500 });
-    t.handleCommit({ speakerId: 's0', tStartMs: 1500, tEndMs: 3000 });
+    feed(t, 0, tone(10000));
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });
+    t.handleCommit({ speakerId: 's1', tStartMs: 2200, tEndMs: 4000 });  // finalizes s0 turn
     await drain();
-    check('prompt: first chunk has none', calls[0]?.prompt === undefined);
-    check('prompt: second chunk chained', calls[1]?.prompt === 'so we kept talking about point number 0 for a while', calls[1]?.prompt);
+    check('prompt: drafts before any final have none', calls[0]?.prompt === undefined);
+    // calls: draft c1, FINAL s0-turn (prompt undefined), draft c2 (prompt = final text)
+    check('prompt: post-final draft chained', !!calls[2]?.prompt && calls[2].prompt!.includes('point number 1'), calls[2]?.prompt);
   }
 
-  // 5. no hints → provisional cluster id; late hint renames same segments
+  // 6. final pass empty → drafts promoted, never lose the turn
   {
-    const { t, published, renamed } = await makeT();
-    feed(t, 0, tone(3000));
-    t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 2000 });
+    const { t, confirmed } = await makeT({
+      text: (i) => (i === 1 ? '' : 'we definitely said something meaningful here'),
+    });
+    feed(t, 0, tone(8000));
+    t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 2000 });   // draft (call 0)
+    t.handleCommit({ speakerId: 's1', tStartMs: 2200, tEndMs: 4000 }); // final (call 1 → empty)
     await drain();
-    check('late: provisional id published', published[0]?.speaker === 'speaker_0', published[0]?.speaker);
+    check('fallback: drafts promoted on empty final', confirmed.length === 1 && confirmed[0].segments[0].segmentId.startsWith('mix:'));
+  }
+
+  // 7. late hint renames a finalized turn, same segment ids
+  {
+    const { t, confirmed, renamed } = await makeT();
+    feed(t, 0, tone(8000));
+    t.handleCommit({ speakerId: 'speaker_0', tStartMs: 0, tEndMs: 2000 });
+    t.handleCommit({ speakerId: 'speaker_1', tStartMs: 2200, tEndMs: 4000 });
+    await drain();
+    check('late: provisional turn confirmed', confirmed[0]?.speaker === 'speaker_0');
     t.recordHint('Bob', 'dom-active', 500);
     check('late: renamed on hint', renamed.length === 1 && renamed[0].to === 'Bob');
-    check('late: same segment ids', renamed[0]?.segments[0]?.segmentId === published[0]?.segments[0]?.segmentId);
+    check('late: same segment ids', renamed[0]?.segments[0]?.segmentId === confirmed[0]?.segments[0]?.segmentId);
   }
 
-  // 6. serialization: queued chunks transcribe strictly in order
+  // 8. strict serialization (drafts + finals share one queue)
   {
     const order: number[] = [];
     const { t } = await makeT();
@@ -135,15 +166,15 @@ async function drain() {
       active++; if (active > 1) overlapped = true;
       await new Promise(r => setTimeout(r, 5));
       order.push(pcm.length); active--;
-      return { text: 'x', language: 'en', duration: 1, segments: [{ text: 'x', start: 0, end: 1 }] };
+      return { text: 'we said real words here', language: 'en', duration: 1, segments: [{ text: 'we said real words here', start: 0, end: 1 }] };
     };
-    feed(t, 0, tone(8000));
+    feed(t, 0, tone(10000));
     t.handleCommit({ speakerId: 's0', tStartMs: 0, tEndMs: 1000 });
-    t.handleCommit({ speakerId: 's0', tStartMs: 1000, tEndMs: 3000 });
-    t.handleCommit({ speakerId: 's0', tStartMs: 3000, tEndMs: 4000 });
-    await new Promise(r => setTimeout(r, 80));
+    t.handleCommit({ speakerId: 's0', tStartMs: 1200, tEndMs: 3000 });
+    t.handleCommit({ speakerId: 's1', tStartMs: 3200, tEndMs: 5000 });
+    await new Promise(r => setTimeout(r, 100));
     check('serial: never concurrent', !overlapped);
-    check('serial: FIFO order', order[0] === SR && order[1] === 2 * SR && order[2] === SR, JSON.stringify(order));
+    check('serial: draft,draft,final,draft order', order.length === 4 && order[2] === 3 * SR, JSON.stringify(order));
   }
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);

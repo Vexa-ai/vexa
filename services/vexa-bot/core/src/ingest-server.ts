@@ -200,6 +200,12 @@ class CaptureSession {
       publish: (speaker, segments) => {
         void this.segmentPublisher.publishTranscript(speaker, this.mapChunkSegments(speaker, segments), []);
       },
+      publishPending: (speaker, segments) => {
+        void this.segmentPublisher.publishTranscript(speaker, [], this.mapChunkSegments(speaker, segments, false));
+      },
+      clearPending: (speaker) => {
+        void this.segmentPublisher.publishTranscript(speaker, [], []);
+      },
       rename: (oldSpeaker, newSpeaker, segments) => {
         // Rename within the FROZEN envelope, via key formation only:
         //  1. clear the OLD name's pending key (empty bundle)
@@ -213,14 +219,14 @@ class CaptureSession {
   }
 
   /** ChunkSegment (audio-time ms) → publisher TranscriptionSegment. */
-  private mapChunkSegments(speaker: string, segments: ChunkSegment[]): TranscriptionSegment[] {
+  private mapChunkSegments(speaker: string, segments: ChunkSegment[], completed = true): TranscriptionSegment[] {
     return segments.map(s => ({
       speaker,
       text: s.text,
       start: (s.startMs - this.segmentPublisher.sessionStartMs) / 1000,
       end: (s.endMs - this.segmentPublisher.sessionStartMs) / 1000,
       language: s.language,
-      completed: true,
+      completed,
       segment_id: `${this.segmentPublisher.sessionUid}:${s.segmentId}`,
       absolute_start_time: new Date(s.startMs).toISOString(),
       absolute_end_time: new Date(s.endMs).toISOString(),
