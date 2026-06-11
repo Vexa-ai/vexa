@@ -225,6 +225,20 @@ async function maybeAutoStart(tabId?: number, url?: string, meetingRef?: Meeting
 }
 
 async function stopCapture(): Promise<void> {
+  // Stop is a CONTRACT: finalize the meeting NOW (active → completed) via the
+  // gateway REST call. The WS close alone leaves the meeting 'active' for the
+  // ingest server's reconnect grace (~60s) — "stop" must mean stopped.
+  const ended = { platform: state.platform, nativeMeetingId: state.nativeMeetingId };
+  if (ended.platform && ended.nativeMeetingId && ended.platform !== 'note') {
+    chrome.storage.local.get(['apiKey', 'gatewayUrl']).then((cfg) => {
+      const gw = String(cfg.gatewayUrl || 'http://localhost:8056').replace(/\/+$/, '');
+      return fetch(`${gw}/extension/sessions/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': cfg.apiKey || '' },
+        body: JSON.stringify({ platform: ended.platform, native_meeting_id: ended.nativeMeetingId }),
+      });
+    }).catch(() => { /* non-fatal: the ingest grace-period finalize covers it */ });
+  }
   if (state.platform === 'note') {
     chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
   } else {
