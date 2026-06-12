@@ -1,7 +1,7 @@
 # Vexa 0.11 MANIFEST — operating spec (v2)
 
 > Mechanical counterpart of [MANIFESTO-0.11.md](MANIFESTO-0.11.md). The manifesto argues; this file specifies.
-> Status: MVP0 pack (#441), shipping via `pack/0.11-mvp0-map`; binding on merge.
+> Status: merged via MVP0 (#442); binding.
 > Binding: behavior that diverges from this file is either a bug or a PR against this file — never silent drift.
 
 ## 0. Primitives
@@ -42,7 +42,7 @@ Ten primitives. Everything else in this file — inventory, gates, process, rele
 
 | Module | Concern | Lives today | Harness today |
 |---|---|---|---|
-| `meet-join` | join / admission / leave / removal per platform | `vexa-bot/core/src/platforms/{googlemeet,msteams,zoom}`; extracted as `packages/meet-join` on `pack/meet-join-extraction` | VNC watch, Mode A/B ✅ |
+| `meet-join` | join / admission / leave / removal per platform | `vexa-bot/core/src/platforms/{googlemeet,msteams,zoom}`; extracted as `packages/meet-join` on `pack/meet-join-extraction` | VNC watch — hot debug container only (reproducible) ✅ |
 | `capture-kit` | in-page per-speaker capture + speaker detection | `vexa-bot/core/src/browser/` | extension is the live testbed |
 | `speaker-streams` | per-speaker stream mgmt, VAD, name mapping | `core/src/services/{speaker-streams,speaker-mapper,vad}.ts` | unit + wav tests ✅ |
 | `audio-pipelines` | the two topologies: multichannel (`audio-pipeline.ts`), mixed (`mixed-audio-pipeline.ts`) | `core/src/services/` | replay |
