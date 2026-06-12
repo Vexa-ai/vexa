@@ -19,11 +19,13 @@ debug: build
 check:
 	node scripts/check-isolation.js
 
-# Same container, PRODUCTION network position (cloud egress) — optional but
-# necessary for block-path reproduction (#444): Google's gate keys on IP
-# reputation, and production bots speak from datacenter ranges. The image and
-# input stack are identical to `make debug`; only the egress IP differs.
-#   make debug-cloud URL="https://meet.google.com/xxx-xxxx-xxx" [CLOUD_HOST=bbb]
+# Same container, DIFFERENT network position — the egress IP is the only
+# variable (#444: Google's gate keys on IP reputation). CLOUD_HOST is any
+# ssh-able box:
+#   bbb            → second household vantage (different ASN; NOT datacenter)
+#   <linode-vm>    → production network position (throwaway VM via tests3
+#                    provision/teardown; prod bots speak from Linode ranges)
+#   make debug-cloud URL="https://meet.google.com/xxx-xxxx-xxx" CLOUD_HOST=<host>
 CLOUD_HOST ?= bbb
 BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 debug-cloud:
