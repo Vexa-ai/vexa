@@ -14,6 +14,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { CaptureV1Sink, AudioChunk, MeetingEvent } from '../contracts/capture-v1';
+import { uploadCaptureToS3 } from '../s3-sync';
 
 const SAMPLE_RATE = 16000;
 const CHANNELS = 1;
@@ -25,7 +27,20 @@ interface TrackState {
   totalSamples: number;
 }
 
-export class RawCaptureService {
+export interface CaptureMeta {
+  platform?: string;
+  nativeMeetingId?: string | number;
+  language?: string | null;
+  task?: string | null;
+  botVersion?: string;
+}
+
+/**
+ * RecorderSink — the recorder (MANIFEST P5) as a CaptureV1Sink implementation.
+ * Tee'd onto the capture→pipeline seam: serializes capture.v1 to disk + S3.
+ * (Class name kept RawCaptureService for call-site stability; it IS the recorder.)
+ */
+export class RawCaptureService implements CaptureV1Sink {
   private outputDir: string;
   private audioDir: string;
   private eventsPath: string;
@@ -33,8 +48,13 @@ export class RawCaptureService {
   private fileCounter = 0;
   private eventsLines: string[] = [];
   private finalized = false;
+  private meta: CaptureMeta;
+  private startedAt = new Date().toISOString();
+  private speakersSeen: Map<string, number> = new Map(); // name -> total samples
+  private connectionEvents = 0;
 
-  constructor(meetingId: string | number) {
+  constructor(meetingId: string | number, meta: CaptureMeta = {}) {
+    this.meta = meta;
     this.outputDir = `/tmp/raw-capture-${meetingId}`;
     this.audioDir = path.join(this.outputDir, 'audio');
     this.eventsPath = path.join(this.outputDir, 'events.txt');
@@ -53,6 +73,9 @@ export class RawCaptureService {
    */
   feedAudio(trackIndex: number, audioData: Float32Array, speakerName: string): void {
     if (this.finalized) return;
+    if (speakerName) {
+      this.speakersSeen.set(speakerName, (this.speakersSeen.get(speakerName) || 0) + audioData.length);
+    }
 
     let track = this.tracks.get(trackIndex);
 
@@ -115,11 +138,86 @@ export class RawCaptureService {
   }
 
   /**
-   * Flush all tracks and write final events. Called at bot shutdown.
+   * Log a connection-lifecycle event (ws connect/disconnect/reconnect, stt stalls).
+   * Part of the envelope spec: prime suspects in real-world silences.
    */
-  finalize(): string {
+  logLifecycle(kind: string, detail?: string): void {
+    if (this.finalized) return;
+    this.connectionEvents++;
+    const line = `${new Date().toISOString()} [LIFECYCLE] ${kind}${detail ? ` ${detail}` : ''}`;
+    this.eventsLines.push(line);
+    this.appendEventsFile(line);
+  }
+
+  // ─── CaptureV1Sink (the contract port) ───────────────────────────────
+  /** contract: an audio chunk crossed the seam. */
+  audioChunk(c: AudioChunk): void {
+    this.feedAudio(c.speakerIndex, c.samples, c.speakerName || '');
+  }
+
+  /** contract: a meeting event crossed the seam. */
+  event(e: MeetingEvent): void {
+    if (this.finalized) return;
+    switch (e.kind) {
+      case 'speaker-joined':
+      case 'active-speaker':
+        if (e.speaker) this.logSpeakerEvent(null, e.speaker); break;
+      case 'segment':
+        if (e.speaker) this.logSegmentConfirmed(e.speaker, e.text || ''); break;
+      case 'lifecycle':
+        this.logLifecycle(String(e.detail?.what ?? 'event'), e.text); break;
+      case 'track-lock':
+        if (typeof e.detail?.trackIndex === 'number' && e.speaker)
+          this.logTrackLock(e.detail.trackIndex as number, e.speaker); break;
+    }
+  }
+
+  /**
+   * Flush all tracks, write meta.json, ship to the training corpus (S3).
+   * The recorder owns its sink — the bot service does NOT (MANIFEST P5:
+   * recording is the recorder's job, not smeared into the assembly).
+   */
+  async finalizeAndUpload(meetingId: string | number): Promise<string> {
+    const dir = this.flushToDisk();
+    uploadCaptureToS3(dir, { platform: this.meta.platform, meetingId });
+    return dir;
+  }
+
+  /** contract: finalize the recording (void). */
+  finalize(): void { this.flushToDisk(); }
+
+  /**
+   * Flush all tracks + write meta.json, return the output dir.
+   */
+  private flushToDisk(): string {
     if (this.finalized) return this.outputDir;
     this.finalized = true;
+
+    // meta.json — the selection index: query captures by platform / speakers / date
+    // without any database (S3 prefix partitioning + this file is the whole index).
+    try {
+      const speakers = Array.from(this.speakersSeen.entries()).map(([name, samples]) => ({
+        name, duration_s: Math.round((samples / SAMPLE_RATE) * 10) / 10,
+      }));
+      const metaOut = {
+        capture: "capture.v1/raw",
+        provenance: process.env.RAW_CAPTURE_PROVENANCE || "prod-full",
+        platform: this.meta.platform || null,
+        native_meeting_id: this.meta.nativeMeetingId ?? null,
+        language: this.meta.language ?? null,
+        task: this.meta.task ?? null,
+        bot_version: this.meta.botVersion || process.env.BOT_IMAGE_TAG || null,
+        topology: "per-participant",
+        sample_rate: SAMPLE_RATE,
+        started_at: this.startedAt,
+        ended_at: new Date().toISOString(),
+        num_speakers: speakers.length,
+        speakers,
+        connection_events: this.connectionEvents,
+        event_lines: this.eventsLines.length,
+      };
+      fs.writeFileSync(path.join(this.outputDir, 'meta.json'), JSON.stringify(metaOut, null, 2));
+    } catch { /* meta is best-effort; never block shutdown */ }
 
     // Flush all remaining tracks
     for (const trackIndex of this.tracks.keys()) {

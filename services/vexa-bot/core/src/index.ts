@@ -1295,8 +1295,16 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     }
 
     // Raw capture: dump per-speaker WAVs + events for offline replay
-    if (process.env.RAW_CAPTURE === 'true') {
-      rawCaptureService = new RawCaptureService(meetingId);
+    // Full telemetry for the TRAINING CORPUS (private S3, operator-governed by ToS):
+    // always-on in prod via TELEMETRY_FULL=on; RAW_CAPTURE=true is the dev debug alias.
+    if (process.env.TELEMETRY_FULL === 'on' || process.env.RAW_CAPTURE === 'true') {
+      rawCaptureService = new RawCaptureService(meetingId, {
+        platform: botConfig.platform,
+        nativeMeetingId: botConfig.nativeMeetingId,
+        language: botConfig.language,
+        task: botConfig.task,
+        botVersion: process.env.BOT_IMAGE_TAG,
+      });
       log(`[PerSpeaker] Raw capture enabled → ${rawCaptureService.outputPath}`);
     }
 
@@ -1504,7 +1512,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       telemetry.segmentsConfirmed++;
       telemetry.totalConfirmLatencyMs += confirmLatencyMs;
       log(`[📝 CONFIRMED] ${speakerName} | ${lang} | ${startSec.toFixed(1)}s-${endSec.toFixed(1)}s (${segDurationSec.toFixed(1)}s, ${wordCount}w, latency=${(confirmLatencyMs/1000).toFixed(1)}s) | ${fullSegmentId} | "${transcript}"`);
-      if (rawCaptureService) rawCaptureService.logSegmentConfirmed(speakerName, transcript);
+      if (rawCaptureService) rawCaptureService.event({ kind: 'segment', ts: Date.now(), speaker: speakerName, text: transcript });
 
       if (!confirmedBatches.has(speakerId)) confirmedBatches.set(speakerId, []);
       confirmedBatches.get(speakerId)!.push({
@@ -1716,13 +1724,16 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
   }
   speakerLastAudioMs.set(speakerId, nowMs);
 
-  // Raw capture: dump audio for offline replay
+  // capture.v1 seam: tee the chunk to the recorder (contract port), then feed
+  // the pipeline. The recorder is a CaptureV1Sink — it consumes the contract,
+  // not the bot's internals.
   if (rawCaptureService) {
-    const resolvedName = speakerManager.getSpeakerName(speakerId) || '';
-    rawCaptureService.feedAudio(speakerIndex, audioData, resolvedName);
+    rawCaptureService.audioChunk({
+      speakerId, speakerIndex, samples: audioData, ts: nowMs,
+      speakerName: speakerManager.getSpeakerName(speakerId) || '',
+    });
   }
-
-  speakerManager.feedAudio(speakerId, audioData);
+  speakerManager.feedAudio(speakerId, audioData); // pipeline (capture.v1 consumer)
 }
 
 /**
@@ -1759,8 +1770,8 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
 
   // Finalize raw capture — flush all tracks to WAV files
   if (rawCaptureService) {
-    const outputPath = rawCaptureService.finalize();
-    log(`[PerSpeaker] Raw capture finalized → ${outputPath}`);
+    const outputPath = await rawCaptureService.finalizeAndUpload(currentBotConfig?.meeting_id ?? 'unknown');
+    log(`[PerSpeaker] capture.v1 recorded + shipped → ${outputPath}`);
     rawCaptureService = null;
   }
 
