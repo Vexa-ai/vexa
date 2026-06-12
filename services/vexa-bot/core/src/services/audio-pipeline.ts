@@ -59,7 +59,11 @@ import { RecordingService } from "./recording";
 import { logJSON } from "../utils/log";
 import { log } from "../utils";
 import { BotConfig } from "../types";
-import { getSegmentPublisher } from "../index";
+// One-way rule: the pipeline does NOT reach back into the bot. The host injects
+// the session-start sink (the bot's SegmentPublisher satisfies this minimal shape).
+export interface SessionStartSink { resetSessionStart(): void; sessionStartMs: number; }
+let _publisherProvider: () => SessionStartSink | null = () => null;
+export function setSessionStartProvider(fn: () => SessionStartSink | null): void { _publisherProvider = fn; }
 
 // ───────────────────────────────────────────────────────────────────────
 // Types
@@ -231,7 +235,7 @@ export class UnifiedRecordingPipeline {
     // boilerplate that was duplicated in googlemeet, msteams, and
     // zoom/web recording.ts.
     this.source.on("started", () => {
-      const publisher = getSegmentPublisher();
+      const publisher = _publisherProvider();
       if (publisher) {
         publisher.resetSessionStart();
         logJSON({
