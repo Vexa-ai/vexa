@@ -27,10 +27,10 @@
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { log } from './utils';
-import { SpeakerStreamManager } from './services/speaker-streams';
-import { TranscriptionClient } from './services/transcription-client';
+import { SpeakerStreamManager } from '@vexa/speaker-streams';
+import { TranscriptionClient } from '@vexa/speaker-streams';
 import { SegmentPublisher, TranscriptionSegment } from './services/segment-publisher';
-import { isHallucination } from './services/hallucination-filter';
+import { isHallucination } from '@vexa/speaker-streams';
 import { ChunkedTranscriber } from './services/chunked-transcriber';
 import { createChunkedHost } from './services/chunked-host';
 

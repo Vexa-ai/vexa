@@ -18,7 +18,7 @@
  */
 
 import { ChunkedTranscriberCallbacks, ChunkSegment } from './chunked-transcriber';
-import { TranscriptionClient } from './transcription-client';
+import { TranscriptionClient } from '@vexa/speaker-streams';
 import { SegmentPublisher, TranscriptionSegment } from './segment-publisher';
 
 export interface ChunkedHostDeps {

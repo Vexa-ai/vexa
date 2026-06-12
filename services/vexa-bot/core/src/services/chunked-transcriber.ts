@@ -50,7 +50,7 @@
 
 import { OnnxLocalDiarizer, CommitEvent } from './diarization/onnx-local-diarizer';
 import { ClusterNameBinder, HintKind } from './cluster-name-binder';
-import { TranscriptionResult } from './transcription-client';
+import { TranscriptionResult } from '@vexa/speaker-streams';
 
 const SAMPLE_RATE = 16000;
 /** Spans shorter than this carry into the next contiguous span. */

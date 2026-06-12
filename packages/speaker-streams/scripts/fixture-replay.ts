@@ -1,13 +1,12 @@
 /**
  * fixture-replay — replay a recorded capture.v1 fixture through the pipeline
  * bricks (SpeakerStreamManager → TranscriptionClient). NO live meeting.
- *   tsx src/services/fixture-replay.ts <fixture-dir>
+ *   npm run replay -- <fixture-dir>
  * Env: TRANSCRIPTION_SERVICE_URL, TRANSCRIPTION_SERVICE_TOKEN.
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { SpeakerStreamManager } from './speaker-streams';
-import { TranscriptionClient } from './transcription-client';
+import { SpeakerStreamManager, TranscriptionClient } from '../src/index';
 
 const SAMPLE_RATE = 16000;
 const fixture = process.argv[2];
@@ -26,7 +25,7 @@ function readWavAsFloat32(p: string): Float32Array {
 
 (async () => {
   const audioDir = path.join(fixture, 'audio');
-  const _d = __dirname; const wav = fs.readdirSync(audioDir).find(f => f.endsWith('.wav'))!;
+  const wav = fs.readdirSync(audioDir).find(f => f.endsWith('.wav'))!;
   const speakerName = wav.replace(/^\d+-/, '').replace('.wav', '').replace(/-/g, ' ');
   const audio = readWavAsFloat32(path.join(audioDir, wav));
   console.log(`\n  REPLAY: ${wav}  (${(audio.length/SAMPLE_RATE).toFixed(1)}s, speaker="${speakerName}")`);

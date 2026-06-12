@@ -6,7 +6,7 @@
  */
 
 import { ChunkedTranscriber, ChunkSegment } from '../chunked-transcriber';
-import { TranscriptionResult } from '../transcription-client';
+import { TranscriptionResult } from '@vexa/speaker-streams';
 
 const SR = 16000;
 let passed = 0;

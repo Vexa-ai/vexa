@@ -1,0 +1,22 @@
+{
+  "name": "@vexa/speaker-streams",
+  "version": "0.1.0",
+  "description": "Pipeline core brick \u2014 per-speaker streams, VAD, name mapping, hallucination filter, stt.v1 client.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc && cp -r src/hallucinations dist/hallucinations",
+    "check:isolation": "node scripts/check-isolation.js",
+    "test": "tsx src/speaker-streams.test.ts && tsx src/speaker-mapper.test.ts",
+    "replay": "tsx scripts/fixture-replay.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0"
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.17.0",
+    "@jjhbw/silero-vad": "*"
+  }
+}

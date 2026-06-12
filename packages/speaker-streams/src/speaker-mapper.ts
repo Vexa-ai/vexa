@@ -1,4 +1,4 @@
-import { log } from '../utils';
+import { log } from './log';
 
 /**
  * Post-transcription speaker mapper for MS Teams.

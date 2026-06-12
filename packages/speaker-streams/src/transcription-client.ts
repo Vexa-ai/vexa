@@ -1,4 +1,4 @@
-import { log } from '../utils';
+import { log } from './log';
 
 export interface TranscriptionWord {
   word: string;

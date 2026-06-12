@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { log } from '../utils';
+import { log } from './log';
 
 let phrases: Set<string> | null = null;
 

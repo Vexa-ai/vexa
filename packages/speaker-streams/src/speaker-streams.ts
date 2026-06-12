@@ -1,4 +1,4 @@
-import { log } from '../utils';
+import { log } from './log';
 import { isHallucination } from './hallucination-filter';
 
 /**

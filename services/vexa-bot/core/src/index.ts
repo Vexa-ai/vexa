@@ -26,17 +26,18 @@ import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, clean
 // HTTP imports removed - using unified callback service instead
 
 // Per-speaker transcription pipeline
-import { TranscriptionClient } from './services/transcription-client';
+import { TranscriptionClient , setLogger as setPipelineLogger } from '@vexa/speaker-streams';
 import { SegmentPublisher } from './services/segment-publisher';
-import { SpeakerStreamManager } from './services/speaker-streams';
+import { SpeakerStreamManager } from '@vexa/speaker-streams';
 import { ChunkedTranscriber } from './services/chunked-transcriber';
 import { createChunkedHost } from './services/chunked-host';
 import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken, reportTrackAudio, getLockedMapping } from './services/speaker-identity';
-import { SileroVAD } from './services/vad';
-import { isHallucination } from './services/hallucination-filter';
+import { SileroVAD } from '@vexa/speaker-streams';
+import { isHallucination } from '@vexa/speaker-streams';
 import { SpeakerStreamHandle } from './services/audio';
 import { RawCaptureService, uploadCaptureToS3 } from '@vexa/recorder';
 import { setSessionStartProvider } from './services/audio-pipeline';
+setPipelineLogger((m: string) => log(m));
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
@@ -167,7 +168,7 @@ export async function disposeMixedChunkedPipeline(): Promise<void> {
 let speakerManager: SpeakerStreamManager | null = null;
 let vadModel: SileroVAD | null = null;
 /** Per-speaker VAD states for streaming mode (GMeet only) */
-import type { VadSpeakerState } from './services/vad';
+import type { VadSpeakerState } from '@vexa/speaker-streams';
 const vadSpeakerStates: Map<string, VadSpeakerState> = new Map();
 /** Whitelist of allowed language codes — if set, segments in other languages are discarded */
 let allowedLanguages: string[] | null = null;

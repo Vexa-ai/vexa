@@ -14,7 +14,7 @@
  * Reference: @jjhbw/silero-vad library (lib.js) and Silero VAD Python iterator.
  */
 
-import { log } from '../utils';
+import { log } from './log';
 
 let ort: any = null;
 

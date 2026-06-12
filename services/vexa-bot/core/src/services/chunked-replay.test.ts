@@ -27,7 +27,7 @@
 
 import * as fs from 'fs';
 import { ChunkedTranscriber, ChunkSegment } from './chunked-transcriber';
-import { TranscriptionClient } from './transcription-client';
+import { TranscriptionClient } from '@vexa/speaker-streams';
 
 const SAMPLE_RATE = 16000;
 const CHUNK = 4096;

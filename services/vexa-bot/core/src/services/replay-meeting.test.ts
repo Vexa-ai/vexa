@@ -20,8 +20,8 @@
  */
 
 import * as fs from 'fs';
-import { SpeakerStreamManager } from './speaker-streams';
-import { TranscriptionClient } from './transcription-client';
+import { SpeakerStreamManager } from '@vexa/speaker-streams';
+import { TranscriptionClient } from '@vexa/speaker-streams';
 import {
   mapWordsToSpeakers,
   captionsToSpeakerBoundaries,
@@ -29,7 +29,7 @@ import {
   CaptionEvent,
   SpeakerBoundary,
   AttributedSegment,
-} from './speaker-mapper';
+} from '@vexa/speaker-streams';
 
 // ── Config ──────────────────────────────────────────────────────────
 
