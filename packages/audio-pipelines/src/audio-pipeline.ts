@@ -55,10 +55,15 @@
 import { EventEmitter } from "events";
 import { spawn, ChildProcess } from "child_process";
 import { Page } from "playwright";
-import { RecordingService } from "./recording";
-import { logJSON } from "../utils/log";
-import { log } from "../utils";
-import { BotConfig } from "../types";
+// One-way rule: the chunk sink is injected by the host (the bot's RecordingService
+// satisfies this shape); the brick never imports the service.
+export interface ChunkSink {
+  uploadChunk(callbackUrl: string, token: string, chunkData: Buffer, chunkSeq: number, isFinal: boolean, format?: string): Promise<void>;
+}
+
+import { log, logJSON } from "./log";
+// Host-opaque: carried in options, never inspected by the brick.
+type BotConfig = any;
 // One-way rule: the pipeline does NOT reach back into the bot. The host injects
 // the session-start sink (the bot's SegmentPublisher satisfies this minimal shape).
 export interface SessionStartSink { resetSessionStart(): void; sessionStartMs: number; }
@@ -163,7 +168,7 @@ export interface AudioCaptureSource extends EventEmitter {
  */
 export interface UnifiedRecordingPipelineOptions {
   source: AudioCaptureSource;
-  recordingService: RecordingService;
+  recordingService: ChunkSink;
   uploadUrl: string;
   token: string;
   platform: "gmeet" | "teams" | "zoom-web";
@@ -171,7 +176,7 @@ export interface UnifiedRecordingPipelineOptions {
 
 export class UnifiedRecordingPipeline {
   private source: AudioCaptureSource;
-  private recordingService: RecordingService;
+  private recordingService: ChunkSink;
   private uploadUrl: string;
   private token: string;
   private platform: string;

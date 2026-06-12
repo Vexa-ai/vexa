@@ -4,7 +4,7 @@ import { BotConfig } from "../../types";
 import { RecordingService } from "../../services/recording";
 import { getSegmentPublisher, disposeMixedChunkedPipeline } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
-import { MediaRecorderCapture, UnifiedRecordingPipeline } from "../../services/audio-pipeline";
+import { MediaRecorderCapture, UnifiedRecordingPipeline } from '@vexa/audio-pipelines';
 import {
   teamsParticipantSelectors,
   teamsSpeakingClassNames,

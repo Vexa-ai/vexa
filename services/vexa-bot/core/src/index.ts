@@ -36,8 +36,9 @@ import { SileroVAD } from '@vexa/speaker-streams';
 import { isHallucination } from '@vexa/speaker-streams';
 import { SpeakerStreamHandle } from './services/audio';
 import { RawCaptureService, uploadCaptureToS3 } from '@vexa/recorder';
-import { setSessionStartProvider } from './services/audio-pipeline';
+import { setSessionStartProvider , setLoggers as setPipelineLoggers } from '@vexa/audio-pipelines';
 setPipelineLogger((m: string) => log(m));
+setPipelineLoggers({ log: (m: string) => log(m), logJSON });
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;

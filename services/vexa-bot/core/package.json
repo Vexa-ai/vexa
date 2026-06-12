@@ -20,6 +20,7 @@
     "@huggingface/transformers": "^4.2.0",
     "@jjhbw/silero-vad": "^1.0.3",
     "@types/uuid": "^10.0.0",
+    "@vexa/audio-pipelines": "file:../../../packages/audio-pipelines",
     "@vexa/capture-kit": "file:../../../packages/capture-kit",
     "@vexa/meet-join": "file:../../../packages/meet-join",
     "@vexa/recorder": "file:../../../packages/recorder",
