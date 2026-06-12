@@ -1,0 +1,26 @@
+{
+  "name": "@vexa/meet-join",
+  "version": "0.1.0",
+  "description": "Isolated Google Meet joining layer — enter + observe, zero coupling to vexa-bot core.",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "meet-join": "dist/scripts/debug-join.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js",
+    "debug": "tsx scripts/debug-join.ts"
+  },
+  "dependencies": {
+    "playwright": "1.56.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2",
+    "@types/node": "^22.13.13"
+  }
+}

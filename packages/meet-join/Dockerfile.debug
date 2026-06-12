@@ -1,0 +1,22 @@
+# Self-contained debug image for the isolated joining layer.
+# Depends on NOTHING from vexa-bot/core — its own deps only.
+# Reproduces the prod-faithful setup: Linux + Xvfb display + humanized X11 input,
+# and exposes the live view over noVNC (port 6080).
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy
+
+# OS tools: virtual display + VNC bridge + the humanized-input deps (xdotool/xclip)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xvfb x11vnc websockify novnc xdotool xclip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /pkg
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Install the package's OWN deps + build (isolation preserved)
+COPY package.json tsconfig.json ./
+RUN npm install
+COPY src ./src
+COPY scripts ./scripts
+RUN npm run build
+
+ENTRYPOINT ["bash", "scripts/docker-entrypoint.sh"]
