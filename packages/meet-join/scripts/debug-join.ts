@@ -14,7 +14,7 @@
  */
 import { chromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import { joinMeeting, startDebugView } from "../src/index";
+import { joinMeeting, startDebugView, leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting } from "../src/index";
 
 
 if (process.platform !== "linux" || !process.env.DISPLAY) {
@@ -89,7 +89,20 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
   }
 
   console.log(`\n=== RESULT: admitted=${result.admitted} state=${result.state} ===`);
-  console.log("Holding 60s so you can watch, then closing.");
+  console.log("Holding 60s so you can watch, then leaving.");
   await new Promise((r) => setTimeout(r, 60_000));
+
+  // Leave via the platform UI before closing — killing the browser mid-call
+  // strands a ghost participant in the meeting (Zoom holds the tile for its
+  // reconnect grace period; Teams/Meet can linger too).
+  if (result.admitted) {
+    try {
+      const leave = isZoomUrl ? leaveZoomMeeting : isTeamsUrl ? leaveMicrosoftTeams : leaveGoogleMeet;
+      const left = await leave(page, undefined, "debug_harness_done");
+      console.log(`Graceful leave: ${left ? "ok" : "leave button not found (already out?)"}`);
+    } catch (err: any) {
+      console.error(`Graceful leave failed: ${err?.message || err}`);
+    }
+  }
   await browser.close();
 })();
