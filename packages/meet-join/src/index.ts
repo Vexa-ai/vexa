@@ -1,5 +1,5 @@
 /**
- * @vexa/meet-join — the isolated meeting joining layer (Google Meet + MS Teams).
+ * @vexa/meet-join — the isolated meeting joining layer (Google Meet + MS Teams + Zoom web client).
  *
  * Public surface. Everything below imports only from within this package
  * (verify with `npm run check:isolation`). The embedder supplies a Page and
@@ -15,13 +15,17 @@ import { joinMicrosoftTeams } from "./msteams/join";
 import { waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent } from "./msteams/admission";
 import { prepareForRecording as prepareForTeamsRecording, leaveMicrosoftTeams } from "./msteams/leave";
 import { startTeamsRemovalMonitor } from "./msteams/removal";
+import { joinZoomMeeting, buildZoomWebClientUrl } from "./zoom/join";
+import { waitForZoomMeetingAdmission, checkForZoomAdmissionSilent } from "./zoom/admission";
+import { leaveZoomMeeting, dismissZoomPopups } from "./zoom/leave";
+import { startZoomRemovalMonitor } from "./zoom/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 
 export type { BotConfig, Hooks, JoinState };
 export { startDebugView, setHooks };
 
-export type Platform = "google_meet" | "teams";
+export type Platform = "google_meet" | "teams" | "zoom";
 
 export interface JoinResult {
   admitted: boolean;
@@ -45,6 +49,12 @@ export interface JoinOptions {
 export function resolvePlatform(meetingUrl: string): Platform {
   if (meetingUrl.includes("meet.google.com")) return "google_meet";
   if (meetingUrl.includes("teams.microsoft.com") || meetingUrl.includes("teams.live.com")) return "teams";
+  // Canonical zoom.us / *.zoom.us only — white-label portals (LFX etc.) can't be
+  // inferred from the URL; the embedder passes platform: "zoom" explicitly.
+  try {
+    const host = new URL(meetingUrl).hostname;
+    if (host === "zoom.us" || host.endsWith(".zoom.us")) return "zoom";
+  } catch { /* fall through to throw below */ }
   throw new Error(`Cannot infer platform from meeting URL: ${meetingUrl}`);
 }
 
@@ -75,6 +85,11 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     admitted = await waitForTeamsMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
     );
+  } else if (platform === "zoom") {
+    await joinZoomMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+    admitted = await waitForZoomMeetingAdmission(
+      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+    );
   } else {
     await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
     admitted = await waitForGoogleMeetingAdmission(
@@ -87,3 +102,4 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
+export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };

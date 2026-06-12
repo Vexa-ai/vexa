@@ -84,3 +84,6 @@ export async function stopGoogleRecording(page?: any, botConfig?: BotConfig): Pr
 export async function stopTeamsRecording(page?: any, botConfig?: BotConfig): Promise<void> {
   await hooks.onStopRecording(page, botConfig as BotConfig);
 }
+export async function stopZoomRecording(page?: any, botConfig?: BotConfig): Promise<void> {
+  await hooks.onStopRecording(page, botConfig as BotConfig);
+}

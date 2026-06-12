@@ -26,8 +26,12 @@ if (process.platform !== "linux" || !process.env.DISPLAY) {
 const url = process.argv[2];
 const isMeetUrl = !!url && url.includes("meet.google.com");
 const isTeamsUrl = !!url && (url.includes("teams.microsoft.com") || url.includes("teams.live.com"));
-if (!isMeetUrl && !isTeamsUrl) {
-  console.error("Usage: tsx scripts/debug-join.ts <google-meet-or-teams-url>");
+const isZoomUrl = !!url && (() => {
+  try { const h = new URL(url).hostname; return h === "zoom.us" || h.endsWith(".zoom.us"); }
+  catch { return false; }
+})();
+if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
+  console.error("Usage: tsx scripts/debug-join.ts <google-meet, teams, or zoom url>");
   process.exit(1);
 }
 

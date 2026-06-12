@@ -1,6 +1,6 @@
 # meet-join — the first brick
 
-Joins a meeting as a participant and reports honest admission state. Platforms: Google Meet (msteams/zoom arrive by extraction).
+Joins a meeting as a participant and reports honest admission state. Platforms: Google Meet, MS Teams, Zoom (web client — the native-SDK path stays in vexa-bot).
 Contract: `src/_host.ts` — the only surface; the host (vexa-bot) supplies the browser context.
 Watch: the **hot debug container** — runs the brick from source in a reproducible env (Xvfb + humanized X11 + noVNC at `localhost:6080/vnc.html`). The image bakes only the environment; `src/` is mounted live and run via tsx, so a host edit + re-run is instant — no rebuild. Container-only by design: the harness environment is reproducible or it is not evidence. Two network positions, same image:
 - `make debug URL=<meet-url>` — local egress (residential)
