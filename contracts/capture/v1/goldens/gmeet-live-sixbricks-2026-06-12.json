@@ -21,5 +21,6 @@
     "audio/01-speaker-0.wav": "5ff075ab3f6ac0757aad575f8f8ef9b6486eaf5eb8efc4833a25f03bcb92e540",
     "audio/02-dmitriy-grankin.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "audio/02-dmitriy-grankin.wav": "00908c6233976bd73d914dd87985b9ca0b69a219dff7d405e422cdffa326e781"
-  }
+  },
+  "sharing": "PRIVATE-ONLY \u2014 contains family/household audio; must not leave the private bucket (MANIFEST \u00a74 gate)"
 }

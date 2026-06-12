@@ -24,8 +24,10 @@ if (process.platform !== "linux" || !process.env.DISPLAY) {
 }
 
 const url = process.argv[2];
-if (!url || !url.includes("meet.google.com")) {
-  console.error("Usage: tsx scripts/debug-join.ts <google-meet-url>");
+const isMeetUrl = !!url && url.includes("meet.google.com");
+const isTeamsUrl = !!url && (url.includes("teams.microsoft.com") || url.includes("teams.live.com"));
+if (!isMeetUrl && !isTeamsUrl) {
+  console.error("Usage: tsx scripts/debug-join.ts <google-meet-or-teams-url>");
   process.exit(1);
 }
 
@@ -65,14 +67,22 @@ if (!url || !url.includes("meet.google.com")) {
   console.log("  agent (control): playwright connectOverCDP(\"" + view.cdpUrl + "\")");
   console.log("────────────────────────────────────────────\n");
 
-  const result = await joinMeeting(page, {
-    meetingUrl: url,
-    botName: "Vexa Join Layer (isolated)",
-    debug: true,
-    hooks: {
-      onState: (s, d) => console.log(`\n>>> [JOIN-STATE] ${s}${d ? " — " + JSON.stringify(d) : ""}\n`),
-    },
-  });
+  // Teams admission throws on rejection/timeout (monolith behavior) — catch so
+  // the harness always prints a RESULT line instead of dying unhandled.
+  let result: { admitted: boolean; state: string };
+  try {
+    result = await joinMeeting(page, {
+      meetingUrl: url,
+      botName: "Vexa Join Layer (isolated)",
+      debug: true,
+      hooks: {
+        onState: (s, d) => console.log(`\n>>> [JOIN-STATE] ${s}${d ? " — " + JSON.stringify(d) : ""}\n`),
+      },
+    });
+  } catch (err: any) {
+    console.error(`\n=== JOIN ERROR: ${err?.message || err} ===`);
+    result = { admitted: false, state: "error" };
+  }
 
   console.log(`\n=== RESULT: admitted=${result.admitted} state=${result.state} ===`);
   console.log("Holding 60s so you can watch, then closing.");

@@ -1,5 +1,5 @@
 /**
- * @vexa/meet-join — the isolated Google Meet joining layer.
+ * @vexa/meet-join — the isolated meeting joining layer (Google Meet + MS Teams).
  *
  * Public surface. Everything below imports only from within this package
  * (verify with `npm run check:isolation`). The embedder supplies a Page and
@@ -11,11 +11,17 @@ import { joinGoogleMeeting } from "./googlemeet/join";
 import { waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent } from "./googlemeet/admission";
 import { prepareForRecording, leaveGoogleMeet } from "./googlemeet/leave";
 import { startGoogleRemovalMonitor } from "./googlemeet/removal";
+import { joinMicrosoftTeams } from "./msteams/join";
+import { waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent } from "./msteams/admission";
+import { prepareForRecording as prepareForTeamsRecording, leaveMicrosoftTeams } from "./msteams/leave";
+import { startTeamsRemovalMonitor } from "./msteams/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 
 export type { BotConfig, Hooks, JoinState };
 export { startDebugView, setHooks };
+
+export type Platform = "google_meet" | "teams";
 
 export interface JoinResult {
   admitted: boolean;
@@ -24,6 +30,8 @@ export interface JoinResult {
 
 export interface JoinOptions {
   meetingUrl: string;
+  /** which platform's join flow to run; default: inferred from meetingUrl */
+  platform?: Platform;
   botName?: string;
   /** force "humanized" (X11) or "synthetic" (CDP) input; default: humanized for gmeet */
   uiInteractionMode?: "humanized" | "synthetic";
@@ -33,15 +41,23 @@ export interface JoinOptions {
   hooks?: Partial<Hooks>;
 }
 
+/** Infer the platform from the meeting URL. Throws on an unrecognized host. */
+export function resolvePlatform(meetingUrl: string): Platform {
+  if (meetingUrl.includes("meet.google.com")) return "google_meet";
+  if (meetingUrl.includes("teams.microsoft.com") || meetingUrl.includes("teams.live.com")) return "teams";
+  throw new Error(`Cannot infer platform from meeting URL: ${meetingUrl}`);
+}
+
 /**
- * Drive a Google Meet join to its admission verdict on the page you hand in.
+ * Drive a meeting join to its admission verdict on the page you hand in.
  * Returns once admitted, rejected, or timed out. Does NOT record or transcribe.
  */
 export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinResult> {
   if (opts.hooks) setHooks(opts.hooks);
 
+  const platform = opts.platform ?? resolvePlatform(opts.meetingUrl);
   const botConfig: BotConfig = {
-    platform: "google_meet",
+    platform,
     botName: opts.botName ?? "Vexa Join Layer",
     uiInteractionMode: opts.uiInteractionMode,
     automaticLeave: { waitingRoomTimeout: opts.waitingRoomTimeoutMs ?? 180_000 },
@@ -53,13 +69,21 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     setHooks({}); // ensure default state-logger is installed if none supplied
   }
 
-  await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
-
-  const admitted = await waitForGoogleMeetingAdmission(
-    page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
-  );
+  let admitted: boolean;
+  if (platform === "teams") {
+    await joinMicrosoftTeams(page, opts.meetingUrl, botConfig.botName!, botConfig);
+    admitted = await waitForTeamsMeetingAdmission(
+      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+    );
+  } else {
+    await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+    admitted = await waitForGoogleMeetingAdmission(
+      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+    );
+  }
 
   return { admitted: !!admitted, state: admitted ? "admitted" : "awaiting_admission" };
 }
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
+export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };

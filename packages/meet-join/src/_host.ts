@@ -81,3 +81,6 @@ export async function callNeedsHumanHelpCallback(
 export async function stopGoogleRecording(page?: any, botConfig?: BotConfig): Promise<void> {
   await hooks.onStopRecording(page, botConfig as BotConfig);
 }
+export async function stopTeamsRecording(page?: any, botConfig?: BotConfig): Promise<void> {
+  await hooks.onStopRecording(page, botConfig as BotConfig);
+}

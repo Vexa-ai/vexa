@@ -6,7 +6,7 @@
 # startDebugView() auto-spawns x11vnc + websockify(noVNC:6080) because DISPLAY is set.
 set -e
 
-: "${MEETING_URL:?set MEETING_URL to a meet.google.com link}"
+: "${MEETING_URL:?set MEETING_URL to a meet.google.com or Teams meeting link}"
 
 Xvfb :99 -screen 0 1920x1080x24 -ac +extension RANDR >/tmp/xvfb.log 2>&1 &
 export DISPLAY=:99
