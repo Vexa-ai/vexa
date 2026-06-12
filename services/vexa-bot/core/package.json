@@ -20,6 +20,7 @@
     "@huggingface/transformers": "^4.2.0",
     "@jjhbw/silero-vad": "^1.0.3",
     "@types/uuid": "^10.0.0",
+    "@vexa/capture-kit": "file:../../../packages/capture-kit",
     "basic-ftp": "^5.3.1",
     "onnxruntime-node": "^1.24.3",
     "playwright": "1.56.0",

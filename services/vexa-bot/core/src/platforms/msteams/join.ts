@@ -220,7 +220,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
     /* eslint-disable @typescript-eslint/no-var-requires */
     const fs = require('fs');
     const path = require('path');
-    const hookSource = fs.readFileSync(path.join(__dirname, '../../browser/webrtc-audio-hook.js'), 'utf8');
+    const hookSource = fs.readFileSync(path.join(path.dirname(require.resolve('@vexa/capture-kit/package.json')), 'dist', 'webrtc-audio-hook.js'), 'utf8');
     await page.addInitScript(
       `(function(){var exports={};var module={exports:exports};(function(exports,module){${hookSource}\n})(exports,module);` +
       `var f=(module.exports&&module.exports.installRemoteAudioHook)||exports.installRemoteAudioHook;if(f)f({});})();`

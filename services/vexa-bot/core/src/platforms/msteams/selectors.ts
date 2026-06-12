@@ -5,7 +5,7 @@ export {
   teamsNameSelectors,
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
-} from '../../browser/msteams-speakers';
+} from '@vexa/capture-kit';
 
 // Centralized MS Teams selectors and indicators
 // Keep this file free of runtime logic; export constants only.

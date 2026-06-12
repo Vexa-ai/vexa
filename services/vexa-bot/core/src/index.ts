@@ -2329,6 +2329,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
     
     // Create context with CSP bypass to allow script injection (like Google Meet)
+    if (!browserInstance) throw new Error('browserInstance not initialized');
     const context = await browserInstance.newContext({
       permissions: ['microphone', 'camera'],
       ignoreHTTPSErrors: true,
@@ -2394,6 +2395,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     });
 
     // Create a new page with permissions and viewport for non-Teams
+    if (!browserInstance) throw new Error('browserInstance not initialized');
     const context = await browserInstance.newContext({
       permissions: ["camera", "microphone"],
       userAgent: userAgent,
