@@ -175,7 +175,7 @@ Harness flavor by kind: domain replays `capture.v1` + recorded `stt.v1`; infra r
 
 | Pattern | Meaning |
 |---|---|
-| `layer/<concern>` | incubation branch (any fork): carves one concern toward brickhood — a future module or contract. No gates, no promises. Renamed to `pack/*` at promotion |
+| `brick/<concern>` | incubation branch (any fork): carves one concern toward brickhood — a future module or contract. No gates, no promises. Renamed to `pack/*` at promotion |
 | `spike/<topic>` | incubation branch (any fork): throwaway experiment. Never promoted — its learnings become issues |
 | `pack/<topic>` | shipping branch: an issue pack driven to merge upstream, counted by the WIP gate |
 | `[Pack] <title>` + label `pack` | a pack issue — the unit of WIP; exactly these are counted against WIP = 3 |
@@ -191,7 +191,7 @@ Harness flavor by kind: domain replays `capture.v1` + recorded `stt.v1`; infra r
 | `<contract>/v<N>` | contract version directory (§2); `<contract>/<fixture-id>` names fixtures (§4) |
 | milestone `0.11` | all MVP packs carry it |
 
-**Branches:** incubation in **your fork** — any contributor's, maintainer's included, same rules (`layer/*`, `spike/*`, unbounded, no promises). Shipping from upstream `Vexa-ai/vexa` (`pack/*`, **WIP = 3**, `dev-init/scripts/wip-gate.sh`; visibility via `master/scripts/standup.sh`). Promotion gate, all green: isolation, standalone, harness runs (replay ≥1 fixture, or watch vs solo meeting for live-platform bricks).
+**Branches:** incubation in **your fork** — any contributor's, maintainer's included, same rules (`brick/*`, `spike/*`, unbounded, no promises). Shipping from upstream `Vexa-ai/vexa` (`pack/*`, **WIP = 3**, `dev-init/scripts/wip-gate.sh`; visibility via `master/scripts/standup.sh`). Promotion gate, all green: isolation, standalone, harness runs (replay ≥1 fixture, or watch vs solo meeting for live-platform bricks).
 
 ## 6. Releases
 
