@@ -179,3 +179,7 @@ tests3/.state-helm
 # Suffixed snapshots from teardown / iteration captures contain the same credentials.
 tests3/.state-*
 
+
+# 0.11 MANIFEST figures (override *.png ignore)
+!docs/0.11/*.png
+!contracts/*/v*/examples/*.wav
