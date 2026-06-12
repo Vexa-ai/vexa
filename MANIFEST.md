@@ -171,6 +171,26 @@ Harness flavor by kind: domain replays `capture.v1` + recorded `stt.v1`; infra r
 
 ![The development loop: production evidence becomes a ready issue, fixed in the harness, verified by machine gates, routed to a fast machine lane or the human-gated contract lane, composed into a release.](docs/0.11/03-process-loop.png)
 
+**Conventions registry** — every name pattern in the process; if a convention isn't here, it doesn't exist:
+
+| Pattern | Meaning |
+|---|---|
+| `layer/<concern>` | incubation branch (any fork): carves one concern toward brickhood — a future module or contract. No gates, no promises. Renamed to `pack/*` at promotion |
+| `spike/<topic>` | incubation branch (any fork): throwaway experiment. Never promoted — its learnings become issues |
+| `pack/<topic>` | shipping branch: an issue pack driven to merge upstream, counted by the WIP gate |
+| `[Pack] <title>` + label `pack` | a pack issue — the unit of WIP; exactly these are counted against WIP = 3 |
+| `pkg:<module>` | issue/PR touches this brick |
+| `lane:contract` / `lane:internals` | auto-applied by path filter (§5 lanes) |
+| `status:available` / `status:in-progress` | pack state; flipping to in-progress claims a WIP lane |
+| **Pause protocol** | in-progress → available + a state-snapshot comment on the issue: what's done, what's next, where the branch lives. Resume = flip the label back |
+| `good-first-issue` | only with: failing fixture id + exact command + expected oracle output |
+| `docs:unaffected` | escape for `gate:docs`, requires one-line justification |
+| `fix:` / `feat:` commit & PR prefixes | conventional commits; `gate:fixture` triggers on `fix:` |
+| `Closes #<pack-issue>` in PR body | every pack PR links its pack issue; merge closes it |
+| `<module>-vX.Y.Z` | brick version tag (§6) |
+| `<contract>/v<N>` | contract version directory (§2); `<contract>/<fixture-id>` names fixtures (§4) |
+| milestone `0.11` | all MVP packs carry it |
+
 **Branches:** incubation in **your fork** — any contributor's, maintainer's included, same rules (`layer/*`, `spike/*`, unbounded, no promises). Shipping from upstream `Vexa-ai/vexa` (`pack/*`, **WIP = 3**, `dev-init/scripts/wip-gate.sh`; visibility via `master/scripts/standup.sh`). Promotion gate, all green: isolation, standalone, harness runs (replay ≥1 fixture, or watch vs solo meeting for live-platform bricks).
 
 ## 6. Releases
