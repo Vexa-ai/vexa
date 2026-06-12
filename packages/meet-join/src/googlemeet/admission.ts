@@ -287,16 +287,14 @@ export async function waitForGoogleMeetingAdmission(
       const startTime = Date.now();
       let unknownStateDuration2 = 0;
       const effectiveTimeout2 = () => timeout + getEscalationExtensionMs();
-      let blockedEmitted = false;
       while (Date.now() - startTime < effectiveTimeout2()) {
-        // Bot-detection block: name the state instead of polling blind (#444).
-        // reCAPTCHA is detectable now (existing detector); the BLANK block page
-        // our 2026-06-12 run hit returns false here — its detector is built and
-        // validated against the hot debug container (make debug), then added below.
-        if (!blockedEmitted && await hasRecaptchaChallenge(page)) {
-          await callBlockedCallback(botConfig, "recaptcha");
-          blockedEmitted = true;
-        }
+        // #444 — the `blocked` state is wired (callBlockedCallback), but NOT emitted yet.
+        // hasRecaptchaChallenge() is too loose to drive it: Google Meet loads reCAPTCHA
+        // Enterprise INVISIBLY on every normal join (a background bot-scoring frame), so
+        // matching a "/recaptcha/" frame url false-fires on clean joins — verified live
+        // 2026-06-12 (humanized, residential): blocked->awaiting->admitted, no real challenge.
+        // The real block detector (VISIBLE challenge / blank block page) needs a run that
+        // actually reproduces a block (datacenter egress arm) to build without false positives.
 
         // Rejection check first
         const isRejected = await checkForGoogleRejection(page);
