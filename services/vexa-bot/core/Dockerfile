@@ -14,14 +14,21 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy package files and install dependencies with npm
-COPY package.json package-lock.json ./
+# Build context is the REPO ROOT (monorepo: the bot consumes the meet-join brick).
+# The brick lands where core's file:../../../packages/meet-join resolves from /app
+# (/app/../../.. normalizes to /).
+COPY packages/meet-join /packages/meet-join
+RUN cd /packages/meet-join && npm install --ignore-scripts && npm run build
+
+# Copy package manifest and install dependencies with npm
+# (no core package-lock.json exists on main; npm install, not ci)
+COPY services/vexa-bot/core/package.json ./
 
 RUN npm install
 # Install TypeScript globally to avoid permission issues
 RUN npm install -g typescript
 # Copy the rest of the application source code
-COPY . .
+COPY services/vexa-bot/core/ ./
 
 # Build the TypeScript code and browser utilities bundle
 RUN npm run build
@@ -70,7 +77,8 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tm
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws
 
-# Copy the built application and node_modules from the base stage
+# Copy the built application, node_modules, and the brick (symlink target)
+COPY --from=base /packages/meet-join /packages/meet-join
 COPY --from=base /app /app
 
 # Install MS Edge in runtime stage as well (skip on ARM64 - not supported)
@@ -87,7 +95,7 @@ RUN mkdir -p /root/ms-playwright && chmod -R 777 /root/ms-playwright
 RUN mkdir -p /app/storage/screenshots /app/storage/logs /app/storage/temp && chmod -R 777 /app/storage
 
 # Copy an entrypoint script that will start Xvfb and run our bot
-COPY entrypoint.sh /app/entrypoint.sh
+COPY services/vexa-bot/core/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Expose DISPLAY port for headful browser operations (adjust as needed)

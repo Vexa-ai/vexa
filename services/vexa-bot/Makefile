@@ -12,14 +12,14 @@ TEST := $(CURDIR)/../features/realtime-transcription/tests
 # Build image + create local dist/ (one-time setup)
 build:
 	@echo "Building Docker image..."
-	@docker build -t $(IMAGE_NAME) -f core/Dockerfile core
+	@docker build -t $(IMAGE_NAME) -f core/Dockerfile ../..
 	@echo "Creating local dist/ for hot-reload..."
-	@docker run --rm -v "$$(pwd)/core:/app" -w /app node:18 sh -c "npm install && npm run build"
+	@docker run --rm -v "$$(pwd)/../..:/repo" -w /repo/services/vexa-bot/core node:18 sh -c "npm install && npm run build"
 	@echo "✅ Ready! Run: make test MEETING_URL=..."
 
 # Rebuild dist/ when you edit code (fast, uses Docker)
 rebuild:
-	@docker run --rm -v "$$(pwd)/core:/app" -w /app node:18 sh -c "npm install && npm run build"
+	@docker run --rm -v "$$(pwd)/../..:/repo" -w /repo/services/vexa-bot/core node:18 sh -c "npm install && npm run build"
 	@echo "✅ dist/ rebuilt. Restart bot to pick up changes."
 
 # Usage: make test MEETING_URL='https://teams.live.com/meet/...'
