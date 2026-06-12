@@ -1,16 +1,27 @@
 /**
- * debug-join.ts — watch the isolated joining layer drive a real meeting.
+ * debug-join.ts — drives the joining layer inside the HOT DEBUG CONTAINER.
  *
- *   npx tsx scripts/debug-join.ts "https://meet.google.com/xxx-xxxx-xxx"
+ * Do not run on a host. The only supported invocation is:
  *
- * Linux (Docker/Xvfb): opens the noVNC view so a human sees it live.
- * macOS:               launches HEADED Chromium (real visible window).
- * Either way:          prints the CDP URL so an agent can connectOverCDP and
- *                      drive/inspect the SAME browser the human is watching.
+ *   make debug URL="https://meet.google.com/xxx-xxxx-xxx"
+ *
+ * which builds the self-contained image (Xvfb + humanized X11 + noVNC) and
+ * serves the live view at http://localhost:6080/vnc.html — the same
+ * environment every run, every machine: the watch harness is reproducible
+ * or it is not evidence.
+ * The CDP URL is printed so an agent can connectOverCDP and drive/inspect
+ * the SAME browser a human is watching.
  */
 import { chromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { joinMeeting, startDebugView } from "../src/index";
+
+
+if (process.platform !== "linux" || !process.env.DISPLAY) {
+  console.error("watch mode runs only in the debug container (reproducible env).");
+  console.error('Use: make debug URL="https://meet.google.com/xxx-xxxx-xxx"');
+  process.exit(1);
+}
 
 const url = process.argv[2];
 if (!url || !url.includes("meet.google.com")) {

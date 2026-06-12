@@ -2,6 +2,6 @@
 
 Joins a meeting as a participant and reports honest admission state. Platforms: Google Meet (msteams/zoom arrive by extraction).
 Contract: `src/_host.ts` — the only surface; the host (vexa-bot) supplies the browser context.
-Watch: `make debug-join URL=<meet-url>` (VNC lens, Mode A) · `make debug-join-docker` (Mode B, full container).
+Watch: `make debug URL=<meet-url>` — the hot debug container (Xvfb + humanized X11 + noVNC at `localhost:6080/vnc.html`). Container-only by design: the harness environment is reproducible or it is not evidence.
 Gates: `node scripts/check-isolation.js` + standalone `npm run build`.
 Status: promoted in MVP1 (#443); fixtures and oracle formalize with capture.v1 (MVP2).
