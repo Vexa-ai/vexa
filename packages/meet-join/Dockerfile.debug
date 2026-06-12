@@ -4,7 +4,10 @@
 # and exposes the live view over noVNC (port 6080).
 FROM mcr.microsoft.com/playwright:v1.56.0-jammy
 
-# OS tools: virtual display + VNC bridge + the humanized-input deps (xdotool/xclip)
+# OS tools: virtual display + VNC bridge + the humanized-input deps (xdotool/xclip).
+# noninteractive: novnc pulls tzdata, which otherwise blocks on an interactive
+# "Geographic area" prompt forever (this was the 16-min "stall").
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb x11vnc websockify novnc xdotool xclip \
     && rm -rf /var/lib/apt/lists/*
