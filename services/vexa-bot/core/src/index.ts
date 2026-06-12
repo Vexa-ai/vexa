@@ -35,7 +35,7 @@ import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken, 
 import { SileroVAD } from './services/vad';
 import { isHallucination } from './services/hallucination-filter';
 import { SpeakerStreamHandle } from './services/audio';
-import { RawCaptureService } from './services/raw-capture';
+import { RawCaptureService, uploadCaptureToS3 } from '@vexa/recorder';
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;

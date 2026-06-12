@@ -1,7 +1,14 @@
 /**
- * MIRROR of /contracts/capture/v1/schema.ts — that file is CANONICAL.
- * Kept in-tree until capture-kit/pipeline extract as bricks (MVP2), then
- * both import the contract package directly. Sync on contract change.
+ * capture.v1 — the capture→pipeline contract (CANONICAL).
+ *
+ * Output of capture-kit (browser per-speaker audio + meeting events),
+ * input to the pipeline bricks (speaker-streams → audio-pipelines → …).
+ * Today the seam is an in-process callback in vexa-bot; this names it.
+ *
+ * The recorder (P5) is a TEE on this contract: it forwards every message to
+ * the pipeline unchanged AND serializes a copy to a sink (training corpus /
+ * fixture). One format, three jobs (MANIFEST P4): wire format, recorder
+ * output, pipeline replay input.
  */
 
 /** One per-speaker audio chunk crossing the seam. */

@@ -14,8 +14,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { CaptureV1Sink, AudioChunk, MeetingEvent } from '../contracts/capture-v1';
-import { uploadCaptureToS3 } from '../s3-sync';
+import { CaptureV1Sink, AudioChunk, MeetingEvent } from './contracts/capture-v1';
+import { uploadCaptureToS3 } from './s3-upload';
 
 const SAMPLE_RATE = 16000;
 const CHANNELS = 1;

@@ -1,0 +1,15 @@
+{
+  "name": "@vexa/recorder",
+  "version": "0.1.0",
+  "description": "Recorder brick \u2014 tees capture.v1 to a sink (training corpus / fixture).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
