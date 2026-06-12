@@ -38,7 +38,7 @@ export function randomDelay(amount: number): number {
 // ── Hooks: the embedder's window into join-layer state ─────────────────
 export type JoinState =
   | "joining" | "awaiting_admission" | "admitted" | "rejected"
-  | "leaving" | "needs_human_help";
+  | "blocked" | "leaving" | "needs_human_help";
 
 export interface Hooks {
   onState: (state: JoinState, detail?: any) => void | Promise<void>;
@@ -62,6 +62,16 @@ export async function callAwaitingAdmissionCallback(_botConfig: BotConfig): Prom
 }
 export async function callLeaveCallback(_botConfig: BotConfig, ...rest: any[]): Promise<void> {
   await hooks.onState("leaving", rest?.[0]);
+}
+/**
+ * Bot-detection block (reCAPTCHA / blank block page). The join layer does NOT
+ * quit — a human via VNC or an agent via CDP may still solve it — but it MUST
+ * surface the state so the host stops waiting blind. Emitted once per block.
+ */
+export async function callBlockedCallback(
+  _botConfig: BotConfig, reason: string, detail?: any,
+): Promise<void> {
+  await hooks.onState("blocked", { reason, ...detail });
 }
 export async function callNeedsHumanHelpCallback(
   _botConfig: BotConfig, reason?: string, screenshotPath?: string,

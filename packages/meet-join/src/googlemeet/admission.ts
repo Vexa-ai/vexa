@@ -1,5 +1,5 @@
 import { Page } from "playwright";
-import { log, callAwaitingAdmissionCallback } from "../_host";
+import { log, callAwaitingAdmissionCallback, callBlockedCallback } from "../_host";
 import { BotConfig } from "../_host";
 import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
 import {
@@ -287,7 +287,17 @@ export async function waitForGoogleMeetingAdmission(
       const startTime = Date.now();
       let unknownStateDuration2 = 0;
       const effectiveTimeout2 = () => timeout + getEscalationExtensionMs();
+      let blockedEmitted = false;
       while (Date.now() - startTime < effectiveTimeout2()) {
+        // Bot-detection block: name the state instead of polling blind (#444).
+        // reCAPTCHA is detectable now (existing detector); the BLANK block page
+        // our 2026-06-12 run hit returns false here — its detector is built and
+        // validated against the hot debug container (make debug), then added below.
+        if (!blockedEmitted && await hasRecaptchaChallenge(page)) {
+          await callBlockedCallback(botConfig, "recaptcha");
+          blockedEmitted = true;
+        }
+
         // Rejection check first
         const isRejected = await checkForGoogleRejection(page);
         if (isRejected) {

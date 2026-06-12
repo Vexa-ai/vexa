@@ -15,8 +15,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # Bake the package's OWN deps (incl. tsx) — the reproducible environment.
 # src/ and scripts/ are a baseline here but are MOUNTED live by `make debug`,
 # so the running container executes host source via tsx — no rebuild on edit.
-COPY package.json tsconfig.json ./
-RUN npm install
+# The base image already ships the browsers at /ms-playwright — don't let
+# npm's postinstall re-download them (saved several minutes).
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+COPY package.json package-lock.json* tsconfig.json ./
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund
 COPY src ./src
 COPY scripts ./scripts
 
