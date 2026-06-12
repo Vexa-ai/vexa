@@ -25,6 +25,14 @@ interface TrackState {
   totalSamples: number;
 }
 
+export interface CaptureMeta {
+  platform?: string;
+  nativeMeetingId?: string | number;
+  language?: string | null;
+  task?: string | null;
+  botVersion?: string;
+}
+
 export class RawCaptureService {
   private outputDir: string;
   private audioDir: string;
@@ -33,8 +41,13 @@ export class RawCaptureService {
   private fileCounter = 0;
   private eventsLines: string[] = [];
   private finalized = false;
+  private meta: CaptureMeta;
+  private startedAt = new Date().toISOString();
+  private speakersSeen: Map<string, number> = new Map(); // name -> total samples
+  private connectionEvents = 0;
 
-  constructor(meetingId: string | number) {
+  constructor(meetingId: string | number, meta: CaptureMeta = {}) {
+    this.meta = meta;
     this.outputDir = `/tmp/raw-capture-${meetingId}`;
     this.audioDir = path.join(this.outputDir, 'audio');
     this.eventsPath = path.join(this.outputDir, 'events.txt');
@@ -53,6 +66,9 @@ export class RawCaptureService {
    */
   feedAudio(trackIndex: number, audioData: Float32Array, speakerName: string): void {
     if (this.finalized) return;
+    if (speakerName) {
+      this.speakersSeen.set(speakerName, (this.speakersSeen.get(speakerName) || 0) + audioData.length);
+    }
 
     let track = this.tracks.get(trackIndex);
 
@@ -115,11 +131,49 @@ export class RawCaptureService {
   }
 
   /**
+   * Log a connection-lifecycle event (ws connect/disconnect/reconnect, stt stalls).
+   * Part of the envelope spec: prime suspects in real-world silences.
+   */
+  logLifecycle(kind: string, detail?: string): void {
+    if (this.finalized) return;
+    this.connectionEvents++;
+    const line = `${new Date().toISOString()} [LIFECYCLE] ${kind}${detail ? ` ${detail}` : ''}`;
+    this.eventsLines.push(line);
+    this.appendEventsFile(line);
+  }
+
+  /**
    * Flush all tracks and write final events. Called at bot shutdown.
    */
   finalize(): string {
     if (this.finalized) return this.outputDir;
     this.finalized = true;
+
+    // meta.json — the selection index: query captures by platform / speakers / date
+    // without any database (S3 prefix partitioning + this file is the whole index).
+    try {
+      const speakers = Array.from(this.speakersSeen.entries()).map(([name, samples]) => ({
+        name, duration_s: Math.round((samples / SAMPLE_RATE) * 10) / 10,
+      }));
+      const metaOut = {
+        capture: "capture.v1/raw",
+        provenance: process.env.RAW_CAPTURE_PROVENANCE || "prod-full",
+        platform: this.meta.platform || null,
+        native_meeting_id: this.meta.nativeMeetingId ?? null,
+        language: this.meta.language ?? null,
+        task: this.meta.task ?? null,
+        bot_version: this.meta.botVersion || process.env.BOT_IMAGE_TAG || null,
+        topology: "per-participant",
+        sample_rate: SAMPLE_RATE,
+        started_at: this.startedAt,
+        ended_at: new Date().toISOString(),
+        num_speakers: speakers.length,
+        speakers,
+        connection_events: this.connectionEvents,
+        event_lines: this.eventsLines.length,
+      };
+      fs.writeFileSync(path.join(this.outputDir, 'meta.json'), JSON.stringify(metaOut, null, 2));
+    } catch { /* meta is best-effort; never block shutdown */ }
 
     // Flush all remaining tracks
     for (const trackIndex of this.tracks.keys()) {

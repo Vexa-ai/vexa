@@ -33,6 +33,7 @@ import { SileroVAD } from './services/vad';
 import { isHallucination } from './services/hallucination-filter';
 import { SpeakerStreamHandle } from './services/audio';
 import { RawCaptureService } from './services/raw-capture';
+import { uploadCaptureToS3 } from './s3-sync';
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
@@ -1296,7 +1297,13 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
     // Raw capture: dump per-speaker WAVs + events for offline replay
     if (process.env.RAW_CAPTURE === 'true') {
-      rawCaptureService = new RawCaptureService(meetingId);
+      rawCaptureService = new RawCaptureService(meetingId, {
+        platform: botConfig.platform,
+        nativeMeetingId: botConfig.nativeMeetingId,
+        language: botConfig.language,
+        task: botConfig.task,
+        botVersion: process.env.BOT_IMAGE_TAG,
+      });
       log(`[PerSpeaker] Raw capture enabled → ${rawCaptureService.outputPath}`);
     }
 
@@ -1761,6 +1768,8 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
   if (rawCaptureService) {
     const outputPath = rawCaptureService.finalize();
     log(`[PerSpeaker] Raw capture finalized → ${outputPath}`);
+    // Ship to the telemetry bucket under a partitioned prefix (no DB). Best-effort.
+    uploadCaptureToS3(outputPath, { platform: botConfig.platform, meetingId });
     rawCaptureService = null;
   }
 
