@@ -25,7 +25,9 @@ function readWavAsFloat32(p: string): Float32Array {
 
 (async () => {
   const audioDir = path.join(fixture, 'audio');
-  const wav = fs.readdirSync(audioDir).find(f => f.endsWith('.wav'))!;
+  // Pick the largest WAV (early stubs from pre-rename speakers can shadow the real track).
+  const wav = fs.readdirSync(audioDir).filter(f => f.endsWith('.wav'))
+    .sort((a, b) => fs.statSync(path.join(audioDir, b)).size - fs.statSync(path.join(audioDir, a)).size)[0]!;
   const speakerName = wav.replace(/^\d+-/, '').replace('.wav', '').replace(/-/g, ' ');
   const audio = readWavAsFloat32(path.join(audioDir, wav));
   console.log(`\n  REPLAY: ${wav}  (${(audio.length/SAMPLE_RATE).toFixed(1)}s, speaker="${speakerName}")`);
