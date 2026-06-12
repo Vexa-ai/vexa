@@ -6,14 +6,21 @@
 #   make debug-cloud URL="..." CLOUD_HOST=<host>                 # other egress IP
 #
 IMAGE := meet-join-debug
+ENV_IMAGE := vexa/meet-join-env:dev
 SRC_MOUNT := -v $(CURDIR)/src:/pkg/src -v $(CURDIR)/scripts:/pkg/scripts
 CLOUD_HOST ?= bbb
 BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 
-.PHONY: debug image debug-cloud check
+.PHONY: env debug image debug-cloud check
 
-# Build the environment image once (deps + tools). Re-run only when deps change.
-image:
+# The brick's runtime-shape SOURCE OF TRUTH (Playwright + humanized X11 stack).
+# Both this debug image and the vexa-bot service build FROM it.
+env:
+	docker build -f Dockerfile.env -t $(ENV_IMAGE) .
+
+# Build the debug image (inherits env). Builds env first if missing.
+image: 
+	@docker image inspect $(ENV_IMAGE) >/dev/null 2>&1 || $(MAKE) env
 	docker build -f Dockerfile.debug -t $(IMAGE) .
 
 # Hot watch: build image if missing, then run with LIVE host source mounted.

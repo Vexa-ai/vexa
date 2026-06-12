@@ -44,31 +44,32 @@ RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then
     fi
 
 # --- Runtime Stage ---
-FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS runtime
+# Runtime inherits the meet-join brick's runtime shape (its source of truth:
+# packages/meet-join/Dockerfile.env) — Playwright + the humanized-X11 stack
+# (xvfb·xdotool·xclip·x11vnc·novnc·websockify). The bot does NOT re-declare those
+# (MANIFEST P6: service env = union of bricks' shapes, depended-on not duplicated).
+# Build order: vexa/meet-join-env:dev must exist first (the deploy build builds
+# brick env bases before service images).
+FROM vexa/meet-join-env:dev AS runtime
 
 # Set working directory
 WORKDIR /app
 
-# Install runtime dependencies for Xvfb, VNC, SSH, and others
+# The bot's OWN extra runtime deps (NOT meet-join's): audio/recording (capture-kit
+# territory), display extras, SSH, AWS CLI prerequisites.
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    xvfb \
     ffmpeg \
     pulseaudio \
     xserver-xephyr \
     x11-utils \
     x11-xserver-utils \
     fluxbox \
-    x11vnc \
     socat \
     autocutsel \
-    xdotool \
-    xclip \
     openssh-server \
     sshpass \
     unzip \
     curl \
-    python3-websockify \
-    novnc \
     && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI for S3/MinIO sync (used by authenticated bot mode)
