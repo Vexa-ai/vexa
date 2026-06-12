@@ -199,14 +199,22 @@ Per-brick tags (`meet-join-v1.2.0`) cut on green gates, nothing re-verified. `re
 
 ## 7. Roadmap — MVP exit gates
 
+**The trim ratchet.** Every MVP exits only when its trim list is empty. Extraction without deletion at source is duplication, not modularization; stale = superseded by something this MVP shipped. Trims are ordinary `lane:internals` PRs riding the same pack.
+
 ![Six gated milestones from the map to the 0.11 release.](docs/0.11/04-roadmap.png)
 
-- [ ] **MVP0 — the map.** This MANIFEST + `contracts/` + `packages/` skeleton merged upstream; `gate:isolation` runs on PRs; milestone + labels exist. **Bootstrap rule:** MVP0 is the first change to ride the process it defines — filed as a ready issue (oracle: the gate job runs green), branched as `pack/*` under the WIP gate, laned `lane:contract` by its own path filter, reviewed at the human gate as schemas + goldens only. `stt.v1` ships with a real recorded golden, not a stub.
+- [ ] **MVP0 — the map.** This MANIFEST + `contracts/` + `packages/` skeleton merged upstream; `gate:isolation` runs on PRs; milestone + labels exist.
+  *Trim:* superseded architecture docs (`docs/architecture-proposed.md`, `docs/architecture-refactoring-plan.md`) archived in favor of the MANIFEST; Mintlify deploy branch repointed `pre-commit/v0.9` → `main` and the stale branch deleted. **Bootstrap rule:** MVP0 is the first change to ride the process it defines — filed as a ready issue (oracle: the gate job runs green), branched as `pack/*` under the WIP gate, laned `lane:contract` by its own path filter, reviewed at the human gate as schemas + goldens only. `stt.v1` ships with a real recorded golden, not a stub.
 - [ ] **MVP1 — presence proven.** `meet-join` promoted upstream; the bot assembly imports the brick (arrow points service → module, never back); `make watch` joins a live meeting; ≥5 qualifying `good-first-issue`s.
+  *Trim:* the in-bot join code (`platforms/{googlemeet,msteams,zoom}` join/admission paths) deleted at source — the move completes only on deletion; join-era fork branches (`stitch/gmeet-join-restore`, `pack/407*`, `release/meet-join-fix*`) closed and deleted.
 - [ ] **MVP2 — pipeline replayable.** `capture.v1` + `transcript.v1` formalized from the embryos (`ingest-server` frames, `raw-capture` dumps); pipeline bricks extracted with `production-replay` promoted to their `make replay` gate — attributed transcript reproduced in CI: no bot, no meeting, no GPU.
+  *Trim:* `raw-capture.ts` and the in-bot copies of extracted pipeline code deleted at source; bot/extension transcription-core duplication ends (single-sourced bricks only); tests3 registry checks covering pipeline behavior migrate into brick oracles and are deleted from `registry.yaml`.
 - [ ] **MVP3 — thin bot.** `acts.v1` and `lifecycle.v1` defined (the latter formalizing the Pack J / Pack D.2 outbox semantics); `vexa-bot` thinned to a manifest; `runtime-api` stays thin; zero module→service imports repo-wide; all three cars boot.
+  *Trim:* `vexa-bot/core/src/services/` (the name-colliding folder) emptied and removed; hand-rolled outbox/callback reliability code retired where `lifecycle.v1` semantics replace it; tests3 lifecycle/bot checks migrated and deleted.
 - [ ] **MVP4 — proprietary split.** `api.v1` + `webhook.v1` versioned and published; `meeting-api` thinned (infra bricks extracted); proprietary products build in private repos against published contracts with zero monorepo imports — we are the contracts' first hostile customer.
+  *Trim:* extracted infra code deleted from `meeting-api` at source; `libs/admin-models` absorbed into `meeting-store` and removed from `libs/`; any proprietary remnants deleted from the monorepo.
 - [ ] **MVP5 — 0.11 ships.** v0.11 tagged from a pin-set; one solo brick hotfix shipped through the flow; WIP gate in CI; first external PR merged through machine gates alone.
+  *Trim:* tests3 reduced to verbs + boot smoke (migrated checks gone from `registry.yaml`); `VERSION` retired in favor of `release.yaml`; the fork branch swamp (70+ pre-0.11 branches) archived or deleted — incubation starts clean; dead `release/*` and `codex/*` lines pruned.
 
 ## 8. Open decisions (resolve by end of MVP2)
 
