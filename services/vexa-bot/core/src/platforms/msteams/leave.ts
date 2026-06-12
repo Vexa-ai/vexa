@@ -3,7 +3,7 @@ import { log, callLeaveCallback } from "../../utils";
 import { logJSON } from "../../utils/log";
 import { BotConfig } from "../../types";
 import { teamsLeaveSelectors, teamsPrimaryHangupButtonSelector } from "./selectors";
-import { stopTeamsRecording } from "./recording";
+import { stopTeamsRecording } from './recording';
 
 // Prepare for recording by exposing necessary functions
 export async function prepareForRecording(page: Page, botConfig: BotConfig): Promise<void> {

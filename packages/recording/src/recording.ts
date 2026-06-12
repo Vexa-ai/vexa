@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { log } from '../utils';
-import { logJSON } from '../utils/log';
+import { log, logJSON } from './log';
+
 import http from 'http';
 import https from 'https';
 

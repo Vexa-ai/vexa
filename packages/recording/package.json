@@ -1,0 +1,8 @@
+{
+  "name": "@vexa/recording",
+  "version": "0.1.0",
+  "description": "Media-chunk delivery brick (recording.v1 bot side) — audio WAV + video x11grab capture, chunked HTTP upload.",
+  "main": "dist/index.js", "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc", "check:isolation": "node scripts/check-isolation.js" },
+  "devDependencies": { "typescript": "^5.4.0", "@types/node": "^20.0.0" }
+}

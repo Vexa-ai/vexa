@@ -13,7 +13,7 @@ import {
   startGoogleRemovalMonitor,
   setHooks,
 } from "@vexa/meet-join";
-import { startGoogleRecording } from "./recording";
+import { startGoogleRecording } from './recording';
 import { callStatusChangeCallback, MeetingStatus } from "../../services/unified-callback";
 import { callNeedsHumanHelpCallback } from "../../utils";
 

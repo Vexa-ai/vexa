@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import http from 'http';
 import https from 'https';
-import { log } from '../utils';
+import { log } from './log';
 
 /**
  * Hardware acceleration modes for video encoding.

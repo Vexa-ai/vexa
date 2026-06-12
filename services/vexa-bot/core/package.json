@@ -24,6 +24,7 @@
     "@vexa/capture-kit": "file:../../../packages/capture-kit",
     "@vexa/meet-join": "file:../../../packages/meet-join",
     "@vexa/recorder": "file:../../../packages/recorder",
+    "@vexa/recording": "file:../../../packages/recording",
     "@vexa/speaker-streams": "file:../../../packages/speaker-streams",
     "basic-ftp": "^5.3.1",
     "onnxruntime-node": "^1.24.3",

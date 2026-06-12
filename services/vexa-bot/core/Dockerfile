@@ -14,11 +14,18 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Build context is the REPO ROOT (monorepo: the bot consumes the meet-join brick).
-# The brick lands where core's file:../../../packages/meet-join resolves from /app
+# Build context is the REPO ROOT (monorepo: the bot consumes the bricks).
+# Bricks land where core's file:../../../packages/* resolve from /app
 # (/app/../../.. normalizes to /).
 COPY packages/meet-join /packages/meet-join
-RUN cd /packages/meet-join && npm install --ignore-scripts && npm run build
+COPY packages/capture-kit /packages/capture-kit
+COPY packages/recorder /packages/recorder
+COPY packages/speaker-streams /packages/speaker-streams
+COPY packages/audio-pipelines /packages/audio-pipelines
+COPY packages/recording /packages/recording
+RUN for b in meet-join capture-kit recorder speaker-streams audio-pipelines recording; do \
+      cd /packages/$b && npm install --ignore-scripts && npm run build || exit 1; \
+    done
 
 # Copy package manifest and install dependencies with npm
 # (no core package-lock.json exists on main; npm install, not ci)
@@ -79,7 +86,7 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tm
     && rm -rf /tmp/awscliv2.zip /tmp/aws
 
 # Copy the built application, node_modules, and the brick (symlink target)
-COPY --from=base /packages/meet-join /packages/meet-join
+COPY --from=base /packages /packages
 COPY --from=base /app /app
 
 # Install MS Edge in runtime stage as well (skip on ARM64 - not supported)

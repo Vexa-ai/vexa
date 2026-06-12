@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
-import { RecordingService } from "../../services/recording";
+import { RecordingService } from '@vexa/recording';
 import { getSegmentPublisher, disposeMixedChunkedPipeline } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import { MediaRecorderCapture, UnifiedRecordingPipeline } from '@vexa/audio-pipelines';

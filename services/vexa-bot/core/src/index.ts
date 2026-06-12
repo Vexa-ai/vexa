@@ -11,8 +11,8 @@ import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { getZoomSpeakerEvents } from "./platforms/zoom/strategies/recording";
 import { browserArgs, getBrowserArgs, getAuthenticatedBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
-import { RecordingService } from "./services/recording";
-import { VideoRecordingService } from "./services/video-recording";
+import { RecordingService , setLoggers as setRecordingLoggers } from '@vexa/recording';
+import { VideoRecordingService } from '@vexa/recording';
 import { TTSPlaybackService } from "./services/tts-playback";
 import { MicrophoneService } from "./services/microphone";
 import { MeetingChatService, ChatTranscriptConfig } from "./services/chat";
@@ -39,6 +39,7 @@ import { RawCaptureService, uploadCaptureToS3 } from '@vexa/recorder';
 import { setSessionStartProvider , setLoggers as setPipelineLoggers } from '@vexa/audio-pipelines';
 setPipelineLogger((m: string) => log(m));
 setPipelineLoggers({ log: (m: string) => log(m), logJSON });
+setRecordingLoggers({ log: (m: string) => log(m), logJSON });
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;

@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
-import { RecordingService } from '../../../services/recording';
+import { RecordingService } from '@vexa/recording';
 import { getRawCaptureService, getSegmentPublisher, feedMixedAudio, recordMixedHint, hasMixedChunkedPipeline, disposeMixedChunkedPipeline } from '../../../index';
 import { log } from '../../../utils';
 import { PulseAudioCapture, UnifiedRecordingPipeline } from '@vexa/audio-pipelines';
