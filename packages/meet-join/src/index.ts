@@ -15,7 +15,7 @@ import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 
 export type { BotConfig, Hooks, JoinState };
-export { startDebugView };
+export { startDebugView, setHooks };
 
 export interface JoinResult {
   admitted: boolean;
