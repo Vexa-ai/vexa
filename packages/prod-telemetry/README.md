@@ -4,6 +4,17 @@ The recorder primitive (MANIFEST P5) shipped to production. Captures real
 `capture.v1` traffic to S3 so any meeting can be replayed as if live, and runs
 a Deepgram single-shot pass for ground-truth benchmarking + analytics.
 
+## Two sinks, two governance rules
+
+- **Training/analytics corpus** — full content (audio + transcripts), private
+  access-controlled S3, governed by Vexa's ToS/privacy policy. **Always-on**
+  in prod (`TELEMETRY_FULL=on`). This is the data you fetch for training the
+  pipeline. `RAW_CAPTURE=true` is the per-meeting dev-debug alias of the same path.
+- **Fixtures** — captures *promoted* into shareable test artifacts (committed,
+  attached to issues). These travel, so they stay under MANIFEST §4 PII tiers:
+  `prod-envelope` (no-PII shape) freely; full content only `internal`/consented/
+  redacted. Promotion to a fixture is the gate, not collection.
+
 ## What it records (per meeting, S3 only — no DB)
 
 `RAW_CAPTURE=true` on the bot (`services/vexa-bot/core/src/services/raw-capture.ts`)

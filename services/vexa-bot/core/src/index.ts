@@ -1296,7 +1296,9 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     }
 
     // Raw capture: dump per-speaker WAVs + events for offline replay
-    if (process.env.RAW_CAPTURE === 'true') {
+    // Full telemetry for the TRAINING CORPUS (private S3, operator-governed by ToS):
+    // always-on in prod via TELEMETRY_FULL=on; RAW_CAPTURE=true is the dev debug alias.
+    if (process.env.TELEMETRY_FULL === 'on' || process.env.RAW_CAPTURE === 'true') {
       rawCaptureService = new RawCaptureService(meetingId, {
         platform: botConfig.platform,
         nativeMeetingId: botConfig.nativeMeetingId,
