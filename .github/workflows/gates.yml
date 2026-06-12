@@ -1,0 +1,29 @@
+name: gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate-isolation:
+    name: "gate:isolation"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run per-brick isolation checks
+        run: |
+          set -e
+          found=0
+          for f in packages/*/scripts/check-isolation*; do
+            [ -e "$f" ] || continue
+            found=1
+            echo "== $f"
+            case "$f" in
+              *.js)  node "$f" ;;
+              *.sh)  bash "$f" ;;
+              *)     "$f" ;;
+            esac
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "gate:isolation — no bricks with check-isolation yet (pre-MVP1); gate is armed and green."
+          fi
