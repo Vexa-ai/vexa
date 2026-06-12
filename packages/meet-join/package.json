@@ -1,10 +1,10 @@
 {
   "name": "@vexa/meet-join",
   "version": "0.1.0",
-  "description": "Isolated Google Meet joining layer — enter + observe, zero coupling to vexa-bot core.",
+  "description": "Isolated Google Meet joining layer \u2014 enter + observe, zero coupling to vexa-bot core.",
   "type": "commonjs",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
   "bin": {
     "meet-join": "dist/scripts/debug-join.js"
   },

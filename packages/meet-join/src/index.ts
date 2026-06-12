@@ -8,8 +8,8 @@
  */
 import type { Page } from "playwright";
 import { joinGoogleMeeting } from "./googlemeet/join";
-import { waitForGoogleMeetingAdmission } from "./googlemeet/admission";
-import { leaveGoogleMeet } from "./googlemeet/leave";
+import { waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent } from "./googlemeet/admission";
+import { prepareForRecording, leaveGoogleMeet } from "./googlemeet/leave";
 import { startGoogleRemovalMonitor } from "./googlemeet/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
@@ -62,4 +62,4 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
   return { admitted: !!admitted, state: admitted ? "admitted" : "awaiting_admission" };
 }
 
-export { joinGoogleMeeting, waitForGoogleMeetingAdmission, leaveGoogleMeet, startGoogleRemovalMonitor };
+export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };

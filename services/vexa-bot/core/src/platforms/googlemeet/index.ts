@@ -2,12 +2,17 @@ import { Page } from "playwright";
 import { BotConfig } from "../../types";
 import { runMeetingFlow, PlatformStrategies } from "../shared/meetingFlow";
 
-// Import modular functions
-import { joinGoogleMeeting } from "./join";
-import { waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent } from "./admission";
+// Join/admission/leave/removal: the meet-join brick (packages/meet-join).
+// The bot consumes the module through its public surface — MANIFEST one-way rule.
+import {
+  joinGoogleMeeting,
+  waitForGoogleMeetingAdmission,
+  checkForGoogleAdmissionSilent,
+  prepareForRecording,
+  leaveGoogleMeet,
+  startGoogleRemovalMonitor,
+} from "@vexa/meet-join";
 import { startGoogleRecording } from "./recording";
-import { prepareForRecording, leaveGoogleMeet } from "./leave";
-import { startGoogleRemovalMonitor } from "./removal";
 
 // --- Google Meet Main Handler ---
 
