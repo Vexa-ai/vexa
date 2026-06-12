@@ -1,16 +1,19 @@
-# capture.v1 — meeting capture stream (to formalize at MVP2)
+# capture.v1 — capture-kit → pipeline
 
-One format, three jobs: the bot/extension → pipeline wire format, the recorder's
-output, and the pipeline test input.
+Output of capture-kit, input to the pipeline bricks. The recorder (P5) is a
+**tee** on this seam: forward to pipeline unchanged + serialize a copy. One
+format, three jobs — wire format, recorder output, pipeline replay input.
 
-Shape (MANIFEST §2): `events.jsonl` (one timestamped JSON object per line —
-join/leave, active-speaker, captions, chat, admission state; capture-kit speaker
-hints ride here) + `audio/` chunks (PCM or Opus; start timestamp, duration,
-**channel id**) + `meta.json` declaring topology: `channels: per-participant`
-(identity free by channel) or `channels: mixed` (diarization required downstream).
+- **schema.ts** — the typed contract: `AudioChunk`, `MeetingEvent`, `CaptureMeta`,
+  the `CaptureV1Sink` port, and `tee()` (compose pipeline + recorder).
+- **example.capture.json** — golden: a short envelope (no audio bytes) showing
+  the event sequence + chunk descriptors.
 
-Embryos to formalize from (do not invent — recover):
-- `services/vexa-bot/core/src/ingest-server.ts` — documented WS frames:
-  `{type:'speakers',...}` text frame + `[Int32 speakerIndex][Float32 pcm]` binary.
-- `services/vexa-bot/core/src/services/raw-capture.ts` — per-speaker WAVs +
-  timestamped `events.txt` dumps (`RAW_CAPTURE=true`).
+Status: in-process code contract today (vexa-bot routes the per-speaker audio
+callback through `CaptureV1Sink`). Becomes the wire boundary when capture-kit
+and pipeline extract as bricks (MVP2). The `ingest-server` WS frames are the
+wire form of this same contract (the extension already speaks it).
+
+Fixture/corpus governance: §4 tiers. `prod-full` (consented) carries
+`text`/audio; `prod-envelope` (always-on, no PII) carries chunk descriptors +
+event occurrences only.

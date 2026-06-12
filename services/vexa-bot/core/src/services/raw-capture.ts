@@ -14,6 +14,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { CaptureV1Sink, AudioChunk, MeetingEvent } from '../contracts/capture-v1';
+import { uploadCaptureToS3 } from '../s3-sync';
 
 const SAMPLE_RATE = 16000;
 const CHANNELS = 1;
@@ -33,7 +35,12 @@ export interface CaptureMeta {
   botVersion?: string;
 }
 
-export class RawCaptureService {
+/**
+ * RecorderSink — the recorder (MANIFEST P5) as a CaptureV1Sink implementation.
+ * Tee'd onto the capture→pipeline seam: serializes capture.v1 to disk + S3.
+ * (Class name kept RawCaptureService for call-site stability; it IS the recorder.)
+ */
+export class RawCaptureService implements CaptureV1Sink {
   private outputDir: string;
   private audioDir: string;
   private eventsPath: string;
@@ -142,10 +149,47 @@ export class RawCaptureService {
     this.appendEventsFile(line);
   }
 
+  // ─── CaptureV1Sink (the contract port) ───────────────────────────────
+  /** contract: an audio chunk crossed the seam. */
+  audioChunk(c: AudioChunk): void {
+    this.feedAudio(c.speakerIndex, c.samples, c.speakerName || '');
+  }
+
+  /** contract: a meeting event crossed the seam. */
+  event(e: MeetingEvent): void {
+    if (this.finalized) return;
+    switch (e.kind) {
+      case 'speaker-joined':
+      case 'active-speaker':
+        if (e.speaker) this.logSpeakerEvent(null, e.speaker); break;
+      case 'segment':
+        if (e.speaker) this.logSegmentConfirmed(e.speaker, e.text || ''); break;
+      case 'lifecycle':
+        this.logLifecycle(String(e.detail?.what ?? 'event'), e.text); break;
+      case 'track-lock':
+        if (typeof e.detail?.trackIndex === 'number' && e.speaker)
+          this.logTrackLock(e.detail.trackIndex as number, e.speaker); break;
+    }
+  }
+
   /**
-   * Flush all tracks and write final events. Called at bot shutdown.
+   * Flush all tracks, write meta.json, ship to the training corpus (S3).
+   * The recorder owns its sink — the bot service does NOT (MANIFEST P5:
+   * recording is the recorder's job, not smeared into the assembly).
    */
-  finalize(): string {
+  async finalizeAndUpload(meetingId: string | number): Promise<string> {
+    const dir = this.flushToDisk();
+    uploadCaptureToS3(dir, { platform: this.meta.platform, meetingId });
+    return dir;
+  }
+
+  /** contract: finalize the recording (void). */
+  finalize(): void { this.flushToDisk(); }
+
+  /**
+   * Flush all tracks + write meta.json, return the output dir.
+   */
+  private flushToDisk(): string {
     if (this.finalized) return this.outputDir;
     this.finalized = true;
 
