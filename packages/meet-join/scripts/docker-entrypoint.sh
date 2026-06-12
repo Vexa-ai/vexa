@@ -10,6 +10,7 @@ set -e
 
 Xvfb :99 -screen 0 1920x1080x24 -ac +extension RANDR >/tmp/xvfb.log 2>&1 &
 export DISPLAY=:99
+export DEBUG_ADMISSION=1   # rich admission DOM dumps for oracle debugging
 ( command -v fluxbox >/dev/null && fluxbox >/tmp/fluxbox.log 2>&1 & ) || true
 
 for i in $(seq 1 20); do xdpyinfo -display :99 >/dev/null 2>&1 && break; sleep 0.25; done

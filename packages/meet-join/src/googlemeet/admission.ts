@@ -75,7 +75,55 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
 }
 
 // Helper function to check for any visible and enabled admission indicators
+/**
+ * Diagnostic: dump the exact DOM truth the admission oracle keys on, so a live
+ * run can be cross-checked against the host participant list (no false pos/neg).
+ * Gated on DEBUG_ADMISSION so it never runs in production.
+ */
+/**
+ * Count REAL participant tiles, excluding the self "Backgrounds and effects" panel.
+ *
+ * Google Meet gives the local effects/self-preview element a `data-participant-id`
+ * too (its label leads with the "visual_effects" icon ligature / "Backgrounds and
+ * effects"), so it is present in BOTH the lobby and the call. Raw `[data-participant-id]`
+ * count is therefore >=1 even in the lobby (verified live 2026-06-12 vs host ground
+ * truth) — making admission depend entirely on the waiting-room negative guard.
+ * A REAL participant tile (self once in-call, or any remote) has a human-name label.
+ * Presence of >=1 such tile is a POSITIVE admitted signal independent of that guard.
+ */
+const EFFECTS_TILE = /visual_effects|backgrounds and effects/i;
+export async function countRealParticipantTiles(page: Page): Promise<number> {
+  try {
+    const labels = await page.locator("[data-participant-id]").evaluateAll(
+      els => els.map(e => e.getAttribute("aria-label") || (e.textContent || "").trim()),
+    );
+    return labels.filter(l => l && !EFFECTS_TILE.test(l)).length;
+  } catch {
+    return 0;
+  }
+}
+
+export async function dumpAdmissionState(page: Page, tag: string): Promise<void> {
+  if (!process.env.DEBUG_ADMISSION) return;
+  try {
+    const url = page.url();
+    const wr = await checkForWaitingRoomIndicators(page).catch(() => null);
+    const pid = await page.locator("[data-participant-id]").evaluateAll(
+      els => els.map(e => ({ id: e.getAttribute("data-participant-id"), label: e.getAttribute("aria-label") || (e.textContent || "").trim().slice(0, 30) })),
+    ).catch(() => []);
+    const self = await page.locator("[data-self-name]").evaluateAll(
+      els => els.map(e => e.getAttribute("data-self-name") || ""),
+    ).catch(() => []);
+    const recaptchaFrames = page.frames().filter(f => (f.url() || "").includes("/recaptcha/")).length;
+    const realTiles = await countRealParticipantTiles(page);
+    log(`🔎 [ADMIT-DUMP ${tag}] url=${url} waitingRoom=${wr} realTiles=${realTiles} participantTiles=${pid.length} ${JSON.stringify(pid)} selfName=${self.length}${self.length ? " " + JSON.stringify(self) : ""} recaptchaFrames=${recaptchaFrames}`);
+  } catch (e: any) {
+    log(`🔎 [ADMIT-DUMP ${tag}] dump error: ${e?.message}`);
+  }
+}
+
 export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boolean> {
+  await dumpAdmissionState(page, "check");
   // 1. NEGATIVE GUARD: If any waiting room indicator is visible,
   // the bot is NOT admitted — lobby toolbar buttons are false positives.
   const inWaitingRoom = await checkForWaitingRoomIndicators(page);
@@ -112,6 +160,16 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
   for (const selector of googleInitialAdmissionIndicators) {
     try {
       if (presenceSelectors.has(selector)) {
+        // Real participant present (effects-panel phantom excluded) = positive admitted
+        // signal, not just "a tile exists". See countRealParticipantTiles.
+        if (selector === '[data-participant-id]') {
+          const real = await countRealParticipantTiles(page);
+          if (real > 0) {
+            log(`✅ Admitted: ${real} real participant tile(s) present (effects phantom excluded)`);
+            return true;
+          }
+          continue;
+        }
         const count = await page.locator(selector).count();
         if (count > 0) {
           log(`✅ Found Google Meet admission indicator (DOM presence, auto-hide-proof): ${selector}`);
