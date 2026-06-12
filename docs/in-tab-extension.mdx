@@ -1,0 +1,67 @@
+---
+title: "In-Tab Extension"
+---
+
+The **in-tab extension** transcribes a meeting you are **already in**, with no
+bot and no admission step. A Chrome extension captures audio inside your own
+already-joined Google Meet tab and streams it to the same transcription pipeline
+a bot would use.
+
+<Note>
+Experimental. Google Meet only. Per-element speaker separation with generic
+`Speaker N` labels for now.
+</Note>
+
+## Why there's no admission
+
+A normal Vexa [bot](bot-overview) joins a meeting as a **separate participant**:
+it launches a headless browser, navigates to the meeting, and then waits in the
+lobby to be **admitted** by a host — which is friction and a failure mode
+(`admission_timeout`, `admission_rejected_by_admin`).
+
+The extension runs inside **your** tab. You are a real, already-admitted
+participant, so the join and admission phases simply do not exist. Capture starts
+the moment you press **Start**.
+
+## Same pipeline as the bot
+
+The bot is two halves joined by one seam:
+
+- **Capture half** (browser) — per-speaker Web Audio streams off each
+  participant's media element → 16 kHz PCM.
+- **Pipeline half** (Node) — `SpeakerStreamManager` → transcription-service →
+  `SegmentPublisher` (Redis) → dashboard.
+
+The bot bridges them in-process via Playwright. The extension keeps both halves
+unchanged and replaces only that bridge with a **WebSocket**:
+
+```
+Your Meet tab (already admitted)
+  └─ extension content script  ── the bot's exact per-speaker capture loop
+       └─ WebSocket ──▶ ingest-server  ── the bot's Node pipeline, no Playwright
+                            └─ transcription-service → Redis → dashboard (live)
+```
+
+Transcripts land on the same `tc:meeting:{id}:mutable` Redis channel the
+dashboard already reads, so the live per-speaker view works with no extra UI —
+identical to a bot-driven meeting.
+
+## How to use
+
+1. Build and load the extension — see
+   [services/vexa-extension/README.md](https://github.com/Vexa-ai/vexa/tree/main/services/vexa-extension).
+2. Run the backend stack including the `ingest-server` service (host port 8092).
+3. In the popup, enter your Vexa API key and the ingest URL
+   (`ws://localhost:8092/ingest`).
+4. Join a Google Meet as yourself, then press **Start**.
+5. Open that meeting in the [dashboard](ui-dashboard) — the live transcript
+   appears as usual.
+
+## Limitations
+
+- **Google Meet only** today; Microsoft Teams and Zoom are follow-ups.
+- Speaker **names** are generic (`Speaker 1`, `Speaker 2`); the bot's
+  [speaker-identification](speaker-identification) vote/lock attribution is not
+  yet ported to the in-tab path.
+- One capture session per tab; closing the tab stops capture and flushes the
+  final buffer.

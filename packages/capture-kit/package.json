@@ -1,0 +1,12 @@
+{
+  "name": "@vexa/capture-kit",
+  "version": "0.1.0",
+  "description": "Isolated meeting-capture layer — emits capture.v1 (per-speaker audio + events).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "devDependencies": { "typescript": "^5.4.0" }
+}

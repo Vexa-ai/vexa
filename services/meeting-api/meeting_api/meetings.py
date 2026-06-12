@@ -712,6 +712,145 @@ async def _find_meeting_any_status(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+class ExtensionSessionRequest(BaseModel):
+    platform: Platform = Field(default=Platform.GOOGLE_MEET, description="Meeting platform")
+    native_meeting_id: str = Field(..., description="Platform-native meeting id (read from the tab URL)")
+
+
+class ExtensionSessionResponse(BaseModel):
+    meeting_id: int
+    token: str
+    platform: str
+    native_meeting_id: str
+
+
+@router.post(
+    "/extension/sessions",
+    response_model=ExtensionSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Get-or-create a meeting for an in-tab extension capture and mint a MeetingToken",
+    dependencies=[Depends(get_user_and_token)],
+)
+async def create_extension_session(
+    req: ExtensionSessionRequest,
+    request: Request,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """The extension captures audio inside the user's own already-joined meeting
+    tab — there is no bot and no admission. This binds that capture to a real
+    meeting row + MeetingToken so the existing transcription pipeline and
+    dashboard work unchanged. Idempotent: returns the active meeting if one
+    already exists for (user, platform, native_meeting_id)."""
+    _user_token, current_user = auth_data
+    platform = req.platform.value
+    native_meeting_id = req.native_meeting_id.strip()
+    if not native_meeting_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="native_meeting_id required")
+
+    existing_stmt = (
+        select(Meeting)
+        .where(
+            Meeting.user_id == current_user.id,
+            Meeting.platform == platform,
+            Meeting.platform_specific_id == native_meeting_id,
+            Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+        )
+        .order_by(desc(Meeting.created_at))
+        .limit(1)
+    )
+    meeting = (await db.execute(existing_stmt)).scalars().first()
+
+    if meeting is None:
+        meeting = Meeting(
+            user_id=current_user.id,
+            platform=platform,
+            platform_specific_id=native_meeting_id,
+            status=MeetingStatus.ACTIVE.value,
+            data={"transcribe_enabled": True, "source": "extension"},
+        )
+        db.add(meeting)
+        await db.commit()
+        await db.refresh(meeting)
+        try:
+            await publish_meeting_status_change(
+                meeting.id, MeetingStatus.ACTIVE.value, redis_client, platform, native_meeting_id, current_user.id
+            )
+        except Exception:
+            pass
+
+    try:
+        token = mint_meeting_token(meeting.id, current_user.id, platform, native_meeting_id, ttl_seconds=7200)
+    except Exception as e:
+        logger.error(f"Failed to mint MeetingToken for extension session (meeting {meeting.id}): {e}")
+        raise HTTPException(status_code=500, detail="Failed to mint meeting token")
+
+    return ExtensionSessionResponse(
+        meeting_id=meeting.id,
+        token=token,
+        platform=platform,
+        native_meeting_id=native_meeting_id,
+    )
+
+
+@router.post(
+    "/extension/sessions/end",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Finalize an extension capture meeting (transition to completed)",
+    dependencies=[Depends(get_user_and_token)],
+)
+async def end_extension_session(
+    req: ExtensionSessionRequest,
+    background_tasks: BackgroundTasks,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Called by the ingest server when an extension capture ends (after a
+    grace period with no reconnect). Extension meetings have no bot container,
+    so without this nothing ever transitions them out of 'active'."""
+    _user_token, current_user = auth_data
+    platform = req.platform.value
+    native_meeting_id = req.native_meeting_id.strip()
+
+    stmt = (
+        select(Meeting)
+        .where(
+            Meeting.user_id == current_user.id,
+            Meeting.platform == platform,
+            Meeting.platform_specific_id == native_meeting_id,
+            Meeting.status == MeetingStatus.ACTIVE.value,
+        )
+        .order_by(desc(Meeting.created_at))
+        .limit(1)
+    )
+    meeting = (await db.execute(stmt)).scalars().first()
+    if not meeting:
+        return {"message": "No active extension meeting to finalize"}
+    if not (isinstance(meeting.data, dict) and meeting.data.get("source") == "extension"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Meeting is not an extension capture")
+
+    old_status = meeting.status
+    success = await update_meeting_status(
+        meeting, MeetingStatus.COMPLETED, db,
+        completion_reason=MeetingCompletionReason.STOPPED,
+        transition_reason="extension_session_end",
+    )
+    if success:
+        try:
+            await publish_meeting_status_change(
+                meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform, native_meeting_id, current_user.id
+            )
+        except Exception:
+            pass
+        await schedule_status_webhook_task(
+            meeting=meeting, background_tasks=background_tasks,
+            old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+            reason="Extension capture ended", transition_source="extension_session_end",
+        )
+        background_tasks.add_task(run_all_tasks, meeting.id)
+    return {"message": "Meeting finalized", "meeting_id": meeting.id}
+
+
 @router.post(
     "/bots",
     response_model=MeetingResponse,
@@ -1649,10 +1788,23 @@ async def stop_bot(
             # silently classified as completed/stopped, exactly the
             # #255 silent class. Fix: route through _classify_stopped_exit
             # so every DELETE path produces the same data-driven verdict.
+            #
+            # Extension capture sessions (data.source == 'extension') have NO
+            # container BY DESIGN — Pack J's bot-shaped proof (reached_active
+            # markers set by bot callbacks) doesn't exist for them, so the
+            # classifier mislabeled healthy transcribed meetings as
+            # failed/stopped_before_admission (live finding 2026-06-10,
+            # meetings 10460/10461/10475...). A user DELETE of an extension
+            # meeting is an intentional stop → COMPLETED.
             from .callbacks import _classify_stopped_exit
-            target_status, classified_reason = await _classify_stopped_exit(
-                meeting, db, MeetingCompletionReason.STOPPED
-            )
+            if isinstance(meeting.data, dict) and meeting.data.get("source") == "extension":
+                target_status, classified_reason = (
+                    MeetingStatus.COMPLETED, MeetingCompletionReason.STOPPED
+                )
+            else:
+                target_status, classified_reason = await _classify_stopped_exit(
+                    meeting, db, MeetingCompletionReason.STOPPED
+                )
             old_status = meeting.status
             success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
             if success:

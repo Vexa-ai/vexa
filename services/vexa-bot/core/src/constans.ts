@@ -88,7 +88,16 @@ export const CDP_DEBUG_ARGS = [
 ];
 
 export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
-  return [...baseBrowserArgs, ...CDP_DEBUG_ARGS];
+  const args = [...baseBrowserArgs];
+  // Opt-in CDP exposure for the hot-debug loop. Inert unless BOT_DEBUG_CDP=true.
+  if (process.env.BOT_DEBUG_CDP === 'true') {
+    args.push(
+      '--remote-debugging-port=9222',
+      '--remote-debugging-address=0.0.0.0',
+      '--remote-allow-origins=*'
+    );
+  }
+  return args;
 }
 
 /**

@@ -42,6 +42,10 @@ interface SpeakerBuffer {
   lastAudioTimestamp: number;
   /** Whether we already submitted a final idle attempt */
   idleSubmitted: boolean;
+  /** Segmentation closed this buffer while a draft request was in flight:
+   *  that response's text covers the pre-trim window — discard it and
+   *  resubmit the owned (trimmed) audio as the final window. */
+  pendingFinal: boolean;
   /** Samples inherited from a previous speaker via carry-forward */
   carryForwardSamples: number;
   /** Generation counter — incremented on full reset to detect stale responses */
@@ -113,6 +117,7 @@ export class SpeakerStreamManager {
       sequenceNumber: 0,
       lastAudioTimestamp: now,
       idleSubmitted: false,
+      pendingFinal: false,
       carryForwardSamples: 0,
       generation: 0,
       lastConfirmedText: '',
@@ -124,16 +129,49 @@ export class SpeakerStreamManager {
     log(`[SpeakerStreams] Added speaker "${speakerName}" (${speakerId})`);
   }
 
-  feedAudio(speakerId: string, audioData: Float32Array): void {
+  /**
+   * @param atMs Optional wall-clock time the audio was actually SPOKEN
+   *             (turn start). Batch feeders (MixedAudioPipeline turns arrive
+   *             seconds after speech, all at once) pass it so published
+   *             segment times reflect speech time, not feed time. Live
+   *             streamers omit it (feed time ≈ speech time).
+   */
+  feedAudio(speakerId: string, audioData: Float32Array, atMs?: number): void {
     const buffer = this.buffers.get(speakerId);
     if (!buffer) return;
 
+    // Gap guard for batch feeders: turns of one speaker arrive separated by
+    // other speakers' turns. Concatenating non-contiguous audio into one
+    // buffer maps Whisper offsets onto a gapless timeline — the second turn's
+    // words get stamped near the first turn's end instead of when they were
+    // actually spoken, shuffling cross-speaker order. If the new audio is not
+    // contiguous with what's buffered (>2s gap), flush the buffer first so
+    // each contiguous stretch keeps a truthful time base.
+    if (atMs !== undefined && buffer.totalSamples > 0) {
+      const bufferedEndMs = buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000;
+      if (atMs - bufferedEndMs > 2000) {
+        // Detach the buffered stretch and finish it asynchronously on the
+        // snapshot, then reset the live buffer NOW — the new turn must never
+        // append to (or race with) the old stretch. fullReset() assigns fresh
+        // arrays, so the snapshot keeps the old chunks untouched.
+        const detached: SpeakerBuffer = { ...buffer };
+        this.fullReset(buffer);
+        if (detached.lastTranscript) {
+          this.emitSegment(detached, detached.lastTranscript);
+        } else if (detached.totalSamples - detached.confirmedSamples > 0 && !detached.inFlight) {
+          void this.submitBuffer(detached).then(() => {
+            if (detached.lastTranscript) this.emitSegment(detached, detached.lastTranscript);
+          }).catch(() => { /* transcription failed; stretch dropped */ });
+        }
+      }
+    }
+
     // Set window start on first audio after reset — this ensures the segment's
-    // start time reflects when audio actually arrived, not when the buffer was
-    // cleared. Critical for speaker-mapper: offset words use this as their base.
+    // start time reflects when the audio was actually spoken, not when the
+    // buffer was cleared. Critical for speaker-mapper and cross-speaker order.
     if (buffer.totalSamples === 0) {
-      buffer.windowStartMs = Date.now();
-      buffer.bufferStartMs = Date.now();
+      buffer.windowStartMs = atMs ?? Date.now();
+      buffer.bufferStartMs = atMs ?? Date.now();
     }
 
     buffer.chunks.push(audioData);
@@ -151,10 +189,15 @@ export class SpeakerStreamManager {
    *                   falls back to full-text confirmation using transcript param.
    * @param segmentEndSec - end time (seconds) of the last segment Whisper returned,
    *                        relative to the start of the submitted audio.
+   * @returns true if the result was accepted into the confirmation pipeline;
+   *          false if it was discarded (stale generation, or a deferred-close
+   *          finalization superseded it). Callers must NOT publish a pending
+   *          draft for a rejected result — its text describes audio this
+   *          buffer no longer owns.
    */
-  handleTranscriptionResult(speakerId: string, transcript: string, segmentEndSec?: number, segments?: WhisperSegment[]): void {
+  handleTranscriptionResult(speakerId: string, transcript: string, segmentEndSec?: number, segments?: WhisperSegment[]): boolean {
     const buffer = this.buffers.get(speakerId);
-    if (!buffer) return;
+    if (!buffer) return false;
 
     buffer.inFlight = false;
 
@@ -164,14 +207,29 @@ export class SpeakerStreamManager {
     // from a previous segment.
     const submitGen = this.submitGeneration.get(speakerId);
     if (submitGen !== undefined && submitGen < buffer.generation) {
-      return;
+      return false;
+    }
+
+    // Segmentation closed this buffer while this request was in flight: the
+    // text covers the pre-trim window (may include the next segment's audio).
+    // Discard it and submit the owned audio as the final window.
+    if (buffer.pendingFinal) {
+      buffer.pendingFinal = false;
+      if (this.unconfirmedSamples(buffer) === 0) {
+        this.fullReset(buffer);
+        return false;
+      }
+      buffer.idleSubmitted = true;
+      log(`[SpeakerStreams] Final resubmit for "${buffer.speakerName}" after deferred close (${(this.unconfirmedSamples(buffer) / this.sampleRate).toFixed(1)}s audio)`);
+      void this.submitBuffer(buffer);
+      return false;
     }
 
     if (!transcript || transcript.trim().length === 0) {
       if (buffer.idleSubmitted) {
         this.fullReset(buffer);
       }
-      return;
+      return false;
     }
 
     const trimmed = transcript.trim();
@@ -182,14 +240,14 @@ export class SpeakerStreamManager {
       if (buffer.idleSubmitted) {
         this.fullReset(buffer);
       }
-      return;
+      return false;
     }
 
     // Idle/flush submit — emit immediately, this is the last chance
     if (buffer.idleSubmitted) {
       this.emitSegment(buffer, trimmed);
       this.fullReset(buffer);
-      return;
+      return true;
     }
 
     // Word-level prefix confirmation (LocalAgreement-2, UFAL whisper_streaming).
@@ -252,7 +310,7 @@ export class SpeakerStreamManager {
           const lastConfirmedSeg = segments[confirmedSegCount - 1];
           this.advanceOffset(buffer, lastConfirmedSeg.end);
           buffer.windowStartMs = baseWindowMs + Math.floor(lastConfirmedSeg.end * 1000);
-          return;
+          return true;
         }
       }
 
@@ -273,6 +331,7 @@ export class SpeakerStreamManager {
       this.emitSegment(buffer, trimmed);
       this.advanceOffset(buffer, segmentEndSec);
     }
+    return true;
   }
 
   removeSpeaker(speakerId: string): void {
@@ -334,10 +393,20 @@ export class SpeakerStreamManager {
    */
   /**
    * @param force - if true, flush regardless of minAudioDuration (end-of-stream)
+   * @param trimAtMs - segmentation boundary (audio-time ms): audio after this
+   *                   belongs to the NEXT segment buffer (the pipeline re-feeds
+   *                   it there) — drop it here so the same frames are never
+   *                   transcribed under both segments.
    */
-  async flushSpeaker(speakerId: string, force: boolean = false): Promise<void> {
+  async flushSpeaker(speakerId: string, force: boolean = false, trimAtMs?: number): Promise<void> {
     const buffer = this.buffers.get(speakerId);
     if (!buffer) return;
+
+    if (trimAtMs !== undefined) this.trimTailAfter(buffer, trimAtMs);
+    if (buffer.totalSamples === 0) {
+      this.fullReset(buffer);
+      return;
+    }
 
     const unconfirmedSec = this.unconfirmedSamples(buffer) / this.sampleRate;
 
@@ -354,7 +423,16 @@ export class SpeakerStreamManager {
     }
 
     // Have audio but no transcript — final Whisper submit
-    if (this.unconfirmedSamples(buffer) > 0 && !buffer.inFlight) {
+    if (this.unconfirmedSamples(buffer) > 0) {
+      if (buffer.inFlight) {
+        // A draft request is in flight for the PRE-TRIM window. Discarding
+        // the buffer here loses the whole segment's audio (multi-second
+        // transcript holes). Instead: when the response lands, its text is
+        // discarded and the owned audio resubmitted as the final window.
+        buffer.pendingFinal = true;
+        log(`[SpeakerStreams] Close while in-flight for "${buffer.speakerName}" — finalize deferred to response (${unconfirmedSec.toFixed(1)}s audio held)`);
+        return;
+      }
       buffer.idleSubmitted = true;
       log(`[SpeakerStreams] Flush-submit for "${buffer.speakerName}" (${unconfirmedSec.toFixed(1)}s audio, no transcript yet)`);
       await this.submitBuffer(buffer);
@@ -468,7 +546,12 @@ export class SpeakerStreamManager {
       log(`[SpeakerStreams] Dedup skip for "${buffer.speakerName}": "${text.substring(0, 50)}" (same as last confirmed)`);
       return;
     }
-    const endMs = Date.now();
+    // Audio-time end via the buffer's gapless timeline — NOT Date.now(),
+    // which is submit/commit ARRIVAL time and overstates the span by the
+    // whole commit lag (segments then visually overlap their successors).
+    const endMs = buffer.totalSamples > 0
+      ? buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000
+      : Date.now();
     const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
     this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, buffer.windowStartMs, endMs, segmentId);
     buffer.sequenceNumber++;
@@ -508,6 +591,44 @@ export class SpeakerStreamManager {
     buffer.windowStartMs = Date.now();
 
     log(`[SpeakerStreams] Offset advanced for "${buffer.speakerName}" (confirmed=${buffer.confirmedSamples}, total=${buffer.totalSamples}, trimmed to ${buffer.chunks.length} chunks)`);
+  }
+
+  /**
+   * Drop buffered audio AFTER an audio-time boundary (segmentation close).
+   * The buffer's gapless timeline maps samples to windowStartMs + offset, so
+   * everything past `tMs` is excess that streamed in during commit lag. Any
+   * draft transcript described the untrimmed audio, so it is invalidated —
+   * the flush that follows re-submits only the owned window.
+   */
+  private trimTailAfter(buffer: SpeakerBuffer, tMs: number): void {
+    if (buffer.totalSamples === 0) return;
+    const keep = Math.floor(((tMs - buffer.windowStartMs) / 1000) * this.sampleRate);
+    if (keep >= buffer.totalSamples) return;
+    if (keep <= 0) {
+      // Boundary predates this window (offset drift or stale commit) — an
+      // over-trim would discard real speech; keeping it only risks one
+      // duplicated segment. Keep.
+      log(`[SpeakerStreams] trimTailAfter skipped for "${buffer.speakerName}": boundary ${tMs} <= windowStart ${buffer.windowStartMs}`);
+      return;
+    }
+    let excess = buffer.totalSamples - keep;
+    const droppedSec = excess / this.sampleRate;
+    while (excess > 0 && buffer.chunks.length > 0) {
+      const last = buffer.chunks[buffer.chunks.length - 1];
+      if (last.length <= excess) {
+        excess -= last.length;
+        buffer.chunks.pop();
+      } else {
+        buffer.chunks[buffer.chunks.length - 1] = last.subarray(0, last.length - excess);
+        excess = 0;
+      }
+    }
+    buffer.totalSamples = keep;
+    if (buffer.confirmedSamples > keep) buffer.confirmedSamples = keep;
+    buffer.lastTranscript = '';
+    buffer.confirmCount = 0;
+    buffer.lastWords = [];
+    log(`[SpeakerStreams] Boundary trim for "${buffer.speakerName}": dropped ${droppedSec.toFixed(2)}s past segmentation boundary`);
   }
 
   /**
@@ -554,6 +675,7 @@ export class SpeakerStreamManager {
     buffer.bufferStartMs = Date.now();
     buffer.lastAudioTimestamp = Date.now();
     buffer.idleSubmitted = false;
+    buffer.pendingFinal = false;
     buffer.carryForwardSamples = 0;
     buffer.generation++;
   }

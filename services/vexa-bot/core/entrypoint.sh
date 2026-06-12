@@ -8,9 +8,13 @@ fi
 # Start a virtual framebuffer in the background
 Xvfb :99 -screen 0 1920x1080x24 &
 
-# Set up PulseAudio for Zoom SDK audio capture
+# Set up PulseAudio for Zoom SDK audio capture.
+# --exit-idle-time=-1 : NEVER exit on idle. Without it PulseAudio quits after its
+# default ~20s idle timeout — fatal for any bot that waits in a lobby / waiting room
+# / captcha before audio capture starts: by admission time the daemon is gone and
+# parecord fails "Connection refused", so the bot captures nothing (whisper=0, 0 segments).
 echo "[Entrypoint] Starting PulseAudio daemon..."
-pulseaudio --start --log-target=syslog 2>/dev/null || true
+pulseaudio --start --exit-idle-time=-1 --log-target=syslog 2>/dev/null || true
 sleep 1
 
 # Create a null sink for Zoom SDK audio output

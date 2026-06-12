@@ -1,0 +1,32 @@
+# ◆P8 gate — eyeball + live/human test. The release does NOT ship until this is filled + signed.
+# Per pipeline-status-model.md ◆P8. Filling `approved:true` here flips the `blessed` carrier and
+# authorises pipeline:3-release ‖ 4-deliver. HUMAN-ONLY (the agent never sets approved).
+release_id: 260604-meet-join-fix
+artifact: vexaai/vexa-bot:meet-join-fix-dev        # the exact bytes under test (build-once)
+
+# ── The live test a HUMAN must run (the `live` rung — machines can't drive a real Meet) ──
+# #407 marks this REQUIRED: the cause is external (Google-side), so synthetic/compose cannot prove it.
+live_test:
+  required: true
+  steps:
+    - "Run the artifact as the bot image (BROWSER_IMAGE=vexaai/vexa-bot:meet-join-fix-dev) in a dispatch env."
+    - "407-A: create a REAL Google Meet → dispatch a bot → confirm it JOINS + transcribes on the first attempt."
+    - "407-A localized: set the Meet account UI to Hungarian (hl=hu) → dispatch → confirm it still finds the join control + joins."
+    - "407-B: confirm a normal join is not aborted by a transient meeting-api blip (no spurious 'rejected after N')."
+    - "407-C: dispatch one bot with a bad config → confirm meeting-api RECORDS the failure (not a silent zero-log crash)."
+  confirm:                                # human fills pass/fail
+    gmeet_join_first_attempt: null
+    gmeet_join_non_english_ui: null
+    callback_resilient_no_spurious_abort: null
+    startup_failure_recorded_not_silent: null
+    evidence_link: null                  # screenshot · meeting_id · transcript
+
+# ── Eyeball: the human's review of stitch's verdict ──
+eyeball:
+  full_corpus_3modes_green: null         # P7: compose ✓ ; clean-room (throwaway VMs + helm staging) PENDING
+  notes: null
+
+# ── Sign (HUMAN-ONLY) — flips `blessed`, authorises release ‖ deliver ──
+approved: false
+approver: null                           # e.g. dmitry@vexa.ai
+approved_at: null

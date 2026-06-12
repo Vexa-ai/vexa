@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "noEmitOnError": false
+  },
+  "include": ["src/ingest-server.ts"]
+}

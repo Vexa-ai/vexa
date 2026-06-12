@@ -55,7 +55,7 @@
           },
           {
             "group": "Concepts",
-            "pages": ["concepts", "bot-overview", "meeting-ids", "errors-and-retries", "speaker-identification", "transcription-quality"]
+            "pages": ["concepts", "bot-overview", "in-tab-extension", "meeting-ids", "errors-and-retries", "speaker-identification", "transcription-quality"]
           },
           {
             "group": "Platforms",

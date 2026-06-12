@@ -303,6 +303,42 @@ services:
       - vexa
     restart: unless-stopped
 
+  # ingest-server: in-tab extension capture → reused bot pipeline → Redis.
+  # The Chrome extension (running in the user's own meeting tab) streams
+  # per-speaker audio here over a WebSocket; this runs the SAME
+  # SpeakerStreamManager → TranscriptionClient → SegmentPublisher pipeline as
+  # the bot, minus Playwright/join/admission. Host-published so the browser can
+  # reach it. Port 8092 on host (runtime-api already owns 8090).
+  ingest-server:
+    build:
+      context: ../../services/vexa-bot/core
+      dockerfile: Dockerfile.ingest
+    image: vexaai/ingest-server:${IMAGE_TAG}
+    mem_limit: 512m
+    ports:
+      - "${INGEST_HOST_PORT:-8092}:8090"
+    environment:
+      - INGEST_PORT=8090
+      - REDIS_URL=redis://redis:6379/0
+      # Route session creation through the gateway so the extension's API key
+      # resolves to a real user (the gateway injects X-User-ID). Falls back to
+      # meeting-api direct (dev user) when unset.
+      - MEETING_API_URL=${INGEST_MEETING_API_URL:-http://meeting-api:8080}
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - MIN_SILENCE_DURATION_MS=${MIN_SILENCE_DURATION_MS:-100}
+      # Grace before an ended capture transitions the meeting active→completed
+      # (pause/reload reconnects within this window keep the meeting alive).
+      - INGEST_FINALIZE_GRACE_MS=${INGEST_FINALIZE_GRACE_MS:-60000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    init: true
+    depends_on:
+      - redis
+      - meeting-api
+    networks:
+      - vexa
+    restart: unless-stopped
+
   # --- Optional services ---
 
   # telegram-bot: NO-SHIP for 0.10 — not included in release

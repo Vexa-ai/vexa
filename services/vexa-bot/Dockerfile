@@ -54,6 +54,10 @@ COPY core/build-browser-utils.js ./core/
 WORKDIR /app/vexa-bot/core
 RUN npm install
 RUN npm install -g typescript
+# Pre-bake diarization ONNX models (~32 MB) into the transformers.js cache in
+# node_modules — flows to the runtime stage with the node_modules COPY.
+COPY core/scripts/bake-diarization-models.js ./scripts/
+RUN node scripts/bake-diarization-models.js
 
 # Copy TypeScript source and assets (default avatar logo)
 COPY core/src/ ./src/
@@ -138,6 +142,9 @@ RUN chmod +x /app/vexa-bot/entrypoint.sh
 
 # Set environment
 ENV DISPLAY=:99
+# Hot-debug build: expose Chromium CDP (opt-in flag, see core/src/constans.ts) so a
+# human can drive the bot in via CDP. Harmless on prod images that don't set it.
+ENV BOT_DEBUG_CDP=true
 
 # Expose noVNC web interface and SSH for browser session mode
 EXPOSE 6080 22

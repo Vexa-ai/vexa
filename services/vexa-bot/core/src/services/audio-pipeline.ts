@@ -407,6 +407,9 @@ export class PulseAudioCapture extends EventEmitter implements AudioCaptureSourc
           this.emit("started");
           resolve();
         }
+        // Live tee for the transcription pipeline (MixedAudioPipeline):
+        // raw s16le PCM as it arrives, independent of the 15s upload slicing.
+        this.emit("pcm", buf);
         this._appendAndSlice(buf);
       });
 

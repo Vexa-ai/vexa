@@ -1,3 +1,12 @@
+// Speaker-detection selectors are OWNED by the shared browser module
+// (one source for bot AND extension — see browser/msteams-speakers.ts).
+export {
+  teamsParticipantSelectors,
+  teamsNameSelectors,
+  teamsParticipantIdSelectors,
+  teamsMeetingContainerSelectors,
+} from '@vexa/capture-kit';
+
 // Centralized MS Teams selectors and indicators
 // Keep this file free of runtime logic; export constants only.
 
@@ -114,20 +123,6 @@ export const teamsAdmissionIndicators: string[] = [
 ];
 
 // Participant-related selectors and class names for speaker detection
-export const teamsParticipantSelectors: string[] = [
-  '[data-tid*="participant"]',
-  '[aria-label*="participant"]',
-  '[data-tid*="roster"]',
-  '[data-tid*="roster-item"]',
-  '[data-tid*="video-tile"]',
-  '[data-tid*="videoTile"]',
-  '[data-tid*="participant-tile"]',
-  '[data-tid*="participantTile"]',
-  '[role="listitem"]',
-  '.participant-tile',
-  '.video-tile',
-  '.roster-item'
-];
 
 export const teamsSpeakingClassNames: string[] = [
   'speaking', 'active-speaker', 'speaker-active', 'speaking-indicator',
@@ -190,23 +185,6 @@ export const teamsSecondaryLeaveButtonSelectors: string[] = [
 ];
 
 // Teams name selectors for participant identification
-export const teamsNameSelectors: string[] = [
-  // Look for the actual name div structure
-  'div[class*="___2u340f0"]', // The actual name div class pattern
-  '[data-tid*="display-name"]',
-  '[data-tid*="participant-name"]',
-  '[data-tid*="user-name"]',
-  '[aria-label*="name"]',
-  '.participant-name',
-  '.display-name',
-  '.user-name',
-  '.roster-item-name',
-  '.video-tile-name',
-  'span[title]',
-  '[title*="name"]',
-  '.ms-Persona-primaryText',
-  '.ms-Persona-secondaryText'
-];
 
 // Teams speaking indicators (primary voice level detection)
 export const teamsSpeakingIndicators: string[] = [
@@ -353,10 +331,6 @@ export const teamsNameInputSelectors: string[] = [
 ];
 
 // Teams meeting container selectors
-export const teamsMeetingContainerSelectors: string[] = [
-  '[role="main"]',
-  'body'
-];
 
 // Teams voice level detection selectors
 export const teamsVoiceLevelSelectors: string[] = [
@@ -381,11 +355,6 @@ export const teamsAudioActivitySelectors: string[] = [
 ];
 
 // Teams participant ID selectors
-export const teamsParticipantIdSelectors: string[] = [
-  '[data-tid]',
-  '[data-participant-id]',
-  '[data-user-id]'
-];
 
 // Teams live captions selectors.
 //
