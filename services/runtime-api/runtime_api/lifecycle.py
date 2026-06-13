@@ -180,11 +180,14 @@ async def handle_container_exit(redis, name: str, exit_code: int) -> None:
     """Called when a container exits (from event listener or reaper).
 
     Updates state and delivers the exit callback.
+    Preserves failed containers for debugging.
     """
     status = "stopped" if exit_code == 0 else "failed"
     logger.info(f"Container {name} exited with code {exit_code} -> {status}")
     await state.set_stopped(redis, name, status=status, exit_code=exit_code)
     await _fire_exit_callback(redis, name, exit_code=exit_code)
+    # PRESERVE failed containers for debugging; do not remove here.
+    # Inspect with: docker logs <name>
 
 
 async def _fire_exit_callback(redis, name: str, exit_code: int = 0) -> None:
