@@ -21,6 +21,7 @@
 import * as http from 'node:http';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as fs from 'node:fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ChunkedTranscriber, SpeakerStreamManager, TranscriptionClient, ClusterNameBinder, type ChunkSegment, type HintKind } from '../src/index';
 import { decodeAudioFrame, decodeEvent } from '../../../contracts/capture/v1/schema';
@@ -322,6 +323,10 @@ ingest.on('connection', async (ws, req) => {
       }
       rec.rawEvent(b);                                    // tee events (chat + hints)
       const ev = decodeEvent(b.toString('utf8'));
+      if ((ev?.kind as string) === 'dom-probe') {  // opt-in DIAGNOSTIC: dump audio↔tile co-location (VEXA_DOM_PROBE=path)
+        if (process.env.VEXA_DOM_PROBE) { try { fs.appendFileSync(process.env.VEXA_DOM_PROBE, JSON.stringify({ t: ev.ts, ...(ev.detail as any)?.probe }) + '\n'); } catch { /* */ } }
+        return;
+      }
       // active-speaker = the ONLY naming signal. Feed BOTH binders: tc names the
       // mixed 999 clusters, channelBinder names the multistream channels. Only the
       // active platform's path has commits to resolve, so the cross-feed is inert.

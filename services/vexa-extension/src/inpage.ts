@@ -300,6 +300,17 @@ import {
     };
   }
   const diagTimer = setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
+  // DIAGNOSTIC PROBE (opt-in: localStorage.vexaDomProbe='1'): dump the live
+  // audio↔tile co-location to confirm whether captured <audio> elements sit inside
+  // the named/glowing tiles (direct map) or a separate pool (timing required).
+  // Off by default — zero overhead in normal capture. Routed to the desktop.
+  const probeTimer = setInterval(() => {
+    try {
+      if (!localStorage.getItem('vexaDomProbe')) return;
+      const gs = (window as any).__vexaGmeetSpeakers;
+      if (gs && isCurrent()) post('dom_probe', { probe: gs.probeDom() });
+    } catch { /* */ }
+  }, 3000);
 
   // Attribution runs from page load (not capture start): diagnostics see the
   // DOM state immediately, and Zoom's temporal naming is live before/without
@@ -310,6 +321,7 @@ import {
   (window as any).__vexaInpageTeardown = () => {
     try { stop(); } catch { /* not running */ }
     if (diagTimer !== null) { clearInterval(diagTimer); }
+    clearInterval(probeTimer);
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }

@@ -12,6 +12,7 @@
  */
 
 import { detectMeeting, detectMediaTab, MeetingRef } from './meeting';
+import { encodeAudioFrame, encodeEvent } from '../../../contracts/capture/v1/schema';
 
 interface SessionState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
@@ -274,11 +275,8 @@ function sendAudio(index: number, pcm: number[]): void {
   t.frames++; t.lastAt = Date.now();
   trackFrames.set(index, t);
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const samples = Float32Array.from(pcm);
-  const buf = new ArrayBuffer(4 + samples.byteLength);
-  new DataView(buf).setInt32(0, index, true);
-  new Float32Array(buf, 4).set(samples);
-  ws.send(buf);
+  // capture.v1 wire codec — capture-time stamped HERE (pre-network), never at receipt.
+  ws.send(encodeAudioFrame(index, Date.now(), Float32Array.from(pcm)));
 }
 
 // ── Telemetry: merged extension state → ingest server /telemetry ──────────
@@ -361,17 +359,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendAudio(msg.index, msg.pcm); break;
     case 'speakers':
       Object.assign(lastSpeakerMap, msg.speakers || {});
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'speakers', speakers: msg.speakers }));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const ts = Date.now(); // capture.v1: index→name map → speaker-joined events
+        for (const [idx, name] of Object.entries(msg.speakers || {}))
+          if (name) ws.send(encodeEvent({ kind: 'speaker-joined', ts, speaker: String(name), detail: { index: Number(idx) } }));
+      }
       break;
     case 'diag':
       if (msg.diag) pageDiags[`${msg.diag.top ? 'top' : 'sub'}:${msg.diag.frame || '?'}`] = msg.diag;
+      break;
+    case 'dom_probe':
+      // RESEARCH: route the audio↔tile co-location probe to the desktop for logging.
+      if (msg.probe && ws && ws.readyState === WebSocket.OPEN) ws.send(encodeEvent({ kind: 'dom-probe', ts: Date.now(), speaker: '', detail: { probe: msg.probe } } as any));
       break;
     case 'speaker_activity':
       // Timestamped DOM hint for the server-side cluster↔name binder.
       // Dropped while paused — hints must not describe un-shipped audio.
       if (state.paused) break;
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'speaker_activity', name: msg.name, kind: msg.kind || 'dom-active', isEnd: !!msg.isEnd, tMs: Date.now() }));
+        ws.send(encodeEvent({ kind: 'active-speaker', ts: Date.now(), speaker: msg.name || '', detail: { hint: msg.kind || 'dom-active', isEnd: !!msg.isEnd } }));
+      }
+      break;
+    case 'chat-message':
+      // capture.v1 `chat` event — sender + text from the meeting chat panel.
+      if (ws && ws.readyState === WebSocket.OPEN && (msg.text || msg.sender)) {
+        ws.send(encodeEvent({ kind: 'chat', ts: Date.now(), speaker: String(msg.sender || ''), text: String(msg.text || ''), detail: { source: 'zoom-chat' } }));
       }
       break;
     case 'capture-started':

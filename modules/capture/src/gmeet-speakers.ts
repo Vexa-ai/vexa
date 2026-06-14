@@ -66,10 +66,15 @@ export interface GmeetSpeakers {
  *  needs a SEMANTIC (aria/role) speaking signal instead of obfuscated classes. */
 export interface GmeetDomProbe {
   audioCount: number;
-  /** Per audio element: does it (or an ancestor) carry a participant id? */
-  audio: { hasStream: boolean; trackId: string | null; participantId: string | null }[];
+  /** Per media element carrying audio: the co-location test — does it sit inside a
+   *  tile that carries a participant id + name, and is that tile currently glowing
+   *  (speaking)? If participantId/tileName are populated AND `speaking` tracks who
+   *  is actually talking, audio→name is a DIRECT structural read (no timing). */
+  audio: { tag: string; hasAudioTrack: boolean; trackId: string | null; participantId: string | null; tileName: string | null; speaking: boolean }[];
   tileCount: number;
-  tiles: { id: string; name: string | null; aria: string | null; ariaInside: string[] }[];
+  tiles: { id: string; name: string | null; speaking: boolean; aria: string | null }[];
+  /** Names the DOM currently shows as speaking (glow), for cross-check. */
+  speakingNow: string[];
 }
 
 const PARTICIPANT_SELECTORS = ['div[data-participant-id]', '[data-participant-id]'];
@@ -187,28 +192,34 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
       };
     },
     probeDom(): GmeetDomProbe {
-      const audios = Array.from(document.querySelectorAll('audio')) as HTMLAudioElement[];
+      // The captured elements are <audio> AND <video> with audio tracks (same set
+      // gmeet-capture taps). For each, run the co-location test against its tile.
+      const media = (Array.from(document.querySelectorAll('audio, video')) as HTMLMediaElement[])
+        .filter(el => el.srcObject instanceof MediaStream && (el.srcObject as MediaStream).getAudioTracks().length > 0);
       const tiles = Array.from(document.querySelectorAll('[data-participant-id]')) as HTMLElement[];
       return {
-        audioCount: audios.length,
-        audio: audios.slice(0, 8).map(a => {
+        audioCount: media.length,
+        audio: media.slice(0, 16).map(a => {
           let track: string | null = null;
           try { track = (a.srcObject as MediaStream | null)?.getAudioTracks?.()[0]?.id?.slice(0, 12) || null; } catch { /* */ }
-          const pid = a.getAttribute('data-participant-id')
-            || a.closest('[data-participant-id]')?.getAttribute('data-participant-id')
-            || a.parentElement?.getAttribute('data-participant-id') || null;
-          return { hasStream: !!a.srcObject, trackId: track, participantId: pid };
+          const tile = (a.getAttribute('data-participant-id') ? a : a.closest('[data-participant-id]')) as HTMLElement | null;
+          return {
+            tag: a.tagName.toLowerCase(),
+            hasAudioTrack: true,
+            trackId: track,
+            participantId: (tile?.getAttribute('data-participant-id') || a.parentElement?.getAttribute('data-participant-id') || null)?.slice(0, 16) || null,
+            tileName: tile ? tileName(tile) : null,
+            speaking: tile ? tileSpeaking(tile) : false,
+          };
         }),
         tileCount: tiles.length,
-        tiles: tiles.slice(0, 8).map(t => ({
+        tiles: tiles.slice(0, 16).map(t => ({
           id: (t.getAttribute('data-participant-id') || '').slice(0, 16),
           name: tileName(t),
+          speaking: tileSpeaking(t),
           aria: t.getAttribute('aria-label') || null,
-          ariaInside: (Array.from(t.querySelectorAll('[aria-label],[aria-pressed],[aria-live],[role]')) as HTMLElement[])
-            .slice(0, 5)
-            .map(e => e.getAttribute('aria-label') || e.getAttribute('aria-pressed') || e.getAttribute('aria-live') || e.getAttribute('role') || '')
-            .filter(Boolean),
         })),
+        speakingNow: tiles.filter(t => !t.hasAttribute('data-self-name') && tileSpeaking(t) && tileName(t)).map(t => tileName(t) as string),
       };
     },
     destroy(): void {
