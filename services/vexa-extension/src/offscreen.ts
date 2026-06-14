@@ -3,13 +3,15 @@
  *
  * Lives independently of any tab or the side panel (MV3 offscreen API), so a
  * note keeps recording even if the panel closes. Same capture shape as the
- * in-page mic path: getUserMedia → ScriptProcessor → 16 kHz PCM → 'audio'
+ * in-page mic path: getUserMedia → AudioWorklet → 16 kHz PCM → 'audio'
  * runtime messages, which the background worker already forwards to the
  * ingest WebSocket.
  *
  * NOTE: offscreen documents cannot show permission prompts — the side panel
  * pre-grants mic permission for the extension origin before this runs.
  */
+
+import { createPcmCaptureNode } from '@vexa/capture';
 
 const MIC_INDEX = 1000;
 // Mixed tab audio (all remote participants) — used where the page doesn't expose
@@ -18,7 +20,6 @@ const MIC_INDEX = 1000;
 // 999: distinct from per-participant element indexes (0..N) and the mic (1000).
 const TAB_INDEX = 999;
 const TARGET_SAMPLE_RATE = 16000;
-const BUFFER_SIZE = 4096;
 
 let stream: MediaStream | null = null;
 let ctx: AudioContext | null = null;
@@ -34,20 +35,17 @@ async function start(): Promise<{ ok: boolean; error?: string }> {
   }
   ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
   const source = ctx.createMediaStreamSource(stream);
-  const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
-  processor.onaudioprocess = (e: AudioProcessingEvent) => {
-    const data = e.inputBuffer.getChannelData(0);
+  // AudioWorklet (audio-thread) — the deprecated ScriptProcessor duplicated mic
+  // buffers under load (the captured-audio stutter).
+  const node = await createPcmCaptureNode(ctx, (data) => {
     let maxVal = 0;
-    for (let i = 0; i < data.length; i++) {
-      const a = Math.abs(data[i]);
-      if (a > maxVal) maxVal = a;
-    }
+    for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
     if (maxVal > 0.005) {
       chrome.runtime.sendMessage({ type: 'audio', index: MIC_INDEX, pcm: Array.from(data) }).catch(() => { /* ws gone */ });
     }
-  };
-  source.connect(processor);
-  processor.connect(ctx.destination);
+  });
+  source.connect(node);
+  node.connect(ctx.destination);
   chrome.runtime.sendMessage({ type: 'speakers', speakers: { [String(MIC_INDEX)]: 'You' } }).catch(() => { /* ignore */ });
   chrome.runtime.sendMessage({ type: 'capture-started', streams: 1 }).catch(() => { /* ignore */ });
   console.log('[vexa-offscreen] mic capture started');
@@ -78,17 +76,16 @@ async function startTab(streamId: string): Promise<{ ok: boolean; error?: string
   }
   tabCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
   const source = tabCtx.createMediaStreamSource(tabStream!);
-  const processor = tabCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
-  processor.onaudioprocess = (e: AudioProcessingEvent) => {
-    const data = e.inputBuffer.getChannelData(0);
+  // AudioWorklet (audio-thread) instead of the deprecated ScriptProcessor.
+  const node = await createPcmCaptureNode(tabCtx, (data) => {
     let maxVal = 0;
     for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
     if (maxVal > 0.005) {
       chrome.runtime.sendMessage({ type: 'audio', index: TAB_INDEX, pcm: Array.from(data) }).catch(() => { /* ws gone */ });
     }
-  };
-  source.connect(processor);
-  processor.connect(tabCtx.destination);
+  });
+  source.connect(node);
+  node.connect(tabCtx.destination);
   // Re-play the tab audio so the user still hears the meeting (tab capture
   // otherwise silences it).
   source.connect(tabCtx.destination);

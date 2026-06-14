@@ -7,6 +7,7 @@
  * The host wires the emitted chunks/events to a capture.v1 sink (bot: in-process;
  * extension: WebSocket).
  */
+export { createPcmCaptureNode } from "./pcm-capture";
 export { createGmeetCapture } from "./gmeet-capture";
 export type { GmeetCapture } from "./gmeet-capture";
 export { createGmeetSpeakers } from "./gmeet-speakers";

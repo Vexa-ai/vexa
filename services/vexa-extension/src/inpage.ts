@@ -23,6 +23,7 @@ import {
   createGmeetCapture, GmeetCapture,
   createZoomChat, ZoomChat,
   createTeamsChat, TeamsChat,
+  createPcmCaptureNode,
 } from '@vexa/capture';
 
 (() => {
@@ -33,7 +34,6 @@ import {
   // otherwise both capture and post duplicate audio/diag messages.
   try { (window as any).__vexaInpageTeardown?.(); } catch { /* old instance gone */ }
   const TARGET_SAMPLE_RATE = 16000;
-  const BUFFER_SIZE = 4096;
 
   let running = false;
   let countTimer: number | null = null;
@@ -150,19 +150,16 @@ import {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
       const source = ctx.createMediaStreamSource(micStream);
-      const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
-      processor.onaudioprocess = (e: AudioProcessingEvent) => {
+      // AudioWorklet (audio-thread) — the deprecated ScriptProcessor duplicated
+      // mic buffers under main-thread load (the captured-audio stutter).
+      const node = await createPcmCaptureNode(ctx, (data) => {
         if (!running) return;
-        const data = e.inputBuffer.getChannelData(0);
         let maxVal = 0;
-        for (let i = 0; i < data.length; i++) {
-          const a = Math.abs(data[i]);
-          if (a > maxVal) maxVal = a;
-        }
+        for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
         if (maxVal > 0.005) post('audio', { index: MIC_INDEX, pcm: Array.from(data) });
-      };
-      source.connect(processor);
-      processor.connect(ctx.destination);
+      });
+      source.connect(node);
+      node.connect(ctx.destination);
       contexts.push(ctx);
       post('speakers', { speakers: { [MIC_INDEX]: 'You' } });
       console.log(`${TAG} microphone capture started ("You")`);

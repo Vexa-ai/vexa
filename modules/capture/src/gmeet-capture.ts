@@ -8,11 +8,13 @@
  *
  * Google Meet renders each participant's audio as a separate <audio>/<video>
  * element whose srcObject is a live MediaStream. This wires each into a
- * dedicated AudioContext → ScriptProcessor, resampled to 16 kHz, and delivers
+ * dedicated AudioContext → AudioWorklet, resampled to 16 kHz, and delivers
  * per-element PCM chunks via onAudio(index, pcm). It rescans for late joiners /
  * recycled elements and silence-gates each chunk. The track index is stable per
  * stream id (the basis for per-track speaker attribution in gmeet-speakers.ts).
  */
+
+import { createPcmCaptureNode } from './pcm-capture';
 
 export interface GmeetCaptureOptions {
   /** One per-element PCM chunk (already 16 kHz). index is the stable track index. */
@@ -36,7 +38,6 @@ export interface GmeetCapture {
 export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
   const log = opts.log || (() => { /* silent */ });
   const SR = opts.targetSampleRate ?? 16000;
-  const BUF = opts.bufferSize ?? 4096;
   const SILENCE = opts.silenceThreshold ?? 0.005;
   const RESCAN = opts.rescanMs ?? 15000;
   const FIND_RETRIES = opts.findRetries ?? 10;
@@ -65,21 +66,16 @@ export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
 
       const ctx = new AudioContext({ sampleRate: SR });
       const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(BUF, 1, 1);
-
-      processor.onaudioprocess = (e: AudioProcessingEvent) => {
+      // AudioWorklet (audio-thread) instead of the deprecated ScriptProcessor,
+      // which duplicates/drops buffers under main-thread load — the captured-audio
+      // stutter. connectElement is sync, so wire the node when addModule resolves.
+      createPcmCaptureNode(ctx, (data) => {
         if (!running) return;
-        const data = e.inputBuffer.getChannelData(0);
         let maxVal = 0;
         for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
-        if (maxVal > SILENCE) {
-          // Copy out — the AudioProcessingEvent buffer is reused after return.
-          opts.onAudio(index, new Float32Array(data));
-        }
-      };
-
-      source.connect(processor);
-      processor.connect(ctx.destination);
+        if (maxVal > SILENCE) opts.onAudio(index, data); // worklet already yields a fresh copy
+      }).then((node) => { source.connect(node); node.connect(ctx.destination); })
+        .catch((err: any) => console.log(`[gmeet-capture] worklet init failed: ${err?.message}`));
       connectedStreamIds.add(streamId);
       contexts.push(ctx);
 
