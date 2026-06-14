@@ -89,6 +89,12 @@ export class SpeakerStreamManager {
   /** Called when a segment is confirmed and should be published. */
   onSegmentConfirmed: ((speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number, segmentId: string) => void) | null = null;
 
+  /** Called with the UNCONFIRMED forming tail after each submission (the "pending"
+   *  draft) — parity with ChunkedTranscriber's publishPending, so the multistream
+   *  (gmeet per-participant) path shows a live forming tail like the mixed path,
+   *  not just confirmed text. Empty string ⇒ clear the speaker's draft. */
+  onSegmentPending: ((speakerId: string, speakerName: string, text: string, bufferStartMs: number) => void) | null = null;
+
   constructor(config?: SpeakerStreamManagerConfig) {
     this.minAudioDuration = config?.minAudioDuration ?? 2;
     this.submitInterval = config?.submitInterval ?? 2;
@@ -272,6 +278,14 @@ export class SpeakerStreamManager {
 
       buffer.lastWords = currentWords;
 
+      // PENDING: the unconfirmed tail (words past the stable prefix) is the live
+      // forming draft — emit it so the multistream path has the same pending tail
+      // the mixed/mic ChunkedTranscriber gives. Cleared when nothing's unconfirmed.
+      if (this.onSegmentPending) {
+        const tail = currentWords.slice(prefixLen).join(' ');
+        this.onSegmentPending(buffer.speakerId, buffer.speakerName, tail, buffer.windowStartMs);
+      }
+
       // Confirm if prefix covers at least 1 word but NOT all current words
       // (trailing words are still forming and may change next submission).
       // With confirmThreshold=2, having a common prefix between 2 consecutive
@@ -330,6 +344,9 @@ export class SpeakerStreamManager {
       // CONFIRMED — emit and advance offset to Whisper's segment boundary.
       this.emitSegment(buffer, trimmed);
       this.advanceOffset(buffer, segmentEndSec);
+    } else if (this.onSegmentPending) {
+      // Still forming — emit the whole draft as pending (no per-segment timing here).
+      this.onSegmentPending(buffer.speakerId, buffer.speakerName, trimmed, buffer.windowStartMs);
     }
     return true;
   }

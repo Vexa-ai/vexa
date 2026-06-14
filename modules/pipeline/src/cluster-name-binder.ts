@@ -47,6 +47,9 @@ const KIND_LAG_MS: Record<HintKind, number> = {
 const OPEN_TURN_HORIZON_MS = Number.MAX_SAFE_INTEGER;
 const DEFAULT_MATCH_TOLERANCE_MS = 2500;
 const DEFAULT_HINT_LOG_LIMIT = 2000;
+/** Vote-count lead a challenger name needs over the cluster's current name to
+ *  flip it — hysteresis against hint flicker (continuous re-resolve). */
+const NAME_SWITCH_MARGIN = 2;
 
 export interface HintEvent {
   /** Display name from the platform UI. */
@@ -99,7 +102,10 @@ export class ClusterNameBinder {
   private readonly lag: Record<HintKind, number>;
   private readonly matchToleranceMs: number;
   private readonly hintLogLimit: number;
-  private readonly onLateResolve?: (clusterId: string, resolvedName: string) => void;
+  /** Fires on EVERY accepted (hysteresis-cleared) cluster-name change — the
+   *  caller repaints that cluster's pending + published segments. Settable post-
+   *  construction (the host wires it after creating the binder as a field). */
+  onLateResolve?: (clusterId: string, resolvedName: string) => void;
 
   /** Per-kind turn logs (append-only, trimmed to hintLogLimit). */
   private turns = new Map<HintKind, HintTurn[]>();
@@ -133,13 +139,6 @@ export class ClusterNameBinder {
     if (open && open.tEndMs === undefined) open.tEndMs = t;
     log.push({ name: ev.name, tStartMs: t });
     if (log.length > this.hintLogLimit) log.splice(0, log.length - this.hintLogLimit);
-  }
-
-  /** LIT-ONLY resolution (experiment, operator-decided): the name with the
-   *  maximum hint-overlap for this time span — no cluster votes, no
-   *  provisional ids. Returns null when no hint overlaps the window. */
-  bestOverlapName(commit: { tStartMs: number; tEndMs: number }): { name: string; confidence: number } | null {
-    return this.windowMatch({ clusterId: '', tStartMs: commit.tStartMs, tEndMs: commit.tEndMs });
   }
 
   /** Resolve a diarizer commit to its final speaker name. */
@@ -203,15 +202,21 @@ export class ClusterNameBinder {
     const tally = this.clusterVoteHistory.get(clusterId)!;
     tally.set(speakerName, (tally.get(speakerName) ?? 0) + 1);
 
-    const prevResolved = this.clusterLastResolvedName.get(clusterId);
+    const prev = this.clusterLastResolvedName.get(clusterId);
     const majority = this.clusterMajority(clusterId);
-    if (majority && majority.name !== prevResolved && majority.name !== clusterId) {
-      // Fire late-resolve when the cluster previously had no real name (was
-      // provisional). Caller's updateSpeakerName is idempotent.
-      if (prevResolved === undefined || prevResolved === clusterId) {
-        this.onLateResolve?.(clusterId, majority.name);
-      }
+    if (!majority || majority.name === clusterId || majority.name === prev) return;
+
+    // Continuous re-resolve with HYSTERESIS: the cluster's name may change as
+    // evidence accumulates, but only flip when the new winner leads the current
+    // name by a clear margin — otherwise noisy/lagging hints thrash A→B→A.
+    // Fires onLateResolve on EVERY accepted change (first resolution included),
+    // so the caller repaints the cluster's pending + published segments live.
+    const prevVotes = prev ? (tally.get(prev) ?? 0) : 0;
+    const winnerVotes = tally.get(majority.name) ?? 0;
+    const firstResolution = prev === undefined || prev === clusterId;
+    if (firstResolution || winnerVotes - prevVotes >= NAME_SWITCH_MARGIN) {
       this.clusterLastResolvedName.set(clusterId, majority.name);
+      this.onLateResolve?.(clusterId, majority.name);
     }
   }
 

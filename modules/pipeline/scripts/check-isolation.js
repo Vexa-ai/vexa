@@ -13,7 +13,10 @@ let files = 0, violations = [];
   if (e.isDirectory()) walk(p);
   else if (e.name.endsWith('.ts')) {
     files++;
-    const src = fs.readFileSync(p, 'utf8');
+    // Strip comments first — a prose `from "…"` in a comment is not an import.
+    const src = fs.readFileSync(p, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
     for (const m of src.matchAll(/from\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
       const spec = m[1] || m[2];
       if (spec.startsWith('.')) continue;                 // intra-package

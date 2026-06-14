@@ -73,13 +73,16 @@ import {
       if (speakers) return;
       const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
         ?.getAttribute('data-self-name')?.trim() || undefined;
+      // SoC: capture emits only "who's lit when" HINTS — the per-participant
+      // channel→name BINDING happens downstream (the cluster-vote binder). The
+      // audio stays multi-stream (per participant); names attach via these hints.
       speakers = createGmeetSpeakers({
         selfName,
         log: (m) => console.log(`${TAG} ${m}`),
-        onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
+        onSpeaking: (name, isEnd) => post('speaker_activity', { name, isEnd, kind: 'dom-active' }),
       });
       (window as any).__vexaGmeetSpeakers = speakers;
-      console.log(`${TAG} shared gmeet-speakers attribution started (self="${selfName || 'unknown'}")`);
+      console.log(`${TAG} shared gmeet-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
     } else if (location.hostname.endsWith('zoom.us')) {
       if (zoomSpeakers) return;
       const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
@@ -136,17 +139,6 @@ import {
     return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0);
   }
 
-  // Placeholder label for a freshly-seen participant track until attribution
-  // locks a real name. Meet names its own tracks via gmeet-speakers, so skip
-  // there; Zoom/Teams tracks (injected by the WebRTC hook) start as "Speaker N".
-  const labeledTracks = new Set<number>();
-  function labelTrack(index: number): void {
-    if (index === MIC_INDEX || location.hostname.endsWith('meet.google.com')) return;
-    if (labeledTracks.has(index)) return;
-    labeledTracks.add(index);
-    post('speakers', { speakers: { [String(index)]: `Speaker ${index + 1}` } });
-  }
-
   /**
    * Capture the LOCAL microphone (your own voice). Remote participants live in
    * page media elements; your own voice does not, so we grab it directly. The
@@ -200,11 +192,10 @@ import {
     if (isPerParticipant) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
-        onAudio: (index, pcm) => {
-          speakers?.reportTrackAudio(index);       // Meet per-track voting
-          labelTrack(index);                       // placeholder until a name locks
-          post('audio', { index, pcm: Array.from(pcm) });
-        },
+        // SoC: just ship each opaque per-participant channel's audio. No binding
+        // here — the downstream cluster-vote binder names channel N from the
+        // active-speaker hints. (No reportTrackAudio / placeholder relabel.)
+        onAudio: (index, pcm) => post('audio', { index, pcm: Array.from(pcm) }),
       });
       await gmeetCapture.start();
     }
@@ -270,7 +261,7 @@ import {
       } catch (e: any) { return { error: String(e?.message || e) }; }
     })() : null;
     const gs = w.__vexaGmeetSpeakers ? (() => {
-      try { const st = w.__vexaGmeetSpeakers.getState(); return { locks: st.locks ?? st.locked ?? null, tilesSeen: st.tiles?.length }; }
+      try { const st = w.__vexaGmeetSpeakers.getState(); return { speakingNow: st.speakingNow ?? null, tilesSeen: st.tiles?.length }; }
       catch (e: any) { return { error: String(e?.message || e) }; }
     })() : null;
     return {

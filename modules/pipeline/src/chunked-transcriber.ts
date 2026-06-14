@@ -132,7 +132,10 @@ interface Turn {
   /** Last unconfirmed tail — promoted if the closing pass returns nothing. */
   pendingTail: ChunkSegment[];
 }
-interface UnresolvedTurn { speaker: string; t0: number; t1: number; segments: ChunkSegment[] }
+/** A committed turn whose hint hasn't arrived yet (provisional cluster id) —
+ *  re-resolved when a later hint produces a window match. Segments live in
+ *  clusterSegments, so only the window + cluster are kept here. */
+interface UnresolvedTurn { clusterId: string; t0: number; t1: number }
 
 function rms(s: Float32Array): number {
   if (s.length === 0) return 0;
@@ -181,6 +184,12 @@ export class ChunkedTranscriber {
   /** Turns published under a provisional cluster id, awaiting hint evidence. */
   private unresolved: UnresolvedTurn[] = [];
 
+  /** Every CONFIRMED segment published per cluster — the binder's continuous
+   *  re-resolve repaints these (rename) when a cluster's name changes. */
+  private clusterSegments = new Map<string, ChunkSegment[]>();
+  /** Name each cluster's segments were last published under (cluster id until resolved). */
+  private clusterName = new Map<string, string>();
+
   /** High-water mark of CONFIRMED audio. The diarizer duplicates
    *  overlap-region commits to both the outgoing and incoming cluster, and
    *  flicker can open a new turn inside audio the previous turn already
@@ -194,6 +203,9 @@ export class ChunkedTranscriber {
 
   static async create(cb: ChunkedTranscriberCallbacks): Promise<ChunkedTranscriber> {
     const t = new ChunkedTranscriber(cb);
+    // Continuous re-resolve: when a cluster's voted name changes (hysteresis-
+    // cleared), repaint that cluster's pending + published segments live.
+    t.binder.onLateResolve = (clusterId, name) => t.onClusterRename(clusterId, name);
     // Native defaults (tab-audio tuned) — see commit history for why the old
     // pipeline's AMI-pack overrides are wrong here.
     t.diarizer = await OnnxLocalDiarizer.create({
@@ -246,15 +258,13 @@ export class ChunkedTranscriber {
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
     if (!name || this.unresolved.length === 0) return;
+    // A new hint may now produce a window match for a turn that committed before
+    // its hint arrived — re-resolve (casts the cluster vote → onClusterRename
+    // repaints). Keep the ones still without any hint overlap.
     const still: UnresolvedTurn[] = [];
     for (const u of this.unresolved) {
-      const winner = this.binder.bestOverlapName({ tStartMs: u.t0, tEndMs: u.t1 });
-      if (winner && winner.name !== u.speaker) {
-        this.cb.rename(u.speaker, winner.name, u.segments);
-        this.log(`[ChunkedTranscriber] late-resolved turn [${u.t0}..${u.t1}] "${u.speaker}" → "${winner.name}"`);
-      } else if (!winner) {
-        still.push(u);
-      }
+      const r = this.binder.resolve({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+      if (r.source === 'provisional-cluster-id') still.push(u);
     }
     this.unresolved = still.slice(-MAX_UNRESOLVED);
   }
@@ -525,6 +535,11 @@ export class ChunkedTranscriber {
       // client's pending block for seconds (the "vanishing transcript" bug).
       this.cb.publish(name, confirmed, closing ? [] : tail);
       turn.allConfirmed.push(...confirmed);
+      // Track per-cluster so a later name change repaints these in place.
+      let cs = this.clusterSegments.get(turn.clusterId);
+      if (!cs) { cs = []; this.clusterSegments.set(turn.clusterId, cs); }
+      cs.push(...confirmed);
+      this.clusterName.set(turn.clusterId, name);
       turn.confirmedUpToMs = spanStart + mapped[confirmCount - 1].relEnd * 1000;
       this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.confirmedUpToMs);
       const txt = confirmed.map(s => s.text).join(' ');
@@ -559,6 +574,10 @@ export class ChunkedTranscriber {
       const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
       this.cb.publish(name, promoted, []);
       turn.allConfirmed.push(...promoted);
+      let cs = this.clusterSegments.get(turn.clusterId);
+      if (!cs) { cs = []; this.clusterSegments.set(turn.clusterId, cs); }
+      cs.push(...promoted);
+      this.clusterName.set(turn.clusterId, name);
       // Drafts come from LIVE-EDGE submissions and can extend past the
       // committed boundary — the high-water mark must cover everything
       // PUBLISHED, or the next turn re-transcribes the promoted audio and
@@ -567,18 +586,42 @@ export class ChunkedTranscriber {
       this.log(`[ChunkedTranscriber] turn ${turn.turnId}: promoted ${promoted.length} draft segment(s) on close`);
     }
     if (turn.pendingName) this.cb.clearPending(turn.pendingName);
+    // Register a cluster vote for the closed turn. If no hint overlaps yet
+    // (provisional), queue it for re-resolve when a later hint arrives.
     if (turn.allConfirmed.length > 0) {
-      const winner = this.binder.bestOverlapName({ tStartMs: turn.t0, tEndMs: turn.t1 });
-      if (!winner) {
-        this.unresolved.push({ speaker: turn.clusterId, t0: turn.t0, t1: turn.t1, segments: turn.allConfirmed });
+      const r = this.binder.resolve({ clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 });
+      if (r.source === 'provisional-cluster-id') {
+        this.unresolved.push({ clusterId: turn.clusterId, t0: turn.t0, t1: turn.t1 });
         if (this.unresolved.length > MAX_UNRESOLVED) this.unresolved.shift();
       }
     }
   }
 
   private resolveName(turn: Turn): string {
-    const winner = this.binder.bestOverlapName({ tStartMs: turn.t0, tEndMs: turn.t1 });
-    return winner?.name || turn.clusterId;
+    // Cluster-vote resolution: window-match (lag-corrected hint overlap) casts a
+    // per-cluster vote; the returned name is the current best. Accumulating votes
+    // drive onLateResolve → onClusterRename (repaint) when the name shifts.
+    return this.binder.resolve({ clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 }).speakerName;
+  }
+
+  /** Binder says this cluster's name changed → repaint its published segments
+   *  (rename) and its live pending tail. Stable segment ids let the client
+   *  update in place (no segment is keyed by speaker name). */
+  private onClusterRename(clusterId: string, name: string): void {
+    const old = this.clusterName.get(clusterId) ?? clusterId;
+    this.clusterName.set(clusterId, name);
+    const segs = this.clusterSegments.get(clusterId);
+    if (segs && segs.length && old !== name) {
+      this.cb.rename(old, name, segs);
+      this.log(`[ChunkedTranscriber] cluster ${clusterId} → "${name}" (repainted ${segs.length} segment(s))`);
+    }
+    // Repaint the live pending tail if the open turn belongs to this cluster.
+    const turn = this.turn;
+    if (turn && turn.clusterId === clusterId && turn.pendingTail.length > 0) {
+      if (turn.pendingName && turn.pendingName !== name) this.cb.clearPending(turn.pendingName);
+      turn.pendingName = name;
+      this.cb.publishPending(name, turn.pendingTail);
+    }
   }
 
   /** The bot's production quality gates. Returns whisper segments or null. */

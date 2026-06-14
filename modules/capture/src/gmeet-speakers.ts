@@ -1,46 +1,40 @@
 /**
- * Google Meet speaker attribution — THE shared implementation.
+ * Google Meet speaker detection — THE shared HINT emitter.
  *
  * Pure browser code (no Node, no Playwright imports). Consumed by BOTH:
  *  - the bot: bundled into browser-utils.global.js, instantiated in-page by
- *    googlemeet/recording.ts; Node's speaker-identity.ts delegates resolution
- *    here via page.evaluate.
- *  - the extension: imported directly by vexa-extension/src/inpage.ts.
+ *    googlemeet/recording.ts; its onSpeaking hints feed recordMixedHint().
+ *  - the extension: imported directly by vexa-extension/src/inpage.ts; its
+ *    onSpeaking hints become `speaker_activity` (dom-active) WS messages.
  *
- * Algorithm (vote/lock, inherited from the bot's speaker-identity.ts):
- *  - Audio chunks arrive per track (per participant media element). The host
- *    calls reportTrackAudio(trackIndex) on every audible chunk.
- *  - Every poll tick: read who is visibly speaking from participant tiles.
- *    Exactly 1 speaker lit → tracks with current audio vote 1.0 for that name;
- *    2 lit → 0.5 each; 0 or 3+ → no vote.
- *  - Lock at >=2 votes with >=70% share. One-name-per-track, one-track-per-name.
- *  - NO participant-order fallback: an unmapped track stays unmapped ("") —
- *    wrong names are worse than missing names.
+ * SoC: this module extracts RAW SIGNALS only — it reads who Meet is visibly
+ * rendering as speaking and emits debounced start/stop HINTS per name. It NEVER
+ * binds a name to an audio track/segment. Naming happens DOWNSTREAM: the mixed
+ * remote channel (999) is diarized into clusters, and the ClusterNameBinder
+ * resolves those clusters to these `dom-active` hints (cluster-vote, hysteresis,
+ * live re-resolve). gmeet now follows the SAME mixed path as zoom/teams.
  *
  * Self-healing speaking detection:
  *  Meet's speaking-indicator CSS classes are obfuscated and rot with UI pushes
- *  (the historic failure mode: zero votes forever, then bad fallbacks). This
- *  module watches class mutations across tiles and correlates them with real
- *  audio arrivals; if the known classes go silent while audio flows, the most
- *  audio-correlated mutating class is adopted as a speaking indicator (logged
- *  loudly, capped). getState() exposes the full forensic dump.
+ *  (the historic failure mode: nothing ever reads as "speaking"). This module
+ *  watches class mutations across tiles; if the known classes go silent for a
+ *  while, the most-recently-added mutating class is adopted as a speaking
+ *  indicator (logged loudly, capped). getState() exposes the full forensic dump.
  */
 
 export interface GmeetSpeakersOptions {
   /** Local participant's display name (bot name / data-self-name). Excluded from candidates. */
   selfName?: string;
-  /** Fired when a track locks to a name (and if a lock ever changes). */
-  onName?: (trackIndex: number, name: string) => void;
+  /** Debounced speaking state change for a NON-self named tile.
+   *  isEnd=false → started speaking; isEnd=true → stopped. */
+  onSpeaking?: (name: string, isEnd: boolean) => void;
   /** Log sink (defaults to console.log). */
   log?: (msg: string) => void;
-  lockThreshold?: number;   // default 2
-  lockRatio?: number;       // default 0.7
-  pollMs?: number;          // default 500
-  /** How recent (ms) a track's audio must be to vote. Default 700. */
-  audioWindowMs?: number;
+  /** Poll interval (ms). Default 500. */
+  pollMs?: number;
   /** Adopt a learned indicator class only after known classes have been silent this long. Default 10s. */
   learnAfterSilentMs?: number;
-  /** Audio-correlated mutation count required to adopt a class. Default 3. */
+  /** Mutation count required to adopt a class as a speaking indicator. Default 3. */
   learnMinScore?: number;
 }
 
@@ -54,49 +48,18 @@ export interface GmeetTileInfo {
 export interface GmeetSpeakersState {
   tiles: GmeetTileInfo[];
   speakingNow: string[];
-  votes: Record<number, Record<string, number>>;
-  locks: Record<number, string>;
   participantCount: number;
   selectorStats: {
     knownClassHits: Record<string, number>;
     learnedClasses: string[];
-    /** class → audio-correlated mutation count (learning evidence) */
+    /** class → mutation count (learning evidence) */
     candidateScores: Record<string, number>;
     lastKnownHitMs: number;
   };
 }
 
-/** One recorded event: a tile snapshot (per poll tick, on change) or an audio arrival. */
-export interface GmeetTraceEvent {
-  /** ms since trace start */
-  t: number;
-  kind: 'tiles' | 'audio';
-  /** kind=tiles: tile states incl. REAL class strings (for selector-fidelity replay) */
-  tiles?: Array<{ id: string; name: string | null; self: boolean; rootClasses: string; indicatorClasses: string[] }>;
-  /** kind=audio: which track received an audible chunk */
-  track?: number;
-}
-
-export interface GmeetTrace {
-  version: 1;
-  selfName?: string;
-  durationMs: number;
-  /** Timing/threshold params the module ran with — replay must scale FROM these. */
-  params: { pollMs: number; audioWindowMs: number; lockThreshold: number; lockRatio: number };
-  events: GmeetTraceEvent[];
-  /** Locks held when the trace was dumped — replay ground truth. */
-  finalLocks: Record<number, string>;
-}
-
 export interface GmeetSpeakers {
-  reportTrackAudio(trackIndex: number): void;
-  /** Locked name, else top-voted untaken name, else null. */
-  resolve(trackIndex: number): { name: string | null; locked: boolean };
-  isLocked(trackIndex: number): boolean;
   getState(): GmeetSpeakersState;
-  /** Dump the rolling trace (always recording, bounded) for offline replay. */
-  dumpTrace(): GmeetTrace;
-  invalidate(trackIndex?: number): void;
   destroy(): void;
 }
 
@@ -113,32 +76,9 @@ const LEARN_BLOCKLIST = /hover|focus|active-tab|tooltip/i;
 
 export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeakers {
   const log = opts.log || ((m: string) => console.log(m));
-  const lockThreshold = opts.lockThreshold ?? 2;
-  const lockRatio = opts.lockRatio ?? 0.7;
   const pollMs = opts.pollMs ?? 500;
-  const audioWindowMs = opts.audioWindowMs ?? 700;
   const learnAfterSilentMs = opts.learnAfterSilentMs ?? 10_000;
   const learnMinScore = opts.learnMinScore ?? 3;
-
-  const trackVotes = new Map<number, Map<string, number>>();
-  const locks = new Map<number, string>();
-  const announced = new Map<number, string>();
-  const trackLastAudio = new Map<number, number>();
-  let lastParticipantCount = 0;
-
-  // Trace recorder — always on, rolling buffer (~30 min at 500ms ticks).
-  // Captures REAL tile class strings + audio timing so a single real meeting
-  // becomes a permanent offline replay fixture (dev/test-gmeet-replay.mjs).
-  const TRACE_MAX_EVENTS = 20_000;
-  const traceStartMs = Date.now();
-  const traceEvents: GmeetTraceEvent[] = [];
-  let lastTileSig = '';
-  let lastAudioTraceMs = new Map<number, number>();
-
-  function tracePush(ev: GmeetTraceEvent): void {
-    traceEvents.push(ev);
-    if (traceEvents.length > TRACE_MAX_EVENTS) traceEvents.splice(0, traceEvents.length - TRACE_MAX_EVENTS);
-  }
 
   // Self-healing state
   const knownClassHits: Record<string, number> = {};
@@ -147,6 +87,9 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
   let lastKnownHitMs = Date.now();
   /** Recent class additions: class → last-added timestamp (rolling). */
   const recentClassAdds = new Map<string, number>();
+
+  /** Names currently lit (non-self, named) — drives start/stop hint edges. */
+  const speakingNow = new Set<string>();
 
   // ── DOM reading ─────────────────────────────────────────────────
 
@@ -193,16 +136,8 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
     return false;
   }
 
-  function indicatorClassesIn(el: HTMLElement): string[] {
-    const hits: string[] = [];
-    for (const cls of activeSpeakingClasses()) {
-      if (el.classList.contains(cls) || el.querySelector('.' + CSS.escape(cls))) hits.push(cls);
-    }
-    return hits;
-  }
-
-  function scanTilesDetailed(): Array<{ info: GmeetTileInfo; rootClasses: string; indicatorClasses: string[] }> {
-    const out: Array<{ info: GmeetTileInfo; rootClasses: string; indicatorClasses: string[] }> = [];
+  function scanTiles(): GmeetTileInfo[] {
+    const out: GmeetTileInfo[] = [];
     const seen = new Set<string>();
     for (const sel of PARTICIPANT_SELECTORS) {
       document.querySelectorAll(sel).forEach(node => {
@@ -211,41 +146,13 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
         if (!id || seen.has(id)) return;
         seen.add(id);
         const name = tileName(el);
-        out.push({
-          info: { id, name, self: isSelf(el, name), speaking: tileSpeaking(el) },
-          rootClasses: el.className || '',
-          indicatorClasses: indicatorClassesIn(el),
-        });
+        out.push({ id, name, self: isSelf(el, name), speaking: tileSpeaking(el) });
       });
     }
     return out;
   }
 
-  function scanTiles(): GmeetTileInfo[] {
-    return scanTilesDetailed().map(d => d.info);
-  }
-
-  // ── Vote / lock ─────────────────────────────────────────────────
-
-  function nameTaken(name: string, except: number): boolean {
-    for (const [i, n] of locks) if (i !== except && n === name) return true;
-    return false;
-  }
-
-  function vote(index: number, name: string, weight: number): void {
-    if (locks.has(index) || nameTaken(name, index)) return;
-    let v = trackVotes.get(index);
-    if (!v) { v = new Map(); trackVotes.set(index, v); }
-    v.set(name, (v.get(name) || 0) + weight);
-    const total = [...v.values()].reduce((a, b) => a + b, 0);
-    const top = [...v.entries()].sort((a, b) => b[1] - a[1])[0];
-    if (top[1] >= lockThreshold && top[1] / total >= lockRatio && !nameTaken(top[0], index)) {
-      locks.set(index, top[0]);
-      log(`[GmeetSpeakers] LOCKED track ${index} = "${top[0]}" (${top[1].toFixed(1)}/${total.toFixed(1)} votes)`);
-    }
-  }
-
-  // ── Self-healing: learn speaking classes from audio correlation ──
+  // ── Self-healing: learn speaking classes from mutation activity ──
 
   const observer = new MutationObserver(muts => {
     const now = Date.now();
@@ -254,7 +161,12 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
       const el = m.target as HTMLElement;
       const old = new Set(String(m.oldValue || '').split(/\s+/).filter(Boolean));
       el.classList.forEach(c => {
-        if (!old.has(c) && !LEARN_BLOCKLIST.test(c) && c.length <= 24) recentClassAdds.set(c, now);
+        if (!old.has(c) && !LEARN_BLOCKLIST.test(c) && c.length <= 24) {
+          recentClassAdds.set(c, now);
+          if (!KNOWN_SPEAKING_CLASSES.includes(c) && !learnedClasses.includes(c)) {
+            candidateScores.set(c, (candidateScores.get(c) || 0) + 1);
+          }
+        }
       });
     }
     if (recentClassAdds.size > 200) {
@@ -264,16 +176,6 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
   try {
     observer.observe(document.body, { attributes: true, attributeFilter: ['class'], attributeOldValue: true, subtree: true });
   } catch { /* body not ready; poll loop still works with known classes */ }
-
-  function creditAudioCorrelation(now: number): void {
-    // An audible chunk just arrived: classes added in the last 400ms are
-    // candidate speaking indicators.
-    for (const [cls, t] of recentClassAdds) {
-      if (now - t <= 400 && !KNOWN_SPEAKING_CLASSES.includes(cls) && !learnedClasses.includes(cls)) {
-        candidateScores.set(cls, (candidateScores.get(cls) || 0) + 1);
-      }
-    }
-  }
 
   function maybeLearn(now: number): void {
     if (now - lastKnownHitMs < learnAfterSilentMs) return;       // known classes still work
@@ -285,89 +187,45 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
     if (best) {
       learnedClasses.push(best[0]);
       candidateScores.delete(best[0]);
-      log(`[GmeetSpeakers] ⚠ known speaking classes silent ${((now - lastKnownHitMs) / 1000).toFixed(0)}s — LEARNED indicator class "${best[0]}" (audio-correlated ×${best[1]})`);
+      log(`[GmeetSpeakers] ⚠ known speaking classes silent ${((now - lastKnownHitMs) / 1000).toFixed(0)}s — LEARNED indicator class "${best[0]}" (×${best[1]})`);
     }
   }
 
-  // ── Main loop ───────────────────────────────────────────────────
+  // ── Main loop: emit start/stop HINTS on edge changes ─────────────
 
   const timer = setInterval(() => {
     const now = Date.now();
-    const detailed = scanTilesDetailed();
-    const tiles = detailed.map(d => d.info);
-
-    // Trace: record tile state when it changes (names/classes/speaking)
-    const sig = detailed.map(d => `${d.info.id}|${d.info.name}|${d.info.self ? 1 : 0}|${d.rootClasses}|${d.indicatorClasses.join(',')}`).join('§');
-    if (sig !== lastTileSig) {
-      lastTileSig = sig;
-      tracePush({
-        t: now - traceStartMs,
-        kind: 'tiles',
-        tiles: detailed.map(d => ({ id: d.info.id, name: d.info.name, self: d.info.self, rootClasses: d.rootClasses, indicatorClasses: d.indicatorClasses })),
-      });
-    }
-
-    // Participant-count change: clear UNLOCKED votes only. (The legacy bot
-    // cleared locks too, discarding correct mappings on every join/leave.)
-    const count = tiles.length;
-    if (lastParticipantCount > 0 && count !== lastParticipantCount) {
-      trackVotes.clear();
-      log(`[GmeetSpeakers] participant count ${lastParticipantCount} → ${count}; cleared unlocked votes (locks kept)`);
-    }
-    lastParticipantCount = count;
-
-    const speaking = [...new Set(tiles.filter(t => !t.self && t.speaking && t.name).map(t => t.name as string))];
-    if (speaking.length >= 1 && speaking.length <= 2) {
-      for (const [index, last] of trackLastAudio) {
-        if (now - last > audioWindowMs) continue;
-        if (locks.has(index)) continue;
-        if (speaking.length === 1) vote(index, speaking[0], 1.0);
-        else for (const n of speaking) vote(index, n, 0.5);
-      }
-    }
+    const tiles = scanTiles();
 
     maybeLearn(now);
 
-    for (const [index, name] of locks) {
-      if (announced.get(index) !== name) {
-        announced.set(index, name);
-        try { opts.onName?.(index, name); } catch { /* consumer error */ }
+    // Currently-lit, non-self, named tiles.
+    const litNow = new Set<string>(
+      tiles.filter(t => !t.self && t.speaking && t.name).map(t => t.name as string),
+    );
+
+    // Newly lit → SPEAKER_START hint.
+    for (const name of litNow) {
+      if (!speakingNow.has(name)) {
+        speakingNow.add(name);
+        try { opts.onSpeaking?.(name, false); } catch { /* consumer error */ }
+      }
+    }
+    // Went quiet → SPEAKER_END hint.
+    for (const name of [...speakingNow]) {
+      if (!litNow.has(name)) {
+        speakingNow.delete(name);
+        try { opts.onSpeaking?.(name, true); } catch { /* consumer error */ }
       }
     }
   }, pollMs);
 
   return {
-    reportTrackAudio(trackIndex: number): void {
-      const now = Date.now();
-      trackLastAudio.set(trackIndex, now);
-      creditAudioCorrelation(now);
-      // Trace: downsample to one audio event per track per 100ms
-      const lastT = lastAudioTraceMs.get(trackIndex) || 0;
-      if (now - lastT >= 100) {
-        lastAudioTraceMs.set(trackIndex, now);
-        tracePush({ t: now - traceStartMs, kind: 'audio', track: trackIndex });
-      }
-    },
-    resolve(trackIndex: number): { name: string | null; locked: boolean } {
-      const locked = locks.get(trackIndex);
-      if (locked) return { name: locked, locked: true };
-      const v = trackVotes.get(trackIndex);
-      if (v && v.size > 0) {
-        const sorted = [...v.entries()].sort((a, b) => b[1] - a[1]);
-        for (const [name] of sorted) if (!nameTaken(name, trackIndex)) return { name, locked: false };
-      }
-      return { name: null, locked: false };
-    },
-    isLocked(trackIndex: number): boolean {
-      return locks.has(trackIndex);
-    },
     getState(): GmeetSpeakersState {
       const tiles = scanTiles();
       return {
         tiles,
         speakingNow: tiles.filter(t => !t.self && t.speaking && t.name).map(t => t.name as string),
-        votes: Object.fromEntries([...trackVotes.entries()].map(([i, v]) => [i, Object.fromEntries(v)])),
-        locks: Object.fromEntries(locks),
         participantCount: tiles.length,
         selectorStats: {
           knownClassHits: { ...knownClassHits },
@@ -376,25 +234,6 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
           lastKnownHitMs,
         },
       };
-    },
-    dumpTrace(): GmeetTrace {
-      return {
-        version: 1,
-        selfName: opts.selfName,
-        durationMs: Date.now() - traceStartMs,
-        params: { pollMs, audioWindowMs, lockThreshold, lockRatio },
-        events: [...traceEvents],
-        finalLocks: Object.fromEntries(locks),
-      };
-    },
-    invalidate(trackIndex?: number): void {
-      if (trackIndex === undefined) {
-        trackVotes.clear(); locks.clear(); announced.clear();
-        log('[GmeetSpeakers] all mappings invalidated');
-      } else {
-        trackVotes.delete(trackIndex); locks.delete(trackIndex); announced.delete(trackIndex);
-        log(`[GmeetSpeakers] track ${trackIndex} invalidated`);
-      }
     },
     destroy(): void {
       clearInterval(timer);

@@ -22,7 +22,7 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
-import { ChunkedTranscriber, SpeakerStreamManager, TranscriptionClient, type ChunkSegment } from '../src/index';
+import { ChunkedTranscriber, SpeakerStreamManager, TranscriptionClient, ClusterNameBinder, type ChunkSegment, type HintKind } from '../src/index';
 import { decodeAudioFrame, decodeEvent } from '../../../contracts/capture/v1/schema';
 import { StreamCaptureWriter } from '../../recorder/src/stream-capture';
 import { openStore } from './desktop-store';
@@ -41,7 +41,7 @@ const store = openStore();
 console.log(`[desktop] lite-db: ${store.path}`);
 
 interface Seg { segment_id: string; speaker: string; text: string; start: number; absolute_start_time: string; completed: boolean }
-const liveClients = new Set<WebSocket>();
+const liveClients = new Map<WebSocket, Set<string>>();  // ws → subscribed metaKeys (empty set = all, for diagnostics)
 const meetingByKey = new Map<string, number>();   // platform/native → meeting_id
 const keyOf = (p: string, n: string) => `${p}/${n}`;
 const toSeg = (c: ChunkSegment, speaker: string, completed: boolean): Seg => ({
@@ -62,7 +62,12 @@ function broadcast(metaKey: string, speaker: string, confirmed: Seg[], pending: 
     console.log(`  \x1b[2m[${speaker}] …${pending.map((p) => p.text).join(' ')}\x1b[0m`);
   }
   const msg = JSON.stringify({ type: 'transcript', speaker, confirmed, pending });
-  for (const c of liveClients) if (c.readyState === WebSocket.OPEN) c.send(msg);
+  // Scope to subscribers of THIS meeting — a client only gets its own meeting's
+  // transcripts (empty subscription = all, used by diagnostics). Without this,
+  // every /ws client receives every meeting (cross-meeting leak).
+  for (const [c, keys] of liveClients) {
+    if (c.readyState === WebSocket.OPEN && (keys.size === 0 || keys.has(metaKey))) c.send(msg);
+  }
 }
 
 // ── gateway (8056): control plane + history + live WS ──
@@ -94,8 +99,20 @@ const gatewayHttp = http.createServer(async (req, res) => {
   send({ error: 'not found', path: url.pathname }, 404);
 });
 new WebSocketServer({ server: gatewayHttp, path: '/ws' }).on('connection', (ws) => {
-  liveClients.add(ws);
-  ws.on('message', (d) => { try { if (JSON.parse(d.toString()).action === 'subscribe') ws.send(JSON.stringify({ type: 'subscribed' })); } catch { /* ignore */ } });
+  liveClients.set(ws, new Set());
+  ws.on('message', (d) => {
+    try {
+      const m = JSON.parse(d.toString());
+      if (m.action === 'subscribe') {
+        // sidepanel sends { action:'subscribe', meetings:[{platform, native_id}] }
+        const keys = Array.isArray(m.meetings)
+          ? m.meetings.map((x: any) => `${x.platform}/${x.native_id ?? x.native_meeting_id}`)
+          : [];
+        liveClients.set(ws, new Set(keys));
+        ws.send(JSON.stringify({ type: 'subscribed' }));
+      }
+    } catch { /* ignore */ }
+  });
   ws.on('close', () => liveClients.delete(ws));
 });
 gatewayHttp.listen(GATEWAY_PORT, () => console.log(`[desktop] gateway  http://localhost:${GATEWAY_PORT}  (/extension/sessions /bots /transcripts /ws)`));
@@ -139,18 +156,42 @@ ingest.on('connection', async (ws, req) => {
     log: () => { /* quiet */ },
   });
 
-  // multistream (gmeet): per-participant channels named by speaker-joined
+  // multistream (gmeet): per-participant OPAQUE channels. Audio stays per-
+  // participant; the channel→name BINDING is done DOWNSTREAM here by the
+  // cluster-vote binder, fed the SAME active-speaker hints (overlap-robust,
+  // hysteresis, repaint) — NOT in capture. Each channel id IS the binder entity.
   const multi = new SpeakerStreamManager({ sampleRate: SAMPLE_RATE, minAudioDuration: 3, submitInterval: 3, confirmThreshold: 3, maxBufferDuration: 30, idleTimeoutSec: 15 });
-  const chanName = new Map<number, string>(); const added = new Set<number>();
+  const added = new Set<number>();
+  const channelBinder = new ClusterNameBinder({});
+  const channelSegs = new Map<string, Seg[]>();   // channel id → published segments (for repaint)
+  const channelName = new Map<string, string>();  // channel id → current resolved name
+  channelBinder.onLateResolve = (channelId, name) => {
+    const old = channelName.get(channelId) ?? channelId;
+    channelName.set(channelId, name);
+    const segs = channelSegs.get(channelId);
+    if (segs && segs.length && old !== name) {
+      broadcast(metaKey, name, segs.map((s) => ({ ...s, speaker: name })), []); // clients key by segment_id → update in place
+      segs.forEach((s) => { s.speaker = name; });
+    }
+  };
   multi.onSegmentReady = async (sid, _n, audio) => {
     try { if (!txClient) return multi.handleTranscriptionResult(sid, ''); const r = await txClient.transcribe(audio, lang); multi.handleTranscriptionResult(sid, (r?.text || '').trim(), r?.segments?.[r.segments.length - 1]?.end); }
     catch { multi.handleTranscriptionResult(sid, ''); }
   };
-  multi.onSegmentConfirmed = (sid, name, text) => {
+  multi.onSegmentConfirmed = (sid, _name, text, startMs, endMs, segId) => {
     if (!text.trim()) return;
-    const idx = Number(sid.replace('ch-', ''));
-    const spk = chanName.get(idx) || name || sid;
-    broadcast(metaKey, spk, [{ segment_id: `${metaKey}:${sid}:${Date.now()}`, speaker: spk, text, start: Date.now() / 1000, absolute_start_time: new Date().toISOString(), completed: true }], []);
+    const spk = channelBinder.resolve({ clusterId: sid, tStartMs: startMs, tEndMs: endMs }).speakerName; // votes channel→name from hints
+    channelName.set(sid, spk);
+    const seg: Seg = { segment_id: segId || `${metaKey}:${sid}:${startMs}`, speaker: spk, text, start: startMs / 1000, absolute_start_time: new Date(startMs).toISOString(), completed: true };
+    let cs = channelSegs.get(sid); if (!cs) { cs = []; channelSegs.set(sid, cs); } cs.push(seg);
+    broadcast(metaKey, spk, [seg], []);
+  };
+  multi.onSegmentPending = (sid, _name, text, startMs) => {
+    const spk = channelName.get(sid) ?? sid;   // current resolved name; no new vote on a pending refresh
+    const pend = text.trim()
+      ? [{ segment_id: `${metaKey}:${sid}:pending`, speaker: spk, text, start: startMs / 1000, absolute_start_time: new Date(startMs).toISOString(), completed: false }]
+      : [];
+    broadcast(metaKey, spk, [], pend);
   };
 
   ws.send(JSON.stringify({ type: 'ready', meeting_id }));
@@ -164,16 +205,22 @@ ingest.on('connection', async (ws, req) => {
         if (!seen.has(f.speakerIndex)) { seen.add(f.speakerIndex); console.log(`[desktop] channel ${f.speakerIndex}${f.speakerIndex === MIXED ? ' = MIXED → diarizer' : f.speakerIndex === MIC ? ' = MIC → "You"' : ''}`); }
         if (f.speakerIndex === MIXED) { mixedF++; tc.feedAudio(f.samples, f.ts); }
         else if (f.speakerIndex === MIC) { micF++; micTc.feedAudio(f.samples, f.ts); }
-        else { otherF++; const id = `ch-${f.speakerIndex}`; if (!added.has(f.speakerIndex)) { added.add(f.speakerIndex); multi.addSpeaker(id, chanName.get(f.speakerIndex) || `Speaker ${f.speakerIndex + 1}`); } multi.feedAudio(id, f.samples); }
+        else { otherF++; const id = `ch-${f.speakerIndex}`; if (!added.has(f.speakerIndex)) { added.add(f.speakerIndex); multi.addSpeaker(id, id); } multi.feedAudio(id, f.samples); } // opaque channel; the binder names it
         return;
       }
       rec.rawEvent(b);                                    // tee events (chat + hints)
       const ev = decodeEvent(b.toString('utf8'));
-      if (ev?.kind === 'active-speaker' && ev.speaker) { hints++; tc.recordHint(ev.speaker, (ev.detail?.hint as any) || 'dom-active', ev.ts, !!(ev.detail as any)?.isEnd); }
-      else if (ev?.kind === 'speaker-joined' && (ev.detail as any)?.index != null) {
-        const idx = Number((ev.detail as any).index);
-        if (idx !== MIC && idx !== MIXED && ev.speaker) { chanName.set(idx, ev.speaker); if (!added.has(idx)) { added.add(idx); multi.addSpeaker(`ch-${idx}`, ev.speaker); } }
+      // active-speaker = the ONLY naming signal. Feed BOTH binders: tc names the
+      // mixed 999 clusters, channelBinder names the multistream channels. Only the
+      // active platform's path has commits to resolve, so the cross-feed is inert.
+      if (ev?.kind === 'active-speaker' && ev.speaker) {
+        hints++;
+        const kind = ((ev.detail?.hint as any) || 'dom-active') as HintKind;
+        const isEnd = !!(ev.detail as any)?.isEnd;
+        tc.recordHint(ev.speaker, kind, ev.ts, isEnd);
+        channelBinder.recordHint({ name: ev.speaker, tMs: ev.ts, kind, isEnd });
       }
+      // speaker-joined is roster only now — channels come from audio; no channel→name binding.
     } catch (e: any) { console.error('[desktop] msg:', e?.message); }
   });
   const hb = setInterval(() => console.log(`[desktop] \x1b[36m· ${metaKey}  mixed=${mixedF}f mic=${micF}f other=${otherF}f hints=${hints} channels=[${[...seen].join(',')}]\x1b[0m`), 5000);
