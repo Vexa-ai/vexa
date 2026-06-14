@@ -52,6 +52,9 @@ if (!process.env.DESKTOP_NO_DASHBOARD) procs.push({
     // Single local user, no auth backend: a constant key satisfies the proxy's
     // auth gate + the WS api_key query. The desktop gateway ignores its value.
     VEXA_API_KEY: 'local',
+    // No login screen — /api/auth/me returns a synthetic local user so the
+    // dashboard auth-provider authenticates immediately (desktop is single-user).
+    VEXA_DESKTOP_SINGLE_USER: '1',
     PORT: DASHBOARD_PORT,
   },
 });
