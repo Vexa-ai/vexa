@@ -33,6 +33,17 @@ import {
   // reloaded and re-injected), stop it completely before installing this one —
   // otherwise both capture and post duplicate audio/diag messages.
   try { (window as any).__vexaInpageTeardown?.(); } catch { /* old instance gone */ }
+
+  // Capture epoch — the SINGLE source of truth for "who owns capture in this
+  // page". Teardown-pointer chaining alone is racy (the pointer is overwritten by
+  // each new instance and START can reach several instances), which let multiple
+  // instances capture the same <audio> elements → 2-3× duplicated PCM (the
+  // captured-audio stutter). Each instance claims a higher epoch on load; any
+  // instance that is no longer the newest refuses to post audio and self-stops.
+  const myEpoch = (((window as any).__vexaCaptureEpoch as number) || 0) + 1;
+  (window as any).__vexaCaptureEpoch = myEpoch;
+  const isCurrent = () => (window as any).__vexaCaptureEpoch === myEpoch;
+
   const TARGET_SAMPLE_RATE = 16000;
 
   let running = false;
@@ -156,7 +167,7 @@ import {
         if (!running) return;
         let maxVal = 0;
         for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
-        if (maxVal > 0.005) post('audio', { index: MIC_INDEX, pcm: Array.from(data) });
+        if (maxVal > 0.005 && isCurrent()) post('audio', { index: MIC_INDEX, pcm: Array.from(data) });
       });
       source.connect(node);
       node.connect(ctx.destination);
@@ -170,7 +181,7 @@ import {
   }
 
   async function start() {
-    if (running) return;
+    if (running || !isCurrent()) return;   // a superseded instance never captures
     running = true;
     console.log(`${TAG} starting capture`);
 
@@ -192,7 +203,7 @@ import {
         // SoC: just ship each opaque per-participant channel's audio. No binding
         // here — the downstream cluster-vote binder names channel N from the
         // active-speaker hints. (No reportTrackAudio / placeholder relabel.)
-        onAudio: (index, pcm) => post('audio', { index, pcm: Array.from(pcm) }),
+        onAudio: (index, pcm) => { if (isCurrent()) post('audio', { index, pcm: Array.from(pcm) }); },
       });
       await gmeetCapture.start();
     }
@@ -201,7 +212,10 @@ import {
     console.log(`${TAG} capture started with ${streamCount()} stream(s) (mic + participants)`);
 
     // Keep the panel's stream count live — the rescan discovers late joiners.
-    countTimer = window.setInterval(() => { if (running) post('capture-started', { streams: streamCount() }); }, 5000);
+    countTimer = window.setInterval(() => {
+      if (!isCurrent()) { stop(); return; }   // a newer instance took over — release capture
+      if (running) post('capture-started', { streams: streamCount() });
+    }, 5000);
   }
 
   function stop() {

@@ -43,6 +43,7 @@ console.log(`[desktop] lite-db: ${store.path}`);
 interface Seg { segment_id: string; speaker: string; text: string; start: number; absolute_start_time: string; completed: boolean }
 const liveClients = new Map<WebSocket, Set<string>>();  // ws → subscribed metaKeys (empty set = all, for diagnostics)
 const meetingByKey = new Map<string, number>();   // platform/native → meeting_id
+const captureConnByKey = new Map<string, WebSocket>(); // platform/native → the ONE active capture ws
 const keyOf = (p: string, n: string) => `${p}/${n}`;
 const toSeg = (c: ChunkSegment, speaker: string, completed: boolean): Seg => ({
   segment_id: c.segmentId, speaker, text: c.text, start: c.startMs / 1000,
@@ -201,6 +202,12 @@ ingest.on('connection', async (ws, req) => {
   const nativeId = url.searchParams.get('native_meeting_id') || '?';
   const language = url.searchParams.get('language');
   const metaKey = keyOf(platform, nativeId);
+  // One capture per meeting. A second tab/window capturing the same meeting would
+  // merge a duplicate audio stream into this session → 2-3× PCM (the stutter).
+  // Last-writer-wins: drop the previous capture connection for this meeting.
+  const prevConn = captureConnByKey.get(metaKey);
+  if (prevConn && prevConn !== ws) { console.log(`[desktop] ⚠ ${metaKey} superseded by a new capture — closing the previous one`); try { prevConn.close(4001, 'superseded'); } catch { /* already gone */ } }
+  captureConnByKey.set(metaKey, ws);
   const { meeting_id } = store.resolveSession(platform, nativeId);
   meetingByKey.set(metaKey, meeting_id);
   console.log(`[desktop] ▶ ${metaKey}  meeting_id=${meeting_id}`);
@@ -346,6 +353,7 @@ ingest.on('connection', async (ws, req) => {
     clearInterval(hb);
     try { await tc.dispose(); } catch { /* */ } try { await micTc.dispose(); } catch { /* */ } try { (multi as any).destroy?.(); } catch { /* */ }
     try { const dir = await rec.finalize(); console.log(`[desktop] ■ fixture: ${dir}`); } catch { /* */ }
+    if (captureConnByKey.get(metaKey) === ws) captureConnByKey.delete(metaKey); // only if not already superseded
     store.endMeeting(meeting_id);
     console.log(`[desktop] ■ ${metaKey} closed (meeting_id=${meeting_id})`);
   };
