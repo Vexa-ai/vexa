@@ -67,6 +67,12 @@ const PROMPT_TAIL_CHARS = 200;
 const MAX_UNRESOLVED = 100;
 /** A silence gap between commits longer than this closes the turn. */
 const TURN_GAP_MS = 2500;
+/** A real silence at least this long resets the in-memory Whisper prompt: a fresh
+ *  utterance shouldn't inherit the prior context, and any silence-hallucination
+ *  poison ("Продолжение следует") is cleared before it can feed back and loop.
+ *  Above natural sentence/breath pauses (<1.5s) so continuous speech keeps its
+ *  context; just past TURN_GAP_MS so it fires on a genuine end-of-utterance break. */
+const SILENCE_PROMPT_RESET_MS = 3000;
 /** Cap on the UNCONFIRMED window — if stability stalls this long, the turn
  *  force-closes (everything confirms). Stays inside Whisper's input window. */
 const TURN_MAX_MS = 28_000;
@@ -170,6 +176,9 @@ export class ChunkedTranscriber {
   private latestAudioMs = 0;
   private pumping = false;
   private lastConfirmedText = '';
+  /** Audio-time end of the last processed commit — used to detect the silence
+   *  gap that resets the prompt (SILENCE_PROMPT_RESET_MS). */
+  private lastAudioEndMs = 0;
   private commitCounter = 0;
   private turnCounter = 0;
   private disposed = false;
@@ -404,6 +413,12 @@ export class ChunkedTranscriber {
     // Never re-enter confirmed audio (overlap-duplicated commits, flicker).
     if (chunk.t1 <= this.confirmedHighWaterMs + 250) return;
     chunk = { ...chunk, t0: Math.max(chunk.t0, this.confirmedHighWaterMs) };
+    // Real silence since the last commit → reset the in-memory prompt so the new
+    // utterance starts clean (no inherited context, no silence-hallucination loop).
+    if (this.lastAudioEndMs > 0 && chunk.t0 - this.lastAudioEndMs >= SILENCE_PROMPT_RESET_MS) {
+      this.lastConfirmedText = '';
+    }
+    this.lastAudioEndMs = Math.max(this.lastAudioEndMs, chunk.t1);
     // Turn membership FIRST — a closed turn fully confirms before the next
     // turn's first submission, keeping confirmed output strictly ordered.
     if (this.turnCloses(chunk)) {
