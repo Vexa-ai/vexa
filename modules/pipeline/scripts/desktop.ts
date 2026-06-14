@@ -240,7 +240,11 @@ ingest.on('connection', async (ws, req) => {
   // grab the overlapping speaker, and the label tracks the real-time glow.
   const channelBinder = new ClusterNameBinder({ matchToleranceMs: 800 });
   const channelSegs = new Map<string, Seg[]>();        // channel id → published (confirmed) segments, for repaint
-  const channelName = new Map<string, string>();       // channel id → current resolved name
+  const channelName = new Map<string, string>();       // channel id → current resolved name (this turn only)
+  const channelLastFrameMs = new Map<string, number>(); // channel id → ts of its last audio frame
+  // A gap longer than this on a channel ends its turn: Meet may rotate the channel
+  // to a different participant, so its name is forgotten and the next turn maps fresh.
+  const CHANNEL_TURN_GAP_MS = 1500;
   const channelDraftName = new Map<string, string>();  // channel id → NAME its live pending draft sits under
   const channelDraftSeg = new Map<string, Seg>();      // channel id → current pending draft seg (to re-home on rename)
   // The client keys pending drafts by SPEAKER NAME (pendingBySpeaker) and replaces
@@ -299,7 +303,14 @@ ingest.on('connection', async (ws, req) => {
         if (!seen.has(f.speakerIndex)) { seen.add(f.speakerIndex); console.log(`[desktop] channel ${f.speakerIndex}${f.speakerIndex === MIXED ? ' = MIXED → diarizer' : f.speakerIndex === MIC ? ' = MIC → "You"' : ''}`); }
         if (f.speakerIndex === MIXED) { mixedF++; tc.feedAudio(f.samples, f.ts); }
         else if (f.speakerIndex === MIC) { micF++; micTc.feedAudio(f.samples, f.ts); }
-        else { otherF++; const id = `ch-${f.speakerIndex}`; if (!added.has(f.speakerIndex)) { added.add(f.speakerIndex); multi.addSpeaker(id, id); } multi.feedAudio(id, f.samples); } // opaque channel; the binder names it
+        else { // opaque channel; named only by a confident hint lit during its turn
+          otherF++; const id = `ch-${f.speakerIndex}`;
+          if (!added.has(f.speakerIndex)) { added.add(f.speakerIndex); multi.addSpeaker(id, id); }
+          const prevTs = channelLastFrameMs.get(id);
+          if (prevTs !== undefined && f.ts - prevTs > CHANNEL_TURN_GAP_MS) channelName.delete(id); // turn ended → may have rotated; map fresh
+          channelLastFrameMs.set(id, f.ts);
+          multi.feedAudio(id, f.samples);
+        }
         return;
       }
       rec.rawEvent(b);                                    // tee events (chat + hints)
