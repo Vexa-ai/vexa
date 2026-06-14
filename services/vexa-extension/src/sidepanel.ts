@@ -5,21 +5,30 @@
  *  - REST bootstrap: GET {gateway}/transcripts/{platform}/{native_id} (X-API-Key)
  *  - Live: WS {gateway}/ws?api_key=… → {action:'subscribe', meetings:[…]} →
  *    'transcript' bundles (per-speaker confirmed[] + pending[]), ping keepalive
- *  - Two-map merge model: confirmed by segment_id (append-only) + pending
- *    replaced per speaker per tick (same as use-live-transcripts.ts)
+ *  - Two-map merge model + the stale-pending filter come from the SHARED
+ *    @vexaai/transcript-rendering package — the SAME module the dashboard uses
+ *    (createTranscriptState / bootstrapConfirmed / applyTranscriptTick /
+ *    recomputeTranscripts). This file owns only the DOM painting; the transcript
+ *    STATE logic has exactly one implementation across all clients.
  *  - Rendering: colored speaker names, grouped consecutive turns, drafts in
  *    muted italic (same as transcript-segment.tsx / SPEAKER_COLORS)
  *
  * Capture control stays in the background worker (START/STOP/STATUS messages).
  */
 
-interface Segment {
-  segment_id?: string;
+import {
+  createTranscriptState,
+  bootstrapConfirmed,
+  applyTranscriptTick,
+  recomputeTranscripts,
+  type TranscriptSegment,
+} from '@vexaai/transcript-rendering';
+
+// The package's segment shape + the few fields this UI also paints.
+interface Segment extends TranscriptSegment {
   speaker: string;
-  text: string;
+  /** Relative start (s) — fallback timestamp when absolute is absent. */
   start: number;
-  completed: boolean;
-  absolute_start_time?: string;
   language?: string;
 }
 
@@ -63,9 +72,8 @@ const DEFAULTS: Record<string, string> = {
 let cfg: Record<string, string> = { ...DEFAULTS };
 let state: PanelState = { status: 'idle', platform: null, nativeMeetingId: null, meetingId: null, streams: 0, error: null, tabAudio: 'none' };
 
-// Transcript state — the dashboard's two-map model
-let confirmed: Map<string, Segment> = new Map();
-let pendingBySpeaker: Map<string, Segment[]> = new Map();
+// Transcript state — the shared two-map model (single source of truth).
+let tState = createTranscriptState<Segment>();
 let speakerOrder: string[] = [];
 let liveWs: WebSocket | null = null;
 let livePing: ReturnType<typeof setInterval> | null = null;
@@ -232,13 +240,15 @@ async function pollStatus(): Promise<void> {
 // ── Live transcript feed (same protocol as the dashboard) ───────
 
 function toSegment(s: any): Segment {
+  const absStart = s.absolute_start_time || s.created_at || '';
   return {
-    segment_id: s.segment_id || s.id || s.absolute_start_time,
+    segment_id: s.segment_id || s.id || absStart,
     speaker: s.speaker || '',
     text: (s.text || '').trim(),
     start: s.start ?? s.start_time ?? 0,
     completed: s.completed !== false,
-    absolute_start_time: s.absolute_start_time || s.created_at,
+    absolute_start_time: absStart,
+    absolute_end_time: s.absolute_end_time || absStart,
     language: s.language,
   };
 }
@@ -258,8 +268,7 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
   if (liveFor === key && liveWs && liveWs.readyState <= WebSocket.OPEN) return;
   stopLive();
   liveFor = key;
-  confirmed = new Map();
-  pendingBySpeaker = new Map();
+  tState = createTranscriptState<Segment>();
   speakerOrder = [];
 
   // 1. REST bootstrap (history)
@@ -270,10 +279,7 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
     });
     if (resp.ok) {
       const data = await resp.json();
-      for (const raw of data.segments || []) {
-        const seg = toSegment(raw);
-        if (seg.text && seg.segment_id) confirmed.set(seg.segment_id, seg);
-      }
+      bootstrapConfirmed(tState, (data.segments || []).map(toSegment));
       feedStatus('');
     } else {
       feedStatus(`History fetch failed: HTTP ${resp.status} from ${cfg.gatewayUrl}`, true);
@@ -310,12 +316,9 @@ async function startLive(platform: string, nativeId: string): Promise<void> {
       // confirmed segments republish under the new name with the SAME
       // segment_ids (formed from the stream key) — so this map self-heals.
       const speaker = msg.speaker || '';
-      for (const raw of msg.confirmed || []) {
-        const seg = toSegment(raw);
-        if (seg.text && seg.segment_id) confirmed.set(seg.segment_id, seg);
-      }
-      const pend = (msg.pending || []).map(toSegment).filter((s: Segment) => s.text);
-      pendingBySpeaker.set(speaker, pend);
+      const conf = (msg.confirmed || []).map(toSegment);
+      const pend = (msg.pending || []).map(toSegment);
+      applyTranscriptTick(tState, conf, pend, speaker);
       render();
     } catch { /* ignore malformed frame */ }
   };
@@ -360,15 +363,9 @@ function fmtTime(seg: Segment): string {
 
 function render(): void {
   const feed = $('feed');
-  // ONE combined timestamp ordering for confirmed + pending — appending
-  // pending after the sort rendered drafts out of order at the bottom.
-  // Segments without an absolute time sink to the end (newest drafts).
-  const all: Segment[] = [...confirmed.values()];
-  for (const segs of pendingBySpeaker.values()) {
-    for (const s of segs) all.push({ ...s, completed: false });
-  }
-  all.sort((a, b) =>
-    (a.absolute_start_time || '\uffff').localeCompare(b.absolute_start_time || '\uffff') || a.start - b.start);
+  // Merge confirmed + non-stale pending, sorted by absolute time \u2014 the shared
+  // recompute (the SAME logic the dashboard uses), incl. the stale-draft filter.
+  const all = recomputeTranscripts(tState);
   if (all.length === 0) {
     feed.innerHTML = `<div class="empty" id="emptyState"><div style="font-size:22px;">&#127911;</div><div>Listening… speak and the transcript appears here.</div></div>`;
     return;

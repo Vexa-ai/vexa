@@ -9,7 +9,12 @@
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@vexa/capture": ["../../modules/capture/src/index.ts"],
+      "@vexaai/transcript-rendering": ["../../packages/transcript-rendering/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts"]
 }
