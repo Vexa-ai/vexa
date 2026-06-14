@@ -43,6 +43,15 @@ if (!process.env.DESKTOP_NO_DASHBOARD) procs.push({
   env: {
     NEXT_PUBLIC_API_URL: `http://localhost:${GATEWAY_PORT}`,
     NEXT_PUBLIC_VEXA_API_URL: `http://localhost:${GATEWAY_PORT}`,
+    // next.config + the /api/vexa server proxy + /api/config hard-require VEXA_API_URL (the SSOT).
+    // REST is same-origin → /api/vexa/* (server proxy → gateway); the live WS is
+    // same-origin ws://…:3001/ws → Next's /ws rewrite → gateway/ws (verified to
+    // proxy the upgrade under Turbopack dev). The browser never hits :8056 directly,
+    // so no loopback public-URL override is needed (resolveBrowserApiUrl drops it anyway).
+    VEXA_API_URL: `http://localhost:${GATEWAY_PORT}`,
+    // Single local user, no auth backend: a constant key satisfies the proxy's
+    // auth gate + the WS api_key query. The desktop gateway ignores its value.
+    VEXA_API_KEY: 'local',
     PORT: DASHBOARD_PORT,
   },
 });

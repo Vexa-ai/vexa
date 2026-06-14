@@ -91,7 +91,17 @@ const gatewayHttp = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/extension/sessions/end') {
     const b = await readBody(req); if (b.meeting_id != null) store.endMeeting(Number(b.meeting_id)); return send({ ok: true });
   }
-  if (req.method === 'GET' && url.pathname === '/bots') return send(store.listMeetings());
+  if (req.method === 'GET' && url.pathname === '/bots') {
+    // Prod /bots shape: { meetings:[…], has_more }. The dashboard proxy reads
+    // data.meetings and expects native_meeting_id + data as an object; the
+    // extension only health-checks resp.ok (body ignored), so this satisfies both.
+    const meetings = (store.listMeetings() as any[]).map((m) => ({
+      ...m,
+      native_meeting_id: m.native_id,
+      data: (() => { try { return typeof m.data === 'string' ? JSON.parse(m.data) : (m.data ?? {}); } catch { return {}; } })(),
+    }));
+    return send({ meetings, has_more: false });
+  }
   const bot = url.pathname.match(/^\/bots\/id\/(\d+)/);
   if (req.method === 'GET' && bot) { const m = store.getMeeting(Number(bot[1])); return m ? send(m) : send({ error: 'not found' }, 404); }
   const tr = url.pathname.match(/^\/transcripts\/([^/]+)\/([^/]+)/);
