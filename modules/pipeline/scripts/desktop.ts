@@ -163,16 +163,33 @@ ingest.on('connection', async (ws, req) => {
   const multi = new SpeakerStreamManager({ sampleRate: SAMPLE_RATE, minAudioDuration: 3, submitInterval: 3, confirmThreshold: 3, maxBufferDuration: 30, idleTimeoutSec: 15 });
   const added = new Set<number>();
   const channelBinder = new ClusterNameBinder({});
-  const channelSegs = new Map<string, Seg[]>();   // channel id → published segments (for repaint)
-  const channelName = new Map<string, string>();  // channel id → current resolved name
+  const channelSegs = new Map<string, Seg[]>();        // channel id → published (confirmed) segments, for repaint
+  const channelName = new Map<string, string>();       // channel id → current resolved name
+  const channelDraftName = new Map<string, string>();  // channel id → NAME its live pending draft sits under
+  const channelDraftSeg = new Map<string, Seg>();      // channel id → current pending draft seg (to re-home on rename)
+  // The client keys pending drafts by SPEAKER NAME (pendingBySpeaker) and replaces
+  // them wholesale. So a draft published under the provisional "ch-0" is NOT cleared
+  // when the confirm lands under "Vexa" — it orphans (the ch-0/Vexa duplicate). Every
+  // rename/confirm must therefore clear the draft under its OLD name explicitly.
+  const setChannelDraft = (sid: string, name: string, seg: Seg | null) => {
+    const prev = channelDraftName.get(sid);
+    if (prev && prev !== name) broadcast(metaKey, prev, [], []);   // drop the stale draft under the old name
+    if (seg) { channelDraftName.set(sid, name); channelDraftSeg.set(sid, seg); broadcast(metaKey, name, [], [seg]); }
+    else { channelDraftName.delete(sid); channelDraftSeg.delete(sid); broadcast(metaKey, name, [], []); }
+  };
   channelBinder.onLateResolve = (channelId, name) => {
     const old = channelName.get(channelId) ?? channelId;
+    if (old === name) return;
     channelName.set(channelId, name);
+    // Repaint published segments under the new name — same segment_id ⇒ client UPSERTs in place.
     const segs = channelSegs.get(channelId);
-    if (segs && segs.length && old !== name) {
-      broadcast(metaKey, name, segs.map((s) => ({ ...s, speaker: name })), []); // clients key by segment_id → update in place
+    if (segs && segs.length) {
+      broadcast(metaKey, name, segs.map((s) => ({ ...s, speaker: name })), []);
       segs.forEach((s) => { s.speaker = name; });
     }
+    // Re-home the live draft to the new name (clears the orphan under the old name).
+    const draft = channelDraftSeg.get(channelId);
+    if (draft) setChannelDraft(channelId, name, { ...draft, speaker: name });
   };
   multi.onSegmentReady = async (sid, _n, audio) => {
     try { if (!txClient) return multi.handleTranscriptionResult(sid, ''); const r = await txClient.transcribe(audio, lang); multi.handleTranscriptionResult(sid, (r?.text || '').trim(), r?.segments?.[r.segments.length - 1]?.end); }
@@ -184,14 +201,15 @@ ingest.on('connection', async (ws, req) => {
     channelName.set(sid, spk);
     const seg: Seg = { segment_id: segId || `${metaKey}:${sid}:${startMs}`, speaker: spk, text, start: startMs / 1000, absolute_start_time: new Date(startMs).toISOString(), completed: true };
     let cs = channelSegs.get(sid); if (!cs) { cs = []; channelSegs.set(sid, cs); } cs.push(seg);
+    setChannelDraft(sid, spk, null);          // confirm supersedes the live draft — clear it (under whatever name)
     broadcast(metaKey, spk, [seg], []);
   };
   multi.onSegmentPending = (sid, _name, text, startMs) => {
-    const spk = channelName.get(sid) ?? sid;   // current resolved name; no new vote on a pending refresh
-    const pend = text.trim()
-      ? [{ segment_id: `${metaKey}:${sid}:pending`, speaker: spk, text, start: startMs / 1000, absolute_start_time: new Date(startMs).toISOString(), completed: false }]
-      : [];
-    broadcast(metaKey, spk, [], pend);
+    const spk = channelName.get(sid) ?? sid;  // current resolved name; no new vote on a pending refresh
+    const seg = text.trim()
+      ? { segment_id: `${metaKey}:${sid}:pending`, speaker: spk, text, start: startMs / 1000, absolute_start_time: new Date(startMs).toISOString(), completed: false }
+      : null;
+    setChannelDraft(sid, spk, seg);
   };
 
   ws.send(JSON.stringify({ type: 'ready', meeting_id }));
