@@ -111,7 +111,17 @@ const gatewayHttp = http.createServer(async (req, res) => {
   const bot = url.pathname.match(/^\/bots\/id\/(\d+)/);
   if (req.method === 'GET' && bot) { const m = store.getMeeting(Number(bot[1])); return m ? send(mapMeetingRow(m)) : send({ error: 'not found' }, 404); }
   const tr = url.pathname.match(/^\/transcripts\/([^/]+)\/([^/]+)/);
-  if (req.method === 'GET' && tr) return send({ segments: store.getTranscripts(decodeURIComponent(tr[1]), decodeURIComponent(tr[2])) });
+  if (req.method === 'GET' && tr) {
+    // Prod /transcripts shape: the meeting envelope { id, platform,
+    // native_meeting_id, status, … } PLUS segments + recordings. The dashboard
+    // builds its Meeting from this response (data.id.toString()), so the
+    // metadata must be present, not just segments.
+    const platform = decodeURIComponent(tr[1]); const nativeId = decodeURIComponent(tr[2]);
+    const m = store.getMeetingByNative(platform, nativeId);
+    const envelope = m ? mapMeetingRow(m)
+      : { id: 0, platform, native_meeting_id: nativeId, status: 'unknown', start_time: null, end_time: null, data: {} };
+    return send({ ...envelope, segments: store.getTranscripts(platform, nativeId), recordings: [] });
+  }
   send({ error: 'not found', path: url.pathname }, 404);
 });
 new WebSocketServer({ server: gatewayHttp, path: '/ws' }).on('connection', (ws) => {

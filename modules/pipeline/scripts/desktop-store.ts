@@ -76,6 +76,14 @@ export class Store {
     return this.db.prepare(`SELECT * FROM meetings WHERE id=?`).get(meetingId) || null;
   }
 
+  /** Most recent meeting row for a platform/native id (any status) — used to
+   *  enrich the /transcripts response with meeting metadata. */
+  getMeetingByNative(platform: string, nativeId: string) {
+    return this.db.prepare(
+      `SELECT * FROM meetings WHERE platform=? AND native_id=? ORDER BY id DESC LIMIT 1`
+    ).get(platform, nativeId) || null;
+  }
+
   /** GET /bots — recent meetings for the dashboard. */
   listMeetings(limit = 100) {
     return this.db.prepare(`SELECT * FROM meetings ORDER BY id DESC LIMIT ?`).all(limit);
