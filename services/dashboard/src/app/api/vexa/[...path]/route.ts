@@ -138,12 +138,13 @@ async function proxyRequest(
         content_type?: string;
       };
 
-      const match = pathString.match(/^recordings\/(\d+)\/master$/);
-      const recordingId = match?.[1] || "";
+      const masterMatch = pathString.match(/^recordings\/(\d+)\/master$/);
+      const downloadMatch = pathString.match(/^recordings\/(\d+)\/media\/(\d+)\/download$/);
+      const recordingId = masterMatch?.[1] || downloadMatch?.[1] || "";
       const mediaType = upstreamSearchParams.get("type") || "";
-      if (!recordingId || !/^(audio|video)$/.test(mediaType)) {
+      if (!recordingId || (masterMatch && !/^(audio|video)$/.test(mediaType))) {
         return NextResponse.json(
-          { error: "Invalid master media proxy request" },
+          { error: "Invalid media proxy request" },
           { status: 502, headers: { "Cache-Control": "no-store" } }
         );
       }
@@ -173,7 +174,7 @@ async function proxyRequest(
         mediaUrl = new URL(selectedUrl);
         const isHostLocalUrl = ["localhost", "127.0.0.1", "[::1]"].includes(mediaUrl.hostname);
         if (isHostLocalUrl && (data.raw_url || data.media_file_id)) {
-          const rawUrl = data.raw_url || `/recordings/${recordingId}/media/${data.media_file_id}/raw`;
+          const rawUrl = data.raw_url || `/recordings/${recordingId}/media/${downloadMatch?.[2] ?? data.media_file_id}/raw`;
           mediaUrl = new URL(rawUrl, `${VEXA_API_URL}/`);
           if (VEXA_API_KEY) {
             mediaHeaders["X-API-Key"] = VEXA_API_KEY;
@@ -212,6 +213,29 @@ async function proxyRequest(
           }),
         },
       });
+    }
+
+    // AIS-178: if download proxy was requested but /download returned non-ok (e.g. 404
+    // for an in-progress meeting without a master), fall back to /raw (streaming chunks).
+    if (proxyMasterMedia && !response.ok) {
+      const m = pathString.match(/^recordings\/(\d+)\/media\/(\d+)\/download$/);
+      if (m) {
+        const rawPath = `recordings/${m[1]}/media/${m[2]}/raw`;
+        const rawHeaders: HeadersInit = VEXA_API_KEY ? { "X-API-Key": VEXA_API_KEY } : {};
+        if (rangeHeader) rawHeaders["Range"] = rangeHeader;
+        const rawResp = await fetch(`${VEXA_API_URL}/${rawPath}`, { headers: rawHeaders, cache: "no-store" });
+        const rawBlob = await rawResp.blob();
+        return new NextResponse(rawBlob, {
+          status: rawResp.status,
+          headers: {
+            "Content-Type": rawResp.headers.get("content-type") || "application/octet-stream",
+            "Content-Length": rawResp.headers.get("content-length") || "",
+            "Cache-Control": "no-store",
+            ...(rawResp.headers.get("content-range") ? { "Content-Range": rawResp.headers.get("content-range")! } : {}),
+            ...(rawResp.headers.get("accept-ranges") ? { "Accept-Ranges": rawResp.headers.get("accept-ranges")! } : {}),
+          },
+        });
+      }
     }
 
     if (contentType.includes("audio") || contentType.includes("video") || contentType.includes("octet-stream")) {

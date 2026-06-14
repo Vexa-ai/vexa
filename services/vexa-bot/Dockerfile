@@ -88,6 +88,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && apt-get install -
     libxcb-xtest0 \
     fluxbox \
     x11vnc \
+    xdotool \
+    xclip \
     novnc \
     python3-websockify \
     xdotool \

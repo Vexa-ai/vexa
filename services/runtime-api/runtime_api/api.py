@@ -13,6 +13,7 @@ Provides REST API for container lifecycle management:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -211,6 +212,12 @@ async def create_container(req: CreateContainerRequest, request: Request):
     user_env = req.config.get("env", {})
     if isinstance(user_env, dict):
         env.update(user_env)
+
+    # BOT_CONFIG: full bot configuration serialized as JSON.
+    # Required by services/vexa-bot/core/entrypoint.sh which starts the bot.
+    # Only set if caller (e.g. meeting-api) has not already provided it.
+    if "BOT_CONFIG" not in env:
+        env["BOT_CONFIG"] = json.dumps(req.config)
 
     # Build labels
     labels = {

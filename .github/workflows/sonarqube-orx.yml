@@ -1,0 +1,28 @@
+name: SonarQube Analysis (ORX)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  sonar:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=vexa-orx
+            -Dsonar.projectName=vexa-orx
+            -Dsonar.sources=services,features,libs,packages
+            -Dsonar.exclusions=**/__pycache__/**,**/*.pyc,**/node_modules/**,**/tests/**,**/venv/**,**/.venv/**

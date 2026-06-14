@@ -369,29 +369,13 @@ export const vexaAPI = {
     recordingId: number,
     mediaFileId: number
   ): Promise<string> {
-    try {
-      const response = await fetch(
-        withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/download`)
-      );
-      if (response.ok) {
-        const data = (await response.json()) as { url?: string; download_url?: string };
-        const presigned = data.url || data.download_url || "";
-        // Local-storage backend returns a relative `/raw` path; absolute
-        // (https://...) URLs go straight to MinIO.
-        if (presigned && /^https?:\/\//.test(presigned)) {
-          return presigned;
-        }
-        if (presigned) {
-          return withBasePath(`/api/vexa${presigned}`);
-        }
-      }
-      // 404 / non-OK / empty body → fall through to /raw fallback below.
-    } catch {
-      // Network error → fall through to /raw fallback below.
-    }
-    // fallback: master may not exist if finalizer crashed; /raw streams chunks (tested in BOT_KILL_RECORDING_PLAYABLE_*) — kept until Pack U master_ready flag exists
+    // AIS-178: route through server-side proxy so Next.js resolves the MinIO
+    // presigned URL and forwards Range headers server-side. Direct presigned
+    // URLs fail Range requests from the browser (SignatureDoesNotMatch 403).
+    // /raw fallback for in-progress recordings without a master is handled
+    // in route.ts (proxyMasterMedia block).
     return withBasePath(
-      `/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`
+      `/api/vexa/recordings/${recordingId}/media/${mediaFileId}/download?proxy=1`
     );
   },
 
