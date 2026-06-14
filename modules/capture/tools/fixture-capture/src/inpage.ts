@@ -16,14 +16,11 @@
  * (src/browser/gmeet-speakers.ts) — one algorithm for bot and extension.
  */
 
-import {
-  createGmeetSpeakers, GmeetSpeakers,
-  createZoomSpeakers, ZoomSpeakers,
-  createTeamsSpeakers, TeamsSpeakers,
-  createGmeetCapture, GmeetCapture,
-  createZoomChat, ZoomChat,
-  createTeamsChat, TeamsChat,
-} from '@vexa/capture';
+import { createGmeetSpeakers, GmeetSpeakers } from '../../../src/gmeet-speakers';
+import { createZoomSpeakers, ZoomSpeakers } from '../../../src/zoom-speakers';
+import { createTeamsSpeakers, TeamsSpeakers } from '../../../src/msteams-speakers';
+import { createGmeetCapture, GmeetCapture } from '../../../src/gmeet-capture';
+import { createZoomChat, ZoomChat } from '../../../src/zoom-chat';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -60,7 +57,6 @@ import {
   let zoomSpeakers: ZoomSpeakers | null = null;
   let teamsSpeakers: TeamsSpeakers | null = null;
   let zoomChat: ZoomChat | null = null;
-  let teamsChat: TeamsChat | null = null;
 
   function isTeamsHost(): boolean {
     return location.hostname.endsWith('teams.live.com')
@@ -99,8 +95,8 @@ import {
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
       console.log(`${TAG} shared zoom-speakers attribution started (multi-channel, self="${selfName || 'unknown'}")`);
-      // Chat capture — each message becomes a capture.v1 `chat` event (rides the
-      // same stream as audio/hints). Chat panel must be open for messages to exist.
+      // Chat capture — emit each message as a capture.v1 `chat` event. Independent
+      // of audio/attribution; the chat panel must be open for messages to exist.
       if (!zoomChat) {
         zoomChat = createZoomChat({
           log: (m) => console.log(`${TAG} [zoom-chat] ${m}`),
@@ -121,14 +117,6 @@ import {
       });
       (window as any).__vexaTeamsSpeakers = teamsSpeakers;
       console.log(`${TAG} shared msteams-speakers attribution started (blue squares)`);
-      // Chat capture — each message becomes a capture.v1 `chat` event (same as zoom).
-      if (!teamsChat) {
-        teamsChat = createTeamsChat({
-          log: (m) => console.log(`${TAG} [teams-chat] ${m}`),
-          onMessage: ({ sender, text }) => post('chat-message', { sender, text }),
-        });
-        (window as any).__vexaTeamsChat = teamsChat;
-      }
     }
   }
 
@@ -191,17 +179,22 @@ import {
     await startMic();
     post('capture-started', { streams: streamCount() });
 
-    // Per-participant in-page capture is GOOGLE MEET ONLY — Meet exposes native
-    // per-participant <audio> elements. Zoom AND Teams use the SAME mixed path:
-    // one diarized tab-audio channel (999) captured by the offscreen document.
-    // (Teams Web does expose per-participant WebRTC tracks, but we deliberately
-    // do NOT use them — Teams must follow Zoom's mixed path exactly.)
-    const isPerParticipant = location.hostname.endsWith('meet.google.com');
-    if (isPerParticipant) {
+    // Per-participant capture via the SHARED vexa-bot module — runs on ALL
+    // meeting platforms. Google Meet exposes native per-participant <audio>
+    // elements; Zoom/Teams get equivalent ones from the document_start WebRTC
+    // hook (each remote track mirrored into a hidden <audio>). So this captures
+    // MULTI-CHANNEL everywhere — no mixed tabCapture.
+    const isMeeting = location.hostname.endsWith('meet.google.com')
+      || location.hostname.endsWith('zoom.us')
+      || location.hostname.endsWith('teams.live.com')
+      || location.hostname.endsWith('teams.microsoft.com')
+      || location.hostname === 'teams.cloud.microsoft';
+    if (isMeeting) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
         onAudio: (index, pcm) => {
           speakers?.reportTrackAudio(index);       // Meet per-track voting
+          zoomSpeakers?.reportTrackAudio(index);   // Zoom per-track voting
           labelTrack(index);                       // placeholder until a name locks
           post('audio', { index, pcm: Array.from(pcm) });
         },
@@ -223,7 +216,6 @@ import {
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
-    if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     labeledTracks.clear();
@@ -296,6 +288,24 @@ import {
         !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0).length,
       zoomSpeakers: zs,
       gmeetSpeakers: gs,
+      zoomChat: w.__vexaZoomChat ? (() => {
+        try { const st = w.__vexaZoomChat.getState(); return { matched: st.matchedContainer, seen: st.seen, candidates: st.candidates.filter((c: any) => c.count > 0), sample: st.sample, recent: st.recent.map((m: any) => ({ sender: m.sender, text: (m.text || '').length <= 60 ? m.text : scrub(m.text) })) }; }
+        catch (e: any) { return { error: String(e?.message || e) }; }
+      })() : null,
+      // Deep audio-architecture probe (audio-probe.ts, installed at document_start).
+      // This is what reveals where Zoom's audio actually lives.
+      probe: (() => {
+        const p = w.__vexaProbe;
+        if (!p) return null;
+        return {
+          audioContexts: p.audioContexts.map((c: any) => ({ state: c.state, sr: c.sampleRate, samples: c.samples, peak: Number(c.peak?.toFixed?.(4) ?? c.peak) })),
+          gum: p.gum, gdm: p.gdm,
+          worklets: p.worklets, wasm: p.wasmInstantiations,
+          msSources: p.msSources, msDestinations: p.msDestinations,
+          scriptProcessors: p.scriptProcessors, audioWorkletNodes: p.audioWorkletNodes,
+          pcAudioStats: p.pcAudioStats,
+        };
+      })(),
     };
   }
   const diagTimer = setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
@@ -313,7 +323,6 @@ import {
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
-    if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
     console.log(`${TAG} instance torn down (superseded)`);
   };
 

@@ -26,17 +26,17 @@ import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, clean
 // HTTP imports removed - using unified callback service instead
 
 // Per-speaker transcription pipeline
-import { TranscriptionClient , setLogger as setPipelineLogger } from '@vexa/speaker-streams';
+import { TranscriptionClient , setLogger as setPipelineLogger } from '@vexa/pipeline';
 import { SegmentPublisher } from './services/segment-publisher';
-import { SpeakerStreamManager } from '@vexa/speaker-streams';
-import { ChunkedTranscriber } from './services/chunked-transcriber';
+import { SpeakerStreamManager } from '@vexa/pipeline';
+import { ChunkedTranscriber } from '@vexa/pipeline';
 import { createChunkedHost } from './services/chunked-host';
 import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken, reportTrackAudio, getLockedMapping } from './services/speaker-identity';
-import { SileroVAD } from '@vexa/speaker-streams';
-import { isHallucination } from '@vexa/speaker-streams';
+import { SileroVAD } from '@vexa/pipeline';
+import { isHallucination } from '@vexa/pipeline';
 import { SpeakerStreamHandle } from './services/audio';
-import { RawCaptureService, uploadCaptureToS3 } from '@vexa/recorder';
-import { setSessionStartProvider , setLoggers as setPipelineLoggers } from '@vexa/audio-pipelines';
+import { RawCaptureService, uploadCaptureToS3, StreamCaptureWriter, openRetentionWriter, MeetingEvent } from '@vexa/recorder';
+import { setSessionStartProvider , setLoggers as setPipelineLoggers } from '@vexa/recording';
 setPipelineLogger((m: string) => log(m));
 setPipelineLoggers({ log: (m: string) => log(m), logJSON });
 setRecordingLoggers({ log: (m: string) => log(m), logJSON });
@@ -148,11 +148,13 @@ let chunkStatsTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Raw mixed PCM (16 kHz mono f32), wall-clock ms of the chunk START. */
 export function feedMixedAudio(pcm: Float32Array, tsMs: number): void {
+  retainAudio(999, tsMs, pcm); // faithful tee of the mixed remote channel
   chunked?.feedAudio(pcm, tsMs);
 }
 
 /** Timestamped platform speaker hint ("who's lit"). */
 export function recordMixedHint(name: string, kind: 'dom-active' | 'caption' | 'dom-outline', tMs: number, isEnd = false): void {
+  retainEvent({ kind: 'active-speaker', ts: retainRelSec(tMs), speaker: name, detail: { hint: kind, isEnd } }); // tee naming hints
   chunked?.recordHint(name, kind, tMs, isEnd);
 }
 
@@ -170,7 +172,7 @@ export async function disposeMixedChunkedPipeline(): Promise<void> {
 let speakerManager: SpeakerStreamManager | null = null;
 let vadModel: SileroVAD | null = null;
 /** Per-speaker VAD states for streaming mode (GMeet only) */
-import type { VadSpeakerState } from '@vexa/speaker-streams';
+import type { VadSpeakerState } from '@vexa/pipeline';
 const vadSpeakerStates: Map<string, VadSpeakerState> = new Map();
 /** Whitelist of allowed language codes — if set, segments in other languages are discarded */
 let allowedLanguages: string[] | null = null;
@@ -187,6 +189,23 @@ let activeSpeakerStreamHandles: SpeakerStreamHandle[] = [];
 /** Raw capture service — dumps per-speaker WAVs + events for offline replay (RAW_CAPTURE=true) */
 let rawCaptureService: RawCaptureService | null = null;
 export function getRawCaptureService(): RawCaptureService | null { return rawCaptureService; }
+
+// Rolling fixture retention (no-op unless CAPTURE_RETENTION=1): tee the bot's
+// in-process capture.v1 (the prod seam) to a faithful stream.capture, so a real
+// meeting can be `dump`ed into a replayable fixture later. ts is normalized to
+// seconds-from-first-frame (the replay ring is ts-indexed); both audio funnels
+// and the hint funnel share one clock. Must never break capture.
+let retainWriter: StreamCaptureWriter | null = null;
+let retainT0 = 0;
+function retainRelSec(ms: number): number { if (!retainT0) retainT0 = ms; return (ms - retainT0) / 1000; }
+function retainAudio(speakerIndex: number, ms: number, samples: Float32Array): void {
+  if (!retainWriter) return;
+  try { retainWriter.audio(speakerIndex, retainRelSec(ms), samples); } catch { /* retention must not break capture */ }
+}
+function retainEvent(ev: MeetingEvent): void {
+  if (!retainWriter) return;
+  try { retainWriter.event(ev); } catch { /* retention must not break capture */ }
+}
 /** Per-speaker confirmed segment batches — drained on each draft tick, flushed on cleanup */
 let confirmedBatches = new Map<string, import('./services/segment-publisher').TranscriptionSegment[]>();
 // ------------------------------------------
@@ -1344,6 +1363,9 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       });
       log(`[PerSpeaker] Raw capture enabled → ${rawCaptureService.outputPath}`);
     }
+    // Rolling fixture retention — independent of TELEMETRY_FULL (no-op unless CAPTURE_RETENTION=1).
+    retainWriter = openRetentionWriter({ platform: botConfig.platform, nativeMeetingId: botConfig.nativeMeetingId, meetingId, language: botConfig.language });
+    if (retainWriter) log(`[Retention] on → ${retainWriter.outDir}`);
 
     const isGoogleMeet = botConfig.platform === 'google_meet';
     speakerManager = new SpeakerStreamManager({
@@ -1762,6 +1784,7 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
       speakerName: speakerManager.getSpeakerName(speakerId) || '',
     });
   }
+  retainAudio(speakerIndex, nowMs, audioData); // faithful tee of the per-speaker channel
   speakerManager.feedAudio(speakerId, audioData); // pipeline (capture.v1 consumer)
 }
 
@@ -1812,6 +1835,11 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
     const outputPath = await rawCaptureService.finalizeAndUpload(currentBotConfig?.meeting_id ?? 'unknown');
     log(`[PerSpeaker] capture.v1 recorded + shipped → ${outputPath}`);
     rawCaptureService = null;
+  }
+  if (retainWriter) {
+    try { const dir = await retainWriter.finalize(); log(`[Retention] fixture written → ${dir} (dump with: cd modules/recorder && npm run dump <name>)`); }
+    catch { /* retention must not break teardown */ }
+    retainWriter = null; retainT0 = 0;
   }
 
   // Flush remaining speaker buffers

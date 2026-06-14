@@ -27,12 +27,13 @@
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { log } from './utils';
-import { SpeakerStreamManager } from '@vexa/speaker-streams';
-import { TranscriptionClient } from '@vexa/speaker-streams';
+import { SpeakerStreamManager } from '@vexa/pipeline';
+import { TranscriptionClient } from '@vexa/pipeline';
 import { SegmentPublisher, TranscriptionSegment } from './services/segment-publisher';
-import { isHallucination } from '@vexa/speaker-streams';
-import { ChunkedTranscriber } from './services/chunked-transcriber';
+import { isHallucination } from '@vexa/pipeline';
+import { ChunkedTranscriber } from '@vexa/pipeline';
 import { createChunkedHost } from './services/chunked-host';
+import { decodeAudioFrame, decodeEvent, openRetentionWriter, StreamCaptureWriter } from '@vexa/recorder'; // capture.v1 wire codec + rolling fixture retention
 
 const PORT = parseInt(process.env.INGEST_PORT || '8090', 10);
 
@@ -222,14 +223,14 @@ class CaptureSession {
   /** Timestamped platform hint: who the UI showed as speaking. Server arrival
    *  time is the timebase (client clocks skew; binder tolerance absorbs the
    *  transport jitter). */
-  recordSpeakerActivity(name: string, kind: 'dom-active' | 'caption' | 'dom-outline' = 'dom-active', isEnd = false): void {
-    this.chunked?.recordHint(name, kind, Date.now(), isEnd);
+  recordSpeakerActivity(name: string, kind: 'dom-active' | 'caption' | 'dom-outline' = 'dom-active', isEnd = false, tMs: number = Date.now()): void {
+    this.chunked?.recordHint(name, kind, tMs, isEnd);
   }
 
   /** One per-speaker audio chunk from the page. */
-  feedAudio(speakerIndex: number, pcm: Float32Array): void {
+  feedAudio(speakerIndex: number, pcm: Float32Array, ts: number = Date.now()): void {
     if (speakerIndex === MIXED_TRACK_INDEX && this.usesMixedDiarization()) {
-      if (this.chunked) this.chunked.feedAudio(pcm, Date.now());
+      if (this.chunked) this.chunked.feedAudio(pcm, ts);
       return;
     }
     const speakerId = `spk-${speakerIndex}`;
@@ -238,7 +239,7 @@ class CaptureSession {
       this.speakerManager.addSpeaker(speakerId, `Speaker ${speakerIndex + 1}`);
       this.knownSpeakers.add(speakerIndex);
     }
-    this.speakerManager.feedAudio(speakerId, pcm);
+    this.speakerManager.feedAudio(speakerId, pcm, ts);
   }
 
   async stop(): Promise<void> {
@@ -367,16 +368,6 @@ class CaptureSession {
   }
 }
 
-/** Parse a binary audio frame: [Int32LE speakerIndex][Float32LE pcm…]. */
-function parseAudioFrame(buf: Buffer): { speakerIndex: number; pcm: Float32Array } | null {
-  if (buf.length < 8 || (buf.length - 4) % 4 !== 0) return null;
-  const speakerIndex = buf.readInt32LE(0);
-  const audioBytes = buf.subarray(4);
-  // Copy into a fresh, 4-byte-aligned ArrayBuffer for the Float32Array view.
-  const ab = audioBytes.buffer.slice(audioBytes.byteOffset, audioBytes.byteOffset + audioBytes.byteLength);
-  return { speakerIndex, pcm: new Float32Array(ab) };
-}
-
 export function runIngestServer(): void {
   // Explicit HTTP server: /ingest (WS upgrade) + extension telemetry endpoints.
   // Telemetry exists so extension state (WebRTC hook, captured tracks, speaker
@@ -437,6 +428,10 @@ export function runIngestServer(): void {
 
     let capture: CaptureSession | null = null;
     let boundMeetingId: number | null = null;
+    // Rolling fixture retention (no-op unless CAPTURE_RETENTION=1): tee every
+    // verbatim capture.v1 frame to a stream.capture so this real meeting can be
+    // `dump`ed into a replayable fixture later. Never breaks the live session.
+    let retain: StreamCaptureWriter | null = null;
     try {
       const session = await resolveSession(apiKey, platform, nativeMeetingId);
       capture = new CaptureSession(session, connectionId, explicitLanguage && explicitLanguage !== 'auto' ? explicitLanguage : null);
@@ -444,6 +439,8 @@ export function runIngestServer(): void {
       ws.send(JSON.stringify({ type: 'ready', meeting_id: session.meeting_id }));
       log(`[Ingest] Connection ready meeting=${session.meeting_id} native=${nativeMeetingId}`);
       boundMeetingId = session.meeting_id;
+      retain = openRetentionWriter({ platform, nativeMeetingId, meetingId: session.meeting_id, connectionId, language: explicitLanguage && explicitLanguage !== 'auto' ? explicitLanguage : undefined });
+      if (retain) log(`[Ingest] Retention on → ${retain.outDir}`);
       if (!liveSessionsByMeeting.has(session.meeting_id)) liveSessionsByMeeting.set(session.meeting_id, new Set());
       liveSessionsByMeeting.get(session.meeting_id)!.add(connectionId);
       // Supersede any prior live session for this meeting (zombie from a SW
@@ -468,19 +465,22 @@ export function runIngestServer(): void {
     ws.on('message', (data: Buffer, isBinary: boolean) => {
       if (!capture) return;
       if (isBinary) {
-        const frame = parseAudioFrame(data);
-        if (frame) capture.feedAudio(frame.speakerIndex, frame.pcm);
+        retain?.rawAudio(data); // faithful tee, verbatim wire bytes
+        // capture.v1 wire codec — ts is the sender's capture-time, used as-is.
+        const frame = decodeAudioFrame(data.buffer, data.byteOffset, data.byteLength);
+        if (frame) capture.feedAudio(frame.speakerIndex, frame.samples, frame.ts);
         return;
       }
-      try {
-        const msg = JSON.parse(data.toString('utf8'));
-        if (msg.type === 'speakers' && msg.speakers) capture.updateSpeakers(msg.speakers);
-        // Timestamped platform hint stream (Zoom active-speaker / Teams
-        // captions+outline) — feeds the cluster↔name binder.
-        if (msg.type === 'speaker_activity' && (msg.name || msg.isEnd)) {
-          capture.recordSpeakerActivity(msg.name || '', msg.kind || 'dom-active', !!msg.isEnd);
-        }
-      } catch { /* ignore malformed control frame */ }
+      retain?.rawEvent(data); // tee every event (incl. chat), verbatim
+      const ev = decodeEvent(data.toString('utf8')); // MeetingEvent JSON
+      if (!ev) return;
+      if (ev.kind === 'speaker-joined' && ev.speaker) {
+        const index = (ev.detail as any)?.index;
+        if (index !== undefined) capture.updateSpeakers({ [String(index)]: ev.speaker });
+      } else if (ev.kind === 'active-speaker' && (ev.speaker || (ev.detail as any)?.isEnd)) {
+        // Timestamped platform hint → the cluster↔name binder (capture-time).
+        capture.recordSpeakerActivity(ev.speaker || '', (ev.detail as any)?.hint || 'dom-active', !!(ev.detail as any)?.isEnd, ev.ts);
+      }
     });
 
     // Server→extension stop feedback: the dashboard (or API) can stop/delete
@@ -509,6 +509,7 @@ export function runIngestServer(): void {
 
     const cleanup = async () => {
       clearInterval(statusWatch);
+      if (retain) { try { await retain.finalize(); } catch { /* retention must not break teardown */ } retain = null; }
       if (capture) { await capture.stop(); capture = null; }
       if (boundMeetingId !== null) {
         liveSessionsByMeeting.get(boundMeetingId)?.delete(connectionId);
