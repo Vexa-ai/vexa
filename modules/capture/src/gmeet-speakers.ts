@@ -9,17 +9,19 @@
  *
  * SoC: this module extracts RAW SIGNALS only — it reads who Meet is visibly
  * rendering as speaking and emits debounced start/stop HINTS per name. It NEVER
- * binds a name to an audio track/segment. Naming happens DOWNSTREAM: the mixed
- * remote channel (999) is diarized into clusters, and the ClusterNameBinder
- * resolves those clusters to these `dom-active` hints (cluster-vote, hysteresis,
- * live re-resolve). gmeet now follows the SAME mixed path as zoom/teams.
+ * binds a name to an audio track/segment. Naming happens DOWNSTREAM: the
+ * ClusterNameBinder resolves channels/clusters to these `dom-active` hints
+ * (cluster-vote, hysteresis, live re-resolve), cross-validated against audio.
  *
- * Self-healing speaking detection:
- *  Meet's speaking-indicator CSS classes are obfuscated and rot with UI pushes
- *  (the historic failure mode: nothing ever reads as "speaking"). This module
- *  watches class mutations across tiles; if the known classes go silent for a
- *  while, the most-recently-added mutating class is adopted as a speaking
- *  indicator (logged loudly, capped). getState() exposes the full forensic dump.
+ * Speaking detection — NO auto-learn:
+ *  The previous self-healing "learn a CSS class after the known ones go silent
+ *  10s" heuristic was REMOVED. It mislearned a busy non-speaking class and stuck
+ *  every channel to one name (the all-one-speaker collapse). Obfuscated class
+ *  matching is a known-bad foundation we're replacing. For now detection uses the
+ *  known classes ONLY (no learning ⇒ worst case a tile reads as not-speaking and
+ *  stays provisional `ch-N`, never *wrongly* named). `probeDom()` dumps the live
+ *  DOM structure so the robust, non-obfuscated signal can be designed from real
+ *  data (audio-element ↔ participant-id linkage, aria/role speaking markers).
  */
 
 export interface GmeetSpeakersOptions {
@@ -32,10 +34,6 @@ export interface GmeetSpeakersOptions {
   log?: (msg: string) => void;
   /** Poll interval (ms). Default 500. */
   pollMs?: number;
-  /** Adopt a learned indicator class only after known classes have been silent this long. Default 10s. */
-  learnAfterSilentMs?: number;
-  /** Mutation count required to adopt a class as a speaking indicator. Default 3. */
-  learnMinScore?: number;
 }
 
 export interface GmeetTileInfo {
@@ -51,16 +49,27 @@ export interface GmeetSpeakersState {
   participantCount: number;
   selectorStats: {
     knownClassHits: Record<string, number>;
-    learnedClasses: string[];
-    /** class → mutation count (learning evidence) */
-    candidateScores: Record<string, number>;
     lastKnownHitMs: number;
   };
 }
 
 export interface GmeetSpeakers {
   getState(): GmeetSpeakersState;
+  /** One-shot structural dump of the live Meet DOM — for designing a robust,
+   *  non-obfuscated speaking/naming signal. Read-only; no side effects. */
+  probeDom(): GmeetDomProbe;
   destroy(): void;
+}
+
+/** What probeDom() returns: enough of the live structure to decide whether
+ *  channel↔name can be STRUCTURAL (audio element carries a participant id) or
+ *  needs a SEMANTIC (aria/role) speaking signal instead of obfuscated classes. */
+export interface GmeetDomProbe {
+  audioCount: number;
+  /** Per audio element: does it (or an ancestor) carry a participant id? */
+  audio: { hasStream: boolean; trackId: string | null; participantId: string | null }[];
+  tileCount: number;
+  tiles: { id: string; name: string | null; aria: string | null; ariaInside: string[] }[];
 }
 
 const PARTICIPANT_SELECTORS = ['div[data-participant-id]', '[data-participant-id]'];
@@ -70,23 +79,12 @@ const KNOWN_SPEAKING_CLASSES = [
 ];
 const JUNK_NAME = /^Google Participant \(|spaces\/|devices\//;
 const JUNK_PHRASES = ['let participants', 'send messages', 'turn on captions'];
-const MAX_LEARNED = 3;
-/** Classes that mutate constantly for non-speaking reasons; never learn these. */
-const LEARN_BLOCKLIST = /hover|focus|active-tab|tooltip/i;
 
 export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeakers {
-  const log = opts.log || ((m: string) => console.log(m));
   const pollMs = opts.pollMs ?? 500;
-  const learnAfterSilentMs = opts.learnAfterSilentMs ?? 10_000;
-  const learnMinScore = opts.learnMinScore ?? 3;
 
-  // Self-healing state
   const knownClassHits: Record<string, number> = {};
-  const learnedClasses: string[] = [];
-  const candidateScores = new Map<string, number>();
   let lastKnownHitMs = Date.now();
-  /** Recent class additions: class → last-added timestamp (rolling). */
-  const recentClassAdds = new Map<string, number>();
 
   /** Names currently lit (non-self, named) — drives start/stop hint edges. */
   const speakingNow = new Set<string>();
@@ -121,12 +119,8 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
     return false;
   }
 
-  function activeSpeakingClasses(): string[] {
-    return [...KNOWN_SPEAKING_CLASSES, ...learnedClasses];
-  }
-
   function tileSpeaking(el: HTMLElement): boolean {
-    for (const cls of activeSpeakingClasses()) {
+    for (const cls of KNOWN_SPEAKING_CLASSES) {
       if (el.classList.contains(cls) || el.querySelector('.' + CSS.escape(cls))) {
         knownClassHits[cls] = (knownClassHits[cls] || 0) + 1;
         lastKnownHitMs = Date.now();
@@ -152,52 +146,10 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
     return out;
   }
 
-  // ── Self-healing: learn speaking classes from mutation activity ──
-
-  const observer = new MutationObserver(muts => {
-    const now = Date.now();
-    for (const m of muts) {
-      if (m.type !== 'attributes' || m.attributeName !== 'class') continue;
-      const el = m.target as HTMLElement;
-      const old = new Set(String(m.oldValue || '').split(/\s+/).filter(Boolean));
-      el.classList.forEach(c => {
-        if (!old.has(c) && !LEARN_BLOCKLIST.test(c) && c.length <= 24) {
-          recentClassAdds.set(c, now);
-          if (!KNOWN_SPEAKING_CLASSES.includes(c) && !learnedClasses.includes(c)) {
-            candidateScores.set(c, (candidateScores.get(c) || 0) + 1);
-          }
-        }
-      });
-    }
-    if (recentClassAdds.size > 200) {
-      for (const [c, t] of recentClassAdds) if (now - t > 5000) recentClassAdds.delete(c);
-    }
-  });
-  try {
-    observer.observe(document.body, { attributes: true, attributeFilter: ['class'], attributeOldValue: true, subtree: true });
-  } catch { /* body not ready; poll loop still works with known classes */ }
-
-  function maybeLearn(now: number): void {
-    if (now - lastKnownHitMs < learnAfterSilentMs) return;       // known classes still work
-    if (learnedClasses.length >= MAX_LEARNED) return;
-    let best: [string, number] | null = null;
-    for (const [cls, score] of candidateScores) {
-      if (score >= learnMinScore && (!best || score > best[1])) best = [cls, score];
-    }
-    if (best) {
-      learnedClasses.push(best[0]);
-      candidateScores.delete(best[0]);
-      log(`[GmeetSpeakers] ⚠ known speaking classes silent ${((now - lastKnownHitMs) / 1000).toFixed(0)}s — LEARNED indicator class "${best[0]}" (×${best[1]})`);
-    }
-  }
-
   // ── Main loop: emit start/stop HINTS on edge changes ─────────────
 
   const timer = setInterval(() => {
-    const now = Date.now();
     const tiles = scanTiles();
-
-    maybeLearn(now);
 
     // Currently-lit, non-self, named tiles.
     const litNow = new Set<string>(
@@ -227,17 +179,36 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
         tiles,
         speakingNow: tiles.filter(t => !t.self && t.speaking && t.name).map(t => t.name as string),
         participantCount: tiles.length,
-        selectorStats: {
-          knownClassHits: { ...knownClassHits },
-          learnedClasses: [...learnedClasses],
-          candidateScores: Object.fromEntries(candidateScores),
-          lastKnownHitMs,
-        },
+        selectorStats: { knownClassHits: { ...knownClassHits }, lastKnownHitMs },
+      };
+    },
+    probeDom(): GmeetDomProbe {
+      const audios = Array.from(document.querySelectorAll('audio')) as HTMLAudioElement[];
+      const tiles = Array.from(document.querySelectorAll('[data-participant-id]')) as HTMLElement[];
+      return {
+        audioCount: audios.length,
+        audio: audios.slice(0, 8).map(a => {
+          let track: string | null = null;
+          try { track = (a.srcObject as MediaStream | null)?.getAudioTracks?.()[0]?.id?.slice(0, 12) || null; } catch { /* */ }
+          const pid = a.getAttribute('data-participant-id')
+            || a.closest('[data-participant-id]')?.getAttribute('data-participant-id')
+            || a.parentElement?.getAttribute('data-participant-id') || null;
+          return { hasStream: !!a.srcObject, trackId: track, participantId: pid };
+        }),
+        tileCount: tiles.length,
+        tiles: tiles.slice(0, 8).map(t => ({
+          id: (t.getAttribute('data-participant-id') || '').slice(0, 16),
+          name: tileName(t),
+          aria: t.getAttribute('aria-label') || null,
+          ariaInside: (Array.from(t.querySelectorAll('[aria-label],[aria-pressed],[aria-live],[role]')) as HTMLElement[])
+            .slice(0, 5)
+            .map(e => e.getAttribute('aria-label') || e.getAttribute('aria-pressed') || e.getAttribute('aria-live') || e.getAttribute('role') || '')
+            .filter(Boolean),
+        })),
       };
     },
     destroy(): void {
       clearInterval(timer);
-      try { observer.disconnect(); } catch { /* already gone */ }
     },
   };
 }
