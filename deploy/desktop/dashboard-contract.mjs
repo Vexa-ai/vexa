@@ -2,6 +2,13 @@
 // gate:dashboard-contract — pins the desktop gateway to the dashboard's gateway
 // surface so it can't silently drift.
 //
+// ⚠ INTERIM. The durable fix is the MVP4 "n" deliverable (MANIFEST.md): the
+// api-gateway / meeting-api Pydantic schemas (already annotated with
+// response_model=) extracted to a published, versioned OpenAPI artifact under
+// contracts/api/v1/, with the dashboard types GENERATED from it and the desktop
+// gateway RESPONSE-VALIDATED against it. When that lands, delete this file — a
+// hand-maintained endpoint list is itself a thing that can drift from the client.
+//
 // WHY THIS EXISTS: every other deploy runs the real api-gateway (+ meeting-api),
 // which IS the contract the dashboard was built against. Desktop replaces both
 // with one hand-written Node gateway (modules/pipeline/scripts/desktop.ts). With
