@@ -5,6 +5,7 @@
   "description": "Vexa Desktop — all-Node, Docker-free local deployment that doubles as the hot debug rig (VEXA-DESKTOP.md). modules → services → deploy: the local+hot cell.",
   "type": "module",
   "scripts": {
-    "dev": "node dev.mjs"
+    "dev": "node dev.mjs",
+    "check:contract": "node dashboard-contract.mjs"
   }
 }

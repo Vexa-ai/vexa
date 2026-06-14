@@ -122,6 +122,53 @@ const gatewayHttp = http.createServer(async (req, res) => {
       : { id: 0, platform, native_meeting_id: nativeId, status: 'unknown', start_time: null, end_time: null, data: {} };
     return send({ ...envelope, segments: store.getTranscripts(platform, nativeId), recordings: [] });
   }
+
+  // ── Rest of the dashboard's gateway surface (see dashboard-contract.mjs). ──
+  // Desktop is a single-user local VIEWER: read endpoints serve real/empty data;
+  // bot-control endpoints are no-ops or end the local session; features with no
+  // local backend (sharing) return an honest 501; recordings/master 404 is the
+  // dashboard's designed "not ready" path. Every entry is pinned by the contract gate.
+
+  // GET /bots/status — "running bots" = the active local meetings.
+  if (req.method === 'GET' && url.pathname === '/bots/status') {
+    const running = (store.listMeetings() as any[]).filter((m) => m.status === 'active')
+      .map((m) => ({ container_id: `local-${m.id}`, meeting_id: m.id, platform: m.platform, native_meeting_id: m.native_id }));
+    return send({ running_bots: running });
+  }
+  // GET /bots/{platform}/{native}/chat — meeting chat. Desktop tees chat events to
+  // the recording but doesn't persist them to lite-db, so this is honestly empty.
+  const chat = url.pathname.match(/^\/bots\/([^/]+)\/([^/]+)\/chat$/);
+  if (req.method === 'GET' && chat) {
+    const m = store.getMeetingByNative(decodeURIComponent(chat[1]), decodeURIComponent(chat[2])) as any;
+    return send({ messages: [], meeting_id: m?.id ?? 0 });
+  }
+  // PUT /bots/{platform}/{native}/config — no live bot to reconfigure; no-op ok.
+  if (req.method === 'PUT' && /^\/bots\/[^/]+\/[^/]+\/config$/.test(url.pathname)) return send({ ok: true });
+  // DELETE /bots/{platform}/{native} — "stop bot" ⇒ end the active local session.
+  const stopBot = url.pathname.match(/^\/bots\/([^/]+)\/([^/]+)$/);
+  if (req.method === 'DELETE' && stopBot) {
+    const m = store.getMeetingByNative(decodeURIComponent(stopBot[1]), decodeURIComponent(stopBot[2])) as any;
+    if (m) store.endMeeting(m.id);
+    return send({ ok: true });
+  }
+  // POST /meetings/{id}/transcribe — desktop transcribes live; report current segments.
+  const tx = url.pathname.match(/^\/meetings\/(\d+)\/transcribe$/);
+  if (req.method === 'POST' && tx) {
+    const m = store.getMeeting(Number(tx[1])) as any;
+    const segs = m ? store.getTranscripts(m.platform, m.native_id) : [];
+    return send({ status: 'ok', segment_count: segs.length, language: 'auto' });
+  }
+  // PATCH /meetings/{platform}/{native} — viewer: data edits aren't persisted; echo
+  // the meeting so the client's mapMeeting() succeeds.
+  const patchMeet = url.pathname.match(/^\/meetings\/([^/]+)\/([^/]+)$/);
+  if (req.method === 'PATCH' && patchMeet) {
+    const m = store.getMeetingByNative(decodeURIComponent(patchMeet[1]), decodeURIComponent(patchMeet[2])) as any;
+    return m ? send(mapMeetingRow(m)) : send({ error: 'not found' }, 404);
+  }
+  // POST /transcripts/{platform}/{native}/share — no share service in desktop.
+  if (req.method === 'POST' && /^\/transcripts\/[^/]+\/[^/]+\/share$/.test(url.pathname))
+    return send({ error: 'Transcript sharing is not available in Vexa Desktop' }, 501);
+
   send({ error: 'not found', path: url.pathname }, 404);
 });
 new WebSocketServer({ server: gatewayHttp, path: '/ws' }).on('connection', (ws) => {
