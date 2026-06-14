@@ -81,7 +81,7 @@ const JUNK_NAME = /^Google Participant \(|spaces\/|devices\//;
 const JUNK_PHRASES = ['let participants', 'send messages', 'turn on captions'];
 
 export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeakers {
-  const pollMs = opts.pollMs ?? 500;
+  const pollMs = opts.pollMs ?? 250;  // responsive: track the visible active-speaker glow closely
 
   const knownClassHits: Record<string, number> = {};
   let lastKnownHitMs = Date.now();
@@ -105,18 +105,21 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
     return t;
   }
 
-  function isSelf(el: HTMLElement, name: string | null): boolean {
-    if (el.hasAttribute('data-self-name') || el.querySelector('[data-self-name]')) {
-      const selfAttr = (el.getAttribute('data-self-name')
-        || (el.querySelector('[data-self-name]') as HTMLElement | null)?.getAttribute('data-self-name') || '').trim();
-      if (selfAttr && name && (selfAttr === name)) return true;
-      if (selfAttr && !name) return true;
-    }
-    if (opts.selfName && name) {
-      const a = name.toLowerCase(), b = opts.selfName.toLowerCase();
-      if (a.includes(b) || b.includes(a)) return true;
-    }
-    return false;
+  // The local participant's tile, located via Meet's OWN structural marker
+  // (data-self-name). Re-read every scan — the self tile can render late or move,
+  // and the marker may sit on a child or sibling of the participant tile.
+  function selfParticipantId(): string | null {
+    const marker = document.querySelector('[data-self-name]');
+    const tile = marker?.closest('[data-participant-id]') as HTMLElement | null;
+    return tile?.getAttribute('data-participant-id') || null;
+  }
+
+  // Self/host detection is PURELY STRUCTURAL — Meet's data-self-name marker, never
+  // name/aria text matching. The host tile is excluded so it can never emit a hint.
+  function isSelf(el: HTMLElement, id: string, selfId: string | null): boolean {
+    return el.hasAttribute('data-self-name')
+      || !!el.querySelector('[data-self-name]')
+      || (selfId !== null && id === selfId);
   }
 
   function tileSpeaking(el: HTMLElement): boolean {
@@ -133,6 +136,7 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
   function scanTiles(): GmeetTileInfo[] {
     const out: GmeetTileInfo[] = [];
     const seen = new Set<string>();
+    const selfId = selfParticipantId();
     for (const sel of PARTICIPANT_SELECTORS) {
       document.querySelectorAll(sel).forEach(node => {
         const el = node as HTMLElement;
@@ -140,7 +144,7 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
         if (!id || seen.has(id)) return;
         seen.add(id);
         const name = tileName(el);
-        out.push({ id, name, self: isSelf(el, name), speaking: tileSpeaking(el) });
+        out.push({ id, name, self: isSelf(el, id, selfId), speaking: tileSpeaking(el) });
       });
     }
     return out;

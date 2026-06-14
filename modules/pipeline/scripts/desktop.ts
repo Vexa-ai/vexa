@@ -235,7 +235,10 @@ ingest.on('connection', async (ws, req) => {
   // hysteresis, repaint) — NOT in capture. Each channel id IS the binder entity.
   const multi = new SpeakerStreamManager({ sampleRate: SAMPLE_RATE, minAudioDuration: 3, submitInterval: 3, confirmThreshold: 3, maxBufferDuration: 30, idleTimeoutSec: 15 });
   const added = new Set<number>();
-  const channelBinder = new ClusterNameBinder({});
+  // Tighter window than the default ±2500ms: bind a channel's segment to the name
+  // that was lit DURING it, not one that merely lit up near it — so clashes don't
+  // grab the overlapping speaker, and the label tracks the real-time glow.
+  const channelBinder = new ClusterNameBinder({ matchToleranceMs: 800 });
   const channelSegs = new Map<string, Seg[]>();        // channel id → published (confirmed) segments, for repaint
   const channelName = new Map<string, string>();       // channel id → current resolved name
   const channelDraftName = new Map<string, string>();  // channel id → NAME its live pending draft sits under
