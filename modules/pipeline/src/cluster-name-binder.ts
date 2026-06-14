@@ -155,6 +155,15 @@ export class ClusterNameBinder {
     return { speakerName: commit.clusterId, source: 'provisional-cluster-id', confidence: 0 };
   }
 
+  /** Pure window-match — the name lit DURING the commit window (with confidence),
+   *  or null. No cluster-vote, no vote accumulation, no provisional fallback. For
+   *  per-segment "unknown until a confident hint matches" binding (rotating gmeet
+   *  channels): callers treat a low/no-confidence result as UNKNOWN rather than
+   *  inheriting a stale channel name. */
+  matchWindow(commit: CommitInfo): { name: string; confidence: number } | null {
+    return this.windowMatch(commit);
+  }
+
   private windowMatch(commit: CommitInfo): { name: string; confidence: number } | null {
     // Hints are already lag-corrected at insert, so the commit window only
     // needs tolerance slack.

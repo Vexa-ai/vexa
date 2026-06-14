@@ -253,19 +253,17 @@ ingest.on('connection', async (ws, req) => {
     if (seg) { channelDraftName.set(sid, name); channelDraftSeg.set(sid, seg); broadcast(metaKey, name, [], [seg]); }
     else { channelDraftName.delete(sid); channelDraftSeg.delete(sid); broadcast(metaKey, name, [], []); }
   };
-  channelBinder.onLateResolve = (channelId, name) => {
-    const old = channelName.get(channelId) ?? channelId;
-    if (old === name) return;
-    channelName.set(channelId, name);
-    // Repaint published segments under the new name — same segment_id ⇒ client UPSERTs in place.
-    const segs = channelSegs.get(channelId);
-    if (segs && segs.length) {
-      broadcast(metaKey, name, segs.map((s) => ({ ...s, speaker: name })), []);
-      segs.forEach((s) => { s.speaker = name; });
-    }
-    // Re-home the live draft to the new name (clears the orphan under the old name).
-    const draft = channelDraftSeg.get(channelId);
-    if (draft) setChannelDraft(channelId, name, { ...draft, speaker: name });
+  // UNKNOWN-until-confident: a channel segment is NAMED only when a hint was lit
+  // confidently DURING it (pure window-match ≥ MIN_CONF). Otherwise it stays
+  // "Speaker" (unknown) and is resolved LATER, once, when a confident hint lands —
+  // never the channel's stale name. So a segment never shows a wrong name that
+  // then flips: it goes unknown → correct, or stays unknown.
+  const UNKNOWN = 'Speaker';
+  const MIN_CONF = 0.6;
+  const unresolved: { sid: string; seg: Seg; tStartMs: number; tEndMs: number }[] = [];
+  const confidentName = (sid: string, tStartMs: number, tEndMs: number): string | null => {
+    const m = channelBinder.matchWindow({ clusterId: sid, tStartMs, tEndMs });
+    return m && m.confidence >= MIN_CONF ? m.name : null;
   };
   multi.onSegmentReady = async (sid, _n, audio) => {
     try { if (!txClient) return multi.handleTranscriptionResult(sid, ''); const r = await txClient.transcribe(audio, lang); multi.handleTranscriptionResult(sid, (r?.text || '').trim(), r?.segments?.[r.segments.length - 1]?.end); }
@@ -273,15 +271,17 @@ ingest.on('connection', async (ws, req) => {
   };
   multi.onSegmentConfirmed = (sid, _name, text, startMs, endMs, segId) => {
     if (!text.trim()) return;
-    const spk = channelBinder.resolve({ clusterId: sid, tStartMs: startMs, tEndMs: endMs }).speakerName; // votes channel→name from hints
-    channelName.set(sid, spk);
+    const name = confidentName(sid, startMs, endMs);
+    const spk = name ?? UNKNOWN;
+    if (name) channelName.set(sid, name);
     const seg: Seg = { segment_id: segId || `${metaKey}:${sid}:${startMs}`, speaker: spk, text, start: startMs / 1000, absolute_start_time: new Date(startMs).toISOString(), completed: true };
     let cs = channelSegs.get(sid); if (!cs) { cs = []; channelSegs.set(sid, cs); } cs.push(seg);
-    setChannelDraft(sid, spk, null);          // confirm supersedes the live draft — clear it (under whatever name)
+    setChannelDraft(sid, spk, null);          // confirm supersedes the live draft
     broadcast(metaKey, spk, [seg], []);
+    if (!name) { unresolved.push({ sid, seg, tStartMs: startMs, tEndMs: endMs }); if (unresolved.length > 40) unresolved.shift(); }
   };
   multi.onSegmentPending = (sid, _name, text, startMs) => {
-    const spk = channelName.get(sid) ?? sid;  // current resolved name; no new vote on a pending refresh
+    const spk = channelName.get(sid) ?? UNKNOWN; // last CONFIDENT name for this channel, else unknown
     const seg = text.trim()
       ? { segment_id: `${metaKey}:${sid}:pending`, speaker: spk, text, start: startMs / 1000, absolute_start_time: new Date(startMs).toISOString(), completed: false }
       : null;
@@ -313,6 +313,19 @@ ingest.on('connection', async (ws, req) => {
         const isEnd = !!(ev.detail as any)?.isEnd;
         tc.recordHint(ev.speaker, kind, ev.ts, isEnd);
         channelBinder.recordHint({ name: ev.speaker, tMs: ev.ts, kind, isEnd });
+        // A new glow may now confidently name a still-UNKNOWN segment — resolve it
+        // ONCE (unknown → name; never name → another name). Drop entries too old to
+        // ever match (the hint log only holds recent turns).
+        for (let k = unresolved.length - 1; k >= 0; k--) {
+          const u = unresolved[k];
+          if (ev.ts - u.tEndMs > 25000) { unresolved.splice(k, 1); continue; }
+          const name = confidentName(u.sid, u.tStartMs, u.tEndMs);
+          if (name) {
+            u.seg.speaker = name; channelName.set(u.sid, name);
+            broadcast(metaKey, name, [u.seg], []); // same segment_id → client UPSERTs UNKNOWN→name
+            unresolved.splice(k, 1);
+          }
+        }
       }
       // speaker-joined is roster only now — channels come from audio; no channel→name binding.
     } catch (e: any) { console.error('[desktop] msg:', e?.message); }
