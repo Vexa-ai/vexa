@@ -93,6 +93,7 @@ wss.on('connection', (ws, req) => {
     try {
       const dir = await writer.finalize();
       console.log(`\n[capture-recorder] ■ fixture: ${dir}  (audio=${chunks} events=${textFrames} channels=[${[...seenChannels].join(',')}])`);
+      console.log(`[capture-recorder]   check:  node ../../contracts/capture/v1/validate.mjs ${dir}`);
       console.log(`[capture-recorder]   replay: cd ../pipeline && npm run replay:mixed -- ${dir}`);
       console.log(`[capture-recorder]   or view: cd ../pipeline && npm run bench:view -- ${dir}`);
       if (process.env.FIXTURE_S3 === '1') console.log(`[capture-recorder]   (S3 push of stream.capture: TODO — fixture is local for now)`);
