@@ -49,6 +49,14 @@ const toSeg = (c: ChunkSegment, speaker: string, completed: boolean): Seg => ({
   absolute_start_time: new Date(c.startMs).toISOString(), completed,
 });
 
+// Map a DB meeting row to the prod meeting shape the dashboard expects:
+// native_meeting_id (from native_id) + data as a parsed object.
+const mapMeetingRow = (m: any) => ({
+  ...m,
+  native_meeting_id: m.native_id,
+  data: (() => { try { return typeof m.data === 'string' ? JSON.parse(m.data) : (m.data ?? {}); } catch { return {}; } })(),
+});
+
 /** Live delivery (WS) + persist CONFIRMED to SQLite. */
 function broadcast(metaKey: string, speaker: string, confirmed: Seg[], pending: Seg[]) {
   if (confirmed.length) {
@@ -95,15 +103,13 @@ const gatewayHttp = http.createServer(async (req, res) => {
     // Prod /bots shape: { meetings:[…], has_more }. The dashboard proxy reads
     // data.meetings and expects native_meeting_id + data as an object; the
     // extension only health-checks resp.ok (body ignored), so this satisfies both.
-    const meetings = (store.listMeetings() as any[]).map((m) => ({
-      ...m,
-      native_meeting_id: m.native_id,
-      data: (() => { try { return typeof m.data === 'string' ? JSON.parse(m.data) : (m.data ?? {}); } catch { return {}; } })(),
-    }));
-    return send({ meetings, has_more: false });
+    return send({ meetings: (store.listMeetings() as any[]).map(mapMeetingRow), has_more: false });
   }
+  // Single meeting by numeric id — the dashboard's meeting-detail page (getMeeting).
+  const meet = url.pathname.match(/^\/meetings\/(\d+)$/);
+  if (req.method === 'GET' && meet) { const m = store.getMeeting(Number(meet[1])); return m ? send(mapMeetingRow(m)) : send({ error: 'not found' }, 404); }
   const bot = url.pathname.match(/^\/bots\/id\/(\d+)/);
-  if (req.method === 'GET' && bot) { const m = store.getMeeting(Number(bot[1])); return m ? send(m) : send({ error: 'not found' }, 404); }
+  if (req.method === 'GET' && bot) { const m = store.getMeeting(Number(bot[1])); return m ? send(mapMeetingRow(m)) : send({ error: 'not found' }, 404); }
   const tr = url.pathname.match(/^\/transcripts\/([^/]+)\/([^/]+)/);
   if (req.method === 'GET' && tr) return send({ segments: store.getTranscripts(decodeURIComponent(tr[1]), decodeURIComponent(tr[2])) });
   send({ error: 'not found', path: url.pathname }, 404);
