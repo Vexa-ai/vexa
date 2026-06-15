@@ -756,6 +756,20 @@ export default function MeetingDetailPage() {
     }
   }, [currentMeeting]);
 
+  // Fallback polling: re-fetch meeting status every 15s while the bot is active.
+  // This catches status transitions (active → completed) that are missed when the
+  // dashboard WebSocket loses a status_change event (e.g. reconnect gap, network blip).
+  useEffect(() => {
+    const activeStatuses = ["active", "joining", "stopping", "needs_human_help"];
+    if (!meetingId || !currentMeeting || !activeStatuses.includes(currentMeeting.status)) return;
+
+    const timer = window.setInterval(() => {
+      fetchMeeting(meetingId);
+    }, 15000);
+
+    return () => window.clearInterval(timer);
+  }, [meetingId, currentMeeting?.status, fetchMeeting]);
+
   // Show detected language from backend first (meeting.data.languages or from segments), then user can change via toggle
   const validLangCodes = useMemo(
     () => new Set(WHISPER_LANGUAGE_CODES),
