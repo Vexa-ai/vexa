@@ -1,8 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import crypto from "crypto";
 
 const ADMIN_COOKIE_NAME = "vexa-admin-session";
 const COOKIE_MAX_AGE = 60 * 60 * 24; // 24 hours
+
+/**
+ * Extract and verify the base64 payload from an HMAC-signed cookie value.
+ * Cookie format: base64(json).hmac  (set by /api/auth/admin-verify)
+ * Falls back to plain base64 for legacy sessions without a signature.
+ */
+function extractCookiePayload(value: string): string | null {
+  const dotIndex = value.lastIndexOf(".");
+  if (dotIndex === -1) {
+    // Legacy unsigned cookie — return as-is
+    return value;
+  }
+
+  const payload = value.substring(0, dotIndex);
+  const signature = value.substring(dotIndex + 1);
+
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    // No secret configured — accept without HMAC verification
+    return payload;
+  }
+
+  try {
+    const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+      return null; // HMAC mismatch — tampered cookie
+    }
+  } catch {
+    return null;
+  }
+
+  return payload;
+}
 
 /**
  * Verify admin session from cookie
@@ -16,8 +50,13 @@ async function verifyAdminSession(): Promise<boolean> {
       return false;
     }
 
+    const payload = extractCookiePayload(sessionCookie.value);
+    if (!payload) {
+      return false;
+    }
+
     const sessionData = JSON.parse(
-      Buffer.from(sessionCookie.value, "base64").toString()
+      Buffer.from(payload, "base64").toString()
     );
 
     // Check if session is expired (24 hours)
