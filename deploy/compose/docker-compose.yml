@@ -311,8 +311,10 @@ services:
   # reach it. Port 8092 on host (runtime-api already owns 8090).
   ingest-server:
     build:
-      context: ../../services/vexa-bot/core
-      dockerfile: Dockerfile.ingest
+      # Repo root: the ingest server consumes the @vexa/* bricks under modules/,
+      # which Dockerfile.ingest vendors (file: deps need them in the context).
+      context: ../..
+      dockerfile: services/vexa-bot/core/Dockerfile.ingest
     image: vexaai/ingest-server:${IMAGE_TAG}
     mem_limit: 512m
     ports:

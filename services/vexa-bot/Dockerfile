@@ -14,12 +14,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app/vexa-bot
 
-# Copy package files for root workspace
-COPY package*.json ./
-COPY binding.gyp ./
+# Copy package files for root workspace (build context is the REPO ROOT so the
+# @vexa/* file: deps under modules/ are reachable — see stage 2).
+COPY services/vexa-bot/package*.json ./
+COPY services/vexa-bot/binding.gyp ./
 
 # Copy Zoom SDK (if present) and native source
-COPY core/src/platforms/zoom/native/ ./core/src/platforms/zoom/native/
+COPY services/vexa-bot/core/src/platforms/zoom/native/ ./core/src/platforms/zoom/native/
 
 # Install dependencies without triggering native postinstall hooks.
 # Native addon build is handled explicitly below on best-effort basis.
@@ -46,22 +47,43 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace files
-COPY core/package*.json ./core/
-COPY core/tsconfig.json ./core/
-COPY core/build-browser-utils.js ./core/
+COPY services/vexa-bot/core/package*.json ./core/
+COPY services/vexa-bot/core/tsconfig.json ./core/
+COPY services/vexa-bot/core/build-browser-utils.js ./core/
 
-# Install TypeScript dependencies
+# Vendor the @vexa/* bricks the bot consumes. The build context is the repo root;
+# core/package.json declares them as `file:../../../modules/*`, which from
+# /app/vexa-bot/core resolves to /modules. Copy each brick's package.json + built
+# dist there (the bricks have no `prepare` script, so npm uses the prebuilt dist;
+# their runtime deps overlap with core's and resolve up the tree). This is what
+# makes the service consume the brick in the image — no in-bot copy, no drift.
+COPY modules/join/package.json                 /modules/join/package.json
+COPY modules/join/dist                         /modules/join/dist
+COPY modules/capture/package.json              /modules/capture/package.json
+COPY modules/capture/dist                      /modules/capture/dist
+COPY modules/pipeline/package.json             /modules/pipeline/package.json
+COPY modules/pipeline/dist                     /modules/pipeline/dist
+COPY modules/recording/package.json            /modules/recording/package.json
+COPY modules/recording/dist                    /modules/recording/dist
+COPY modules/recorder/package.json             /modules/recorder/package.json
+COPY modules/recorder/dist                     /modules/recorder/dist
+COPY modules/speaker-attribution/package.json  /modules/speaker-attribution/package.json
+COPY modules/speaker-attribution/dist          /modules/speaker-attribution/dist
+
+# Install TypeScript dependencies. --install-links COPIES the @vexa/* file: bricks
+# into node_modules (instead of symlinking to /modules), so they survive the
+# node_modules COPY into the runtime stage (no dangling symlinks).
 WORKDIR /app/vexa-bot/core
-RUN npm install
+RUN npm install --install-links
 RUN npm install -g typescript
 # Pre-bake diarization ONNX models (~32 MB) into the transformers.js cache in
 # node_modules — flows to the runtime stage with the node_modules COPY.
-COPY core/scripts/bake-diarization-models.js ./scripts/
+COPY services/vexa-bot/core/scripts/bake-diarization-models.js ./scripts/
 RUN node scripts/bake-diarization-models.js
 
 # Copy TypeScript source and assets (default avatar logo)
-COPY core/src/ ./src/
-COPY core/assets/ ./assets/
+COPY services/vexa-bot/core/src/ ./src/
+COPY services/vexa-bot/core/assets/ ./assets/
 
 # Build TypeScript
 RUN npm run build
@@ -137,7 +159,7 @@ RUN mkdir -p /app/vexa-bot/storage/screenshots /app/vexa-bot/storage/logs /app/v
     chmod -R 777 /app/vexa-bot/storage
 
 # Copy entrypoint script
-COPY core/entrypoint.sh /app/vexa-bot/entrypoint.sh
+COPY services/vexa-bot/core/entrypoint.sh /app/vexa-bot/entrypoint.sh
 RUN chmod +x /app/vexa-bot/entrypoint.sh
 
 # Set environment

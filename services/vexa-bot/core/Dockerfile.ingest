@@ -1,7 +1,10 @@
 # Ingest server — the bot's Node transcription pipeline behind a WebSocket.
 # Deliberately lightweight: no Playwright, no Edge, no native Zoom addon. The
-# ingest path only needs Node + ws + redis, so this is a plain node:20-slim
-# build, NOT the heavy vexa-bot browser image.
+# ingest path only needs Node + ws + redis + the @vexa pipeline/recorder bricks,
+# so this is a plain node:20-slim build, NOT the heavy vexa-bot browser image.
+#
+# Build context is the REPO ROOT (compose: context ../..) so the @vexa/* file:
+# deps under modules/ are reachable and vendored below.
 
 FROM node:20-slim AS build
 WORKDIR /app
@@ -9,14 +12,31 @@ WORKDIR /app
 # launches a browser; the user's own Chrome is the browser.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PUPPETEER_SKIP_DOWNLOAD=1
-COPY package*.json tsconfig.json ./
-RUN npm install --ignore-scripts
-COPY src/ ./src/
-COPY tsconfig.ingest.json ./
-COPY scripts/bake-diarization-models.js ./scripts/
-# Compile only the ingest-server's import graph (no Playwright in it), then
-# bring the hallucination phrase lists alongside the output.
-RUN npx tsc -p tsconfig.ingest.json && cp -r src/services/hallucinations dist/services/hallucinations
+COPY services/vexa-bot/core/package*.json services/vexa-bot/core/tsconfig.json ./
+# Vendor the @vexa/* bricks (file:../../../modules/* in package.json → /modules
+# from /app). package.json + prebuilt dist only; no `prepare` script, so npm uses
+# the dist. --install-links COPIES them into node_modules (real dirs, not symlinks)
+# so they flow to the runtime stage via the node_modules COPY.
+COPY modules/join/package.json                 /modules/join/package.json
+COPY modules/join/dist                         /modules/join/dist
+COPY modules/capture/package.json              /modules/capture/package.json
+COPY modules/capture/dist                      /modules/capture/dist
+COPY modules/pipeline/package.json             /modules/pipeline/package.json
+COPY modules/pipeline/dist                     /modules/pipeline/dist
+COPY modules/recording/package.json            /modules/recording/package.json
+COPY modules/recording/dist                    /modules/recording/dist
+COPY modules/recorder/package.json             /modules/recorder/package.json
+COPY modules/recorder/dist                     /modules/recorder/dist
+COPY modules/speaker-attribution/package.json  /modules/speaker-attribution/package.json
+COPY modules/speaker-attribution/dist          /modules/speaker-attribution/dist
+RUN npm install --install-links --ignore-scripts
+COPY services/vexa-bot/core/src/ ./src/
+COPY services/vexa-bot/core/tsconfig.ingest.json ./
+COPY services/vexa-bot/core/scripts/bake-diarization-models.js ./scripts/
+# Compile only the ingest-server's import graph (no Playwright in it). The
+# hallucination phrase lists now live in @vexa/pipeline (vendored into
+# node_modules), so the old `cp src/services/hallucinations` step is gone.
+RUN npx tsc -p tsconfig.ingest.json
 # Pre-bake the diarization ONNX models (~32 MB) into the transformers.js cache
 # inside node_modules so the runtime never hits Hugging Face on session start.
 RUN node scripts/bake-diarization-models.js
