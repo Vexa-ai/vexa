@@ -1,4 +1,5 @@
 import { log } from './log';
+import { isLowConfidenceSegment } from './hallucination-filter';
 
 export interface TranscriptionWord {
   word: string;
@@ -211,20 +212,31 @@ export class TranscriptionClient {
 
       const data = await response.json() as any;
 
+      const allSegments = (data.segments || []).map((s: any) => ({
+        start: s.start || 0,
+        end: s.end || 0,
+        text: s.text || '',
+        avg_logprob: s.avg_logprob,
+        no_speech_prob: s.no_speech_prob,
+        compression_ratio: s.compression_ratio,
+        words: s.words,
+      }));
+      // Drop low-confidence (hallucinated / faint-bleed) segments at the source and
+      // rebuild the text from what survives, so phantoms never reach the pipeline.
+      // If the model returned no segments we can't score, so keep its text as-is.
+      const segments = allSegments.filter((s: any) => !isLowConfidenceSegment(s));
+      const text = allSegments.length
+        ? segments.map((s: any) => (s.text || '').trim()).filter(Boolean).join(' ')
+        : (data.text || '');
+      if (allSegments.length && segments.length < allSegments.length) {
+        log(`[STT] dropped ${allSegments.length - segments.length}/${allSegments.length} low-confidence segment(s)`);
+      }
       return {
-        text: data.text || '',
+        text,
         language: data.language || language || 'unknown',
         language_probability: data.language_probability ?? 0,
         duration: data.duration || 0,
-        segments: (data.segments || []).map((s: any) => ({
-          start: s.start || 0,
-          end: s.end || 0,
-          text: s.text || '',
-          avg_logprob: s.avg_logprob,
-          no_speech_prob: s.no_speech_prob,
-          compression_ratio: s.compression_ratio,
-          words: s.words,
-        })),
+        segments,
       };
     } finally {
       clearTimeout(timeoutId);
