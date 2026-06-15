@@ -158,7 +158,7 @@ def callback_meeting_id():
     )
     if not mid:
         pytest.skip("Failed to insert test meeting into Postgres")
-    meeting_id = int(mid)
+    meeting_id = int(mid.splitlines()[0])
 
     # Insert meeting session
     _psql(
