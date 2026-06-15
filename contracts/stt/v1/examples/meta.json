@@ -1,0 +1,8 @@
+{
+  "fixture": "stt.v1/golden-1",
+  "contract": "stt.v1",
+  "provenance": "synthetic",
+  "recorded": "2026-06-12",
+  "source": "live transcription-service (dev), recorded via curl",
+  "notes": "first fixture recorded under the 0.11 paradigm; spoken text: 'Welcome to Vexa zero point eleven. Modules, contracts, harnesses and fixtures.'"
+}
