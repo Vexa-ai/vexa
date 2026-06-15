@@ -11,7 +11,7 @@
  * pre-grants mic permission for the extension origin before this runs.
  */
 
-import { createPcmCaptureNode } from '@vexa/capture';
+import { createPcmCaptureNode, createMixedAudioCapture, type MixedAudioCapture } from '@vexa/capture';
 
 const MIC_INDEX = 1000;
 // Mixed tab audio (all remote participants) — used where the page doesn't expose
@@ -24,7 +24,7 @@ const TARGET_SAMPLE_RATE = 16000;
 let stream: MediaStream | null = null;
 let ctx: AudioContext | null = null;
 let tabStream: MediaStream | null = null;
-let tabCtx: AudioContext | null = null;
+let tabCapture: MixedAudioCapture | null = null;
 
 async function start(): Promise<{ ok: boolean; error?: string }> {
   if (stream) return { ok: true };
@@ -74,21 +74,18 @@ async function startTab(streamId: string): Promise<{ ok: boolean; error?: string
   } catch (err: any) {
     return { ok: false, error: err.name || String(err) };
   }
-  tabCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-  const source = tabCtx.createMediaStreamSource(tabStream!);
-  // AudioWorklet (audio-thread) instead of the deprecated ScriptProcessor.
-  const node = await createPcmCaptureNode(tabCtx, (data) => {
-    let maxVal = 0;
-    for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
-    if (maxVal > 0.005) {
-      chrome.runtime.sendMessage({ type: 'audio', index: TAB_INDEX, pcm: Array.from(data) }).catch(() => { /* ws gone */ });
-    }
-  });
-  source.connect(node);
-  node.connect(tabCtx.destination);
-  // Re-play the tab audio so the user still hears the meeting (tab capture
-  // otherwise silences it).
-  source.connect(tabCtx.destination);
+  // @vexa/capture brick: 16 kHz PCM for transcription + native-rate re-play so the
+  // user keeps hearing the meeting (tab capture otherwise mutes it — "system audio
+  // blocked"). Re-play lives in the module so bot + extension share one fix.
+  try {
+    tabCapture = await createMixedAudioCapture(tabStream!, (pcm) => {
+      chrome.runtime.sendMessage({ type: 'audio', index: TAB_INDEX, pcm: Array.from(pcm) }).catch(() => { /* ws gone */ });
+    }, { sampleRate: TARGET_SAMPLE_RATE, log: (m) => console.log(`[vexa-offscreen] tab ${m}`) });
+  } catch (err: any) {
+    if (tabStream) { for (const t of tabStream.getTracks()) { try { t.stop(); } catch { /* */ } } }
+    tabStream = null;
+    return { ok: false, error: `capture: ${err?.message || err}` };
+  }
   chrome.runtime.sendMessage({ type: 'speakers', speakers: { [String(TAB_INDEX)]: 'Participant' } }).catch(() => { /* ignore */ });
   chrome.runtime.sendMessage({ type: 'capture-started', streams: 1 }).catch(() => { /* ignore */ });
   console.log('[vexa-offscreen] tab audio capture started');
@@ -96,27 +93,21 @@ async function startTab(streamId: string): Promise<{ ok: boolean; error?: string
 }
 
 function stopTab(): void {
+  if (tabCapture) { try { tabCapture.stop(); } catch { /* ignore */ } tabCapture = null; }
   if (tabStream) { for (const t of tabStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } tabStream = null; }
-  if (tabCtx) { try { tabCtx.close(); } catch { /* ignore */ } tabCtx = null; }
   console.log('[vexa-offscreen] tab audio capture stopped');
 }
 
+// Always respond (even on a thrown rejection) — an un-caught reject leaves the
+// message channel open then closes it, surfacing a useless "channel closed"
+// error instead of the real failure.
+const respond = (p: Promise<{ ok: boolean; error?: string }>, sendResponse: (r: unknown) => void) =>
+  p.then(sendResponse).catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type === 'NOTE_CAPTURE_START') {
-    start().then(sendResponse);
-    return true; // async response
-  }
-  if (msg.type === 'NOTE_CAPTURE_STOP') {
-    stop();
-    sendResponse({ ok: true });
-  }
-  if (msg.type === 'TAB_CAPTURE_START') {
-    startTab(msg.streamId).then(sendResponse);
-    return true;
-  }
-  if (msg.type === 'TAB_CAPTURE_STOP') {
-    stopTab();
-    sendResponse({ ok: true });
-  }
+  if (msg.type === 'NOTE_CAPTURE_START') { respond(start(), sendResponse); return true; }
+  if (msg.type === 'NOTE_CAPTURE_STOP') { stop(); sendResponse({ ok: true }); }
+  if (msg.type === 'TAB_CAPTURE_START') { respond(startTab(msg.streamId), sendResponse); return true; }
+  if (msg.type === 'TAB_CAPTURE_STOP') { stopTab(); sendResponse({ ok: true }); }
   return undefined;
 });

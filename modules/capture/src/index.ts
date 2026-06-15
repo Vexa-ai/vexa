@@ -8,6 +8,8 @@
  * extension: WebSocket).
  */
 export { createPcmCaptureNode } from "./pcm-capture";
+export { createMixedAudioCapture } from "./mixed-audio";
+export type { MixedAudioCapture, MixedAudioOptions } from "./mixed-audio";
 export { createGmeetCapture } from "./gmeet-capture";
 export type { GmeetCapture } from "./gmeet-capture";
 export { createGmeetSpeakers } from "./gmeet-speakers";

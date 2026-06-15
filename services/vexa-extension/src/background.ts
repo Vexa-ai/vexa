@@ -65,8 +65,10 @@ async function ensureOffscreen(): Promise<void> {
   if (has) return;
   await chrome.offscreen.createDocument({
     url: 'offscreen.html',
-    reasons: [chrome.offscreen.Reason.USER_MEDIA],
-    justification: 'Microphone capture for voice notes',
+    // USER_MEDIA: mic + tab capture. AUDIO_PLAYBACK: re-play the captured tab
+    // audio to the speakers (tab capture otherwise mutes the meeting).
+    reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.AUDIO_PLAYBACK],
+    justification: 'Meeting audio capture and re-play',
   }).catch((e) => { if (!String(e).includes('single offscreen')) throw e; });
 }
 

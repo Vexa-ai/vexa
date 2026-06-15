@@ -189,6 +189,11 @@ function applyState(s: PanelState): void {
     // participant tracks were captured in-page (streams counts mic + remote).
     if (ta === 'on' || s.streams > 1) { feedStatus(''); }
     else if (ta === 'pending') { feedStatus('Connecting tab audio…'); }
+    else if (ta.startsWith('error:')) {
+      // Surface the actual failure instead of the generic hint — so we can see
+      // whether it's getMediaStreamId, getUserMedia, or the offscreen.
+      feedStatus('Remote audio error: ' + ta.slice(6) + ' — click the Vexa toolbar icon to retry.', true);
+    }
     else {
       feedStatus('Remote audio NOT captured — only your mic is being transcribed. '
         + 'Click the Vexa toolbar icon (top-right of Chrome) on this meeting tab — '
