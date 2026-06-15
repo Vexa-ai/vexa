@@ -31,7 +31,8 @@ window.addEventListener('message', (event) => {
   switch (data.type) {
     case 'audio':
       // Forward one per-speaker PCM chunk to the background WebSocket.
-      chrome.runtime.sendMessage({ type: 'audio', index: data.index, pcm: data.pcm });
+      // speakerName = the glow name bound at the source (gmeet); undefined otherwise.
+      chrome.runtime.sendMessage({ type: 'audio', index: data.index, pcm: data.pcm, speakerName: data.speakerName });
       break;
     case 'speakers':
       chrome.runtime.sendMessage({ type: 'speakers', speakers: data.speakers });

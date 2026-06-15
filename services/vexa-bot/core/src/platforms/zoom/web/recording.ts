@@ -3,7 +3,7 @@ import { BotConfig } from '../../../types';
 import { RecordingService } from '@vexa/recording';
 import { getRawCaptureService, getSegmentPublisher, feedMixedAudio, recordMixedHint, hasMixedChunkedPipeline, disposeMixedChunkedPipeline } from '../../../index';
 import { log } from '../../../utils';
-import { PulseAudioCapture, UnifiedRecordingPipeline } from '@vexa/audio-pipelines';
+import { PulseAudioCapture, UnifiedRecordingPipeline } from '@vexa/recording';
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';
 import { startZoomRichObservation } from './observe';

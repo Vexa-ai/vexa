@@ -41,10 +41,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { SpeakerStreamManager } from '@vexa/speaker-streams';
-import { TranscriptionClient } from '@vexa/speaker-streams';
+import { SpeakerStreamManager } from '@vexa/pipeline';
+import { TranscriptionClient } from '@vexa/pipeline';
 import { SegmentPublisher } from './segment-publisher';
-import { mapWordsToSpeakers, captionsToSpeakerBoundaries, CaptionEvent, TimestampedWord } from '@vexa/speaker-streams';
+import { mapWordsToSpeakers, captionsToSpeakerBoundaries, CaptionEvent, TimestampedWord } from '@vexa/speaker-attribution';
 
 const SAMPLE_RATE = 16000;
 const CHUNK_SIZE = 4096;

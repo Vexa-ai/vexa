@@ -6,7 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "check:isolation": "node scripts/check-isolation.js"
+    "check:isolation": "node scripts/check-isolation.js",
+    "test": "tsx test/bind.test.ts"
   },
-  "devDependencies": { "typescript": "^5.4.0" }
+  "devDependencies": { "typescript": "^5.4.0", "tsx": "^4.0.0" }
 }

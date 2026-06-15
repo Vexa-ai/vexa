@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc && cp -r src/hallucinations dist/hallucinations",
     "check:isolation": "node scripts/check-isolation.js",
-    "test": "tsx src/speaker-streams.test.ts",
+    "test": "tsx src/speaker-streams.test.ts && tsx src/gmeet-pipeline.test.ts",
     "dev": "tsx watch --env-file-if-exists=.env scripts/desktop.ts",
     "live-stack": "tsx watch --env-file-if-exists=.env scripts/live-stack.ts",
     "replay": "tsx scripts/fixture-replay.ts",

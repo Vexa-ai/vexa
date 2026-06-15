@@ -13,7 +13,8 @@ human-gated lane; review surface is schema diffs + goldens, never implementation
 |---|---|---|
 | `stt/v1` | stt-client → transcription-service | **live since v0.10** — real golden included |
 | `capture/v1` | bot/extension capture → pipeline bricks | formalize at MVP2 (embryo: `ingest-server` frames, `raw-capture` dumps) |
-| `transcript/v1` | delivery → collector | formalize at MVP2 (embryo: de facto Redis segment schema) |
+| `separated-transcript/v1` | mixed-pipeline & multistream-pipeline → speaker-attribution | formalize at MVP2 (embryo: `speaker-mapper.ts` opaque-key segments) |
+| `transcript/v1` | speaker-attribution → collector | formalize at MVP2 (embryo: de facto Redis segment schema) |
 | `acts/v1` | meeting-api / runtime-api → vexa-bot | define at MVP3 |
 | `lifecycle/v1` | meeting-lifecycle ↔ bot-orchestration | formalize at MVP3 (semantics: Pack J / Pack D.2 outboxes) |
 | `api/v1` | gateway / mcp / meeting-api → world | version at MVP4 (exists: OpenAPI + WS + MCP) |

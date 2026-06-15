@@ -5,7 +5,7 @@ export {
   teamsNameSelectors,
   teamsParticipantIdSelectors,
   teamsMeetingContainerSelectors,
-} from '@vexa/capture-kit';
+} from '@vexa/capture';
 
 // Centralized MS Teams selectors and indicators
 // Keep this file free of runtime logic; export constants only.

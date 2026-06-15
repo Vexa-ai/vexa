@@ -8,10 +8,13 @@
  *    onSpeaking hints become `speaker_activity` (dom-active) WS messages.
  *
  * SoC: this module extracts RAW SIGNALS only — it reads who Meet is visibly
- * rendering as speaking and emits debounced start/stop HINTS per name. It NEVER
- * binds a name to an audio track/segment. Naming happens DOWNSTREAM: the
- * ClusterNameBinder resolves channels/clusters to these `dom-active` hints
- * (cluster-vote, hysteresis, live re-resolve), cross-validated against audio.
+ * rendering as speaking, emits debounced start/stop HINTS per name, and exposes
+ * litNames() (who is lit now). It NEVER itself attaches a name to audio. Two
+ * consumers use the signal:
+ *  - gmeet (capture.v1): gmeet-capture-v1 stamps the lit name onto each audio
+ *    chunk AT THE SOURCE — binding identity to audio, not to a segment.
+ *  - mixed (zoom/teams): the downstream ClusterNameBinder resolves clusters to
+ *    these `dom-active` hints (cluster-vote, hysteresis), cross-validated vs audio.
  *
  * Speaking detection — NO auto-learn:
  *  The previous self-healing "learn a CSS class after the known ones go silent
@@ -55,6 +58,11 @@ export interface GmeetSpeakersState {
 
 export interface GmeetSpeakers {
   getState(): GmeetSpeakersState;
+  /** Names lit RIGHT NOW (non-self, named), from the poll-maintained set — O(1),
+   *  no DOM re-scan. The capture.v1 binder reads this per audio chunk to stamp the
+   *  glow name at the chunk's capture time. Still RAW signal extraction: it reports
+   *  who Meet renders as speaking; it does not itself attach a name to audio. */
+  litNames(): string[];
   /** One-shot structural dump of the live Meet DOM — for designing a robust,
    *  non-obfuscated speaking/naming signal. Read-only; no side effects. */
   probeDom(): GmeetDomProbe;
@@ -191,6 +199,7 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
         selectorStats: { knownClassHits: { ...knownClassHits }, lastKnownHitMs },
       };
     },
+    litNames(): string[] { return [...speakingNow]; },
     probeDom(): GmeetDomProbe {
       // The captured elements are <audio> AND <video> with audio tracks (same set
       // gmeet-capture taps). For each, run the co-location test against its tile.

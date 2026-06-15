@@ -269,14 +269,15 @@ async function stopCapture(): Promise<void> {
 
 // Pack and forward one per-speaker PCM chunk.
 const trackFrames = new Map<number, { frames: number; lastAt: number }>();
-function sendAudio(index: number, pcm: number[]): void {
+function sendAudio(index: number, pcm: number[], speakerName?: string): void {
   if (state.paused) return; // paused: capture runs, nothing ships
   const t = trackFrames.get(index) || { frames: 0, lastAt: 0 };
   t.frames++; t.lastAt = Date.now();
   trackFrames.set(index, t);
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   // capture.v1 wire codec — capture-time stamped HERE (pre-network), never at receipt.
-  ws.send(encodeAudioFrame(index, Date.now(), Float32Array.from(pcm)));
+  // speakerName (gmeet glow, bound at the source) rides on the frame when present.
+  ws.send(encodeAudioFrame(index, Date.now(), Float32Array.from(pcm), speakerName));
 }
 
 // ── Telemetry: merged extension state → ingest server /telemetry ──────────
@@ -356,7 +357,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }).catch(() => sendResponse({ mode: 'note' }));
       return true;
     case 'audio':
-      sendAudio(msg.index, msg.pcm); break;
+      sendAudio(msg.index, msg.pcm, msg.speakerName); break;
     case 'speakers':
       Object.assign(lastSpeakerMap, msg.speakers || {});
       if (ws && ws.readyState === WebSocket.OPEN) {

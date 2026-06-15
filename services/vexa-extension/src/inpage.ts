@@ -20,7 +20,7 @@ import {
   createGmeetSpeakers, GmeetSpeakers,
   createZoomSpeakers, ZoomSpeakers,
   createTeamsSpeakers, TeamsSpeakers,
-  createGmeetCapture, GmeetCapture,
+  createGmeetCapture, GmeetCapture, pickBoundName,
   createZoomChat, ZoomChat,
   createTeamsChat, TeamsChat,
   createPcmCaptureNode,
@@ -200,10 +200,14 @@ import {
     if (isPerParticipant) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
-        // SoC: just ship each opaque per-participant channel's audio. No binding
-        // here — the downstream cluster-vote binder names channel N from the
-        // active-speaker hints. (No reportTrackAudio / placeholder relabel.)
-        onAudio: (index, pcm) => { if (isCurrent()) post('audio', { index, pcm: Array.from(pcm) }); },
+        // Bind the glow name lit at THIS instant onto the frame (capture.v1
+        // speakerName) — gmeet identity rides on the AUDIO, not the rotating
+        // channel index. Exactly-one-lit ⇒ that name; else undefined (UNKNOWN).
+        onAudio: (index, pcm) => {
+          if (!isCurrent()) return;
+          const speakerName = speakers ? pickBoundName(speakers.litNames()) : undefined;
+          post('audio', { index, pcm: Array.from(pcm), speakerName });
+        },
       });
       await gmeetCapture.start();
     }

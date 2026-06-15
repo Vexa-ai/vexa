@@ -5,8 +5,8 @@
  * Run: npx tsx src/services/__tests__/chunked-transcriber.test.ts
  */
 
-import { ChunkedTranscriber, ChunkSegment } from '../chunked-transcriber';
-import { TranscriptionResult } from '@vexa/speaker-streams';
+import { ChunkedTranscriber, ChunkSegment } from '@vexa/pipeline';
+import { TranscriptionResult } from '@vexa/pipeline';
 
 const SR = 16000;
 let passed = 0;
@@ -69,7 +69,7 @@ async function makeT(fake?: Fake) {
       rename: (from: string, to: string, segments: ChunkSegment[]) => renamed.push({ from, to, segments }),
     },
     log: () => {},
-    binder: new (await import('../cluster-name-binder')).ClusterNameBinder({}),
+    binder: new (await import('@vexa/pipeline')).ClusterNameBinder({}),
     diarizer: null,
     ring: [], ringMs: 0, carry: null, queue: [], pumping: false,
     lastConfirmedText: '', commitCounter: 0, turnCounter: 0, disposed: false,

@@ -17,8 +17,7 @@
  *    SAME segment ids under the new name.
  */
 
-import { ChunkedTranscriberCallbacks, ChunkSegment } from './chunked-transcriber';
-import { TranscriptionClient } from '@vexa/speaker-streams';
+import { ChunkedTranscriberCallbacks, ChunkSegment, TranscriptionClient } from '@vexa/pipeline';
 import { SegmentPublisher, TranscriptionSegment } from './segment-publisher';
 
 export interface ChunkedHostDeps {

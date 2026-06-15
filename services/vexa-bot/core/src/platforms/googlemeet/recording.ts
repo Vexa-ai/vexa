@@ -4,7 +4,7 @@ import { BotConfig } from "../../types";
 import { RecordingService } from '@vexa/recording';
 import { getSegmentPublisher } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
-import { MediaRecorderCapture, UnifiedRecordingPipeline } from '@vexa/audio-pipelines';
+import { MediaRecorderCapture, UnifiedRecordingPipeline } from '@vexa/recording';
 import {
   googleParticipantSelectors,
   googleSpeakingClassNames,

@@ -11,7 +11,7 @@
  */
 
 import assert from 'node:assert';
-import { SpeakerStreamManager } from '@vexa/speaker-streams';
+import { SpeakerStreamManager } from '@vexa/pipeline';
 
 let passed = 0;
 let failed = 0;

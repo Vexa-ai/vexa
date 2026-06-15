@@ -30,3 +30,8 @@ export type { HintKind } from "./cluster-name-binder";
 // (opaque cluster ids; naming is the downstream speaker-attribution brick).
 export { createMixedPipeline } from "./mixed-pipeline";
 export type { MixedPipeline, MixedPipelineOptions } from "./mixed-pipeline";
+
+// The gmeet PER-SPEAKER strategy: capture.v1 (glow-bound names) → transcript.v1
+// (named directly; channel index ignored, no diarizer, no post-hoc attribution).
+export { createGmeetPipeline, streamKeyFor } from "./gmeet-pipeline";
+export type { GmeetPipeline, GmeetPipelineOptions } from "./gmeet-pipeline";

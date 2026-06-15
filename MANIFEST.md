@@ -20,11 +20,11 @@ Ten primitives. Everything else in this file — inventory, gates, process, rele
 
 ![One module and its twin: production above, harness below, both through the same contract ports; the recorder turns production traffic into fixtures.](docs/0.11/02-module-harness.png)
 
-**P6 — Service (assembly).** The unit of runtime: a **manifest** — which bricks, what wiring, which runtime shape (container per meeting, pooled workers, stateless replicas, a browser extension). *Law: a service owns no domain logic; a fat service is bricks fused together, and thinning = un-fusing until only the manifest remains.* The service list is a product snapshot, never architecture: the same bricks assemble into the bot product (one container, in-process) or the extension product (capture-kit in the user's tab + the same pipeline bricks behind `capture.v1` as a backend ingest service).
+**P6 — Service (assembly).** The unit of runtime: a **manifest** — which bricks, what wiring, which runtime shape (container per meeting, pooled workers, stateless replicas, a browser extension). *Law: a service owns no domain logic; a fat service is bricks fused together, and thinning = un-fusing until only the manifest remains.* The service list is a product snapshot, never architecture: the same bricks assemble into the bot product (one container, in-process) or the extension product (capture in the user's tab + the same pipeline bricks behind `capture.v1` as a backend ingest service).
 
 **P7 — Deployment (car).** A way to run the software: a set of services + topology + config for one context. Services build into **images published on Docker Hub** — one image per service, as today; `lite` is one more published image that packages the whole car. *Laws: deployments pull published images, never build them; image tags are immutable — `promote` re-tags forward (`:dev` → `:latest`), never rebuilds (already the tests3 law). By the time anything reaches a deployment it is verified and immutable.* Today's cars: `deploy/compose` (laptop), `deploy/helm` (cloud), `deploy/lite` (single container), Today this layer is driven by the `tests3` engine — itself a monolith-era artifact (its evidence registry of `proves:`/`symptom:` checks is, in 0.11 terms, hundreds of module oracles written at the only level where verification was possible). As module gates absorb those checks, the deployment layer keeps only the verbs (`build·deploy·promote`) and a thin boot smoke per car.
 
-![Same bricks, two products: the bot assembles everything in one container; the extension runs capture-kit in the user's tab wired over capture.v1 to the same pipeline bricks on the backend.](docs/0.11/07-lego-assemblies.png)
+![Same bricks, two products: the bot assembles everything in one container; the extension runs capture in the user's tab wired over capture.v1 to the same pipeline bricks on the backend.](docs/0.11/07-lego-assemblies.png)
 
 **P8 — Gate.** A machine verdict on a module's artifacts; green is binding (trust contract, §4). *Law: no human approval is required for correctness — humans judge only what machines cannot.*
 
@@ -36,21 +36,19 @@ Ten primitives. Everything else in this file — inventory, gates, process, rele
 
 ![Emergence: modules are atoms inside services, services are molecules inside the deployment crystal; arrows between services are wire contracts.](docs/0.11/08-emergence.png)
 
-## 1. Inventory (grounded in today's tree, branch `feat/extension-in-tab-capture`)
+## 1. Inventory (grounded in today's tree, branch `0.11-integration`)
 
 ### 1a. Domain bricks
 
 | Module | Concern | Lives today | Harness today |
 |---|---|---|---|
-| `meet-join` | join / admission / leave / removal per platform | `vexa-bot/core/src/platforms/{googlemeet,msteams,zoom}`; extracted as `packages/meet-join` on `pack/meet-join-extraction` | VNC watch — hot debug container only (reproducible) ✅ |
-| `capture-kit` | in-page per-speaker capture + speaker detection | `vexa-bot/core/src/browser/` | extension is the live testbed |
-| `speaker-streams` | per-speaker stream mgmt, VAD, name mapping | `core/src/services/{speaker-streams,speaker-mapper,vad}.ts` | unit + wav tests ✅ |
-| `audio-pipelines` | the two topologies: multichannel (`audio-pipeline.ts`), mixed (`mixed-audio-pipeline.ts`) | `core/src/services/` | replay |
-| `diarization` | mixed-channel attribution | `core/src/services/diarization/` (6 files incl. metrics) | metrics + AMI sets |
-| `hallucination-filter` | STT hallucination corpus + filter | `core/src/services/hallucination*` | corpus tests ✅ |
-| `stt-client` | speaks `stt.v1` | `core/src/services/transcription-client.ts` | replay w/ recorded responses |
-| `delivery` | segment publishing + callbacks | `{segment-publisher,unified-callback}.ts` | replay FULL mode ✅ |
-| `recorder` | contracts → fixtures | `core/src/services/raw-capture.ts` | feeds every other harness |
+| `join` | join / admission / leave / removal per platform | `vexa-bot/core/src/platforms/{googlemeet,msteams,zoom}`; extracted as `modules/join` on `pack/meet-join-extraction` | VNC watch — hot debug container only (reproducible) ✅ |
+| `capture` | in-page audio + speaker/chat detection → `capture.v1` | `modules/capture` — **browser-pure**; extension imports `@vexa/capture`, bot bundles it | extension is the live testbed ✅ |
+| `pipeline` | audio → `separated-transcript.v1` (opaque keys). **Internal strategies:** multistream (gmeet, channel id) ‖ mixed (zoom/msteams, diarizer cluster id), selected by `meta.topology`. Owns VAD + stt-client + hallucination-filter | `modules/pipeline` — **both strategies in-brick**: mixed = `ChunkedTranscriber` + `diarization/` (gate→wespeaker→clustering) + `createMixedPipeline` adapter; multistream = `SpeakerStreamManager`. **Bot imports `@vexa/pipeline`; in-bot copies deleted** | unit + wav + live + offline replay ✅ |
+| `speaker-attribution` | `separated-transcript.v1` (opaque keys) + capture.v1 names → `transcript.v1` (named). **Internal strategies:** caption-mapper ‖ diarizer cluster-name-binder | `modules/speaker-attribution` — caption-mapper ‖ `cluster-name-binder` (`attributeMixed`) both in-brick; **`transcript.v1` schema now defined** | unit ✅; fixture replay ✅ (golden diff at MVP2) |
+| `recording` | acquire (PulseAudio/MediaRecorder) + deliver (chunked upload) → `recording.v1`. **Internal strategies:** MediaRecorder (gmeet/teams) ‖ PulseAudio (zoom); audio ‖ video | `modules/recording` | replay vs fake receiver |
+| `recorder` | contracts → fixtures (P5 tee) | `modules/recorder` (from `raw-capture.ts`) | feeds every other harness |
+| `delivery` | `transcript.v1` segment publishing + callbacks | `{segment-publisher,unified-callback}.ts` — **still in bot** | replay FULL mode ✅ |
 
 ### 1b. Infra bricks (today fused inside `meeting-api` 17.9k LOC and `runtime-api`)
 
@@ -71,8 +69,8 @@ Ten primitives. Everything else in this file — inventory, gates, process, rele
 
 | Service | Runtime shape | Assembles | Today → direction |
 |---|---|---|---|
-| `vexa-bot` | browser container, one per meeting | meet-join, capture-kit, speaker-streams, audio-pipelines, diarization, hallucination-filter, stt-client, delivery, recorder | 31k LOC FAT → pure manifest |
-| `vexa-extension` | MV3 in the user's browser | capture-kit (+ `ingest-server` runs the same pipeline bricks server-side) | 1.5k ✅ thin |
+| `vexa-bot` | browser container, one per meeting | `@vexa/{join,capture,pipeline,speaker-attribution,recording,recorder}` (+ delivery, still in-bot) | 31k LOC FAT → pure manifest |
+| `vexa-extension` | MV3 in the user's browser | capture (+ `ingest-server` runs the same pipeline bricks server-side) | 1.5k ✅ thin |
 | `transcription-service` | GPU/CPU model pool | model serving behind `stt.v1` | 2.2k ✅ **the thin exemplar** |
 | `meeting-api` | stateless API + collector | auth-keys, meeting-store, collector, webhooks | 17.9k FAT → thins |
 | `runtime-api` | control plane | lifecycle | 5.3k, stays thin |
@@ -80,7 +78,7 @@ Ten primitives. Everything else in this file — inventory, gates, process, rele
 | `tts-service` | model server | — | 0.8k ✅ |
 | `dashboard` · `telegram-bot` · `calendar-service` · `agent-api` | clients of `api.v1` | client bricks | **out of 0.11 scope** |
 
-![Wire-contract graph: vexa-bot and vexa-extension share the capture-kit brick at build time and both emit capture.v1 into the pipeline bricks (in-bot / ingest); stt.v1 to transcription, transcript.v1 to meeting-api, api.v1 to clients, webhook.v1 to customers, acts.v1 back to the bot only.](docs/0.11/05-module-graph.png)
+![Wire-contract graph: vexa-bot and vexa-extension share the capture brick at build time and both emit capture.v1 into the pipeline bricks (in-bot / ingest); stt.v1 to transcription, transcript.v1 to meeting-api, api.v1 to clients, webhook.v1 to customers, acts.v1 back to the bot only.](docs/0.11/05-module-graph.png)
 
 ### 1e. The cars
 
@@ -98,9 +96,10 @@ The paradigm is already in embryo: recorder = `raw-capture.ts`; replay harness =
 
 | Contract | Between | Format | Standard? | Status |
 |---|---|---|---|---|
-| `capture.v1` | bot/extension capture → pipeline bricks (in-process in bot; WS via `ingest-server`) | JSONL events + framed audio chunks — **also the fixture format** | custom | formalize at MVP2 |
+| `capture.v1` | bot/extension capture → pipeline bricks (in-process in bot; WS via `ingest-server`) | JSONL events (incl. **`chat`**) + framed audio chunks — **also the fixture format** | custom | schema + codec + validator ✅; goldens ongoing |
 | `stt.v1` | stt-client → transcription-service | OpenAI-compatible audio API | standard — never fork it | live since v0.10 |
-| `transcript.v1` | delivery → collector | attributed segment JSON (de facto Redis schema today) | custom | formalize at MVP2 |
+| `separated-transcript.v1` | `pipeline` (mixed ‖ multistream) → speaker-attribution | speaker-separated segment JSON keyed by an **opaque** channel/cluster id (not a name) | custom | schema ✅ + real-time fixture recorded; goldens at MVP2 |
+| `transcript.v1` | speaker-attribution → collector | attributed segment JSON (de facto Redis schema today) | custom | **schema now defined** ✅ + real-time fixture; goldens at MVP2 |
 | `api.v1` | api-gateway / mcp / meeting-api → world | OpenAPI + WS + MCP schemas | partial (MCP standard) | version at MVP4 |
 | `acts.v1` | meeting-api / runtime-api → vexa-bot | act commands (speak, chat, screen) | custom | define at MVP3 |
 | `webhook.v1` | webhooks → customer endpoints | HMAC-SHA256 signed JSON | custom — live since v0.9 | version at MVP4 |
@@ -108,7 +107,7 @@ The paradigm is already in embryo: recorder = `raw-capture.ts`; replay harness =
 
 Rules: contracts live in `contracts/<name>/v<N>/` (schema + README + goldens); additive = same version, breaking = `v<N+1>`, old kept until unpinned; no shared classes/state/callbacks across a boundary.
 
-**`capture.v1` spelled out** (one format, three jobs — wire format, recorder output, pipeline test input): `events.jsonl` (one timestamped JSON object per line: join/leave, active-speaker, captions, chat, admission state — capture-kit's speaker hints ride here) + `audio/` chunks (PCM or Opus, each with start timestamp, duration, **channel id**); `meta.json` declares topology — `channels: per-participant` (identity free by channel) or `channels: mixed` (diarization required). Replay = both files through contract-in on the original clock. Channel topology selects the attribution strategy inside the pipeline bricks (channel-labeler vs diarizer) — two strategies, one contract, one oracle, therefore not separate modules. Embryo: `raw-capture.ts` already dumps WAVs + `events.txt`.
+**`capture.v1` spelled out** (one format, three jobs — wire format, recorder output, pipeline test input): `events.jsonl` (one timestamped JSON object per line: join/leave, active-speaker, captions, chat, admission state — capture's speaker hints ride here) + `audio/` chunks (PCM or Opus, each with start timestamp, duration, **channel id**); `meta.json` declares topology — `channels: per-participant` (identity free by channel) or `channels: mixed` (diarization required). Replay = both files through contract-in on the original clock. Channel topology selects the strategy: `per-participant` → **multistream-pipeline** (channel-labeler, gmeet); `mixed` → **mixed-pipeline** (diarizer, zoom/msteams). The two are **internal strategies of one `pipeline` brick** — distinct internals (channel labels vs online clustering) with distinct live-platform failure modes — converging on **one** contract-out, `separated-transcript.v1`, asserted by **one** oracle, and that opaque-keyed seam feeds a single downstream **speaker-attribution** brick (name resolution single-sourced; see `contracts/separated-transcript/v1`). Both strategies are now **extracted into `modules/pipeline`** (`ChunkedTranscriber` + `diarization/` for mixed, `SpeakerStreamManager` for multistream; in-bot copies deleted); naming lives in `modules/speaker-attribution`; the recorder writes the `capture.v1` fixture that replays them.
 
 ## 3. Skeletons
 
@@ -118,16 +117,16 @@ Rules: contracts live in `contracts/<name>/v<N>/` (schema + README + goldens); a
 |---|---|---|
 | `MANIFEST.md` | **NEW** | this file |
 | `contracts/` | **NEW** | all wire boundaries: `capture/v1` `stt/v1` `transcript/v1` `acts/v1` `lifecycle/v1` `api/v1` `webhook/v1` |
-| `packages/<module>/` | **NEW**, one per extracted brick | `meet-join` first (MVP1); then capture-kit, speaker-streams, audio-pipelines, diarization, delivery (MVP2+); infra bricks as services thin (MVP3–4) |
+| `modules/<module>/` | one per extracted brick | **extracted:** join · capture · pipeline · speaker-attribution · recording · recorder. **next:** delivery, then infra bricks as services thin (MVP3–4) |
 | `.github/` | +5 workflow files | the gates (§4) |
-| `packages/` | unchanged | exists (`transcript-rendering`, `vexa-cli`, `vexa-client`) — bricks join an existing convention |
+| `packages/` | unchanged | npm-published client SDKs only (`transcript-rendering`, `vexa-cli`, `vexa-client`); domain/infra bricks live in `modules/` |
 | `services/` | unchanged | assemblies — thinned, never rewritten, never deleted |
 | `deploy/` | unchanged | the cars: `compose/`, `helm/`, `lite/` |
 | `tests3/` | shrinks | monolith-era artifact — built to validate what couldn't be verified alone. Its evidence checks migrate into module oracles/fixtures as gates absorb them; what stays: `build·deploy·promote` verbs + a thin boot smoke per car |
 | `libs/` | unchanged | absorbed brick by brick (`admin-models` → `meeting-store`) |
 | everything else | untouched | `docs/`, `scripts/`, `Makefile`, `VERSION`, … |
 
-Thinning rule: functionality moves into `packages/<module>` behind a contract; the service keeps its name, image, and place in deploy, and consumes the module. If a step touches more than one module plus `contracts/`, the step is too big — split it.
+Thinning rule: functionality moves into `modules/<module>` behind a contract; the service keeps its name, image, and place in deploy, and consumes the module. If a step touches more than one module plus `contracts/`, the step is too big — split it.
 
 ### 3b. Every module ships the same nine artifacts
 
@@ -158,7 +157,7 @@ Thinning rule: functionality moves into `packages/<module>` behind a contract; t
 1. **Determinism:** in CI replay, `stt.v1` (and TTS) responses are part of the fixture — replay is bit-deterministic, oracles exact-match. Model *quality* (WER, attribution on the quality datasets) is a separate scheduled, non-blocking trend job. Correctness blocks; quality never does.
 2. **Hermetic:** no network except content-addressed fixture fetch; lockfiles, base images, fixture hashes pinned.
 3. **The ratchet:** every production bug adds its fixture; a bug class can return exactly once in history.
-4. **Live-platform bricks pass at the release boundary:** per-PR CI cannot join meetings; `meet-join`/`capture-kit` merge on the four deterministic gates, and the live canary (solo meeting, oracle on `capture.v1` out) gates cutting the version. The pass sits where it can be real.
+4. **Live-platform bricks pass at the release boundary:** per-PR CI cannot join meetings; `join`/`capture` merge on the four deterministic gates, and the live canary (solo meeting, oracle on `capture.v1` out) gates cutting the version. The pass sits where it can be real.
 5. **Zero tolerated flake:** a flaky fixture is quarantined by PR with an issue the same day — never retried-until-green.
 
 Harness flavor by kind: domain replays `capture.v1` + recorded `stt.v1`; infra replays recorded request/response, seeded-DB fixtures, golden webhook payloads; client runs contract tests against `api.v1` goldens.
@@ -203,11 +202,12 @@ Per-brick tags (`meet-join-v1.2.0`) cut on green gates, nothing re-verified. `re
 
 ![Six gated milestones from the map to the 0.11 release.](docs/0.11/04-roadmap.png)
 
-- [ ] **MVP0 — the map.** This MANIFEST + `contracts/` + `packages/` skeleton merged upstream; `gate:isolation` runs on PRs; milestone + labels exist.
+- [ ] **MVP0 — the map.** This MANIFEST + `contracts/` + `modules/` skeleton merged upstream; `gate:isolation` runs on PRs; milestone + labels exist.
   *Trim:* superseded architecture docs (`docs/architecture-proposed.md`, `docs/architecture-refactoring-plan.md`) archived in favor of the MANIFEST; Mintlify deploy branch repointed `pre-commit/v0.9` → `main` and the stale branch deleted. **Bootstrap rule:** MVP0 is the first change to ride the process it defines — filed as a ready issue (oracle: the gate job runs green), branched as `pack/*` under the WIP gate, laned `lane:contract` by its own path filter, reviewed at the human gate as schemas + goldens only. `stt.v1` ships with a real recorded golden, not a stub.
 - [ ] **MVP1 — presence proven.** `meet-join` promoted upstream; the bot assembly imports the brick (arrow points service → module, never back); `make watch` joins a live meeting; ≥5 qualifying `good-first-issue`s.
   *Trim:* the in-bot join code (`platforms/{googlemeet,msteams,zoom}` join/admission paths) deleted at source — the move completes only on deletion; join-era fork branches (`stitch/gmeet-join-restore`, `pack/407*`, `release/meet-join-fix*`) closed and deleted.
 - [ ] **MVP2 — pipeline replayable.** `capture.v1` + `transcript.v1` formalized from the embryos (`ingest-server` frames, `raw-capture` dumps); pipeline bricks extracted with `production-replay` promoted to their `make replay` gate — attributed transcript reproduced in CI: no bot, no meeting, no GPU.
+  *Progress (this session):* `pipeline` mixed strategy (gate→diarizer→Whisper) and `speaker-attribution` cluster-name-binder **extracted into bricks**; `separated-transcript.v1` + `transcript.v1` **schemas defined**; `capture.v1` gained a `chat` event + a faithful timestamped fixture form (`stream.capture`); full chain proven **live** (product extension → modules → sidepanel) **and offline** (fixture replay, ~98% match). **Done of the trim:** in-bot copies of `chunked-transcriber`/`diarization`/`cluster-name-binder` deleted; bot imports `@vexa/pipeline`. *Remaining:* formalize `capture.v1`/`transcript.v1` + record goldens; promote `make replay` to a **CI gate**; consolidate `cluster-name-binder` to one brick; `raw-capture.ts` retire; tests3 migration.
   *Trim:* `raw-capture.ts` and the in-bot copies of extracted pipeline code deleted at source; bot/extension transcription-core duplication ends (single-sourced bricks only); tests3 registry checks covering pipeline behavior migrate into brick oracles and are deleted from `registry.yaml`.
 - [ ] **MVP3 — thin bot.** `acts.v1` and `lifecycle.v1` defined (the latter formalizing the Pack J / Pack D.2 outbox semantics); `vexa-bot` thinned to a manifest; `runtime-api` stays thin; zero module→service imports repo-wide; all three cars boot.
   *Trim:* `vexa-bot/core/src/services/` (the name-colliding folder) emptied and removed; hand-rolled outbox/callback reliability code retired where `lifecycle.v1` semantics replace it; tests3 lifecycle/bot checks migrated and deleted.

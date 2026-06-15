@@ -15,16 +15,16 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Build context is the REPO ROOT (monorepo: the bot consumes the bricks).
-# Bricks land where core's file:../../../packages/* resolve from /app
+# Bricks land where core's file:../../../modules/* resolve from /app
 # (/app/../../.. normalizes to /).
-COPY packages/meet-join /packages/meet-join
-COPY packages/capture-kit /packages/capture-kit
-COPY packages/recorder /packages/recorder
-COPY packages/speaker-streams /packages/speaker-streams
-COPY packages/audio-pipelines /packages/audio-pipelines
-COPY packages/recording /packages/recording
-RUN for b in meet-join capture-kit recorder speaker-streams audio-pipelines recording; do \
-      cd /packages/$b && npm install --ignore-scripts && npm run build || exit 1; \
+COPY modules/join /modules/join
+COPY modules/capture /modules/capture
+COPY modules/recorder /modules/recorder
+COPY modules/pipeline /modules/pipeline
+COPY modules/speaker-attribution /modules/speaker-attribution
+COPY modules/recording /modules/recording
+RUN for b in join capture recorder pipeline speaker-attribution recording; do \
+      cd /modules/$b && npm install --ignore-scripts && npm run build || exit 1; \
     done
 
 # Copy package manifest and install dependencies with npm
@@ -52,7 +52,7 @@ RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then
 
 # --- Runtime Stage ---
 # Runtime inherits the meet-join brick's runtime shape (its source of truth:
-# packages/meet-join/Dockerfile.env) — Playwright + the humanized-X11 stack
+# modules/join/Dockerfile.env) — Playwright + the humanized-X11 stack
 # (xvfb·xdotool·xclip·x11vnc·novnc·websockify). The bot does NOT re-declare those
 # (MANIFEST P6: service env = union of bricks' shapes, depended-on not duplicated).
 # Build order: vexa/meet-join-env:dev must exist first (the deploy build builds

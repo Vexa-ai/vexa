@@ -58,8 +58,13 @@ export async function createMixedPipeline(opts: MixedPipelineOptions): Promise<M
     publish: (speaker, confirmed, _pending) => {
       for (const c of confirmed) opts.sink.segment(toSegment(speaker, c));
     },
-    publishPending: () => { /* pending is a live-UI affordance; the contract carries CONFIRMED segments only */ },
-    clearPending: () => { /* no-op */ },
+    // Live partial → the separated-transcript.v1 DRAFT channel (opaque key; naming downstream).
+    publishPending: (speaker, segments) => {
+      const text = segments.map((s) => s.text).join(' ').trim();
+      if (!text) return;
+      opts.sink.draft?.({ speakerKey: speaker, text, start: segments[0].startMs / 1000, end: segments[segments.length - 1].endMs / 1000, words: [], topology: 'mixed' });
+    },
+    clearPending: (speaker) => { opts.sink.draft?.({ speakerKey: speaker, text: '', start: 0, end: 0, words: [], topology: 'mixed' }); },
     rename: () => { /* no naming in the pipeline brick */ },
     log: opts.log,
   });

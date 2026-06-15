@@ -2,7 +2,7 @@ import { Page } from "playwright";
 import { BotConfig } from "../../types";
 import { runMeetingFlow, PlatformStrategies } from "../shared/meetingFlow";
 
-// Join/admission/leave/removal: the meet-join brick (packages/meet-join).
+// Join/admission/leave/removal: the meet-join brick (modules/join).
 // The bot consumes the module through its public surface — MANIFEST one-way rule.
 import {
   joinGoogleMeeting,
@@ -12,7 +12,7 @@ import {
   leaveGoogleMeet,
   startGoogleRemovalMonitor,
   setHooks,
-} from "@vexa/meet-join";
+} from "@vexa/join";
 import { startGoogleRecording } from './recording';
 import { callStatusChangeCallback, MeetingStatus } from "../../services/unified-callback";
 import { callNeedsHumanHelpCallback } from "../../utils";

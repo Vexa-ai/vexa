@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 // capture-kit brick (consumed, not local browser/): resolve its built dist
-const CK = path.dirname(require.resolve('@vexa/capture-kit/package.json'));
+const CK = path.dirname(require.resolve('@vexa/capture/package.json'));
 const CK_DIST = path.join(CK, 'dist');
 
 // Read the compiled browser-side modules (each is a self-contained CommonJS

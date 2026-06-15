@@ -233,6 +233,10 @@ export class SpeakerStreamManager {
 
     if (!transcript || transcript.trim().length === 0) {
       if (buffer.idleSubmitted) {
+        // The FINAL re-transcription came back empty (VAD/Whisper drift), but we
+        // already showed good text as pending. Finalize THAT instead of dropping
+        // the turn — the "pending then lost" loss. emitSegment self-guards.
+        if (buffer.lastTranscript) this.emitSegment(buffer, buffer.lastTranscript);
         this.fullReset(buffer);
       }
       return false;
@@ -244,6 +248,9 @@ export class SpeakerStreamManager {
     if (isHallucination(trimmed)) {
       log(`[SpeakerStreams] [FILTERED] Hallucination for "${buffer.speakerName}": "${trimmed.substring(0, 60)}"`);
       if (buffer.idleSubmitted) {
+        // The FINAL submit hallucinated, but earlier pending text was clean —
+        // finalize the last good text rather than losing the whole turn.
+        if (buffer.lastTranscript) this.emitSegment(buffer, buffer.lastTranscript);
         this.fullReset(buffer);
       }
       return false;
