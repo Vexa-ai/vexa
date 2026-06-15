@@ -44,7 +44,16 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                 continue
 
             batch_to_store = []
-            segments_to_delete: Dict[int, Set[str]] = {}
+            # segments_to_delete_after_commit: valid segments moved to PG — only
+            # remove from Redis AFTER the PG commit succeeds to prevent data loss.
+            segments_to_delete_after_commit: Dict[int, Set[str]] = {}
+            # segments_to_delete_always: empty-text / parse-error segments that
+            # will NEVER be stored in PG — safe to remove from Redis immediately
+            # regardless of whether batch_to_store is non-empty.  The previous
+            # bug was that these were mixed into segments_to_delete and only
+            # cleaned up when batch_to_store was non-empty from OTHER meetings,
+            # causing silent data loss (Redis deleted, PG never written).
+            segments_to_delete_always: Dict[int, Set[str]] = {}
 
             async with async_session_local() as db:
                 for meeting_id_str in meeting_ids_raw:
@@ -81,7 +90,9 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
 
                                     text = segment_data.get('text', '')
                                     if not text.strip():
-                                        segments_to_delete.setdefault(meeting_id, set()).add(seg_key)
+                                        # Empty text — will never be stored in PG; clean from Redis now.
+                                        logger.debug(f"Discarding empty-text segment {seg_key} for meeting {meeting_id}")
+                                        segments_to_delete_always.setdefault(meeting_id, set()).add(seg_key)
                                         continue
 
                                     batch_to_store.append(create_transcription_object(
@@ -94,12 +105,23 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                         mapped_speaker_name=segment_data.get('speaker'),
                                         segment_id=segment_data.get('segment_id'),
                                     ))
-                                    segments_to_delete.setdefault(meeting_id, set()).add(seg_key)
+                                    segments_to_delete_after_commit.setdefault(meeting_id, set()).add(seg_key)
                             except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
                                 logger.error(f"Error processing segment {seg_key} for meeting {meeting_id}: {e}")
-                                segments_to_delete.setdefault(meeting_id, set()).add(seg_key)
+                                # Unparseable segment — will never be stored in PG; clean from Redis now.
+                                segments_to_delete_always.setdefault(meeting_id, set()).add(seg_key)
                     except Exception as e:
                         logger.error(f"Error processing meeting {meeting_id_str}: {e}", exc_info=True)
+
+                # Always clean up segments that cannot be stored in PG (empty text /
+                # parse errors), independent of whether there are valid segments to commit.
+                for meeting_id, seg_keys in segments_to_delete_always.items():
+                    if seg_keys:
+                        try:
+                            await redis_c.hdel(f"meeting:{meeting_id}:segments", *seg_keys)
+                            logger.debug(f"Cleaned {len(seg_keys)} non-storable segment(s) from Redis for meeting {meeting_id}")
+                        except Exception as e:
+                            logger.error(f"Redis hdel error for non-storable segments of meeting {meeting_id}: {e}")
 
                 if batch_to_store:
                     try:
@@ -123,7 +145,7 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                         await db.commit()
                         logger.info(f"Stored {len(batch_to_store)} segments to PostgreSQL")
 
-                        for meeting_id, seg_keys in segments_to_delete.items():
+                        for meeting_id, seg_keys in segments_to_delete_after_commit.items():
                             if seg_keys:
                                 hash_key = f"meeting:{meeting_id}:segments"
                                 await redis_c.hdel(hash_key, *seg_keys)
