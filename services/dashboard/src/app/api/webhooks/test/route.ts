@@ -65,6 +65,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "No webhook URL provided" }, { status: 400 });
     }
 
+    // Security fix (#388): prevent SSRF — only allow public http/https targets.
+    // Blocks loopback, private ranges (RFC 1918), link-local, and docker-internal hostnames.
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return NextResponse.json({ success: false, error: "Invalid webhook URL: only http/https allowed" }, { status: 400 });
+      }
+      const hostname = parsed.hostname.toLowerCase();
+      const isPrivate =
+        hostname === "localhost" ||
+        /^127\./.test(hostname) ||               // loopback
+        /^10\./.test(hostname) ||                // RFC 1918
+        /^192\.168\./.test(hostname) ||          // RFC 1918
+        /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) || // RFC 1918
+        /^169\.254\./.test(hostname) ||          // link-local (AWS metadata etc.)
+        /^::1$/.test(hostname) ||                // IPv6 loopback
+        /^fc00:/i.test(hostname) ||              // IPv6 ULA
+        /^fe80:/i.test(hostname) ||              // IPv6 link-local
+        // Common docker-internal hostnames
+        hostname.endsWith(".internal") ||
+        hostname.endsWith(".local") ||
+        ["admin-api", "meeting-api", "api-gateway", "transcription-collector", "redis", "postgres"].includes(hostname);
+      if (isPrivate) {
+        return NextResponse.json({ success: false, error: "Invalid webhook URL: private/internal addresses not allowed" }, { status: 400 });
+      }
+    } catch {
+      return NextResponse.json({ success: false, error: "Invalid webhook URL" }, { status: 400 });
+    }
+
     // Build a test payload using the standard envelope format
     const eventId = `evt_${crypto.randomUUID().replace(/-/g, "")}`;
     const testPayload = {

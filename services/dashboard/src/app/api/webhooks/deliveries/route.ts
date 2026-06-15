@@ -30,6 +30,12 @@ export async function GET(request: NextRequest) {
 
   const userId = request.nextUrl.searchParams.get("userId");
 
+  // Security fix (#389): reject non-numeric userId to prevent path traversal
+  // e.g. userId=../other-endpoint would reach unintended admin-api routes.
+  if (userId !== null && !/^\d+$/.test(userId)) {
+    return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
+  }
+
   try {
     const allDeliveries: Array<Record<string, unknown>> = [];
 
