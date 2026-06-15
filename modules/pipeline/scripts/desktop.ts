@@ -269,10 +269,10 @@ ingest.on('connection', async (ws, req) => {
         if (!seen.has(f.speakerIndex)) { seen.add(f.speakerIndex); console.log(`[desktop] channel ${f.speakerIndex}${f.speakerIndex === MIXED ? ' = MIXED → diarizer' : f.speakerIndex === MIC ? ' = MIC → "You"' : ''}`); }
         if (f.speakerIndex === MIXED) { mixedF++; tc.feedAudio(f.samples, f.ts); }
         else if (f.speakerIndex === MIC) { micF++; micTc.feedAudio(f.samples, f.ts); }
-        else { // gmeet remote channels (0/1/2 = anonymous rotating pool) → route by the
-               // glow name BOUND at capture (capture.v1 speakerName), never the channel.
+        else { // gmeet remote channels (0/1/2) → route by CHANNEL (overlap-safe), name
+               // each turn by the glow bound at capture (capture.v1 speakerName), at onset.
           otherF++;
-          gmeetPipe?.feedAudio(f.speakerName, f.samples, f.ts);
+          gmeetPipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts);
         }
         return;
       }

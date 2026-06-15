@@ -31,7 +31,8 @@ export type { HintKind } from "./cluster-name-binder";
 export { createMixedPipeline } from "./mixed-pipeline";
 export type { MixedPipeline, MixedPipelineOptions } from "./mixed-pipeline";
 
-// The gmeet PER-SPEAKER strategy: capture.v1 (glow-bound names) → transcript.v1
-// (named directly; channel index ignored, no diarizer, no post-hoc attribution).
-export { createGmeetPipeline, streamKeyFor } from "./gmeet-pipeline";
+// The gmeet CHANNEL-routed strategy: capture.v1 (channel + glow name) → transcript.v1.
+// Overlap-safe — separate channels transcribe independently; glow names each turn,
+// bound at onset and held through overlap. No diarizer, no post-hoc attribution.
+export { createGmeetPipeline } from "./gmeet-pipeline";
 export type { GmeetPipeline, GmeetPipelineOptions } from "./gmeet-pipeline";
