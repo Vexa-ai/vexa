@@ -14,7 +14,7 @@
  */
 import { chromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import { joinMeeting, startDebugView, leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting } from "../src/index";
+import { joinMeeting, startDebugView, leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, getJoinBrowserArgs } from "../src/index";
 
 
 if (process.platform !== "linux" || !process.env.DISPLAY) {
@@ -44,11 +44,10 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
 
   const browser = await chromium.launch({
     headless: false, // visible window on macOS; renders to Xvfb :99 on Linux
+    // Canonical join launch args (single source of truth) so this harness
+    // reproduces the vexa-bot image's browser byte-for-byte — no drift.
     args: [
-      "--no-sandbox",
-      "--disable-blink-features=AutomationControlled",
-      "--use-fake-ui-for-media-stream",
-      "--use-file-for-fake-video-capture=/dev/null",
+      ...getJoinBrowserArgs(),
       "--remote-debugging-port=9222", // CDP for the agent to attach
     ],
   });

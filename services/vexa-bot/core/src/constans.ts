@@ -1,3 +1,7 @@
+// Canonical join launch args live in the join brick (single source of truth — the
+// service consumes them, never re-declares them; see modules/join/src/browser-args.ts).
+import { JOIN_BROWSER_ARGS } from "@vexa/join";
+
 // User Agent — MUST stay consistent with the bundled Chromium's real version AND
 // platform, or Google Meet's anti-abuse flags the UA↔Client-Hints mismatch and serves
 // a reCAPTCHA + "You can't join this video call" (then redirects to
@@ -25,37 +29,11 @@ export const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
 // --disable-blink-features=AutomationControlled (mirrors getAuthenticatedBrowserArgs).
 // Google Meet uses valid TLS certs; the certificate-error flags were never needed
 // for meet.google.com and init-scripts are injected via CDP (unaffected by CSP).
-const baseBrowserArgs = [
-  "--incognito",
-  "--no-sandbox",
-  "--disable-setuid-sandbox",
-  "--disable-features=IsolateOrigins,site-per-process",
-  "--disable-infobars",
-  "--disable-gpu",
-  // Collapse Chromium's gpu-process work into the renderer — no separate
-  // gpu-process at all.
-  //
-  // 2026-04-27 measurement (cycle 260426 Zoom Web): a Zoom Web bot
-  // demanded 4.4 cores; 3.6 of those (= 357% CPU) lived in
-  // --type=gpu-process running SwiftShader software-WebGL + canvas
-  // compositing for Zoom's UI. Software-decoded video frames also flow
-  // through that process. With --in-process-gpu, the work collapses
-  // into the renderer (which already runs the page's JS) and per-bot
-  // demand drops to ~115% — back inside the 1500m budget that matches
-  // the gmeet/teams p95 (780m).
-  //
-  // Earlier iterations on this cycle tried --disable-webgl /
-  // --disable-3d-apis / --disable-accelerated-2d-canvas etc.; all
-  // confirmed inert (gpu-process kept running because it hosts the
-  // software video decoder, not just the compositor).
-  // --in-process-gpu is the only flag that actually killed it.
-  "--in-process-gpu",
-  "--use-fake-ui-for-media-stream",
-  "--use-file-for-fake-video-capture=/dev/null",
-  "--disable-blink-features=AutomationControlled",
-  "--disable-features=VizDisplayCompositor",
-  "--disable-site-isolation-trials"
-];
+// The meeting-launch environment is the join brick's contract (JOIN_BROWSER_ARGS) —
+// consumed here, never duplicated, so the brick's debug harness and this image
+// launch byte-for-byte the same browser (no drift). Bot-only concerns (voice-agent
+// audio, CDP debug) are layered on below.
+const baseBrowserArgs = [...JOIN_BROWSER_ARGS];
 
 /**
  * Get browser launch arguments based on voice agent state.
@@ -113,6 +91,12 @@ export function getAuthenticatedBrowserArgs(): string[] {
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     '--disable-gpu',
+    // Environment flags shared with the join brick (JOIN_BROWSER_ARGS) so the
+    // authenticated browser matches the meeting browser. NOT --incognito: this
+    // mode uses a persistent context with stored cookies, which incognito wipes.
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--disable-site-isolation-trials',
+    '--in-process-gpu',
     '--use-fake-ui-for-media-stream',
     '--use-file-for-fake-video-capture=/dev/null',
     '--disable-features=VizDisplayCompositor',
