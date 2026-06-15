@@ -16,6 +16,8 @@ export { createGmeetSpeakers } from "./gmeet-speakers";
 export type { GmeetSpeakers } from "./gmeet-speakers";
 export { createGmeetCaptureV1, pickBoundName } from "./gmeet-capture-v1";
 export type { GmeetCaptureV1, GmeetCaptureV1Options } from "./gmeet-capture-v1";
+export { GmeetChannelBinder } from "./gmeet-channel-binder";
+export type { GmeetChannelBinderOptions } from "./gmeet-channel-binder";
 export { createZoomSpeakers } from "./zoom-speakers";
 export type { ZoomSpeakers } from "./zoom-speakers";
 export { createZoomChat } from "./zoom-chat";

@@ -20,7 +20,7 @@ import {
   createGmeetSpeakers, GmeetSpeakers,
   createZoomSpeakers, ZoomSpeakers,
   createTeamsSpeakers, TeamsSpeakers,
-  createGmeetCapture, GmeetCapture, pickBoundName,
+  createGmeetCapture, GmeetCapture, GmeetChannelBinder,
   createZoomChat, ZoomChat,
   createTeamsChat, TeamsChat,
   createPcmCaptureNode,
@@ -52,6 +52,10 @@ import {
 
   // Per-participant Meet capture — SHARED vexa-bot module (one codebase).
   let gmeetCapture: GmeetCapture | null = null;
+  // Per-channel glow correlation — names each channel from the tile whose glow ONSET
+  // aligns with that channel's audio onset (NOT the global glow, which leaks across
+  // channels). Fed glow edges from gmeet-speakers; queried per audio frame below.
+  const channelBinder = new GmeetChannelBinder();
 
   // Reserved high index for the local microphone ("You"), kept clear of the
   // 0-based participant element indices.
@@ -90,7 +94,10 @@ import {
       speakers = createGmeetSpeakers({
         selfName,
         log: (m) => console.log(`${TAG} ${m}`),
-        onSpeaking: (name, isEnd) => post('speaker_activity', { name, isEnd, kind: 'dom-active' }),
+        onSpeaking: (name, isEnd) => {
+          channelBinder.recordGlow(name, isEnd, Date.now());   // feed the per-channel correlator
+          post('speaker_activity', { name, isEnd, kind: 'dom-active' });
+        },
       });
       (window as any).__vexaGmeetSpeakers = speakers;
       console.log(`${TAG} shared gmeet-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
@@ -200,12 +207,17 @@ import {
     if (isPerParticipant) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
-        // Bind the glow name lit at THIS instant onto the frame (capture.v1
-        // speakerName) — gmeet identity rides on the AUDIO, not the rotating
-        // channel index. Exactly-one-lit ⇒ that name; else undefined (UNKNOWN).
+        // Name this channel by PER-CHANNEL correlation: the tile whose glow ONSET
+        // aligned with this channel's audio onset (capture.v1 speakerName). NOT the
+        // global glow — that leaks one speaker's name onto every channel. undefined
+        // until correlated (UNKNOWN), never a guess.
         onAudio: (index, pcm) => {
           if (!isCurrent()) return;
-          const speakerName = speakers ? pickBoundName(speakers.litNames()) : undefined;
+          // Per-channel ENERGY↔GLOW correlation: this channel's name = the tile whose
+          // glow tracks its energy over a window (undefined until confident, never the
+          // global glow that leaks across channels).
+          let peak = 0; for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
+          const speakerName = channelBinder.nameForChannel(index, Date.now(), peak);
           post('audio', { index, pcm: Array.from(pcm), speakerName });
         },
       });
