@@ -8,7 +8,7 @@
  * Mirrors the bot's platforms/msteams/join.ts addInitScript hook; shares the
  * exact implementation (vexa-bot/core/src/browser/webrtc-audio-hook.ts).
  */
-import { installRemoteAudioHook } from '../../../src/webrtc-audio-hook';
+import { installRemoteAudioHook } from '@vexa/mixed-capture-core';
 
 installRemoteAudioHook({ log: (m) => console.log(`[vexa-webrtc-hook] ${m}`) });
 // NOTE: the audio-architecture probe (audio-probe.ts) is intentionally NOT

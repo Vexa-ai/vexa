@@ -1,5 +1,6 @@
 import { log } from './log';
 import { isHallucination } from './hallucination-filter';
+import { longestCommonWordPrefix } from '@vexa/transcribe-buffer';
 
 /**
  * Per-speaker audio buffer with offset-based sliding window.
@@ -272,16 +273,8 @@ export class SpeakerStreamManager {
       const currentWords = segments.flatMap(s => s.text.trim().split(/\s+/).filter(w => w.length > 0));
       const prevWords = buffer.lastWords;
 
-      // Find longest common word prefix between current and previous submission
-      let prefixLen = 0;
-      const maxLen = Math.min(currentWords.length, prevWords.length);
-      for (let i = 0; i < maxLen; i++) {
-        if (currentWords[i] === prevWords[i]) {
-          prefixLen = i + 1;
-        } else {
-          break;
-        }
-      }
+      // Longest common word prefix across consecutive submissions (shared core).
+      const prefixLen = longestCommonWordPrefix(currentWords, prevWords);
 
       buffer.lastWords = currentWords;
 

@@ -19,7 +19,7 @@
 import { WebSocket } from 'ws';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { decodeAudioFrame } from '../../../contracts/capture/v1/schema';
+import { decodeAudioFrame } from '@vexa/capture-codec';
 
 const INGEST_URL = process.env.INGEST_URL || 'ws://localhost:9099/ingest';
 const GATEWAY_URL = (process.env.GATEWAY_URL || 'http://localhost:8056').replace(/\/+$/, '');

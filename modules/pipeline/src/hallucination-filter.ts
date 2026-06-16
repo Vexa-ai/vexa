@@ -83,19 +83,7 @@ export function isHallucination(text: string): boolean {
   return false;
 }
 
-/**
- * Confidence filter — drop a Whisper segment the model is clearly GUESSING. This is
- * the source of the "[You] お疲れ様でした"-style phantom lines (hallucinated over near-
- * silence) and faint cross-channel bleed (a neighbouring speaker leaking onto this
- * channel at low energy). Uses faster-whisper's own per-segment signals:
- *  - non-speech: high no_speech_prob WITH low avg_logprob = invented over silence,
- *  - repetition: a blown-up compression_ratio = looped/garbage text,
- *  - very low avg_logprob alone = the model is guessing.
- * Thresholds are conservative so real (even quiet) speech survives.
- */
-export function isLowConfidenceSegment(s: { avg_logprob?: number; no_speech_prob?: number; compression_ratio?: number }): boolean {
-  if (s.no_speech_prob !== undefined && s.avg_logprob !== undefined && s.no_speech_prob > 0.6 && s.avg_logprob < -1.0) return true;
-  if (s.compression_ratio !== undefined && s.compression_ratio > 2.4) return true;
-  if (s.avg_logprob !== undefined && s.avg_logprob < -1.3) return true;
-  return false;
-}
+// The low-confidence STT-segment filter (isLowConfidenceSegment) moved to
+// @vexa/transcribe-whisper (src/confidence.ts) — it belongs at the stt.v1 egress,
+// applied to Whisper's raw output before the confirm loop. This module keeps only
+// the phrase-list hallucination filter (isHallucination), a downstream concern.

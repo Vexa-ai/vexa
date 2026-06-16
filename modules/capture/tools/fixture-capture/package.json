@@ -8,6 +8,12 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@vexa/capture-codec": "file:../../../shared/capture-codec",
+    "@vexa/mixed-capture-core": "file:../../../mixed/capture/core",
+    "@vexa/zoom-capture": "file:../../../mixed/capture/zoom",
+    "@vexa/teams-capture": "file:../../../mixed/capture/teams"
+  },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
     "esbuild": "^0.24.0",

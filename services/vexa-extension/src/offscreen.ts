@@ -11,7 +11,8 @@
  * pre-grants mic permission for the extension origin before this runs.
  */
 
-import { createPcmCaptureNode, createMixedAudioCapture, type MixedAudioCapture } from '@vexa/capture';
+import { createPcmCaptureNode } from '@vexa/capture';   // gmeet lane (uncarved)
+import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-capture-core';
 
 const MIC_INDEX = 1000;
 // Mixed tab audio (all remote participants) — used where the page doesn't expose

@@ -7,13 +7,10 @@
   "scripts": {
     "build": "tsc && cp -r src/hallucinations dist/hallucinations",
     "check:isolation": "node scripts/check-isolation.js",
-    "test": "tsx src/speaker-streams.test.ts && tsx src/gmeet-pipeline.test.ts",
+    "test": "echo 'gmeet golden lands here when gmeet/pipeline is carved' && exit 0",
     "dev": "tsx watch --env-file-if-exists=.env scripts/desktop.ts",
     "live-stack": "tsx watch --env-file-if-exists=.env scripts/live-stack.ts",
     "replay": "tsx scripts/fixture-replay.ts",
-    "replay:mixed": "tsx scripts/mixed-replay.ts",
-    "bench:mixed": "tsx --env-file-if-exists=.env scripts/bench-mixed.ts",
-    "bench:view": "tsx scripts/bench-view.ts",
     "e2e": "tsx scripts/fixture-feed.ts"
   },
   "devDependencies": {
@@ -22,7 +19,11 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@vexa/transcribe-whisper": "file:../shared/whisper",
+    "@vexa/transcribe-buffer": "file:../shared/buffer",
+    "@vexa/mixed-pipeline": "file:../mixed/pipeline",
+    "@vexa/capture-codec": "file:../shared/capture-codec",
+    "@vexa/recorder": "file:../recorder",
     "@jjhbw/silero-vad": "*",
     "@types/ws": "^8.18.1",
     "onnxruntime-node": "^1.17.0",

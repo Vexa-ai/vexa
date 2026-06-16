@@ -16,11 +16,10 @@
  * (src/browser/gmeet-speakers.ts) — one algorithm for bot and extension.
  */
 
-import { createGmeetSpeakers, GmeetSpeakers } from '../../../src/gmeet-speakers';
-import { createZoomSpeakers, ZoomSpeakers } from '../../../src/zoom-speakers';
-import { createTeamsSpeakers, TeamsSpeakers } from '../../../src/msteams-speakers';
-import { createGmeetCapture, GmeetCapture } from '../../../src/gmeet-capture';
-import { createZoomChat, ZoomChat } from '../../../src/zoom-chat';
+import { createGmeetSpeakers, GmeetSpeakers } from '../../../src/gmeet-speakers';   // gmeet lane: not yet carved
+import { createGmeetCapture, GmeetCapture } from '../../../src/gmeet-capture';      // gmeet lane: not yet carved
+import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
+import { createTeamsSpeakers, TeamsSpeakers } from '@vexa/teams-capture';
 
 (() => {
   const TAG = '[vexa-inpage]';

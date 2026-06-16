@@ -22,8 +22,10 @@
  */
 import * as http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { ChunkedTranscriber, SpeakerStreamManager, TranscriptionClient, type ChunkSegment } from '../src/index';
-import { decodeAudioFrame, decodeEvent } from '../../../contracts/capture/v1/schema';
+import { ChunkedTranscriber, type ChunkSegment } from '@vexa/mixed-pipeline';
+import { SpeakerStreamManager } from '../src/index';   // gmeet lane: not yet carved
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
+import { decodeAudioFrame, decodeEvent } from '@vexa/capture-codec';
 
 const INGEST_PORT = parseInt(process.env.INGEST_PORT || '9099', 10);
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || '8056', 10);

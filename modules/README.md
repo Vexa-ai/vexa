@@ -6,9 +6,14 @@ coupling between bricks. So fixing a bug is *routing*:
 > **Find the brick that owns your symptom → reproduce it with no live meeting →
 > fix it there.** This page is that router + runbook.
 
-Architecture & rationale live in [`../MANIFEST.md`](../MANIFEST.md); what's
-tested *right now* lives in [`../PIPELINE-RELEASE.md`](../PIPELINE-RELEASE.md).
-This file is for **a contributor fixing a thing**.
+This file is for **a contributor fixing a thing** — the brick map + runbook.
+
+> **Reorg in progress (0.11):** the lanes are being split — `mixed/` (Zoom/Teams,
+> segmentation + hints) is carved into `@vexa/mixed-capture-*` + `@vexa/mixed-pipeline`
+> over a shared engine (`@vexa/transcribe-buffer`, `@vexa/transcribe-whisper`,
+> `@vexa/capture-codec`); `gmeet/` is next. `speaker-attribution`, the diarizer
+> monolith, and `separated-transcript.v1` have been **dropped** (names are
+> capture-bound for gmeet, hints-only for mixed).
 
 ---
 
@@ -17,34 +22,35 @@ This file is for **a contributor fixing a thing**.
 ```mermaid
 flowchart LR
     URL([meeting URL]):::ext --> J[join]
-    J -- page --> C[capture]
-    C -- capture.v1 --> P["pipeline<br>(mixed ‖ multistream)"]
-    P -- separated-transcript.v1 --> A["speaker-attribution<br>(cluster-binder ‖ caption-mapper)"]
-    A -- transcript.v1 --> D[delivery]:::soon
+    J -- page --> C["capture<br>(gmeet ‖ mixed/capture/*)"]
+    C -- "gmeet-capture.v1 ‖ mixed-capture.v1" --> P["pipeline<br>(gmeet ‖ mixed-pipeline)"]
+    P -- transcript.v1 --> D[delivery]:::soon
     D --> CL([client]):::ext
 
     C -. tap .-> R[recording]
     R -- recording.v1 --> M([media file]):::ext
 
-    C -. capture.v1 .-> REC[recorder]
+    C -. capture .-> REC[recorder]
     REC -. records .-> FX[("fixture<br>replays everything downstream")]:::ext
 
-    class J,C,P,A,R,REC brick
+    class J,C,P,R,REC brick
     classDef brick fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
     classDef ext fill:#f3f4f6,stroke:#9ca3af,color:#374151;
     classDef soon fill:#fef3c7,stroke:#d97706,color:#92400e,stroke-dasharray:5 3;
 ```
 
-<sub>Solid boxes = bricks · arrows carry the **contract** named on them · dotted = tap/record · amber dashed `delivery` = still in the bot, not yet a module.</sub>
+<sub>Solid boxes = bricks · arrows carry the **contract** named on them · dotted = tap/record · amber dashed `delivery` = still in the bot, not yet a module. Naming is folded into each lane (gmeet = capture-bound glow name; mixed = hints-only namer) — there is no separate attribution brick.</sub>
 
 | Brick | Does | Contract in → out |
 |---|---|---|
 | [join](join/) | gets the bot into the meeting | URL → admitted page |
-| [capture](capture/) | audio + signals out of the page (browser-only) | page → `capture.v1` |
-| [pipeline](pipeline/) | audio → text, split by speaker (no names) | `capture.v1` → `separated-transcript.v1` |
-| [speaker-attribution](speaker-attribution/) | opaque ids → real names | `separated-transcript.v1` + hints → `transcript.v1` |
+| [capture (gmeet)](capture/) | Google Meet per-channel audio + glow name | page → `gmeet-capture.v1` |
+| [mixed/capture/*](mixed/capture/) | Zoom/Teams mixed audio + active-speaker hints | page → `mixed-capture.v1` |
+| [pipeline (gmeet)](pipeline/) | channel-routed transcription, name at capture | `gmeet-capture.v1` → `transcript.v1` |
+| [mixed/pipeline](mixed/pipeline/) | segmentation cut + hints-namer (no clustering) | `mixed-capture.v1` → `transcript.v1` |
+| [shared/*](shared/) | the engine: `capture-codec` · `buffer` (LocalAgreement) · `whisper` (stt.v1) | — |
 | [recording](recording/) | the meeting media file | tap → `recording.v1` |
-| [recorder](recorder/) | records the `capture.v1` fixture (head of the chain) | `capture.v1` → fixture |
+| [recorder](recorder/) | records the capture fixture (head of the chain) | capture → fixture |
 
 > `delivery` (ship `transcript.v1` to clients) is still in the bot, not yet a module.
 
@@ -150,16 +156,14 @@ to the shared store. (Real-meeting transcripts are sensitive — keep them priva
 *Replay it downstream* — no meeting:
 ```bash
 cd modules/pipeline
-npm run replay:mixed -- <fixture-dir>       # mixed (zoom/teams) → separated-transcript.v1
-npm run replay       -- <fixture-dir>       # multistream (gmeet)
-cd ../speaker-attribution && npx tsx scripts/attribute-fixture.ts <fixture-dir>   # naming → transcript.v1
+npm run replay -- <fixture-dir>             # gmeet (channel-routed) → transcript.v1
 ```
 
-**Judging mixed-pipeline quality (zoom/teams)** — benchmark against Deepgram and
-*look with your own eyes*: `npm run bench:mixed` (full Deepgram → 2-min window of
-interest → faithful real-time playback) then `npm run bench:view`
-(http://localhost:8077 — Deepgram vs Vexa side-by-side, colour-per-speaker, synced
-audio playback). Full guide: [modules/pipeline/README.md](pipeline/README.md#debugging-the-mixed-pipeline-zoom--teams).
+**Judging mixed-pipeline quality (zoom/teams)** — the agentic eval vehicle in
+[`mixed/eval`](mixed/eval/) benchmarks `@vexa/mixed-pipeline` against Deepgram and
+renders a side-by-side, timestamp-aligned playback page (audio + segmentation
+boundary pointers). Pull a YouTube fixture, run a region, serve the page — full
+guide in [mixed/eval/CLAUDE.md](mixed/eval/CLAUDE.md).
 
 ### C · `join`, in isolation
 `join` is debugged differently — it fails on **IP reputation, geo, and
@@ -201,14 +205,17 @@ by itself — debugged by **moving the egress IP**, not the code.
 | fixture collected | 🟡 old | ✅ | ❌ none |
 
 **Open work, by priority:**
-1. **Teams names** — `msteams-speakers.ts` active-speaker selectors stale (`hints=0`).
-2. **Teams chat reader** — only `zoom-chat.ts` exists.
-3. **gmeet multistream** end-to-end confirm; collect **gmeet + teams fixtures**.
-4. **`cluster-name-binder` dedup** (lives in `pipeline` + `speaker-attribution`).
-5. **`separated-transcript.v1`**: thread `words[]`; meeting-relative timestamps.
+1. **Teams names** — `@vexa/teams-capture` active-speaker selectors stale (`hints=0`).
+2. **Teams chat reader** — only `@vexa/zoom-capture` has one.
+3. **gmeet lane carve** → `modules/gmeet/{capture,pipeline}` + `gmeet-capture.v1`;
+   then retire `modules/capture` + the gmeet remnant in `modules/pipeline`.
+4. **Finish the `capture.v1` split** — `capture-codec` re-export + drift gate; re-point
+   the bot off the old contract.
+5. **gmeet end-to-end** confirm; collect **gmeet + teams fixtures**.
 
 ---
 
 **The one rule:** a brick imports contracts, other bricks' **published packages**
 (`@vexa/*`, never their `src/`), and third-party deps — never `services/`, never
-another brick's internals. Services import bricks. Full spec: [MANIFEST §3b](../MANIFEST.md).
+another brick's internals. Services import bricks. Each module's
+`npm run check:isolation` enforces it.

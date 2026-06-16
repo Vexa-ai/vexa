@@ -8,9 +8,12 @@
 
 const fs = require('fs');
 const path = require('path');
-// capture-kit brick (consumed, not local browser/): resolve its built dist
+// Capture bricks (consumed, not local browser/): resolve each built dist.
+// gmeet stays in @vexa/capture; the mixed lane was carved out to @vexa/{zoom,teams}-capture.
 const CK = path.dirname(require.resolve('@vexa/capture/package.json'));
 const CK_DIST = path.join(CK, 'dist');
+const ZK_DIST = path.join(path.dirname(require.resolve('@vexa/zoom-capture/package.json')), 'dist');
+const TK_DIST = path.join(path.dirname(require.resolve('@vexa/teams-capture/package.json')), 'dist');
 
 // Read the compiled browser-side modules (each is a self-contained CommonJS
 // file — no cross-file requires — wrapped in its own shim below)
@@ -18,11 +21,11 @@ const browserUtilsPath = path.join(__dirname, 'dist', 'utils', 'browser.js');
 const browserUtilsContent = fs.readFileSync(browserUtilsPath, 'utf8');
 const gmeetSpeakersPath = path.join(CK_DIST, 'gmeet-speakers.js');
 const gmeetSpeakersContent = fs.readFileSync(gmeetSpeakersPath, 'utf8');
-const zoomSpeakersPath = path.join(CK_DIST, 'zoom-speakers.js');
+const zoomSpeakersPath = path.join(ZK_DIST, 'zoom-speakers.js');
 const zoomSpeakersContent = fs.readFileSync(zoomSpeakersPath, 'utf8');
 const gmeetCapturePath = path.join(CK_DIST, 'gmeet-capture.js');
 const gmeetCaptureContent = fs.readFileSync(gmeetCapturePath, 'utf8');
-const teamsSpeakersPath = path.join(CK_DIST, 'msteams-speakers.js');
+const teamsSpeakersPath = path.join(TK_DIST, 'msteams-speakers.js');
 const teamsSpeakersContent = fs.readFileSync(teamsSpeakersPath, 'utf8');
 
 // Create the browser bundle content using a safe CommonJS wrapper

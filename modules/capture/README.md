@@ -1,20 +1,23 @@
-# capture-kit — the meeting-capture brick
+# @vexa/capture — the gmeet capture brick (TRANSITIONAL — to be retired)
 
 Runs inside the meeting page (injected by the bot, or loaded by the extension)
-and emits **capture.v1** — per-speaker audio chunks + meeting events — the input
-to the pipeline bricks. Zero node/back imports: pure browser-context modules.
+and captures **Google Meet** audio. Zero node/back imports: pure browser-context
+modules.
 
-- `src/gmeet-capture.ts` — per-speaker audio capture (Google Meet)
-- `src/{gmeet,zoom,msteams}-speakers.ts` — per-platform speaker detection
-- `src/webrtc-audio-hook.ts` — the WebRTC remote-audio tap
-- `src/contract/capture-v1.ts` — the contract this brick EMITS (AudioChunk,
-  MeetingEvent, CaptureV1Sink). The host wires emitted chunks/events to a sink:
-  in-process for the bot, WebSocket for the extension.
+> **This module is transitional and will be RETIRED.** The mixed lane was already
+> carved out to `@vexa/mixed-capture-core` + `@vexa/zoom-capture` +
+> `@vexa/teams-capture` (consumers import those directly). What remains here is
+> gmeet-only, and it goes away when the gmeet lane is carved into
+> `modules/gmeet/capture` (`@vexa/gmeet-capture`) — at which point `modules/capture`
+> is deleted.
 
-Public API: `createGmeetCapture`, `createGmeetSpeakers`, `createTeamsSpeakers`,
-`createZoomSpeakers`, `installRemoteAudioHook`.
+- `src/gmeet-capture.ts` / `src/gmeet-capture-v1.ts` — per-channel audio capture
+- `src/gmeet-speakers.ts` — glow-based active-speaker detection
+- `src/gmeet-channel-binder.ts` — binds the glow name to a channel at onset
+- `src/pcm-capture.ts` — the shared PCM capture node
+- `src/contract/capture-v1.ts` — the contract this brick emits (gmeet shape)
 
-Harness: the **extension is the live testbed** (it runs capture-kit in a real
-user tab). Replay: recorded capture.v1 (the recorder tees this brick's output).
+Public API: `createGmeetCapture`, `createGmeetSpeakers`, `GmeetChannelBinder`,
+`createGmeetCaptureV1`, `createPcmCaptureNode`.
 
-Gates (laptop, no infra): `npm run check:isolation` · `npm run build`.
+Gates: `npm run check:isolation` · `npm run build`.

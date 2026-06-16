@@ -13,6 +13,9 @@
     "baseUrl": ".",
     "paths": {
       "@vexa/capture": ["../../modules/capture/src/index.ts"],
+      "@vexa/mixed-capture-core": ["../../modules/mixed/capture/core/src/index.ts"],
+      "@vexa/zoom-capture": ["../../modules/mixed/capture/zoom/src/index.ts"],
+      "@vexa/teams-capture": ["../../modules/mixed/capture/teams/src/index.ts"],
       "@vexaai/transcript-rendering": ["../../packages/transcript-rendering/src/index.ts"]
     }
   },

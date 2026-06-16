@@ -1,0 +1,16 @@
+{
+  "name": "@vexa/mixed-eval",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Agentic evaluation vehicle for the mixed lane: pull a YouTube fixture (Deepgram reference), stream a region through our pipeline, render a side-by-side page.",
+  "scripts": {
+    "pull": "node pull.mjs",
+    "run": "../../pipeline/node_modules/.bin/tsx run.ts",
+    "serve": "node serve.mjs"
+  },
+  "dependencies": {
+    "@vexa/mixed-pipeline": "file:../pipeline",
+    "@vexa/transcribe-whisper": "file:../../shared/whisper"
+  }
+}

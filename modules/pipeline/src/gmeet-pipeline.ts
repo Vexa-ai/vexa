@@ -20,7 +20,7 @@
  * derived. No diarizer, no post-hoc window-match.
  */
 import { SpeakerStreamManager, type SpeakerStreamManagerConfig } from './speaker-streams';
-import type { TranscriptionResult } from './transcription-client';
+import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import type { TranscriptSegment, TranscriptSink } from './contracts/transcript-v1';
 
 export interface GmeetPipelineOptions {

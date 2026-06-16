@@ -18,13 +18,11 @@
 
 import {
   createGmeetSpeakers, GmeetSpeakers,
-  createZoomSpeakers, ZoomSpeakers,
-  createTeamsSpeakers, TeamsSpeakers,
   createGmeetCapture, GmeetCapture, GmeetChannelBinder,
-  createZoomChat, ZoomChat,
-  createTeamsChat, TeamsChat,
   createPcmCaptureNode,
-} from '@vexa/capture';
+} from '@vexa/capture';   // gmeet lane (uncarved)
+import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
+import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '@vexa/teams-capture';
 
 (() => {
   const TAG = '[vexa-inpage]';

@@ -1,0 +1,15 @@
+{
+  "name": "@vexa/transcribe-whisper",
+  "version": "0.1.0",
+  "description": "Shared stt.v1 egress — PCM window → hosted Whisper segments, with the low-confidence STT filter.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}

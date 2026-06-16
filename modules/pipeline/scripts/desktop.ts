@@ -23,9 +23,11 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { WebSocketServer, WebSocket } from 'ws';
-import { ChunkedTranscriber, TranscriptionClient, createGmeetPipeline, type ChunkSegment, type HintKind } from '../src/index';
-import { decodeAudioFrame, decodeEvent } from '../../../contracts/capture/v1/schema';
-import { StreamCaptureWriter } from '../../recorder/src/stream-capture';
+import { ChunkedTranscriber, type ChunkSegment, type HintKind } from '@vexa/mixed-pipeline';
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
+import { createGmeetPipeline } from '../src/index';   // gmeet lane: not yet carved
+import { decodeAudioFrame, decodeEvent } from '@vexa/capture-codec';
+import { StreamCaptureWriter } from '@vexa/recorder';
 import { openStore } from './desktop-store';
 
 const INGEST_PORT = parseInt(process.env.INGEST_PORT || '9099', 10);
@@ -221,6 +223,7 @@ ingest.on('connection', async (ws, req) => {
   const transcribe = async (pcm: Float32Array, prompt?: string) => { if (!txClient) throw new Error('no STT'); return txClient.transcribe(pcm, lang, prompt); };
 
   const tc = await ChunkedTranscriber.create({
+    // @vexa/mixed-pipeline: pyannote-segmentation-separated speeches, hints-only naming — no diarization/clustering (per plan)
     language: lang, transcribe,
     publish: (speaker, confirmed, pending) => broadcast(metaKey, speaker, confirmed.map((c) => toSeg(c, speaker, true)), pending.map((p) => toSeg(p, speaker, false))),
     publishPending: (speaker, pending) => broadcast(metaKey, speaker, [], pending.map((p) => toSeg(p, speaker, false))),
@@ -229,7 +232,7 @@ ingest.on('connection', async (ws, req) => {
     log: (m) => console.log(`  \x1b[2m${m}\x1b[0m`),
   });
   const micTc = await ChunkedTranscriber.create({
-    language: lang, transcribe,
+    language: lang, transcribe,   // mic is always "You"
     publish: (_s, confirmed, pending) => broadcast(metaKey, 'You', confirmed.map((c) => toSeg(c, 'You', true)), pending.map((p) => toSeg(p, 'You', false))),
     publishPending: (_s, pending) => broadcast(metaKey, 'You', [], pending.map((p) => toSeg(p, 'You', false))),
     clearPending: () => broadcast(metaKey, 'You', [], []),
