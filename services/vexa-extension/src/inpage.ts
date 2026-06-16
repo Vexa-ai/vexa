@@ -23,6 +23,7 @@ import {
 } from '@vexa/gmeet-capture';
 import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
 import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '@vexa/teams-capture';
+import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -50,6 +51,9 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
 
   // Per-participant Meet capture — SHARED vexa-bot module (one codebase).
   let gmeetCapture: GmeetCapture | null = null;
+  // Meeting RECORDING (separate concern from transcription): the combined mix →
+  // recording.v1 chunks. The desktop stores them + builds master.webm on stop.
+  let recordingTap: RecordingTap | null = null;
   // Per-channel glow correlation — names each channel from the tile whose glow ONSET
   // aligns with that channel's audio onset (NOT the global glow, which leaks across
   // channels). Fed glow edges from gmeet-speakers; queried per audio frame below.
@@ -220,6 +224,13 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
         },
       });
       await gmeetCapture.start();
+      // RECORDING tap — the combined meeting mix (all participants) → recording.v1
+      // chunks → background → desktop (master.webm on stop). Independent of the
+      // per-channel transcription capture above; best-effort, never blocks capture.
+      recordingTap = createRecordingTap({
+        onChunk: (c) => { if (isCurrent()) post('recording-chunk', { seq: c.chunkSeq, isFinal: c.isFinal, mimeType: c.mimeType, base64: c.base64 }); return true; },
+      });
+      recordingTap.start().catch((e: any) => console.log(`${TAG} recording tap: ${e?.message || e}`));
     }
 
     post('capture-started', { streams: streamCount() });
@@ -240,6 +251,7 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
     if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
     if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
+    if (recordingTap) { recordingTap.stop().catch(() => { /* */ }); recordingTap = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }

@@ -13,6 +13,7 @@
 
 import { createPcmCaptureNode } from '@vexa/gmeet-capture';
 import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-capture-core';
+import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
 
 const MIC_INDEX = 1000;
 // Mixed tab audio (all remote participants) — used where the page doesn't expose
@@ -26,6 +27,8 @@ let stream: MediaStream | null = null;
 let ctx: AudioContext | null = null;
 let tabStream: MediaStream | null = null;
 let tabCapture: MixedAudioCapture | null = null;
+// Meeting RECORDING (zoom/teams): the mixed tab stream → recording.v1 chunks.
+let recordingTap: RecordingTap | null = null;
 
 async function start(): Promise<{ ok: boolean; error?: string }> {
   if (stream) return { ok: true };
@@ -87,6 +90,15 @@ async function startTab(streamId: string): Promise<{ ok: boolean; error?: string
     tabStream = null;
     return { ok: false, error: `capture: ${err?.message || err}` };
   }
+  // RECORDING tap — the mixed tab stream IS the combined meeting audio → recording.v1
+  // chunks → background → desktop (master.webm on stop). Best-effort; never blocks capture.
+  try {
+    recordingTap = createRecordingTap({
+      stream: tabStream!,
+      onChunk: (c) => { chrome.runtime.sendMessage({ type: 'recording-chunk', seq: c.chunkSeq, isFinal: c.isFinal, mimeType: c.mimeType, base64: c.base64 }).catch(() => { /* ws gone */ }); return true; },
+    });
+    await recordingTap.start();
+  } catch (e: any) { console.log(`[vexa-offscreen] recording tap: ${e?.message || e}`); recordingTap = null; }
   chrome.runtime.sendMessage({ type: 'speakers', speakers: { [String(TAB_INDEX)]: 'Participant' } }).catch(() => { /* ignore */ });
   chrome.runtime.sendMessage({ type: 'capture-started', streams: 1 }).catch(() => { /* ignore */ });
   console.log('[vexa-offscreen] tab audio capture started');
@@ -94,6 +106,7 @@ async function startTab(streamId: string): Promise<{ ok: boolean; error?: string
 }
 
 function stopTab(): void {
+  if (recordingTap) { recordingTap.stop().catch(() => { /* */ }); recordingTap = null; }
   if (tabCapture) { try { tabCapture.stop(); } catch { /* ignore */ } tabCapture = null; }
   if (tabStream) { for (const t of tabStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } tabStream = null; }
   console.log('[vexa-offscreen] tab audio capture stopped');

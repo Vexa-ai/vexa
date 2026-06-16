@@ -14,6 +14,7 @@
     "paths": {
       "@vexa/gmeet-capture": ["../../modules/gmeet/capture/src/index.ts"],
       "@vexa/capture-codec": ["../../modules/shared/capture-codec/src/index.ts"],
+      "@vexa/record-chunker": ["../../modules/shared/record-chunker/src/index.ts"],
       "@vexa/mixed-capture-core": ["../../modules/mixed/capture/core/src/index.ts"],
       "@vexa/zoom-capture": ["../../modules/mixed/capture/zoom/src/index.ts"],
       "@vexa/teams-capture": ["../../modules/mixed/capture/teams/src/index.ts"],

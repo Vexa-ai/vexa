@@ -26,7 +26,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { ChunkedTranscriber, type ChunkSegment, type HintKind } from '@vexa/mixed-pipeline';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import { createGmeetPipeline } from '@vexa/gmeet-pipeline';
-import { decodeAudioFrame, decodeEvent } from '@vexa/capture-codec';
+import { decodeAudioFrame, decodeEvent, decodeRecordingChunk } from '@vexa/capture-codec';
+import { createRecordingSink, recordingMasterPath } from './desktop-recording';
 import { StreamCaptureWriter } from '@vexa/recorder';
 import { openStore } from './desktop-store';
 
@@ -124,7 +125,55 @@ const gatewayHttp = http.createServer(async (req, res) => {
     const m = store.getMeetingByNative(platform, nativeId);
     const envelope = m ? mapMeetingRow(m)
       : { id: 0, platform, native_meeting_id: nativeId, status: 'unknown', start_time: null, end_time: null, data: {} };
-    return send({ ...envelope, segments: store.getTranscripts(platform, nativeId), recordings: [] });
+    // recordings[] in the dashboard's RecordingData shape — the player filters on
+    // status==='completed' && playback_url.audio, then calls
+    // getRecordingMasterStreamUrl(id) → /recordings/{id}/master?type=audio.
+    const recMaster = recordingMasterPath(platform, nativeId);
+    const recordings = (recMaster && m)
+      ? [{
+          id: m.id, meeting_id: m.id, user_id: 0,
+          session_uid: `ext-${platform}-${nativeId}-${m.id}`,
+          source: 'bot', status: 'completed',
+          created_at: m.start_time || new Date().toISOString(),
+          completed_at: m.end_time || m.start_time || null,
+          media_files: [],
+          playback_url: { audio: `/recordings/${m.id}/master`, video: null },
+        }]
+      : [];
+    return send({ ...envelope, segments: store.getTranscripts(platform, nativeId), recordings });
+  }
+
+  // GET /recordings/{platform}/{native}/master — the assembled meeting recording.
+  // The all-Node desktop is the recording.v1 consumer: it stores chunks and builds
+  // master.<fmt> on stop. 404 until assembled — the dashboard's "not ready" path.
+  const recMasterRoute = url.pathname.match(/^\/recordings\/([^/]+)\/([^/]+)\/master$/);
+  if (req.method === 'GET' && recMasterRoute) {
+    const found = recordingMasterPath(decodeURIComponent(recMasterRoute[1]), decodeURIComponent(recMasterRoute[2]));
+    if (!found) return send({ error: 'recording not ready' }, 404);
+    const dataBuf = fs.readFileSync(found.path);
+    res.writeHead(200, { 'Content-Type': found.format === 'wav' ? 'audio/wav' : 'audio/webm', 'Content-Length': dataBuf.length, ...CORS });
+    return res.end(dataBuf);
+  }
+
+  // GET /recordings/{id}/master?type=audio — the dashboard's canonical playback
+  // lookup (getRecordingMasterStreamUrl): returns a relative stream URL (the
+  // dashboard prepends /api/vexa and fetches it). 404 until the master exists.
+  const recMasterById = url.pathname.match(/^\/recordings\/(\d+)\/master$/);
+  if (req.method === 'GET' && recMasterById) {
+    const mm = store.getMeeting(Number(recMasterById[1])) as any;
+    const found = mm && recordingMasterPath(mm.platform, mm.native_id);
+    if (!found) return send({ error: 'recording not ready' }, 404);
+    return send({ url: `/recordings/${recMasterById[1]}/raw`, duration_seconds: null });
+  }
+  // GET /recordings/{id}/raw — stream the assembled master bytes (by meeting id).
+  const recRawById = url.pathname.match(/^\/recordings\/(\d+)\/raw$/);
+  if (req.method === 'GET' && recRawById) {
+    const mm = store.getMeeting(Number(recRawById[1])) as any;
+    const found = mm && recordingMasterPath(mm.platform, mm.native_id);
+    if (!found) return send({ error: 'recording not ready' }, 404);
+    const dataBuf = fs.readFileSync(found.path);
+    res.writeHead(200, { 'Content-Type': found.format === 'wav' ? 'audio/wav' : 'audio/webm', 'Content-Length': dataBuf.length, ...CORS });
+    return res.end(dataBuf);
   }
 
   // ── Rest of the dashboard's gateway surface (see dashboard-contract.mjs). ──
@@ -218,6 +267,8 @@ ingest.on('connection', async (ws, req) => {
   // recording tee — collect the fixture WHILE delivering live (the whole point)
   const fixtureDir = path.join(FIXTURE_ROOT, 'capture', 'v1', `${platform}-${nativeId}-${meeting_id}`);
   const rec = new StreamCaptureWriter(fixtureDir, { platform, nativeMeetingId: nativeId, language: language && language !== 'auto' ? language : undefined });
+  // recording.v1 consumer — store the extension's recording chunks + build master.<fmt> on stop.
+  const recSink = createRecordingSink(platform, nativeId, (m) => console.log(`  \x1b[2m${m}\x1b[0m`));
 
   const lang = language && language !== 'auto' ? language : undefined;
   const transcribe = async (pcm: Float32Array, prompt?: string) => { if (!txClient) throw new Error('no STT'); return txClient.transcribe(pcm, lang, prompt); };
@@ -267,6 +318,8 @@ ingest.on('connection', async (ws, req) => {
     try {
       const b = Buffer.from(data);
       if (isBinary) {
+        const recChunk = decodeRecordingChunk(b.buffer, b.byteOffset, b.byteLength);
+        if (recChunk) { recSink.write(recChunk); return; }   // recording.v1 chunk → store (NOT transcription audio)
         rec.rawAudio(b);                                  // tee
         const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength); if (!f) return;
         if (!seen.has(f.speakerIndex)) { seen.add(f.speakerIndex); console.log(`[desktop] channel ${f.speakerIndex}${f.speakerIndex === MIXED ? ' = MIXED → diarizer' : f.speakerIndex === MIC ? ' = MIC → "You"' : ''}`); }
@@ -299,6 +352,10 @@ ingest.on('connection', async (ws, req) => {
   const hb = setInterval(() => console.log(`[desktop] \x1b[36m· ${metaKey}  mixed=${mixedF}f mic=${micF}f other=${otherF}f hints=${hints} channels=[${[...seen].join(',')}]\x1b[0m`), 5000);
   const finish = async () => {
     clearInterval(hb);
+    // Build the recording master FIRST — a fast sync disk op. It must NOT sit
+    // behind `await tc.dispose()`: that dispose can hang on in-flight STT, which
+    // would strand the recording (meeting marked completed, master never written).
+    try { recSink.finalize(); } catch { /* */ }
     try { await tc.dispose(); } catch { /* */ } try { await micTc.dispose(); } catch { /* */ } try { await gmeetPipe?.dispose(); } catch { /* */ }
     try { const dir = await rec.finalize(); console.log(`[desktop] ■ fixture: ${dir}`); } catch { /* */ }
     if (captureConnByKey.get(metaKey) === ws) captureConnByKey.delete(metaKey); // only if not already superseded

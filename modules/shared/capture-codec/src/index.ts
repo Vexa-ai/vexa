@@ -92,3 +92,48 @@ export function decodeEvent(json: string): MeetingEvent | null {
     return e as MeetingEvent;
   } catch { return null; }
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// recording-chunk frame (binary) — recording.v1 over the same ingest WS.
+//
+// A meeting RECORDING (the combined media, WebM/WAV) is NOT transcription audio:
+// it rides the same WS but as its own frame, keyed by a leading magic so the
+// receiver tells it apart from an audio frame. The magic (0x52454331 'REC1') is
+// a large positive Int32 — never a real track id (0..1000) and never the audio
+// name-flag (high bit) — so decodeRecordingChunk returns null on an audio frame
+// (the receiver tries it first, then falls back to decodeAudioFrame).
+// ───────────────────────────────────────────────────────────────────────
+
+const REC_MAGIC = 0x52454331;     // 'REC1'
+const REC_HEADER_BYTES = 16;      // magic(4) + seq(4) + isFinal(4) + formatCode(4)
+const REC_FORMATS = ['webm', 'wav'] as const;
+export type RecordingFormat = typeof REC_FORMATS[number];
+
+/** Encode one recording chunk for the wire. `bytes` is the raw media (WebM/WAV);
+ *  the final chunk may be empty (isFinal=true is the COMPLETED signal). */
+export function encodeRecordingChunk(seq: number, isFinal: boolean, format: RecordingFormat, bytes: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(REC_HEADER_BYTES + bytes.length);
+  const view = new DataView(buf);
+  view.setInt32(0, REC_MAGIC, true);
+  view.setInt32(4, seq, true);
+  view.setInt32(8, isFinal ? 1 : 0, true);
+  const code = REC_FORMATS.indexOf(format);
+  view.setInt32(12, code < 0 ? 0 : code, true);
+  if (bytes.length) new Uint8Array(buf, REC_HEADER_BYTES).set(bytes);
+  return buf;
+}
+
+/** Decode a recording-chunk frame. Returns null if the magic doesn't match (i.e.
+ *  this is NOT a recording frame) so the receiver can fall through to audio. */
+export function decodeRecordingChunk(buf: ArrayBufferLike, byteOffset = 0, byteLength?: number):
+    { seq: number; isFinal: boolean; format: RecordingFormat; bytes: Uint8Array } | null {
+  const len = byteLength ?? (buf as ArrayBuffer).byteLength - byteOffset;
+  if (len < REC_HEADER_BYTES) return null;
+  const view = new DataView(buf as ArrayBuffer, byteOffset, len);
+  if (view.getInt32(0, true) !== REC_MAGIC) return null;     // not a recording frame
+  const seq = view.getInt32(4, true);
+  const isFinal = view.getInt32(8, true) === 1;
+  const format = REC_FORMATS[view.getInt32(12, true)] ?? 'webm';
+  const bytes = new Uint8Array(buf as ArrayBuffer, byteOffset + REC_HEADER_BYTES, len - REC_HEADER_BYTES);
+  return { seq, isFinal, format, bytes };
+}

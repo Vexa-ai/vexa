@@ -17,3 +17,4 @@ export * from "./audio-pipeline";          // UnifiedRecordingPipeline, MediaRec
 export { RecordingService } from "./recording";
 export { VideoRecordingService } from "./video-recording";
 export { setLoggers } from "./log";
+export { assembleRecording } from "./assemble";   // Node master-builder for the all-Node desktop (meeting-api assembles for the bot)

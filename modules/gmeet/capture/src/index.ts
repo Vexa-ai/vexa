@@ -1,15 +1,14 @@
 /**
- * @vexa/capture — the isolated meeting-capture layer (browser context).
+ * @vexa/gmeet-capture — the Google Meet TRANSCRIPTION capture layer (browser).
  *
- * Output of this brick = capture.v1 (per-speaker audio chunks + meeting events),
- * the input to the pipeline bricks. These modules run INSIDE the meeting page
- * (injected by the bot, or loaded by the extension) — zero node/back imports.
- * The host wires the emitted chunks/events to a capture.v1 sink (bot: in-process;
- * extension: WebSocket).
+ * Per-channel audio + glow active-speaker → gmeet-capture.v1 (the name bound
+ * onto each channel at the source). Runs INSIDE the meeting page (injected by
+ * the bot, or loaded by the extension) — zero node/back imports; the host wires
+ * the emitted frames to a capture.v1 sink (bot: in-process; extension: WebSocket).
+ *
+ * Recording (the combined meeting mix → recording.v1) is a separate, platform-
+ * agnostic concern — see `@vexa/record-chunker` (createRecordingTap), not here.
  */
-// gmeet lane only — the mixed lane is carved out to @vexa/{mixed-capture-core,
-// zoom-capture,teams-capture}; consumers import those directly. This package
-// becomes @vexa/gmeet-capture when the gmeet lane is carved.
 export { createPcmCaptureNode } from "./pcm-capture";
 export { createGmeetCapture } from "./gmeet-capture";
 export type { GmeetCapture } from "./gmeet-capture";

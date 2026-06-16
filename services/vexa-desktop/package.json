@@ -16,6 +16,7 @@
     "@vexa/capture-codec": "file:../../modules/shared/capture-codec",
     "@vexa/transcribe-whisper": "file:../../modules/shared/whisper",
     "@vexa/recorder": "file:../../modules/recorder",
+    "@vexa/recording": "file:../../modules/recording",
     "ws": "^8.21.0"
   },
   "devDependencies": {

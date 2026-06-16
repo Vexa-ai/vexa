@@ -12,7 +12,7 @@
  */
 
 import { detectMeeting, detectMediaTab, MeetingRef } from './meeting';
-import { encodeAudioFrame, encodeEvent } from '@vexa/capture-codec';
+import { encodeAudioFrame, encodeEvent, encodeRecordingChunk } from '@vexa/capture-codec';
 
 interface SessionState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
@@ -282,6 +282,21 @@ function sendAudio(index: number, pcm: number[], speakerName?: string): void {
   ws.send(encodeAudioFrame(index, Date.now(), Float32Array.from(pcm), speakerName));
 }
 
+// Forward one RECORDING chunk (recording.v1) over the same WS. The browser tap
+// (@vexa/record-chunker, in inpage/offscreen) emits base64 WebM/WAV; we decode
+// and frame it for the desktop's recording.v1 consumer, which stores it and
+// builds master.<fmt> on the final chunk. Gated by `paused` like audio — a
+// paused capture ships nothing, recording included.
+function sendRecordingChunk(seq: number, isFinal: boolean, mimeType: string, base64: string): void {
+  if (state.paused) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const fmt = (mimeType || '').toLowerCase().includes('wav') ? 'wav' : 'webm';
+  const bin = atob(base64 || '');
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  ws.send(encodeRecordingChunk(seq, isFinal, fmt, bytes));
+}
+
 // ── Telemetry: merged extension state → ingest server /telemetry ──────────
 // Page diag (hook/attribution/captured-element state) + session state + per-
 // track frame counters, POSTed every 10s while a session is live (plus on
@@ -360,6 +375,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     case 'audio':
       sendAudio(msg.index, msg.pcm, msg.speakerName); break;
+    case 'recording-chunk':
+      sendRecordingChunk(msg.seq, msg.isFinal, msg.mimeType, msg.base64); break;
     case 'speakers':
       Object.assign(lastSpeakerMap, msg.speakers || {});
       if (ws && ws.readyState === WebSocket.OPEN) {

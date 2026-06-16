@@ -54,6 +54,10 @@ window.addEventListener('message', (event) => {
     case 'chat-message':
       chrome.runtime.sendMessage({ type: 'chat-message', sender: data.sender, text: data.text });
       break;
+    case 'recording-chunk':
+      // gmeet recording (combined mix → MediaRecorder, @vexa/record-chunker) → background → WS (recording.v1)
+      chrome.runtime.sendMessage({ type: 'recording-chunk', seq: data.seq, isFinal: data.isFinal, mimeType: data.mimeType, base64: data.base64 });
+      break;
   }
 });
 
