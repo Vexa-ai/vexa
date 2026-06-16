@@ -1,60 +1,49 @@
-# @vexa/eval — synthetic-meeting evaluation harness (any platform)
+# @vexa/eval — fill a meeting with speaking bots to debug the stack, hot
 
-Drives a controlled, **ground-truthed** multi-speaker meeting end-to-end against the
-**production** Vexa service, then scores the captured transcript:
+The inner loop for working on transcription. Instead of waiting for a real
+meeting with real people, you tell the agent *"run a 4-speaker meeting with heavy
+overlap"* and seconds later there are bots talking known scripts into a live
+meeting while Vexa transcribes it. You watch it in the extension, spot what's
+wrong, fix a brick, the **desktop** stack hot-reloads, and you re-run — tight
+iteration on the thing you actually care about: does it transcribe and attribute
+correctly?
 
-1. **corpus** — speech fixtures: a pool of TTS clips per speaker (Deepgram Aura,
-   1–30 s), generated once and cached. The clip **text is the ground truth** (we
-   know exactly what each bot says); every clip leads with a self-ID ("Boris here…")
-   so the scorer can detect mis-attribution by content.
-2. **launch** — send N speaker bots into the meeting via the production API
-   (`POST /bots`), **one at a time, 10 s apart**, so the egress IP isn't flagged.
-   Each bot joins as its own production **test account** (`TOK_<key>`).
-3. **drive** — make the admitted bots speak the clips into the live meeting via the
-   production **`POST /bots/{platform}/{native}/speak`** API, on a controlled
-   timeline. You dial **how many speakers**, **speech length** (min/max/median), and
-   **overlap** (min/max/mean). Ground truth (who spoke when) → `truth.jsonl`.
-4. **judge** — pull the captured transcript and score it vs ground truth
-   (completeness / leakage / attribution). Eyeball the same meeting live in the
-   extension at the same time.
+Two properties make it more than a demo:
 
-Platform-agnostic: set `PLATFORM=teams|zoom|google_meet`. (Ported from the manual
-`~/vexa-test-rig`; the live token/meeting values live in its `secrets.env`.)
+- **Ground truth.** Every bot speaks a known TTS clip that leads with a self-ID
+  ("Boris here…"), so we know *exactly* who said what and when. The captured
+  transcript can be **scored automatically** (completeness / leakage /
+  attribution), not just eyeballed.
+- **Reproducible & controllable.** You dial the stressors — number of speakers,
+  speech length, overlap — and replay the *same* meeting shape. Precisely the
+  thing you can't do with real humans.
 
-## Setup
-```bash
-cd modules/eval
-cp secrets.env.example secrets.env && chmod 600 secrets.env   # fill in VEXA_BASE, NATIVE_ID, PLATFORM, TOK_*
-```
-Fixtures (`cache/`), `truth.jsonl`, and `secrets.env` are git-ignored — **never** in the repo.
+It is **not** desktop-specific. The bots are launched through a Vexa **service
+API**, so the same harness drives:
 
-## Run
-```bash
-./bin/eval.sh launch     # send the speaker bots in (staggered; waits for admission)
-./bin/eval.sh drive      # in another shell: bots speak the timeline + write truth.jsonl
-./bin/eval.sh judge      # after ~2 min of speech: score the live transcript vs truth
-```
+- the **desktop** hot rig (the usual case — fastest iteration), or
+- **any Vexa deployment** you point it at (staging, prod) that can launch bots.
 
-## The dials (env; defaults reproduce the benchmarked rig)
-| dial | env | default | notes |
-|---|---|---|---|
-| how many / which speakers | `TOK_A…TOK_H` set | — | N tokens ⇒ N speakers (9 voices cached) |
-| speech length | `LEN_MED` `LEN_SD` `LEN_MIN` `LEN_MAX` | 11 / 0.65 / 2 / 30 s | lognormal; set at **corpus** gen time |
-| overlap | `GAP_MEAN` `GAP_SD` `GAP_MIN` `GAP_MAX` | +0.5 / 0.8 / −1.5 / +2.5 s | `gap<0` = two different speakers overlap |
-| run length | `DURATION_S` | 900 | |
-| launch stagger | `STAGGER_S` | 10 | seconds between bot joins (IP safety) |
+And the *same* live workflow works on a genuine meeting with real people on the
+desktop — this harness just makes the setup **reproducible and controllable**
+instead of ad-hoc.
 
-Examples: `GAP_MEAN=-0.5 ./bin/eval.sh drive` (heavy overlap) · `LEN_MED=4 LEN_MAX=8 FORCE_REGEN=1 ./bin/eval.sh corpus` (short turns, regen).
+## What it does — four stages
 
-## The three metrics (`judge`)
-1. **COMPLETENESS** — was each truth turn transcribed at all (any label)? (dropped audio)
-2. **LEAKAGE** — a segment's content self-IDs speaker A while it's labeled B (the
-   definitive content-based correctness check under fuzzy overlap timing).
-3. **ATTRIBUTION** — of named segments, label == true speaker → precision + unknown%.
+1. **corpus** — generate & cache a pool of TTS clips per speaker (Deepgram Aura,
+   1–30 s). The clip **text is the ground truth**.
+2. **launch** — send N speaker bots into the meeting via the service API, **one at
+   a time, staggered**, so the egress IP isn't flagged. Each is its own test account.
+3. **drive** — the admitted bots speak the clips on a controlled timeline (you set
+   #speakers, length, overlap); who-spoke-when is written to `truth.jsonl`.
+4. **judge** — pull the captured transcript and score it against ground truth
+   (eyeball the same meeting live in the extension at the same time).
 
-## Regenerating fixtures (rare — costs Deepgram credits)
-```bash
-FORCE_REGEN=1 CLIPS_PER=16 ./bin/eval.sh corpus    # needs DG_KEY
-```
-Delete `cache/<key>.json` to regenerate one speaker. Or point `EVAL_CACHE` at an
-existing pool (e.g. `~/vexa-test-rig/cache`) to reuse it with zero Deepgram calls.
+## Operating it
+
+The setup, the run commands, the dials, and the metrics are in the agent guide —
+**[CLAUDE.md](CLAUDE.md)**. In short: fill `secrets.env`, then
+`./bin/eval.sh launch` → `drive` → `judge`.
+
+> Fixtures (`cache/`), `truth.jsonl`, and `secrets.env` are git-ignored — speech
+> fixtures and real transcripts **never** go in the repo.

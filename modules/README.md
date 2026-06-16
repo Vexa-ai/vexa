@@ -8,12 +8,14 @@ coupling between bricks. So fixing a bug is *routing*:
 
 This file is for **a contributor fixing a thing** — the brick map + runbook.
 
-> **Reorg in progress (0.11):** the lanes are being split — `mixed/` (Zoom/Teams,
-> segmentation + hints) is carved into `@vexa/mixed-capture-*` + `@vexa/mixed-pipeline`
-> over a shared engine (`@vexa/transcribe-buffer`, `@vexa/transcribe-whisper`,
-> `@vexa/capture-codec`); `gmeet/` is next. `speaker-attribution`, the diarizer
-> monolith, and `separated-transcript.v1` have been **dropped** (names are
-> capture-bound for gmeet, hints-only for mixed).
+> **Two lanes over a shared engine (0.11):** both lanes are now carved.
+> `mixed/` (Zoom/Teams, segmentation + hints) → `@vexa/mixed-capture-*` +
+> `@vexa/mixed-pipeline`; `gmeet/` (per-channel audio, glow-bound name) →
+> `@vexa/gmeet-capture` + `@vexa/gmeet-pipeline`. Both ride the shared engine
+> (`@vexa/transcribe-buffer`, `@vexa/transcribe-whisper`, `@vexa/capture-codec`).
+> `speaker-attribution`, the diarizer monolith, and `separated-transcript.v1` are
+> **dropped** (names are capture-bound for gmeet, hints-only for mixed). The host
+> that composes the lanes lives in [`services/vexa-desktop`](../services/vexa-desktop/).
 
 ---
 
@@ -44,15 +46,27 @@ flowchart LR
 | Brick | Does | Contract in → out |
 |---|---|---|
 | [join](join/) | gets the bot into the meeting | URL → admitted page |
-| [capture (gmeet)](capture/) | Google Meet per-channel audio + glow name | page → `gmeet-capture.v1` |
+| [capture (gmeet)](gmeet/capture/) | Google Meet per-channel audio + glow name | page → `gmeet-capture.v1` |
 | [mixed/capture/*](mixed/capture/) | Zoom/Teams mixed audio + active-speaker hints | page → `mixed-capture.v1` |
-| [pipeline (gmeet)](pipeline/) | channel-routed transcription, name at capture | `gmeet-capture.v1` → `transcript.v1` |
+| [pipeline (gmeet)](gmeet/pipeline/) | channel-routed transcription, name at capture | `gmeet-capture.v1` → `transcript.v1` |
 | [mixed/pipeline](mixed/pipeline/) | segmentation cut + hints-namer (no clustering) | `mixed-capture.v1` → `transcript.v1` |
 | [shared/*](shared/) | the engine: `capture-codec` · `buffer` (LocalAgreement) · `whisper` (stt.v1) | — |
 | [recording](recording/) | the meeting media file | tap → `recording.v1` |
 | [recorder](recorder/) | records the capture fixture (head of the chain) | capture → fixture |
 
 > `delivery` (ship `transcript.v1` to clients) is still in the bot, not yet a module.
+
+**Lanes, shared engine & tooling** — each brick's own README has its surface +
+files; start at the lane:
+- **Lanes:** [`gmeet/`](gmeet/) (per-channel audio, name bound at capture) ·
+  [`mixed/`](mixed/) (one mixed stream, hints namer) — the two topologies.
+- **Shared engine:** [`shared/`](shared/) — `capture-codec` (wire) · `buffer`
+  (LocalAgreement-3 confirm) · `whisper` (stt.v1).
+- **Host:** [`services/vexa-desktop`](../services/vexa-desktop/) composes the lanes
+  into the all-Node backend (ingest + gateway + recording tee).
+- **Eval:** [`eval/`](eval/) drives a **live** meeting full of ground-truthed
+  speaker bots to debug the stack hot; [`mixed/eval/`](mixed/eval/) scores the
+  mixed lane **offline** against a YouTube/Deepgram fixture.
 
 ---
 
@@ -75,7 +89,7 @@ real examples — read them for the full repro).
 | **"cannot reach transcription service"** / transcription not working | **pipeline** (STT) | #146 #223 |
 | **repetitions / hallucinated phrases** in the transcript | **pipeline** | #104 |
 | transcription **stops on long meetings** (>~25 min / >1500 s) | **pipeline** | #232 #157 |
-| **speaker identification degrades with 5+ participants** | **pipeline** (diarizer) | #317 |
+| **speaker identification degrades with 5+ participants** | **mixed/pipeline** (hints-namer) | #317 |
 | **recording lost / overwritten / "failed after N mins" / won't store** | **recording** | #404 #412 #224 #268 #282 |
 
 *From dev-debugging this session, not yet filed (same brick — **capture**):* mic
@@ -102,23 +116,24 @@ capture runs (page audio graph touched).
 
 ## 3. How to debug
 
-Three surfaces, mapped to the chain: **the extension** (live, page→downstream),
-**fixtures** (offline, capture→downstream), **join** (the page-entry, alone).
+Surfaces, mapped to the chain: **the extension** (live, page→downstream),
+**fixtures** (offline, capture→downstream), **join** (the page-entry, alone), and
+the **synthetic eval** (drive a live meeting with ground-truthed speaker bots).
 
 ### A · Live & interactive — the product extension *(start here)*
 
 One terminal runs the whole backend **hot**; the real product extension drives
-it. Covers **capture → pipeline → attribution → delivery, online.**
+it. Covers **capture → pipeline → delivery, online** (naming is folded into each lane).
 
 *One-time setup:*
 ```bash
-cd modules/pipeline && cp .env.example .env     # then put TRANSCRIPTION_SERVICE_TOKEN in .env
-cd ../../services/vexa-extension && npm run build  # then chrome://extensions → Load unpacked → dist/
+cd services/vexa-desktop  && cp .env.example .env   # then put TRANSCRIPTION_SERVICE_TOKEN in .env
+cd ../vexa-extension      && npm run build          # then chrome://extensions → Load unpacked → dist/
 ```
 
 *Each session — the hot loop:*
 ```bash
-cd modules/pipeline       && npm run dev    # hot backend: pipeline+attribution+gateway, reloads on any brick edit
+cd services/vexa-desktop  && npm run dev    # hot backend: both lanes + gateway, reloads on any brick edit
 cd services/vexa-extension && npm run dev   # (optional, other terminal) rebuilds + auto-reloads the extension on edit
 ```
 In the extension **sidepanel**: `ingestUrl` = `ws://localhost:9099/ingest`,
@@ -155,7 +170,7 @@ to the shared store. (Real-meeting transcripts are sensitive — keep them priva
 
 *Replay it downstream* — no meeting:
 ```bash
-cd modules/pipeline
+cd services/vexa-desktop
 npm run replay -- <fixture-dir>             # gmeet (channel-routed) → transcript.v1
 ```
 
@@ -190,6 +205,23 @@ Three axes, because join usually fails on the **network position**, not the code
 downstream of *capture* (any deployment, incl. prod) · join = the page-entry,
 by itself — debugged by **moving the egress IP**, not the code.
 
+### D · Synthetic meeting — speaker bots on demand ([`eval/`](eval/))
+
+To put *controllable, ground-truthed* load on the live stack (surface A),
+[`modules/eval`](eval/) sends N speaker bots into a real meeting via the Vexa
+service API and has them speak known TTS scripts on a timeline you dial
+(#speakers, length, overlap). Because the script text is known, the captured
+transcript is **scored automatically** (completeness / leakage / attribution) —
+not just eyeballed. Drives the desktop hot rig, or any deployment that can launch
+bots; the *same* workflow also runs on a real meeting with real people.
+
+```bash
+cd modules/eval        # fill secrets.env first — see eval/CLAUDE.md
+./bin/eval.sh launch   # bots join (staggered, IP-safe)
+./bin/eval.sh drive    # bots speak the timeline → truth.jsonl
+./bin/eval.sh judge    # score the live transcript vs ground truth
+```
+
 ---
 
 ## 4. Where to help (coverage = the to-do map)
@@ -200,18 +232,18 @@ by itself — debugged by **moving the egress IP**, not the code.
 |---|---|---|---|
 | capture | 🟡 per-participant live | ✅ | 🟡 needs toolbar gesture |
 | chat | ⚪ no reader | ✅ | ❌ no reader |
-| pipeline | (multistream 🟡) | ✅ live + replay | 🟡 quality issues |
-| names | 🟡 via `speaker-joined` | ✅ | ❌ active-speaker selectors stale |
+| pipeline | 🟡 channel-routed | ✅ live + replay | 🟡 quality issues |
+| names | ✅ glow↔channel (at capture) | ✅ | ❌ active-speaker selectors stale |
 | fixture collected | 🟡 old | ✅ | ❌ none |
 
 **Open work, by priority:**
 1. **Teams names** — `@vexa/teams-capture` active-speaker selectors stale (`hints=0`).
 2. **Teams chat reader** — only `@vexa/zoom-capture` has one.
-3. **gmeet lane carve** → `modules/gmeet/{capture,pipeline}` + `gmeet-capture.v1`;
-   then retire `modules/capture` + the gmeet remnant in `modules/pipeline`.
-4. **Finish the `capture.v1` split** — `capture-codec` re-export + drift gate; re-point
-   the bot off the old contract.
-5. **gmeet end-to-end** confirm; collect **gmeet + teams fixtures**.
+3. **Bot rewire** — `services/vexa-bot` is the last consumer still on the dropped
+   monolith: it imports `@vexa/pipeline` (`SileroVAD`/`VadSpeakerState`, deleted) +
+   `@vexa/capture`. Re-point it onto the carved lanes (`@vexa/gmeet-*`,
+   `@vexa/mixed-*`, `@vexa/capture-codec`).
+4. **Fixtures** — collect **gmeet + teams** `capture.v1` fixtures (zoom done).
 
 ---
 

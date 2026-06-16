@@ -64,4 +64,7 @@ npx tsc --noEmit                  # typecheck
 
 ## Context
 
-Brick lives at `modules/join/`; consumed by `services/vexa-bot` (the bot imports it — never the reverse). Pack: #443. Spec: repo-root `MANIFEST.md`. When you fix a verdict, log it on the relevant issue with the host-vs-brick evidence, commit on `pack/0.11-mvp1-meet-join`, push to `stitchfork`.
+Brick lives at `modules/join/`; consumed by `services/vexa-bot` (the bot imports
+it — never the reverse). The contributor map + symptom→brick router is
+[`modules/README.md`](../README.md). When you fix a verdict, log it on the relevant
+issue with the host-vs-brick evidence.

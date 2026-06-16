@@ -6,12 +6,14 @@ platform-specific lives here. Each is its own isolated brick with its own README
 | module | role | contract |
 |---|---|---|
 | [`whisper`](./whisper) — `@vexa/transcribe-whisper` | the stt.v1 egress: PCM window → Whisper segments | `stt.v1` |
-| `buffer` — `@vexa/transcribe-buffer` *(in progress)* | the LocalAgreement-2 confirm loop: window → confirmed/pending segments | `transcript.v1` sink |
-| `capture-codec` — `@vexa/capture-codec` *(planned)* | frame + event byte serialization, shared by both lane capture contracts | — |
+| [`buffer`](./buffer) — `@vexa/transcribe-buffer` | the LocalAgreement-3 confirm primitive: which leading words are stable enough to confirm | — (pure fn) |
+| [`capture-codec`](./capture-codec) — `@vexa/capture-codec` | frame + event byte serialization, shared by both lane capture contracts | the wire codec |
 
-Flow: a lane pipeline produces audio windows → `buffer` (confirm) → `whisper` (stt) →
-the lane's `transcript.v1` sink. `buffer` reaches `whisper` only through an injected
-`transcribe(pcm, prompt)` fn, so the two stay independently swappable.
+Flow: a lane pipeline cuts an audio window → `whisper` transcribes it (stt.v1) →
+`buffer.localAgreement()` decides how many leading words are stable enough to
+confirm → the lane's `transcript.v1` sink. `buffer` is a pure primitive (no I/O);
+the lane driver owns the loop and injects `whisper`, so the two stay independently
+swappable.
 
 ## Function naming conventions (project-wide)
 

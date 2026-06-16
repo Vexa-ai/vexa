@@ -1,33 +1,42 @@
 # @vexa/transcribe-buffer
 
-The shared **confirmation core**. As a turn's unconfirmed window is re-submitted
-to Whisper, only the words that are **stable across two consecutive submissions**
-are safe to confirm — the still-forming tail stays pending. That LocalAgreement-2
-primitive was copy-pasted between the two engines (`speaker-streams` and
-`chunked-transcriber`); it now lives here once.
+The shared **confirmation primitive** for the streaming transcription engines.
+As a turn's still-open window is re-submitted to Whisper the tail keeps changing;
+only the leading words that stay **identical across N consecutive submissions**
+are safe to confirm — the rest stays pending. That is *LocalAgreement-N*, and it
+used to be copy-pasted between the two engines; it lives here once.
+
+`N` defaults to **3**: live mixed audio (Teams/Zoom AGC + jitter) makes a 2-pass
+agreement confirm not-yet-settled text, so the mixed driver requires three
+identical passes and pairs it with a TTL idle-finalize (commit whatever is pending
+when updates stop) so the stricter threshold never leaves words stuck.
 
 ```
 driver: cut window → whisper → gate → localAgreement() → confirmed / pending → sink
                                        └──── this module ────┘
 ```
 
-Each engine owns its own buffer model, cut, turn lifecycle, naming, and sink; it
-calls `localAgreement()` to decide how many leading segments of one submission
-may confirm. Pure + deterministic — no audio, no I/O.
+The primitive is pure + deterministic (no audio, no I/O). Each engine owns its own
+buffer model, cut, turn lifecycle, naming, and sink; it calls `localAgreement()`
+to decide how many leading segments of one submission may confirm, then carries
+the returned `history` into the next pass.
 
 ## Public surface
-
 | symbol | kind | role |
 |---|---|---|
-| `localAgreement(segments, prevWords, spanEndMs, closing)` | fn | → `{ confirmCount, lastWords }` for one submission |
-| `words(text)` | fn | whitespace word split (the tokenization the agreement uses) |
-| `AgreementSegment` / `AgreementResult` | types | the inputs/outputs |
+| `localAgreement(segments, history, spanEndMs, closing, agree=3)` | fn | → `{ confirmCount, history }` for one submission |
+| `commonWordPrefix(arrays)` | fn | longest leading run identical across ALL passes — the heart of LocalAgreement-N |
+| `longestCommonWordPrefix(a, b)` | fn | the two-array variant (reused by the gmeet per-channel confirm loop) |
+| `words(text)` | fn | the whitespace word split the agreement tokenizes on |
+| `AgreementSegment` / `AgreementResult` | types | the inputs / outputs |
 
-Behavior is pinned by the **confirm-loop golden** (currently in `@vexa/pipeline`;
-moves here when the engines themselves move into the lanes).
+## Behavior pinned by goldens
+The confirm behavior is pinned by the **confirm-loop golden** in
+[`@vexa/mixed-pipeline`](../../mixed/pipeline/) (`src/confirm-loop.golden.test.ts`),
+which drives the real 3-pass + TTL loop. (gmeet reuses only
+`longestCommonWordPrefix`; its own per-channel confirm loop lives in
+[`@vexa/gmeet-pipeline`](../../gmeet/pipeline/).)
 
-## Naming conventions & isolation
-
-Follows the project-wide stage conventions (see `modules/shared/README.md`). A leaf
-brick — no `@vexa/*` deps; `npm run check:isolation` proves every import is
+## Isolation
+A leaf brick — no `@vexa/*` deps. `npm run check:isolation` proves every import is
 intra-package or a Node builtin.

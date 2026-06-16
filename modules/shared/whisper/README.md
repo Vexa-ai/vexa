@@ -27,18 +27,8 @@ buffer ──stt.v1──► whisper ──► segments
 | `setLogger(fn)` | fn | host-injectable logger |
 | `TranscriptionResult` / `…Segment` / `…Word` / `…ClientConfig` | types | the stt.v1 shapes |
 
-## Naming conventions (project-wide)
-
-This module follows the shared stage conventions:
-
-- **construct**: `create<Name>(opts) → <Name>`; stateful pure logic = a `class`.
-- **push data in**: `feed<Noun>(…)` (`feedAudio`, `feedFrame`, `feedHint`).
-- **emit out**: one `on<X>` callback per output; a single `sink` object only when outputs
-  are coupled (e.g. the transcript's `{ publish, publishPending, clearPending, rename }`).
-- **serialize**: `encode<X>` / `decode<X>`.
-- **stt**: `transcribe(pcm, prompt) → segments` (the whole stt.v1 surface — this module).
-- **read state**: `get<X>()`.
-- **teardown**: `dispose(): Promise<void>` if it must flush; `destroy(): void` for sync teardown.
+## Naming conventions
+Follows the project-wide stage conventions — see [`../README.md`](../README.md).
 
 ## Isolation
 

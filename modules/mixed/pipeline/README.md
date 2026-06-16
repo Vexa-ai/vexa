@@ -7,7 +7,7 @@ arbitrary tab). One stream in, named transcript segments out.
 mixed-capture.v1 (audio + hints)
    └─ ChunkedTranscriber
         ├─ PyannoteSegmenter   cut-only (the only ONNX; NO diarization/clustering)
-        ├─ @vexa/transcribe-buffer   LocalAgreement-2 confirm
+        ├─ @vexa/transcribe-buffer   LocalAgreement-3 confirm (+ TTL idle-finalize)
         ├─ @vexa/transcribe-whisper  stt.v1 transcribe (injected)
         └─ ClusterNameBinder   the namer — hints by time window
    ─► transcript.v1 (named segments + drafts)
@@ -28,4 +28,7 @@ segmentation id is the key. **There is no speaker clustering/diarization.**
 `src/pyannote-segmenter.ts` (the cut), `src/cluster-name-binder.ts` (the namer).
 
 ## Gates
-`npm run check:isolation` · `npm test` (confirm-loop golden + naming smoke).
+`npm run check:isolation` · `npm test` — 6 goldens: the confirm-loop golden plus
+the naming / claim / priority / concurrency / flicker smokes (each pins one
+attribution behavior: window-match naming, late-box claim, unattributed-priority,
+concurrent multi-speaker hints, and flicker-resistant sticky attribution).

@@ -2,7 +2,7 @@
 
 You are operating an evaluation vehicle for the **mixed** transcription lane
 (single mixed audio stream → pyannote **segmentation** cuts turns → shared
-LocalAgreement-2 confirm → Whisper). **Clustering is OFF by design** — the lane
+LocalAgreement-3 confirm → Whisper). **Clustering is OFF by design** — the lane
 separates *speeches* by segmentation, not speaker *identity*. So judge the
 **cut placement** (did we start/end a turn at the right instant?) and the
 **transcript text**, NOT whether "S0" matches Deepgram's "S0".
@@ -19,7 +19,7 @@ DEEPGRAM_API_KEY=$(grep -o 'sk-[^ ]*\|[A-Za-z0-9]\{32,\}' /tmp/.dg.env | head -1
 #   → fixtures/<id>/{audio.wav, deepgram.json, meta.json}    (fixtures/ is git-ignored)
 
 # 2. evaluate a chosen region through our pipeline → side-by-side page
-set -a; source ../../pipeline/.env; set +a            # our Whisper egress
+set -a; source ../../../services/vexa-desktop/.env; set +a   # our Whisper egress
 npm run run -- --id <id> --start <sec> --end <sec> [--speed 3]
 #   → fixtures/<id>/eval-<start>-<end>.html
 ```

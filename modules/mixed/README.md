@@ -12,5 +12,5 @@ pipeline       @vexa/mixed-pipeline        segmenter(pyannote) + namer(hints) â”
 eval           agentic evaluation vehicle (YouTube fixture vs our pipeline)
 ```
 
-Shared engine: `@vexa/transcribe-buffer` (LocalAgreement-2) + `@vexa/transcribe-whisper`
+Shared engine: `@vexa/transcribe-buffer` (LocalAgreement-3) + `@vexa/transcribe-whisper`
 (stt.v1) + `@vexa/capture-codec` (wire). See each subfolder's README.
