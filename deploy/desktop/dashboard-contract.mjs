@@ -11,7 +11,7 @@
 //
 // WHY THIS EXISTS: every other deploy runs the real api-gateway (+ meeting-api),
 // which IS the contract the dashboard was built against. Desktop replaces both
-// with one hand-written Node gateway (modules/pipeline/scripts/desktop.ts). With
+// with one hand-written Node gateway (services/vexa-desktop/src/desktop.ts). With
 // nothing binding the two, the dashboard discovers missing/!-shaped endpoints one
 // click at a time. This manifest is the SSOT for what desktop must serve and how;
 // the probe asserts the running gateway matches it.

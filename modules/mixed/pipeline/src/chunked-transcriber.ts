@@ -161,6 +161,11 @@ interface Turn {
   pendingName: string | null;
   /** Last unconfirmed tail — promoted if the closing pass returns nothing. */
   pendingTail: ChunkSegment[];
+  /** Sticky speaker: set once this turn resolves to a REAL name. While null the turn
+   *  is UNATTRIBUTED and stays eligible for (re)attribution/claim/priority; once set,
+   *  the name is locked so later hints (incl. brief "hmm" flickers) can't flip the
+   *  turn's pending. Priority is for the unattributed, never for already-attributed. */
+  resolvedName: string | null;
 }
 /** A committed turn whose hint hasn't arrived yet (provisional segmentation id) —
  *  re-resolved when a later hint produces a window match. Segments live in
@@ -289,12 +294,13 @@ export class ChunkedTranscriber {
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
     if (!name) return;
-    // Faster pending: a just-arrived hint may now name the OPEN turn — re-resolve it
-    // immediately so its live pending tail repaints under the correct speaker,
-    // instead of waiting for the next submit tick (~2s) and showing seg_N / the
-    // previous speaker in the meantime. resolveName casts the vote → onClusterRename
-    // repaints the pending tail (and any published segments) if the name changed.
-    if (this.turn && (this.turn.pendingTail.length > 0 || this.turn.allConfirmed.length > 0)) {
+    // Faster attribution of an UNATTRIBUTED open turn: a just-arrived hint may now
+    // name it — resolve immediately so its pending repaints under the right speaker
+    // instead of showing seg_N until the next tick. STICKY: only while unattributed
+    // (resolvedName == null); once attributed we never re-resolve the open turn, so a
+    // brief flicker hint can't flip an already-correct pending. Priority for the
+    // unattributed, NOT for pending that's already attributed.
+    if (this.turn && !this.turn.resolvedName && (this.turn.pendingTail.length > 0 || this.turn.allConfirmed.length > 0)) {
       this.resolveName(this.turn);
     }
     if (this.unresolved.length === 0) return;
@@ -471,7 +477,7 @@ export class ChunkedTranscriber {
       clusterId: item.segId, turnId: this.turnCounter++,
       t0, t1: t0, confirmedUpToMs: t0,
       history: [], seq: 0, lastSubmitEndMs: 0, allConfirmed: [], pendingName: null, pendingTail: [],
-      lastVoicedWallMs: Date.now(),
+      lastVoicedWallMs: Date.now(), resolvedName: null,
     };
   }
 
@@ -635,10 +641,16 @@ export class ChunkedTranscriber {
   }
 
   private resolveName(turn: Turn): string {
-    // Window-match (lag-corrected hint overlap) casts a per-key vote; the
-    // returned name is the current best. Accumulating votes drive onLateResolve
-    // → onClusterRename (repaint) when the name shifts.
-    return this.binder.resolve({ clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 }).speakerName;
+    // STICKY ATTRIBUTION. Once a turn has resolved to a real speaker, lock it: later
+    // hints (a brief "hmm" box-flicker, the other speaker's lag-shifted overlap) must
+    // NOT flip an already-attributed turn's pending. Priority/claim is for the
+    // UNATTRIBUTED, never for the attributed. While unattributed we keep resolving:
+    // window-match (lag-corrected overlap) casts the per-key vote; the first REAL
+    // result locks the name (and onLateResolve → onClusterRename paints it in).
+    if (turn.resolvedName) return turn.resolvedName;
+    const r = this.binder.resolve({ clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 });
+    if (r.source !== 'provisional-cluster-id') turn.resolvedName = r.speakerName;
+    return r.speakerName;
   }
 
   /** Binder says this key's name changed → repaint its published segments

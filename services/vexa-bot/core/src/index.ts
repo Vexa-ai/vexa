@@ -26,14 +26,15 @@ import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, clean
 // HTTP imports removed - using unified callback service instead
 
 // Per-speaker transcription pipeline
-import { TranscriptionClient , setLogger as setPipelineLogger } from '@vexa/pipeline';
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
+import { setLogger as setPipelineLogger } from '@vexa/gmeet-pipeline';
 import { SegmentPublisher } from './services/segment-publisher';
-import { SpeakerStreamManager } from '@vexa/pipeline';
-import { ChunkedTranscriber } from '@vexa/pipeline';
+import { SpeakerStreamManager } from '@vexa/gmeet-pipeline';
+import { ChunkedTranscriber } from '@vexa/mixed-pipeline';
 import { createChunkedHost } from './services/chunked-host';
 import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken, reportTrackAudio, getLockedMapping } from './services/speaker-identity';
 import { SileroVAD } from '@vexa/pipeline';
-import { isHallucination } from '@vexa/pipeline';
+import { isHallucination } from '@vexa/gmeet-pipeline';
 import { SpeakerStreamHandle } from './services/audio';
 import { RawCaptureService, uploadCaptureToS3, StreamCaptureWriter, openRetentionWriter, MeetingEvent } from '@vexa/recorder';
 import { setSessionStartProvider , setLoggers as setPipelineLoggers } from '@vexa/recording';

@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "check:isolation": "node scripts/check-isolation.js",
-    "test": "tsx src/confirm-loop.golden.test.ts && tsx src/naming.smoke.test.ts && tsx src/claim.smoke.test.ts && tsx src/priority.smoke.test.ts && tsx src/concurrency.smoke.test.ts"
+    "test": "tsx src/confirm-loop.golden.test.ts && tsx src/naming.smoke.test.ts && tsx src/claim.smoke.test.ts && tsx src/priority.smoke.test.ts && tsx src/concurrency.smoke.test.ts && tsx src/flicker.smoke.test.ts"
   },
   "dependencies": {
     "@vexa/transcribe-buffer": "file:../../shared/buffer",

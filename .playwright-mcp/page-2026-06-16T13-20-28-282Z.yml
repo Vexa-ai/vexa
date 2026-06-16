@@ -1,0 +1,185 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - heading "Anthropic's Fable Backlash, Nationalizing AI, Inflation Heats Up & California’s Broken Elections — region 57:50–58:50 (60s)" [level=1] [ref=e3]
+    - generic [ref=e4]: "deepgram: 12 utt · vexa: 29 seg · pyannote boundaries: 52 · ▍open/cut ▍close — click any row or tick to seek"
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - generic "speaker→silence @3.70s (0.55)" [ref=e8] [cursor=pointer]
+      - generic "speaker→silence @6.69s (0.56)" [ref=e9] [cursor=pointer]
+      - generic "overlap-onset @11.93s (0.52)" [ref=e10] [cursor=pointer]
+      - generic "overlap-offset @12.38s (0.45)" [ref=e11] [cursor=pointer]
+      - generic "speaker→silence @18.65s (0.50)" [ref=e12] [cursor=pointer]
+      - generic "speaker→silence @20.45s (0.48)" [ref=e13] [cursor=pointer]
+      - generic "speaker→speaker @20.55s (0.47)" [ref=e14] [cursor=pointer]
+      - generic "overlap-onset @24.90s (0.47)" [ref=e15] [cursor=pointer]
+      - generic "overlap-offset @26.57s (0.32)" [ref=e16] [cursor=pointer]
+      - generic "overlap-onset @26.73s (0.33)" [ref=e17] [cursor=pointer]
+      - generic "overlap-offset @26.85s (0.32)" [ref=e18] [cursor=pointer]
+      - generic "speaker→speaker @27.65s (0.33)" [ref=e19] [cursor=pointer]
+      - generic "speaker→speaker @28.37s (0.44)" [ref=e20] [cursor=pointer]
+      - generic "overlap-onset @28.78s (0.39)" [ref=e21] [cursor=pointer]
+      - generic "overlap-offset @28.88s (0.39)" [ref=e22] [cursor=pointer]
+      - generic "overlap-offset @29.04s (0.37)" [ref=e23] [cursor=pointer]
+      - generic "speaker→silence @29.67s (0.37)" [ref=e24] [cursor=pointer]
+      - generic "speaker→speaker @29.98s (0.48)" [ref=e25] [cursor=pointer]
+      - generic "speaker→speaker @30.63s (0.46)" [ref=e26] [cursor=pointer]
+      - generic "speaker→silence @35.55s (0.49)" [ref=e27] [cursor=pointer]
+      - generic "silence→speaker @35.72s (0.46)" [ref=e28] [cursor=pointer]
+      - generic "overlap-onset @36.18s (0.43)" [ref=e29] [cursor=pointer]
+      - generic "overlap-offset @36.57s (0.42)" [ref=e30] [cursor=pointer]
+      - generic "speaker→silence @38.10s (0.49)" [ref=e31] [cursor=pointer]
+      - generic "silence→speaker @38.20s (0.50)" [ref=e32] [cursor=pointer]
+      - generic "speaker→silence @39.00s (0.43)" [ref=e33] [cursor=pointer]
+      - generic "silence→speaker @39.63s (0.36)" [ref=e34] [cursor=pointer]
+      - generic "silence→speaker @39.84s (0.42)" [ref=e35] [cursor=pointer]
+      - generic "overlap-onset @40.50s (0.34)" [ref=e36] [cursor=pointer]
+      - generic "overlap-offset @41.35s (0.33)" [ref=e37] [cursor=pointer]
+      - generic "speaker→silence @41.56s (0.33)" [ref=e38] [cursor=pointer]
+      - generic "silence→speaker @41.71s (0.35)" [ref=e39] [cursor=pointer]
+      - generic "silence→speaker @42.00s (0.31)" [ref=e40] [cursor=pointer]
+      - generic "speaker→silence @43.06s (0.47)" [ref=e41] [cursor=pointer]
+      - generic "silence→speaker @43.40s (0.35)" [ref=e42] [cursor=pointer]
+      - generic "overlap-onset @43.58s (0.35)" [ref=e43] [cursor=pointer]
+      - generic "speaker→silence @46.44s (0.50)" [ref=e44] [cursor=pointer]
+      - generic "silence→speaker @47.14s (0.34)" [ref=e45] [cursor=pointer]
+      - generic "silence→speaker @48.04s (0.39)" [ref=e46] [cursor=pointer]
+      - generic "speaker→speaker @48.17s (0.32)" [ref=e47] [cursor=pointer]
+      - generic "overlap-onset @48.46s (0.32)" [ref=e48] [cursor=pointer]
+      - generic "overlap-offset @48.68s (0.34)" [ref=e49] [cursor=pointer]
+      - generic "overlap-onset @49.39s (0.30)" [ref=e50] [cursor=pointer]
+      - generic "overlap-offset @50.42s (0.44)" [ref=e51] [cursor=pointer]
+      - generic "speaker→speaker @50.72s (0.50)" [ref=e52] [cursor=pointer]
+      - generic "overlap-onset @52.25s (0.41)" [ref=e53] [cursor=pointer]
+      - generic "overlap-offset @52.98s (0.36)" [ref=e54] [cursor=pointer]
+      - generic "speaker→speaker @53.24s (0.41)" [ref=e55] [cursor=pointer]
+      - generic "speaker→speaker @53.81s (0.42)" [ref=e56] [cursor=pointer]
+      - generic "overlap-onset @56.63s (0.49)" [ref=e57] [cursor=pointer]
+      - generic "overlap-offset @57.45s (0.58)" [ref=e58] [cursor=pointer]
+      - generic "overlap-onset @59.04s (0.54)" [ref=e59] [cursor=pointer]
+    - generic [ref=e60]:
+      - heading "Deepgram (reference)" [level=2] [ref=e61]
+      - generic [ref=e62] [cursor=pointer]:
+        - text: S4 0:00
+        - generic [ref=e63]: the gatekeeping monopolist. It's now anthropic. They're not a monopolist yet, but if they get the right capture they're looking for, they will be either a monopolist or a demote duopol. It'll be duopol. Somebody start an open source frontier lab. Each of the four besties will go into There are no. There are there are many. There's a whole bunch of them, Jayco.
+      - generic [ref=e64] [cursor=pointer]:
+        - text: S2 0:00
+        - generic [ref=e65]: It's not the labs that's the problem, Jason. In the absence of power, this is all a moot conversation. And if you can't deliver power to hundreds and hundreds of megawatts and line of sight to gigawatts, it's all meaningless bullshit. It's all futile. I don't know. I I I would love an open source
+      - generic [ref=e66] [cursor=pointer]:
+        - text: S0 0:15
+        - generic [ref=e67]: company that was focused on running it locally. That's that's my dream is, you know, make the model work there. I think these guys are capitalist cucks. I think their kink is, like, having their equity taken and being regulated.
+      - generic [ref=e68] [cursor=pointer]:
+        - text: S2 0:26
+        - generic [ref=e69]: They're just like, that's their kink.
+      - generic [ref=e70] [cursor=pointer]:
+        - text: S2 0:28
+        - generic [ref=e71]: So Dario's like,
+      - generic [ref=e72] [cursor=pointer]:
+        - text: S0 0:29
+        - generic [ref=e73]: oh, take my equity. Oh, regulate me. That's it, Bernie. Take my equity. I'm such a bad boy.
+      - generic [ref=e74] [cursor=pointer]:
+        - text: S0 0:36
+        - generic [ref=e75]: I can't be trusted. Regulate me, Elizabeth.
+      - generic [ref=e76] [cursor=pointer]:
+        - text: S0 0:40
+        - generic [ref=e77]: Regulate me, AOC.
+      - generic [ref=e78] [cursor=pointer]:
+        - text: S1 0:42
+        - generic [ref=e79]: Oh my god.
+      - generic [ref=e80] [cursor=pointer]:
+        - text: S0 0:43
+        - generic [ref=e81]: Oh, it's so rug. Sorry. Come on the program anytime, Daria.
+      - generic [ref=e82] [cursor=pointer]:
+        - text: S0 0:48
+        - generic [ref=e83]: He's in a rush to come on the program. He will never come on this pod. Dario will never come on. He's running.
+      - generic [ref=e84] [cursor=pointer]:
+        - text: S4 0:54
+        - generic [ref=e85]: We didn't get Sam. We got Sarah Friar to come on the pod, and she was treated well. Sam came on the pod. He has to come on the pod. He's like, hey. I'm gonna come on too. Right? That's right. That's right. Sam to come on. He's great. Sam will come on the pot anytime. He's totally satisfied. By the way, even even We didn't treat him harshly at all.
+    - generic [ref=e86]:
+      - heading "Vexa (mixed lane · segmentation-separated)" [level=2] [ref=e87]
+      - generic [ref=e88] [cursor=pointer]:
+        - text: seg_0 0:00
+        - generic [ref=e89]: It's not the labs that's the problem, Jason.
+      - generic [ref=e90] [cursor=pointer]:
+        - text: seg_0 0:02
+        - generic [ref=e91]: In the absence of power, this is all a moot conversation.
+      - generic [ref=e92] [cursor=pointer]:
+        - text: seg_0 0:05
+        - generic [ref=e93]: And if you can't deliver power to hundreds and hundreds of megawatts
+      - generic [ref=e94] [cursor=pointer]:
+        - text: seg_0 0:08
+        - generic [ref=e95]: and line of sight to gigawatts, it's all meaningless bullshit.
+      - generic [ref=e96] [cursor=pointer]:
+        - text: seg_0 0:11
+        - generic [ref=e97]: It's all through-
+      - generic [ref=e98] [cursor=pointer]:
+        - text: seg_1 0:12
+        - generic [ref=e99]: I don't know. I would love an open source company that was focused on running it locally. That's my dream.
+      - generic [ref=e100] [cursor=pointer]:
+        - text: seg_2 0:20
+        - generic [ref=e101]: I think these guys are capitalist cucks. I think their kink is having their equity team.
+      - generic [ref=e102] [cursor=pointer]:
+        - text: seg_3 0:24
+        - generic [ref=e103]: Taken and being regulated.
+      - generic [ref=e104] [cursor=pointer]:
+        - text: seg_6 0:26
+        - generic [ref=e105]: Like that's their kink.
+      - generic [ref=e106] [cursor=pointer]:
+        - text: seg_8 0:28
+        - generic [ref=e107]: Don't.
+      - generic [ref=e108] [cursor=pointer]:
+        - text: seg_11 0:29
+        - generic [ref=e109]: It's like, ooh.
+      - generic [ref=e110] [cursor=pointer]:
+        - text: seg_12 0:29
+        - generic [ref=e111]: Take my ex.
+      - generic [ref=e112] [cursor=pointer]:
+        - text: seg_13 0:30
+        - generic [ref=e113]: Equity. Ooh, regulate me. That's it, Bernie. Take my equity. I'm such a bad boy.
+      - generic [ref=e114] [cursor=pointer]:
+        - text: seg_15 0:36
+        - generic [ref=e115]: I can't be.
+      - generic [ref=e116] [cursor=pointer]:
+        - text: seg_16 0:36
+        - generic [ref=e117]: Trust it. Regulate me.
+      - generic [ref=e118] [cursor=pointer]:
+        - text: seg_17 0:38
+        - generic [ref=e119]: Elizabeth.
+      - generic [ref=e120] [cursor=pointer]:
+        - text: seg_20 0:40
+        - generic [ref=e121]: Regulate me out.
+      - generic [ref=e122] [cursor=pointer]:
+        - text: seg_23 0:42
+        - generic [ref=e123]: Oh, my God.
+      - generic [ref=e124] [cursor=pointer]:
+        - text: seg_25 0:43
+        - generic [ref=e125]: Oh, it's so wrong. Sorry. Come on the program anytime, Daria.
+      - generic [ref=e126] [cursor=pointer]:
+        - text: seg_28 0:48
+        - generic [ref=e127]: Wait.
+      - generic [ref=e128] [cursor=pointer]:
+        - text: seg_31 0:49
+        - generic [ref=e129]: He will never come.
+      - generic [ref=e130] [cursor=pointer]:
+        - text: seg_32 0:50
+        - generic [ref=e131]: I'm missing.
+      - generic [ref=e132] [cursor=pointer]:
+        - text: seg_33 0:50
+        - generic [ref=e133]: This pod. Daria.
+      - generic [ref=e134] [cursor=pointer]:
+        - text: seg_34 0:52
+        - generic [ref=e135]: He's wrong.
+      - generic [ref=e136] [cursor=pointer]:
+        - text: seg_35 0:52
+        - generic [ref=e137]: Morning.
+      - generic [ref=e138] [cursor=pointer]:
+        - text: seg_37 0:53
+        - generic [ref=e139]: We didn't get Sam. We got Sarah Friar to come on the pod.
+      - generic [ref=e140] [cursor=pointer]:
+        - text: seg_38 0:56
+        - generic [ref=e141]: And she was treated- No, Sam.
+      - generic [ref=e142] [cursor=pointer]:
+        - text: seg_39 0:57
+        - generic [ref=e143]: He came on the pod. He has to come on the podcast.
+      - generic [ref=e144] [cursor=pointer]:
+        - text: seg_40 0:59
+        - generic [ref=e145]: He's like, hey, how am I coming off?

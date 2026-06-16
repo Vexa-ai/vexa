@@ -9,7 +9,8 @@ const WATCH = process.argv.includes('--watch');
 // Consume bricks by PACKAGE NAME (the published surface), not by reaching into
 // their src/. Aliased to the brick's index so esbuild still bundles the TS source.
 const vexaAlias = {
-  '@vexa/capture': resolve(__dirname, '../../modules/capture/src/index.ts'),                 // gmeet lane (uncarved)
+  '@vexa/gmeet-capture': resolve(__dirname, '../../modules/gmeet/capture/src/index.ts'),
+  '@vexa/capture-codec': resolve(__dirname, '../../modules/shared/capture-codec/src/index.ts'),
   '@vexa/mixed-capture-core': resolve(__dirname, '../../modules/mixed/capture/core/src/index.ts'),
   '@vexa/zoom-capture': resolve(__dirname, '../../modules/mixed/capture/zoom/src/index.ts'),
   '@vexa/teams-capture': resolve(__dirname, '../../modules/mixed/capture/teams/src/index.ts'),

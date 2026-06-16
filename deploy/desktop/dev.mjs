@@ -4,14 +4,14 @@
  *
  * Launches ALL of Vexa locally, hot, no Docker (VEXA-DESKTOP.md, option B: all-Node):
  *
- *   backend    modules/pipeline/scripts/desktop.ts   tsx watch  ── ingest :9099 + pipeline
- *                                                                  + delivery WS + recording tee
- *                                                                  + node:sqlite control plane :8056
- *   dashboard  services/dashboard                    next dev   ── :3001, NEXT_PUBLIC_API_URL → :8056
- *   extension  services/vexa-extension               esbuild w  ── rebuilds dist/ on edit
+ *   backend    services/vexa-desktop   tsx watch  ── ingest :9099 + pipeline
+ *                                                     + delivery WS + recording tee
+ *                                                     + node:sqlite control plane :8056
+ *   dashboard  services/dashboard      next dev   ── :3001, NEXT_PUBLIC_API_URL → :8056
+ *   extension  services/vexa-extension esbuild w  ── rebuilds dist/ on edit
  *
  * Edit any layer → it reloads. One file DB (~/.vexa/desktop.db). STT is remote
- * (put TRANSCRIPTION_SERVICE_* in modules/pipeline/.env). This is the deployment
+ * (put TRANSCRIPTION_SERVICE_* in services/vexa-desktop/.env). This is the deployment
  * that doubles as the debug rig: modules → services → deploy, the local+hot cell.
  *
  *   cd deploy/desktop && npm run dev
@@ -31,8 +31,8 @@ const log = (name, line) => process.stdout.write(`${COLORS[name] || ''}[${name}]
 
 const procs = [
   {
-    name: 'backend', cwd: path.join(ROOT, 'modules', 'pipeline'),
-    cmd: 'npx', args: ['tsx', 'watch', '--env-file-if-exists=.env', 'scripts/desktop.ts'],
+    name: 'backend', cwd: path.join(ROOT, 'services', 'vexa-desktop'),
+    cmd: 'npm', args: ['run', 'dev'],
     env: { INGEST_PORT, GATEWAY_PORT },
   },
 ];

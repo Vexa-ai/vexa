@@ -16,7 +16,7 @@ Launches three hot processes (edit any → it reloads):
 
 | process | what | port |
 |---|---|---|
-| **backend** (`modules/pipeline/scripts/desktop.ts`, `tsx watch`) | ingest + pipeline (mixed ‖ multistream + mic) + delivery WS + recording tee + `node:sqlite` control plane | ingest `:9099`, gateway `:8056` |
+| **backend** (`services/vexa-desktop/src/desktop.ts`, `tsx watch`) | ingest + pipeline (mixed ‖ multistream + mic) + delivery WS + recording tee + `node:sqlite` control plane | ingest `:9099`, gateway `:8056` |
 | **dashboard** (`services/dashboard`, `next dev`) | the real UI, pointed at the backend | `:3001` |
 | **extension** (`services/vexa-extension`, esbuild watch) | rebuilds `dist/` on edit | — |
 
@@ -26,10 +26,10 @@ join a meeting → Start. Transcripts render live; the `stream.capture` fixture 
 to `$VEXA_FIXTURE_CACHE/capture/v1/` at the same time (collect-while-you-watch).
 
 ## Prereqs (one-time)
-- Node 22+ (uses `node:sqlite`). `npm install` in `modules/pipeline`, `services/dashboard`,
+- Node 22+ (uses `node:sqlite`). `npm install` in `services/vexa-desktop`, `services/dashboard`,
   `services/vexa-extension`.
 - STT: put `TRANSCRIPTION_SERVICE_URL` + `TRANSCRIPTION_SERVICE_TOKEN` in
-  `modules/pipeline/.env` (remote endpoint — no local GPU).
+  `services/vexa-desktop/.env` (remote endpoint — no local GPU).
 - `cp .env.example .env` here to tweak ports / DB path.
 
 ## Subsets

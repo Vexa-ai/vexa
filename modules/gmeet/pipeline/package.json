@@ -1,0 +1,16 @@
+{
+  "name": "@vexa/gmeet-pipeline",
+  "version": "0.1.0",
+  "description": "Gmeet-lane pipeline: the channel-router driver. Per-channel named audio (gmeet-capture.v1) → per-channel sliding-window confirm via the shared engine → transcript.v1. Overlap-safe; name is bound at capture, no downstream namer.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc && cp -r src/hallucinations dist/hallucinations",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {
+    "@vexa/transcribe-whisper": "file:../../shared/whisper",
+    "@vexa/transcribe-buffer": "file:../../shared/buffer"
+  },
+  "devDependencies": { "@types/node": "^20.0.0", "typescript": "^5.4.0", "tsx": "^4.0.0" }
+}

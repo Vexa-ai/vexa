@@ -26,8 +26,8 @@
  */
 
 import * as fs from 'fs';
-import { ChunkedTranscriber, ChunkSegment } from '@vexa/pipeline';
-import { TranscriptionClient } from '@vexa/pipeline';
+import { ChunkedTranscriber, ChunkSegment } from '@vexa/mixed-pipeline';
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
 
 const SAMPLE_RATE = 16000;
 const CHUNK = 4096;

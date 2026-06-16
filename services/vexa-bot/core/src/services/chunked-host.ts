@@ -17,7 +17,8 @@
  *    SAME segment ids under the new name.
  */
 
-import { ChunkedTranscriberCallbacks, ChunkSegment, TranscriptionClient } from '@vexa/pipeline';
+import { ChunkedTranscriberCallbacks, ChunkSegment } from '@vexa/mixed-pipeline';
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import { SegmentPublisher, TranscriptionSegment } from './segment-publisher';
 
 export interface ChunkedHostDeps {

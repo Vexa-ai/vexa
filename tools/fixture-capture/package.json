@@ -1,0 +1,23 @@
+{
+  "name": "@vexa/fixture-capture",
+  "version": "0.1.0",
+  "description": "Fixture-capture extension — capture.v1 from a meeting tab → recorder. Self-contained; depends only on the capture brick + contract.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vexa/gmeet-capture": "file:../../modules/gmeet/capture",
+    "@vexa/capture-codec": "file:../../modules/shared/capture-codec",
+    "@vexa/mixed-capture-core": "file:../../modules/mixed/capture/core",
+    "@vexa/zoom-capture": "file:../../modules/mixed/capture/zoom",
+    "@vexa/teams-capture": "file:../../modules/mixed/capture/teams"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.8.2"
+  }
+}

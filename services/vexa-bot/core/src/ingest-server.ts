@@ -27,11 +27,11 @@
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { log } from './utils';
-import { SpeakerStreamManager } from '@vexa/pipeline';
-import { TranscriptionClient } from '@vexa/pipeline';
+import { SpeakerStreamManager } from '@vexa/gmeet-pipeline';
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import { SegmentPublisher, TranscriptionSegment } from './services/segment-publisher';
-import { isHallucination } from '@vexa/pipeline';
-import { ChunkedTranscriber } from '@vexa/pipeline';
+import { isHallucination } from '@vexa/gmeet-pipeline';
+import { ChunkedTranscriber } from '@vexa/mixed-pipeline';
 import { createChunkedHost } from './services/chunked-host';
 import { decodeAudioFrame, decodeEvent, openRetentionWriter, StreamCaptureWriter } from '@vexa/recorder'; // capture.v1 wire codec + rolling fixture retention
 

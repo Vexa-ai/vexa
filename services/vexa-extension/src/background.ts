@@ -12,7 +12,7 @@
  */
 
 import { detectMeeting, detectMediaTab, MeetingRef } from './meeting';
-import { encodeAudioFrame, encodeEvent } from '../../../contracts/capture/v1/schema';
+import { encodeAudioFrame, encodeEvent } from '@vexa/capture-codec';
 
 interface SessionState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';

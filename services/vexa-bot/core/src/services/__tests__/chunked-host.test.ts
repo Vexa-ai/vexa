@@ -6,7 +6,7 @@
  */
 
 import { createChunkedHost, mapChunkSegments } from '../chunked-host';
-import { ChunkSegment } from '@vexa/pipeline';
+import { ChunkSegment } from '@vexa/mixed-pipeline';
 
 let passed = 0;
 let failed = 0;

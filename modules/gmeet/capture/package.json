@@ -1,0 +1,12 @@
+{
+  "name": "@vexa/gmeet-capture",
+  "version": "0.1.0",
+  "description": "Google Meet capture (browser): per-channel audio + glow-based active-speaker, binding the speaker name onto each channel at the source → gmeet-capture.v1 (named per-channel frames).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "devDependencies": { "typescript": "^5.4.0", "tsx": "^4.0.0" }
+}

@@ -8,10 +8,9 @@
 
 const fs = require('fs');
 const path = require('path');
-// Capture bricks (consumed, not local browser/): resolve each built dist.
-// gmeet stays in @vexa/capture; the mixed lane was carved out to @vexa/{zoom,teams}-capture.
-const CK = path.dirname(require.resolve('@vexa/capture/package.json'));
-const CK_DIST = path.join(CK, 'dist');
+// Capture bricks (consumed, not local browser/): resolve each built dist. Each lane
+// is its own module now: gmeet → @vexa/gmeet-capture, mixed → @vexa/{zoom,teams}-capture.
+const CK_DIST = path.join(path.dirname(require.resolve('@vexa/gmeet-capture/package.json')), 'dist');
 const ZK_DIST = path.join(path.dirname(require.resolve('@vexa/zoom-capture/package.json')), 'dist');
 const TK_DIST = path.join(path.dirname(require.resolve('@vexa/teams-capture/package.json')), 'dist');
 

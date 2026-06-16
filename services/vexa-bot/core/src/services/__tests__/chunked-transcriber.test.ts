@@ -5,8 +5,8 @@
  * Run: npx tsx src/services/__tests__/chunked-transcriber.test.ts
  */
 
-import { ChunkedTranscriber, ChunkSegment } from '@vexa/pipeline';
-import { TranscriptionResult } from '@vexa/pipeline';
+import { ChunkedTranscriber, ChunkSegment } from '@vexa/mixed-pipeline';
+import { TranscriptionResult } from '@vexa/transcribe-whisper';
 
 const SR = 16000;
 let passed = 0;

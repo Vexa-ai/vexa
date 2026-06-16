@@ -1,6 +1,6 @@
 export { AudioService, type AudioProcessorConfig, type AudioProcessor, type SpeakerStreamHandle } from './audio';
 export { RecordingService } from '@vexa/recording';
-export { TranscriptionClient, type TranscriptionClientConfig, type TranscriptionResult } from '@vexa/pipeline';
+export { TranscriptionClient, type TranscriptionClientConfig, type TranscriptionResult } from '@vexa/transcribe-whisper';
 export { SegmentPublisher, type SegmentPublisherConfig } from './segment-publisher';
-export { SpeakerStreamManager, type SpeakerStreamManagerConfig } from '@vexa/pipeline';
+export { SpeakerStreamManager, type SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 export { resolveSpeakerName, clearSpeakerNameCache, invalidateSpeakerName, reportTrackAudio } from './speaker-identity';

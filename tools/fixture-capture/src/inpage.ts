@@ -16,13 +16,9 @@
  * (src/browser/gmeet-speakers.ts) — one algorithm for bot and extension.
  */
 
-import {
-  createGmeetSpeakers, GmeetSpeakers,
-  createGmeetCapture, GmeetCapture, GmeetChannelBinder,
-  createPcmCaptureNode,
-} from '@vexa/gmeet-capture';
+import { createGmeetSpeakers, GmeetSpeakers, createGmeetCapture, GmeetCapture } from '@vexa/gmeet-capture';
 import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
-import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '@vexa/teams-capture';
+import { createTeamsSpeakers, TeamsSpeakers } from '@vexa/teams-capture';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -31,18 +27,8 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
   // reloaded and re-injected), stop it completely before installing this one —
   // otherwise both capture and post duplicate audio/diag messages.
   try { (window as any).__vexaInpageTeardown?.(); } catch { /* old instance gone */ }
-
-  // Capture epoch — the SINGLE source of truth for "who owns capture in this
-  // page". Teardown-pointer chaining alone is racy (the pointer is overwritten by
-  // each new instance and START can reach several instances), which let multiple
-  // instances capture the same <audio> elements → 2-3× duplicated PCM (the
-  // captured-audio stutter). Each instance claims a higher epoch on load; any
-  // instance that is no longer the newest refuses to post audio and self-stops.
-  const myEpoch = (((window as any).__vexaCaptureEpoch as number) || 0) + 1;
-  (window as any).__vexaCaptureEpoch = myEpoch;
-  const isCurrent = () => (window as any).__vexaCaptureEpoch === myEpoch;
-
   const TARGET_SAMPLE_RATE = 16000;
+  const BUFFER_SIZE = 4096;
 
   let running = false;
   let countTimer: number | null = null;
@@ -50,10 +36,6 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
 
   // Per-participant Meet capture — SHARED vexa-bot module (one codebase).
   let gmeetCapture: GmeetCapture | null = null;
-  // Per-channel glow correlation — names each channel from the tile whose glow ONSET
-  // aligns with that channel's audio onset (NOT the global glow, which leaks across
-  // channels). Fed glow edges from gmeet-speakers; queried per audio frame below.
-  const channelBinder = new GmeetChannelBinder();
 
   // Reserved high index for the local microphone ("You"), kept clear of the
   // 0-based participant element indices.
@@ -73,7 +55,6 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
   let zoomSpeakers: ZoomSpeakers | null = null;
   let teamsSpeakers: TeamsSpeakers | null = null;
   let zoomChat: ZoomChat | null = null;
-  let teamsChat: TeamsChat | null = null;
 
   function isTeamsHost(): boolean {
     return location.hostname.endsWith('teams.live.com')
@@ -86,19 +67,13 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
       if (speakers) return;
       const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
         ?.getAttribute('data-self-name')?.trim() || undefined;
-      // SoC: capture emits only "who's lit when" HINTS — the per-participant
-      // channel→name BINDING happens downstream (the cluster-vote binder). The
-      // audio stays multi-stream (per participant); names attach via these hints.
       speakers = createGmeetSpeakers({
         selfName,
         log: (m) => console.log(`${TAG} ${m}`),
-        onSpeaking: (name, isEnd) => {
-          channelBinder.recordGlow(name, isEnd, Date.now());   // feed the per-channel correlator
-          post('speaker_activity', { name, isEnd, kind: 'dom-active' });
-        },
+        onName: (index, name) => post('speakers', { speakers: { [String(index)]: name } }),
       });
       (window as any).__vexaGmeetSpeakers = speakers;
-      console.log(`${TAG} shared gmeet-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
+      console.log(`${TAG} shared gmeet-speakers attribution started (self="${selfName || 'unknown'}")`);
     } else if (location.hostname.endsWith('zoom.us')) {
       if (zoomSpeakers) return;
       const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
@@ -118,8 +93,8 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
       });
       (window as any).__vexaZoomSpeakers = zoomSpeakers;
       console.log(`${TAG} shared zoom-speakers attribution started (multi-channel, self="${selfName || 'unknown'}")`);
-      // Chat capture — each message becomes a capture.v1 `chat` event (rides the
-      // same stream as audio/hints). Chat panel must be open for messages to exist.
+      // Chat capture — emit each message as a capture.v1 `chat` event. Independent
+      // of audio/attribution; the chat panel must be open for messages to exist.
       if (!zoomChat) {
         zoomChat = createZoomChat({
           log: (m) => console.log(`${TAG} [zoom-chat] ${m}`),
@@ -140,19 +115,22 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
       });
       (window as any).__vexaTeamsSpeakers = teamsSpeakers;
       console.log(`${TAG} shared msteams-speakers attribution started (blue squares)`);
-      // Chat capture — each message becomes a capture.v1 `chat` event (same as zoom).
-      if (!teamsChat) {
-        teamsChat = createTeamsChat({
-          log: (m) => console.log(`${TAG} [teams-chat] ${m}`),
-          onMessage: ({ sender, text }) => post('chat-message', { sender, text }),
-        });
-        (window as any).__vexaTeamsChat = teamsChat;
-      }
     }
   }
 
   function streamCount(): number {
     return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0);
+  }
+
+  // Placeholder label for a freshly-seen participant track until attribution
+  // locks a real name. Meet names its own tracks via gmeet-speakers, so skip
+  // there; Zoom/Teams tracks (injected by the WebRTC hook) start as "Speaker N".
+  const labeledTracks = new Set<number>();
+  function labelTrack(index: number): void {
+    if (index === MIC_INDEX || location.hostname.endsWith('meet.google.com')) return;
+    if (labeledTracks.has(index)) return;
+    labeledTracks.add(index);
+    post('speakers', { speakers: { [String(index)]: `Speaker ${index + 1}` } });
   }
 
   /**
@@ -166,16 +144,19 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
       const source = ctx.createMediaStreamSource(micStream);
-      // AudioWorklet (audio-thread) — the deprecated ScriptProcessor duplicated
-      // mic buffers under main-thread load (the captured-audio stutter).
-      const node = await createPcmCaptureNode(ctx, (data) => {
+      const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+      processor.onaudioprocess = (e: AudioProcessingEvent) => {
         if (!running) return;
+        const data = e.inputBuffer.getChannelData(0);
         let maxVal = 0;
-        for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
-        if (maxVal > 0.005 && isCurrent()) post('audio', { index: MIC_INDEX, pcm: Array.from(data) });
-      });
-      source.connect(node);
-      node.connect(ctx.destination);
+        for (let i = 0; i < data.length; i++) {
+          const a = Math.abs(data[i]);
+          if (a > maxVal) maxVal = a;
+        }
+        if (maxVal > 0.005) post('audio', { index: MIC_INDEX, pcm: Array.from(data) });
+      };
+      source.connect(processor);
+      processor.connect(ctx.destination);
       contexts.push(ctx);
       post('speakers', { speakers: { [MIC_INDEX]: 'You' } });
       console.log(`${TAG} microphone capture started ("You")`);
@@ -186,7 +167,7 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
   }
 
   async function start() {
-    if (running || !isCurrent()) return;   // a superseded instance never captures
+    if (running) return;
     running = true;
     console.log(`${TAG} starting capture`);
 
@@ -196,27 +177,24 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
     await startMic();
     post('capture-started', { streams: streamCount() });
 
-    // Per-participant in-page capture is GOOGLE MEET ONLY — Meet exposes native
-    // per-participant <audio> elements. Zoom AND Teams use the SAME mixed path:
-    // one diarized tab-audio channel (999) captured by the offscreen document.
-    // (Teams Web does expose per-participant WebRTC tracks, but we deliberately
-    // do NOT use them — Teams must follow Zoom's mixed path exactly.)
-    const isPerParticipant = location.hostname.endsWith('meet.google.com');
-    if (isPerParticipant) {
+    // Per-participant capture via the SHARED vexa-bot module — runs on ALL
+    // meeting platforms. Google Meet exposes native per-participant <audio>
+    // elements; Zoom/Teams get equivalent ones from the document_start WebRTC
+    // hook (each remote track mirrored into a hidden <audio>). So this captures
+    // MULTI-CHANNEL everywhere — no mixed tabCapture.
+    const isMeeting = location.hostname.endsWith('meet.google.com')
+      || location.hostname.endsWith('zoom.us')
+      || location.hostname.endsWith('teams.live.com')
+      || location.hostname.endsWith('teams.microsoft.com')
+      || location.hostname === 'teams.cloud.microsoft';
+    if (isMeeting) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
-        // Name this channel by PER-CHANNEL correlation: the tile whose glow ONSET
-        // aligned with this channel's audio onset (capture.v1 speakerName). NOT the
-        // global glow — that leaks one speaker's name onto every channel. undefined
-        // until correlated (UNKNOWN), never a guess.
         onAudio: (index, pcm) => {
-          if (!isCurrent()) return;
-          // Per-channel ENERGY↔GLOW correlation: this channel's name = the tile whose
-          // glow tracks its energy over a window (undefined until confident, never the
-          // global glow that leaks across channels).
-          let peak = 0; for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
-          const speakerName = channelBinder.nameForChannel(index, Date.now(), peak);
-          post('audio', { index, pcm: Array.from(pcm), speakerName });
+          speakers?.reportTrackAudio(index);       // Meet per-track voting
+          zoomSpeakers?.reportTrackAudio(index);   // Zoom per-track voting
+          labelTrack(index);                       // placeholder until a name locks
+          post('audio', { index, pcm: Array.from(pcm) });
         },
       });
       await gmeetCapture.start();
@@ -226,10 +204,7 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
     console.log(`${TAG} capture started with ${streamCount()} stream(s) (mic + participants)`);
 
     // Keep the panel's stream count live — the rescan discovers late joiners.
-    countTimer = window.setInterval(() => {
-      if (!isCurrent()) { stop(); return; }   // a newer instance took over — release capture
-      if (running) post('capture-started', { streams: streamCount() });
-    }, 5000);
+    countTimer = window.setInterval(() => { if (running) post('capture-started', { streams: streamCount() }); }, 5000);
   }
 
   function stop() {
@@ -239,9 +214,9 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
-    if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
+    labeledTracks.clear();
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }
     contexts.length = 0;
@@ -285,7 +260,7 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
       } catch (e: any) { return { error: String(e?.message || e) }; }
     })() : null;
     const gs = w.__vexaGmeetSpeakers ? (() => {
-      try { const st = w.__vexaGmeetSpeakers.getState(); return { speakingNow: st.speakingNow ?? null, tilesSeen: st.tiles?.length }; }
+      try { const st = w.__vexaGmeetSpeakers.getState(); return { locks: st.locks ?? st.locked ?? null, tilesSeen: st.tiles?.length }; }
       catch (e: any) { return { error: String(e?.message || e) }; }
     })() : null;
     return {
@@ -311,20 +286,27 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
         !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0).length,
       zoomSpeakers: zs,
       gmeetSpeakers: gs,
+      zoomChat: w.__vexaZoomChat ? (() => {
+        try { const st = w.__vexaZoomChat.getState(); return { matched: st.matchedContainer, seen: st.seen, candidates: st.candidates.filter((c: any) => c.count > 0), sample: st.sample, recent: st.recent.map((m: any) => ({ sender: m.sender, text: (m.text || '').length <= 60 ? m.text : scrub(m.text) })) }; }
+        catch (e: any) { return { error: String(e?.message || e) }; }
+      })() : null,
+      // Deep audio-architecture probe (audio-probe.ts, installed at document_start).
+      // This is what reveals where Zoom's audio actually lives.
+      probe: (() => {
+        const p = w.__vexaProbe;
+        if (!p) return null;
+        return {
+          audioContexts: p.audioContexts.map((c: any) => ({ state: c.state, sr: c.sampleRate, samples: c.samples, peak: Number(c.peak?.toFixed?.(4) ?? c.peak) })),
+          gum: p.gum, gdm: p.gdm,
+          worklets: p.worklets, wasm: p.wasmInstantiations,
+          msSources: p.msSources, msDestinations: p.msDestinations,
+          scriptProcessors: p.scriptProcessors, audioWorkletNodes: p.audioWorkletNodes,
+          pcAudioStats: p.pcAudioStats,
+        };
+      })(),
     };
   }
   const diagTimer = setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
-  // DIAGNOSTIC PROBE (opt-in: localStorage.vexaDomProbe='1'): dump the live
-  // audio↔tile co-location to confirm whether captured <audio> elements sit inside
-  // the named/glowing tiles (direct map) or a separate pool (timing required).
-  // Off by default — zero overhead in normal capture. Routed to the desktop.
-  const probeTimer = setInterval(() => {
-    try {
-      if (!localStorage.getItem('vexaDomProbe')) return;
-      const gs = (window as any).__vexaGmeetSpeakers;
-      if (gs && isCurrent()) post('dom_probe', { probe: gs.probeDom() });
-    } catch { /* */ }
-  }, 3000);
 
   // Attribution runs from page load (not capture start): diagnostics see the
   // DOM state immediately, and Zoom's temporal naming is live before/without
@@ -335,12 +317,10 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
   (window as any).__vexaInpageTeardown = () => {
     try { stop(); } catch { /* not running */ }
     if (diagTimer !== null) { clearInterval(diagTimer); }
-    clearInterval(probeTimer);
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
-    if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
     console.log(`${TAG} instance torn down (superseded)`);
   };
 
