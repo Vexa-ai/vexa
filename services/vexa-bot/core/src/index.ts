@@ -1272,7 +1272,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       serviceUrl: transcriptionServiceUrl,
       apiToken: botConfig.transcriptionServiceToken || process.env.TRANSCRIPTION_SERVICE_TOKEN,
       maxSpeechDurationSec: process.env.MAX_SPEECH_DURATION_SEC ? parseFloat(process.env.MAX_SPEECH_DURATION_SEC) : undefined,
-      minSilenceDurationMs: process.env.MIN_SILENCE_DURATION_MS ? parseInt(process.env.MIN_SILENCE_DURATION_MS) : 100,
+      minSilenceDurationMs: process.env.MIN_SILENCE_DURATION_MS ? parseInt(process.env.MIN_SILENCE_DURATION_MS) : undefined,
     });
     log('[PerSpeaker] TranscriptionClient created');
 
