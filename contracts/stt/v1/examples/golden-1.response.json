@@ -1,0 +1,22 @@
+{
+    "text": "Welcome to VEXA 0.11, modules, contracts, harnesses and fixtures.",
+    "language": "en",
+    "language_probability": 0.99951171875,
+    "duration": 5.9,
+    "segments": [
+        {
+            "id": 0,
+            "seek": 0,
+            "start": 0.0,
+            "end": 5.9,
+            "text": " Welcome to VEXA 0.11, modules, contracts, harnesses and fixtures.",
+            "tokens": [],
+            "temperature": 0.0,
+            "avg_logprob": -0.2780880494551225,
+            "compression_ratio": 0.9154929577464789,
+            "no_speech_prob": 0.0,
+            "audio_start": 0.0,
+            "audio_end": 5.9
+        }
+    ]
+}
