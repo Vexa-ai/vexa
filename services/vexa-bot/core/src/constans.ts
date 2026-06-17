@@ -53,18 +53,10 @@ const baseBrowserArgs = [...JOIN_BROWSER_ARGS];
  * - Teams UI: mic muted after join (join.ts)
  * - TTS: unmutes pactl + UI mic before speaking, re-mutes after
  */
-// CDP debug args — shared by EVERY browser launch (meeting + browser-session) so an
-// agent can attach over the gateway /b/{token}/cdp proxy to clear captcha/blocking
-// states. Chrome opens 9222 alongside Playwright's own --remote-debugging-pipe (the
-// pipe is NOT removed — removing it severs Playwright's connection and the bot dies on
-// launch). Chrome still binds 9222 on 127.0.0.1 only; the entrypoint socat relay
-// re-exposes it on 0.0.0.0:9223 for the gateway to reach across the docker network.
-export const CDP_DEBUG_ARGS = [
-  '--remote-debugging-port=9222',
-  '--remote-debugging-address=0.0.0.0',
-  '--remote-allow-origins=*',
-];
-
+// Persistent-context / interactive (VNC) browser args — getAuthenticatedBrowserArgs,
+// getBrowserSessionArgs, CDP_DEBUG_ARGS — now live in @vexa/remote-browser (the
+// browser-as-container brick, single source of truth). The MEETING args below stay
+// here: they are a bot concern, built on the join brick's JOIN_BROWSER_ARGS.
 export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
   const args = [...baseBrowserArgs];
   // Opt-in CDP exposure for the hot-debug loop. Inert unless BOT_DEBUG_CDP=true.
@@ -78,49 +70,5 @@ export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
   return args;
 }
 
-/**
- * Browser args for authenticated bot mode (persistent context with stored cookies).
- * Uses minimal, clean flags — aggressive flags like --disable-web-security and
- * --ignore-certificate-errors trigger Google's bot detection and cause "You can't
- * join this video call" blocks. Modeled after getBrowserSessionArgs().
- */
-export function getAuthenticatedBrowserArgs(): string[] {
-  return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-blink-features=AutomationControlled',
-    '--disable-infobars',
-    '--disable-gpu',
-    // Environment flags shared with the join brick (JOIN_BROWSER_ARGS) so the
-    // authenticated browser matches the meeting browser. NOT --incognito: this
-    // mode uses a persistent context with stored cookies, which incognito wipes.
-    '--disable-features=IsolateOrigins,site-per-process',
-    '--disable-site-isolation-trials',
-    '--in-process-gpu',
-    '--use-fake-ui-for-media-stream',
-    '--use-file-for-fake-video-capture=/dev/null',
-    '--disable-features=VizDisplayCompositor',
-    '--password-store=basic',
-  ];
-}
-
 // Default browser args
 export const browserArgs = getBrowserArgs(false);
-
-/**
- * Browser args for interactive browser session mode (VNC + CDP).
- * No incognito, no fake media — human interacts via VNC, agent via CDP.
- */
-export function getBrowserSessionArgs(): string[] {
-  return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-blink-features=AutomationControlled',
-    '--use-fake-ui-for-media-stream',
-    '--start-maximized',
-    '--window-size=1920,1080',
-    '--window-position=0,0',
-    ...CDP_DEBUG_ARGS,
-    '--password-store=basic',
-  ];
-}

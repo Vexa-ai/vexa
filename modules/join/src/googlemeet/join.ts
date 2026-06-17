@@ -168,7 +168,9 @@ export async function joinGoogleMeeting(
     // - "Ask to join" — cookies didn't load (fallback to anonymous)
     const joinNowSelector = 'button:has-text("Join now")';
     const switchHereSelector = 'button:has-text("Switch here")';
-    const askToJoinSelector = googleJoinButtonSelectors[0];
+    // Text-matched directly: googleJoinButtonSelectors[0] is :not([aria-label]) and the
+    // real "Ask to join" button carries an aria-label, so [0] never matches it here.
+    const askToJoinSelector = 'button:has-text("Ask to join")';
 
     try {
       // Race: wait for any join button
@@ -185,11 +187,12 @@ export async function joinGoogleMeeting(
         await clickHandle(joinButton.el!, "switch_here");
         log("Bot joined Google Meet as authenticated user (Switch here — same account already in call).");
       } else {
-        // Cookies didn't work — fall back to anonymous join
-        log("WARNING: Authenticated mode but 'Ask to join' found instead of 'Join now'. Cookies may not be loaded.");
-        log("Falling back to anonymous-style join...");
-
-        // Fill name since we're in anonymous territory
+        // "Ask to join" in authenticated mode = the signed-in account isn't pre-admitted
+        // to THIS meeting (not host / same-org / invited), so it must knock — like an
+        // anonymous join but carrying the real account identity. (Also the path if cookies
+        // genuinely failed to load.) A signed-in account shows no name field; the fill
+        // below is a harmless safety for the cookies-failed case.
+        log("Authenticated account not pre-admitted — knocking via 'Ask to join'.");
         try {
           const nameFieldSelector = googleNameInputSelectors[0];
           const nameField = await page.$(nameFieldSelector);
@@ -198,11 +201,11 @@ export async function joinGoogleMeeting(
             log(`Filled bot name: ${botName}`);
           }
         } catch (e) {
-          log("No name field to fill.");
+          // no name field for a signed-in account — expected
         }
 
         await clickHandle(joinButton.el!, "ask_to_join");
-        log(`Bot joined Google Meet via fallback (Ask to join).`);
+        log("Bot requested to join Google Meet (Ask to join) as the signed-in account.");
       }
     } catch (e) {
       // No button found — take diagnostic screenshot and fail

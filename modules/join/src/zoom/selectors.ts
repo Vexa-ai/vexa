@@ -66,6 +66,24 @@ export const zoomRemovalTexts = [
   'host ended the meeting',
 ];
 
+// ---- Post-Join anti-bot wall (RTMS-required) ----
+// Some meetings/accounts serve a hard anti-bot wall AFTER the bot clicks Join
+// (the admission phase), instead of the waiting room or the meeting:
+//   "We detected you may be a bot. Automated bots aren't allowed to join this
+//    meeting or webinar and must use Zoom RTMS. … Sign in to join" + reCAPTCHA.
+// Verified identical from datacenter AND residential IPs on the same meeting →
+// it is the meeting/account anti-bot setting, NOT IP reputation. The path the
+// wall points to (Zoom RTMS) is a server-side API, not a browser join, so the
+// honest outcome is to detect this, fail fast (reason: zoom_requires_rtms), and
+// route to RTMS — NOT to attempt evasion. Case-insensitive substring match.
+export const zoomBotBlockTexts = [
+  "automated bots aren't allowed",
+  "automated bots aren’t allowed", // curly apostrophe variant Zoom renders
+  "must use Zoom RTMS",
+  "detected you may be a bot",
+  "sign in to join",
+];
+
 // ---- Leave dialog (after clicking Leave button) ----
 // Verified from live DOM: the "Leave Meeting" button has class leave-meeting-options__btn--danger
 // aria-label is empty so text-based selectors are unreliable; use the CSS class directly

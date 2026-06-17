@@ -42,17 +42,42 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
   stealth.enabledEvasions.delete("user-agent-override");
   chromium.use(stealth);
 
-  const browser = await chromium.launch({
-    headless: false, // visible window on macOS; renders to Xvfb :99 on Linux
-    // Canonical join launch args (single source of truth) so this harness
-    // reproduces the vexa-bot image's browser byte-for-byte — no drift.
-    args: [
-      ...getJoinBrowserArgs(),
-      "--remote-debugging-port=9222", // CDP for the agent to attach
-    ],
-  });
-  const context = await browser.newContext({ permissions: ["camera", "microphone"], viewport: null });
-  const page = await context.newPage();
+  // AUTH_PROFILE set → authenticated join: a persistent context with a saved login
+  // profile (produced by @vexa/remote-browser `make login`). The brick skips guest
+  // name-entry and joins as the signed-in account. Args mirror getAuthenticatedBrowserArgs
+  // (inlined — the join debug image has no remote-browser dep). NOT incognito: it would
+  // wipe the stored cookies that make the join authenticated.
+  const AUTH_PROFILE = process.env.AUTH_PROFILE;
+  let page: any;
+  let cleanup: () => Promise<void>;
+  if (AUTH_PROFILE) {
+    console.log(`\n>>> [debug-join] AUTHENTICATED mode — persistent profile: ${AUTH_PROFILE}\n`);
+    const authArgs = [
+      "--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled",
+      "--disable-infobars", "--disable-gpu", "--disable-features=IsolateOrigins,site-per-process",
+      "--disable-site-isolation-trials", "--in-process-gpu", "--use-fake-ui-for-media-stream",
+      "--use-file-for-fake-video-capture=/dev/null", "--disable-features=VizDisplayCompositor",
+      "--password-store=basic", "--remote-debugging-port=9222",
+    ];
+    const ctx = await chromium.launchPersistentContext(AUTH_PROFILE, {
+      headless: false, ignoreDefaultArgs: ["--enable-automation"], args: authArgs, viewport: null,
+    });
+    page = ctx.pages()[0] ?? await ctx.newPage();
+    cleanup = () => ctx.close();
+  } else {
+    const browser = await chromium.launch({
+      headless: false, // visible window on macOS; renders to Xvfb :99 on Linux
+      // Canonical join launch args (single source of truth) so this harness
+      // reproduces the vexa-bot image's browser byte-for-byte — no drift.
+      args: [
+        ...getJoinBrowserArgs(),
+        "--remote-debugging-port=9222", // CDP for the agent to attach
+      ],
+    });
+    const context = await browser.newContext({ permissions: ["camera", "microphone"], viewport: null });
+    page = await context.newPage();
+    cleanup = () => browser.close();
+  }
 
   // join.ts hardcodes /app/storage/screenshots (Docker). Redirect locally.
   const dir = process.cwd() + "/debug-screenshots";
@@ -77,6 +102,7 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
     result = await joinMeeting(page, {
       meetingUrl: url,
       botName: "Vexa Join Layer (isolated)",
+      authenticated: !!AUTH_PROFILE,
       debug: true,
       hooks: {
         onState: (s, d) => console.log(`\n>>> [JOIN-STATE] ${s}${d ? " — " + JSON.stringify(d) : ""}\n`),
@@ -103,5 +129,5 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
       console.error(`Graceful leave failed: ${err?.message || err}`);
     }
   }
-  await browser.close();
+  await cleanup();
 })();

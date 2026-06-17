@@ -97,6 +97,13 @@ export async function joinZoomMeeting(
 ): Promise<void> {
   if (!page) throw new Error('[Zoom Web] Page is required for web-based Zoom join');
 
+  // Authenticated mode: the caller hands in a persistent context already signed in to
+  // Zoom (see @vexa/remote-browser). The signed-in web client uses the account identity
+  // instead of a guest name, so we skip the guest name-entry flow below. THE EXPERIMENT:
+  // does being a real signed-in user clear the "sign in to join / automated bots aren't
+  // allowed / use Zoom RTMS" wall that blocks anonymous web joins?
+  const authenticated = !!botConfig.authenticated;
+
   const rawUrl = meetingUrl;
   const webClientUrl = buildZoomWebClientUrl(rawUrl);
   log(`[Zoom Web] Navigating to web client: ${webClientUrl}`);
@@ -128,9 +135,12 @@ export async function joinZoomMeeting(
       ];
       return signInIndicators.some(s => body.includes(s));
     }).catch(() => false);
-    if (authRequired) {
+    if (authRequired && !authenticated) {
       log('[Zoom Web] Sign-in page detected — meeting requires authenticated users');
       throw new Error('[Zoom Web] auth_required: meeting host has restricted entry to authenticated Zoom users; bot cannot join without a Zoom account session');
+    }
+    if (authRequired && authenticated) {
+      log('[Zoom Web] Authenticated mode: sign-in text present, proceeding (the persistent context should already carry a Zoom session)');
     }
 
     if (!isError) break; // Pre-join page loaded
@@ -210,15 +220,22 @@ export async function joinZoomMeeting(
   // means buildZoomWebClientUrl returned the URL as-is, which it only does
   // for white-label hosts) so the user has time to assist. Canonical zoom.us
   // URLs keep the tight 30s timeout — there's no portal layer to navigate.
-  const isWhiteLabel = rawUrl === webClientUrl && !rawUrl.includes('/wc/');
-  const nameInputTimeoutMs = isWhiteLabel ? 5 * 60 * 1000 : 30_000;
-  if (isWhiteLabel) {
-    log(`[Zoom Web] White-label URL — waiting up to 5 min for pre-join name input ` +
-        `(human can VNC in to click through any portal page).`);
+  if (authenticated) {
+    // Signed-in pre-join uses the account identity — there may be no guest name field,
+    // so don't block on it; just let the signed-in pre-join settle.
+    log('[Zoom Web] Authenticated mode — signed-in pre-join; not waiting on a guest name field');
+    await page.waitForTimeout(3000);
   } else {
-    log('[Zoom Web] Waiting for pre-join name input...');
+    const isWhiteLabel = rawUrl === webClientUrl && !rawUrl.includes('/wc/');
+    const nameInputTimeoutMs = isWhiteLabel ? 5 * 60 * 1000 : 30_000;
+    if (isWhiteLabel) {
+      log(`[Zoom Web] White-label URL — waiting up to 5 min for pre-join name input ` +
+          `(human can VNC in to click through any portal page).`);
+    } else {
+      log('[Zoom Web] Waiting for pre-join name input...');
+    }
+    await page.waitForSelector(zoomNameInputSelector, { timeout: nameInputTimeoutMs });
   }
-  await page.waitForSelector(zoomNameInputSelector, { timeout: nameInputTimeoutMs });
 
   // Some meetings show a passcode-entry pre-join page that includes a
   // passcode input ABOVE the name input. If a passcode field is visible
@@ -250,10 +267,28 @@ export async function joinZoomMeeting(
   //
   // Real keyboard events (focus + type) trigger Zoom's full input pipeline
   // including the validation that enables the Join button.
-  await page.locator(zoomNameInputSelector).first().click({ timeout: 5000 }).catch(() => {});
-  await page.locator(zoomNameInputSelector).first().fill('');
-  await page.keyboard.type(botName, { delay: 30 });
-  log(`[Zoom Web] Name typed: "${botName}"`);
+  if (authenticated) {
+    // Signed-in: keep the account identity. Leave any pre-filled name as-is; only type a
+    // fallback if the field is unexpectedly empty (so the Join button can still enable).
+    const nameField = page.locator(zoomNameInputSelector).first();
+    if (await nameField.isVisible({ timeout: 1500 }).catch(() => false)) {
+      const current = await nameField.inputValue().catch(() => '');
+      if (current) {
+        log(`[Zoom Web] Signed-in name pre-filled ("${current}") — using account identity`);
+      } else {
+        await nameField.click({ timeout: 5000 }).catch(() => {});
+        await page.keyboard.type(botName, { delay: 30 });
+        log(`[Zoom Web] Signed-in name field empty — typed fallback "${botName}"`);
+      }
+    } else {
+      log('[Zoom Web] No name field — signed-in client uses the account name directly');
+    }
+  } else {
+    await page.locator(zoomNameInputSelector).first().click({ timeout: 5000 }).catch(() => {});
+    await page.locator(zoomNameInputSelector).first().fill('');
+    await page.keyboard.type(botName, { delay: 30 });
+    log(`[Zoom Web] Name typed: "${botName}"`);
+  }
 
   // Wait for Zoom to enable the Join button. The CLASSIC web client gates
   // #joinBtn behind a Google reCAPTCHA ("I'm not a robot" + image challenge)

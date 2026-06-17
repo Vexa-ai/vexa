@@ -1,5 +1,5 @@
 import { Page } from "playwright";
-import { log, callAwaitingAdmissionCallback } from "../_host";
+import { log, callAwaitingAdmissionCallback, callBlockedCallback } from "../_host";
 import { BotConfig } from "../_host";
 import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
 import {
@@ -7,7 +7,42 @@ import {
   zoomMeetingAppSelector,
   zoomWaitingRoomTexts,
   zoomRemovalTexts,
+  zoomBotBlockTexts,
 } from "./selectors";
+
+/**
+ * Detect Zoom's post-Join anti-bot wall.
+ *
+ * After the bot clicks Join, meetings/accounts with the RTMS-required anti-bot
+ * setting serve an admission-phase wall instead of the waiting room or the
+ * meeting:
+ *   "We detected you may be a bot. Automated bots aren't allowed to join this
+ *    meeting or webinar and must use Zoom RTMS. … Sign in to join" + reCAPTCHA.
+ *
+ * This is NOT IP reputation — verified identical from a datacenter IP and a
+ * residential IP on the same meeting, so it is keyed to the meeting/account.
+ * The sanctioned path the wall itself points to is Zoom RTMS (Realtime Media
+ * Streams), which is a server-side API, not a browser join — so there is no
+ * honest in-browser way past it. We detect it and FAIL FAST with a structured
+ * reason (`zoom_requires_rtms`) so the host stops polling "waiting for
+ * admission" forever and can route to RTMS.
+ *
+ * Case-insensitive substring scan of the live page text against the known wall
+ * phrases (selectors.ts: zoomBotBlockTexts). Returns the matched phrase, or null.
+ */
+async function detectZoomBotBlock(page: Page): Promise<string | null> {
+  try {
+    return await page.evaluate((phrases: string[]) => {
+      const body = (document.body?.innerText || '').toLowerCase();
+      for (const p of phrases) {
+        if (body.includes(p.toLowerCase())) return p;
+      }
+      return null;
+    }, zoomBotBlockTexts);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Check if the bot is confirmed inside the meeting.
@@ -132,6 +167,20 @@ export async function waitForZoomMeetingAdmission(
     return true;
   }
 
+  // Terminal anti-bot wall: Zoom serves the "must use Zoom RTMS" / "automated
+  // bots aren't allowed" wall in the admission phase for RTMS-required
+  // meetings/accounts. It renders immediately after Join, so check before the
+  // poll loop and fail fast — otherwise the bot loops "waiting for admission"
+  // forever (the wall never becomes the waiting room or the meeting).
+  {
+    const wall = await detectZoomBotBlock(page);
+    if (wall) {
+      log(`[Zoom Web] 🚫 Anti-bot wall detected (matched: "${wall}") — this meeting requires Zoom RTMS; bots cannot join via the web client. Failing fast.`);
+      await callBlockedCallback(botConfig, 'zoom_requires_rtms', { matched: wall, phase: 'pre_admission_poll' });
+      throw new Error('[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins and requires Zoom RTMS (Realtime Media Streams); route to the RTMS path');
+    }
+  }
+
   // Check if in waiting room
   const inWaiting = await isInWaitingRoom(page);
   if (inWaiting) {
@@ -155,6 +204,16 @@ export async function waitForZoomMeetingAdmission(
     if (await isRejectedOrEnded(page)) {
       log('[Zoom Web] Bot was rejected or meeting ended during admission wait');
       throw new Error('Bot was rejected from the Zoom meeting or meeting ended');
+    }
+
+    // Anti-bot wall can also appear a beat after Join (the reCAPTCHA frame and
+    // wall text stream in just after the page transition). Re-scan each poll so
+    // we transition to terminal `blocked` instead of accruing unknown-state time.
+    const wall = await detectZoomBotBlock(page);
+    if (wall) {
+      log(`[Zoom Web] 🚫 Anti-bot wall detected during poll (matched: "${wall}") — requires Zoom RTMS. Failing fast.`);
+      await callBlockedCallback(botConfig, 'zoom_requires_rtms', { matched: wall, phase: 'admission_poll' });
+      throw new Error('[Zoom Web] zoom_requires_rtms: meeting/account blocks automated browser joins and requires Zoom RTMS (Realtime Media Streams); route to the RTMS path');
     }
 
     if (await isAdmitted(page)) {

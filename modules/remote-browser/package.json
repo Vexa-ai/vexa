@@ -1,0 +1,23 @@
+{
+  "name": "@vexa/remote-browser",
+  "version": "0.1.0",
+  "description": "Remote browser as container: persistent-context launch (VNC/CDP), browser-session persistence + retrieval (cookies/localStorage), and logged-in validation — so the join layer can join authenticated.",
+  "type": "commonjs",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js",
+    "login": "tsx scripts/login.ts",
+    "validate": "tsx scripts/validate.ts"
+  },
+  "dependencies": {
+    "playwright": "1.56.0",
+    "playwright-extra": "^4.3.6"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2",
+    "@types/node": "^22.13.13"
+  }
+}

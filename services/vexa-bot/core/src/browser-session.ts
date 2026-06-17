@@ -1,13 +1,12 @@
-import { chromium } from 'playwright-extra';
 import { createClient, RedisClientType } from 'redis';
 import { execSync } from 'child_process';
 import { mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { getBrowserSessionArgs } from './constans';
+import { getBrowserSessionArgs, launchPersistentBrowser } from '@vexa/remote-browser';
 import { BrowserSessionConfig } from './types';
 import { TTSPlaybackService } from './services/tts-playback';
 import { MeetingChatService } from './services/chat';
-import { s3Sync, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR, BROWSER_CACHE_EXCLUDES } from './s3-sync';
+import { s3Sync, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR, BROWSER_CACHE_EXCLUDES } from '@vexa/remote-browser';
 
 const WORKSPACE_DIR = '/workspace';
 
@@ -130,17 +129,8 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
   // Clean stale locks
   cleanStaleLocks();
 
-  // Launch persistent browser context
-  const context = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
-    headless: false,
-    ignoreDefaultArgs: ['--enable-automation'],
-    args: getBrowserSessionArgs(),
-    viewport: null,
-  });
-
-  // Get or create a page
-  const pages = context.pages();
-  const page = pages.length > 0 ? pages[0] : await context.newPage();
+  // Launch persistent browser context (one true launch — @vexa/remote-browser)
+  const { context, page } = await launchPersistentBrowser({ dataDir: BROWSER_DATA_DIR, args: getBrowserSessionArgs() });
   await page.goto('about:blank');
 
   console.log('[browser-session] Browser session ready. VNC :6080, CDP :9222');

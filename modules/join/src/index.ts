@@ -43,6 +43,9 @@ export interface JoinOptions {
   botName?: string;
   /** force "humanized" (X11) or "synthetic" (CDP) input; default: humanized for gmeet */
   uiInteractionMode?: "humanized" | "synthetic";
+  /** join as a signed-in user — caller hands in a persistent, logged-in context
+   *  (e.g. from @vexa/remote-browser); the brick skips guest name-entry. */
+  authenticated?: boolean;
   waitingRoomTimeoutMs?: number;
   /** turn on the live debug view (VNC pixels on Linux, CDP control anywhere) */
   debug?: boolean;
@@ -73,6 +76,7 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
   const botConfig: BotConfig = {
     platform,
     botName: opts.botName ?? "Vexa Join Layer",
+    authenticated: opts.authenticated,
     uiInteractionMode: opts.uiInteractionMode,
     automaticLeave: { waitingRoomTimeout: opts.waitingRoomTimeoutMs ?? 180_000 },
   };

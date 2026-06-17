@@ -9,7 +9,7 @@ import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
 import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { getZoomSpeakerEvents } from "./platforms/zoom/strategies/recording";
-import { browserArgs, getBrowserArgs, getAuthenticatedBrowserArgs, userAgent } from "./constans";
+import { browserArgs, getBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { RecordingService , setLoggers as setRecordingLoggers } from '@vexa/recording';
 import { VideoRecordingService } from '@vexa/recording';
@@ -22,7 +22,7 @@ import { createClient, RedisClientType } from 'redis';
 import { Page, Browser, BrowserContext } from 'playwright-core';
 import { execSync } from 'child_process';
 import * as net from 'net';
-import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR } from './s3-sync';
+import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR, getAuthenticatedBrowserArgs, launchPersistentBrowser } from '@vexa/remote-browser';
 // HTTP imports removed - using unified callback service instead
 
 // Per-speaker transcription pipeline
@@ -33,7 +33,6 @@ import { SpeakerStreamManager } from '@vexa/gmeet-pipeline';
 import { ChunkedTranscriber } from '@vexa/mixed-pipeline';
 import { createChunkedHost } from './services/chunked-host';
 import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken, reportTrackAudio, getLockedMapping } from './services/speaker-identity';
-import { SileroVAD } from '@vexa/pipeline';
 import { isHallucination } from '@vexa/gmeet-pipeline';
 import { SpeakerStreamHandle } from './services/audio';
 import { RawCaptureService, uploadCaptureToS3, StreamCaptureWriter, openRetentionWriter, MeetingEvent } from '@vexa/recorder';
@@ -171,18 +170,12 @@ export async function disposeMixedChunkedPipeline(): Promise<void> {
 }
 
 let speakerManager: SpeakerStreamManager | null = null;
-let vadModel: SileroVAD | null = null;
-/** Per-speaker VAD states for streaming mode (GMeet only) */
-import type { VadSpeakerState } from '@vexa/pipeline';
-const vadSpeakerStates: Map<string, VadSpeakerState> = new Map();
 /** Whitelist of allowed language codes — if set, segments in other languages are discarded */
 let allowedLanguages: string[] | null = null;
 /** Per-speaker last detected language — used in onSegmentConfirmed where Whisper result isn't available */
 const lastDetectedLanguage: Map<string, string> = new Map();
-/** Pipeline telemetry counters — module-level so entry gate VAD can update them */
+/** Pipeline telemetry counters — module-level for the pipeline to update. */
 let pipelineTelemetry: {
-  vadChunksProcessed: number;
-  vadChunksRejected: number;
   [key: string]: any;
 } | null = null;
 let pipelineTelemetryInterval: ReturnType<typeof setInterval> | null = null;
@@ -1343,14 +1336,6 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       log('[PerSpeaker] ChunkedTranscriber ready (mixed-channel core)');
     }
 
-    try {
-      vadModel = await SileroVAD.create();
-      log('[PerSpeaker] Silero VAD loaded');
-    } catch (err: any) {
-      log(`[PerSpeaker] VAD not available (${err.message}) — will send all audio`);
-      vadModel = null;
-    }
-
     // Raw capture: dump per-speaker WAVs + events for offline replay
     // Full telemetry for the TRAINING CORPUS (private S3, operator-governed by ToS):
     // always-on in prod via TELEMETRY_FULL=on; RAW_CAPTURE=true is the dev debug alias.
@@ -1377,8 +1362,6 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
       idleTimeoutSec: 15,      // 15s idle → emit + reset
     });
-    // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
-    // SpeakerStreamManager no longer does VAD — it only receives real speech.
 
     // onSegmentReady: transcribe the buffer (called every submitInterval)
     // Does NOT publish — just transcribes and feeds result back for confirmation.
@@ -1394,15 +1377,13 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       totalConfirmLatencyMs: 0,  // time from buffer start to confirmation
       reconfirmations: 0,        // times the same text was confirmed again (wasted work)
       whisperSegmentCounts: [] as number[],  // how many segments Whisper returns per call
-      vadChunksProcessed: 0,     // total audio chunks checked by entry VAD
-      vadChunksRejected: 0,      // chunks rejected as silence by entry VAD
     };
-    pipelineTelemetry = telemetry; // expose to module-level for entry gate VAD
+    pipelineTelemetry = telemetry; // expose to module-level for the pipeline
     pipelineTelemetryInterval = setInterval(() => {
       const avgWhisper = telemetry.whisperCalls > 0 ? (telemetry.totalWhisperMs / telemetry.whisperCalls).toFixed(0) : 'n/a';
       const avgConfirmLatency = telemetry.segmentsConfirmed > 0 ? (telemetry.totalConfirmLatencyMs / telemetry.segmentsConfirmed / 1000).toFixed(1) : 'n/a';
       const avgWhisperSegs = telemetry.whisperSegmentCounts.length > 0 ? (telemetry.whisperSegmentCounts.reduce((a,b) => a+b, 0) / telemetry.whisperSegmentCounts.length).toFixed(1) : 'n/a';
-      log(`[📊 TELEMETRY] whisper=${telemetry.whisperCalls} (${avgWhisper}ms avg, ${telemetry.whisperFailures} failed) | drafts=${telemetry.draftsEmitted} confirmed=${telemetry.segmentsConfirmed} discarded=${telemetry.segmentsDiscarded} | confirm_latency=${avgConfirmLatency}s | whisper_segs/call=${avgWhisperSegs} | reconfirm=${telemetry.reconfirmations} | vad=${telemetry.vadChunksProcessed}/${telemetry.vadChunksRejected} (checked/rejected)`);
+      log(`[📊 TELEMETRY] whisper=${telemetry.whisperCalls} (${avgWhisper}ms avg, ${telemetry.whisperFailures} failed) | drafts=${telemetry.draftsEmitted} confirmed=${telemetry.segmentsConfirmed} discarded=${telemetry.segmentsDiscarded} | confirm_latency=${avgConfirmLatency}s | whisper_segs/call=${avgWhisperSegs} | reconfirm=${telemetry.reconfirmations}`);
       // Flush arrays to prevent unbounded growth during long meetings
       telemetry.whisperSegmentCounts = [];
     }, 30000);
@@ -1747,27 +1728,8 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
     }
   }
 
-  // Per-speaker streaming VAD gate (GMeet only).
-  // Filters ambient noise BEFORE feedAudio() so lastAudioTimestamp only updates
-  // on real speech. This lets the 15s idle timeout fire correctly when a speaker
-  // stops talking but their mic still emits low-level room noise.
-  const isGMeet = currentPlatform === 'google_meet';
-  if (isGMeet && vadModel) {
-    // Get or create per-speaker VAD state
-    if (!vadSpeakerStates.has(speakerId)) {
-      vadSpeakerStates.set(speakerId, vadModel.createSpeakerState());
-    }
-    const vadState = vadSpeakerStates.get(speakerId)!;
-    const isSpeech = await vadModel.isSpeechStreaming(audioData, vadState);
-    if (pipelineTelemetry) pipelineTelemetry.vadChunksProcessed++;
-
-    if (!isSpeech) {
-      if (pipelineTelemetry) pipelineTelemetry.vadChunksRejected++;
-      return; // Skip feedAudio — ambient noise, don't update lastAudioTimestamp
-    }
-  }
-
-  // Track audio arrival for silence monitoring (only reached for real speech)
+  // Track audio arrival for silence monitoring. Capture silence-gates upstream
+  // (gmeet-capture silenceThreshold), so only non-silent chunks reach here.
   const prevMs = speakerLastAudioMs.get(speakerId);
   const nowMs = Date.now();
   if (prevMs && (nowMs - prevMs) > 30000) {
@@ -2355,13 +2317,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     syncBrowserDataFromS3(botConfig);
     cleanStaleLocks(BROWSER_DATA_DIR);
 
-    const authArgs = getAuthenticatedBrowserArgs();
-    const context: BrowserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
-      headless: false,
-      ignoreDefaultArgs: ['--enable-automation'],
-      args: authArgs,
-      viewport: null,
-    });
+    const { context, page: authPage } = await launchPersistentBrowser({ dataDir: BROWSER_DATA_DIR, args: getAuthenticatedBrowserArgs() });
 
     log('[Bot] Authenticated persistent context launched');
 
@@ -2387,8 +2343,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       }
     }
 
-    const pages = context.pages();
-    page = pages.length > 0 ? pages[0] : await context.newPage();
+    page = authPage;
   }
   // Simple browser setup like simple-bot.js
   else if (botConfig.platform === "teams") {
