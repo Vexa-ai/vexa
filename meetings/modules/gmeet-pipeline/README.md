@@ -24,11 +24,15 @@ Front door: [`src/index.ts`](src/index.ts).
 pnpm --filter @vexa/gmeet-pipeline build
 pnpm --filter @vexa/gmeet-pipeline test
 ```
-Two goldens, both **offline** (no transcription-service):
-- `hallucination-filter.test.ts` — phrase-list + structural junk drop.
-- `pipeline-conformance.test.ts` — **the replay gate**: drive the pipeline with a
-  stub Whisper and validate every emitted segment against the **sealed**
-  `transcript.v1` schema (names carried, source/confidence correct, schema-valid).
+Three goldens:
+- `hallucination-filter.test.ts` — phrase-list + structural junk drop (offline).
+- `pipeline-conformance.test.ts` — the **conformance** gate: drive the pipeline with a
+  **stub** Whisper and validate every emitted segment against the **sealed**
+  `transcript.v1` schema (offline, deterministic).
+- `pipeline-realstt.live.test.ts` — the **real-STT** gate: feed known TTS clips through
+  the spine + the live transcription service, assert glow-attributed, schema-valid
+  `transcript.v1`. Skips without `VEXA_TX_KEY` + `EVAL_CACHE` (same skip-where-no-backend
+  pattern as the runtime docker/k8s tests; turbo passes those env through).
 
-The live path (real Meet audio → real STT, eval-scored) is L4 (3.5). Covered by
-`gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.
+The remaining live path (real Meet *page* audio → capture → this spine) is the bot's job (3.3+).
+Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.
