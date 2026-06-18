@@ -10,6 +10,9 @@ hand-written schemas.
 ## Decision
 - **JSON Schema (Draft 2020-12) is the single source of truth** for every published contract, with
   golden vectors as the spec (P8) and ajv validating goldens ≡ schema (`gate:schema`).
+- **A contract describes data, not transport auth.** Tokens/credentials are a transport-layer concern
+  (authenticate the producer/connection), **never a field in a data contract** (e.g. no `token` in
+  `transcript.v1`).
 - **No codegen pipeline, no schema lint, no IDL (TypeSpec) now.** Consumers validate against the
   schema *at runtime* (ajv in TS, pydantic/jsonschema in Python — zero codegen). Typed bindings are
   hand-written or generated per-consumer only when a real consumer needs them (Stage 3/4).

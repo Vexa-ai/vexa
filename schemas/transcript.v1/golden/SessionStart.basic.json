@@ -1,0 +1,7 @@
+{
+  "type": "session_start",
+  "session_uid": "sess-uid",
+  "meeting_id": "42",
+  "platform": "google_meet",
+  "start_time": "2026-06-18T10:00:00.000Z"
+}

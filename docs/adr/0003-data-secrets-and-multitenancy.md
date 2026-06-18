@@ -24,9 +24,11 @@ single-user DB now.
 - The agent gets **scoped, brokered, audited** secret access — never raw keys in its workspace or logs.
 
 **Deferred-seam approach (P16).**
-- Build none of the above now. Install **ports with passthrough defaults** (crypto, secrets, audit,
-  `canAccess`, tenant-resolution) and **thread `tenantId`/`ownerId`/`visibility` into every contract**
-  (optional, defaulted). Real adapters + the additive `access_grants` table land later — drop-in.
+- Build none of the above now, and **don't pre-thread fields either**: `tenant_id`/`owner_id`/`visibility`
+  are added **additively** to the relevant contracts when sharing lands (optional fields are
+  back-compatible — no refactor is avoided by adding them early, so they'd just be unused noise). The seam
+  that exists from day one is the **`canAccess` port** (default: owner-only) + tenant-resolution; real
+  adapters + the additive `access_grants` table land later — drop-in.
 
 ## Consequences
 - The DB is untouched now; multitenancy + sharing are additive future builds, enabled by the contract
