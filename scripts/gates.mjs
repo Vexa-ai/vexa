@@ -37,15 +37,19 @@ function gateReadme() {
   return true;
 }
 
-// gate:exports (P6) — every workspace package locks its front door with "exports"
+// gate:exports (P6) — every LIBRARY package locks its front door with "exports".
+// "private": true packages are not published libraries (CLI tools, harnesses, apps) → exempt.
 function gateExports() {
-  const pkgs = packageDirs();
-  const bad = pkgs.filter((d) => {
+  const libs = packageDirs().filter((d) => {
+    try { return !JSON.parse(readFileSync(join(d, "package.json"), "utf8")).private; }
+    catch { return true; }   // unreadable → still check it (will be flagged below)
+  });
+  const bad = libs.filter((d) => {
     try { return !JSON.parse(readFileSync(join(d, "package.json"), "utf8")).exports; }
     catch { return true; }
   });
-  if (bad.length) return fail(bad.map((d) => `package without "exports": ${rel(d)}`));
-  console.log(`  ✓ gate:exports — ${pkgs.length} package(s) lock their front door`);
+  if (bad.length) return fail(bad.map((d) => `library package without "exports": ${rel(d)}`));
+  console.log(`  ✓ gate:exports — ${libs.length} library package(s) lock their front door`);
   return true;
 }
 

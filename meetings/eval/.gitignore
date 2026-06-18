@@ -1,0 +1,6 @@
+# Secrets + ground truth + fixtures NEVER live in the repo (real transcripts are sensitive).
+# Live values are in ~/vexa-test-rig/secrets.env; clip pools in ~/vexa-test-rig/cache.
+secrets.env
+cache/
+truth*.jsonl
+*.log
