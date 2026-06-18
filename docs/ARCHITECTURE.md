@@ -54,6 +54,10 @@ microservices, carved where a real force requires it (runtime, scale, data, ephe
 | **P10** | **Default to a module; carve a service only when a force requires it** (independent scale, different runtime, separate team, hard fault isolation). | distribution is a tax — pay it on purpose, not by reflex | Modular Monolith (Brown) | review |
 | **P11** | **Mechanism, not policy.** The platform owns *mechanism* (`runtime`, contracts, the workspace primitive); a *specific* entity schema, integration, or a customer's workspace is **config at the edge — never a platform domain.** | a sales CRM schema and a bank's control catalog are both just schemas; freeze one into the platform and it fits no one else | mechanism-not-policy (microkernel tradition); Open/Closed | review + structure |
 | **P12** | **Every folder self-documents.** A directory at any level carries a `README.md` stating its one concern, its public surface (the `index`/contract it exposes, or the children it groups), and what it may depend on. Trivial leaves get a one-liner — the rule is *existence*, not length. | a modular tree must be navigable; the README is the front-door *doc* beside the front-door *code* (P6) | self-documenting systems; the `modules/README` symptom→brick router | `gate:readme` |
+| **P13** | **Language minimalism.** Add a language only when an ecosystem forces it (browser→TS, ML→Python); the control plane's language is a deliberate choice. Align every language boundary with a service+contract boundary — never mix languages within a module. | each language multiplies the schema surface | mechanism-not-policy; P10 for languages | review · ADR-0001 |
+| **P14** | **Config is a validated contract, delivered by env.** App vars are `VEXA_*`; structured config travels as one JSON env var validated against a `*.v1` schema; secrets are a class (`*_TOKEN`/`_SECRET`/`_KEY`) — never logged, committed, or in goldens; validate at boot, fail fast. | env is where config discipline usually leaks | 12-Factor; schema-first | `.env.example` · ADR-0002 |
+| **P15** | **User data & secrets are protected by default.** Data → per-tenant envelope encryption (crypto-shreddable, BYOK); secrets → a vault behind a port; the agent gets scoped, brokered, audited access — never raw keys in its workspace or logs. | a meeting product's data is its liability | data-protection; least privilege | ports now, impl deferred · ADR-0003 |
+| **P16** | **Defer the implementation, not the seam.** A deferred capability is a port with a default (passthrough) adapter, wired through now; contracts carry the data the future impl needs (`tenantId`/`ownerId`/`visibility`). | "plug-and-play later" only works if the socket exists now | open/closed; ports & adapters | review · ADR-0003 |
 
 ---
 
@@ -107,10 +111,10 @@ Each gate enforces one or more principles. **An artifact "exists" only when it i
 | Gate | Checks | Enforces | Tool | Status |
 |---|---|---|---|---|
 | `gate:isolation` | every import is intra-module, builtin, or a declared dep | P2 | `check-isolation.js` | **have** |
-| `gate:graph` | module graph is acyclic + matches the allowed-edges spec | P3 | `dependency-cruiser` / `madge --circular` | **add** |
-| `gate:exports` | no consumer deep-imports past a module's `index` | P6 | `package.json` `"exports"` + import lint | **add** |
-| `gate:readme` | every non-ignored directory has a non-empty `README.md` | P12 | tree-walk over tracked dirs | **add** |
-| `gate:schema-conformance` | producer emits & consumer parses every golden, **on both TS and Python**; goldens ≡ schema | P4, P8 | `ajv` + `pydantic` + `generate.mjs` | **add** |
+| `gate:graph` | module graph is acyclic + matches the allowed-edges spec | P3 | `dependency-cruiser` | **have** (green-on-empty; bites as packages land) |
+| `gate:exports` | no consumer deep-imports past a module's `index` | P6 | `package.json` `"exports"` + scan | **have** (locks land per-package) |
+| `gate:readme` | every non-ignored directory has a non-empty `README.md` | P12 | tree-walk | **have** |
+| `gate:schema` | goldens ≡ schema (ajv) | P4, P8 | `generate.mjs` (ajv) | **have** (both-language conformance per-consumer in Stage 3/4) |
 | `gate:contract-version` | a `.vN` schema changes back-compatibly, or the version bumps | P4 | schema diff | **add** |
 | `gate:unit` | per-module tests pass (the L1–L2 pyramid) | P8 | `npm test` per package | **have** |
 | `gate:e2e` | offline lane/wire integration (L3) | P8 | desktop/bot e2e | **have** |
