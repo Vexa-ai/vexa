@@ -78,8 +78,14 @@ function gateSchema() {
   const dir = join(ROOT, "schemas");
   if (!existsSync(dir)) { console.log("  ✓ gate:schema — no schemas/ (green-on-empty)"); return true; }
   const versions = readdirSync(dir).filter((n) => /\.v\d+$/.test(n) && statSync(join(dir, n)).isDirectory());
-  // TODO(Stage 1): validate goldens ≡ schema + TS/Py codegen. Presence-only for now.
-  console.log(`  ✓ gate:schema — ${versions.length} schema version(s) (conformance wired in Stage 1)`);
+  let checked = 0;
+  for (const v of versions) {
+    const gen = join(dir, v, "generate.mjs");
+    if (!existsSync(gen)) continue;
+    try { execSync(`node ${JSON.stringify(gen)} --check`, { stdio: "pipe" }); checked++; }
+    catch (e) { return fail([`schema ${v}:\n${(e.stdout || e.stderr || e).toString()}`]); }
+  }
+  console.log(`  ✓ gate:schema — ${checked} schema(s) conform (goldens ≡ schema)`);
   return true;
 }
 
