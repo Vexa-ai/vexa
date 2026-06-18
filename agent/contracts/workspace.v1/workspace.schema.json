@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/workspace.v1",
+  "title": "workspace.v1",
+  "description": "A workspace is a USER git repo (the agent's durable memory) — data, not platform code. vexa owns ONLY the init template (the repo layout, see README) + this BASE entity-frontmatter convention. Customers extend the frontmatter per entity type (P11: the entity schema is config, not platform). Not a wire payload.",
+  "$defs": {
+    "EntityFrontmatter": {
+      "description": "The typed YAML frontmatter atop a markdown entity (kg/entities/<type>/<slug>.md). Extensible — customers add fields per entity type.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "title"],
+      "properties": {
+        "type": { "type": "string", "description": "entity type, e.g. contact | company | meeting" },
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "created": { "type": "string", "format": "date-time" },
+        "updated": { "type": "string", "format": "date-time" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "aliases": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
