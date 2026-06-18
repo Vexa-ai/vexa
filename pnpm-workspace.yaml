@@ -15,3 +15,7 @@ packages:
   - "sdks/*"
   - "schemas/*"
   - "tools/*"
+# Build scripts pnpm may run (pnpm ≥10 blocks postinstall by default). esbuild
+# ships the native binary our TS test runner (tsx) needs.
+allowBuilds:
+  esbuild: true

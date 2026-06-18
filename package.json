@@ -16,6 +16,7 @@
     "gate:graph": "node scripts/gates.mjs graph",
     "gate:schema": "node scripts/gates.mjs schema",
     "gate:python": "node scripts/gates.mjs python",
+    "gate:node": "node scripts/gates.mjs node",
     "gates": "node scripts/gates.mjs all"
   },
   "devDependencies": {
