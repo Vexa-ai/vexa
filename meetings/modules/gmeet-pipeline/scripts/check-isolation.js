@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // gate:isolation (P2) — every import must stay inside the package: intra-package,
-// a Node builtin, or a DECLARED dep. @vexa/transcribe-whisper is the stt.v1 egress;
-// it uses only Node/Web globals (fetch, Buffer, AbortController) — no external dep,
-// no brick internals, no monolith back-import.
+// a Node builtin, or a DECLARED dep. @vexa/gmeet-pipeline may pull the shared engine
+// (@vexa/transcribe-{buffer,whisper}) + declared devDeps (ajv for the conformance
+// golden) — never another brick's internals, never the monolith.
 // ESM (the package is "type":"module"); the gate runs `node scripts/check-isolation.js`.
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, dirname } from "node:path";

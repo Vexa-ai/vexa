@@ -25,9 +25,10 @@ const violations = [];
       for (const m of src.matchAll(/from\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
         const spec = m[1] || m[2];
         if (spec.startsWith(".")) continue;                 // intra-package
-        const scoped = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
-        if (builtins.has(spec) || builtins.has(scoped)) continue;
-        if (deps.has(spec) || deps.has(scoped)) continue;
+        const bare = spec.startsWith("node:") ? spec.slice(5) : spec;   // node:fs ≡ fs
+        const scoped = bare.startsWith("@") ? bare.split("/").slice(0, 2).join("/") : bare.split("/")[0];
+        if (builtins.has(bare) || builtins.has(scoped)) continue;       // Node builtin (± node: prefix)
+        if (deps.has(spec) || deps.has(bare) || deps.has(scoped)) continue;  // declared dep
         violations.push(`${relative(SRC, p)} → ${spec}`);
       }
     }

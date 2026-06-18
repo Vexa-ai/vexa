@@ -13,6 +13,6 @@ The transcript spine, in dependency order:
 | [buffer](buffer/) | LocalAgreement-N confirmation core (pure) | — |
 | [whisper](whisper/) | `stt.v1` egress (PCM → Whisper segments) | — |
 | _gmeet-capture_ | Google Meet per-channel audio + glow name | page → `gmeet-capture.v1` |
-| _gmeet-pipeline_ | channel-routed transcription | `gmeet-capture.v1` → `transcript.v1` |
+| [gmeet-pipeline](gmeet-pipeline/) | channel-routed transcription → transcript.v1 | `gmeet-capture.v1` → `transcript.v1` |
 
 _Filled in brick-by-brick as each lands gate-green (Stage 3)._

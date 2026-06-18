@@ -1,0 +1,13 @@
+# Portuguese hallucination phrases (exact, deduplicated)
+# Updated: 2025-08-31
+
+ e aí
+ E aí
+ É isso aí.
+ É isso aí, galera!
+ Então, me lembre-se, me lembre-se, me lembre-se.
+ Obrigado.
+ Obrigada.
+ Eu não sei o que é isso.
+ Eu não sei o que você está falando.
+ Eu não sei o que você está falando, mas eu não sei o que você está falando.
