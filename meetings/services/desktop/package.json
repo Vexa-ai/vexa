@@ -1,0 +1,28 @@
+{
+  "name": "@vexa/desktop",
+  "version": "0.1.0",
+  "description": "The meetings all-in-one host (gmeet subset): capture.v1 ingest WS → gmeet-pipeline → real STT → gateway /transcripts. One process, no Docker/Postgres/Redis. The bricks the cloud splits across services, composed as one deployable.",
+  "private": true,
+  "type": "module",
+  "main": "dist/desktop.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/desktop.ts",
+    "test": "tsx src/desktop-e2e.live.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {
+    "@vexa/capture-codec": "workspace:*",
+    "@vexa/gmeet-pipeline": "workspace:*",
+    "@vexa/transcribe-whisper": "workspace:*",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

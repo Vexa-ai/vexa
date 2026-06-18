@@ -85,6 +85,40 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  meetings/services/desktop:
+    dependencies:
+      '@vexa/capture-codec':
+        specifier: workspace:*
+        version: link:../../modules/capture-codec
+      '@vexa/gmeet-pipeline':
+        specifier: workspace:*
+        version: link:../../modules/gmeet-pipeline
+      '@vexa/transcribe-whisper':
+        specifier: workspace:*
+        version: link:../../modules/whisper
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      ajv:
+        specifier: ^8.17.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.22.4
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.1':
@@ -275,6 +309,9 @@ packages:
 
   '@types/node@20.19.43':
     resolution: {integrity: sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   acorn-jsx-walk@2.0.0:
     resolution: {integrity: sha512-uuo6iJj4D4ygkdzd6jPtcxs8vZgDX9YFIkqczGImoypX2fQ4dVImmu3UzA4ynixCIMTrEOWW+95M2HuBaCEOVA==}
@@ -512,6 +549,18 @@ packages:
     engines: {node: ^18||>=20}
     hasBin: true
 
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
 snapshots:
 
   '@esbuild/aix-ppc64@0.28.1':
@@ -613,6 +662,10 @@ snapshots:
   '@types/node@20.19.43':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 20.19.43
 
   acorn-jsx-walk@2.0.0: {}
 
@@ -850,3 +903,5 @@ snapshots:
   undici-types@6.21.0: {}
 
   watskeburt@4.2.3: {}
+
+  ws@8.21.0: {}
