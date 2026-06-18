@@ -10,6 +10,7 @@ jobs:
         with: { version: 11 }
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: pnpm }
+      - uses: astral-sh/setup-uv@v5
       - run: pnpm install --frozen-lockfile
       # the compliance bar — each gate is its own step so a failure is unambiguous
       - run: pnpm gate:readme
@@ -17,6 +18,7 @@ jobs:
       - run: pnpm gate:exports
       - run: pnpm gate:graph
       - run: pnpm gate:schema
+      - run: pnpm gate:python
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test

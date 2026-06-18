@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { execSync } from "node:child_process";
 
 const ROOT = process.cwd();
-const SKIP = new Set(["node_modules", "dist", ".turbo"]);
+const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__"]);
 const skippable = (name) => name.startsWith(".") || SKIP.has(name);
 const rel = (p) => p.slice(ROOT.length + 1) || ".";
 const fail = (msgs) => { for (const m of msgs) console.error("  ✗ " + m); return false; };
@@ -87,7 +87,19 @@ function gateSchema() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema };
+// gate:python — pytest in every Python package (a dir with pyproject.toml + tests/)
+function gatePython() {
+  const pkgs = walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
+  if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
+  for (const d of pkgs) {
+    try { execSync("uv run pytest -q", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`pytest ${rel(d)}:\n${(e.stdout || e.stderr || e).toString()}`]); }
+  }
+  console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, python: gatePython };
 const which = process.argv[2] || "all";
 const run = which === "all" ? Object.keys(GATES) : [which];
 if (run.some((g) => !GATES[g])) { console.error(`unknown gate: ${which}`); process.exit(2); }

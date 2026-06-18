@@ -1,0 +1,13 @@
+[project]
+name = "vexa-runtime"
+version = "0.12.0"
+description = "The runtime kernel — spawns/executes workloads (implements runtime.v1)."
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2", "jsonschema>=4", "pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
