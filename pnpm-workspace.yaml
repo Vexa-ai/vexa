@@ -1,0 +1,17 @@
+# Workspace packages. Globs match dirs that have a package.json; empty dirs are ignored
+# (so this is green-on-empty and fills in as domains are populated, contract-first).
+packages:
+  - "runtime"
+  - "gateway"
+  - "meetings/services/*"
+  - "meetings/modules/*"
+  - "agent/services/*"
+  - "agent/modules/*"
+  - "identity/services/*"
+  - "identity/modules/*"
+  - "integrations/in/*"
+  - "integrations/out/*"
+  - "clients/*"
+  - "sdks/*"
+  - "schemas/*"
+  - "tools/*"

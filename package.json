@@ -1,0 +1,25 @@
+{
+  "name": "vexa",
+  "version": "0.12.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "gate:readme": "node scripts/gates.mjs readme",
+    "gate:isolation": "node scripts/gates.mjs isolation",
+    "gate:exports": "node scripts/gates.mjs exports",
+    "gate:graph": "node scripts/gates.mjs graph",
+    "gate:schema": "node scripts/gates.mjs schema",
+    "gates": "node scripts/gates.mjs all"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "dependency-cruiser": "^16.0.0",
+    "typescript": "^5.6.0"
+  }
+}
