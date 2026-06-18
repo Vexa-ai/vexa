@@ -75,17 +75,15 @@ function gateGraph() {
 
 // gate:schema (P4/P8) — schemas/*.v1 goldens conform on both languages (real in Stage 1)
 function gateSchema() {
-  const dir = join(ROOT, "schemas");
-  if (!existsSync(dir)) { console.log("  ✓ gate:schema — no schemas/ (green-on-empty)"); return true; }
-  const versions = readdirSync(dir).filter((n) => /\.v\d+$/.test(n) && statSync(join(dir, n)).isDirectory());
-  let checked = 0;
-  for (const v of versions) {
-    const gen = join(dir, v, "generate.mjs");
-    if (!existsSync(gen)) continue;
-    try { execSync(`node ${JSON.stringify(gen)} --check`, { stdio: "pipe" }); checked++; }
-    catch (e) { return fail([`schema ${v}:\n${(e.stdout || e.stderr || e).toString()}`]); }
+  const contracts = walkDirs().filter(
+    (d) => /(^|\/)contracts\/[^/]+\.v\d+$/.test(rel(d).replace(/\\/g, "/")) && existsSync(join(d, "generate.mjs"))
+  );
+  if (!contracts.length) { console.log("  ✓ gate:schema — no contracts yet (green-on-empty)"); return true; }
+  for (const d of contracts) {
+    try { execSync(`node ${JSON.stringify(join(d, "generate.mjs"))} --check`, { stdio: "pipe" }); }
+    catch (e) { return fail([`schema ${rel(d)}:\n${(e.stdout || e.stderr || e).toString()}`]); }
   }
-  console.log(`  ✓ gate:schema — ${checked} schema(s) conform (goldens ≡ schema)`);
+  console.log(`  ✓ gate:schema — ${contracts.length} contract(s) conform (goldens ≡ schema)`);
   return true;
 }
 

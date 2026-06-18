@@ -30,9 +30,9 @@ microservices, carved where a real force requires it (runtime, scale, data, ephe
 | **Contract** | the *only* sanctioned coupling between two parties | ports (in-process) + schemas (at boundaries) | Design by Contract (Meyer); Published Language (DDD) |
 | **Port** | an interface the core depends on — a "hole" an adapter fills | `JoinDriver`, `Pipeline`, `TranscriptSink` | Hexagonal / Ports & Adapters (Cockburn) |
 | **Adapter** | binds a port to a real transport or external brick | `join-vexa`, `transcript-redis`, `lifecycle-http` | Hexagonal; Anti-Corruption Layer (DDD) |
-| **Published schema** | a *language-neutral* contract at a boundary | `schemas/*.v1` (JSON Schema / OpenAPI + golden vectors) | schema-first / consumer-driven contract testing |
+| **Published schema** | a *language-neutral* contract at a boundary | `contracts/*.v1` (JSON Schema / OpenAPI + golden vectors) | schema-first / consumer-driven contract testing |
 | **Kernel (runtime)** | the domain-agnostic execution substrate everything sits on | `runtime/` (spawn/execute, now or scheduled; mounts the workspace) | platform substrate |
-| **Workspace** | a *user-owned git repo* — durable memory the agent reads/writes; **data, not platform code** | the user's repo; template = `schemas/workspace.v1`; mount = a `runtime` capability | git-as-database; mechanism-not-policy |
+| **Workspace** | a *user-owned git repo* — durable memory the agent reads/writes; **data, not platform code** | the user's repo; template = `agent/contracts/workspace.v1`; mount = a `runtime` capability | git-as-database; mechanism-not-policy |
 | **Composition root** | the one place wiring happens; the only place adapters meet the core | a service's `index.ts` / `main` | DI composition root (Seemann) |
 | **Worker** | an ephemeral, stateless service spawned on demand and disposed | `bot` (per meeting), `agent` (per run) | 12-Factor (disposability) |
 
@@ -65,41 +65,47 @@ microservices, carved where a real force requires it (runtime, scale, data, ephe
 
 ```
 vexa/
-├── runtime/        ① KERNEL — spawn/execute workloads (now or scheduled) · Docker·K8s·process · mounts the workspace · domain-agnostic
-├── meetings/       ② CAPTURE — meeting-api · bot · transcription · tts · eval/ (quality vs ground truth) → transcript + events
+├── runtime/        ① KERNEL — spawn/execute workloads · Docker·K8s·process · domain-agnostic
+│   └── contracts/  runtime.v1
+├── meetings/       ② CAPTURE — meeting-api · bot · transcription · tts · eval/ → transcript + events
+│   └── contracts/  transcript.v1 · lifecycle.v1 · acts.v1 · invocation.v1
 ├── agent/          ③ EXECUTION — agent-api · sandboxed worker (scoped identity + a mounted workspace)
-├── identity/       access · accounts · tokens · audit — authN/authZ, schema-agnostic
+│   └── contracts/  workspace.v1
+├── identity/       access · accounts · tokens · audit — authN/authZ   (+ rest-api · webhook contracts when built)
 ├── gateway/        the edge — auth · routing · WS fan-out
 ├── integrations/   out/ (FINOS adapters, on the agent emit port) · in/ (calendar → scheduler)   [email/github deferred]
 ├── clients/        dashboard · extension · desktop · telegram · mcp
-├── schemas/        runtime.v1 · transcript.v1 · lifecycle.v1 · acts.v1 · invocation.v1 · workspace.v1 · rest-api · webhook
 ├── sdks/           vexa-client · vexa-cli · transcript-rendering
 ├── tools/ · deploy/ · docs/
 ├── package.json · pnpm-workspace.yaml · turbo.json    ← workspace root
 └── .github/workflows/gates.yml
-# a workspace is a USER git repo (data, not in this tree); its template is schemas/workspace.v1, its mount is a runtime capability.
-# deferred (NOT platform domains): crm (an app — one entity schema over a workspace, see P11) · retrieval (a vector+KG service)
+# Contracts NEST with their owner domain (no top-level schemas/). Language-neutrality is the FORMAT
+# (JSON Schema, read by path), not the location — so each domain stays self-contained and liftable.
+# A workspace is a USER git repo (data, not in this tree); template = agent/contracts/workspace.v1.
+# deferred (NOT platform domains): crm (an app over a workspace, P11) · retrieval (a vector+KG service)
 ```
 
 **Dependency rules** (the `gate:graph` spec — acyclic):
 
 ```
-runtime        → schemas                 (implements runtime.v1; nothing else)
-meetings       → runtime, schemas
-agent          → runtime, schemas
-identity       → schemas
-gateway        → HTTP only (imports no internals)
-integrations   → agent (out/), runtime (in/calendar → scheduler), schemas
-clients, sdks  → schemas (+ sdks)
+A domain's INTERNALS (services/, modules/) may import: its own code · another domain's contracts/
+(the published seam) · runtime/contracts. They may NOT import another domain's internals.
 
-★ meetings and agent never depend on each other. Both are runtime WORKLOADS (spawned identically
-  via runtime.v1); they are coupled only by schemas/transcript.v1 + the shared workspace repo.
+runtime internals  → (nothing above; owns runtime.v1)
+meetings internals → runtime/contracts · its own contracts
+agent internals    → runtime/contracts · meetings/contracts (consumes transcript.v1) · its own
+identity · gateway → contracts only (gateway routes over HTTP, imports no internals)
+clients · sdks     → contracts (+ sdks)
+
+★ meetings ⊥ agent at the INTERNALS level. agent MAY reference meetings/contracts/transcript.v1
+  (that IS the seam); it may never import meetings/services or meetings/modules.
 ```
 
-**Contract placement** (P4 applied): every boundary the bot crosses is TS↔Py (a TS bot in a Python
-control plane), so `runtime.v1`, `invocation.v1`, `lifecycle.v1`, `acts.v1`, `transcript.v1`,
-`workspace.v1` all live in `schemas/`. Only purely in-process, TS-to-TS brick contracts (e.g.
-`capture.v1` between the capture and pipeline bricks) nest as `.ts` inside `meetings/modules/`.
+**Contract placement** (P4 applied): a contract **nests with its owner domain** in `<domain>/contracts/`
+as JSON Schema — `runtime.v1`→runtime, `transcript/lifecycle/acts/invocation.v1`→meetings,
+`workspace.v1`→agent. Cross-language is satisfied by the *format* (JSON Schema, read by path), **not** a
+shared location — so domains stay self-contained and liftable. Purely in-process, TS-to-TS brick contracts
+(e.g. `capture.v1`) still nest as `.ts` inside the owning module's `src/contracts/`.
 
 ---
 
@@ -176,7 +182,7 @@ The sections above say *what the system is*. This says *how you change it*. Same
 step names its practice and ends at a gate.
 
 **The inner loop (one change):**
-1. **Contract first** — define/change the port or `schemas/*.v1` *before* the code; the contract is the unit of agreement. *(API-first / consumer-driven contracts)*
+1. **Contract first** — define/change the port or `contracts/*.v1` *before* the code; the contract is the unit of agreement. *(API-first / consumer-driven contracts)*
 2. **Implement behind a port** — transports are adapters; the core stays offline-provable. *(hexagonal)*
 3. **Prove down the pyramid** — L1 golden → L2 unit (mock ports) → L3 integration → L4 live + eval. Cheapest proof first. *(test pyramid)*
 4. **Green under the gates is "done"** — isolation · graph · exports · schema-conformance · unit. *Green or it didn't happen.* *(fitness functions)*
@@ -186,14 +192,14 @@ step names its practice and ends at a gate.
 
 | Rule | Why | Practice |
 |---|---|---|
-| **`lane:contract` PRs are human-gated** — a PR label that routes any change touching a `schemas/*.v1` to *required human review* (it can break consumers across languages); ordinary changes merge on green gates alone | published contracts have a wide blast radius | published-language governance; semver (add-optional = v1, breaking = bump to v2) |
+| **`lane:contract` PRs are human-gated** — a PR label that routes any change touching a `contracts/*.v1` to *required human review* (it can break consumers across languages); ordinary changes merge on green gates alone | published contracts have a wide blast radius | published-language governance; semver (add-optional = v1, breaking = bump to v2) |
 | **Fix in the brick that owns the symptom** | never mask a brick's bug in a consumer | symptom→brick router (`modules/README`) |
 | **Reproduce with no live meeting before you fix** | the brick's own logs are a claim, not proof | brick debug discipline |
 | **Record decisions as an ADR** — *Architecture Decision Record*: a short, dated, numbered `docs/adr/NNNN.md` capturing **one** decision = context · the decision · the trade-off accepted | the durable "why," so a boundary isn't relitigated later | Nygard ADRs |
 | **Big work is staged with per-stage validation gates** | each stage is specific and ends at a *runnable* proof; never advance on red | staged migration |
 
 **The brick lifecycle (how a module is born):** scaffold (one template, incl. its `README.md`: *what · surface · deps*) → define its contract (a nested
-port, or `schemas/*.v1` if it crosses a boundary) → implement behind the port → pass the gate suite →
+port, or `contracts/*.v1` if it crosses a boundary) → implement behind the port → pass the gate suite →
 *admit* it (consumers may now import its `index`). **A brick that isn't gate-green doesn't exist yet.**
 
 **Collapsed:** *Contract → pyramid → gates → small PR. Contracts (`lane:contract`) are human-gated. Fix
