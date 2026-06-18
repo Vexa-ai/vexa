@@ -7,14 +7,17 @@ import subprocess
 from typing import Optional
 
 from .backend import WorkloadHandle
+from .profiles import Runnable
 
 
 class ProcessBackend:
     name = "process"
 
-    def start(self, workload_id: str, command: list[str], env: dict[str, str]) -> WorkloadHandle:
+    def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
+        if not runnable.command:
+            raise ValueError("process backend requires a command")
         proc = subprocess.Popen(
-            command,
+            runnable.command,
             env={**os.environ, **env},
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -10,11 +10,12 @@ from typing import Callable, Optional
 from .backend import Backend, WorkloadHandle
 from .models import RuntimeEvent, RuntimeState, StopReason, WorkloadSpec, WorkloadStatus
 from .process_backend import ProcessBackend
+from .profiles import Runnable
 
-# The opaque-profile → command registry. Real profiles are config (per deployment); this default
-# carries only what tests/dev need. The contract (runtime.v1) never knows these commands.
-DEFAULT_PROFILES: dict[str, list[str]] = {
-    "test-sleep": ["sleep", "30"],
+# The opaque-profile → Runnable registry. Real profiles are config (per deployment); this default
+# carries only what tests/dev need. The contract (runtime.v1) never knows these.
+DEFAULT_PROFILES: dict[str, Runnable] = {
+    "test-sleep": Runnable(image="alpine", command=["sleep", "30"]),
 }
 
 
@@ -35,7 +36,7 @@ class Runtime:
     def __init__(
         self,
         backend: Optional[Backend] = None,
-        profiles: Optional[dict[str, list[str]]] = None,
+        profiles: Optional[dict] = None,
         on_event: Optional[Callable[[RuntimeEvent], None]] = None,
         grace_sec: float = 5.0,
     ) -> None:
@@ -52,9 +53,11 @@ class Runtime:
 
     # ── runtime.v1 operations ────────────────────────────────────────────────
     def create(self, spec: WorkloadSpec) -> WorkloadStatus:
-        command = self.profiles.get(spec.profile)
-        if command is None:
+        runnable = self.profiles.get(spec.profile)
+        if runnable is None:
             raise ValueError(f"unknown profile: {spec.profile!r}")
+        if isinstance(runnable, list):       # tolerate the bare-command form
+            runnable = Runnable(command=runnable)
         status = WorkloadStatus(
             workloadId=spec.workloadId, profile=spec.profile,
             state=RuntimeState.starting, backend=self.backend.name,
@@ -63,7 +66,7 @@ class Runtime:
         self._workloads[spec.workloadId] = entry
         self._emit(spec.workloadId, RuntimeState.starting)
         try:
-            entry.handle = self.backend.start(spec.workloadId, command, spec.env)
+            entry.handle = self.backend.start(spec.workloadId, runnable, spec.env)
         except Exception:
             status.state = RuntimeState.stopped
             status.stopReason = StopReason.start_failed

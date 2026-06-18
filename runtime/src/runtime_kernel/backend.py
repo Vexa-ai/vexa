@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Optional, Protocol
 
+from .profiles import Runnable
+
 
 class WorkloadHandle:
     """An opaque, backend-specific handle to a started workload."""
@@ -17,7 +19,7 @@ class WorkloadHandle:
 class Backend(Protocol):
     name: str
 
-    def start(self, workload_id: str, command: list[str], env: dict[str, str]) -> WorkloadHandle: ...
+    def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle: ...
     def exit_code(self, h: WorkloadHandle) -> Optional[int]:
         """None while running; the exit code once exited."""
         ...
