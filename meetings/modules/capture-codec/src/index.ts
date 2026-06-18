@@ -26,6 +26,43 @@ export interface MeetingEvent {
   detail?: Record<string, unknown>; // active-speaker → {hint:'dom-active'|'dom-outline'|'caption', isEnd, index}
 }
 
+// ── capture.v1 MODEL — this brick is the capture.v1 contract: model + serialization. ──
+
+/** One audio chunk crossing the capture→pipeline seam, on ONE channel. */
+export interface AudioChunk {
+  speakerId: string;          // derived per-channel id, e.g. "spk-3" (not on the wire)
+  speakerIndex: number;       // CHANNEL id — raw track index (999 = the mixed channel)
+  samples: Float32Array;      // 16 kHz mono PCM
+  ts: number;                 // CAPTURE epoch ms — set at the source, carried on the wire
+  speakerName?: string;       // name bound AT THE SOURCE when known (gmeet glow); empty ⇒ attribute downstream
+}
+
+/** Per-meeting capture meta — platform + the replay topology selecting the downstream strategy. */
+export interface CaptureMeta {
+  platform?: string;
+  nativeMeetingId?: string | number;
+  language?: string | null;
+  topology?: 'per-participant' | 'mixed';
+  sampleRate?: number;
+}
+
+/** The capture.v1 contract-in port: the pipeline consumes it; the recorder tees it. */
+export interface CaptureV1Sink {
+  audioChunk(chunk: AudioChunk): void;
+  event(ev: MeetingEvent): void;
+  finalize(): void | Promise<void>;
+}
+
+/** Compose sinks: emit each message to all (the recorder is just another sink). */
+export function tee(...sinks: (CaptureV1Sink | null | undefined)[]): CaptureV1Sink {
+  const live = sinks.filter(Boolean) as CaptureV1Sink[];
+  return {
+    audioChunk: (c) => { for (const s of live) try { s.audioChunk(c); } catch { /* */ } },
+    event: (e) => { for (const s of live) try { s.event(e); } catch { /* */ } },
+    finalize: async () => { for (const s of live) try { await s.finalize(); } catch { /* */ } },
+  };
+}
+
 const AUDIO_HEADER_BYTES = 12;     // no-name header: Int32 track (4) + Float64 ts (8)
 const NAMED_HEADER_BYTES = 16;     // + Int32 nameLen (4), when the name flag is set
 const NAME_FLAG = 0x80000000 | 0;  // high bit of track ⇒ trailing name present

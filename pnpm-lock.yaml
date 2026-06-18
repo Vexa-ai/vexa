@@ -48,6 +48,22 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  meetings/modules/gmeet-capture:
+    dependencies:
+      '@vexa/capture-codec':
+        specifier: workspace:*
+        version: link:../capture-codec
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      tsx:
+        specifier: ^4.19.0
+        version: 4.22.4
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
   meetings/modules/gmeet-pipeline:
     dependencies:
       '@vexa/transcribe-buffer':
