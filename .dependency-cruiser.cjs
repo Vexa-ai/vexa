@@ -36,6 +36,7 @@ module.exports = {
   ],
   options: {
     doNotFollow: { path: "node_modules" },
+    exclude: { path: "^clients/dashboard/" },   // vendored Next.js app — pending the principled refactor
     tsConfig: { fileName: "tsconfig.base.json" },
   },
 };

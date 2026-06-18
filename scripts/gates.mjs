@@ -19,7 +19,10 @@ function walkDirs(dir = ROOT, acc = []) {
     if (skippable(name)) continue;
     const p = join(dir, name);
     let s; try { s = statSync(p); } catch { continue; }
-    if (s.isDirectory()) { acc.push(p); walkDirs(p, acc); }
+    if (s.isDirectory()) {
+      if (existsSync(join(p, ".gateignore"))) continue;   // vendored subtree — opted out of the per-dir gates (refactor pending)
+      acc.push(p); walkDirs(p, acc);
+    }
   }
   return acc;
 }

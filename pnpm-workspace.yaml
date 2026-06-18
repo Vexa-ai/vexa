@@ -12,6 +12,7 @@ packages:
   - "integrations/in/*"
   - "integrations/out/*"
   - "clients/*"
+  - "!clients/dashboard"   # vendored full Next.js app (own npm); refactor pending
   - "sdks/*"
   - "schemas/*"
   - "tools/*"

@@ -1,0 +1,2 @@
+# vendored — pending the principled refactor (keep/prune map in the chat).
+# Skips the 0.12 per-dir gates; a full Next.js app, run with its own npm.
