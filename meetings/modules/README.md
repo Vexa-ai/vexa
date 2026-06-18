@@ -10,8 +10,8 @@ The transcript spine, in dependency order:
 | Brick | Concern | In → out |
 |---|---|---|
 | [capture-codec](capture-codec/) | the shared capture/recording wire codec (pure) | — |
-| _buffer_ | LocalAgreement confirmation core | _(soon)_ |
-| _whisper_ | `stt.v1` egress (PCM → Whisper segments) | _(soon)_ |
+| [buffer](buffer/) | LocalAgreement-N confirmation core (pure) | — |
+| [whisper](whisper/) | `stt.v1` egress (PCM → Whisper segments) | — |
 | _gmeet-capture_ | Google Meet per-channel audio + glow name | page → `gmeet-capture.v1` |
 | _gmeet-pipeline_ | channel-routed transcription | `gmeet-capture.v1` → `transcript.v1` |
 
