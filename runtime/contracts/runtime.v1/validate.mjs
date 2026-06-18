@@ -2,7 +2,7 @@
 /**
  * gate:schema (level 1) for runtime.v1 — validate every golden vector against runtime.schema.json.
  * The goldens are the spec (P8). Golden filenames start with the shape: spec- / status- / event-.
- * Run: node generate.mjs [--check]
+ * Run: node validate.mjs [--check]
  */
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";

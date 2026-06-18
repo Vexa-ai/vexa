@@ -6,8 +6,8 @@ control-plane callback. The kernel never interprets it (ADR-0001: separate chann
 ## States & legal transitions (the machine)
 ```
 joining            → awaiting_admission · active · failed
-awaiting_admission → active · needs_human_help · failed
-needs_human_help   → active · failed
+awaiting_admission → active · needs_help · failed
+needs_help   → active · failed
 active             → completed · failed
 completed          ∅   (terminal)
 failed             ∅   (terminal)

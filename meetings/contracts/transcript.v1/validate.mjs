@@ -3,7 +3,7 @@
  * gate:schema for transcript.v1 — validate every golden against transcript.schema.json.
  * Convention: a golden filename is `<Shape>.<case>.json`; the part before the first dot is the
  * `$def` it must conform to (e.g. `TranscriptSegment.glow.json` → #/$defs/TranscriptSegment).
- * Run: node generate.mjs [--check]
+ * Run: node validate.mjs [--check]
  */
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";

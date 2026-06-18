@@ -57,7 +57,7 @@ running → stopped directly when the workload exits on its own (reason=complete
 Defined in [`runtime.schema.json`](runtime.schema.json) (`$defs`): **WorkloadSpec** (create input),
 **WorkloadStatus** (the kernel's view), **RuntimeEvent** (the callback), plus the `RuntimeState` and
 `StopReason` enums. Conforming examples live in [`golden/`](golden/) and are validated by
-[`generate.mjs`](generate.mjs) (run by `gate:schema`).
+[`validate.mjs`](validate.mjs) (run by `gate:schema`).
 
 ## Status
 **`lane:contract` — under review.** This is the first published contract; the shape is up for your

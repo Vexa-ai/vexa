@@ -18,5 +18,5 @@ this schema (P4).
   `canAccess` port, built then.
 
 ## Conformance
-Goldens in [`golden/`](golden/) named `<Shape>.<case>.json`; `generate.mjs` (ajv) validates each against
+Goldens in [`golden/`](golden/) named `<Shape>.<case>.json`; `validate.mjs` (ajv) validates each against
 its `$def` (the filename prefix). Run by `gate:schema`.

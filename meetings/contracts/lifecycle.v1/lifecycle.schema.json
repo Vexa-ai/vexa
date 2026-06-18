@@ -5,7 +5,7 @@
   "description": "The bot's DOMAIN status (distinct from runtime.v1's container lifecycle). The bot emits these to its control-plane callback; the legal transitions are the state machine in the README.",
   "$defs": {
     "BotStatus": {
-      "enum": ["joining", "awaiting_admission", "active", "needs_human_help", "completed", "failed"]
+      "enum": ["joining", "awaiting_admission", "active", "needs_help", "completed", "failed"]
     },
     "CompletionReason": {
       "description": "Why a `completed` run ended (operator-facing).",

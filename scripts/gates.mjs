@@ -76,11 +76,11 @@ function gateGraph() {
 // gate:schema (P4/P8) — schemas/*.v1 goldens conform on both languages (real in Stage 1)
 function gateSchema() {
   const contracts = walkDirs().filter(
-    (d) => /(^|\/)contracts\/[^/]+\.v\d+$/.test(rel(d).replace(/\\/g, "/")) && existsSync(join(d, "generate.mjs"))
+    (d) => /(^|\/)contracts\/[^/]+\.v\d+$/.test(rel(d).replace(/\\/g, "/")) && existsSync(join(d, "validate.mjs"))
   );
   if (!contracts.length) { console.log("  ✓ gate:schema — no contracts yet (green-on-empty)"); return true; }
   for (const d of contracts) {
-    try { execSync(`node ${JSON.stringify(join(d, "generate.mjs"))} --check`, { stdio: "pipe" }); }
+    try { execSync(`node ${JSON.stringify(join(d, "validate.mjs"))} --check`, { stdio: "pipe" }); }
     catch (e) { return fail([`schema ${rel(d)}:\n${(e.stdout || e.stderr || e).toString()}`]); }
   }
   console.log(`  ✓ gate:schema — ${contracts.length} contract(s) conform (goldens ≡ schema)`);

@@ -120,7 +120,7 @@ Each gate enforces one or more principles. **An artifact "exists" only when it i
 | `gate:graph` | module graph is acyclic + matches the allowed-edges spec | P3 | `dependency-cruiser` | **have** (green-on-empty; bites as packages land) |
 | `gate:exports` | no consumer deep-imports past a module's `index` | P6 | `package.json` `"exports"` + scan | **have** (locks land per-package) |
 | `gate:readme` | every non-ignored directory has a non-empty `README.md` | P12 | tree-walk | **have** |
-| `gate:schema` | goldens ≡ schema (ajv) | P4, P8 | `generate.mjs` (ajv) | **have** (both-language conformance per-consumer in Stage 3/4) |
+| `gate:schema` | goldens ≡ schema (ajv) | P4, P8 | `validate.mjs` (ajv) | **have** (both-language conformance per-consumer in Stage 3/4) |
 | `gate:contract-version` | a `.vN` schema changes back-compatibly, or the version bumps | P4 | schema diff | **add** |
 | `gate:unit` | per-module tests pass (the L1–L2 pyramid) | P8 | `npm test` per package | **have** |
 | `gate:e2e` | offline lane/wire integration (L3) | P8 | desktop/bot e2e | **have** |

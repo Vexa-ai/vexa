@@ -22,6 +22,6 @@ hand-written schemas.
   contracts get both bindings when their consumers exist.
 
 ## Consequences
-- The contract tier stays minimal: `*.schema.json` + `golden/` + `generate.mjs` (ajv).
+- The contract tier stays minimal: `*.schema.json` + `golden/` + `validate.mjs` (ajv).
 - Revisit TypeSpec only if authoring verbosity becomes a real cost (many schemas).
 - P4's "both-language conformance" is realized per-consumer in Stage 3/4, not pre-built.
