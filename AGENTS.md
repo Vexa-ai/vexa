@@ -3,11 +3,13 @@
 This repo is governed by **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — the constitution (P1–P21,
 the gate suite, the development process). This file is the *front door*: how you run a session in it.
 
-## Plan first — two modes
-Never build without a current plan. **Planning mode** produces/revises the *full path* to the dev-release
-objectives ([`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) — the always-current, staged plan); **execution
-mode** runs it one stage at a time under the loop below. A surprise or changed objective → back to
-planning. You are always in exactly one mode (ADR-0015).
+## Plan first — two modes; goal vs objective
+Never build without a current plan. **Planning mode** produces/revises the *full path* to the **goal**
+([`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) — the always-current, staged plan); **execution mode** runs
+it one **objective** at a time under the loop below. **Goal** = destination (end of plan = the release);
+**objective** = the current *go*. You are always executing toward exactly one open objective; it closes
+**expected** (→ next objective, autonomously) or **unexpected** (→ stop, interpret *with the human*, as
+learning → codify, re-plan). Never drift; always in exactly one mode (ADR-0015/0017).
 
 ## How you work — the expectation–reality loop (§8)
 1. **Expect first.** State what the system *should* do and what "done" looks like for the current
@@ -26,10 +28,12 @@ planning. You are always in exactly one mode (ADR-0015).
    missing/violated principle — fix the instance, then close the gap as a principle + its gate. This is
    how the principle-set grows (P18→P21 were each born this way). See ADR-0014.
 
-6. **Report facts, not evaluations.** Every result ships with its **raw evidence** — the command + actual
-   output, the counts/names of what was checked, and **what was NOT** (fakes vs real, type-checked vs
-   executed, instrument vs human). "Done"/"validated"/"works" is *your* interpretation — state it
-   separately and labelled, downstream of the facts, so the human reaches their own (P21, ADR-0016).
+6. **State the objective, then report facts — not evaluations.** A report assesses the result-state
+   against the **current objective** (*result vs objective*), so name the objective first, then ship the
+   **raw evidence** — the command + actual output, counts/names of what was checked, and **what was NOT**
+   (fakes vs real, type-checked vs executed, instrument vs human). "Done"/"validated"/"works" is *your*
+   interpretation — state it separately and labelled, downstream of the facts, so the human assesses
+   result-vs-objective themselves (P21, ADR-0016/0017).
 
 > *Expect → instrument → (human: minimal, cross-validated) → stop on surprise → root-cause to a principle → codify. Report facts, not evaluations.*
 

@@ -6,7 +6,7 @@ Detailed rules live in [`ARCHITECTURE.md`](ARCHITECTURE.md); decisions in [`adr/
 
 _Last updated: 2026-06-20._
 
-## Milestone
+## Goal (the destination — end of plan)
 A self-hostable **0.12** where every component is validated **in isolation (L1/L2) and integrated (L3/L4)**.
 **Release spine (order):** desktop+extension → standalone bot → meeting-api → dashboard → agents → deploy → release.
 
