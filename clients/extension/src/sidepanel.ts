@@ -10,6 +10,7 @@
  * (ws://localhost:9099/ingest, the desktop) → tells the Meet tab's content
  * script to begin per-participant capture.
  */
+import { createTranscriptManager, groupSegments, type TranscriptSegment } from './transcript-rendering';
 
 interface PanelState {
   status: 'idle' | 'connecting' | 'capturing' | 'error';
@@ -47,6 +48,52 @@ let cfg: Record<string, string> = { ...DEFAULTS };
 let state: PanelState = { status: 'idle', platform: null, nativeMeetingId: null, meetingId: null, streams: 0, error: null };
 
 let captureStartMs: number | null = null;
+
+// ── Live transcript — rendered INLINE, the 0.11 way ─────────────
+// Feed the desktop gateway's /ws through the SAME grouping brick the 0.11 dashboard
+// uses (@vexaai/transcript-rendering, vendored): dedup + speaker-grouped turns.
+type Seg = TranscriptSegment & { speaker?: string; completed?: boolean };
+const mgr = createTranscriptManager<Seg>();
+let txSegs: Seg[] = [];
+let txWs: WebSocket | null = null;
+const SPK_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#db61a2', '#a371f7', '#f0883e', '#39c5cf', '#ff7b72'];
+function speakerColor(n: string): string { let h = 0; for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) | 0; return SPK_COLORS[Math.abs(h) % SPK_COLORS.length]; }
+function hhmmss(iso?: string): string { if (!iso) return ''; const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z'); return isNaN(d.getTime()) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; }
+// Map a transcript.v1 segment (start in seconds) → the brick's shape (absolute ISO time).
+function toBrickSeg(s: any): Seg {
+  const startMs = (captureStartMs || Date.now()) + (typeof s.start === 'number' ? s.start * 1000 : 0);
+  const iso = new Date(startMs).toISOString();
+  return { ...s, start_time: s.start, end_time: s.end, absolute_start_time: iso, absolute_end_time: iso };
+}
+
+function connectFeed(): void {
+  if (txWs && (txWs.readyState === WebSocket.OPEN || txWs.readyState === WebSocket.CONNECTING)) return;
+  const base = (cfg.gatewayUrl || DEFAULTS.gatewayUrl).replace(/\/$/, '');
+  try {
+    const ws = new WebSocket(base.replace(/^http/, 'ws') + '/ws');
+    txWs = ws;
+    ws.onopen = () => {
+      if (state.platform && state.nativeMeetingId)
+        ws.send(JSON.stringify({ action: 'subscribe', meetings: [{ platform: state.platform, native_id: state.nativeMeetingId }] }));
+    };
+    ws.onmessage = (e) => {
+      try {
+        const m = JSON.parse(e.data);
+        if (m.type !== 'transcript') return;
+        const conf = (m.confirmed || []).map(toBrickSeg);
+        const pend = (m.pending || []).map(toBrickSeg);
+        // The desktop sends no top-level speaker — derive it so the brick keys pending per-speaker.
+        const speaker = m.speaker || pend[0]?.speaker || conf[0]?.speaker;
+        mgr.handleMessage({ type: 'transcript', speaker, confirmed: conf, pending: pend });
+        // Recompute on EVERY tick (handleMessage returns null on pending-only ticks → the forming tail).
+        txSegs = mgr.getSegments();
+        if (state.status === 'capturing' && !state.paused) renderFeed();
+      } catch { /* ignore */ }
+    };
+    ws.onclose = () => { if (txWs === ws) txWs = null; };
+  } catch { /* gateway unreachable — feed stays in the listening state */ }
+}
+function disconnectFeed(): void { const w = txWs; txWs = null; if (w) { try { w.close(); } catch { /* */ } } }
 
 // ── Config ──────────────────────────────────────────────────────
 
@@ -98,11 +145,22 @@ function feedStatus(text: string, isError = false): void {
 function renderFeed(): void {
   const feed = $('feed');
   if (state.status === 'capturing' && !state.paused) {
-    feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#127911;</div>`
-      + `<div>Capturing ${state.streams} stream(s). Open the dashboard to read the live transcript.</div>`
-      + `<button class="btn" id="feedDashBtn" style="max-width:220px;margin-top:8px;">Open dashboard &#8599;</button></div>`;
-    const b = document.getElementById('feedDashBtn');
-    if (b) b.addEventListener('click', openDashboard);
+    if (!txSegs.length) {
+      feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#127911;</div><div>Listening — capturing ${state.streams} stream(s)…</div></div>`;
+      return;
+    }
+    const groups = groupSegments(txSegs);
+    feed.innerHTML = `<div style="text-align:left;padding:2px 2px 10px;">` + groups.map(g => {
+      const name = g.key || 'Speaker';
+      const col = speakerColor(name);
+      const body = g.segments.map(s => (s as any).completed === false
+        ? `<span style="opacity:.55;font-style:italic;">${escapeHtml(s.text)}</span>`
+        : escapeHtml(s.text)).join(' ');
+      return `<div style="margin:0 0 11px;">`
+        + `<div style="display:flex;gap:8px;align-items:baseline;margin-bottom:2px;"><span style="font-weight:600;font-size:13px;color:${col};">${escapeHtml(name)}</span><span style="font-size:11px;opacity:.5;">${hhmmss(g.startTime)}</span></div>`
+        + `<div style="font-size:13px;line-height:1.5;">${body}</div></div>`;
+    }).join('') + `</div>`;
+    feed.scrollTop = feed.scrollHeight;
   } else if (state.status === 'capturing' && state.paused) {
     feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#10074;&#10074;</div><div>Paused — press Resume to keep capturing.</div></div>`;
   } else {
@@ -113,6 +171,8 @@ function renderFeed(): void {
 
 function applyState(s: PanelState): void {
   state = s;
+  if (s.status === 'capturing') connectFeed();
+  else if (s.status === 'idle') { disconnectFeed(); mgr.clear(); txSegs = []; }
 
   // Stale-background guard: if the running service worker loaded an older build
   // than this panel, capture-control code is out of date. Surface a blocking
