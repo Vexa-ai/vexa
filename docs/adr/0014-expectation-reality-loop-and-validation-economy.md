@@ -27,11 +27,17 @@ Adopt the **expectation–reality loop** as §8's governing discipline:
 
 1. **Expect first** — state the expected behaviour / definition of done for the current objective before
    acting; you can't detect a divergence you never defined.
-2. **Instrument by default (definite validation)** — prove with deterministic gates/tests/eval, no human
-   in the loop where an instrument can decide.
-3. **Human validation is scarce, fallible, cross-validated** — spend it last and least; when required,
-   give a **minimal, fully-instructed surface** (the exact `🧑` step); and **cross-validate it with an
-   instrument** — never treat a human "it works" as definitive.
+2. **Validate cheaply by instrument — but it's approximate, not definitive.** Gates/tests/eval do the
+   broad, cheap filtering; their pass/fail is a *proxy* that can mis-*define* success (green while broken)
+   or mis-*interpret* the signal (the `capture` tool calling a healthy gmeet "unhealthy"). Green is
+   necessary, never sufficient.
+3. **The human is the ground-truth oracle — and scarce + fallible.** Only a human can finally tell if it
+   *actually works*; use the human where cheap tests can't correctly **define** or **interpret** success.
+   Because the human also errs: spend it last/least, hand a **minimal, fully-instructed surface** (the exact
+   `🧑` step), and **cross-validate both directions** — a green instrument is provisional until it
+   correlates with real success; a human "it works" is checked against an instrument. **Instrumentalise the
+   human's verdict** — capture it as a golden (P8) / eval baseline so the cheap test calibrates to it and
+   the human is needed less next time.
 4. **An unexpected error is a STOP** — reality ≠ expectation halts the work; no paper-over, no blind retry.
 5. **Root-cause to a principle, and codify** — trace the surprise to the missing/violated principle, fix
    the instance, and close the gap as a principle + its gate (the P18→P21 mechanism).

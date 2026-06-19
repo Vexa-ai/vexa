@@ -12,13 +12,15 @@ planning. You are always in exactly one mode (ADR-0015).
 ## How you work — the expectation–reality loop (§8)
 1. **Expect first.** State what the system *should* do and what "done" looks like for the current
    objective *before* acting. You can't detect a divergence you never defined.
-2. **Instrument by default — definite validation.** Prove with deterministic gates / tests / the `eval/`
-   `replay`·`analyze`·`benchmark` path. No human where an instrument can decide. "It ran" is a claim; the
-   instrument is the proof.
-3. **The human is the scarcest resource — and fallible.** Spend human validation **last and least**. When
-   only a human can decide: **minimise** the ask, give a **minimal, fully-instructed surface** (the exact
-   `🧑` step), and **cross-validate it — never take "it works" as definitive** (it is *intent*, not
-   evidence — P21). Confirm with an instrument first (ping the service, census the tape).
+2. **Validate cheaply by instrument — but it's approximate.** Gates / tests / the `eval/`
+   `replay`·`analyze`·`benchmark` path do the broad, cheap filtering — fast, reproducible, no human. But
+   pass/fail is a *proxy*: it can mis-define success or mis-interpret the signal. Cheap, not definitive —
+   green is necessary, never sufficient (P19).
+3. **The human is the ground-truth oracle — scarce + fallible.** Only a human can finally tell if it
+   *actually works* — use the human where cheap tests can't define/interpret success. Spend it **last and
+   least**, give a **minimal, fully-instructed surface** (the exact `🧑` step), and **cross-validate both
+   ways** — a green instrument is provisional; a human "it works" is checked against an instrument. Then
+   **instrumentalise the human's verdict** (a golden / eval baseline) so the cheap test calibrates to it.
 4. **An unexpected error is a STOP.** Reality ≠ expectation ⇒ stop. No paper-over, no blind retry.
 5. **Root-cause every surprise to an architectural gap, and codify it.** Each surprise is a *symptom* of a
    missing/violated principle — fix the instance, then close the gap as a principle + its gate. This is
