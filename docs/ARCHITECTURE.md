@@ -211,6 +211,15 @@ step names its practice and ends at a gate.
 | **Record decisions as an ADR** — *Architecture Decision Record*: a short, dated, numbered `docs/adr/NNNN.md` capturing **one** decision = context · the decision · the trade-off accepted | the durable "why," so a boundary isn't relitigated later | Nygard ADRs |
 | **Big work is staged with per-stage validation gates** | each stage is specific and ends at a *runnable* proof; never advance on red | staged migration |
 
+**The expectation–reality loop — how we run a session, and how the principle-set grows:**
+1. **State the expected behaviour first.** Before acting, name what the system *should* do and what "done" looks like for the current objective — the contract for the work in front of you. *You can't detect a divergence you never defined.* *(expectation-first; P19/P21 applied to the work itself)*
+2. **Match reality against it — by instrument, definitely.** Default to **instrumented, definite validation**: deterministic gates, unit/integration tests, the `eval/` `replay`·`analyze`·`benchmark` path — reproducible, no judgement call, no human. "It ran" is a claim; the instrument is the proof.
+3. **The human is the highest, scarcest resource — and fallible.** Spend human validation **last and least**. When only a human can decide (real browser behaviour, real-meeting quality): **minimise** the ask; hand a **minimal, fully-instructed surface** (the exact `🧑` step, never a vague request); and **cross-validate the human — never take it as definitive.** "I topped up the balance" / "it works" is *intent*, not evidence (P21) — confirm it with an instrument (ping the service, census the tape) before relying on it. A human is one more signal that must be evidence-backed.
+4. **An unexpected error is a STOP.** Reality ≠ expectation ⇒ stop. Don't paper over it, blind-retry, or push past — an unpredicted behaviour is a *signal*, not a nuisance.
+5. **Root-cause every surprise to an architectural gap, and close it.** Each unexpected error is a *symptom* of a missing or violated principle. Trace it to that gap, fix the instance, and **codify the gap as a principle + its gate** so it cannot recur. *This is how the principle-set grows* — P18 (silent STT `402`), P19 (gate-green ≠ works), P20 (open read paths), P21 ("Listening" over silence) were each born from one such surprise. *(blameless root-cause; evolutionary architecture)*
+
+> **Collapsed:** *Expect → instrument → (human: minimal, cross-validated) → stop on surprise → root-cause to a principle → codify.*
+
 **The brick lifecycle (how a module is born):** scaffold (one template, incl. its `README.md`: *what · surface · deps*) → define its contract (a nested
 port, or `contracts/*.v1` if it crosses a boundary) → implement behind the port → pass the gate suite →
 *admit* it (consumers may now import its `index`). **A brick that isn't gate-green doesn't exist yet.**
