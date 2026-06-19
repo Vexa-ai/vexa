@@ -150,6 +150,28 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     for (const [c, keys] of liveClients) if (c.readyState === WebSocket.OPEN && (keys.size === 0 || keys.has(key))) c.send(msg);
   };
 
+  // ── P18 (fail loud + attributable): surface an engine/dependency FAULT — e.g. an STT
+  // 402 "out of balance" — on an observable, attributed channel (log · /telemetry · a /ws
+  // `health` frame) instead of degrading silently to "no transcript". Throttled per
+  // (meeting,source,kind) so a repeating fault doesn't flood. ──
+  const faultSeen = new Map<string, number>();
+  const FAULT_THROTTLE_MS = 15000;
+  const reportFault = (key: string, fault: unknown) => {
+    const f = fault as { source?: string; kind?: string; status?: number; detail?: string; message?: string };
+    const source = f?.source ?? 'engine';
+    const kind = f?.kind ?? 'unknown';
+    const id = `${key}|${source}|${kind}`;
+    const now = Date.now();
+    if (now - (faultSeen.get(id) ?? 0) < FAULT_THROTTLE_MS) return;   // already surfaced recently
+    faultSeen.set(id, now);
+    const detail = f?.detail ?? f?.message ?? '';
+    log(`  ⚠ ENGINE FAULT [${source}:${kind}] ${key}${detail ? ` — ${detail}` : ''}`);
+    telemetry.push({ at: new Date().toISOString(), reason: 'engine_fault', body: { meeting: key, source, kind, status: f?.status, detail } });
+    while (telemetry.length > TELEMETRY_MAX) telemetry.shift();
+    const msg = JSON.stringify({ type: 'health', meeting: key, source, kind, status: f?.status, detail });
+    for (const [c, keys] of liveClients) if (c.readyState === WebSocket.OPEN && (keys.size === 0 || keys.has(key))) c.send(msg);
+  };
+
   // ── gateway (control plane + history + live WS) ──
   const CORS: Record<string, string> = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'X-API-Key, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
   const readBody = (req: http.IncomingMessage): Promise<any> => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => { try { r(b ? JSON.parse(b) : {}); } catch { r({}); } }); });
@@ -297,6 +319,7 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
         clearPending: (sp) => broadcastBatch(key, showSp(sp), [], []),
         rename: (_old, next, segs) => { const s = showSp(next); broadcastBatch(key, s, segs.map((c) => toTx(c, s, true)), []); },
         log: (m) => log(`  ${m}`),
+        onError: (e) => reportFault(key, e),   // P18: STT/engine fault → observable health frame
       });
       micTc = await ChunkedTranscriber.create({
         language: lang, transcribe,
@@ -305,12 +328,14 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
         clearPending: () => broadcastBatch(key, 'You', [], []),
         rename: () => { /* the local mic is always "You" */ },
         log: () => { /* quiet */ },
+        onError: (e) => reportFault(key, e),   // P18
       });
     } else if (txClient) {
       pipe = createGmeetPipeline({
         transcribe,
         config: { sampleRate: SAMPLE_RATE, minAudioDuration: 2, submitInterval: 1.5, confirmThreshold: 3, maxBufferDuration: 30, idleTimeoutSec: 15 },
         sink: { segment: (t) => broadcast(key, t), draft: (t) => { if (t.text.trim()) broadcast(key, t); }, finalize: () => { /* live */ } },
+        onError: (e) => reportFault(key, e),   // P18: STT/engine fault → observable health frame
       });
     }
     let mixF = 0, micF = 0, evHints = 0, recF = 0;

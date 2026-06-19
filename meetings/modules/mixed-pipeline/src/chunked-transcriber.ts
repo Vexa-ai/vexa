@@ -129,6 +129,10 @@ export interface ChunkedTranscriberCallbacks {
    *  the boundary sink; the source calls it to cut. Test / advanced seam. */
   makeSegmenter?: (onBoundary: (ev: BoundaryEvent) => void) => Promise<BoundarySource>;
   log?: (msg: string) => void;
+  /** Surface a transcribe FAILURE (P18: fail loud + attributable). The turn still
+   *  degrades gracefully, but the host gets the fault to make it observable instead of
+   *  a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
+  onError?: (fault: unknown) => void;
 }
 
 interface RingFrame { pcm: Float32Array; tMs: number }
@@ -524,7 +528,8 @@ export class ChunkedTranscriber {
     try {
       result = await this.cb.transcribe(pcm, prompt);
     } catch (e: any) {
-      this.log(`[ChunkedTranscriber] transcribe failed: ${e?.message}`);
+      this.cb.onError?.(e);                                            // P18: surface the fault…
+      this.log(`[ChunkedTranscriber] transcribe failed: ${e?.message}`);   // …keep the local log too
     }
     const gated = result ? this.applyGates(result, spanEnd - spanStart) : null;
     if (!gated || gated.length === 0) {

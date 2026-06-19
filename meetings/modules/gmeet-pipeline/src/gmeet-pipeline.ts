@@ -34,6 +34,11 @@ export interface GmeetPipelineOptions {
   config?: SpeakerStreamManagerConfig;
   /** Silence gap (ms) on a channel that ends its turn (→ re-bind on the next onset). Default 1000. */
   onsetGapMs?: number;
+  /** Surface a transcribe FAILURE (P18: fail loud + attributable). The pipeline still
+   *  degrades gracefully (empty turn) so it doesn't wedge, but it reports the fault here
+   *  so the host can make it observable (a /ws health frame, telemetry, lifecycle) instead
+   *  of a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
+  onError?: (fault: unknown) => void;
 }
 
 export interface GmeetPipeline {
@@ -71,8 +76,9 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
         const r = await opts.transcribe(audio, mgr.getLastConfirmedText(speakerId) || undefined);
         const segs = r?.segments;
         mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs);
-      } catch {
-        mgr.handleTranscriptionResult(speakerId, '');
+      } catch (e) {
+        opts.onError?.(e);                          // P18: report the fault, don't swallow it…
+        mgr.handleTranscriptionResult(speakerId, '');   // …but still free the turn (graceful degrade)
       }
     })();
     inflight.add(p);

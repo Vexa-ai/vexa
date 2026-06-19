@@ -45,6 +45,42 @@ export interface TranscriptionClientConfig {
   minSilenceDurationMs?: number;
 }
 
+/** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
+ *  dependency's failures, not just its successes). A consumer reads `.kind` to surface
+ *  an attributable health event instead of silently degrading to "no transcript". */
+export type TranscriptionFaultKind =
+  | 'payment_required'   // 402 — out of balance / credits exhausted
+  | 'unauthorized'       // 401 / 403 — bad or expired token
+  | 'rate_limited'       // 429
+  | 'unavailable'        // 5xx or network error
+  | 'timeout'            // request aborted (no response in time)
+  | 'bad_request'        // other 4xx
+  | 'unknown';
+
+/** A typed STT failure. `source` lets a consumer attribute it; `retryable` drives backoff. */
+export class TranscriptionError extends Error {
+  readonly source = 'stt' as const;
+  constructor(
+    readonly kind: TranscriptionFaultKind,
+    readonly status: number | undefined,
+    readonly detail: string | undefined,
+    readonly retryable: boolean,
+  ) {
+    super(`stt ${kind}${status ? ` (HTTP ${status})` : ''}${detail ? `: ${detail}` : ''}`);
+    this.name = 'TranscriptionError';
+  }
+}
+
+/** Map an HTTP status to a typed fault (the anti-corruption translation, P5). */
+function classifyHttp(status: number, detail?: string): TranscriptionError {
+  if (status === 402) return new TranscriptionError('payment_required', status, detail, false);
+  if (status === 401 || status === 403) return new TranscriptionError('unauthorized', status, detail, false);
+  if (status === 429) return new TranscriptionError('rate_limited', status, detail, true);
+  if (status >= 500) return new TranscriptionError('unavailable', status, detail, true);
+  if (status >= 400) return new TranscriptionError('bad_request', status, detail, false);
+  return new TranscriptionError('unknown', status, detail, false);
+}
+
 /**
  * HTTP client for the transcription-service.
  * Converts Float32Array audio to WAV, sends as multipart form,
@@ -85,19 +121,23 @@ export class TranscriptionClient {
         const result = await this.sendRequest(wavBuffer, language, prompt);
         return result;
       } catch (err: any) {
-        const isTransient = err.statusCode === 503 || err.statusCode === 429 || err.statusCode === 500 || !err.statusCode;
+        // Normalize anything non-HTTP (abort/network) into a typed fault too, so the
+        // thrown value is ALWAYS a TranscriptionError the consumer can attribute (P18).
+        const fault: TranscriptionError = err instanceof TranscriptionError
+          ? err
+          : new TranscriptionError(err?.name === 'AbortError' ? 'timeout' : 'unavailable', undefined, err?.message, true);
         const isLastAttempt = attempt === this.maxRetries;
 
-        if (isTransient && !isLastAttempt) {
+        if (fault.retryable && !isLastAttempt) {
           const delay = this.retryDelayMs * Math.pow(2, attempt);
-          log(`[TranscriptionClient] Transient error (attempt ${attempt + 1}/${this.maxRetries + 1}): ${err.message}. Retrying in ${delay}ms...`);
+          log(`[TranscriptionClient] ${fault.kind} (attempt ${attempt + 1}/${this.maxRetries + 1}): ${fault.message}. Retrying in ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
 
-        // Non-transient error or exhausted retries
-        log(`[TranscriptionClient] Transcription failed after ${attempt + 1} attempts: ${err.message}`);
-        throw err;
+        // Non-retryable (402/401/4xx) or retries exhausted → surface the typed fault.
+        log(`[TranscriptionClient] transcription failed after ${attempt + 1} attempt(s): ${fault.message}`);
+        throw fault;
       }
     }
 
@@ -205,9 +245,7 @@ export class TranscriptionClient {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unable to read error response');
-        const err: any = new Error(`Transcription service returned HTTP ${response.status}: ${errorText}`);
-        err.statusCode = response.status;
-        throw err;
+        throw classifyHttp(response.status, errorText);   // typed fault (P5/P18), not a bare Error
       }
 
       const data = await response.json() as any;
