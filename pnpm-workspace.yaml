@@ -12,11 +12,17 @@ packages:
   - "integrations/in/*"
   - "integrations/out/*"
   - "clients/*"
-  - "!clients/dashboard"   # vendored full Next.js app (own npm); refactor pending
+  - "!clients/dashboard" # vendored full Next.js app (own npm); refactor pending
   - "sdks/*"
   - "schemas/*"
   - "tools/*"
 # Build scripts pnpm may run (pnpm ≥10 blocks postinstall by default). esbuild
-# ships the native binary our TS test runner (tsx) needs.
+# ships the native binary our TS test runner (tsx) needs; onnxruntime-node (+ its
+# transitive sharp/protobufjs, via @huggingface/transformers in @vexa/mixed-pipeline)
+# fetches the native ONNX runtime the pyannote segmenter runs on in production. The
+# mixed-pipeline goldens are model-free, so the gate stays green even before download.
 allowBuilds:
   esbuild: true
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: true
