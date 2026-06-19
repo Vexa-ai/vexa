@@ -20,3 +20,4 @@ principle.
 | 10 | 06-20 | "P2-2a done — L3-validated" → hid that tests use **fakes**, no real broker | a report shipped an *evaluation*, not facts | **report facts, not evaluations** | ADR-0016 |
 | 11 | 06-20 | report had no reference frame → result not assessable | objective not stated | **goal vs objective**; a report assesses *result vs objective* | ADR-0017 |
 | 12 | 06-20 | learnings lived only in scattered ADRs → no running ledger | learnings not logged | **learnings earned with the human, promoted to architecture + this log** | ADR-0018 · this file |
+| 13 | 06-20 | a `meeting-api` package **appeared mid-session** — built by *another chat* sharing this working tree (this session nearly overwrote it) | concurrent chats on one shared tree don't isolate uncommitted state; no branches/PRs (audit) | **one git worktree per chat, integrate via PR** — never two chats on one working tree; never adopt another chat's uncommitted files | ADR-0019 · §8 |

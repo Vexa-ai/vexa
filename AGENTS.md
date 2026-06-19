@@ -3,6 +3,13 @@
 This repo is governed by **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — the constitution (P1–P21,
 the gate suite, the development process). This file is the *front door*: how you run a session in it.
 
+## One worktree per chat
+Concurrent work is isolated: each chat works in its **own `git worktree`** on a short-lived branch
+(`git worktree add ../v0.12-<slug> -b chat/<slug>`), integrating to the integration branch via **PR**
+(gates required; `lane:contract` human-gated). **Never two chats on one working tree**, and **never touch
+another chat's uncommitted files** — if surprise files appear from another chat on a shared tree, surface
+them, don't adopt them (ADR-0019).
+
 ## Plan first — two modes; goal vs objective
 Never build without a current plan. **Planning mode** produces/revises the *full path* to the **goal**
 ([`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) — the always-current, staged plan); **execution mode** runs

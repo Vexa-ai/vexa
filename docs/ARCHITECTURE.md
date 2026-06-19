@@ -210,6 +210,7 @@ step names its practice and ends at a gate.
 | **Reproduce with no live meeting before you fix** | the brick's own logs are a claim, not proof | brick debug discipline |
 | **Record decisions as an ADR** — *Architecture Decision Record*: a short, dated, numbered `docs/adr/NNNN.md` capturing **one** decision = context · the decision · the trade-off accepted | the durable "why," so a boundary isn't relitigated later | Nygard ADRs |
 | **Big work is staged with per-stage validation gates** | each stage is specific and ends at a *runnable* proof; never advance on red | staged migration |
+| **One worktree per chat** — concurrent work is isolated in its own `git worktree` on a short-lived branch, integrated via PR; **never two chats on one working tree**, and you never touch another chat's uncommitted files | shared-tree collisions cost us (the `meeting-api` appeared mid-session; the `bot/` brick was destroyed) — uncommitted state must be isolated | git worktrees; trunk-based + PR · ADR-0019 |
 
 **Planning mode ⇄ execution mode — never build without a current plan:**
 - **A current plan always exists** — the *full path* from where we are to the goal: the staged route to "done", each stage with a runnable proof, plus the critical path and what's parallelizable. It is a **maintained doc** ([`docs/RELEASE-PLAN.md`](RELEASE-PLAN.md)), not a memory. *The plan is the macro expectation; the expectation–reality loop below executes against it.*
