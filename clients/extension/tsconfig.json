@@ -13,7 +13,8 @@
     "baseUrl": ".",
     "paths": {
       "@vexa/gmeet-capture": ["../../meetings/modules/gmeet-capture/src/index.ts"],
-      "@vexa/capture-codec": ["../../meetings/modules/capture-codec/src/index.ts"]
+      "@vexa/capture-codec": ["../../meetings/modules/capture-codec/src/index.ts"],
+      "@vexa/mixed-capture-core": ["../../meetings/modules/mixed-capture-core/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"]

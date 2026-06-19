@@ -5,7 +5,7 @@
  */
 
 export interface MeetingRef {
-  platform: 'google_meet';
+  platform: 'google_meet' | 'youtube' | 'zoom' | 'teams';
   nativeMeetingId: string;
 }
 
@@ -23,6 +23,14 @@ export function detectMeeting(url: string): MeetingRef | null {
     if (seg && /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(seg)) {
       return { platform: 'google_meet', nativeMeetingId: seg };
     }
+    return null;
+  }
+
+  // YouTube — youtube.com/watch?v=ID. The MIXED lane: the tab's <video> is one
+  // mixed audio stream the desktop diarizes with pyannote (no per-speaker channels).
+  if (u.hostname.endsWith('youtube.com')) {
+    const v = u.searchParams.get('v');
+    if (v) return { platform: 'youtube', nativeMeetingId: v };
     return null;
   }
 

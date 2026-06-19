@@ -20,6 +20,7 @@ import {
   createGmeetCapture, GmeetCapture, GmeetChannelBinder,
   createPcmCaptureNode,
 } from '@vexa/gmeet-capture';
+import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-capture-core';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -57,6 +58,12 @@ import {
   const MIC_INDEX = 1000;
   let micStream: MediaStream | null = null;
 
+  // Mixed lane (YouTube now): the tab's <video> is ONE mixed audio stream → channel
+  // 999, diarized server-side by pyannote. Kept clear of the 0-based participant
+  // indices and the mic.
+  const MIXED_INDEX = 999;
+  let mixedCapture: MixedAudioCapture | null = null;
+
   function post(type: string, payload: any) {
     window.postMessage({ __vexa: true, type, ...payload }, '*');
   }
@@ -84,7 +91,7 @@ import {
   }
 
   function streamCount(): number {
-    return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0);
+    return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0) + (mixedCapture ? 1 : 0);
   }
 
   /**
@@ -117,6 +124,24 @@ import {
     }
   }
 
+  /**
+   * MIXED lane (YouTube): capture the page <video>'s own audio via captureStream()
+   * → 16 kHz PCM on channel 999. No tabCapture/offscreen needed — the media element
+   * is page-accessible from the MAIN world. replay:false (the <video> already plays).
+   */
+  async function startYoutubeMixed(): Promise<void> {
+    const video = document.querySelector('video') as HTMLVideoElement | null;
+    const stream = (video as unknown as { captureStream?: () => MediaStream })?.captureStream?.();
+    if (!video || !stream || stream.getAudioTracks().length === 0) {
+      console.log(`${TAG} [yt] no playing <video> audio yet — press play, then Start`);
+      return;
+    }
+    mixedCapture = await createMixedAudioCapture(stream, (pcm) => {
+      if (isCurrent() && running) post('audio', { index: MIXED_INDEX, pcm: Array.from(pcm) });
+    }, { replay: false, log: (m) => console.log(`${TAG} [yt] ${m}`) });
+    console.log(`${TAG} [yt] mixed capture started → channel ${MIXED_INDEX}`);
+  }
+
   async function start() {
     if (running || !isCurrent()) return;   // a superseded instance never captures
     running = true;
@@ -124,8 +149,9 @@ import {
 
     startSpeakerAttribution();
 
-    // Your own voice first — it doesn't depend on other participants being present.
-    await startMic();
+    const isYoutube = location.hostname.endsWith('youtube.com');
+    // Your own voice first — but NOT on YouTube (you're watching, not speaking).
+    if (!isYoutube) await startMic();
     post('capture-started', { streams: streamCount() });
 
     // Per-participant in-page capture: Google Meet exposes native per-participant
@@ -148,6 +174,11 @@ import {
         },
       });
       await gmeetCapture.start();
+    } else if (isYoutube) {
+      // MIXED lane (YouTube): the page <video> IS the mixed stream → channel 999.
+      // No per-speaker channels, no DOM hints (YouTube has no active-speaker UI) —
+      // the desktop's pyannote segments it; names are provisional.
+      await startYoutubeMixed();
     }
 
     post('capture-started', { streams: streamCount() });
@@ -165,6 +196,7 @@ import {
     running = false;
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
+    if (mixedCapture) { mixedCapture.stop(); mixedCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }
