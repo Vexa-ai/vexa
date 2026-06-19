@@ -73,7 +73,7 @@ function recordingPlayerPage(platform: string, native: string, src: string, form
 }
 
 interface Meeting { id: number; platform: string; native_meeting_id: string; status: string; start_time: string; segments: TranscriptSegment[]; }
-export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; }
+export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; }
 export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
 
 export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> {
@@ -222,6 +222,15 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       return send({ count: items.length, total: telemetry.length, items });
     }
     if (req.method === 'GET' && url.pathname === '/bots') return send({ meetings: [...meetings.values()], has_more: false });
+    // GET /health — liveness + dependency readiness (P18). The body reports each
+    // dependency's state so an operator/orchestrator sees "is STT configured?" without
+    // parsing logs. 200 when STT is configured; 503 (degraded) when it isn't — a desktop
+    // with no STT silently never transcribes, which this makes observable.
+    if (req.method === 'GET' && url.pathname === '/health') {
+      const live = [...meetings.values()].filter((m) => m.status === 'active').length;
+      const ok = !!txClient;
+      return send({ ok, checks: { stt: txClient ? 'configured' : 'unconfigured', stt_url: TX_URL || null }, live_sessions: live, recordings_dir: recordingsDir }, ok ? 200 : 503);
+    }
     const tr = url.pathname.match(/^\/transcripts\/([^/]+)\/([^/]+)/);
     if (req.method === 'GET' && tr) {
       const m = meetings.get(keyOf(decodeURIComponent(tr[1]), decodeURIComponent(tr[2])));
@@ -340,6 +349,18 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     }
     let mixF = 0, micF = 0, evHints = 0, recF = 0;
     const hb = isMixed ? setInterval(() => log(`  [hb ${key}] ch999=${mixF}f ch1000=${micF}f hints=${evHints} rec=${recF}`), 5000) : null;
+    // P18 liveness (server-side): a connected session NOT receiving audio frames is the
+    // desktop's own "active but silent" — surface it as a 'no-signal' fault on the observable
+    // channels (/ws health · /telemetry · log), so absence is reported, not invisible. Mirrors
+    // the extension's client-side capture-liveness; here it's the receiver's view.
+    const NO_SIGNAL_MS = opts.noSignalMs ?? (Number(process.env.VEXA_NO_SIGNAL_MS) || 8000);
+    const sessionStartMs = Date.now();
+    let lastFrameMs = 0;
+    const watchdog = setInterval(() => {
+      if (finished) return;
+      const since = Date.now() - (lastFrameMs || sessionStartMs);
+      if (since > NO_SIGNAL_MS) reportFault(key, { source: 'capture', kind: 'no-signal', detail: `no audio frames for ${Math.round(since / 1000)}s — capture not flowing (stream not minted / muted / no speakers?)` });
+    }, Math.max(250, Math.min(3000, NO_SIGNAL_MS)));
     log(`[desktop] ▶ ${key} (${isMixed ? 'mixed' : 'gmeet'})`);
     ws.send(JSON.stringify({ type: 'ready' }));
     // recording.v1 branch — try decodeRecordingChunk FIRST on every binary frame.
@@ -359,7 +380,7 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
           const b = Buffer.from(data);
           if (tryRecording(b)) return;                                       // recording.v1 chunk — not transcription audio
           const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
-          if (f) { if (f.speakerIndex === MIXED_CHANNEL) { mixF++; tc?.feedAudio(f.samples, f.ts); } else if (f.speakerIndex === MIC_CHANNEL) { micF++; micTc?.feedAudio(f.samples, f.ts); } }
+          if (f) { lastFrameMs = Date.now(); if (f.speakerIndex === MIXED_CHANNEL) { mixF++; tc?.feedAudio(f.samples, f.ts); } else if (f.speakerIndex === MIC_CHANNEL) { micF++; micTc?.feedAudio(f.samples, f.ts); } }
         } else {                          // mixed lane: the WHO signal rides EVENT frames (active-speaker hints)
           try { const ev = JSON.parse(data.toString()); if (ev?.kind === 'active-speaker' && ev.speaker) { evHints++; tc?.recordHint(ev.speaker, (ev.detail?.hint as HintKind) || 'dom-active', ev.ts ?? ev.tMs ?? 0, !!ev.detail?.isEnd); } } catch { /* */ }
         }
@@ -369,13 +390,13 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       const b = Buffer.from(data);
       if (tryRecording(b)) return;                                         // recording.v1 chunk — not transcription audio
       const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
-      if (f) pipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts);   // route by CHANNEL, name = glow at capture
+      if (f) { lastFrameMs = Date.now(); pipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts); }   // route by CHANNEL, name = glow at capture
     });
     let finished = false;
     const finish = async () => {
       if (finished) return; finished = true;
       if (activeSessions.get(key) === finalize) activeSessions.delete(key);
-      if (hb) clearInterval(hb); tape?.end(); recSink.close(key);
+      if (hb) clearInterval(hb); clearInterval(watchdog); tape?.end(); recSink.close(key);
       try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ }
       const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`);
     };
