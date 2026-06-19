@@ -186,6 +186,50 @@ async function main(): Promise<void> {
     check('transcript: segment conforms to transcript.v1', !!validateSeg(published[0]), ajv2.errorsText(validateSeg.errors));
   }
 
+  // ── REGRESSION (code-review): pipeline.start fails AFTER admission → LEAVE (no ghost bot) ──
+  {
+    const lc = recordingSink();
+    let left = 0;
+    const join: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; }, async leave() { left++; },
+    };
+    const pipe: Pipeline = { async start() { throw new Error('capture init failed'); }, async stop() {} };
+    const res = await createOrchestrator(inv(), { lifecycle: lc, join, pipeline: pipe, acts: noopActs() }).run();
+    check('pipeline-fail: bot LEFT the meeting (no ghost participant)', left === 1);
+    check('pipeline-fail: still failed / exit 1', res.status === 'failed' && res.exitCode === 1);
+  }
+
+  // ── REGRESSION: stop() (the SIGTERM seam) ends the active phase → completed(stopped) ──
+  {
+    const lc = recordingSink();
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs() });
+    const runP = o.run();
+    setTimeout(() => o.stop(), 5);
+    const res = await runP;
+    check('stop(): completed(stopped) — worker is disposable, never hangs after active',
+      res.status === 'completed' && last(lc.events).completion_reason === 'stopped');
+  }
+
+  // ── REGRESSION: fire-and-forget driver reports stay ORDERED through a slow sink (no reorder) ──
+  {
+    const events: LifecycleEvent[] = [];
+    const slowLc: LifecycleSink = { async emit(e) {
+      if (e.status === 'awaiting_admission') await new Promise((r) => setTimeout(r, 12));   // delay the FIRST report
+      events.push(e);
+    } };
+    const join: JoinDriver = {   // fires BOTH reports without awaiting
+      async join(report) { void report('awaiting_admission'); void report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; }, async leave() {},
+    };
+    const o = createOrchestrator(inv(), { lifecycle: slowLc, join, pipeline: noopPipeline(), acts: noopActs() });
+    const runP = o.run();
+    setTimeout(() => o.stop(), 30);
+    await runP;
+    check('reports: serialized in emit order despite a slow awaiting_admission sink',
+      JSON.stringify(seq(events).slice(0, 3)) === JSON.stringify(['joining', 'awaiting_admission', 'active']), JSON.stringify(seq(events)));
+  }
+
   if (failed) { console.error(`\n❌ orchestrator (L2): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ orchestrator (L2): the meeting machine drives a schema-valid lifecycle.v1 sequence and routes transcript.v1 — offline, every port faked.');
 }

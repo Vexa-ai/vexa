@@ -94,8 +94,18 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     recording: inv.recordingEnabled ? stubRecordingSink() : undefined,
   });
 
-  const result = await orchestrator.run();
-  return result.exitCode;
+  // Disposability (P7): a termination signal ends the active phase gracefully (leave →
+  // completed) so the container never hangs after `active`. Wire before run(); unwire after.
+  const onSignal = () => orchestrator.stop('stopped');
+  process.once('SIGTERM', onSignal);
+  process.once('SIGINT', onSignal);
+  try {
+    const result = await orchestrator.run();
+    return result.exitCode;
+  } finally {
+    process.off('SIGTERM', onSignal);
+    process.off('SIGINT', onSignal);
+  }
 }
 
 // Worker entrypoint: boot, work, emit, die (P7).

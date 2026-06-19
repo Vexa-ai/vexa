@@ -95,9 +95,20 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     await emit('joining', base.container_id ? { container_id: base.container_id } : {});
 
     // ── join → admission ──
+    // Serialize the driver's intermediate reports so lifecycle.v1 events POST in order even
+    // when the driver fire-and-forgets, and SURFACE a contract-illegal transition (log) rather
+    // than silently dropping it.
+    let reportChain: Promise<void> = Promise.resolve();
+    const report = (s: BotStatus): Promise<void> => {
+      reportChain = reportChain.then(() => emit(s)).catch((e) => {
+        console.error(`[bot] lifecycle report '${s}' rejected: ${String(e)}`);
+      });
+      return reportChain;
+    };
     let outcome: JoinOutcome;
     try {
-      outcome = await deps.join.join((s) => emit(s).catch(() => { /* emit guard is throw-safe */ }));
+      outcome = await deps.join.join(report);
+      await reportChain;   // flush in-flight reports before deciding admission
     } catch (e) {
       await emit('failed', { failure_stage: 'joining', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
@@ -113,7 +124,10 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     try {
       await deps.pipeline.start();
     } catch (e) {
-      await deps.recording?.close(recordingKey);
+      // Already admitted (the browser is seated in the meeting) → LEAVE before exiting, or we
+      // strand a ghost participant. Best-effort; never masks the failure.
+      deps.recording?.close(recordingKey);
+      await deps.join.leave('pipeline_start_failed').catch(() => { /* best-effort */ });
       await emit('failed', { failure_stage: 'active', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
@@ -137,5 +151,12 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     return { exitCode: 0, status: 'completed', completionReason: reason };
   }
 
-  return { run, handle };
+  /** Trigger a graceful end of the active phase — wired to SIGTERM/SIGINT at the composition
+   *  root so the worker is disposable (P7). No-op before `active` resolves the run early;
+   *  after the run ended it's a no-op (the resolver already fired). */
+  function stop(reason: CompletionReason = 'stopped'): void {
+    signalEnd?.(reason);
+  }
+
+  return { run, handle, stop };
 }
