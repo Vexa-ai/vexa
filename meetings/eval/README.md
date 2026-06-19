@@ -63,3 +63,17 @@ dial at a time to compare runs.
 - `secrets.env`, `cache/`, `truth*.jsonl` stay **out of the repo** (git-ignored).
 - A speaker never overlaps itself — every overlap is two different people.
 - Not a workspace package (a CLI harness, run directly) — exempt from `gate:exports`/`gate:node`.
+
+## Live companion — `observe`
+
+Where `launch/drive/judge` **score** a synthetic run against ground truth, the live observer
+**watches** a real session's transcript *dynamics* as they stream — `forming → confirm`,
+per-segment gap, oversegmentation %, warm-up, and a lost-transcript monitor. Run from the repo
+root while a session is live:
+
+```bash
+pnpm observe <platform> <native_meeting_id>     # e.g. pnpm observe youtube 53yPfrqbpkE
+```
+
+It lives at [`meetings/services/desktop/scripts/observe.mjs`](../services/desktop/scripts/observe.mjs)
+(it taps the desktop gateway `/ws`, so it stays with the desktop where `ws` resolves).
