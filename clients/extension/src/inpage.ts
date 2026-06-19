@@ -1,5 +1,5 @@
 /**
- * In-page capture (MAIN world) — Google Meet (per-participant) + Zoom (mixed).
+ * In-page capture (MAIN world) — Google Meet (per-participant) + Zoom/Teams (mixed).
  *
  * GOOGLE MEET: the bot's browser-side per-speaker capture loop — each
  * participant's <audio>/<video> MediaStream is wired into an AudioWorklet that
@@ -8,18 +8,20 @@
  * postMessage the chunk to the content script, which relays it to the background
  * service worker's WebSocket (capture.v1 → the desktop ingest).
  *
- * ZOOM (MIXED lane): the inpage does NOT capture audio — the offscreen document
- * captures the whole tab's mixed audio (chrome.tabCapture → channel 999, diarized
- * by the desktop's mixed pipeline). The inpage's only job for Zoom is to emit
- * speaker-name HINTS from the zoom-speakers DOM (post('speaker_activity', …)),
+ * ZOOM / MS TEAMS (MIXED lane): the inpage does NOT capture audio — the offscreen
+ * document captures the whole tab's mixed audio (chrome.tabCapture → channel 999,
+ * diarized by the desktop's mixed pipeline). The inpage's only job for these is to
+ * emit speaker-name HINTS from the zoom-speakers / msteams-speakers DOM
+ * (post('speaker_activity', …); Zoom 'dom-active', Teams blue-square 'dom-outline'),
  * which the background relays as capture.v1 active-speaker events to name the
  * mixed clusters server-side.
  *
  * It must run in the MAIN world (not the isolated content-script world) so it
  * can read the page-assigned el.srcObject MediaStream objects directly.
  *
- * Speaker attribution is the SHARED bricks @vexa/gmeet-capture (gmeet-speakers)
- * and @vexa/zoom-capture (zoom-speakers) — one algorithm for bot and extension.
+ * Speaker attribution is the SHARED bricks @vexa/gmeet-capture (gmeet-speakers),
+ * @vexa/zoom-capture (zoom-speakers), and @vexa/teams-capture (msteams-speakers)
+ * — one algorithm for bot and extension.
  */
 
 import {
@@ -28,6 +30,7 @@ import {
   createPcmCaptureNode,
 } from '@vexa/gmeet-capture';
 import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
+import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '@vexa/teams-capture';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -79,6 +82,16 @@ import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vex
   let speakers: GmeetSpeakers | null = null;
   let zoomSpeakers: ZoomSpeakers | null = null;
   let zoomChat: ZoomChat | null = null;
+  let teamsSpeakers: TeamsSpeakers | null = null;
+  let teamsChat: TeamsChat | null = null;
+
+  // Teams hosts (mirrors 0.11 isTeamsHost): teams.live.com, teams.microsoft.com
+  // (+ subdomains), teams.cloud.microsoft.
+  function isTeamsHost(): boolean {
+    return location.hostname.endsWith('teams.live.com')
+      || location.hostname.endsWith('teams.microsoft.com')
+      || location.hostname === 'teams.cloud.microsoft';
+  }
 
   function startSpeakerAttribution(): void {
     if (location.hostname.endsWith('meet.google.com')) {
@@ -118,6 +131,32 @@ import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vex
           onMessage: ({ sender, text }) => post('chat-message', { sender, text }),
         });
         (window as any).__vexaZoomChat = zoomChat;
+      }
+    } else if (isTeamsHost()) {
+      if (teamsSpeakers) return;
+      const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
+        ?.getAttribute('data-self-name')?.trim() || undefined;
+      // Teams audio is the mixed tabCapture track (999) captured by the offscreen
+      // document — the inpage does NOT capture audio here. The server diarizes
+      // that track into per-speaker clusters; the blue-square (voice-level-stream-
+      // outline) timeline is sent as timestamped 'dom-outline' HINTS that name
+      // those clusters. msteams-speakers already debounces brief outline flickers
+      // (debounceMs default 300 + a 200ms hysteresis state machine).
+      teamsSpeakers = createTeamsSpeakers({
+        selfName,
+        log: (m) => console.log(`${TAG} [teams] ${m}`),
+        onSpeaking: (name, _id, isEnd) => post('speaker_activity', { name, isEnd, kind: 'dom-outline' }),
+      });
+      (window as any).__vexaTeamsSpeakers = teamsSpeakers;
+      console.log(`${TAG} shared msteams-speakers HINT emitter started (blue squares, self="${selfName || 'unknown'}")`);
+      // Chat capture — each message becomes a capture.v1 `chat` event. The chat
+      // panel must be open for messages to exist in the DOM.
+      if (!teamsChat) {
+        teamsChat = createTeamsChat({
+          log: (m) => console.log(`${TAG} [teams-chat] ${m}`),
+          onMessage: ({ sender, text }) => post('chat-message', { sender, text }),
+        });
+        (window as any).__vexaTeamsChat = teamsChat;
       }
     }
   }
@@ -169,8 +208,10 @@ import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vex
 
     // Per-participant in-page capture is GOOGLE MEET ONLY — Meet exposes native
     // per-participant <audio> elements; wire each into the shared gmeet captor.
-    // Zoom uses the MIXED path instead: one diarized tab-audio channel (999)
-    // captured by the OFFSCREEN document, so the inpage captures no audio for it.
+    // Zoom AND Teams use the MIXED path instead: one diarized tab-audio channel
+    // (999) captured by the OFFSCREEN document, so the inpage captures no audio
+    // for them. (Teams Web does expose per-participant WebRTC tracks, but we
+    // deliberately do NOT use them — Teams follows Zoom's mixed path exactly.)
     if (location.hostname.endsWith('meet.google.com')) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
@@ -207,6 +248,8 @@ import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vex
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
+    if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
+    if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
@@ -295,6 +338,8 @@ import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vex
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
+    if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
+    if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
     console.log(`${TAG} instance torn down (superseded)`);
   };
 

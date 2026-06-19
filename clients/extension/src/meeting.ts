@@ -1,7 +1,7 @@
 /**
  * Platform + native-meeting-id detection from a tab URL — Google Meet, YouTube,
- * and Zoom. Shared by the content script (auto-start trigger) and the background
- * worker (session bootstrap).
+ * Zoom, and MS Teams. Shared by the content script (auto-start trigger) and the
+ * background worker (session bootstrap).
  */
 
 export interface MeetingRef {
@@ -51,6 +51,26 @@ export function detectMeeting(url: string): MeetingRef | null {
       id = parts[1];                                   // /wc/<id>/... (web client)
     }
     if (/^\d{9,11}$/.test(id)) return { platform: 'zoom', nativeMeetingId: id };
+    return null;
+  }
+
+  // MS Teams — MIXED lane (offscreen tabCapture → channel 999, diarized by the
+  // desktop's mixed pipeline) PLUS the blue-square speaker hints from the
+  // msteams-speakers DOM. Native id = the 10-15 digit meeting number. Mirrors
+  // the 0.11 server parser (services/meeting-api/meeting_api/schemas.py
+  // parse_meeting_url): teams.live.com/meet/<id> (personal) and the enterprise
+  // hosts' /meet/<id> short URL + /v2/...#/meet/<id> deep-link fragment. Hosts:
+  // teams.live.com, teams.microsoft.com (+subdomains), teams.cloud.microsoft.
+  if (
+    u.hostname.endsWith('teams.live.com') ||
+    u.hostname.endsWith('teams.microsoft.com') ||
+    u.hostname === 'teams.cloud.microsoft'
+  ) {
+    // /meet/<10-15 digits> on the path (personal + enterprise short URL)…
+    let m = u.pathname.match(/^\/meet\/(\d{10,15})\/?$/);
+    // …or the enterprise deep-link form /v2/?…#/meet/<id>?p=… (id in the hash).
+    if (!m && u.hash) m = u.hash.replace(/^#/, '').match(/^\/meet\/(\d{10,15})\b/);
+    if (m) return { platform: 'teams', nativeMeetingId: m[1] };
     return null;
   }
 

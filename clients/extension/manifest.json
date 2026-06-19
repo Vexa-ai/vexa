@@ -18,6 +18,9 @@
     "https://meet.google.com/*",
     "https://*.youtube.com/*",
     "https://*.zoom.us/*",
+    "https://teams.microsoft.com/*",
+    "https://teams.live.com/*",
+    "https://teams.cloud.microsoft/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "ws://localhost/*",
@@ -40,7 +43,10 @@
       "matches": [
         "https://meet.google.com/*",
         "https://*.youtube.com/*",
-        "https://*.zoom.us/*"
+        "https://*.zoom.us/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://teams.cloud.microsoft/*"
       ],
       "js": [
         "inpage.js"
@@ -53,7 +59,10 @@
       "matches": [
         "https://meet.google.com/*",
         "https://*.youtube.com/*",
-        "https://*.zoom.us/*"
+        "https://*.zoom.us/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://teams.cloud.microsoft/*"
       ],
       "js": [
         "content.js"

@@ -55,15 +55,15 @@ let ws: WebSocket | null = null;
 
 /** tabCapture stream id, minted on the toolbar-click gesture (that click is the
  *  only event that grants activeTab, which getMediaStreamId requires). Used for
- *  MIXED-lane tabs (YouTube + Zoom) where the offscreen mixed captor is the audio
- *  source. */
+ *  MIXED-lane tabs (YouTube + Zoom + Teams) where the offscreen mixed captor is
+ *  the audio source. */
 let tabStreamId: string | null = null;
 
 /** MIXED-lane platforms: the whole tab's audio is one mixed stream the desktop
  *  diarizes (channel 999, via the offscreen tabCapture), as opposed to Google
- *  Meet's per-participant in-page <audio> capture. Zoom additionally feeds
- *  speaker-name hints from its inpage zoom-speakers DOM. */
-const MIXED = new Set(['youtube', 'zoom']);
+ *  Meet's per-participant in-page <audio> capture. Zoom and Teams additionally
+ *  feed speaker-name hints from their inpage zoom-/msteams-speakers DOM. */
+const MIXED = new Set(['youtube', 'zoom', 'teams']);
 const isMixed = (p: string | null | undefined): boolean => !!p && MIXED.has(p);
 
 function broadcastStatus(): void {
@@ -396,7 +396,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // does a graceful takeover of any orphaned instance.
 async function reinjectIntoOpenMeetingTabs(): Promise<void> {
   let tabs: chrome.tabs.Tab[] = [];
-  try { tabs = await chrome.tabs.query({ url: ['https://meet.google.com/*', 'https://*.zoom.us/*'] }); } catch { return; }
+  try {
+    tabs = await chrome.tabs.query({
+      url: [
+        'https://meet.google.com/*',
+        'https://*.zoom.us/*',
+        'https://teams.microsoft.com/*',
+        'https://teams.live.com/*',
+        'https://teams.cloud.microsoft/*',
+      ],
+    });
+  } catch { return; }
   for (const t of tabs) {
     if (t.id == null) continue;
     try {

@@ -9,12 +9,13 @@ const WATCH = process.argv.includes('--watch');
 // Consume the v0.12 capture bricks by PACKAGE NAME (their published surface), not
 // by reaching into their src/. Aliased to each brick's index so esbuild still
 // bundles the TS source in. gmeet (per-channel) + mixed-capture-core (the mixed
-// lane — YouTube now; Zoom/Teams add zoom-capture/teams-capture next).
+// lane — YouTube, Zoom, and Teams via zoom-capture/teams-capture).
 const vexaAlias = {
   '@vexa/gmeet-capture': resolve(__dirname, '../../meetings/modules/gmeet-capture/src/index.ts'),
   '@vexa/capture-codec': resolve(__dirname, '../../meetings/modules/capture-codec/src/index.ts'),
   '@vexa/mixed-capture-core': resolve(__dirname, '../../meetings/modules/mixed-capture-core/src/index.ts'),
   '@vexa/zoom-capture': resolve(__dirname, '../../meetings/modules/zoom-capture/src/index.ts'),
+  '@vexa/teams-capture': resolve(__dirname, '../../meetings/modules/teams-capture/src/index.ts'),
 };
 
 const outdir = 'dist';
