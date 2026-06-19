@@ -3,4 +3,5 @@
 secrets.env
 cache/
 truth*.jsonl
+noise*.jsonl
 *.log

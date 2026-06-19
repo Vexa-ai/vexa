@@ -19,15 +19,25 @@ Everything here **taps, drives, records, replays, or scores that one stream.**
 |---|---|---|
 | `observe [platform] [native]` | live-watch a session: forming→churn→confirm, warm-up, `⚠ LOST` monitor, `⚠ HIJACK` flag | desktop only |
 | `replay <tape.jsonl>` | re-feed a recorded tape into the ingest **verbatim + deterministic** (`SPEED=`, `REPLAY_PLATFORM/REPLAY_NATIVE=`) | desktop only |
-| `analyze <platform> <native>` | score a transcript: per-speaker, `seg_N`, short turns, ✂ mid-cuts, ⊕ dups (+ grep-friendly `SCORE` line) | desktop only |
+| `analyze <platform> <native>` | score a transcript: per-speaker, `seg_N`, ✂ mid-cuts, ⊕ dups, **✗ mis-attribution** (content self-ID ≠ label) + **⚠ hijack** (`VEXA_NOISE_NAME=`); grep-friendly `SCORE` line | desktop only |
+| `capture <tape>` | **RAW-SIGNAL health** — is `ch999` (remote) minted? near-silent? stalling? Catches "flaky / no transcript" that's a sick FEED, not a pipeline bug (`CAPTURE` line). **Run this first when a session won't transcribe.** | tape only |
+| `benchmark <tape> [p] [native]` | **LOSS oracle** — re-transcribe the tape's full audio offline (same STT), diff vs live: content/in-place **recall**, ✗ **truly-lost** + ~ **misplaced** spans (`BENCH` line) | desktop + STT env |
 | `noise` | one bot emits brief noise bursts — the active-speaker **flicker injector** (`NOISE_DUR_MS=`) | secrets + 🧑 |
 | `drive` | make admitted synthetic bots speak a timeline (`GAP_MEAN=`, `NOISE_KEY=`) | secrets + 🧑 |
 | `launch` | send synthetic bots into a meeting | secrets + 🧑 |
 | `corpus` | (re)generate TTS clip pools | DG key |
 
 `observe` / `replay` / `analyze` are **LOCAL** (no secrets — they only touch the desktop on
-localhost). `launch` / `drive` / `noise` hit the **production API** (`secrets.env`) and put
-bots in a **real meeting**.
+localhost). `benchmark` is local too but needs the **STT egress** (`TRANSCRIPTION_SERVICE_URL`
+/`_TOKEN`, the same the desktop uses) to re-transcribe the tape. `launch` / `drive` / `noise`
+hit the **production API** (`secrets.env`) and put bots in a **real meeting**.
+
+> **The harness no longer hides mis-attribution or loss** (it used to: `analyze` only tallied
+> labels, so a wrong label or a dropped turn passed silently). `analyze` now flags ✗ mis-attribution
+> + ⚠ hijack; `benchmark` is the loss oracle (full-audio recall vs live). Both are deterministic on a
+> tape — the `SCORE`/`BENCH` lines are the regression gate. Caveat: on the **synthetic** corpus a
+> reused clip can mask a true loss in `benchmark`'s global recall, so `misplaced` + the live `observe`
+> `⚠ LOST` remain the don't-miss signals there; on **real** meetings global-absent = truly lost is clean.
 
 ## The debug loop
 1. 🧑 **Record** a real meeting (below) → a tape lands in `~/vexa-test-rig/tapes/`.

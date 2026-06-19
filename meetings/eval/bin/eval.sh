@@ -8,7 +8,8 @@
 #   ./bin/eval.sh corpus     # (re)generate the TTS clip pools (FORCE_REGEN=1)
 #   ./bin/eval.sh observe    # LIVE-watch a session's transcript dynamics (local, no secrets)
 #   ./bin/eval.sh replay <t> # replay a recorded raw-signal tape into the desktop ingest (deterministic repro)
-#   ./bin/eval.sh analyze <p> <native> # score a transcript: per-speaker, mid-cuts, dups (local, no secrets)
+#   ./bin/eval.sh analyze <p> <native> # score a transcript: per-speaker, mid-cuts, dups, mis-attribution (local, no secrets)
+#   ./bin/eval.sh benchmark <tape> [p] [native] # LOSS oracle: re-transcribe full tape audio offline, diff vs live (needs STT env)
 # All knobs are env (see README / src/drive.mjs). e.g. GAP_MEAN=-0.5 ./bin/eval.sh drive
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +19,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ "${1:-}" = "replay" ] && exec node "$HERE/src/replay.mjs" "${@:2}"
 # 'analyze' scores a transcript from the LOCAL gateway — no secrets needed.
 [ "${1:-}" = "analyze" ] && exec node "$HERE/src/analyze.mjs" "${@:2}"
+# 'capture' checks RAW-SIGNAL health of a tape (ch999 minted? silent? stalls?) — no secrets.
+[ "${1:-}" = "capture" ] && exec node "$HERE/src/capture.mjs" "${@:2}"
+# 'benchmark' re-transcribes a tape's full audio offline (needs STT env, NOT the bot secrets).
+[ "${1:-}" = "benchmark" ] && exec node "$HERE/src/benchmark.mjs" "${@:2}"
 SECRETS="${SECRETS:-$HERE/secrets.env}"
 [ -f "$SECRETS" ] && { set -a; . "$SECRETS"; set +a; } || { echo "no secrets.env ($SECRETS) — cp secrets.env.example secrets.env"; exit 1; }
 case "${1:-}" in
@@ -26,5 +31,5 @@ case "${1:-}" in
   noise)  exec node "$HERE/src/noise.mjs" ;;
   corpus) exec node "$HERE/src/corpus.mjs" ;;
   judge)  exec python3 "$HERE/src/judge.py" ;;
-  *) echo "usage: eval.sh {launch|drive|noise|analyze|judge|corpus|observe|replay}"; exit 2 ;;
+  *) echo "usage: eval.sh {launch|drive|noise|analyze|capture|benchmark|judge|corpus|observe|replay}"; exit 2 ;;
 esac
