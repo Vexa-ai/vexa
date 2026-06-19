@@ -79,6 +79,15 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
   const pollMs = opts.pollMs ?? 250;
   const lockVotes = opts.lockVotes ?? 2;
   let active: string | null = null;
+  // Flicker debounce (the obvious attribution fix): Zoom can briefly light another
+  // tile for a single ~250ms poll (a cough, a transient sound, a UI repaint).
+  // Emitting that as a speaker change fires a wrong hint that can hijack the open
+  // turn's name downstream (the binder attributes an unnamed turn to the first hint
+  // and sticks). So require a change to HOLD for CONFIRM_POLLS reads before
+  // committing it — a single flicker poll is dropped.
+  const CONFIRM_POLLS = 2;          // ~2×pollMs ≈ 500ms of stability before a change counts
+  let candidate: string | null = null;
+  let candidateCount = 0;
 
   // ── Multi-channel track→name voting (same vote/lock idea as gmeet-speakers
   //    and the bot's speaker-identity.ts) ──────────────────────────────────
@@ -117,7 +126,11 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
     const footer = container.querySelector(NAME_FOOTER_SELECTOR);
     if (!footer) return null;
     const span = footer.querySelector('span');
-    const t = (span?.textContent?.trim() || (footer as HTMLElement).innerText?.trim()) || '';
+    const raw = (span?.textContent?.trim() || (footer as HTMLElement).innerText?.trim()) || '';
+    // Collapse internal whitespace ("Lord  Mason" → "Lord Mason") — the binder keys
+    // by name, so a whitespace variant would read as a different speaker (its own
+    // kind of flicker) and split one person's turns.
+    const t = raw.replace(/\s+/g, ' ').trim();
     return t || null;
   }
 
@@ -145,14 +158,22 @@ export function createZoomSpeakers(opts: ZoomSpeakersOptions = {}): ZoomSpeakers
     let name: string | null = null;
     try { name = readActiveSpeaker(); } catch { /* DOM in flux */ return; }
     if (name !== active) {
-      if (active) log(`SPEAKER_END: ${active}`);
-      active = name;
-      if (name) log(`SPEAKER_START: ${name}`);
-      sinceEmit = 0;
-      try { opts.onSpeakerChange?.(active); } catch { /* consumer error */ }
-    } else if (active && ++sinceEmit >= HEARTBEAT_POLLS) {
-      sinceEmit = 0;
-      try { opts.onSpeakerChange?.(active); } catch { /* consumer error */ }
+      // A change must hold for CONFIRM_POLLS consecutive reads before we commit it,
+      // so a single flicker poll can't emit a hint (and can't hijack attribution).
+      if (name === candidate) candidateCount++; else { candidate = name; candidateCount = 1; }
+      if (candidateCount >= CONFIRM_POLLS) {
+        if (active) log(`SPEAKER_END: ${active}`);
+        active = candidate;
+        if (active) log(`SPEAKER_START: ${active}`);
+        candidateCount = 0; sinceEmit = 0;
+        try { opts.onSpeakerChange?.(active); } catch { /* consumer error */ }
+      }
+    } else {
+      candidate = active; candidateCount = 0;   // back on the committed speaker → drop any pending flicker
+      if (active && ++sinceEmit >= HEARTBEAT_POLLS) {
+        sinceEmit = 0;
+        try { opts.onSpeakerChange?.(active); } catch { /* consumer error */ }
+      }
     }
     // Multi-channel: correlate the active speaker with the track that's audible.
     if (opts.onName) { try { voteOnce(); } catch { /* ignore */ } }
