@@ -1,7 +1,7 @@
 {
   "name": "@vexa/desktop",
   "version": "0.1.0",
-  "description": "The meetings all-in-one host (gmeet subset): capture.v1 ingest WS → gmeet-pipeline → real STT → gateway /transcripts. One process, no Docker/Postgres/Redis. The bricks the cloud splits across services, composed as one deployable.",
+  "description": "The meetings all-in-one host (dual-lane): capture.v1 ingest WS → gmeet-pipeline (per-channel, glow-named) OR mixed-pipeline (zoom/teams/youtube — pyannote-cut, hint-named) → real STT → gateway /transcripts. One process, no Docker/Postgres/Redis. The bricks the cloud splits across services, composed as one deployable.",
   "private": true,
   "type": "module",
   "main": "dist/desktop.js",
@@ -14,6 +14,7 @@
   "dependencies": {
     "@vexa/capture-codec": "workspace:*",
     "@vexa/gmeet-pipeline": "workspace:*",
+    "@vexa/mixed-pipeline": "workspace:*",
     "@vexa/transcribe-whisper": "workspace:*",
     "ws": "^8.21.0"
   },

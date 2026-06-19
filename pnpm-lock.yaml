@@ -182,6 +182,9 @@ importers:
       '@vexa/gmeet-pipeline':
         specifier: workspace:*
         version: link:../../modules/gmeet-pipeline
+      '@vexa/mixed-pipeline':
+        specifier: workspace:*
+        version: link:../../modules/mixed-pipeline
       '@vexa/transcribe-whisper':
         specifier: workspace:*
         version: link:../../modules/whisper
