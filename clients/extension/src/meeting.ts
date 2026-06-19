@@ -1,7 +1,7 @@
 /**
- * Platform + native-meeting-id detection from a tab URL — GOOGLE MEET ONLY.
- * Shared by the content script (auto-start trigger) and the background worker
- * (session bootstrap).
+ * Platform + native-meeting-id detection from a tab URL — Google Meet, YouTube,
+ * and Zoom. Shared by the content script (auto-start trigger) and the background
+ * worker (session bootstrap).
  */
 
 export interface MeetingRef {
@@ -31,6 +31,26 @@ export function detectMeeting(url: string): MeetingRef | null {
   if (u.hostname.endsWith('youtube.com')) {
     const v = u.searchParams.get('v');
     if (v) return { platform: 'youtube', nativeMeetingId: v };
+    return null;
+  }
+
+  // Zoom — MIXED lane (offscreen tabCapture → channel 999, diarized by the
+  // desktop's mixed pipeline) PLUS speaker-name hints from the zoom-speakers DOM.
+  // Native id = the 9-11 digit meeting number. Mirrors the 0.11 server parser
+  // (services/meeting-api/meeting_api/schemas.py): /j/<id>, /w/<id>, /wc/join/<id>,
+  // and the web-client /wc/<id>/... shape. Hosts include zoom.us subdomains
+  // (us02web.zoom.us, app.zoom.us, <company>.zoom.us).
+  if (u.hostname.endsWith('zoom.us')) {
+    const parts = u.pathname.split('/').filter(Boolean);
+    let id = '';
+    if (parts.length >= 2 && (parts[0] === 'j' || parts[0] === 'w')) {
+      id = parts[1];                                   // /j/<id>, /w/<id>
+    } else if (parts.length >= 3 && parts[0] === 'wc' && parts[1] === 'join') {
+      id = parts[2];                                   // /wc/join/<id>
+    } else if (parts.length >= 2 && parts[0] === 'wc') {
+      id = parts[1];                                   // /wc/<id>/... (web client)
+    }
+    if (/^\d{9,11}$/.test(id)) return { platform: 'zoom', nativeMeetingId: id };
     return null;
   }
 

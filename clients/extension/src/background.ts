@@ -55,9 +55,16 @@ let ws: WebSocket | null = null;
 
 /** tabCapture stream id, minted on the toolbar-click gesture (that click is the
  *  only event that grants activeTab, which getMediaStreamId requires). Used for
- *  media tabs (YouTube now; zoom/teams slot in later) where the offscreen mixed
- *  captor is the audio source. */
+ *  MIXED-lane tabs (YouTube + Zoom) where the offscreen mixed captor is the audio
+ *  source. */
 let tabStreamId: string | null = null;
+
+/** MIXED-lane platforms: the whole tab's audio is one mixed stream the desktop
+ *  diarizes (channel 999, via the offscreen tabCapture), as opposed to Google
+ *  Meet's per-participant in-page <audio> capture. Zoom additionally feeds
+ *  speaker-name hints from its inpage zoom-speakers DOM. */
+const MIXED = new Set(['youtube', 'zoom']);
+const isMixed = (p: string | null | undefined): boolean => !!p && MIXED.has(p);
 
 function broadcastStatus(): void {
   chrome.runtime.sendMessage({ type: 'STATUS', state }).catch(() => { /* panel may be closed */ });
@@ -147,14 +154,14 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
               }
             })
             .catch((e) => { state.status = 'error'; state.error = `Offscreen failed: ${e.message}`; broadcastStatus(); });
-        } else if (state.platform === 'youtube') {
-          // Media tab (YouTube): no per-participant <audio>, and the in-page
-          // mixed captor's smooth AudioWorklet is blocked by YouTube's CSP →
-          // its ScriptProcessor stutters under YouTube's heavy main thread.
-          // Capture the tab audio in the OFFSCREEN document instead (a dedicated
-          // low-load page where the ScriptProcessor runs smoothly) → channel 999,
-          // diarized by the desktop's mixed pipeline. The toolbar click that
-          // opened this session already minted the stream id; use it now.
+        } else if (isMixed(state.platform)) {
+          // MIXED-lane tab (YouTube, Zoom): no per-participant <audio> we capture
+          // in-page. Capture the whole tab's audio in the OFFSCREEN document
+          // instead (a dedicated low-load page where the ScriptProcessor runs
+          // smoothly) → channel 999, diarized by the desktop's mixed pipeline.
+          // Zoom additionally feeds speaker-name hints from its inpage DOM. The
+          // toolbar click that opened this session already minted the stream id;
+          // use it now.
           startTabAudio();
         } else {
           // Page-side capture (Google Meet): local mic ("You") + per-participant
@@ -225,8 +232,9 @@ async function stopCapture(): Promise<void> {
   }
   if (state.platform === 'note') {
     chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
-  } else if (state.platform === 'youtube') {
-    // Media tab: capture lives in the offscreen, not the content script.
+  } else if (isMixed(state.platform)) {
+    // MIXED-lane tab (YouTube, Zoom): capture lives in the offscreen, not the
+    // content script.
     chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
   } else {
     if (state.tabId !== null) {
@@ -382,13 +390,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 // On service-worker startup (extension load OR reload), re-inject the capture
-// scripts into Meet tabs that are ALREADY open: an extension reload orphans
-// every existing tab's content scripts (they can't reach the new SW), which
-// repeatedly cost us live sessions silently running stale code. inpage.ts does
-// a graceful takeover of any orphaned instance.
+// scripts into Meet AND Zoom tabs that are ALREADY open: an extension reload
+// orphans every existing tab's content scripts (they can't reach the new SW),
+// which repeatedly cost us live sessions silently running stale code. inpage.ts
+// does a graceful takeover of any orphaned instance.
 async function reinjectIntoOpenMeetingTabs(): Promise<void> {
   let tabs: chrome.tabs.Tab[] = [];
-  try { tabs = await chrome.tabs.query({ url: ['https://meet.google.com/*'] }); } catch { return; }
+  try { tabs = await chrome.tabs.query({ url: ['https://meet.google.com/*', 'https://*.zoom.us/*'] }); } catch { return; }
   for (const t of tabs) {
     if (t.id == null) continue;
     try {
@@ -401,9 +409,9 @@ reinjectIntoOpenMeetingTabs();
 
 // Toolbar click handling. We do NOT use openPanelOnActionClick, because the click
 // on the toolbar icon is the ONLY event that grants activeTab on the current tab
-// — and chrome.tabCapture.getMediaStreamId needs that activeTab. So on a media
-// tab (YouTube now; zoom/teams slot into the predicate later) we also mint the
-// tab-capture stream id under this invocation and stash it for the next Start.
+// — and chrome.tabCapture.getMediaStreamId needs that activeTab. So on a MIXED-
+// lane tab (YouTube, Zoom) we also mint the tab-capture stream id under this
+// invocation and stash it for the next Start.
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => { /* older Chrome */ });
 // NOTE: listener is intentionally NOT async, and sidePanel.open() is the FIRST
 // statement — it must run synchronously within the click gesture or Chrome
@@ -414,9 +422,9 @@ chrome.action.onClicked.addListener((tab) => {
   if (tab?.id == null) return;
   chrome.sidePanel.open({ tabId: tab.id }).catch(() => { /* older Chrome / already open */ });
 
-  // Media tabs (YouTube) capture the whole tab's audio via the offscreen mixed
-  // captor — mint the stream id now while activeTab is granted.
-  const needsTab = !!(tab.url && detectMeeting(tab.url)?.platform === 'youtube');
+  // MIXED-lane tabs (YouTube, Zoom) capture the whole tab's audio via the
+  // offscreen mixed captor — mint the stream id now while activeTab is granted.
+  const needsTab = !!(tab.url && isMixed(detectMeeting(tab.url)?.platform));
   if (needsTab) {
     chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id) => {
       if (chrome.runtime.lastError || !id) {

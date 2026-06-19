@@ -17,6 +17,7 @@
   "host_permissions": [
     "https://meet.google.com/*",
     "https://*.youtube.com/*",
+    "https://*.zoom.us/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "ws://localhost/*",
@@ -38,7 +39,8 @@
     {
       "matches": [
         "https://meet.google.com/*",
-        "https://*.youtube.com/*"
+        "https://*.youtube.com/*",
+        "https://*.zoom.us/*"
       ],
       "js": [
         "inpage.js"
@@ -50,7 +52,8 @@
     {
       "matches": [
         "https://meet.google.com/*",
-        "https://*.youtube.com/*"
+        "https://*.youtube.com/*",
+        "https://*.zoom.us/*"
       ],
       "js": [
         "content.js"

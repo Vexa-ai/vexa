@@ -1,18 +1,25 @@
 /**
- * In-page capture (MAIN world) — GOOGLE MEET ONLY.
+ * In-page capture (MAIN world) — Google Meet (per-participant) + Zoom (mixed).
  *
- * This is the bot's browser-side per-speaker capture loop — the exact live
- * Google Meet path: each participant's <audio>/<video> MediaStream is wired into
- * an AudioWorklet that emits resampled 16 kHz PCM. Where the bot called
+ * GOOGLE MEET: the bot's browser-side per-speaker capture loop — each
+ * participant's <audio>/<video> MediaStream is wired into an AudioWorklet that
+ * emits resampled 16 kHz PCM. Where the bot called
  * window.__vexaPerSpeakerAudioData(index, data) across the Playwright bridge, we
  * postMessage the chunk to the content script, which relays it to the background
  * service worker's WebSocket (capture.v1 → the desktop ingest).
  *
+ * ZOOM (MIXED lane): the inpage does NOT capture audio — the offscreen document
+ * captures the whole tab's mixed audio (chrome.tabCapture → channel 999, diarized
+ * by the desktop's mixed pipeline). The inpage's only job for Zoom is to emit
+ * speaker-name HINTS from the zoom-speakers DOM (post('speaker_activity', …)),
+ * which the background relays as capture.v1 active-speaker events to name the
+ * mixed clusters server-side.
+ *
  * It must run in the MAIN world (not the isolated content-script world) so it
  * can read the page-assigned el.srcObject MediaStream objects directly.
  *
- * Speaker attribution is the SHARED brick @vexa/gmeet-capture (gmeet-speakers) —
- * one algorithm for bot and extension.
+ * Speaker attribution is the SHARED bricks @vexa/gmeet-capture (gmeet-speakers)
+ * and @vexa/zoom-capture (zoom-speakers) — one algorithm for bot and extension.
  */
 
 import {
@@ -20,6 +27,7 @@ import {
   createGmeetCapture, GmeetCapture, GmeetChannelBinder,
   createPcmCaptureNode,
 } from '@vexa/gmeet-capture';
+import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -61,26 +69,57 @@ import {
     window.postMessage({ __vexa: true, type, ...payload }, '*');
   }
 
-  // Speaker attribution — shared gmeet brick (gmeet-speakers, per-track vote/lock).
-  // Capture emits only "who's lit when" HINTS; the per-participant channel→name
-  // BINDING happens via the per-channel glow correlator below.
+  // Speaker attribution — shared bricks (one codebase for bot + extension).
+  //   Meet: gmeet-speakers (per-track vote/lock)  → window.__vexaGmeetSpeakers
+  //   Zoom: zoom-speakers (active-speaker DOM)     → window.__vexaZoomSpeakers
+  // Meet capture emits only "who's lit when" HINTS; the per-participant
+  // channel→name BINDING happens via the per-channel glow correlator below.
+  // Zoom audio is the mixed offscreen tabCapture track (999); we emit the DOM
+  // active-speaker timeline as hints that name those clusters server-side.
   let speakers: GmeetSpeakers | null = null;
+  let zoomSpeakers: ZoomSpeakers | null = null;
+  let zoomChat: ZoomChat | null = null;
 
   function startSpeakerAttribution(): void {
-    if (!location.hostname.endsWith('meet.google.com')) return;
-    if (speakers) return;
-    const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
-      ?.getAttribute('data-self-name')?.trim() || undefined;
-    speakers = createGmeetSpeakers({
-      selfName,
-      log: (m) => console.log(`${TAG} ${m}`),
-      onSpeaking: (name, isEnd) => {
-        channelBinder.recordGlow(name, isEnd, Date.now());   // feed the per-channel correlator
-        post('speaker_activity', { name, isEnd, kind: 'dom-active' });
-      },
-    });
-    (window as any).__vexaGmeetSpeakers = speakers;
-    console.log(`${TAG} shared gmeet-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
+    if (location.hostname.endsWith('meet.google.com')) {
+      if (speakers) return;
+      const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
+        ?.getAttribute('data-self-name')?.trim() || undefined;
+      speakers = createGmeetSpeakers({
+        selfName,
+        log: (m) => console.log(`${TAG} ${m}`),
+        onSpeaking: (name, isEnd) => {
+          channelBinder.recordGlow(name, isEnd, Date.now());   // feed the per-channel correlator
+          post('speaker_activity', { name, isEnd, kind: 'dom-active' });
+        },
+      });
+      (window as any).__vexaGmeetSpeakers = speakers;
+      console.log(`${TAG} shared gmeet-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
+    } else if (location.hostname.endsWith('zoom.us')) {
+      if (zoomSpeakers) return;
+      const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
+        ?.getAttribute('data-self-name')?.trim() || undefined;
+      // Zoom audio is the mixed tabCapture track (999) captured by the offscreen
+      // document — the inpage does NOT capture audio here. The server diarizes
+      // that track into per-speaker clusters; the DOM active-speaker timeline is
+      // sent as timestamped HINTS that name those clusters (never track relabels).
+      zoomSpeakers = createZoomSpeakers({
+        selfName,
+        log: (m) => console.log(`${TAG} [zoom] ${m}`),
+        onSpeakerChange: (name) => post('speaker_activity', { name: name || '', isEnd: !name, kind: 'dom-active' }),
+      });
+      (window as any).__vexaZoomSpeakers = zoomSpeakers;
+      console.log(`${TAG} shared zoom-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
+      // Chat capture — each message becomes a capture.v1 `chat` event. The chat
+      // panel must be open for messages to exist in the DOM.
+      if (!zoomChat) {
+        zoomChat = createZoomChat({
+          log: (m) => console.log(`${TAG} [zoom-chat] ${m}`),
+          onMessage: ({ sender, text }) => post('chat-message', { sender, text }),
+        });
+        (window as any).__vexaZoomChat = zoomChat;
+      }
+    }
   }
 
   function streamCount(): number {
@@ -128,8 +167,10 @@ import {
     await startMic();
     post('capture-started', { streams: streamCount() });
 
-    // Per-participant in-page capture: Google Meet exposes native per-participant
-    // <audio> elements. Wire each into the shared gmeet captor.
+    // Per-participant in-page capture is GOOGLE MEET ONLY — Meet exposes native
+    // per-participant <audio> elements; wire each into the shared gmeet captor.
+    // Zoom uses the MIXED path instead: one diarized tab-audio channel (999)
+    // captured by the OFFSCREEN document, so the inpage captures no audio for it.
     if (location.hostname.endsWith('meet.google.com')) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
@@ -164,6 +205,8 @@ import {
     if (!running) return;
     running = false;
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
+    if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
+    if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
@@ -196,6 +239,22 @@ import {
       try { const st = w.__vexaGmeetSpeakers.getState(); return { speakingNow: st.speakingNow ?? null, tilesSeen: st.tiles?.length }; }
       catch (e: any) { return { error: String(e?.message || e) }; }
     })() : null;
+    const zs = w.__vexaZoomSpeakers ? (() => {
+      try {
+        const st = w.__vexaZoomSpeakers.getState();
+        return {
+          active: st.active,
+          matchedSelector: st.matchedSelector,
+          tiles: (st.tiles || []).slice(0, 10).map((t: any) => ({
+            name: (t.name || '').length <= 40 ? t.name : scrub(t.name),
+            speakingHints: t.speakingHints,
+          })),
+          survey: (st.survey || []).map((e: any) => ({
+            cls: e.cls, aria: e.aria, text: (e.text || '').length <= 40 ? e.text : scrub(e.text),
+          })),
+        };
+      } catch (e: any) { return { error: String(e?.message || e) }; }
+    })() : null;
     return {
       host: location.hostname,
       frame: location.pathname.slice(0, 60),
@@ -207,12 +266,10 @@ import {
       mediaElsWithAudio: Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
         !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0).length,
       gmeetSpeakers: gs,
-      // scrub() is wired for any future DOM free-text routed through diag — keep
-      // the reference live so the privacy helper never silently rots.
-      _scrub: scrub,
+      zoomSpeakers: zs,
     };
   }
-  const diagTimer = setInterval(() => { try { const d = pageDiag(); delete d._scrub; post('diag', { diag: d }); } catch { /* never break capture */ } }, 5000);
+  const diagTimer = setInterval(() => { try { post('diag', { diag: pageDiag() }); } catch { /* never break capture */ } }, 5000);
   // DIAGNOSTIC PROBE (opt-in: localStorage.vexaDomProbe='1'): dump the live
   // audio↔tile co-location to confirm whether captured <audio> elements sit inside
   // the named/glowing tiles (direct map) or a separate pool (timing required).
@@ -225,8 +282,9 @@ import {
     } catch { /* */ }
   }, 3000);
 
-  // Attribution runs from page load (not capture start): diagnostics see the DOM
-  // state immediately. Idempotent — start() calls it again harmlessly.
+  // Attribution runs from page load (not capture start): diagnostics see the
+  // DOM state immediately, and Zoom's temporal naming is live before/without
+  // capture. Idempotent — start() calls it again harmlessly.
   try { startSpeakerAttribution(); } catch (e: any) { console.log(`${TAG} attribution at load failed: ${e?.message}`); }
 
   // Registered teardown for the next instance's takeover (see top of IIFE).
@@ -235,6 +293,8 @@ import {
     if (diagTimer !== null) { clearInterval(diagTimer); }
     clearInterval(probeTimer);
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
+    if (zoomSpeakers) { zoomSpeakers.destroy(); zoomSpeakers = null; (window as any).__vexaZoomSpeakers = null; }
+    if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
     console.log(`${TAG} instance torn down (superseded)`);
   };
 

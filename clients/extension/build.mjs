@@ -14,6 +14,7 @@ const vexaAlias = {
   '@vexa/gmeet-capture': resolve(__dirname, '../../meetings/modules/gmeet-capture/src/index.ts'),
   '@vexa/capture-codec': resolve(__dirname, '../../meetings/modules/capture-codec/src/index.ts'),
   '@vexa/mixed-capture-core': resolve(__dirname, '../../meetings/modules/mixed-capture-core/src/index.ts'),
+  '@vexa/zoom-capture': resolve(__dirname, '../../meetings/modules/zoom-capture/src/index.ts'),
 };
 
 const outdir = 'dist';
