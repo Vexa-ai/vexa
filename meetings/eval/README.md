@@ -64,16 +64,16 @@ dial at a time to compare runs.
 - A speaker never overlaps itself — every overlap is two different people.
 - Not a workspace package (a CLI harness, run directly) — exempt from `gate:exports`/`gate:node`.
 
-## Live companion — `observe`
+## Live companion — `observe` ([`src/observe.mjs`](src/observe.mjs))
 
 Where `launch/drive/judge` **score** a synthetic run against ground truth, the live observer
 **watches** a real session's transcript *dynamics* as they stream — `forming → confirm`,
-per-segment gap, oversegmentation %, warm-up, and a lost-transcript monitor. Run from the repo
-root while a session is live:
+per-segment gap, the oversegmentation % (≤3-word fragments), the warm-up (time to first
+confirm), and a lost-transcript monitor (`⚠ LOST` = pending shown then cleared without
+confirming). No secrets, no deps (Node's built-in `WebSocket`, taps the local desktop `/ws`):
 
 ```bash
-pnpm observe <platform> <native_meeting_id>     # e.g. pnpm observe youtube 53yPfrqbpkE
+pnpm observe <platform> <native_meeting_id>            # from the repo root
+./bin/eval.sh observe <platform> <native_meeting_id>   # or from here — e.g. youtube 53yPfrqbpkE
+pnpm observe                                           # watch ALL sessions
 ```
-
-It lives at [`meetings/services/desktop/scripts/observe.mjs`](../services/desktop/scripts/observe.mjs)
-(it taps the desktop gateway `/ws`, so it stays with the desktop where `ws` resolves).

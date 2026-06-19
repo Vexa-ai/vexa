@@ -9,7 +9,6 @@
     "build": "tsc",
     "dev": "tsx watch src/desktop.ts",
     "test": "tsx src/desktop-e2e.live.test.ts",
-    "observe": "node scripts/observe.mjs",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {

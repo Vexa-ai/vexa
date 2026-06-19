@@ -10,9 +10,11 @@
 // warm-up (time from first frame to first confirm). Raw stream is recorded to a
 // .jsonl so a session can be replayed/analysed offline.
 //
-// Usage: node scripts/observe.mjs <platform> <native_meeting_id>
-//   e.g. node scripts/observe.mjs youtube 2OD14-0cot4
-import { WebSocket } from 'ws';
+// Usage (from the repo root, while a session is live):
+//   pnpm observe <platform> <native_meeting_id>     e.g. pnpm observe youtube 53yPfrqbpkE
+//   pnpm observe                                    watch ALL sessions
+// (or `./bin/eval.sh observe …` from meetings/eval). Uses Node's built-in global
+// WebSocket (Node 21+) — no `ws` dependency, so it lives in @vexa/eval cleanly.
 import { writeFileSync, appendFileSync } from 'node:fs';
 
 const GATEWAY = process.env.GATEWAY || 'ws://localhost:8056/ws';
@@ -28,17 +30,17 @@ const lastPend = new Map();         // speaker → { text } — for the lost-tra
 let firstFrameMs = null, firstConfirmMs = null, lastEnd = null;
 
 const ws = new WebSocket(GATEWAY);
-ws.on('open', () => {
+ws.onopen = () => {
   // Empty meetings list → the gateway sends ALL broadcasts (keys.size===0), so the
   // harness catches whatever session you start next, any video id.
   const meetings = NATIVE ? [{ platform: PLATFORM, native_id: NATIVE }] : [];
   ws.send(JSON.stringify({ action: 'subscribe', meetings }));
   console.log(`[observe] watching ${NATIVE ? PLATFORM + '/' + NATIVE : 'ALL meetings'} · ${GATEWAY} · rec → ${REC}\n`);
-});
-ws.on('error', (e) => console.log('[observe] ws error:', e.message));
-ws.on('close', () => console.log('[observe] ws closed'));
-ws.on('message', (d) => {
-  let m; try { m = JSON.parse(d.toString()); } catch { return; }
+};
+ws.onerror = (e) => console.log('[observe] ws error:', e?.message || 'connection failed — is the desktop up on :8056?');
+ws.onclose = () => console.log('[observe] ws closed');
+ws.onmessage = (ev) => {
+  let m; try { m = JSON.parse(ev.data); } catch { return; }
   if (m.type !== 'transcript') return;
   appendFileSync(REC, JSON.stringify({ ms: Date.now() - t0, speaker: m.speaker, confirmed: m.confirmed, pending: m.pending }) + '\n');
   if (firstFrameMs === null) firstFrameMs = Date.now();
@@ -68,7 +70,7 @@ ws.on('message', (d) => {
     console.log(`${T()}  \x1b[41m⚠ LOST\x1b[0m [${m.speaker}] pending cleared, never confirmed: "${lastPend.get(m.speaker).text}"`);
     lastPend.delete(m.speaker);
   }
-});
+};
 
 setInterval(() => {
   const all = [...seg.values()].filter((s) => s.confirmedMs);
