@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx src/index.ts",
-    "test": "tsx src/config.test.ts && tsx src/orchestrator.test.ts",
+    "test": "tsx src/config.test.ts && tsx src/orchestrator.test.ts && tsx src/adapters/lifecycle-http.test.ts && tsx src/adapters/transcript-redis.test.ts && tsx src/adapters/acts-redis.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
@@ -20,7 +20,8 @@
     "@vexa/mixed-pipeline": "workspace:*",
     "@vexa/transcribe-whisper": "workspace:*",
     "ajv": "^8.17.0",
-    "ajv-formats": "^3.0.1"
+    "ajv-formats": "^3.0.1",
+    "redis": "^4.7.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
