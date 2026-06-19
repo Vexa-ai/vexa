@@ -13,9 +13,10 @@
 
 import { detectMeeting, isMixedHost, MeetingRef } from './meeting';
 import { encodeAudioFrame, encodeEvent } from '@vexa/capture-codec';
+import { type CaptureStatus, isActive, onFrameObserved, noSignalCheck } from './capture-liveness';
 
 interface SessionState {
-  status: 'idle' | 'connecting' | 'capturing' | 'error';
+  status: CaptureStatus;
   /** Capture suspended (audio/hints dropped) but the session stays alive —
    *  resume continues the SAME meeting. Stop ends it. */
   paused: boolean;
@@ -66,6 +67,12 @@ let tabStreamId: string | null = null;
 const MIXED = new Set(['youtube', 'zoom', 'teams']);
 const isMixed = (p: string | null | undefined): boolean => !!p && MIXED.has(p);
 
+// ── P21 capture liveness: state is EARNED by observed frames, not the Start command.
+const NO_SIGNAL_MS = 6000;
+let startedAt = 0;     // when the WS went 'ready' (warm-up grace baseline)
+let lastFrameAt = 0;   // last audio frame actually observed (0 = none yet this session)
+let framesSeen = 0;    // audio frames observed this session
+
 /** Per-tab meeting ref captured from a JOIN URL the tab navigated through. Teams'
  *  new web app (teams.cloud.microsoft) and Zoom's web client STRIP the meeting id
  *  from the URL once you're in — only the join link (/meet/<id>, /j/<id>) carries
@@ -111,7 +118,7 @@ function startTabAudio(): void {
 }
 
 async function startCaptureForTab(tabId: number, url: string, meetingRef?: MeetingRef): Promise<void> {
-  if (state.status === 'capturing' || state.status === 'connecting') return;
+  if (isActive(state.status)) return;
 
   // An explicit ref wins. No meeting anywhere → voice-notepad mode: capture the
   // mic via the offscreen document under the synthetic 'note' platform.
@@ -151,7 +158,11 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
       const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
       if (msg.type === 'ready') {
         state.meetingId = msg.meeting_id;
-        state.status = 'capturing';
+        // P21: connected + capture begun, but NO frame yet → 'starting', not 'capturing'.
+        // The first observed audio frame (sendAudio) earns 'capturing'; the watchdog flips
+        // to 'no-signal' if none arrives — so the panel can't show "Listening" over silence.
+        state.status = 'starting';
+        startedAt = Date.now(); lastFrameAt = 0; framesSeen = 0;
         broadcastStatus();
         shipTelemetry('session-ready');
         if (state.platform === 'note') {
@@ -219,7 +230,7 @@ async function startCaptureActiveTab(): Promise<void> {
 /** Auto-start when a meeting tab reports it's in a meeting (if enabled + configured). */
 async function maybeAutoStart(tabId?: number, url?: string, meetingRef?: MeetingRef): Promise<void> {
   if (!tabId || !url) return;
-  if (state.status === 'capturing' || state.status === 'connecting') return;
+  if (isActive(state.status)) return;
   const cfg = await chrome.storage.local.get(['autoStart', 'apiKey']);
   if (cfg.autoStart === false) return;          // default ON
   if (!cfg.apiKey) return;                       // need an API key configured first
@@ -259,6 +270,7 @@ async function stopCapture(): Promise<void> {
   state.paused = false;
   state.meetingId = null;
   state.streams = 0;
+  startedAt = 0; lastFrameAt = 0; framesSeen = 0;   // P21 liveness counters
   broadcastStatus();
   shipTelemetry('session-stop');
   trackFrames.clear();
@@ -270,6 +282,10 @@ async function stopCapture(): Promise<void> {
 const trackFrames = new Map<number, { frames: number; lastAt: number }>();
 function sendAudio(index: number, pcm: number[], speakerName?: string): void {
   if (state.paused) return; // paused: capture runs, nothing ships
+  // P21 EVIDENCE: a real frame is what earns 'capturing' (promotes starting/no-signal → capturing).
+  lastFrameAt = Date.now(); framesSeen++;
+  const promoted = onFrameObserved(state.status);
+  if (promoted !== state.status) { state.status = promoted; state.error = null; broadcastStatus(); }
   const t = trackFrames.get(index) || { frames: 0, lastAt: 0 };
   t.frames++; t.lastAt = Date.now();
   trackFrames.set(index, t);
@@ -320,8 +336,19 @@ async function shipTelemetry(reason: string): Promise<void> {
   } catch { /* telemetry must never break capture */ }
 }
 setInterval(() => {
-  if (state.status === 'capturing' || state.status === 'connecting' || state.status === 'error') shipTelemetry('interval');
+  if (isActive(state.status) || state.status === 'error') shipTelemetry('interval');
 }, 10000);
+
+// P21 no-frames watchdog: a started/active capture with no observed frame for
+// NO_SIGNAL_MS flips to 'no-signal' with an actionable cause (P18 liveness, client-side) —
+// the "Listening — capturing 0 stream(s)" case becomes a visible, self-diagnosing state.
+setInterval(() => {
+  const r = noSignalCheck({
+    status: state.status, paused: state.paused, frames: framesSeen,
+    lastFrameAt, startedAt, now: Date.now(), noSignalMs: NO_SIGNAL_MS, mixed: isMixed(state.platform),
+  });
+  if (r && r.status !== state.status) { state.status = r.status; state.error = r.error; broadcastStatus(); shipTelemetry('no-signal'); }
+}, 2000);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
@@ -415,7 +442,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // attribution resume without manual Stop/Start.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (tabId !== state.tabId || changeInfo.status !== 'complete') return;
-  if (state.status !== 'capturing' && state.status !== 'connecting') return;
+  if (!isActive(state.status)) return;
   if (state.platform === 'note') return;
   // Same tab, DIFFERENT meeting (user joined a new call) → the session must
   // restart bound to the new native id, not keep writing into the old meeting.
@@ -519,7 +546,7 @@ setInterval(async () => {
       // ingest session, and resets the transcription buffer. Defer until idle.
       // The panel surfaces a "background stale → Reload now" banner so the dev
       // isn't stuck on old code (esp. with auto-start keeping capture on).
-      if (state.status === 'capturing' || state.status === 'connecting') {
+      if (isActive(state.status)) {
         state.diskBuild = cur; broadcastStatus(); return;
       }
       chrome.runtime.reload();

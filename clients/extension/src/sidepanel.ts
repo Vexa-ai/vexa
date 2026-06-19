@@ -11,9 +11,10 @@
  * script to begin per-participant capture.
  */
 import { createTranscriptManager, groupSegments, type TranscriptSegment } from './transcript-rendering';
+import { type CaptureStatus, isActive } from './capture-liveness';
 
 interface PanelState {
-  status: 'idle' | 'connecting' | 'capturing' | 'error';
+  status: CaptureStatus;
   paused?: boolean;
   platform: string | null;
   nativeMeetingId: string | null;
@@ -163,6 +164,12 @@ function renderFeed(): void {
     feed.scrollTop = feed.scrollHeight;
   } else if (state.status === 'capturing' && state.paused) {
     feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#10074;&#10074;</div><div>Paused — press Resume to keep capturing.</div></div>`;
+  } else if (state.status === 'starting') {
+    // P21: connected, but NOT yet "Listening" — no audio frame has flowed.
+    feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#8987;</div><div>Starting capture… waiting for the first audio frame.</div></div>`;
+  } else if (state.status === 'no-signal') {
+    // P21/P18: the "capturing 0 streams" case, now an honest, self-diagnosing state.
+    feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#128263;</div><div>${escapeHtml(state.error || 'No audio — capturing 0 streams.')}</div></div>`;
   } else {
     feed.innerHTML = `<div class="empty" id="emptyState"><div style="font-size:22px;">&#127911;</div>`
       + `<div>Join a Google Meet and Vexa will capture it. Read the transcript on the dashboard.</div></div>`;
@@ -196,12 +203,14 @@ function applyState(s: PanelState): void {
   pill.classList.toggle('live', s.status === 'capturing' && !s.paused);
   pillText.textContent =
     s.status === 'capturing' ? (s.paused ? 'Paused' : 'LIVE')
+    : s.status === 'starting' ? 'Starting…'
+    : s.status === 'no-signal' ? 'No signal'
     : s.status === 'connecting' ? 'Connecting'
     : s.status === 'error' ? 'Error'
     : 'Idle';
   const toggle = $('toggleBtn') as HTMLButtonElement;
   const stopBtn = $('stopBtn') as HTMLButtonElement;
-  if (s.status === 'capturing' || s.status === 'connecting') {
+  if (isActive(s.status)) {
     // Live: Pause suspends (session stays alive, Resume continues the same
     // meeting); Stop ends it. Two distinct verbs, two buttons.
     toggle.innerHTML = s.paused ? '&#9654; Resume' : '&#10074;&#10074; Pause';
@@ -312,7 +321,7 @@ $('themeBtn').addEventListener('click', () => {
 $('gearBtn').addEventListener('click', () => showSettings($('settings').style.display !== 'flex'));
 $('stopBtn').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'STOP' }));
 $('toggleBtn').addEventListener('click', async () => {
-  if (state.status === 'capturing' || state.status === 'connecting') {
+  if (isActive(state.status)) {
     chrome.runtime.sendMessage({ type: state.paused ? 'RESUME' : 'PAUSE' });
     return;
   }
@@ -339,7 +348,7 @@ setInterval(async () => {
   try {
     const cur = await fetch(stampUrl, { cache: 'no-store' }).then(r => r.text());
     if (knownStamp && cur && cur !== knownStamp) {
-      if (state.status === 'capturing' || state.status === 'connecting') return; // never reload mid-capture
+      if (isActive(state.status)) return; // never reload mid-capture
       chrome.runtime.reload();
     }
   } catch { /* stamp unreadable; skip */ }
