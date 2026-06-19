@@ -1,0 +1,13 @@
+[project]
+name = "vexa-agent-api"
+version = "0.12.0"
+description = "The agent control plane — turns a transcript.v1 input into a governed action committed to a user workspace (workspace.v1), spawning the worker via runtime.v1."
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2", "pydantic-settings>=2", "jsonschema>=4", "referencing>=0.30", "pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

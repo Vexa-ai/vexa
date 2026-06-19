@@ -1,0 +1,73 @@
+"""Contract loading + validation — the published seams the agent touches.
+
+The agent CONSUMES ``meetings/contracts/transcript.v1`` and PRODUCES documents conforming to
+``agent/contracts/workspace.v1``. Both are crossed as language-neutral JSON Schema **read by path**
+(P4): we never import meetings (or any other domain's) Python — that ``meetings ⊥ agent`` boundary
+is enforced by the language/format seam, not by trust.
+
+Schemas are located by walking up to the monorepo root (the dir that holds ``meetings/`` and
+``agent/``), so the package stays liftable regardless of where it is invoked from.
+"""
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+from pathlib import Path
+from typing import Iterable
+
+import jsonschema
+from referencing import Registry, Resource
+
+# The published seams, relative to the monorepo root.
+_TRANSCRIPT_SCHEMA = Path("meetings/contracts/transcript.v1/transcript.schema.json")
+_WORKSPACE_SCHEMA = Path("agent/contracts/workspace.v1/workspace.schema.json")
+
+
+def _repo_root() -> Path:
+    """Walk up from this file to the dir that owns both ``meetings/`` and ``agent/``."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / _TRANSCRIPT_SCHEMA).exists() and (parent / _WORKSPACE_SCHEMA).exists():
+            return parent
+    raise FileNotFoundError(
+        "could not locate the monorepo root (a dir containing both "
+        "meetings/contracts/transcript.v1 and agent/contracts/workspace.v1)"
+    )
+
+
+@lru_cache(maxsize=None)
+def _load(rel: Path) -> dict:
+    return json.loads((_repo_root() / rel).read_text())
+
+
+@lru_cache(maxsize=None)
+def _validator(rel: Path, shape: str) -> jsonschema.Draft202012Validator:
+    schema = _load(rel)
+    registry = Registry().with_resource(schema["$id"], Resource.from_contents(schema))
+    return jsonschema.Draft202012Validator(
+        {"$ref": f"{schema['$id']}#/$defs/{shape}"}, registry=registry
+    )
+
+
+# ── transcript.v1 (CONSUMED) ─────────────────────────────────────────────────
+
+def validate_transcription(payload: dict) -> None:
+    """Validate a ``transcript.v1`` Transcription envelope. Raises ``ValidationError`` if non-conformant."""
+    _validator(_TRANSCRIPT_SCHEMA, "Transcription").validate(payload)
+
+
+def validate_segment(segment: dict) -> None:
+    """Validate a single ``transcript.v1`` TranscriptSegment."""
+    _validator(_TRANSCRIPT_SCHEMA, "TranscriptSegment").validate(segment)
+
+
+def iter_segments(payload: dict) -> Iterable[dict]:
+    """Validate a Transcription payload, then yield its segments (each also conformant)."""
+    validate_transcription(payload)
+    yield from payload.get("segments", [])
+
+
+# ── workspace.v1 (PRODUCED) ──────────────────────────────────────────────────
+
+def validate_entity_frontmatter(frontmatter: dict) -> None:
+    """Validate emitted workspace frontmatter against ``workspace.v1`` EntityFrontmatter (P8)."""
+    _validator(_WORKSPACE_SCHEMA, "EntityFrontmatter").validate(frontmatter)
