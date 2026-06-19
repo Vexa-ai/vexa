@@ -26,7 +26,12 @@ planning. You are always in exactly one mode (ADR-0015).
    missing/violated principle — fix the instance, then close the gap as a principle + its gate. This is
    how the principle-set grows (P18→P21 were each born this way). See ADR-0014.
 
-> *Expect → instrument → (human: minimal, cross-validated) → stop on surprise → root-cause to a principle → codify.*
+6. **Report facts, not evaluations.** Every result ships with its **raw evidence** — the command + actual
+   output, the counts/names of what was checked, and **what was NOT** (fakes vs real, type-checked vs
+   executed, instrument vs human). "Done"/"validated"/"works" is *your* interpretation — state it
+   separately and labelled, downstream of the facts, so the human reaches their own (P21, ADR-0016).
+
+> *Expect → instrument → (human: minimal, cross-validated) → stop on surprise → root-cause to a principle → codify. Report facts, not evaluations.*
 
 ## The hard rules (from the constitution)
 - **Green or it didn't happen.** `pnpm gates` must pass; an artifact "exists" only when gate-green (P9).

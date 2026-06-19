@@ -227,7 +227,9 @@ step names its practice and ends at a gate.
 4. **An unexpected error is a STOP.** Reality ≠ expectation ⇒ stop. Don't paper over it, blind-retry, or push past — an unpredicted behaviour is a *signal*, not a nuisance.
 5. **Root-cause every surprise to an architectural gap, and close it.** Each unexpected error is a *symptom* of a missing or violated principle. Trace it to that gap, fix the instance, and **codify the gap as a principle + its gate** so it cannot recur. *This is how the principle-set grows* — P18 (silent STT `402`), P19 (gate-green ≠ works), P20 (open read paths), P21 ("Listening" over silence) were each born from one such surprise. *(blameless root-cause; evolutionary architecture)*
 
-> **Collapsed:** *Expect → instrument → (human: minimal, cross-validated) → stop on surprise → root-cause to a principle → codify.*
+**Report facts, not evaluations.** Every result you report ships with the **raw evidence** that produced it — the command + its actual output, the counts and names of what was checked, and (crucially) **what was *not*** (fakes vs real, type-checked vs executed, instrument vs human, the boundary of the claim). "Done" / "validated" / "works" is *your* interpretation — state it separately and *labelled*, downstream of the facts, so the human (the ground-truth interpreter) reaches their own and can overturn yours. *An interpretation without its evidence is an unbacked claim (P21); surface the facts.* See ADR-0016.
+
+> **Collapsed:** *Expect → instrument → (human: minimal, cross-validated) → stop on surprise → root-cause to a principle → codify. Report facts, not evaluations.*
 
 **The brick lifecycle (how a module is born):** scaffold (one template, incl. its `README.md`: *what · surface · deps*) → define its contract (a nested
 port, or `contracts/*.v1` if it crosses a boundary) → implement behind the port → pass the gate suite →
