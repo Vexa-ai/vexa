@@ -20,7 +20,7 @@ Everything here **taps, drives, records, replays, or scores that one stream.**
 | `observe [platform] [native]` | live-watch a session: forming→churn→confirm, warm-up, `⚠ LOST` monitor, `⚠ HIJACK` flag | desktop only |
 | `replay <tape.jsonl>` | re-feed a recorded tape into the ingest **verbatim + deterministic** (`SPEED=`, `REPLAY_PLATFORM/REPLAY_NATIVE=`) | desktop only |
 | `analyze <platform> <native>` | score a transcript: per-speaker, `seg_N`, ✂ mid-cuts, ⊕ dups, **✗ mis-attribution** (content self-ID ≠ label) + **⚠ hijack** (`VEXA_NOISE_NAME=`); grep-friendly `SCORE` line | desktop only |
-| `capture <tape>` | **RAW-SIGNAL health** — is `ch999` (remote) minted? near-silent? stalling? Catches "flaky / no transcript" that's a sick FEED, not a pipeline bug (`CAPTURE` line). **Run this first when a session won't transcribe.** | tape only |
+| `capture <tape>` | **RAW-SIGNAL health (LANE-AWARE)** — mixed lane: is `ch999` minted / near-silent / stalling? gmeet lane: did **per-participant `ch0..N`** audio arrive (or only your mic ⇒ SOLO / gmeet not exercised)? Catches "flaky / no transcript" that's a sick FEED, not a pipeline bug (`CAPTURE` line; verdict `healthy`·`inconclusive`·`unhealthy`). **Run this first when a session won't transcribe.** | tape only |
 | `benchmark <tape> [p] [native]` | **LOSS oracle** — re-transcribe the tape's full audio offline (same STT), diff vs live: content/in-place **recall**, ✗ **truly-lost** + ~ **misplaced** spans (`BENCH` line) | desktop + STT env |
 | `noise` | one bot emits brief noise bursts — the active-speaker **flicker injector** (`NOISE_DUR_MS=`) | secrets + 🧑 |
 | `drive` | make admitted synthetic bots speak a timeline (`GAP_MEAN=`, `NOISE_KEY=`) | secrets + 🧑 |
