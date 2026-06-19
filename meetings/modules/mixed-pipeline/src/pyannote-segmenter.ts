@@ -84,6 +84,26 @@ function medianFilter3(arr: number[]): number[] {
   return out;
 }
 
+/** Min-run despeckle. A class run shorter than `minRun` frames is a transient
+ *  pyannote powerset wobble — a brief flip into an overlap or other-speaker class
+ *  WITHIN one continuous speaker — not a real turn. Replace it with the preceding
+ *  settled class so it emits no spurious speaker→speaker / overlap boundary (which
+ *  would hard-split the turn and shatter Whisper's window). Sustained changes
+ *  (>= minRun) are untouched, so real speaker handoffs/overlaps are NOT dropped —
+ *  i.e. this removes false-positive cuts without adding false negatives. */
+const MIN_RUN_FRAMES = 4;   // ≈52ms — below the shortest real turn; kills only wobbles
+function despeckle(arr: number[], minRun: number): number[] {
+  const out = arr.slice();
+  let i = 0;
+  while (i < out.length) {
+    let j = i;
+    while (j < out.length && out[j] === out[i]) j++;
+    if (j - i < minRun && i > 0) { const fill = out[i - 1]; for (let k = i; k < j; k++) out[k] = fill; }
+    i = j;
+  }
+  return out;
+}
+
 export interface PyannoteSegmenterConfig {
   /** How often to run inference. Default 500ms. Lower = lower latency
    *  but more CPU. Forward pass is ~50ms per call on modern CPU. */
@@ -251,7 +271,7 @@ export class PyannoteSegmenter {
       frameClasses[f] = best;
       frameConfidence[f] = 1 / sumExp;
     }
-    const smoothed = medianFilter3(frameClasses);
+    const smoothed = despeckle(medianFilter3(frameClasses), MIN_RUN_FRAMES);
     const frameMs = (window.length / SAMPLE_RATE) * 1000 / numFrames; // ≈13.04
     // pack-msteams-diarization-cutover (#394): scan the ENTIRE window
     // every time, not just the last freshWindowSamples worth. The fresh-
@@ -298,6 +318,10 @@ export class PyannoteSegmenter {
           : (curSet.length > prevSet.length ? 'overlap-onset'
             : (curSet.length < prevSet.length ? 'overlap-offset' : 'speaker→speaker'));
       const ev: BoundaryEvent = { tMs, kind, confidence: frameConfidence[f] };
+      // DEBUG (oversegmentation): show speaker→speaker cuts with the smoothed-class
+      // context around the cut frame — a brief flip back (e.g. 1112221 = wobble) vs
+      // a sustained relabel (1112222222 = real handoff) tells us whether to suppress.
+      if (process.env.VEXA_SEG_DEBUG && (kind === 'speaker→speaker' || kind === 'overlap-onset' || kind === 'overlap-offset')) console.log(`[seg] ${kind} @${(tMs / 1000).toFixed(1)}s ${prev}→${cur} ctx[${smoothed.slice(Math.max(0, f - 8), f + 9).join('')}]`);
       events.push(ev);
       this.lastEmittedBoundaryMs = tMs;
       this.onBoundary?.(ev);
