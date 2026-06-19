@@ -24,9 +24,11 @@ learning → codify, re-plan). Never drift; always in exactly one mode (ADR-0015
    ways** — a green instrument is provisional; a human "it works" is checked against an instrument. Then
    **instrumentalise the human's verdict** (a golden / eval baseline) so the cheap test calibrates to it.
 4. **An unexpected error is a STOP.** Reality ≠ expectation ⇒ stop. No paper-over, no blind retry.
-5. **Root-cause every surprise to an architectural gap, and codify it.** Each surprise is a *symptom* of a
-   missing/violated principle — fix the instance, then close the gap as a principle + its gate. This is
-   how the principle-set grows (P18→P21 were each born this way). See ADR-0014.
+5. **Root-cause every surprise — earn the learning with the human, promote it twice.** Each surprise is a
+   *symptom* of a missing/violated principle. Interpret it **with the human** (never mint a learning from
+   an instrument alone), fix the instance, then promote it to **both** the **architecture** (a principle +
+   gate + ADR) **and** the **learnings log** ([`docs/LEARNINGS.md`](docs/LEARNINGS.md) — always, even for a
+   practice/candidate with no P-number). How the principle-set grows (P18→P21). See ADR-0014/0018.
 
 6. **State the objective, then report facts — not evaluations.** A report assesses the result-state
    against the **current objective** (*result vs objective*), so name the objective first, then ship the
