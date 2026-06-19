@@ -3,6 +3,7 @@
 # runs a stage. Usage:
 #   ./bin/eval.sh launch     # send the speaker bots into the meeting (staggered)
 #   ./bin/eval.sh drive      # make admitted bots speak the timeline + log truth
+#   ./bin/eval.sh noise      # FAILURE-MODE injector — one bot emits brief noise bursts (active-speaker flicker)
 #   ./bin/eval.sh judge      # score the live transcript vs ground truth
 #   ./bin/eval.sh corpus     # (re)generate the TTS clip pools (FORCE_REGEN=1)
 #   ./bin/eval.sh observe    # LIVE-watch a session's transcript dynamics (local, no secrets)
@@ -16,7 +17,8 @@ SECRETS="${SECRETS:-$HERE/secrets.env}"
 case "${1:-}" in
   launch) exec node "$HERE/src/launch.mjs" ;;
   drive)  exec node "$HERE/src/drive.mjs" ;;
+  noise)  exec node "$HERE/src/noise.mjs" ;;
   corpus) exec node "$HERE/src/corpus.mjs" ;;
   judge)  exec python3 "$HERE/src/judge.py" ;;
-  *) echo "usage: eval.sh {launch|drive|judge|corpus|observe}"; exit 2 ;;
+  *) echo "usage: eval.sh {launch|drive|noise|judge|corpus|observe}"; exit 2 ;;
 esac

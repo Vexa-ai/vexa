@@ -28,6 +28,12 @@ const T = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6);
 const seg = new Map();              // segment_id → { firstMs, confirmedMs, text, churn }
 const lastPend = new Map();         // speaker → { text } — for the lost-transcript monitor
 let firstFrameMs = null, firstConfirmMs = null, lastEnd = null;
+// FAILURE-MODE flag: the noise bot (noise.mjs) never converses, so ANY confirmed
+// segment attributed to its display name is a flicker HIJACK. Set VEXA_NOISE_NAME
+// (= "<PREFIX>-<en>", e.g. "spk-Dmitry") to flag + count them live.
+const NOISE_NAME = process.env.VEXA_NOISE_NAME || '';
+const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+let hijacks = 0;
 
 const ws = new WebSocket(GATEWAY);
 ws.onopen = () => {
@@ -59,7 +65,10 @@ ws.onmessage = (ev) => {
       const st = +(s.start ?? 0), en = +(s.end ?? 0);
       const gap = lastEnd === null ? 0 : (st - lastEnd); lastEnd = en;
       const flag = (gap >= 0 && gap < 0.4 && m.speaker && /^seg_\d+$/.test(m.speaker)) ? ' \x1b[31m⟵split?\x1b[0m' : '';
-      console.log(`${T()}  \x1b[32m█\x1b[0m [${m.speaker}] ${st.toFixed(1)}–${en.toFixed(1)}s (${(en - st).toFixed(1)}s ${words}w gap=${gap.toFixed(1)}s) "${s.text}"${flag}`);
+      const hijack = NOISE_NAME && norm(m.speaker) === norm(NOISE_NAME);   // noise bot named ⇒ flicker hijack
+      if (hijack) hijacks++;
+      const bullet = hijack ? '\x1b[41m⚠ HIJACK\x1b[0m' : '\x1b[32m█\x1b[0m';
+      console.log(`${T()}  ${bullet} [${m.speaker}] ${st.toFixed(1)}–${en.toFixed(1)}s (${(en - st).toFixed(1)}s ${words}w gap=${gap.toFixed(1)}s) "${s.text}"${flag}`);
     }
   }
   // Lost-transcript monitor: a viewer saw pending text, then the draft was CLEARED
@@ -79,7 +88,8 @@ setInterval(() => {
   const avg = (w.reduce((a, b) => a + b, 0) / w.length).toFixed(1);
   const tiny = w.filter((x) => x <= 3).length;
   const churn = (all.reduce((a, s) => a + s.churn, 0) / all.length).toFixed(1);
-  console.log(`\n\x1b[36m──[${T()}] confirmed=${all.length}  avg=${avg}w  tiny(≤3w)=${tiny} (${Math.round((100 * tiny) / all.length)}%) ← oversegmentation  avgChurn=${churn}──\x1b[0m\n`);
+  const hj = NOISE_NAME ? `  hijacks=${hijacks}` : '';
+  console.log(`\n\x1b[36m──[${T()}] confirmed=${all.length}  avg=${avg}w  tiny(≤3w)=${tiny} (${Math.round((100 * tiny) / all.length)}%) ← oversegmentation  avgChurn=${churn}${hj}──\x1b[0m\n`);
 }, 12000);
 
 process.on('SIGINT', () => { console.log(`\n[observe] ${seg.size} segments seen · raw → ${REC}`); process.exit(0); });

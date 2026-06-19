@@ -29,6 +29,9 @@ const GAP_MEAN = Number(process.env.GAP_MEAN ?? 0.5);
 const GAP_SD = Number(process.env.GAP_SD ?? 0.8);
 const GAP_MIN = Number(process.env.GAP_MIN ?? -1.5);
 const GAP_MAX = Number(process.env.GAP_MAX ?? 2.5);
+// The noise bot (failure-mode injector, noise.mjs) is NOT a conversational speaker —
+// exclude its key so its name can only reach the transcript via a flicker = a hijack.
+const NOISE_KEY = process.env.NOISE_KEY || '';
 
 const rnd = (a) => a[Math.floor(Math.random() * a.length)];
 const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
@@ -43,7 +46,7 @@ async function post(p) {
 
 // Next speaker — never the same as the last, so every overlap is two DIFFERENT people.
 function pick(act, lastKey) {
-  let pool = SPEAKERS.filter((s) => act.has(s.key));
+  let pool = SPEAKERS.filter((s) => act.has(s.key) && s.key !== NOISE_KEY);
   if (pool.length > 1 && lastKey) pool = pool.filter((s) => s.key !== lastKey);
   return pool.length ? rnd(pool) : null;
 }
