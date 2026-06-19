@@ -1,0 +1,30 @@
+{
+  "name": "@vexa/bot",
+  "version": "0.1.0",
+  "description": "The meetings ephemeral container WORKER (P7): boots from VEXA_BOT_CONFIG (invocation.v1), joins a meeting, captures → transcribes → emits transcript.v1 + lifecycle.v1, then dies. A modular monolith behind ports — the orchestrator core is offline-provable; browser/redis/http are adapters at the composition root.",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "test": "tsx src/config.test.ts && tsx src/orchestrator.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {
+    "@vexa/join": "workspace:*",
+    "@vexa/remote-browser": "workspace:*",
+    "@vexa/recording": "workspace:*",
+    "@vexa/record-chunker": "workspace:*",
+    "@vexa/gmeet-pipeline": "workspace:*",
+    "@vexa/mixed-pipeline": "workspace:*",
+    "@vexa/transcribe-whisper": "workspace:*",
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

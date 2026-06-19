@@ -243,6 +243,46 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  meetings/services/bot:
+    dependencies:
+      '@vexa/gmeet-pipeline':
+        specifier: workspace:*
+        version: link:../../modules/gmeet-pipeline
+      '@vexa/join':
+        specifier: workspace:*
+        version: link:../../modules/join
+      '@vexa/mixed-pipeline':
+        specifier: workspace:*
+        version: link:../../modules/mixed-pipeline
+      '@vexa/record-chunker':
+        specifier: workspace:*
+        version: link:../../modules/record-chunker
+      '@vexa/recording':
+        specifier: workspace:*
+        version: link:../../modules/recording
+      '@vexa/remote-browser':
+        specifier: workspace:*
+        version: link:../../modules/remote-browser
+      '@vexa/transcribe-whisper':
+        specifier: workspace:*
+        version: link:../../modules/whisper
+      ajv:
+        specifier: ^8.17.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      tsx:
+        specifier: ^4.19.0
+        version: 4.22.4
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
   meetings/services/desktop:
     dependencies:
       '@vexa/capture-codec':
