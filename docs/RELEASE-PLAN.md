@@ -1,0 +1,38 @@
+# RELEASE-PLAN — the full path to 0.12
+
+The **always-current plan** (ADR-0015): the staged path from where we are to the **0.12 OSS release**.
+Keep this current — it is the macro expectation the expectation–reality loop (§8) executes against.
+Detailed rules live in [`ARCHITECTURE.md`](ARCHITECTURE.md); decisions in [`adr/`](adr/).
+
+_Last updated: 2026-06-19._
+
+## Milestone
+A self-hostable **0.12** where every component is validated **in isolation (L1/L2) and integrated (L3/L4)**.
+**Release spine (order):** desktop+extension → standalone bot → meeting-api → dashboard → agents → deploy → release.
+
+## Critical path & parallelism
+- **Critical path:** bot (P2) → meeting-api (P3) → dashboard (P4) → deploy (P6) → release.
+- **Independent roots (parallel):** desktop+extension (P1), agents (P5), identity/gateway. All build behind the **sealed contracts** (`runtime/transcript/lifecycle/acts/invocation/recording/workspace .v1`).
+
+## Status — done · in-flight · remaining
+
+| Phase | State | Notes |
+|---|---|---|
+| **P0** process + gates | ✅ done | remote+CI green; `gate:contract-version`·`fault-surfacing`·`client-liveness` **have**; contracts frozen |
+| **Constitution growth** | ✅ done | **P18** fail-loud · **P19** prove-at-altitude · **P20** complete-mediation · **P21** state-from-evidence; process: **ADR-0014** (expectation–reality loop) · **ADR-0015** (plan/exec modes) |
+| **P1** desktop + extension | 🟡 code done · **L4 pending** | endpoints + recording playback + mic-CSP + capture tests + **P21 evidence-driven capture state**; live re-test is the open step |
+| **P2** bot | 🟡 core done · transports next | composition root + ports + orchestrator + 42 L2 (3 review bugs fixed). **Increment 2 = live transports** (redis/http/recording, then browser join) |
+| **P5** agents | 🟡 skeleton done | Python agent-api, transcript.v1 seam, 15 pytest (ADR-0009). LLM loop + real adapters remain |
+| **P3** meeting-api + identity/gateway | ⬜ not started | cloud receiver (recording.v1/lifecycle.v1 + REST/WS + Postgres); the eval 4-op API |
+| **P4** dashboard | ⬜ not started | vendored Next.js → wire to live API; security debt (JWT default-secret) |
+| **P6** deploy | ⬜ not started | lite · compose · helm, validated |
+| **Release** | ⬜ | full-system L4 ≥ baseline |
+
+## Current objective
+**Validate the P1 capture lanes live + capture the 0.12 eval baseline.** STT is unblocked (internal token from vexa-secrets); the desktop is up with tape-recording. Instrument-validated already: STT+pipeline (replay→13 segs), capture-liveness (25 L2), gates green. **Open (human-required, minimal surface):** reload the rebuilt extension → YouTube (mint stream) + Meet (2nd speaker); the tape `capture`/`analyze` instruments adjudicate (§8 — cross-validate the human).
+
+## Gate debts (make the new principles bite — close before release)
+- **`capture.v1`** sealed + golden-pinned (P4 refinement — the busiest wire is still ungated).
+- **`gate:eval-baseline`** (P19) — the L4 eval artifact as a required gate.
+- **`gate:access`** + the `canAccess` port on `/transcripts`·`/recordings`·`/ws` (P20).
+- **`gate:health`** + no-frames/liveness on the desktop (P18 liveness, server-side).

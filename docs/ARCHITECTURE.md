@@ -211,7 +211,15 @@ step names its practice and ends at a gate.
 | **Record decisions as an ADR** — *Architecture Decision Record*: a short, dated, numbered `docs/adr/NNNN.md` capturing **one** decision = context · the decision · the trade-off accepted | the durable "why," so a boundary isn't relitigated later | Nygard ADRs |
 | **Big work is staged with per-stage validation gates** | each stage is specific and ends at a *runnable* proof; never advance on red | staged migration |
 
-**The expectation–reality loop — how we run a session, and how the principle-set grows:**
+**Planning mode ⇄ execution mode — never build without a current plan:**
+- **A current plan always exists** — the *full path* from where we are to the current dev-release objectives (the milestone): the staged route to "done", each stage with a runnable proof, plus the critical path and what's parallelizable. It is a **maintained doc** ([`docs/RELEASE-PLAN.md`](RELEASE-PLAN.md)), not a memory. *The plan is the macro expectation; the expectation–reality loop below executes against it.*
+- **Planning mode** produces or revises that plan *before* building — decompose the objective into staged proofs, mark the parallel workstreams, set each stage's definition-of-done. Output = an approved plan. *(design-before-build; staged migration)*
+- **Execution mode** runs the plan one stage at a time under the expectation–reality loop — instrument-validated, stop-on-surprise.
+- **The modes interlock.** A surprise that root-causes to a principle gap — or a changed objective — loops **back to planning**: revise the plan, then resume. The plan is *living* and always current; you are always in one mode or the other, never improvising without a path.
+
+> **Collapsed:** *Plan the full path (planning mode) → execute a stage under the loop (execution mode) → on a gap/surprise, re-plan. Never build without a current plan.*
+
+**The expectation–reality loop — how execution mode runs, and how the principle-set grows:**
 1. **State the expected behaviour first.** Before acting, name what the system *should* do and what "done" looks like for the current objective — the contract for the work in front of you. *You can't detect a divergence you never defined.* *(expectation-first; P19/P21 applied to the work itself)*
 2. **Match reality against it — by instrument, definitely.** Default to **instrumented, definite validation**: deterministic gates, unit/integration tests, the `eval/` `replay`·`analyze`·`benchmark` path — reproducible, no judgement call, no human. "It ran" is a claim; the instrument is the proof.
 3. **The human is the highest, scarcest resource — and fallible.** Spend human validation **last and least**. When only a human can decide (real browser behaviour, real-meeting quality): **minimise** the ask; hand a **minimal, fully-instructed surface** (the exact `🧑` step, never a vague request); and **cross-validate the human — never take it as definitive.** "I topped up the balance" / "it works" is *intent*, not evidence (P21) — confirm it with an instrument (ping the service, census the tape) before relying on it. A human is one more signal that must be evidence-backed.

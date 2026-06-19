@@ -3,6 +3,12 @@
 This repo is governed by **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — the constitution (P1–P21,
 the gate suite, the development process). This file is the *front door*: how you run a session in it.
 
+## Plan first — two modes
+Never build without a current plan. **Planning mode** produces/revises the *full path* to the dev-release
+objectives ([`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) — the always-current, staged plan); **execution
+mode** runs it one stage at a time under the loop below. A surprise or changed objective → back to
+planning. You are always in exactly one mode (ADR-0015).
+
 ## How you work — the expectation–reality loop (§8)
 1. **Expect first.** State what the system *should* do and what "done" looks like for the current
    objective *before* acting. You can't detect a divergence you never defined.
