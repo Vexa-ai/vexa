@@ -130,15 +130,31 @@ import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-cap
    * is page-accessible from the MAIN world. replay:false (the <video> already plays).
    */
   async function startYoutubeMixed(): Promise<void> {
-    const video = document.querySelector('video') as HTMLVideoElement | null;
-    const stream = (video as unknown as { captureStream?: () => MediaStream })?.captureStream?.();
-    if (!video || !stream || stream.getAudioTracks().length === 0) {
-      console.log(`${TAG} [yt] no playing <video> audio yet — press play, then Start`);
-      return;
+    // Poll for a PLAYING <video> whose captureStream exposes a live audio track.
+    // YouTube reports NO audio track until the element is actually playing audio,
+    // and transient ad/preview <video>s exist — so retry rather than fail once.
+    // (Failing once is what made capture "take a minute to start": a Start fired
+    // before the video was playing saw no track and gave up, forcing a re-Start.)
+    // Bounded so a never-playing tab doesn't spin forever.
+    const grab = (): MediaStream | null => {
+      for (const v of [...document.querySelectorAll('video')] as HTMLVideoElement[]) {
+        try {
+          const s = (v as unknown as { captureStream?: () => MediaStream }).captureStream?.();
+          if (!v.paused && s && s.getAudioTracks().length > 0) return s;
+        } catch { /* element not capturable yet */ }
+      }
+      return null;
+    };
+    let stream: MediaStream | null = null;
+    for (let i = 0; i < 120 && running && isCurrent() && !stream; i++) {
+      stream = grab();
+      if (!stream) await new Promise((r) => setTimeout(r, 500));
     }
+    if (!stream) { console.log(`${TAG} [yt] gave up waiting for a playing <video> with audio`); return; }
     mixedCapture = await createMixedAudioCapture(stream, (pcm) => {
       if (isCurrent() && running) post('audio', { index: MIXED_INDEX, pcm: Array.from(pcm) });
     }, { replay: false, log: (m) => console.log(`${TAG} [yt] ${m}`) });
+    post('capture-started', { streams: streamCount() });
     console.log(`${TAG} [yt] mixed capture started → channel ${MIXED_INDEX}`);
   }
 

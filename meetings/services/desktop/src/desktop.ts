@@ -147,6 +147,8 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
         sink: { segment: (t) => broadcast(key, t), draft: (t) => { if (t.text.trim()) broadcast(key, t); }, finalize: () => { /* live */ } },
       });
     }
+    let mixF = 0, micF = 0, evHints = 0;
+    const hb = isMixed ? setInterval(() => log(`  [hb ${key}] ch999=${mixF}f ch1000=${micF}f hints=${evHints}`), 5000) : null;
     log(`[desktop] ▶ ${key} (${isMixed ? 'mixed' : 'gmeet'})`);
     ws.send(JSON.stringify({ type: 'ready' }));
     ws.on('message', (data: any, isBinary: boolean) => {
@@ -154,9 +156,9 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
         if (isBinary) {
           const b = Buffer.from(data);
           const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
-          if (f) { if (f.speakerIndex === MIXED_CHANNEL) tc?.feedAudio(f.samples, f.ts); else if (f.speakerIndex === MIC_CHANNEL) micTc?.feedAudio(f.samples, f.ts); }
+          if (f) { if (f.speakerIndex === MIXED_CHANNEL) { mixF++; tc?.feedAudio(f.samples, f.ts); } else if (f.speakerIndex === MIC_CHANNEL) { micF++; micTc?.feedAudio(f.samples, f.ts); } }
         } else {                          // mixed lane: the WHO signal rides EVENT frames (active-speaker hints)
-          try { const ev = JSON.parse(data.toString()); if (ev?.kind === 'active-speaker' && ev.speaker) tc?.recordHint(ev.speaker, (ev.detail?.hint as HintKind) || 'dom-active', ev.ts ?? ev.tMs ?? 0, !!ev.detail?.isEnd); } catch { /* */ }
+          try { const ev = JSON.parse(data.toString()); if (ev?.kind === 'active-speaker' && ev.speaker) { evHints++; tc?.recordHint(ev.speaker, (ev.detail?.hint as HintKind) || 'dom-active', ev.ts ?? ev.tMs ?? 0, !!ev.detail?.isEnd); } } catch { /* */ }
         }
         return;
       }
@@ -165,7 +167,7 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
       if (f) pipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts);   // route by CHANNEL, name = glow at capture
     });
-    const finish = async () => { try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ } const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`); };
+    const finish = async () => { if (hb) clearInterval(hb); try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ } const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`); };
     ws.on('close', finish);
     ws.on('error', finish);
   });
