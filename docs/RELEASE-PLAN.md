@@ -4,7 +4,7 @@ The **always-current plan** (ADR-0015): the staged path from where we are to the
 Keep this current — it is the macro expectation the expectation–reality loop (§8) executes against.
 Detailed rules live in [`ARCHITECTURE.md`](ARCHITECTURE.md); decisions in [`adr/`](adr/).
 
-_Last updated: 2026-06-19._
+_Last updated: 2026-06-20._
 
 ## Milestone
 A self-hostable **0.12** where every component is validated **in isolation (L1/L2) and integrated (L3/L4)**.
@@ -21,7 +21,7 @@ A self-hostable **0.12** where every component is validated **in isolation (L1/L
 | **P0** process + gates | ✅ done | remote+CI green; `gate:contract-version`·`fault-surfacing`·`client-liveness` **have**; contracts frozen |
 | **Constitution growth** | ✅ done | **P18** fail-loud · **P19** prove-at-altitude · **P20** complete-mediation · **P21** state-from-evidence; process: **ADR-0014** (expectation–reality loop) · **ADR-0015** (plan/exec modes) |
 | **P1** desktop + extension | 🟡 code done · **L4 pending** | endpoints + recording playback + mic-CSP + capture tests + **P21 evidence-driven capture state**; live re-test is the open step |
-| **P2** bot | 🟡 core done · transports next | composition root + ports + orchestrator + 42 L2 (3 review bugs fixed). **Increment 2 = live transports** (redis/http/recording, then browser join) |
+| **P2** bot | 🟡 core + 2a transports done · **2b browser next** | composition root + ports + orchestrator + 42 L2 (3 review bugs fixed); **2a = live redis/HTTP transports** (lifecycle·transcript·acts, L3). **2b = browser** (join via @vexa/join+remote-browser, capture→pipeline, recording upload — L4) |
 | **P5** agents | 🟡 skeleton done | Python agent-api, transcript.v1 seam, 15 pytest (ADR-0009). LLM loop + real adapters remain |
 | **P3** meeting-api + identity/gateway | ⬜ not started | cloud receiver (recording.v1/lifecycle.v1 + REST/WS + Postgres); the eval 4-op API |
 | **P4** dashboard | ⬜ not started | vendored Next.js → wire to live API; security debt (JWT default-secret) |
