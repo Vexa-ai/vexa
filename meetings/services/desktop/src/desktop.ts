@@ -17,6 +17,7 @@
  * loop can drive it in-process. STT is the real backend (TRANSCRIPTION_SERVICE_URL/_TOKEN).
  */
 import * as http from 'node:http';
+import { createWriteStream } from 'node:fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import { createGmeetPipeline, type TranscriptSegment } from '@vexa/gmeet-pipeline';
@@ -116,6 +117,28 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     const transcribe = async (pcm: Float32Array, prompt?: string) => { if (!txClient) throw new Error('no STT (set TRANSCRIPTION_SERVICE_URL)'); return txClient.transcribe(pcm, lang, prompt); };
     const isMixed = MIXED_PLATFORMS.has(platform);
 
+    // ── Raw-signal tape recorder (env-gated VEXA_RECORD_TAPE=<dir>) ──
+    // Append this session's VERBATIM capture.v1 ingest stream — binary audio frames
+    // (ch999 mix / ch1000 mic / per-channel gmeet) + text event hints (active-speaker)
+    // — to a JSONL tape, so any live bug can be replayed deterministically with no
+    // meeting (eval.sh replay <tape>). A SECOND 'message' listener that never touches
+    // the pipeline path. Off unless VEXA_RECORD_TAPE is set.
+    let tape: ReturnType<typeof createWriteStream> | null = null;
+    if (process.env.VEXA_RECORD_TAPE) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const tapePath = `${process.env.VEXA_RECORD_TAPE}/tape-${platform}-${native}-${stamp}.jsonl`;
+      tape = createWriteStream(tapePath);
+      tape.write(JSON.stringify({ v: 1, platform, native, language: lang ?? null, startedAt: new Date().toISOString() }) + '\n');
+      const tape0 = Date.now();
+      ws.on('message', (data: any, isBinary: boolean) => {
+        if (!tape) return;
+        const t = Date.now() - tape0;
+        if (isBinary) { const b = Buffer.from(data); tape.write(JSON.stringify({ t, bin: true, d: b.toString('base64') }) + '\n'); }
+        else tape.write(JSON.stringify({ t, bin: false, d: data.toString() }) + '\n');
+      });
+      log(`[desktop] ⏺ recording raw tape → ${tapePath}`);
+    }
+
     // ── MIXED lane (zoom/teams/youtube): one mixed remote stream (ch 999) + the local "You" mic
     //    (ch 1000), each its OWN ChunkedTranscriber. pyannote cuts; the speaker is the max-overlap
     //    active-speaker HINT (event frames → recordHint). No per-channel streams, no diarization. ──
@@ -167,7 +190,7 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
       if (f) pipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts);   // route by CHANNEL, name = glow at capture
     });
-    const finish = async () => { if (hb) clearInterval(hb); try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ } const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`); };
+    const finish = async () => { if (hb) clearInterval(hb); tape?.end(); try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ } const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`); };
     ws.on('close', finish);
     ws.on('error', finish);
   });
