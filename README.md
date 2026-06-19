@@ -14,7 +14,7 @@ the constitution (P1–P12), the gate suite, and the development process.
 | `gateway/` | the edge — auth · routing · WS fan-out |
 | `integrations/` | `out/` emit adapters · `in/` connectors |
 | `clients/` | dashboard · extension · desktop · telegram · mcp |
-| `schemas/` | published contracts (JSON Schema + goldens + TS/Py codegen) |
+| `<domain>/contracts/` | published contracts **nest with their owner domain** (JSON Schema + goldens) — no top-level `schemas/` (see ARCHITECTURE §3) |
 | `sdks/` | published client libraries |
 | `tools/` · `deploy/` · `docs/` | dev tooling · deployment topologies · docs + ADRs |
 
@@ -23,4 +23,9 @@ the constitution (P1–P12), the gate suite, and the development process.
 An artifact "exists" only when gate-green.
 
 ## Status
-**Stage 0b** — scaffold + tooling + gates, green-on-empty. Build order is contract-first: `schemas/` is next (Stage 1).
+Past **Stage 3.3.** The runtime kernel (process · docker · k8s, `runtime.v1`) and the **meetings**
+capture plane are real: gmeet + mixed lanes (zoom · teams · youtube), the `recording.v1` desktop
+receiver (ADR-0005), the L4 eval harness, and the `join` · `remote-browser` (authenticated) bricks.
+Six contracts sealed; **8 gates green**. Next, per the 0.12 release plan: harden the process, then the
+standalone bot · meeting-api · dashboard · agents · deploy. `agent · identity · gateway · integrations
+· sdks` are still scaffolds.
