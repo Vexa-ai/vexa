@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/vexa-ai-vexa-badge.png)](https://mseep.ai/app/vexa-ai-vexa)
+
 <p align="center" style="margin-bottom: 0.75em;">
   <img src="assets/logodark.svg" alt="Vexa Logo" width="56"/>
 </p>
