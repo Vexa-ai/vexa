@@ -1,0 +1,25 @@
+{
+  "name": "@vexa/recording",
+  "version": "0.1.0",
+  "description": "Recording brick — acquire (PulseAudio/MediaRecorder) + deliver (chunked upload) → recording.v1. Node twin of the recording.v1 master codec (buildRecordingMaster ↔ meeting-api recording_codec.py).",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx src/golden.test.ts && tsx src/golden-lifecycle.test.ts && tsx src/assemble.smoke.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {
+    "playwright": "1.56.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

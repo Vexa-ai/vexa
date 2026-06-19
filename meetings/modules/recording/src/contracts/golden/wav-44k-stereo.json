@@ -1,0 +1,11 @@
+{
+  "name": "wav-44k-stereo",
+  "format": "wav",
+  "description": "fmt (44.1k/stereo) copied from chunk 0",
+  "chunks": [
+    "UklGRiwAAABXQVZFZm10IBAAAAABAAIARKwAABCxAgAEABAAZGF0YQgAAAB8g4qRmJ+mrQ==",
+    "UklGRi4AAABXQVZFZm10IBAAAAABAAIARKwAABCxAgAEABAAZGF0YQoAAAC6wcjP1t3k6/L5"
+  ],
+  "master_sha256": "189639a2aadbd8ec2dd27cc0d38e470a942589ed74b26a0a74af95b3b5540b96",
+  "master_len": 62
+}

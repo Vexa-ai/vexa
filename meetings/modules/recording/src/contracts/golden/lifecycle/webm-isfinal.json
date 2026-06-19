@@ -1,0 +1,25 @@
+{
+  "name": "webm-isfinal",
+  "format": "webm",
+  "description": "in-order chunks + empty is_final → assembled on is_final",
+  "finalize": "is_final",
+  "frames": [
+    {
+      "seq": 0,
+      "isFinal": false,
+      "bytes": "HyYtNDtCSVBXXmVsc3qBiA=="
+    },
+    {
+      "seq": 1,
+      "isFinal": false,
+      "bytes": "PkVMU1phaG92fYSL"
+    },
+    {
+      "seq": 2,
+      "isFinal": true,
+      "bytes": ""
+    }
+  ],
+  "master_sha256": "966f2056fa2c5d6de6f148b3af935572b675c41048b6601bb93e8497ff35d041",
+  "master_len": 28
+}
