@@ -9,28 +9,34 @@
  *      ├─ mixed (zoom/teams/  ─► @vexa/mixed-pipeline (mix=ch999 + "You"=ch1000, pyannote-cut, named
  *      │   youtube)                                   from active-speaker HINTS on EVENT frames)
  *      ├─ STT egress           @vexa/transcribe-whisper (stt.v1)
+ *      ├─ recording.v1     ─►   RecordingSink port → @vexa/recording buildRecordingMaster → file
+ *      │   (same ingest WS; decodeRecordingChunk discriminates it from an audio frame)
  *      └─ store + deliver  ─►   in-memory + gateway
- *   gateway (:8056): POST /extension/sessions · GET /bots · GET /transcripts/{p}/{n} · WS /ws
+ *   gateway (:8056): POST /extension/sessions · GET /bots · GET /transcripts/{p}/{n}
+ *                  · GET /recordings/{p}/{n} (serve the assembled master) · WS /ws
  *
  * The SAME bricks the cloud splits across meeting-api + collector + gateway, composed as one
  * deployable — "a service is internally a modular monolith." Exposes startDesktop() so the eval
  * loop can drive it in-process. STT is the real backend (TRANSCRIPTION_SERVICE_URL/_TOKEN).
  */
 import * as http from 'node:http';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import { createGmeetPipeline, type TranscriptSegment } from '@vexa/gmeet-pipeline';
 import { ChunkedTranscriber, type ChunkSegment, type HintKind } from '@vexa/mixed-pipeline';
-import { decodeAudioFrame } from '@vexa/capture-codec';
+import { decodeAudioFrame, decodeRecordingChunk } from '@vexa/capture-codec';
+import { createRecordingSink, type RecordingMaster } from './recording-sink.js';
 
 const SAMPLE_RATE = 16000;
+const REC_CONTENT_TYPE: Record<string, string> = { wav: 'audio/wav', webm: 'audio/webm' };
 const MIXED_CHANNEL = 999, MIC_CHANNEL = 1000;   // mixed lane: one mixed remote stream + the local "You" mic
 const MIXED_PLATFORMS = new Set(['zoom', 'teams', 'msteams', 'youtube']);   // everything else (google_meet, …) → gmeet
 
 interface Meeting { id: number; platform: string; native_meeting_id: string; status: string; start_time: string; segments: TranscriptSegment[]; }
-export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; }
-export interface Desktop { ingestPort: number; gatewayPort: number; close(): Promise<void>; }
+export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; }
+export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
 
 export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> {
   const log = opts.quiet ? (_m: string) => { /* */ } : (m: string) => console.log(m);
@@ -42,6 +48,24 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   const meetings = new Map<string, Meeting>();
   let nextId = 1;
   const keyOf = (p: string, n: string) => `${p}/${n}`;
+
+  // ── recording.v1 receiver (P5) — the desktop is the LOCAL receiver (ADR-0005). ──
+  // The DISK + SERVE adapter lives HERE (the composition root); the RecordingSink
+  // port (recording-sink.ts) holds the pure assembly. On is_final the port assembles
+  // the master via @vexa/recording buildRecordingMaster and calls onMaster → we write
+  // the file (recordingsDir, env-configurable) + remember its path for the gateway GET.
+  const recordingsDir = opts.recordingsDir ?? process.env.VEXA_RECORDINGS_DIR ?? join(process.cwd(), '.recordings');
+  try { mkdirSync(recordingsDir, { recursive: true }); } catch { /* best-effort */ }
+  const recordings = new Map<string, { path: string; format: string }>();   // key → on-disk master
+  const recSink = createRecordingSink({
+    log,
+    onMaster: (m: RecordingMaster) => {
+      const safe = m.key.replace(/[^a-zA-Z0-9._-]/g, '_');   // platform/native → filesystem-safe name
+      const path = join(recordingsDir, `${safe}.${m.format}`);
+      try { writeFileSync(path, m.bytes); recordings.set(m.key, { path, format: m.format }); log(`[desktop] ⏹ recording master → ${path} (${m.bytes.length}B)`); }
+      catch (e: any) { log(`[desktop] recording write FAILED for ${m.key}: ${e?.message || e}`); }
+    },
+  });
   const resolve = (p: string, n: string): Meeting => {
     const k = keyOf(p, n);
     let m = meetings.get(k);
@@ -90,6 +114,16 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     if (req.method === 'GET' && tr) {
       const m = meetings.get(keyOf(decodeURIComponent(tr[1]), decodeURIComponent(tr[2])));
       return send(m ?? { id: 0, platform: decodeURIComponent(tr[1]), native_meeting_id: decodeURIComponent(tr[2]), status: 'unknown', segments: [] });
+    }
+    // GET /recordings/{p}/{n} — serve the assembled recording.v1 master (the disk
+    // ADAPTER's read side; the all-in-one path's equivalent of meeting-api's file serve).
+    const rec = url.pathname.match(/^\/recordings\/([^/]+)\/([^/]+)/);
+    if (req.method === 'GET' && rec) {
+      const entry = recordings.get(keyOf(decodeURIComponent(rec[1]), decodeURIComponent(rec[2])));
+      if (!entry || !existsSync(entry.path)) return send({ error: 'no recording', platform: decodeURIComponent(rec[1]), native_meeting_id: decodeURIComponent(rec[2]) }, 404);
+      const body = readFileSync(entry.path);
+      res.writeHead(200, { 'Content-Type': REC_CONTENT_TYPE[entry.format] || 'application/octet-stream', 'Content-Length': body.length, ...CORS });
+      return res.end(body);
     }
     send({ error: 'not found', path: url.pathname }, 404);
   });
@@ -146,13 +180,20 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     // ── GMEET lane (per-channel): the glow name rides the audio frame; the pipeline routes by channel. ──
     let pipe: ReturnType<typeof createGmeetPipeline> | null = null;
 
+    // seg_N is the pipeline's PROVISIONAL cluster id (an as-yet unattributed turn). On
+    // YouTube (single upstream, no participant identities) that placeholder is the intended
+    // label — it shows how segments split. On Teams/Zoom an unattributed turn must publish
+    // an EMPTY speaker, never a seg_N (a wrong identity leaking through). Map at the wire
+    // only; seg_N stays the internal key for late re-resolution / repaint.
+    const showSp = (sp: string) => (platform !== 'youtube' && /^seg_\d+$/.test(sp)) ? '' : sp;
+
     if (isMixed && txClient) {
       tc = await ChunkedTranscriber.create({
         language: lang, transcribe,
-        publish: (sp, conf, pend) => broadcastBatch(key, sp, conf.map((c) => toTx(c, sp, true)), pend.map((c) => toTx(c, sp, false))),
-        publishPending: (sp, pend) => broadcastBatch(key, sp, [], pend.map((c) => toTx(c, sp, false))),
-        clearPending: (sp) => broadcastBatch(key, sp, [], []),
-        rename: (_old, next, segs) => broadcastBatch(key, next, segs.map((c) => toTx(c, next, true)), []),
+        publish: (sp, conf, pend) => { const s = showSp(sp); broadcastBatch(key, s, conf.map((c) => toTx(c, s, true)), pend.map((c) => toTx(c, s, false))); },
+        publishPending: (sp, pend) => { const s = showSp(sp); broadcastBatch(key, s, [], pend.map((c) => toTx(c, s, false))); },
+        clearPending: (sp) => broadcastBatch(key, showSp(sp), [], []),
+        rename: (_old, next, segs) => { const s = showSp(next); broadcastBatch(key, s, segs.map((c) => toTx(c, s, true)), []); },
         log: (m) => log(`  ${m}`),
       });
       micTc = await ChunkedTranscriber.create({
@@ -170,14 +211,26 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
         sink: { segment: (t) => broadcast(key, t), draft: (t) => { if (t.text.trim()) broadcast(key, t); }, finalize: () => { /* live */ } },
       });
     }
-    let mixF = 0, micF = 0, evHints = 0;
-    const hb = isMixed ? setInterval(() => log(`  [hb ${key}] ch999=${mixF}f ch1000=${micF}f hints=${evHints}`), 5000) : null;
+    let mixF = 0, micF = 0, evHints = 0, recF = 0;
+    const hb = isMixed ? setInterval(() => log(`  [hb ${key}] ch999=${mixF}f ch1000=${micF}f hints=${evHints} rec=${recF}`), 5000) : null;
     log(`[desktop] ▶ ${key} (${isMixed ? 'mixed' : 'gmeet'})`);
     ws.send(JSON.stringify({ type: 'ready' }));
+    // recording.v1 branch — try decodeRecordingChunk FIRST on every binary frame.
+    // It returns null on a capture AUDIO frame (the REC1-magic is the built-in
+    // discriminator), non-null on a recording chunk → route to the RecordingSink
+    // and report handled, so the audio path is skipped. Same wire, two frame types.
+    const tryRecording = (b: Buffer): boolean => {
+      const r = decodeRecordingChunk(b.buffer, b.byteOffset, b.byteLength);
+      if (!r) return false;
+      recF++;
+      recSink.chunk(key, r.seq, r.isFinal, r.format, r.bytes);
+      return true;
+    };
     ws.on('message', (data: any, isBinary: boolean) => {
       if (isMixed) {
         if (isBinary) {
           const b = Buffer.from(data);
+          if (tryRecording(b)) return;                                       // recording.v1 chunk — not transcription audio
           const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
           if (f) { if (f.speakerIndex === MIXED_CHANNEL) { mixF++; tc?.feedAudio(f.samples, f.ts); } else if (f.speakerIndex === MIC_CHANNEL) { micF++; micTc?.feedAudio(f.samples, f.ts); } }
         } else {                          // mixed lane: the WHO signal rides EVENT frames (active-speaker hints)
@@ -187,17 +240,18 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       }
       if (!isBinary) return;            // gmeet: the glow name rides on the audio frame; events ignored
       const b = Buffer.from(data);
+      if (tryRecording(b)) return;                                         // recording.v1 chunk — not transcription audio
       const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
       if (f) pipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts);   // route by CHANNEL, name = glow at capture
     });
-    const finish = async () => { if (hb) clearInterval(hb); tape?.end(); try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ } const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`); };
+    const finish = async () => { if (hb) clearInterval(hb); tape?.end(); recSink.close(key); try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ } const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`); };
     ws.on('close', finish);
     ws.on('error', finish);
   });
 
-  log(`[desktop] ingest ws://localhost:${ingestPort}/ingest · gateway http://localhost:${gatewayPort} · STT ${TX_URL || 'NONE'}`);
+  log(`[desktop] ingest ws://localhost:${ingestPort}/ingest · gateway http://localhost:${gatewayPort} · STT ${TX_URL || 'NONE'} · recordings ${recordingsDir}`);
   return {
-    ingestPort, gatewayPort,
+    ingestPort, gatewayPort, recordingsDir,
     close: async () => {
       for (const c of wss.clients) c.terminate();
       wss.close();

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // gate:isolation (P2) — a service composes its domain's bricks by their published packages.
-// @vexa/desktop may import @vexa/{capture-codec,gmeet-pipeline,transcribe-whisper} + ws + declared
-// devDeps (ajv for the e2e check) — never another brick's internals, never another domain.
+// @vexa/desktop may import @vexa/{capture-codec,gmeet-pipeline,mixed-pipeline,recording,transcribe-whisper}
+// + ws + declared devDeps (ajv for the e2e check) — never another brick's internals, never another domain.
+// @vexa/recording is the recording.v1 master codec front door (buildRecordingMaster) for the local receiver.
 // ESM (the package is "type":"module"); the gate runs `node scripts/check-isolation.js`.
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, dirname } from "node:path";

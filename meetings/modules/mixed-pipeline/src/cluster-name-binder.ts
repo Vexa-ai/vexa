@@ -57,6 +57,14 @@ const DEFAULT_HINT_LOG_LIMIT = 2000;
 /** Vote-count lead a challenger name needs over the cluster's current name to
  *  flip it — hysteresis against hint flicker (continuous re-resolve). */
 const NAME_SWITCH_MARGIN = 2;
+/** Active-speaker FLICKER debounce. A hint turn that opened AND closed in less than
+ *  this window is a transient — a noise burst lighting a tile, a UI blip — never a real
+ *  speaking turn. Counting its overlap lets it hijack attribution mid-utterance (the
+ *  reproduced spk-Dmitry steal). So a CLOSED turn shorter than this contributes no
+ *  overlap and no vote. OPEN (still-lit) turns are exempt — a speaker who is still
+ *  talking keeps the tile lit and the heartbeat re-asserts it every ~2s, so legit turns
+ *  always close well above this floor. Tunable via VEXA_FLICKER_MIN_MS. */
+const FLICKER_MIN_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_FLICKER_MIN_MS) || 1000);
 
 export interface HintEvent {
   /** Display name from the platform UI. */
@@ -189,6 +197,9 @@ export class ClusterNameBinder {
 
     for (const log of this.turns.values()) {
       for (const turn of log) {
+        // FLICKER DEBOUNCE: a closed turn shorter than the window is a transient (noise
+        // burst / UI blip), never a real turn — skip it so it can't steal a segment.
+        if (turn.tEndMs !== undefined && turn.tEndMs - turn.tStartMs < FLICKER_MIN_MS) continue;
         const turnEnd = turn.tEndMs ?? (turn.tStartMs + OPEN_TURN_GRACE_MS);
         const o = Math.max(0, Math.min(turnEnd, windowEnd) - Math.max(turn.tStartMs, windowStart));
         if (o <= 0) continue;

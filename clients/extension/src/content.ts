@@ -81,4 +81,29 @@ function checkAutoStart(): void {
 checkAutoStart();
 setInterval(checkAutoStart, 2000);
 
+// Teams' new web app (teams.cloud.microsoft) + meetings created in-tab NEVER expose
+// the meeting id in the URL. Read the canonical thread id (19:meeting_…@thread.v2)
+// from the page (DOM + same-origin storage) and report it so the background can key
+// the session. Scan until found (stable per meeting), then stop.
+function isTeamsHost(): boolean {
+  return location.hostname.endsWith('teams.microsoft.com')
+    || location.hostname.endsWith('teams.live.com')
+    || location.hostname === 'teams.cloud.microsoft';
+}
+let teamsReported = false;
+function checkTeamsMeeting(): void {
+  if (teamsReported || !isTeamsHost()) return;
+  let blob = '';
+  try { blob = document.documentElement.outerHTML; } catch { /* */ }
+  try { blob += ' ' + JSON.stringify({ ...sessionStorage, ...localStorage }); } catch { /* */ }
+  const m = blob.match(/19:meeting_[A-Za-z0-9_\-]+@thread\.v2/);
+  if (m) {
+    teamsReported = true;
+    chrome.runtime.sendMessage({ type: 'MEETING_HINT', meeting: { platform: 'teams', nativeMeetingId: m[0] } }).catch(() => { /* sw asleep */ });
+    console.log(`${VEXA} teams meeting id (from DOM): ${m[0]}`);
+  }
+}
+checkTeamsMeeting();
+setInterval(checkTeamsMeeting, 2000);
+
 console.log(`${VEXA} ready on ${location.href}`);

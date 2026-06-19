@@ -76,3 +76,17 @@ export function detectMeeting(url: string): MeetingRef | null {
 
   return null;
 }
+
+/** True when the URL is a known MIXED-lane host (whole-tab audio), regardless of
+ *  whether the meeting id is in the URL yet. Used to mint the tabCapture stream on
+ *  the toolbar click for hosts like teams.cloud.microsoft that expose the id only
+ *  via the DOM (the content script reports the thread id separately). */
+export function isMixedHost(url: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return h.endsWith('youtube.com') || h.endsWith('zoom.us')
+      || h.endsWith('teams.microsoft.com') || h.endsWith('teams.live.com') || h === 'teams.cloud.microsoft';
+  } catch {
+    return false;
+  }
+}

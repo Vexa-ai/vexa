@@ -16,6 +16,7 @@ const vexaAlias = {
   '@vexa/mixed-capture-core': resolve(__dirname, '../../meetings/modules/mixed-capture-core/src/index.ts'),
   '@vexa/zoom-capture': resolve(__dirname, '../../meetings/modules/zoom-capture/src/index.ts'),
   '@vexa/teams-capture': resolve(__dirname, '../../meetings/modules/teams-capture/src/index.ts'),
+  '@vexa/record-chunker': resolve(__dirname, '../../meetings/modules/record-chunker/src/index.ts'),
 };
 
 const outdir = 'dist';

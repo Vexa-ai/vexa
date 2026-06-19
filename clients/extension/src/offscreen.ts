@@ -12,6 +12,8 @@
 
 import { createPcmCaptureNode } from '@vexa/gmeet-capture';
 import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-capture-core';
+import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
+import { encodeRecordingChunk, type RecordingFormat } from '@vexa/capture-codec';
 
 const MIC_INDEX = 1000;
 // Mixed tab audio (YouTube now): the captured tab is ONE mixed PCM stream →
@@ -24,6 +26,11 @@ let stream: MediaStream | null = null;
 let ctx: AudioContext | null = null;
 let tabStream: MediaStream | null = null;
 let tabCapture: MixedAudioCapture | null = null;
+let recTap: RecordingTap | null = null;   // recording.v1 tee over the SAME captured tab stream
+
+// MediaRecorder mimeType → recording.v1 format. The chunker emits WebM (Opus);
+// the leading 'audio/webm' (or ogg) → 'webm', the one format these chunks carry.
+const recFormatOf = (mimeType: string): RecordingFormat => (/wav/i.test(mimeType) ? 'wav' : 'webm');
 
 async function start(): Promise<{ ok: boolean; error?: string }> {
   if (stream) return { ok: true };
@@ -90,12 +97,40 @@ async function startTab(streamId: string): Promise<{ ok: boolean; error?: string
     tabStream = null;
     return { ok: false, error: `capture: ${err?.message || err}` };
   }
+  // ── recording.v1 tee ── Record the SAME captured tab MediaStream (the mix the
+  // user hears) via @vexa/record-chunker. Each timeslice + the final chunk →
+  // recording.v1 (@vexa/capture-codec encodeRecordingChunk) → a RECORDING_CHUNK
+  // runtime message; the background relays it as binary over the SAME ingest WS
+  // it already uses for audio. The desktop's RecordingSink assembles the master.
+  // Additive: transcription PCM (above) is untouched; this is a second consumer
+  // of the one stream. A tap failure must never break capture → log and continue.
+  try {
+    recTap = createRecordingTap({
+      stream: tabStream!,
+      onChunk: (chunk) => {
+        try {
+          const bin = Uint8Array.from(atob(chunk.base64), (c) => c.charCodeAt(0));   // base64 → bytes
+          const frame = encodeRecordingChunk(chunk.chunkSeq, chunk.isFinal, recFormatOf(chunk.mimeType), bin);
+          chrome.runtime.sendMessage({ type: 'RECORDING_CHUNK', frame: Array.from(new Uint8Array(frame)) }).catch(() => { /* ws gone */ });
+        } catch (e: any) { console.log(`[vexa-offscreen] recording chunk encode failed: ${e?.message || e}`); }
+        return true;
+      },
+    });
+    await recTap.start();
+    console.log('[vexa-offscreen] recording tap started (recording.v1 over the ingest WS)');
+  } catch (err: any) {
+    recTap = null;
+    console.log(`[vexa-offscreen] recording tap failed (capture continues): ${err?.message || err}`);
+  }
   chrome.runtime.sendMessage({ type: 'capture-started', streams: 1 }).catch(() => { /* ignore */ });
   console.log('[vexa-offscreen] tab audio capture started');
   return { ok: true };
 }
 
 function stopTab(): void {
+  // Stop the recording tap FIRST — its stop() flushes the final is_final chunk
+  // (the COMPLETED signal the desktop assembles on) while the stream is still live.
+  if (recTap) { const t = recTap; recTap = null; t.stop().catch(() => { /* */ }); }
   if (tabCapture) { try { tabCapture.stop(); } catch { /* ignore */ } tabCapture = null; }
   if (tabStream) { for (const t of tabStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } tabStream = null; }
   console.log('[vexa-offscreen] tab audio capture stopped');

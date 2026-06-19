@@ -8,13 +8,14 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/desktop.ts",
-    "test": "tsx src/desktop-e2e.live.test.ts",
+    "test": "tsx src/recording-sink.test.ts && tsx src/recording-e2e.test.ts && tsx src/desktop-e2e.live.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
     "@vexa/capture-codec": "workspace:*",
     "@vexa/gmeet-pipeline": "workspace:*",
     "@vexa/mixed-pipeline": "workspace:*",
+    "@vexa/recording": "workspace:*",
     "@vexa/transcribe-whisper": "workspace:*",
     "ws": "^8.21.0"
   },

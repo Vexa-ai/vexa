@@ -16,7 +16,8 @@
       "@vexa/capture-codec": ["../../meetings/modules/capture-codec/src/index.ts"],
       "@vexa/mixed-capture-core": ["../../meetings/modules/mixed-capture-core/src/index.ts"],
       "@vexa/zoom-capture": ["../../meetings/modules/zoom-capture/src/index.ts"],
-      "@vexa/teams-capture": ["../../meetings/modules/teams-capture/src/index.ts"]
+      "@vexa/teams-capture": ["../../meetings/modules/teams-capture/src/index.ts"],
+      "@vexa/record-chunker": ["../../meetings/modules/record-chunker/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"]

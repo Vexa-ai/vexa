@@ -11,7 +11,7 @@
  * tab's content script to begin/end capture.
  */
 
-import { detectMeeting, MeetingRef } from './meeting';
+import { detectMeeting, isMixedHost, MeetingRef } from './meeting';
 import { encodeAudioFrame, encodeEvent } from '@vexa/capture-codec';
 
 interface SessionState {
@@ -66,6 +66,18 @@ let tabStreamId: string | null = null;
 const MIXED = new Set(['youtube', 'zoom', 'teams']);
 const isMixed = (p: string | null | undefined): boolean => !!p && MIXED.has(p);
 
+/** Per-tab meeting ref captured from a JOIN URL the tab navigated through. Teams'
+ *  new web app (teams.cloud.microsoft) and Zoom's web client STRIP the meeting id
+ *  from the URL once you're in — only the join link (/meet/<id>, /j/<id>) carries
+ *  it. We remember it per tab and reuse it when the in-meeting URL no longer has it. */
+const tabMeeting = new Map<number, MeetingRef>();
+const rememberMeeting = (tabId: number, url?: string): void => {
+  const m = url ? detectMeeting(url) : null;
+  if (m && tabId != null) tabMeeting.set(tabId, m);
+};
+const meetingForTab = (tabId: number | null | undefined, url?: string): MeetingRef | null =>
+  (url ? detectMeeting(url) : null) || (tabId != null ? tabMeeting.get(tabId) ?? null : null);
+
 function broadcastStatus(): void {
   chrome.runtime.sendMessage({ type: 'STATUS', state }).catch(() => { /* panel may be closed */ });
 }
@@ -103,7 +115,7 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
 
   // An explicit ref wins. No meeting anywhere → voice-notepad mode: capture the
   // mic via the offscreen document under the synthetic 'note' platform.
-  const meeting = meetingRef || detectMeeting(url)
+  const meeting = meetingRef || meetingForTab(tabId, url)
     || { platform: 'note' as any, nativeMeetingId: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` };
 
   const cfg = await chrome.storage.local.get(['apiKey', 'ingestUrl', 'language']);
@@ -211,7 +223,7 @@ async function maybeAutoStart(tabId?: number, url?: string, meetingRef?: Meeting
   const cfg = await chrome.storage.local.get(['autoStart', 'apiKey']);
   if (cfg.autoStart === false) return;          // default ON
   if (!cfg.apiKey) return;                       // need an API key configured first
-  if (!meetingRef && !detectMeeting(url)) return;
+  if (!meetingRef && !meetingForTab(tabId, url)) return;
   startCaptureForTab(tabId, url, meetingRef);
 }
 
@@ -267,6 +279,16 @@ function sendAudio(index: number, pcm: number[], speakerName?: string): void {
   ws.send(encodeAudioFrame(index, Date.now(), Float32Array.from(pcm), speakerName));
 }
 
+// Relay one recording.v1 chunk (offscreen tee) over the ingest WS. The frame is
+// ALREADY a capture-codec REC1 frame (encoded offscreen) — relay it as bytes; the
+// desktop's decodeRecordingChunk discriminates it from an audio frame. Same WS,
+// same paused/open guards as audio.
+function sendRecordingFrame(frame: number[]): void {
+  if (state.paused) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(Uint8Array.from(frame).buffer);
+}
+
 // ── Telemetry: merged extension state → ingest server /telemetry ──────────
 // Page diag (attribution/captured-element state) + session state + per-track
 // frame counters, POSTed every 10s while a session is live (plus on status
@@ -308,6 +330,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'AUTO_START':
       // Prefer the URL the content script saw at detection time.
       maybeAutoStart(sender.tab?.id, msg.url || sender.tab?.url, msg.meeting); sendResponse({ ok: true }); break;
+    case 'MEETING_HINT':
+      // Content script read a meeting id from the page DOM (Teams web app — the id is
+      // never in the URL). Remember it for this tab so the mint + session can use it.
+      if (sender.tab?.id != null && msg.meeting?.platform && msg.meeting?.nativeMeetingId) tabMeeting.set(sender.tab.id, msg.meeting);
+      sendResponse({ ok: true }); break;
     case 'STOP':
       stopCapture(); sendResponse({ ok: true }); break;
     case 'PAUSE':
@@ -327,11 +354,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Tell the panel what Start would do, so it can pre-grant mic permission
       // for note mode (offscreen documents can't show permission prompts).
       chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-        sendResponse({ mode: tab?.url && detectMeeting(tab.url) ? 'meeting' : 'note' });
+        sendResponse({ mode: meetingForTab(tab?.id, tab?.url) ? 'meeting' : 'note' });
       }).catch(() => sendResponse({ mode: 'note' }));
       return true;
     case 'audio':
       sendAudio(msg.index, msg.pcm, msg.speakerName); break;
+    case 'RECORDING_CHUNK':
+      // recording.v1 chunk from the offscreen tee — already a fully-encoded
+      // capture-codec frame (REC1 magic), relayed VERBATIM as binary over the
+      // SAME ingest WS as audio. The desktop's decodeRecordingChunk tells it
+      // apart from an audio frame. Dropped while paused, like audio.
+      sendRecordingFrame(msg.frame); break;
     case 'speakers':
       Object.assign(lastSpeakerMap, msg.speakers || {});
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -363,9 +396,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-// If the captured tab closes, tear down.
+// If the captured tab closes, tear down + forget its remembered meeting id.
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabMeeting.delete(tabId);
   if (tabId === state.tabId) stopCapture();
+});
+
+// Remember the meeting id from any JOIN URL a tab passes through (teams.microsoft.com
+// /meet/<id>, zoom /j/<id>, …) BEFORE the SPA strips it: teams.cloud.microsoft and
+// Zoom's web client only expose the id in the join link, not the in-meeting URL.
+// Keyed by tab; reused by the toolbar mint + session bootstrap via meetingForTab.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  rememberMeeting(tabId, changeInfo.url || tab?.url || undefined);
 });
 
 // If the captured tab RELOADS mid-session (user refresh, SPA hard nav), the
@@ -387,6 +429,23 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     chrome.tabs.sendMessage(tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready yet */ });
     shipTelemetry('tab-reloaded-rewire');
   }, 1500);
+  // A reload INVALIDATES the tab-capture stream id — the offscreen captor keeps a
+  // DEAD stream, so remote audio (ch999) silently stops while DOM hints keep
+  // working (the "flaky / hints but no transcript" symptom). Re-mint and re-attach.
+  // activeTab persists across a SAME-ORIGIN reload, so getMediaStreamId succeeds
+  // without a new click; if the tab crossed origin (activeTab dropped) we can't
+  // mint headlessly — surface a clear ask instead of dying silently.
+  if (isMixed(state.platform)) {
+    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+      if (chrome.runtime.lastError || !id) {
+        state.error = 'remote audio lost on reload — click the Vexa toolbar icon on this tab to resume';
+        broadcastStatus(); shipTelemetry('tab-reloaded-remint-failed'); return;
+      }
+      tabStreamId = id;
+      startTabAudio();                       // re-attach the offscreen captor to the fresh stream
+      shipTelemetry('tab-reloaded-remint');
+    });
+  }
 });
 
 // On service-worker startup (extension load OR reload), re-inject the capture
@@ -434,7 +493,7 @@ chrome.action.onClicked.addListener((tab) => {
 
   // MIXED-lane tabs (YouTube, Zoom) capture the whole tab's audio via the
   // offscreen mixed captor — mint the stream id now while activeTab is granted.
-  const needsTab = !!(tab.url && isMixed(detectMeeting(tab.url)?.platform));
+  const needsTab = !!isMixed(meetingForTab(tab.id, tab.url)?.platform) || (!!tab.url && isMixedHost(tab.url));
   if (needsTab) {
     chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id) => {
       if (chrome.runtime.lastError || !id) {
