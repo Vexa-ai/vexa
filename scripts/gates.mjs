@@ -119,7 +119,42 @@ function gateNode() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, python: gatePython, node: gateNode };
+// gate:licenses (P17) — every resolved dep is OSS-licence-clean (FINOS Cat A/B/X). Uses pnpm's
+// built-in licence index (no added dependency to vet — itself a P17 win). Cat A (permissive) passes;
+// Cat B (LGPL/MPL/EPL) must be listed in license-exceptions.json; Cat X (GPL/AGPL/SSPL/BSL/…) and
+// any unclassified licence fail the build. B is checked before X so LGPL never trips the GPL match.
+function gateLicenses() {
+  let raw;
+  try { raw = execSync("pnpm licenses list --json", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString(); }
+  catch (e) { raw = (e.stdout || "").toString(); }
+  if (!raw.trim()) { console.log("  ✓ gate:licenses — no resolved deps yet (green-on-empty)"); return true; }
+  let data; try { data = JSON.parse(raw); } catch { return fail(["`pnpm licenses list --json` returned non-JSON — run `pnpm install` first"]); }
+  const A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /OR CC0-1\.0/];
+  const B = [/LGPL/i, /^MPL/i, /^EPL/i];                                          // weak copyleft — needs a logged exception
+  const X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/];
+  const exFile = join(ROOT, "license-exceptions.json");
+  const exceptions = existsSync(exFile) ? (JSON.parse(readFileSync(exFile, "utf8")).categoryB || []) : [];
+  const excepted = (name) => exceptions.some((e) => name === e.package || name.startsWith(e.package));
+  const bad = [], flagged = [];
+  for (const [lic, pkgs] of Object.entries(data)) {
+    const names = pkgs.map((p) => p.name);
+    if (A.some((re) => re.test(lic))) continue;
+    if (B.some((re) => re.test(lic))) {
+      const unlisted = names.filter((n) => !excepted(n));
+      if (unlisted.length) bad.push(`Cat-B ${lic} needs an entry in license-exceptions.json: ${unlisted.join(", ")}`);
+      else flagged.push(`${lic} (${names.join(", ")})`);
+      continue;
+    }
+    if (X.some((re) => re.test(lic))) { bad.push(`FORBIDDEN (Cat X) ${lic}: ${names.join(", ")} — replace this dependency`); continue; }
+    bad.push(`unclassified licence "${lic}": ${names.join(", ")} — classify it in scripts/gates.mjs or replace the dep`);
+  }
+  if (bad.length) return fail(bad);
+  const total = Object.values(data).reduce((n, p) => n + p.length, 0);
+  console.log(`  ✓ gate:licenses — ${total} deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} Cat-B by exception: ${flagged.join("; ")}` : ""})`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, python: gatePython, node: gateNode, licenses: gateLicenses };
 const which = process.argv[2] || "all";
 const run = which === "all" ? Object.keys(GATES) : [which];
 if (run.some((g) => !GATES[g])) { console.error(`unknown gate: ${which}`); process.exit(2); }

@@ -58,6 +58,7 @@ microservices, carved where a real force requires it (runtime, scale, data, ephe
 | **P14** | **Config is a validated contract, delivered by env.** App vars are `VEXA_*`; structured config travels as one JSON env var validated against a `*.v1` schema; secrets are a class (`*_TOKEN`/`_SECRET`/`_KEY`) — never logged, committed, or in goldens; validate at boot, fail fast. | env is where config discipline usually leaks | 12-Factor; schema-first | `.env.example` · ADR-0002 |
 | **P15** | **User data & secrets are protected by default.** Data → per-tenant envelope encryption (crypto-shreddable, BYOK); secrets → a vault behind a port; the agent gets scoped, brokered, audited access — never raw keys in its workspace or logs. | a meeting product's data is its liability | data-protection; least privilege | ports now, impl deferred · ADR-0003 |
 | **P16** | **Defer the implementation, not the seam.** A deferred capability is a port with a default (passthrough) adapter, wired through now; the contract *fields* it needs are added **additively** when it lands (optional fields are back-compatible — so early threading buys nothing). | "plug-and-play later" only works if the socket exists now; but unused fields are noise | open/closed; ports & adapters; YAGNI | review · ADR-0003 |
+| **P17** | **Every dependency is OSS-licence-clean.** Direct *and transitive* deps carry an OSI-approved permissive licence (Cat A: Apache-2.0 / MIT / BSD / ISC / …); weak-copyleft (Cat B: MPL / EPL / LGPL) only when isolated (unmodified, not statically bundled) and exception-logged; strong-copyleft (GPL / AGPL) and source-available/proprietary (BSL / SSPL / Elastic / Commons-Clause) are **forbidden**. The platform must drop into a regulated org with zero licence encumbrance. | one GPL/AGPL or source-available dep *anywhere* in the tree blocks deployment in a bank — the licence tree is a hard deployment constraint, not a footnote | FINOS OSS governance; ASF licence categories A/B/X; SBOM/SPDX | `gate:licenses` · ADR-0004 |
 
 ---
 
@@ -124,6 +125,7 @@ Each gate enforces one or more principles. **An artifact "exists" only when it i
 | `gate:contract-version` | a `.vN` schema changes back-compatibly, or the version bumps | P4 | schema diff | **add** |
 | `gate:unit` | per-module tests pass (the L1–L2 pyramid) | P8 | `npm test` per package | **have** |
 | `gate:e2e` | offline lane/wire integration (L3) | P8 | desktop/bot e2e | **have** |
+| `gate:licenses` | every direct+transitive dep licence is on the allowlist (Cat A; B by logged exception); no GPL/AGPL/source-available; emits an SBOM | P17 | `license-checker` (npm) · `pip-licenses` (py) · SPDX | **add** |
 | `typecheck` / `gate:standalone` | `tsc` clean against own declared deps | P2 | `tsc --noEmit` | **have** |
 | `gate:dist-in-sync` | committed `dist/` ≡ clean rebuild of `src/` | — | — | **retire** (workspace tool builds on demand → delete committed `dist/`) |
 
