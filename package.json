@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.7.0",
   "engines": { "node": ">=20" },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",

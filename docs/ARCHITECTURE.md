@@ -129,6 +129,8 @@ Each gate enforces one or more principles. **An artifact "exists" only when it i
 | `typecheck` / `gate:standalone` | `tsc` clean against own declared deps | P2 | `tsc --noEmit` | **have** |
 | `gate:dist-in-sync` | committed `dist/` ≡ clean rebuild of `src/` | — | — | **retire** (workspace tool builds on demand → delete committed `dist/`) |
 
+**Two-layer enforcement.** Locally, a `pre-push` hook (`.githooks/pre-push`, wired by `core.hooksPath` via the root `prepare` script — zero-dependency, per P17) runs `pnpm gates` and blocks any push that isn't green. In CI, `gates.yml` re-runs each gate as its own step so a failure is unambiguous. `git commit` itself runs nothing — the bar is at **push**, not every commit.
+
 ---
 
 ## 5. How we prove a change — the validation pyramid
