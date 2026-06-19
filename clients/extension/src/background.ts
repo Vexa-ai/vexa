@@ -53,19 +53,42 @@ const DEFAULT_GATEWAY = 'http://localhost:8056';
 
 let ws: WebSocket | null = null;
 
+/** tabCapture stream id, minted on the toolbar-click gesture (that click is the
+ *  only event that grants activeTab, which getMediaStreamId requires). Used for
+ *  media tabs (YouTube now; zoom/teams slot in later) where the offscreen mixed
+ *  captor is the audio source. */
+let tabStreamId: string | null = null;
+
 function broadcastStatus(): void {
   chrome.runtime.sendMessage({ type: 'STATUS', state }).catch(() => { /* panel may be closed */ });
 }
 
-/** Ensure the offscreen mic-capture document exists (voice-notepad mode). */
+/** Ensure the offscreen document exists. USER_MEDIA covers the voice-notepad mic
+ *  AND the tabCapture getUserMedia; AUDIO_PLAYBACK covers re-playing the captured
+ *  tab audio to the speakers (tab capture otherwise mutes the tab). */
 async function ensureOffscreen(): Promise<void> {
   const has = await (chrome.offscreen as any).hasDocument?.().catch(() => false);
   if (has) return;
   await chrome.offscreen.createDocument({
     url: 'offscreen.html',
-    reasons: [chrome.offscreen.Reason.USER_MEDIA],
-    justification: 'Microphone capture for voice notes',
+    reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.AUDIO_PLAYBACK],
+    justification: 'Microphone and meeting/media audio capture and re-play',
   }).catch((e) => { if (!String(e).includes('single offscreen')) throw e; });
+}
+
+/** Start the mixed tab-audio capture (offscreen) for the current media session. */
+function startTabAudio(): void {
+  if (!tabStreamId) {
+    state.error = 'tab audio needs a click — open the panel from the toolbar icon on this tab';
+    broadcastStatus();
+    return;
+  }
+  ensureOffscreen()
+    .then(() => chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_START', streamId: tabStreamId }))
+    .then((res: any) => {
+      if (res && res.ok === false) { state.error = `tab capture: ${res.error}`; broadcastStatus(); }
+    })
+    .catch((e) => { state.error = `tab capture: ${e.message}`; broadcastStatus(); });
 }
 
 async function startCaptureForTab(tabId: number, url: string, meetingRef?: MeetingRef): Promise<void> {
@@ -124,9 +147,18 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
               }
             })
             .catch((e) => { state.status = 'error'; state.error = `Offscreen failed: ${e.message}`; broadcastStatus(); });
+        } else if (state.platform === 'youtube') {
+          // Media tab (YouTube): no per-participant <audio>, and the in-page
+          // mixed captor's smooth AudioWorklet is blocked by YouTube's CSP →
+          // its ScriptProcessor stutters under YouTube's heavy main thread.
+          // Capture the tab audio in the OFFSCREEN document instead (a dedicated
+          // low-load page where the ScriptProcessor runs smoothly) → channel 999,
+          // diarized by the desktop's mixed pipeline. The toolbar click that
+          // opened this session already minted the stream id; use it now.
+          startTabAudio();
         } else {
-          // Page-side capture: local mic ("You") + per-participant <audio>
-          // elements on Google Meet, captured in-page by inpage.ts.
+          // Page-side capture (Google Meet): local mic ("You") + per-participant
+          // <audio> elements, captured in-page by inpage.ts.
           if (state.tabId !== null) {
             chrome.tabs.sendMessage(state.tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready */ });
           }
@@ -193,11 +225,15 @@ async function stopCapture(): Promise<void> {
   }
   if (state.platform === 'note') {
     chrome.runtime.sendMessage({ type: 'NOTE_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
+  } else if (state.platform === 'youtube') {
+    // Media tab: capture lives in the offscreen, not the content script.
+    chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
   } else {
     if (state.tabId !== null) {
       chrome.tabs.sendMessage(state.tabId, { type: 'END_CAPTURE' }).catch(() => { /* tab gone */ });
     }
   }
+  tabStreamId = null;
   if (ws) { try { ws.close(); } catch { /* ignore */ } ws = null; }
   state.status = 'idle';
   state.paused = false;
@@ -363,13 +399,32 @@ async function reinjectIntoOpenMeetingTabs(): Promise<void> {
 }
 reinjectIntoOpenMeetingTabs();
 
-// Toolbar click → open the side panel. open() must run synchronously within the
-// click gesture or Chrome rejects it ("must be called in response to a user
-// gesture").
+// Toolbar click handling. We do NOT use openPanelOnActionClick, because the click
+// on the toolbar icon is the ONLY event that grants activeTab on the current tab
+// — and chrome.tabCapture.getMediaStreamId needs that activeTab. So on a media
+// tab (YouTube now; zoom/teams slot into the predicate later) we also mint the
+// tab-capture stream id under this invocation and stash it for the next Start.
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => { /* older Chrome */ });
+// NOTE: listener is intentionally NOT async, and sidePanel.open() is the FIRST
+// statement — it must run synchronously within the click gesture or Chrome
+// rejects it ("must be called in response to a user gesture"). Minting the
+// tab-capture stream id can happen after: it needs the activeTab grant (which the
+// invocation gives and which persists), not the live gesture.
 chrome.action.onClicked.addListener((tab) => {
   if (tab?.id == null) return;
   chrome.sidePanel.open({ tabId: tab.id }).catch(() => { /* older Chrome / already open */ });
+
+  // Media tabs (YouTube) capture the whole tab's audio via the offscreen mixed
+  // captor — mint the stream id now while activeTab is granted.
+  const needsTab = !!(tab.url && detectMeeting(tab.url)?.platform === 'youtube');
+  if (needsTab) {
+    chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id) => {
+      if (chrome.runtime.lastError || !id) {
+        state.error = `tab audio: ${chrome.runtime.lastError?.message || 'no stream id'}`; broadcastStatus(); return;
+      }
+      tabStreamId = id;
+    });
+  }
 });
 
 // Dev auto-reload: build.mjs rewrites build-stamp.txt on every build; when the

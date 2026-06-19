@@ -20,7 +20,6 @@ import {
   createGmeetCapture, GmeetCapture, GmeetChannelBinder,
   createPcmCaptureNode,
 } from '@vexa/gmeet-capture';
-import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-capture-core';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -58,12 +57,6 @@ import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-cap
   const MIC_INDEX = 1000;
   let micStream: MediaStream | null = null;
 
-  // Mixed lane (YouTube now): the tab's <video> is ONE mixed audio stream → channel
-  // 999, diarized server-side by pyannote. Kept clear of the 0-based participant
-  // indices and the mic.
-  const MIXED_INDEX = 999;
-  let mixedCapture: MixedAudioCapture | null = null;
-
   function post(type: string, payload: any) {
     window.postMessage({ __vexa: true, type, ...payload }, '*');
   }
@@ -91,7 +84,7 @@ import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-cap
   }
 
   function streamCount(): number {
-    return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0) + (mixedCapture ? 1 : 0);
+    return (gmeetCapture ? gmeetCapture.streamCount() : 0) + (micStream ? 1 : 0);
   }
 
   /**
@@ -124,40 +117,6 @@ import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-cap
     }
   }
 
-  /**
-   * MIXED lane (YouTube): capture the page <video>'s own audio via captureStream()
-   * → 16 kHz PCM on channel 999. No tabCapture/offscreen needed — the media element
-   * is page-accessible from the MAIN world. replay:false (the <video> already plays).
-   */
-  async function startYoutubeMixed(): Promise<void> {
-    // Poll for a PLAYING <video> whose captureStream exposes a live audio track.
-    // YouTube reports NO audio track until the element is actually playing audio,
-    // and transient ad/preview <video>s exist — so retry rather than fail once.
-    // (Failing once is what made capture "take a minute to start": a Start fired
-    // before the video was playing saw no track and gave up, forcing a re-Start.)
-    // Bounded so a never-playing tab doesn't spin forever.
-    const grab = (): MediaStream | null => {
-      for (const v of [...document.querySelectorAll('video')] as HTMLVideoElement[]) {
-        try {
-          const s = (v as unknown as { captureStream?: () => MediaStream }).captureStream?.();
-          if (!v.paused && s && s.getAudioTracks().length > 0) return s;
-        } catch { /* element not capturable yet */ }
-      }
-      return null;
-    };
-    let stream: MediaStream | null = null;
-    for (let i = 0; i < 120 && running && isCurrent() && !stream; i++) {
-      stream = grab();
-      if (!stream) await new Promise((r) => setTimeout(r, 500));
-    }
-    if (!stream) { console.log(`${TAG} [yt] gave up waiting for a playing <video> with audio`); return; }
-    mixedCapture = await createMixedAudioCapture(stream, (pcm) => {
-      if (isCurrent() && running) post('audio', { index: MIXED_INDEX, pcm: Array.from(pcm) });
-    }, { replay: false, log: (m) => console.log(`${TAG} [yt] ${m}`) });
-    post('capture-started', { streams: streamCount() });
-    console.log(`${TAG} [yt] mixed capture started → channel ${MIXED_INDEX}`);
-  }
-
   async function start() {
     if (running || !isCurrent()) return;   // a superseded instance never captures
     running = true;
@@ -165,9 +124,8 @@ import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-cap
 
     startSpeakerAttribution();
 
-    const isYoutube = location.hostname.endsWith('youtube.com');
-    // Your own voice first — but NOT on YouTube (you're watching, not speaking).
-    if (!isYoutube) await startMic();
+    // Your own voice first.
+    await startMic();
     post('capture-started', { streams: streamCount() });
 
     // Per-participant in-page capture: Google Meet exposes native per-participant
@@ -190,11 +148,6 @@ import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-cap
         },
       });
       await gmeetCapture.start();
-    } else if (isYoutube) {
-      // MIXED lane (YouTube): the page <video> IS the mixed stream → channel 999.
-      // No per-speaker channels, no DOM hints (YouTube has no active-speaker UI) —
-      // the desktop's pyannote segments it; names are provisional.
-      await startYoutubeMixed();
     }
 
     post('capture-started', { streams: streamCount() });
@@ -212,7 +165,6 @@ import { createMixedAudioCapture, type MixedAudioCapture } from '@vexa/mixed-cap
     running = false;
     if (speakers) { speakers.destroy(); speakers = null; (window as any).__vexaGmeetSpeakers = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
-    if (mixedCapture) { mixedCapture.stop(); mixedCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }
     for (const ctx of contexts) { try { ctx.close(); } catch { /* ignore */ } }
