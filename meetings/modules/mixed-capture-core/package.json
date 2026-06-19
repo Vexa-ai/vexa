@@ -11,6 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
+    "test": "tsx src/mixed-capture-core.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {},

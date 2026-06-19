@@ -15,7 +15,11 @@ copied alongside.
 - `offscreen.ts` — offscreen mic capture (voice-notepad) + mixed tab-audio capture
   (YouTube/Zoom). Also tees that captured tab stream into `@vexa/record-chunker` →
   recording.v1 chunks (`encodeRecordingChunk`) → `RECORDING_CHUNK` messages (the ACQUIRE
-  adapter; the desktop's `RecordingSink` assembles the master — ADR-0005).
+  adapter; the desktop's `RecordingSink` assembles the master — ADR-0005). The ch1000
+  mic AudioWorklet loads from `chrome.runtime.getURL('vexa-pcm-worklet.js')` (a
+  `web_accessible_resource`), NOT a `blob:` URL — MV3's extension-page CSP forbids `blob:`
+  in script/worker-src. `build.mjs` emits `dist/vexa-pcm-worklet.js` from
+  `@vexa/gmeet-capture`'s `WORKLET_SRC` (the SSOT) and it is declared web-accessible in the manifest.
 - `mic-permission.ts` — one-time getUserMedia grant page (offscreen docs can't prompt).
 - `sidepanel.ts` — capture-control UI (Start/Pause/Stop, settings, status). No transcript brick.
 - `meeting.ts` — Google-Meet URL → `{ platform, nativeMeetingId }` detection, shared by background + content.

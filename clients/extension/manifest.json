@@ -81,7 +81,8 @@
     {
       "resources": [
         "offscreen.html",
-        "mic-permission.html"
+        "mic-permission.html",
+        "vexa-pcm-worklet.js"
       ],
       "matches": [
         "<all_urls>"

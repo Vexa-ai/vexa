@@ -8,3 +8,7 @@ via a `ScriptProcessorNode`, plus re-play through a separate native-rate context
 `<audio data-vexa-injected>` element).
 
 Zero external imports — pure DOM/WebAudio. The DOM taps are live-validated in a real meeting.
+
+[`mixed-capture-core.test.ts`](mixed-capture-core.test.ts) (`npm test`) is the L2 unit: a shimmed
+`AudioContext`/`MediaStream` drives the real `ScriptProcessor` callback to pin the silence-gate,
+copy-on-forward, and teardown, plus the `installRemoteAudioHook` no-RTC contract — no browser.

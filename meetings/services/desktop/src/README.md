@@ -1,8 +1,12 @@
 # desktop/src
 
 [`desktop.ts`](desktop.ts) — the host: `startDesktop()` wires the ingest WS (decode `capture.v1`
-→ `gmeet-pipeline` → real STT) to an in-memory store + the gateway (`/transcripts`, `/bots`,
-`/recordings/{p}/{n}`, `/ws`).
+→ `gmeet-pipeline` → real STT) to an in-memory store + the gateway. Gateway routes:
+`POST /extension/sessions` (mint), `POST /extension/sessions/end` (finalize a session NOW — dispose
+the pipeline, flush the recording, mark completed; the extension's Stop contract), `POST /telemetry`
+(accept the extension's JSON diagnostics into a ring buffer — never 404s) + `GET /telemetry` (read it
+back), `GET /transcripts/{p}/{n}`, `GET /bots`, `GET /recordings/{p}/{n}` (the assembled master) +
+`GET /recordings/{p}/{n}/player` (a dependency-free HTML5 `<audio>` page for it), `/ws`.
 
 [`recording-sink.ts`](recording-sink.ts) — the **recording.v1 receiver PORT** (P5; see ADR-0005). A
 pure assembly core (no WS, no disk): accumulates recording.v1 chunks per session and on `is_final`

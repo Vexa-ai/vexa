@@ -34,6 +34,44 @@ const REC_CONTENT_TYPE: Record<string, string> = { wav: 'audio/wav', webm: 'audi
 const MIXED_CHANNEL = 999, MIC_CHANNEL = 1000;   // mixed lane: one mixed remote stream + the local "You" mic
 const MIXED_PLATFORMS = new Set(['zoom', 'teams', 'msteams', 'youtube']);   // everything else (google_meet, …) → gmeet
 
+// Minimal HTML escape for the few values we interpolate into the player page
+// (platform / native id are user-influenced) — never trust them in markup.
+const escHtml = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+// A self-contained HTML5 <audio> player for an assembled recording.v1 master.
+// Dependency-free (one inline HTML string, no JS framework) — it simply points an
+// <audio> element at the bytes route. `src` is a SAME-ORIGIN absolute path, so no
+// escaping beyond the attribute quote is needed; platform/native are escaped.
+function recordingPlayerPage(platform: string, native: string, src: string, format?: string): string {
+  const title = `Vexa recording — ${escHtml(platform)}/${escHtml(native)}`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; padding: 2rem; }
+  main { max-width: 40rem; margin: 0 auto; }
+  h1 { font-size: 1.1rem; font-weight: 600; }
+  .meta { color: #888; font-size: .85rem; margin-bottom: 1rem; word-break: break-all; }
+  audio { width: 100%; }
+  a.dl { display: inline-block; margin-top: 1rem; font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>${escHtml(platform)} — ${escHtml(native)}</h1>
+  <p class="meta">recording.v1 master${format ? ` · ${escHtml(format)}` : ''}</p>
+  <audio controls preload="metadata" src="${src}"></audio>
+  <a class="dl" href="${src}" download>Download</a>
+</main>
+</body>
+</html>`;
+}
+
 interface Meeting { id: number; platform: string; native_meeting_id: string; status: string; start_time: string; segments: TranscriptSegment[]; }
 export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; }
 export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
@@ -49,6 +87,16 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   let nextId = 1;
   const keyOf = (p: string, n: string) => `${p}/${n}`;
 
+  // Telemetry ring buffer — the extension POSTs merged diagnostics (page
+  // attribution state + session state + per-track frame counters) every ~10s
+  // while a session is live (background.ts shipTelemetry). We keep the last N
+  // entries in memory so a live attribution bug is inspectable via GET /telemetry
+  // with no client-side copy-paste, and /telemetry NEVER 404s (telemetry must
+  // not break capture). Secrets/transcript text never enter telemetry (the
+  // client scrubs DOM free-text before sending).
+  const TELEMETRY_MAX = 200;
+  const telemetry: Array<{ at: string; reason: string; body: any }> = [];
+
   // ── recording.v1 receiver (P5) — the desktop is the LOCAL receiver (ADR-0005). ──
   // The DISK + SERVE adapter lives HERE (the composition root); the RecordingSink
   // port (recording-sink.ts) holds the pure assembly. On is_final the port assembles
@@ -57,6 +105,11 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   const recordingsDir = opts.recordingsDir ?? process.env.VEXA_RECORDINGS_DIR ?? join(process.cwd(), '.recordings');
   try { mkdirSync(recordingsDir, { recursive: true }); } catch { /* best-effort */ }
   const recordings = new Map<string, { path: string; format: string }>();   // key → on-disk master
+  // Active ingest sessions by meeting key → a finalizer the gateway's
+  // POST /extension/sessions/end can invoke to end the session NOW (dispose the
+  // pipeline, flush the recording, mark completed) without waiting for the WS to
+  // close on its reconnect grace. Registered by each ingest connection.
+  const activeSessions = new Map<string, () => Promise<void>>();
   const recSink = createRecordingSink({
     log,
     onMaster: (m: RecordingMaster) => {
@@ -109,11 +162,60 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       const m = resolve(b.platform || 'unknown', b.native_meeting_id || b.native_id || '?');
       return send({ meeting_id: m.id, platform: m.platform, native_meeting_id: m.native_meeting_id, token: 'local' });
     }
+    // POST /extension/sessions/end — finalize a session: the extension's Stop is
+    // a CONTRACT (background.ts stopCapture) — "stop" must mean stopped NOW, not
+    // after the ingest reconnect grace. Run the live finalizer (dispose pipeline,
+    // flush recording, mark completed + drop the WS) if one is registered; either
+    // way mark the meeting completed so the panel + history agree. Idempotent.
+    if (req.method === 'POST' && url.pathname === '/extension/sessions/end') {
+      const b = await readBody(req);
+      const p = b.platform || 'unknown';
+      const n = b.native_meeting_id || b.native_id || '?';
+      const k = keyOf(p, n);
+      const fin = activeSessions.get(k);
+      if (fin) { try { await fin(); } catch (e: any) { log(`[desktop] session end finalize FAILED for ${k}: ${e?.message || e}`); } }
+      const m = meetings.get(k);
+      if (m) m.status = 'completed';
+      return send({ ok: true, platform: p, native_meeting_id: n, meeting_id: m?.id ?? 0, status: 'completed', finalized: !!fin });
+    }
+    // POST /telemetry — accept the extension's JSON diagnostics and log+retain
+    // them (ring buffer). MUST NEVER 404 (telemetry must not break capture). The
+    // body is the merged extension state (session + page attribution + per-track
+    // frame counters); transcript text never enters it (the client scrubs it).
+    if (req.method === 'POST' && url.pathname === '/telemetry') {
+      const b = await readBody(req);
+      const reason = String(b?.reason || 'telemetry');
+      telemetry.push({ at: new Date().toISOString(), reason, body: b });
+      while (telemetry.length > TELEMETRY_MAX) telemetry.shift();
+      const st = b?.state || {};
+      log(`[telemetry] ${reason} ${st.platform ?? '?'}/${st.nativeMeetingId ?? '?'} status=${st.status ?? '?'} wsOpen=${b?.wsOpen ?? '?'}`);
+      return send({ ok: true });
+    }
+    // GET /telemetry — read the ring buffer back (debugging needs no client-side
+    // copy-paste). ?reason=… filters; ?limit=N caps the count (newest last).
+    if (req.method === 'GET' && url.pathname === '/telemetry') {
+      const reason = url.searchParams.get('reason');
+      const limit = Math.max(1, Math.min(TELEMETRY_MAX, Number(url.searchParams.get('limit')) || TELEMETRY_MAX));
+      const items = (reason ? telemetry.filter((t) => t.reason === reason) : telemetry).slice(-limit);
+      return send({ count: items.length, total: telemetry.length, items });
+    }
     if (req.method === 'GET' && url.pathname === '/bots') return send({ meetings: [...meetings.values()], has_more: false });
     const tr = url.pathname.match(/^\/transcripts\/([^/]+)\/([^/]+)/);
     if (req.method === 'GET' && tr) {
       const m = meetings.get(keyOf(decodeURIComponent(tr[1]), decodeURIComponent(tr[2])));
       return send(m ?? { id: 0, platform: decodeURIComponent(tr[1]), native_meeting_id: decodeURIComponent(tr[2]), status: 'unknown', segments: [] });
+    }
+    // GET /recordings/{p}/{n}/player — a minimal, dependency-free HTML5 <audio>
+    // page that plays the assembled master via the EXISTING GET /recordings/{p}/{n}
+    // (ADR-0005). Matched BEFORE the bytes route so the trailing /player wins.
+    const play = url.pathname.match(/^\/recordings\/([^/]+)\/([^/]+)\/player\/?$/);
+    if (req.method === 'GET' && play) {
+      const p = decodeURIComponent(play[1]);
+      const n = decodeURIComponent(play[2]);
+      const entry = recordings.get(keyOf(p, n));
+      const src = `/recordings/${encodeURIComponent(p)}/${encodeURIComponent(n)}`;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...CORS });
+      return res.end(recordingPlayerPage(p, n, src, entry?.format));
     }
     // GET /recordings/{p}/{n} — serve the assembled recording.v1 master (the disk
     // ADAPTER's read side; the all-in-one path's equivalent of meeting-api's file serve).
@@ -244,7 +346,19 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
       if (f) pipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts);   // route by CHANNEL, name = glow at capture
     });
-    const finish = async () => { if (hb) clearInterval(hb); tape?.end(); recSink.close(key); try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ } const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`); };
+    let finished = false;
+    const finish = async () => {
+      if (finished) return; finished = true;
+      if (activeSessions.get(key) === finalize) activeSessions.delete(key);
+      if (hb) clearInterval(hb); tape?.end(); recSink.close(key);
+      try { await tc?.dispose(); await micTc?.dispose(); await pipe?.dispose(); } catch { /* */ }
+      const m = meetings.get(key); if (m) m.status = 'completed'; log(`[desktop] ■ ${key}`);
+    };
+    // The finalizer the gateway's /extension/sessions/end calls: finish the
+    // pipeline (flush + mark completed) AND drop the socket so the client's WS
+    // tears down too. finish() is idempotent, so the subsequent 'close' is a no-op.
+    const finalize = async () => { try { ws.close(); } catch { /* */ } await finish(); };
+    activeSessions.set(key, finalize);
     ws.on('close', finish);
     ws.on('error', finish);
   });

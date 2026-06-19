@@ -25,6 +25,19 @@ mkdirSync(outdir, { recursive: true });
 
 const pad = (n) => String(n).padStart(2, '0');
 
+// Extract the AudioWorklet body from @vexa/gmeet-capture's pcm-capture.ts (the
+// SSOT) and resolve its two interpolations (BLOCK, the processor name), so the
+// shipped worklet file is generated from the brick and never duplicated here.
+function extractWorkletSrc() {
+  const path = resolve(__dirname, '../../meetings/modules/gmeet-capture/src/pcm-capture.ts');
+  const src = readFileSync(path, 'utf8');
+  const block = src.match(/const BLOCK\s*=\s*(\d+)/)?.[1];
+  const proc = src.match(/PCM_WORKLET_PROCESSOR\s*=\s*'([^']+)'/)?.[1];
+  const body = src.match(/export const WORKLET_SRC\s*=\s*`([\s\S]*?)`;/)?.[1];
+  if (!block || !proc || !body) throw new Error('build: could not extract WORKLET_SRC from pcm-capture.ts');
+  return body.replaceAll('${BLOCK}', block).replaceAll('${PCM_WORKLET_PROCESSOR}', proc);
+}
+
 // After EVERY (re)build: copy static assets + version the manifest. The version
 // bump rewrites build-stamp.txt, which the loaded extension watches → auto-reload.
 const postBuild = {
@@ -36,6 +49,12 @@ const postBuild = {
       cpSync('src/offscreen.html', `${outdir}/offscreen.html`);
       cpSync('src/mic-permission.html', `${outdir}/mic-permission.html`);
       cpSync('assets', `${outdir}/assets`, { recursive: true });
+      // Ship the PCM AudioWorklet as a real file (a web_accessible_resource), so
+      // the offscreen mic path can load it via chrome.runtime.getURL — MV3's CSP
+      // forbids the blob: URL the brick uses in non-extension contexts. SSOT: the
+      // WORKLET_SRC template literal in @vexa/gmeet-capture's pcm-capture.ts; we
+      // extract it here so the worklet body is never duplicated.
+      writeFileSync(`${outdir}/vexa-pcm-worklet.js`, extractWorkletSrc());
       const now = new Date();
       const stampHuman = `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
       writeFileSync(`${outdir}/build-stamp.txt`, JSON.stringify({ ts: Date.now(), human: stampHuman }));

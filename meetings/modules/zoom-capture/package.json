@@ -11,6 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
+    "test": "tsx src/zoom-capture.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {},

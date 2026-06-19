@@ -16,6 +16,12 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
 import { encodeRecordingChunk, type RecordingFormat } from '@vexa/capture-codec';
 
 const MIC_INDEX = 1000;
+// The PCM AudioWorklet shipped as a web_accessible_resource (build.mjs emits it
+// from @vexa/gmeet-capture's WORKLET_SRC). Loading the worklet from THIS URL
+// (instead of a blob:) is REQUIRED here: MV3's extension-page CSP forbids blob:
+// in script-src/worker-src, so the offscreen mic worklet was silently blocked
+// ("Unable to load a worklet's module") and ch1000 produced no audio.
+const PCM_WORKLET_URL = chrome.runtime.getURL('vexa-pcm-worklet.js');
 // Mixed tab audio (YouTube now): the captured tab is ONE mixed PCM stream →
 // channel 999, diarized server-side by the desktop's mixed pipeline (pyannote).
 // 999: distinct from per-participant element indexes (0..N) and the mic (1000).
@@ -49,7 +55,7 @@ async function start(): Promise<{ ok: boolean; error?: string }> {
     if (maxVal > 0.005) {
       chrome.runtime.sendMessage({ type: 'audio', index: MIC_INDEX, pcm: Array.from(data) }).catch(() => { /* ws gone */ });
     }
-  });
+  }, PCM_WORKLET_URL);
   source.connect(node);
   node.connect(ctx.destination);
   chrome.runtime.sendMessage({ type: 'speakers', speakers: { [String(MIC_INDEX)]: 'You' } }).catch(() => { /* ignore */ });
