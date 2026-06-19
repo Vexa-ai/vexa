@@ -122,7 +122,7 @@ Each gate enforces one or more principles. **An artifact "exists" only when it i
 | `gate:exports` | no consumer deep-imports past a module's `index` | P6 | `package.json` `"exports"` + scan | **have** (locks land per-package) |
 | `gate:readme` | every non-ignored directory has a non-empty `README.md` | P12 | tree-walk | **have** |
 | `gate:schema` | goldens ≡ schema (ajv) | P4, P8 | `validate.mjs` (ajv) | **have** (both-language conformance per-consumer in Stage 3/4) |
-| `gate:contract-version` | a `.vN` schema changes back-compatibly, or the version bumps | P4 | schema diff | **add** |
+| `gate:contract-version` | a sealed `.vN` schema is frozen; any change routes to human re-seal (back-compat) or a vN+1 dir (breaking) | P4 | seal hash (`contracts.seal.json`) | **have** |
 | `gate:unit` | per-module tests pass (the L1–L2 pyramid) | P8 | `npm test` per package | **have** |
 | `gate:e2e` | offline lane/wire integration (L3) | P8 | desktop/bot e2e | **have** |
 | `gate:licenses` | every direct+transitive dep licence is on the allowlist (Cat A; B by logged exception); no GPL/AGPL/source-available; emits an SBOM | P17 | `license-checker` (npm) · `pip-licenses` (py) · SPDX | **add** |

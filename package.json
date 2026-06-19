@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22.13" },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "build": "turbo run build",
@@ -17,6 +17,8 @@
     "gate:exports": "node scripts/gates.mjs exports",
     "gate:graph": "node scripts/gates.mjs graph",
     "gate:schema": "node scripts/gates.mjs schema",
+    "gate:contract-version": "node scripts/gates.mjs contract-version",
+    "seal:contracts": "node scripts/gates.mjs seal",
     "gate:python": "node scripts/gates.mjs python",
     "gate:node": "node scripts/gates.mjs node",
     "gate:licenses": "node scripts/gates.mjs licenses",

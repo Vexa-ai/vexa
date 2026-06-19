@@ -1,0 +1,8 @@
+{
+  "agent/contracts/workspace.v1": "4310ecde33e55b8daf331cc2d86d924a0dc8f7af762a89efbd97dc0d655ff35c",
+  "meetings/contracts/acts.v1": "1eaa34d27c52b0eb987a278115a1966c058f615ca16e3391b00107a6779dec4f",
+  "meetings/contracts/invocation.v1": "993376643aa40541c5e1b732f2a936e167e1a6756cb6050bc829dc1797f65f10",
+  "meetings/contracts/lifecycle.v1": "057837ed2ff962f95caee3d630b927a0a6fa3dfbcf3b5ab9514219787412d9e1",
+  "meetings/contracts/transcript.v1": "ed1364a660870038748bf93030859b70adb689547cc2a7f78abee6239608ba7d",
+  "runtime/contracts/runtime.v1": "9d67b9379e0d34c4d715764a467e7f6e6543a5db8177fc284fb4a7418067bc18"
+}

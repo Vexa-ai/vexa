@@ -4,9 +4,10 @@
  * real as content lands — "an artifact exists only when gate-green" (P9).
  * Usage: node scripts/gates.mjs [readme|isolation|exports|graph|schema|all]
  */
-import { readdirSync, existsSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__"]);
@@ -27,6 +28,19 @@ function walkDirs(dir = ROOT, acc = []) {
   return acc;
 }
 const packageDirs = () => walkDirs().filter((d) => existsSync(join(d, "package.json")));
+
+// a published contract is a `<domain>/contracts/X.vN` dir carrying JSON Schema file(s)
+const contractVersionDirs = () => walkDirs().filter(
+  (d) => /(^|\/)contracts\/[^/]+\.v\d+$/.test(rel(d).replace(/\\/g, "/")) &&
+         readdirSync(d).some((f) => f.endsWith(".schema.json"))
+);
+// the seal hash of a contract = sha256 over its (name-sorted) *.schema.json bytes
+function schemaHash(d) {
+  const h = createHash("sha256");
+  for (const f of readdirSync(d).filter((f) => f.endsWith(".schema.json")).sort())
+    h.update(f + "\0").update(readFileSync(join(d, f)));
+  return h.digest("hex");
+}
 
 // gate:readme (P12) — every non-ignored dir (incl. root) has a non-empty README.md
 function gateReadme() {
@@ -94,6 +108,30 @@ function gateSchema() {
   return true;
 }
 
+// gate:contract-version (P4) — a published `.vN` is FROZEN once sealed. `contracts.seal.json` pins
+// each sealed contract's schema by hash; this gate fails if a sealed schema changed. The fix routes
+// through a human: a BREAKING change adds the next version dir (X.v2, leaving X.v1 intact); a
+// BACK-COMPATIBLE change re-seals (`pnpm seal:contracts`) — a one-line seal diff that rides a
+// `lane:contract` review. Unsealed contracts (still in development) are reported, not failed.
+const SEAL_FILE = join(ROOT, "contracts.seal.json");
+function gateContractVersion() {
+  const dirs = contractVersionDirs();
+  if (!dirs.length) { console.log("  ✓ gate:contract-version — no contracts yet (green-on-empty)"); return true; }
+  const seal = existsSync(SEAL_FILE) ? JSON.parse(readFileSync(SEAL_FILE, "utf8")) : {};
+  const changed = [], unsealed = [];
+  for (const d of dirs) {
+    const key = rel(d).replace(/\\/g, "/");
+    if (!(key in seal)) { unsealed.push(key); continue; }
+    if (seal[key] !== schemaHash(d)) changed.push(key);
+  }
+  if (changed.length) return fail(changed.map((k) =>
+    `sealed contract changed: ${k} — a published .vN is frozen. BREAKING change → add the next version (vN+1); ` +
+    `BACK-COMPATIBLE change → re-seal with \`pnpm seal:contracts\` in a lane:contract human-reviewed PR.`));
+  const note = unsealed.length ? `; ${unsealed.length} unsealed (in development): ${unsealed.join(", ")}` : "";
+  console.log(`  ✓ gate:contract-version — ${dirs.length - unsealed.length} sealed contract(s) frozen${note}`);
+  return true;
+}
+
 // gate:python — pytest in every Python package (a dir with pyproject.toml + tests/)
 function gatePython() {
   const pkgs = walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
@@ -154,8 +192,18 @@ function gateLicenses() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, python: gatePython, node: gateNode, licenses: gateLicenses };
+const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, node: gateNode, licenses: gateLicenses };
 const which = process.argv[2] || "all";
+
+// `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
+// Run when sealing Stage 1 or when re-sealing a back-compatible change (lane:contract review).
+if (which === "seal") {
+  const seal = {};
+  for (const d of contractVersionDirs().sort()) seal[rel(d).replace(/\\/g, "/")] = schemaHash(d);
+  writeFileSync(SEAL_FILE, JSON.stringify(seal, null, 2) + "\n");
+  console.log(`sealed ${Object.keys(seal).length} contract(s) → ${rel(SEAL_FILE)}`);
+  process.exit(0);
+}
 const run = which === "all" ? Object.keys(GATES) : [which];
 if (run.some((g) => !GATES[g])) { console.error(`unknown gate: ${which}`); process.exit(2); }
 console.log(`\n▶ gates: ${run.join(", ")}`);

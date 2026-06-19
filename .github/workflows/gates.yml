@@ -17,6 +17,7 @@ jobs:
       - run: pnpm gate:exports
       - run: pnpm gate:graph
       - run: pnpm gate:schema
+      - run: pnpm gate:contract-version
       - run: pnpm gate:python
       - run: pnpm gate:licenses
       - run: pnpm typecheck
