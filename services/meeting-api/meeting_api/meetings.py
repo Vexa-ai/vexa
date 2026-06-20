@@ -949,14 +949,15 @@ async def request_bot(
             detail=f"An active or requested meeting already exists for this platform and meeting ID",
         )
 
-    # Concurrency limit (exclude browser_session from count — they are infrastructure, not bots)
+    # Concurrency limit (exclude non-bot platforms from the count — browser_session is
+    # infrastructure and discord is external ingest; neither spawns a Vexa bot)
     user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
     if user_limit > 0:
         count_stmt = select(func.count()).select_from(Meeting).where(
             and_(
                 Meeting.user_id == current_user.id,
                 Meeting.status.in_([s.value for s in (MeetingStatus.REQUESTED, MeetingStatus.JOINING, MeetingStatus.AWAITING_ADMISSION, MeetingStatus.ACTIVE)]),
-                Meeting.platform != "browser_session",
+                Meeting.platform.notin_(["browser_session", "discord"]),
             )
         )
         active_count = int((await db.execute(count_stmt)).scalar() or 0)
