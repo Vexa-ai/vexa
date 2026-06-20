@@ -23,12 +23,13 @@ And the unit of work between "the plan" and "a single step" was unnamed.
   assessable rather than asserted.
 
 **Objective closure — two ways:**
-- **Expected** — the result met the objective. Close it and take the **next objective**, still in
-  execution mode, autonomously.
+- **Expected** — the result met the objective. **Continue with the next *planned* objective**
+  autonomously (don't stop to ask); the plan defines the sequence, expected closure just advances it.
 - **Unexpected** — the result diverged. **Stop and interpret it *with the human*, as learning**:
-  root-cause to the architectural gap (the expectation–reality loop, ADR-0014), codify it, then re-plan
-  and resume. Expected closure flows autonomously; **unexpected closure pulls in the human** (the
-  ground-truth interpreter) and grows the principle-set.
+  root-cause to the architectural gap (the expectation–reality loop, ADR-0014), codify it, **and update
+  the plan** (an unexpected result is exactly what triggers a re-plan), then resume. Expected closure
+  flows autonomously through the plan; **unexpected closure pulls in the human** (the ground-truth
+  interpreter), grows the principle-set, *and revises the plan*.
 
 ## Consequences
 
