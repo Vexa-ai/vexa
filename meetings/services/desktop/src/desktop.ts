@@ -428,7 +428,9 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       const b = Buffer.from(data);
       if (tryRecording(b)) return;                                         // recording.v1 chunk — not transcription audio
       const f = decodeAudioFrame(b.buffer, b.byteOffset, b.byteLength);   // capture.v1 audio frame
-      if (f) { lastFrameMs = Date.now(); pipe?.feedAudio(f.speakerIndex, f.speakerName, f.samples, f.ts); }   // route by CHANNEL, name = glow at capture
+      // route by CHANNEL; name = glow at capture, EXCEPT the local mic (ch1000) which is always "You"
+      // (the mic frame carries no glow name → would otherwise fall to the 'Speaker' unknownLabel).
+      if (f) { lastFrameMs = Date.now(); pipe?.feedAudio(f.speakerIndex, f.speakerIndex === MIC_CHANNEL ? 'You' : f.speakerName, f.samples, f.ts); }
     });
     let finished = false;
     const finish = async () => {

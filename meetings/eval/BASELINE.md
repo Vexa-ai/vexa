@@ -18,6 +18,17 @@ _Method: live human capture (the ground-truth oracle) → tape recorded → scor
 - **mixed:** `ch999` minted, healthy.
 - **gmeet:** per-participant **`ch0` HEALTHY** (122f · 31.2s · avgRMS 0.13 · <floor 2%) + mic `ch1000` → `✓ CAPTURE HEALTHY`. *(This is the first time the gmeet per-participant lane was exercised end-to-end — a shared YouTube presentation provided the remote-channel audio.)*
 
+## ⚠ What this baseline does NOT yet validate — ATTRIBUTION
+`misattr=0` here is **weak evidence**: it only means no segment's content self-identified a speaker that
+*contradicted* its label. With **no NAMED speakers** in either capture (the shared presentation → `Speaker`;
+the local mic *should* be `You` — that mislabel is now fixed), **nothing exercised positive attribution**.
+So this baseline validates **capture + transcription + segmentation**, NOT "the right name on the right audio."
+
+**Definitive gmeet attribution requires the speaker-bots eval** — `meetings/eval`: `launch` named synthetic
+bots → `drive` a known speech timeline (the ground truth) → `analyze` attribution against it; `noise` for the
+active-speaker flicker-hijack test. It needs test accounts/secrets + a human to admit the bots (a `🧑` step),
+and is a **planned objective** (RELEASE-PLAN). Until it runs, **gmeet ATTRIBUTION is UNVALIDATED.**
+
 ## Thresholds (the bar)
 - **`misattr = 0`** — HARD. A wrong speaker label fails the lane. Both lanes meet it.
 - **`dup = 0`.** **`seg_N`:** gmeet must stay bound (`0`); mixed `seg_N` is by-design (single stream, no participant identities).
