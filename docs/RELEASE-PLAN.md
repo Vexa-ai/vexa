@@ -32,7 +32,7 @@ A self-hostable **0.12** where every component is validated **in isolation (L1/L
 **Validate the P1 capture lanes live + capture the 0.12 eval baseline.** STT is unblocked (internal token from vexa-secrets); the desktop is up with tape-recording. Instrument-validated already: STT+pipeline (replay→13 segs), capture-liveness (25 L2), gates green. **Open (human-required, minimal surface):** reload the rebuilt extension → YouTube (mint stream) + Meet (2nd speaker); the tape `capture`/`analyze` instruments adjudicate (§8 — cross-validate the human).
 
 ## Gate debts (make the new principles bite — close before release)
-- **`capture.v1`** sealed + golden-pinned (P4 refinement — the busiest wire is still ungated).
+- ~~`capture.v1` sealed~~ ✅ **done** — 7 golden vectors + round-trip conformance (`capture-v1-golden.test.ts`, 21 assertions, under `gate:node`); spec `capture-v1.md` (P4 refinement, the busiest wire).
 - **`gate:eval-baseline`** (P19) — the L4 eval artifact as a required gate.
 - **`gate:access`** + the `canAccess` port on `/transcripts`·`/recordings`·`/ws` (P20).
 - ~~`gate:health`~~ ✅ **done** — desktop `/health` (STT readiness) + no-frames watchdog (P18 server-side); `health.test.ts` (10 L3 checks). *(follow-on: a live STT reachability ping; today /health reports STT *configured*, not pinged.)*
