@@ -34,5 +34,5 @@ A self-hostable **0.12** where every component is validated **in isolation (L1/L
 ## Gate debts (make the new principles bite — close before release)
 - ~~`capture.v1` sealed~~ ✅ **done** — 7 golden vectors + round-trip conformance (`capture-v1-golden.test.ts`, 21 assertions, under `gate:node`); spec `capture-v1.md` (P4 refinement, the busiest wire).
 - **`gate:eval-baseline`** (P19) — the L4 eval artifact as a required gate.
-- **`gate:access`** + the `canAccess` port on `/transcripts`·`/recordings`·`/ws` (P20).
+- ~~`gate:access` + `canAccess`~~ ✅ **done** (desktop) — port on `/transcripts`·`/recordings`·`/player`·`/bots`·`/ws`; `access.test.ts` (13 L3, deny⇒403/empty). *(seam only; default allows-all on localhost; real grants + the cloud meeting-api inherit it — ADR-0003.)*
 - ~~`gate:health`~~ ✅ **done** — desktop `/health` (STT readiness) + no-frames watchdog (P18 server-side); `health.test.ts` (10 L3 checks). *(follow-on: a live STT reachability ping; today /health reports STT *configured*, not pinged.)*
