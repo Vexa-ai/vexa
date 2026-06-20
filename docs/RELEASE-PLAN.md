@@ -20,7 +20,7 @@ A self-hostable **0.12** where every component is validated **in isolation (L1/L
 |---|---|---|
 | **P0** process + gates | ✅ done | remote+CI green; `gate:contract-version`·`fault-surfacing`·`client-liveness` **have**; contracts frozen |
 | **Constitution growth** | ✅ done | **P18** fail-loud · **P19** prove-at-altitude · **P20** complete-mediation · **P21** state-from-evidence; process: **ADR-0014** (expectation–reality loop) · **ADR-0015** (plan/exec modes) |
-| **P1** desktop + extension | 🟡 code done · **L4 pending** | endpoints + recording playback + mic-CSP + capture tests + **P21 evidence-driven capture state**; live re-test is the open step |
+| **P1** desktop + extension | ✅ **L4 PASSED** | endpoints + recording playback + mic-CSP + capture tests + P21 evidence-driven state; **both lanes validated live** (mixed + gmeet, misattr=0), baseline banked (`eval/BASELINE.md`) |
 | **P2** bot | 🟡 core + 2a transports done · **2b browser next** | composition root + ports + orchestrator + 42 L2 (3 review bugs fixed); **2a = live redis/HTTP transports** (lifecycle·transcript·acts, L3). **2b = browser** (join via @vexa/join+remote-browser, capture→pipeline, recording upload — L4) |
 | **P5** agents | 🟡 skeleton done | Python agent-api, transcript.v1 seam, 15 pytest (ADR-0009). LLM loop + real adapters remain |
 | **P3** meeting-api + identity/gateway | ⬜ not started | cloud receiver (recording.v1/lifecycle.v1 + REST/WS + Postgres); the eval 4-op API |
@@ -33,6 +33,6 @@ A self-hostable **0.12** where every component is validated **in isolation (L1/L
 
 ## Gate debts (make the new principles bite — close before release)
 - ~~`capture.v1` sealed~~ ✅ **done** — 7 golden vectors + round-trip conformance (`capture-v1-golden.test.ts`, 21 assertions, under `gate:node`); spec `capture-v1.md` (P4 refinement, the busiest wire).
-- **`gate:eval-baseline`** (P19) — the L4 eval artifact as a required gate.
+- ~~`gate:eval-baseline`~~ ✅ **done** — `meetings/eval/BASELINE.md`: both lanes L4-passed live (mixed `youtube` 130 segs · gmeet `dps-nwbw-jzz` 13 segs, **misattr=0** both); gmeet per-participant `ch0` exercised via a shared presentation. **The P1 L4 milestone.**
 - ~~`gate:access` + `canAccess`~~ ✅ **done** (desktop) — port on `/transcripts`·`/recordings`·`/player`·`/bots`·`/ws`; `access.test.ts` (13 L3, deny⇒403/empty). *(seam only; default allows-all on localhost; real grants + the cloud meeting-api inherit it — ADR-0003.)*
 - ~~`gate:health`~~ ✅ **done** — desktop `/health` (STT readiness) + no-frames watchdog (P18 server-side); `health.test.ts` (10 L3 checks). *(follow-on: a live STT reachability ping; today /health reports STT *configured*, not pinged.)*
