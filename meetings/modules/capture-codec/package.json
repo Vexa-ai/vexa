@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/recording-chunk.test.ts",
+    "test": "tsx src/capture-v1-golden.test.ts && tsx src/recording-chunk.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "devDependencies": {
