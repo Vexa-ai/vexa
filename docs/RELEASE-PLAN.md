@@ -35,4 +35,4 @@ A self-hostable **0.12** where every component is validated **in isolation (L1/L
 - **`capture.v1`** sealed + golden-pinned (P4 refinement — the busiest wire is still ungated).
 - **`gate:eval-baseline`** (P19) — the L4 eval artifact as a required gate.
 - **`gate:access`** + the `canAccess` port on `/transcripts`·`/recordings`·`/ws` (P20).
-- **`gate:health`** + no-frames/liveness on the desktop (P18 liveness, server-side).
+- ~~`gate:health`~~ ✅ **done** — desktop `/health` (STT readiness) + no-frames watchdog (P18 server-side); `health.test.ts` (10 L3 checks). *(follow-on: a live STT reachability ping; today /health reports STT *configured*, not pinged.)*
