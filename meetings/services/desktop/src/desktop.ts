@@ -28,6 +28,7 @@ import { createGmeetPipeline, type TranscriptSegment } from '@vexa/gmeet-pipelin
 import { ChunkedTranscriber, type ChunkSegment, type HintKind } from '@vexa/mixed-pipeline';
 import { decodeAudioFrame, decodeRecordingChunk } from '@vexa/capture-codec';
 import { createRecordingSink, type RecordingMaster } from './recording-sink.js';
+import { ownerOnly, type CanAccess } from './access.js';
 
 const SAMPLE_RATE = 16000;
 const REC_CONTENT_TYPE: Record<string, string> = { wav: 'audio/wav', webm: 'audio/webm' };
@@ -73,7 +74,7 @@ function recordingPlayerPage(platform: string, native: string, src: string, form
 }
 
 interface Meeting { id: number; platform: string; native_meeting_id: string; status: string; start_time: string; segments: TranscriptSegment[]; }
-export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; }
+export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; canAccess?: CanAccess; }
 export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
 
 export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> {
@@ -86,6 +87,18 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   const meetings = new Map<string, Meeting>();
   let nextId = 1;
   const keyOf = (p: string, n: string) => `${p}/${n}`;
+
+  // ── P20 / ADR-0012 — complete mediation: every read path consults canAccess ──
+  // The SEAM (default owner-only = allow-all on the single-user localhost; real
+  // grants land additively behind this same port — ADR-0003). Resolved ONCE here.
+  // Subject is derived from the request: the X-API-Key header on HTTP routes, the
+  // api_key query param on the headerless /ws connection, else 'local'.
+  const canAccess: CanAccess = opts.canAccess ?? ownerOnly;
+  const subjectOf = (req: http.IncomingMessage): string => {
+    const h = req.headers['x-api-key'];
+    const v = Array.isArray(h) ? h[0] : h;
+    return v && v.length ? v : 'local';
+  };
 
   // Telemetry ring buffer — the extension POSTs merged diagnostics (page
   // attribution state + session state + per-track frame counters) every ~10s
@@ -221,7 +234,13 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
       const items = (reason ? telemetry.filter((t) => t.reason === reason) : telemetry).slice(-limit);
       return send({ count: items.length, total: telemetry.length, items });
     }
-    if (req.method === 'GET' && url.pathname === '/bots') return send({ meetings: [...meetings.values()], has_more: false });
+    // GET /bots — P20: return ONLY the meetings the subject canAccess (filter the
+    // list; a forbidden meeting must not even be enumerable to a denied reader).
+    if (req.method === 'GET' && url.pathname === '/bots') {
+      const subject = subjectOf(req);
+      const visible = [...meetings.values()].filter((m) => canAccess(subject, keyOf(m.platform, m.native_meeting_id), 'read'));
+      return send({ meetings: visible, has_more: false });
+    }
     // GET /health — liveness + dependency readiness (P18). The body reports each
     // dependency's state so an operator/orchestrator sees "is STT configured?" without
     // parsing logs. 200 when STT is configured; 503 (degraded) when it isn't — a desktop
@@ -233,8 +252,10 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     }
     const tr = url.pathname.match(/^\/transcripts\/([^/]+)\/([^/]+)/);
     if (req.method === 'GET' && tr) {
-      const m = meetings.get(keyOf(decodeURIComponent(tr[1]), decodeURIComponent(tr[2])));
-      return send(m ?? { id: 0, platform: decodeURIComponent(tr[1]), native_meeting_id: decodeURIComponent(tr[2]), status: 'unknown', segments: [] });
+      const p = decodeURIComponent(tr[1]), n = decodeURIComponent(tr[2]);
+      if (!canAccess(subjectOf(req), keyOf(p, n), 'read')) return send({ error: 'forbidden' }, 403);   // P20
+      const m = meetings.get(keyOf(p, n));
+      return send(m ?? { id: 0, platform: p, native_meeting_id: n, status: 'unknown', segments: [] });
     }
     // GET /recordings/{p}/{n}/player — a minimal, dependency-free HTML5 <audio>
     // page that plays the assembled master via the EXISTING GET /recordings/{p}/{n}
@@ -243,6 +264,7 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     if (req.method === 'GET' && play) {
       const p = decodeURIComponent(play[1]);
       const n = decodeURIComponent(play[2]);
+      if (!canAccess(subjectOf(req), keyOf(p, n), 'read')) return send({ error: 'forbidden' }, 403);   // P20
       const entry = recordings.get(keyOf(p, n));
       const src = `/recordings/${encodeURIComponent(p)}/${encodeURIComponent(n)}`;
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...CORS });
@@ -252,8 +274,10 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     // ADAPTER's read side; the all-in-one path's equivalent of meeting-api's file serve).
     const rec = url.pathname.match(/^\/recordings\/([^/]+)\/([^/]+)/);
     if (req.method === 'GET' && rec) {
-      const entry = recordings.get(keyOf(decodeURIComponent(rec[1]), decodeURIComponent(rec[2])));
-      if (!entry || !existsSync(entry.path)) return send({ error: 'no recording', platform: decodeURIComponent(rec[1]), native_meeting_id: decodeURIComponent(rec[2]) }, 404);
+      const p = decodeURIComponent(rec[1]), n = decodeURIComponent(rec[2]);
+      if (!canAccess(subjectOf(req), keyOf(p, n), 'read')) return send({ error: 'forbidden' }, 403);   // P20
+      const entry = recordings.get(keyOf(p, n));
+      if (!entry || !existsSync(entry.path)) return send({ error: 'no recording', platform: p, native_meeting_id: n }, 404);
       const body = readFileSync(entry.path);
       res.writeHead(200, { 'Content-Type': REC_CONTENT_TYPE[entry.format] || 'application/octet-stream', 'Content-Length': body.length, ...CORS });
       return res.end(body);
@@ -261,9 +285,23 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     send({ error: 'not found', path: url.pathname }, 404);
   });
   const wss = new WebSocketServer({ server: gateway, path: '/ws' });
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     liveClients.set(ws, new Set());
-    ws.on('message', (d) => { try { const m = JSON.parse(d.toString()); if (m.action === 'subscribe') { liveClients.set(ws, new Set((m.meetings || []).map((x: any) => `${x.platform}/${x.native_id ?? x.native_meeting_id}`))); ws.send(JSON.stringify({ type: 'subscribed' })); } } catch { /* */ } });
+    // P20: the /ws connection carries no header we can read per-message — derive the
+    // subject from the `api_key` query param on the connection URL (else 'local').
+    const subject = new URL(req.url || '', 'http://localhost').searchParams.get('api_key') || 'local';
+    ws.on('message', (d) => { try { const m = JSON.parse(d.toString()); if (m.action === 'subscribe') {
+      // DROP denied keys from the subscription set — a forbidden meeting yields no
+      // transcript/health broadcast for the subject. An EMPTY set means "all meetings"
+      // (broadcast's keys.size===0 fan-out), so when the client DID request meetings
+      // but every one was denied we install a sentinel that matches no real key — a
+      // deny must shrink, never widen, what the client receives.
+      const requested: string[] = (m.meetings || []).map((x: any) => `${x.platform}/${x.native_id ?? x.native_meeting_id}`);
+      const allowed = requested.filter((k) => canAccess(subject, k, 'read'));
+      const set = requested.length && allowed.length === 0 ? new Set([' deny-all']) : new Set(allowed);
+      liveClients.set(ws, set);
+      ws.send(JSON.stringify({ type: 'subscribed' }));
+    } } catch { /* */ } });
     ws.on('close', () => liveClients.delete(ws));
   });
   await new Promise<void>((r) => gateway.listen(opts.gatewayPort ?? 8056, () => r()));
