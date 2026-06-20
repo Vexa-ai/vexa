@@ -147,7 +147,11 @@ function renderFeed(): void {
   const feed = $('feed');
   if (state.status === 'capturing' && !state.paused) {
     if (!txSegs.length) {
-      feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#127911;</div><div>Listening — capturing ${state.streams} stream(s)…</div></div>`;
+      // P21: status==='capturing' already means real frames are flowing — so describe
+      // that, not the `streams` count (which the mixed/offscreen lane leaves at 0 while
+      // audio flows). Show the count only when it's a real positive (gmeet per-participant).
+      const cap = state.streams > 0 ? `capturing ${state.streams} stream(s)` : 'capturing audio';
+      feed.innerHTML = `<div class="empty"><div style="font-size:22px;">&#127911;</div><div>Listening — ${cap}…</div></div>`;
       return;
     }
     const groups = groupSegments(txSegs);
