@@ -106,6 +106,20 @@ class SqlAlchemyTranscriptStore:
                 except Exception:
                     pass
             segments = sorted((seg_by_id[k] for k in order), key=lambda s: (s.get("start") or 0.0))
+            # The dashboard's renderer SKIPS any segment without absolute_start_time
+            # (use-vexa-websocket.ts: `if (!seg.absolute_start_time) continue`). Derive it from the
+            # meeting start + the relative offset when a producer didn't supply it, so the historical
+            # transcript renders (the carve served only relative start/end → the UI dropped every segment).
+            from datetime import timedelta
+            base = meeting.start_time or meeting.created_at
+            if base is not None:
+                for s in segments:
+                    if not s.get("absolute_start_time") and s.get("start") is not None:
+                        try:
+                            s["absolute_start_time"] = (base + timedelta(seconds=float(s["start"]))).isoformat()
+                            s["absolute_end_time"] = (base + timedelta(seconds=float(s.get("end") or s["start"]))).isoformat()
+                        except Exception:
+                            pass
             return {
                 "id": meeting.id,
                 "platform": meeting.platform,
