@@ -73,3 +73,7 @@ _⏳ rows are planned gates (A:V2/A:V3/Lane B), not yet green — listed for com
 - **`DELETE /bots` HTTP route** unmounted in the unified meeting-api (the stop *logic* exists,
   `lifecycle/stop.py`); the api.v1 endpoint 404s. Flagged for wiring; the L3 lane drives stop via the
   leave-command for now. (Found by the mock-bot L3 lane, Learning #27.)
+- **max-bots cap has a TOCTOU race** — the count-then-insert pre-check isn't atomic, so concurrent
+  `POST /bots` can overspill the per-user cap (the stress lane reproduces it). Likely shared with main;
+  making it atomic (advisory lock / serializable / conditional insert) is a *better-than-main*
+  enhancement. Flagged; the stress gate asserts "enforcement active + bounded overspill". (Found by A:V2.)

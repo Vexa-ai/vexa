@@ -279,6 +279,31 @@ function gateCompose() {
   return true;
 }
 
+// gate:compose-stress (A:V2) — the control plane under CONCURRENT load (N mock bots at once): enforcement
+// holds (max-bots never overspills), every FSM reaches terminal under contention. OPT-IN + green-or-skip:
+// runs ONLY when COMPOSE_STRESS=1 (heavy → not in the routine `all`; `all` skips it green). Set
+// MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev too; delegates to the same real-stack runner (stress_test.py
+// runs as part of the session). On a shared host (bbb) pass COMPOSE_PROJECT + MINIO_HOST_PORT to isolate.
+function gateComposeStress() {
+  if (process.env.COMPOSE_STRESS !== "1") {
+    console.log("  ✓ gate:compose-stress — opt-in (COMPOSE_STRESS=1 + MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev) → skip");
+    return true;
+  }
+  return gateCompose();   // COMPOSE_STRESS=1 makes deploy/compose/tests/stress_test.py run on the live stack
+}
+
+// gate:compose-chaos (A:V3) — the control plane RECOVERS from injected dependency faults (a redis/meeting-api
+// blip via docker pause/unpause): the FSM still reaches a clean terminal (retry/backoff), never a silent
+// stall (P18). OPT-IN + green-or-skip: runs ONLY when COMPOSE_CHAOS=1 (heavy; not in the routine `all`).
+// Set MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev; delegates to the same real-stack runner (chaos_test.py).
+function gateComposeChaos() {
+  if (process.env.COMPOSE_CHAOS !== "1") {
+    console.log("  ✓ gate:compose-chaos — opt-in (COMPOSE_CHAOS=1 + MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev) → skip");
+    return true;
+  }
+  return gateCompose();   // COMPOSE_CHAOS=1 makes deploy/compose/tests/chaos_test.py run on the live stack
+}
+
 // gate:node — build + unit-test every workspace TS package via turbo (mirrors gate:python)
 function gateNode() {
   const pkgs = packageDirs().filter((d) => {
@@ -459,7 +484,7 @@ function gateExecutionEnv() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity };
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
