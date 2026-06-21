@@ -122,11 +122,15 @@ to `claude/busy-bouman-9ea75f` ([`docs/PARITY-MAIN.md`](PARITY-MAIN.md) · [`doc
 - **Lane A (✅):** A:V1 lifecycle/edge-cases (`gate:compose`+MOCK_BOT, 16 passed) · A:V2 stress · A:V3 chaos · A:V4
   modularity (`gate:test-isolation`/`gate:arch-report`) · A:V5 parity (`gate:parity`). New: execution-target registry
   (`gate:execution-env`, ADR-0020) + planning-embeds-rules (ADR-0021).
-- **Lane B (autonomous done; B:V1 human-gated):** the worker-L4 eval oracle is reusable + gated (`gate:eval-baseline`);
-  the **live score** (real bot on `rvf-kywf-pxb` ≥ BASELINE) awaits the human admit.
+- **Lane B (worker-L4): harness reusable + gated (`gate:eval-baseline`); live admit DONE.** The real bot — **spawned by the
+  real API** (`POST /bots` → gateway → meeting-api → runtime → `vexaai/vexa-bot:v012`) — joined `rvf-kywf-pxb`, was **admitted**,
+  reached `active`, and captured **3 streams**; the DB read `active` (the persistence fix **proven LIVE against the production
+  bot**, not only the mock). The transcript **score** awaits two deferred items: `bot_spawn` STT-wiring (task; confirmed live as
+  `transcriptionServiceUrl:<MISSING>`) + `internal@vexa.ai` `/balance`=0 (`/purchase`). Learning #28.
 - **The mock lane caught 5 real backend bugs O6 (L4) missed** (it bypassed the control plane — raw-stream reads + the
-  legacy image). **Fixed:** `VEXA_BOT_CONFIG` (was `BOT_CONFIG`) · lifecycle now persists to the DB · transcript
-  envelope matches the collector. **Flagged (tasks):** `DELETE /bots` route unmounted · max-bots TOCTOU overspill. Learning #27.
+  legacy image). **Fixed + gate-green:** `VEXA_BOT_CONFIG` (was `BOT_CONFIG`) · lifecycle now persists to the DB (✅ confirmed
+  live via the API) · transcript envelope matches the collector. **Flagged (tasks):** `DELETE /bots` route unmounted · max-bots
+  TOCTOU overspill · `bot_spawn` STT-wiring · bot-orphan-on-terminal. Learning #27. **Close: `pnpm gates` GREEN (exit 0); meeting-api 143 pass.**
 
 ## Done (audit trail)
 - **Re-grounded** on main's real stack (deployments/images/postgres); discarded the sqlite meeting-api tangent (Learning #20).
