@@ -33,7 +33,7 @@ const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", ".venv"])
 const skippable = (n) => n.startsWith(".") || SKIP.has(n);
 
 // The trees that may hold Python packages (do NOT touch services/ / bbb / prod).
-const ROOTS = ["runtime", "gateway", "meetings", "identity", "agent"];
+const ROOTS = ["core/runtime", "core/gateway", "core/meetings", "core/identity", "core/agent"];
 
 // ── allowed cross-package edges ───────────────────────────────────────────────────────────────
 // importer-module → set of sibling modules it MAY import (src→src). Each edge carries a reason so

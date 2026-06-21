@@ -7,14 +7,15 @@ the constitution (P1–P21), the gate suite, and the development process.
 ## Layout
 | Dir | Role |
 |---|---|
-| `runtime/` | ① kernel — spawn/execute workloads + mount the workspace |
-| `meetings/` | ② capture — join → capture → transcript |
-| `agent/` | ③ execution — transcript → governed action |
-| `identity/` | access · accounts · tokens · audit |
-| `gateway/` | the edge — auth · routing · WS fan-out |
+| `core/` | **the platform backend** — the five domains below, grouped (an organizing folder, not a domain) |
+| `core/runtime/` | ① kernel — spawn/execute workloads + mount the workspace |
+| `core/meetings/` | ② capture — join → capture → transcript |
+| `core/agent/` | ③ execution — transcript → governed action |
+| `core/identity/` | access · accounts · tokens · audit |
+| `core/gateway/` | the edge — auth · routing · WS fan-out |
 | `integrations/` | `out/` emit adapters · `in/` connectors |
 | `clients/` | dashboard · extension · desktop · telegram · mcp |
-| `<domain>/contracts/` | published contracts **nest with their owner domain** (JSON Schema + goldens) — no top-level `schemas/` (see ARCHITECTURE §3) |
+| `core/<domain>/contracts/` | published contracts **nest with their owner domain** (JSON Schema + goldens) — no top-level `schemas/` (see ARCHITECTURE §3) |
 | `sdks/` | published client libraries |
 | `tools/` · `deploy/` · `docs/` | dev tooling · deployment topologies · docs + ADRs |
 

@@ -32,7 +32,7 @@ microservices, carved where a real force requires it (runtime, scale, data, ephe
 | **Adapter** | binds a port to a real transport or external brick | `join-vexa`, `transcript-redis`, `lifecycle-http` | Hexagonal; Anti-Corruption Layer (DDD) |
 | **Published schema** | a *language-neutral* contract at a boundary | `contracts/*.v1` (JSON Schema / OpenAPI + golden vectors) | schema-first / consumer-driven contract testing |
 | **Kernel (runtime)** | the domain-agnostic execution substrate everything sits on | `runtime/` (spawn/execute, now or scheduled; mounts the workspace) | platform substrate |
-| **Workspace** | a *user-owned git repo* — durable memory the agent reads/writes; **data, not platform code** | the user's repo; template = `agent/contracts/workspace.v1`; mount = a `runtime` capability | git-as-database; mechanism-not-policy |
+| **Workspace** | a *user-owned git repo* — durable memory the agent reads/writes; **data, not platform code** | the user's repo; template = `core/agent/contracts/workspace.v1`; mount = a `runtime` capability | git-as-database; mechanism-not-policy |
 | **Composition root** | the one place wiring happens; the only place adapters meet the core | a service's `index.ts` / `main` | DI composition root (Seemann) |
 | **Worker** | an ephemeral, stateless service spawned on demand and disposed | `bot` (per meeting), `agent` (per run) | 12-Factor (disposability) |
 
@@ -70,23 +70,28 @@ microservices, carved where a real force requires it (runtime, scale, data, ephe
 
 ```
 vexa/
-├── runtime/        ① KERNEL — spawn/execute workloads · Docker·K8s·process · domain-agnostic
-│   └── contracts/  runtime.v1
-├── meetings/       ② CAPTURE — meeting-api · bot · transcription · tts · eval/ → transcript + events
-│   └── contracts/  transcript.v1 · lifecycle.v1 · acts.v1 · invocation.v1
-├── agent/          ③ EXECUTION — agent-api · sandboxed worker (scoped identity + a mounted workspace)
-│   └── contracts/  workspace.v1
-├── identity/       access · accounts · tokens · audit — authN/authZ   (+ rest-api · webhook contracts when built)
-├── gateway/        the edge — auth · routing · WS fan-out
+├── core/           THE PLATFORM BACKEND — the five backend domains live together so the tree
+│   │               reads itself: the runnable platform is `core/`, everything else (clients, sdks,
+│   │               integrations, deploy, tools) consumes it across a contract seam.
+│   ├── runtime/    ① KERNEL — spawn/execute workloads · Docker·K8s·process · domain-agnostic
+│   │   └── contracts/  runtime.v1
+│   ├── meetings/   ② CAPTURE — meeting-api · bot · transcription · tts · eval/ → transcript + events
+│   │   └── contracts/  transcript.v1 · lifecycle.v1 · acts.v1 · invocation.v1
+│   ├── agent/      ③ EXECUTION — agent-api · sandboxed worker (scoped identity + a mounted workspace)
+│   │   └── contracts/  workspace.v1
+│   ├── identity/   access · accounts · tokens · audit — authN/authZ   (+ rest-api · webhook contracts when built)
+│   └── gateway/    the edge — auth · routing · WS fan-out
 ├── integrations/   out/ (FINOS adapters, on the agent emit port) · in/ (calendar → scheduler)   [email/github deferred]
 ├── clients/        dashboard · extension · desktop · telegram · mcp
 ├── sdks/           vexa-client · vexa-cli · transcript-rendering
 ├── tools/ · deploy/ · docs/
 ├── package.json · pnpm-workspace.yaml · turbo.json    ← workspace root
 └── .github/workflows/gates.yml
+# `core/` groups the platform domains; it is an ORGANIZING folder, not a domain — it owns no code or
+# contract of its own, so the bounded-context rules (P1–P3) still apply per-domain, one level down.
 # Contracts NEST with their owner domain (no top-level schemas/). Language-neutrality is the FORMAT
 # (JSON Schema, read by path), not the location — so each domain stays self-contained and liftable.
-# A workspace is a USER git repo (data, not in this tree); template = agent/contracts/workspace.v1.
+# A workspace is a USER git repo (data, not in this tree); template = core/agent/contracts/workspace.v1.
 # deferred (NOT platform domains): crm (an app over a workspace, P11) · retrieval (a vector+KG service)
 ```
 
@@ -94,16 +99,16 @@ vexa/
 
 ```
 A domain's INTERNALS (services/, modules/) may import: its own code · another domain's contracts/
-(the published seam) · runtime/contracts. They may NOT import another domain's internals.
+(the published seam) · core/runtime/contracts. They may NOT import another domain's internals.
 
 runtime internals  → (nothing above; owns runtime.v1)
-meetings internals → runtime/contracts · its own contracts
-agent internals    → runtime/contracts · meetings/contracts (consumes transcript.v1) · its own
+meetings internals → core/runtime/contracts · its own contracts
+agent internals    → core/runtime/contracts · core/meetings/contracts (consumes transcript.v1) · its own
 identity · gateway → contracts only (gateway routes over HTTP, imports no internals)
 clients · sdks     → contracts (+ sdks)
 
-★ meetings ⊥ agent at the INTERNALS level. agent MAY reference meetings/contracts/transcript.v1
-  (that IS the seam); it may never import meetings/services or meetings/modules.
+★ meetings ⊥ agent at the INTERNALS level. agent MAY reference core/meetings/contracts/transcript.v1
+  (that IS the seam); it may never import core/meetings/services or core/meetings/modules.
 ```
 
 **Contract placement** (P4 applied): a contract **nests with its owner domain** in `<domain>/contracts/`

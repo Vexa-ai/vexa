@@ -39,7 +39,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/buffer:
+  core/meetings/modules/buffer:
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -51,7 +51,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/capture-codec:
+  core/meetings/modules/capture-codec:
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -63,7 +63,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/gmeet-capture:
+  core/meetings/modules/gmeet-capture:
     dependencies:
       '@vexa/capture-codec':
         specifier: workspace:*
@@ -79,7 +79,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/gmeet-pipeline:
+  core/meetings/modules/gmeet-pipeline:
     dependencies:
       '@vexa/transcribe-buffer':
         specifier: workspace:*
@@ -104,7 +104,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/join:
+  core/meetings/modules/join:
     dependencies:
       playwright:
         specifier: 1.56.0
@@ -126,7 +126,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/mixed-capture-core:
+  core/meetings/modules/mixed-capture-core:
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -138,7 +138,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/mixed-pipeline:
+  core/meetings/modules/mixed-pipeline:
     dependencies:
       '@huggingface/transformers':
         specifier: ^4.2.0
@@ -163,7 +163,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/record-chunker:
+  core/meetings/modules/record-chunker:
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -175,7 +175,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/recording:
+  core/meetings/modules/recording:
     dependencies:
       playwright:
         specifier: 1.56.0
@@ -191,7 +191,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/remote-browser:
+  core/meetings/modules/remote-browser:
     dependencies:
       playwright:
         specifier: 1.56.0
@@ -210,7 +210,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/teams-capture:
+  core/meetings/modules/teams-capture:
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -222,7 +222,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/whisper:
+  core/meetings/modules/whisper:
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -234,7 +234,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/modules/zoom-capture:
+  core/meetings/modules/zoom-capture:
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -246,7 +246,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/services/bot:
+  core/meetings/services/bot:
     dependencies:
       '@vexa/gmeet-pipeline':
         specifier: workspace:*
@@ -295,7 +295,7 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  meetings/services/desktop:
+  core/meetings/services/desktop:
     dependencies:
       '@vexa/capture-codec':
         specifier: workspace:*

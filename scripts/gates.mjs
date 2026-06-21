@@ -107,7 +107,7 @@ function gateIsolation() {
 // gate:graph (P3) — acyclic + allowed-edges via dependency-cruiser, once packages exist
 function gateGraph() {
   if (!packageDirs().length) { console.log("  ✓ gate:graph — no packages yet (green-on-empty)"); return true; }
-  const targets = ["runtime", "meetings", "agent", "identity", "gateway", "integrations", "clients", "sdks", "schemas", "tools"]
+  const targets = ["core", "integrations", "clients", "sdks", "schemas", "tools"]
     .filter((d) => existsSync(join(ROOT, d)));
   try { execSync(`npx depcruise --config .dependency-cruiser.cjs --no-progress ${targets.join(" ")}`, { stdio: "pipe" }); }
   catch (e) { return fail([`dependency-cruiser:\n${(e.stdout || e.stderr || e).toString()}`]); }
@@ -370,19 +370,19 @@ function gateTelemetry() {
 // path's eval and this gate goes red — "the autonomous eval IS the bar" cannot silently regress.
 function gateEval() {
   const PATHS = [
-    ["core-stack",        /^test_stack_.*\.py$/,                        ["identity/services/admin-api"]],
-    ["observability",     /^test_tracing\.py$/,                         ["gateway/services/conformance"]],
-    ["runtime",           /^test_(store|restart|scheduler|enforcement|health|kernel|profiles).*\.py$/, ["runtime"]],
-    ["identity-access",   /^test_access\.py$/,                          ["identity"]],
-    ["meeting-lifecycle", /^test_.*(lifecycle|machine|receiver).*\.py$/, ["meetings/services/meeting-api"]],
-    ["webhooks",          /^test_.*webhook.*\.py$/,                     ["meetings/services/meeting-api"]],
-    ["scheduling",        /^test_.*schedul.*\.py$/,                     ["meetings/services/meeting-api"]],
-    ["api-surface",       /^test_api.*\.py$/,                           ["gateway/services/conformance"]],
-    ["ws-protocol",       /^test_.*ws.*\.py$/,                          ["gateway/services/conformance"]],
-    ["agents",            /^test_.*\.py$/,                              ["agent/services/agent-api"]],
-    ["telemetry-tap",     /^telemetry\.test\.ts$/,                      ["meetings/services/bot"]],
-    ["replay",            /^replay\.test\.ts$/,                         ["meetings/services/bot"]],
-    ["bug-flag",          /^flag\.test\.mjs$/,                          ["meetings/eval"]],
+    ["core-stack",        /^test_stack_.*\.py$/,                        ["core/identity/services/admin-api"]],
+    ["observability",     /^test_tracing\.py$/,                         ["core/gateway/services/conformance"]],
+    ["runtime",           /^test_(store|restart|scheduler|enforcement|health|kernel|profiles).*\.py$/, ["core/runtime"]],
+    ["identity-access",   /^test_access\.py$/,                          ["core/identity"]],
+    ["meeting-lifecycle", /^test_.*(lifecycle|machine|receiver).*\.py$/, ["core/meetings/services/meeting-api"]],
+    ["webhooks",          /^test_.*webhook.*\.py$/,                     ["core/meetings/services/meeting-api"]],
+    ["scheduling",        /^test_.*schedul.*\.py$/,                     ["core/meetings/services/meeting-api"]],
+    ["api-surface",       /^test_api.*\.py$/,                           ["core/gateway/services/conformance"]],
+    ["ws-protocol",       /^test_.*ws.*\.py$/,                          ["core/gateway/services/conformance"]],
+    ["agents",            /^test_.*\.py$/,                              ["core/agent/services/agent-api"]],
+    ["telemetry-tap",     /^telemetry\.test\.ts$/,                      ["core/meetings/services/bot"]],
+    ["replay",            /^replay\.test\.ts$/,                         ["core/meetings/services/bot"]],
+    ["bug-flag",          /^flag\.test\.mjs$/,                          ["core/meetings/eval"]],
   ];
   const missing = [];
   for (const [label, re, roots] of PATHS) {
