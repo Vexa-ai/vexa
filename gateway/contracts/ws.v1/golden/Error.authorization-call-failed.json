@@ -1,0 +1,1 @@
+{ "type": "error", "error": "authorization_call_failed", "details": "ConnectTimeout: /ws/authorize-subscribe" }

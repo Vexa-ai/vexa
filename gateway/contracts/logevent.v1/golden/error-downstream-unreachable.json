@@ -1,0 +1,14 @@
+{
+  "ts": "2026-06-21T10:00:02.005Z",
+  "level": "error",
+  "service": "gateway",
+  "trace_id": "9f1c0b7a8d2e4f6a",
+  "span": "proxy",
+  "audience": "system",
+  "event": "downstream_unreachable",
+  "fields": {
+    "method": "GET",
+    "path": "/meetings",
+    "error": "ConnectError: all connection attempts failed"
+  }
+}

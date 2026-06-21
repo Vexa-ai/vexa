@@ -26,6 +26,16 @@ export interface GmeetChannelBinderOptions {
   loudThreshold?: number;
   /** Minimum decayed agreement before a channel binds confidently (else UNKNOWN). Default 2.5. */
   minScore?: number;
+  /**
+   * The LOCAL participant's display name (the host / "self"). The self's own audio is
+   * the microphone (a reserved channel), NEVER a remote <audio> element — so the self
+   * tile must NEVER bind a remote channel, even when it glows concurrently with a
+   * remote speaker. The upstream self-exclusion (gmeet-speakers' data-self-name) is
+   * re-read every scan and Meet drops that marker transiently, which let the host's
+   * glow leak its name onto a remote channel (speaker-bots eval, 2026-06-20). This is
+   * the leak-proof backstop: a sticky self name the binder refuses to assign.
+   */
+  selfName?: string;
 }
 
 interface Score { score: number; ts: number }
@@ -34,6 +44,7 @@ export class GmeetChannelBinder {
   private readonly tauMs: number;
   private readonly loudThreshold: number;
   private readonly minScore: number;
+  private selfName?: string;
   private readonly glowing = new Set<string>();
   /** channel → (tile name → decayed agreement: how often the channel is LOUD while the tile GLOWS). */
   private readonly agree = new Map<number, Map<string, Score>>();
@@ -42,10 +53,25 @@ export class GmeetChannelBinder {
     this.tauMs = o.tauMs ?? 2500;
     this.loudThreshold = o.loudThreshold ?? 0.02;
     this.minScore = o.minScore ?? 2.5;
+    if (o.selfName) this.setSelfName(o.selfName);
   }
 
-  /** A glow edge for a tile. isEnd=false → onset, true → offset. */
+  /**
+   * Declare (or update) the LOCAL participant's name. Sticky: once known, the self can
+   * never bind a remote channel even if its data-self-name marker later vanishes. Also
+   * PURGES any agreement the self already accrued (it may have leaked before the name
+   * was known — the marker can render late), so a prior self-bind collapses to UNKNOWN.
+   */
+  setSelfName(name?: string): void {
+    this.selfName = name;
+    if (!name) return;
+    this.glowing.delete(name);
+    for (const m of this.agree.values()) m.delete(name);
+  }
+
+  /** A glow edge for a tile. isEnd=false → onset, true → offset. The self never glows-to-bind. */
   recordGlow(name: string, isEnd: boolean, tsMs: number): void {
+    if (name === this.selfName) return;                      // self audio is the mic, never a remote channel
     if (isEnd) this.glowing.delete(name); else this.glowing.add(name);
   }
 
@@ -78,6 +104,7 @@ export class GmeetChannelBinder {
     let best: string | undefined;
     let bestScore = 0;
     for (const name of m.keys()) {
+      if (name === this.selfName) continue;                  // the self never wins a remote channel
       const s = this.cur(channel, name, tsMs);
       if (s > bestScore) { bestScore = s; best = name; }
     }

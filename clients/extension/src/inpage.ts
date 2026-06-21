@@ -31,6 +31,7 @@ import {
 } from '@vexa/gmeet-capture';
 import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
 import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '@vexa/teams-capture';
+import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
 
 (() => {
   const TAG = '[vexa-inpage]';
@@ -58,6 +59,11 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
 
   // Per-participant Meet capture — SHARED gmeet brick (one codebase, bot + ext).
   let gmeetCapture: GmeetCapture | null = null;
+  // Meeting RECORDING (separate concern from transcription): the combined Meet mix
+  // (all participant <audio> elements) → recording.v1 chunks. The desktop stores them
+  // and builds master.webm on stop. Meet-only here (per-participant lane); the MIXED
+  // lane (YouTube/Zoom/Teams) records the tab stream in the OFFSCREEN document instead.
+  let recordingTap: RecordingTap | null = null;
   // Per-channel glow correlation — names each channel from the tile whose glow ONSET
   // aligns with that channel's audio onset (NOT the global glow, which leaks across
   // channels). Fed glow edges from gmeet-speakers; queried per audio frame below.
@@ -98,9 +104,14 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
       if (speakers) return;
       const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
         ?.getAttribute('data-self-name')?.trim() || undefined;
+      // Pin the self/host name as never-bindable on a remote channel (the leak-proof
+      // backstop — the host's own audio is the mic, never a remote <audio>). Set now if
+      // known, and again via onSelf if the data-self-name marker only renders later.
+      if (selfName) channelBinder.setSelfName(selfName);
       speakers = createGmeetSpeakers({
         selfName,
         log: (m) => console.log(`${TAG} ${m}`),
+        onSelf: (name) => channelBinder.setSelfName(name),
         onSpeaking: (name, isEnd) => {
           channelBinder.recordGlow(name, isEnd, Date.now());   // feed the per-channel correlator
           post('speaker_activity', { name, isEnd, kind: 'dom-active' });
@@ -230,6 +241,14 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
         },
       });
       await gmeetCapture.start();
+      // RECORDING tap — the combined meeting mix (all participants) → recording.v1
+      // chunks → content → background → desktop (master.webm on stop). Independent of
+      // the per-channel transcription capture above; best-effort, never blocks capture.
+      // Mixed-lane (YouTube/Zoom/Teams) recording is the OFFSCREEN tab tee, not this.
+      recordingTap = createRecordingTap({
+        onChunk: (c) => { if (isCurrent()) post('recording-chunk', { seq: c.chunkSeq, isFinal: c.isFinal, mimeType: c.mimeType, base64: c.base64 }); return true; },
+      });
+      recordingTap.start().catch((e: any) => console.log(`${TAG} recording tap: ${e?.message || e}`));
     }
 
     post('capture-started', { streams: streamCount() });
@@ -250,6 +269,7 @@ import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '
     if (zoomChat) { zoomChat.destroy(); zoomChat = null; (window as any).__vexaZoomChat = null; }
     if (teamsSpeakers) { teamsSpeakers.destroy(); teamsSpeakers = null; (window as any).__vexaTeamsSpeakers = null; }
     if (teamsChat) { teamsChat.destroy(); teamsChat = null; (window as any).__vexaTeamsChat = null; }
+    if (recordingTap) { recordingTap.stop().catch(() => { /* */ }); recordingTap = null; }
     if (gmeetCapture) { gmeetCapture.stop(); gmeetCapture = null; }
     if (countTimer !== null) { clearInterval(countTimer); countTimer = null; }
     if (micStream) { for (const t of micStream.getTracks()) { try { t.stop(); } catch { /* ignore */ } } micStream = null; }

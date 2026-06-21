@@ -1,0 +1,8 @@
+{
+  "on": "scheduled",
+  "meeting": {
+    "meeting_id": "weekly-review",
+    "session_uid": "sched-2026-06-21"
+  },
+  "workspace_repo": "https://git.example.com/acme/company-memory.git"
+}

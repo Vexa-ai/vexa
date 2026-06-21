@@ -50,6 +50,16 @@ window.addEventListener('message', (event) => {
     case 'speaker_activity':
       chrome.runtime.sendMessage({ type: 'speaker_activity', name: data.name, kind: data.kind, isEnd: data.isEnd });
       break;
+    case 'chat-message':
+      // Zoom/Teams chat panel message → capture.v1 `chat` event (background encodes it).
+      chrome.runtime.sendMessage({ type: 'chat-message', sender: data.sender, text: data.text });
+      break;
+    case 'recording-chunk':
+      // gmeet recording (combined Meet mix → MediaRecorder, @vexa/record-chunker) →
+      // background → ingest WS (recording.v1). The MIXED lane records via the offscreen
+      // tee instead (RECORDING_CHUNK, pre-encoded), so the two never collide.
+      chrome.runtime.sendMessage({ type: 'recording-chunk', seq: data.seq, isFinal: data.isFinal, mimeType: data.mimeType, base64: data.base64 });
+      break;
   }
 });
 

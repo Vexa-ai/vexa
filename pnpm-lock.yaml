@@ -282,6 +282,12 @@ importers:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43
+      '@vexa/capture-codec':
+        specifier: workspace:*
+        version: link:../../modules/capture-codec
+      esbuild:
+        specifier: ^0.24.2
+        version: 0.24.2
       tsx:
         specifier: ^4.19.0
         version: 4.22.4

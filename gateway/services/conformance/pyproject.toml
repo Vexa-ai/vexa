@@ -1,0 +1,40 @@
+[project]
+name = "vexa-gateway-conformance"
+version = "0.12.0"
+description = "Gateway lane (Group-6) behavioral conformance harness: a TestClient gateway + a port-fake meeting-api replaying api.v1 goldens, and a /ws unit harness replaying the subscribe→data→error sequence — every response/frame validated against the sealed api.v1 / ws.v1 component schemas (loaded BY PATH)."
+requires-python = ">=3.11"
+dependencies = [
+    # FastAPI + TestClient (starlette) — the in-process gateway, no network, no docker.
+    "fastapi>=0.110",
+    "starlette>=0.37",
+    "httpx>=0.27",          # TestClient transport
+    # jsonschema validates every asserted response/frame against the frozen contract.
+    # 2020-12 vocabulary to match the contracts ($schema draft 2020-12, ws.schema.json).
+    "jsonschema>=4.21",
+    "referencing>=0.31",   # modern $ref resolution (replaces deprecated jsonschema.RefResolver)
+    "pydantic>=2",
+    "pytest>=8",
+    # pytest-asyncio drives the /ws unit harness's `async def` tests (asyncio_mode=auto).
+    # No SQLAlchemy-async here so no greenlet pin is required (lesson from the identity
+    # lane — only pin greenlet when SQLAlchemy-async is in play).
+    "pytest-asyncio>=0.23",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The production `gateway` package's src is on the path so the conformance suite drives the
+# SHIPPED app (`gateway.create_app`). The `transcription_collector` src is ALSO on the path so the
+# /transcripts + /meetings + /ws/authorize-subscribe conformance drives the SHIPPED collector
+# (`transcription_collector.create_app`) instead of a golden port-fake — one hop downstream of the
+# gateway carve. Allowed import direction: conformance (test) → gateway (prod) + collector (prod);
+# the collector imports nothing from conformance.
+pythonpath = [
+    "src",
+    "tests",
+    "../gateway/src",
+    "../../../meetings/services/transcription-collector/src",
+]
+asyncio_mode = "auto"

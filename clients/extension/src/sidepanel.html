@@ -164,11 +164,18 @@
       <input id="apiKey" type="password" placeholder="vxa_..." />
     </div>
     <div>
-      <label>Capture server (desktop ingest)</label>
+      <label>Deployment</label>
+      <select id="deployment">
+        <option value="desktop">Desktop (localhost:9099)</option>
+        <option value="cloud">Cloud / compose / helm (localhost:8092)</option>
+      </select>
+    </div>
+    <div>
+      <label>Capture server (override)</label>
       <input id="ingestUrl" type="text" class="mono" placeholder="ws://localhost:9099/ingest" />
     </div>
     <div>
-      <label>API gateway</label>
+      <label>API gateway (override)</label>
       <input id="gatewayUrl" type="text" class="mono" placeholder="http://localhost:8056" />
     </div>
     <div>
@@ -190,7 +197,7 @@
     <div class="togglerow">
       <div>
         <p class="title">Auto-start in meetings</p>
-        <p class="sub">Google Meet</p>
+        <p class="sub">Google Meet, Zoom &amp; Teams</p>
       </div>
       <label class="switch"><input id="autoStart" type="checkbox" /><span class="track"></span></label>
     </div>

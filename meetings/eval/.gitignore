@@ -5,3 +5,5 @@ cache/
 truth*.jsonl
 noise*.jsonl
 *.log
+# O-TEL-3 flag.test.mjs writes a transient flag-out here; the committed fixtures stay.
+replay-fixture/.flag-out.tmp.json

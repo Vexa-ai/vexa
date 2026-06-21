@@ -21,6 +21,7 @@ from referencing import Registry, Resource
 # The published seams, relative to the monorepo root.
 _TRANSCRIPT_SCHEMA = Path("meetings/contracts/transcript.v1/transcript.schema.json")
 _WORKSPACE_SCHEMA = Path("agent/contracts/workspace.v1/workspace.schema.json")
+_INVOKE_SCHEMA = Path("agent/contracts/invoke.v1/invoke.schema.json")
 
 
 def _repo_root() -> Path:
@@ -60,6 +61,11 @@ def validate_segment(segment: dict) -> None:
     _validator(_TRANSCRIPT_SCHEMA, "TranscriptSegment").validate(segment)
 
 
+def validate_session_end(payload: dict) -> None:
+    """Validate a ``transcript.v1`` SessionEnd envelope (the meeting-completed trigger source)."""
+    _validator(_TRANSCRIPT_SCHEMA, "SessionEnd").validate(payload)
+
+
 def iter_segments(payload: dict) -> Iterable[dict]:
     """Validate a Transcription payload, then yield its segments (each also conformant)."""
     validate_transcription(payload)
@@ -71,3 +77,10 @@ def iter_segments(payload: dict) -> Iterable[dict]:
 def validate_entity_frontmatter(frontmatter: dict) -> None:
     """Validate emitted workspace frontmatter against ``workspace.v1`` EntityFrontmatter (P8)."""
     _validator(_WORKSPACE_SCHEMA, "EntityFrontmatter").validate(frontmatter)
+
+
+# ── invoke.v1 (PRODUCED — the meeting→agent trigger) ─────────────────────────
+
+def validate_invocation(payload: dict) -> None:
+    """Validate an ``invoke.v1`` Invocation envelope (the trigger the bridge emits)."""
+    _validator(_INVOKE_SCHEMA, "Invocation").validate(payload)

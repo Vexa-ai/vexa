@@ -20,6 +20,7 @@
     "gate:contract-version": "node scripts/gates.mjs contract-version",
     "seal:contracts": "node scripts/gates.mjs seal",
     "gate:python": "node scripts/gates.mjs python",
+    "gate:stack": "node scripts/gates.mjs stack",
     "gate:node": "node scripts/gates.mjs node",
     "gate:licenses": "node scripts/gates.mjs licenses",
     "gates": "node scripts/gates.mjs all"

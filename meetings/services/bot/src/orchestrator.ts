@@ -145,7 +145,13 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     stopRemoval();
     await deps.pipeline.stop().catch(() => { /* best-effort */ });
     deps.recording?.close(recordingKey);
-    await deps.join.leave(reason).catch(() => { /* best-effort */ });
+    // Bound the leave: a hung platform leave (e.g. a slow Zoom web-client teardown) must not stall
+    // the disposable worker past its SIGKILL grace — that would cut off the recording-master
+    // assembly + the `completed` callback flush. Best-effort, raced against an 8s cap.
+    await Promise.race([
+      deps.join.leave(reason).catch(() => { /* best-effort */ }),
+      new Promise<void>((resolve) => setTimeout(resolve, 8000)),
+    ]);
 
     await emit('completed', { completion_reason: reason, exit_code: 0 });
     return { exitCode: 0, status: 'completed', completionReason: reason };

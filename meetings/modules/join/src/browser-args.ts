@@ -35,6 +35,9 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   // so it lives here to keep the debug harness byte-for-byte with production.
   "--in-process-gpu",
   "--use-fake-ui-for-media-stream",
+  // Start AudioContexts in 'running', not 'suspended' — the capture taps remote participant audio
+  // via createMediaStreamSource; without this the worklet never fires and no PCM flows. (L4.)
+  "--autoplay-policy=no-user-gesture-required",
   "--use-file-for-fake-video-capture=/dev/null",
   "--disable-blink-features=AutomationControlled",
   "--disable-features=VizDisplayCompositor",

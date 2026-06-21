@@ -1,0 +1,10 @@
+{
+  "seq": 2,
+  "ts": 1718000000523,
+  "speakerIndex": 999,
+  "hint": "Boris",
+  "pcm": "AADivgAA3L4AANa+AADQvgAAyr4AAMS+AAC+vgAAuL4=",
+  "pcm_len": 8,
+  "rms": 0.40128995797439754,
+  "lane": "mixed"
+}

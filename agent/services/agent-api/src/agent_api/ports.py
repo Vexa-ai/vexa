@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional, Protocol, runtime_checkable
 
-from .models import WorkspaceWrite
+from .models import AgentAction, WorkspaceWrite
 
 
 @runtime_checkable
@@ -57,6 +57,60 @@ class RuntimePort(Protocol):
 
     def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
         """Block until the workload reaches a terminal ``runtime.v1`` state; return that state."""
+        ...
+
+
+@runtime_checkable
+class AgentDecisionPort(Protocol):
+    """Decide WHAT a run does from a (validated) transcript — the LLM seam.
+
+    This is the hole the model plugs into. The core hands a ``transcript.v1`` payload to ``decide``
+    and gets back an ``AgentAction`` (the agent's own shape). The default adapter is the existing
+    DETERMINISTIC rule (a fixed transcript→meeting-entity mapping); the real Claude adapter — model +
+    Read/Write/Edit/Bash tooling over the mounted workspace — slots in HERE behind the same signature,
+    OUT OF SCOPE for this increment.
+
+    The point of the seam is governance, not the model: whatever ``decide`` returns, ``core.run``
+    re-validates the emitted frontmatter against ``workspace.v1`` before it can touch the user repo
+    (P8). A decision port — even a hallucinating LLM — CANNOT bypass the contract.
+    """
+
+    def decide(self, payload: dict) -> AgentAction:
+        """Given a validated transcript.v1 payload, return the action this run should take."""
+        ...
+
+
+@runtime_checkable
+class WorkspaceStoragePort(Protocol):
+    """Sync a workspace dir to/from durable object storage (S3/MinIO) — the agent's at-rest memory.
+
+    Mirrors the parent ``workspace.py`` ``aws s3 sync`` up/down: ``sync_down`` hydrates the local
+    workspace before a run, ``sync_up`` persists it after. Implementations honor an exclude list (the
+    ``.claude/.session`` ephemera the parent excludes) and report the object ops performed. The
+    transport (boto3 / a real ``aws s3 sync``) is the adapter's concern; the eval fakes it.
+    """
+
+    def sync_down(self, local_dir: str, *, excludes: tuple[str, ...] = ()) -> list[str]:
+        """Pull objects from storage into ``local_dir``; return the keys fetched."""
+        ...
+
+    def sync_up(self, local_dir: str, *, excludes: tuple[str, ...] = ()) -> list[str]:
+        """Push ``local_dir`` to storage (delete extraneous), honoring excludes; return keys put."""
+        ...
+
+
+@runtime_checkable
+class VcsPort(Protocol):
+    """Push a committed workspace to a per-user GitHub remote over a BROKERED token (P15).
+
+    The token is fetched from the identity ``SecretsPort`` as a redacted ``BrokeredSecret`` and only
+    ``reveal()``-ed at the moment the remote URL is assembled — it MUST NEVER be logged raw. This is
+    the GitHub-per-user seam: each user's workspace pushes to their own repo under their own scoped
+    credential, brokered and audited by identity, never a shared platform key.
+    """
+
+    def push(self, local_dir: str, remote_url: str, ref: str) -> str:
+        """Push ``ref`` from ``local_dir`` to ``remote_url`` using the brokered token; return the sha."""
         ...
 
 

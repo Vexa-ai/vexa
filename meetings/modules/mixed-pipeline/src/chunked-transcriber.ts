@@ -240,6 +240,10 @@ export class ChunkedTranscriber {
     t.binder.onLateResolve = (clusterId, name) => t.onClusterRename(clusterId, name);
     transformersEnv.allowLocalModels = true;
     transformersEnv.allowRemoteModels = true; // first run downloads from HF; cached after
+    // Offline bake: point the HF cache at the model dir baked into the image
+    // (Dockerfile warms /opt/hf-cache at build time) so the segmenter loads
+    // pyannote from disk at runtime — no live-meeting HF download stall.
+    if (process.env.VEXA_HF_CACHE) transformersEnv.cacheDir = process.env.VEXA_HF_CACHE;
     // Segmentation OWNS the cut — pyannote boundaries are the only cut signal.
     const makeSegmenter = cb.makeSegmenter
       ?? ((onBoundary) => PyannoteSegmenter.create({ inferIntervalMs: 500, onBoundary }));

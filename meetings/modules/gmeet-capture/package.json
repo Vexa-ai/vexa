@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/gmeet-capture.test.ts && tsx src/gmeet-speakers.test.ts",
+    "test": "tsx src/gmeet-capture.test.ts && tsx src/gmeet-speakers.test.ts && tsx src/gmeet-channel-binder.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {

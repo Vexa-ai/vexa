@@ -72,6 +72,10 @@ const ctx = await context({
     background: 'src/background.ts',
     content: 'src/content.ts',
     inpage: 'src/inpage.ts',
+    // Zoom/Teams MAIN-world content script (document_start). Currently a no-op
+    // (Zoom/Teams use the mixed tab-audio path, not per-participant WebRTC tracks);
+    // kept as a build entry so the manifest's webrtc-hook.js slot resolves.
+    'webrtc-hook': 'src/webrtc-hook.ts',
     sidepanel: 'src/sidepanel.ts',
     offscreen: 'src/offscreen.ts',
     'mic-permission': 'src/mic-permission.ts',

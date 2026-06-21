@@ -63,3 +63,31 @@ export interface ActsSource {
 export interface RecordingSink {
   close(key: string): void;
 }
+
+/** One captured-signal.v1 frame as it crosses the capture-bridge tap — the VERBATIM raw
+ *  signal a live bug rides on, BEFORE it enters the pipeline. Mirrors the `@vexa/capture-codec`
+ *  binary frame shape (the JSONL tape's per-frame record), so a stored stream replays through
+ *  the EXACT pipeline offline (O-TEL-2). `pcm` is base64 of the Float32 PCM bytes (little-endian),
+ *  exactly what the codec puts on the wire. `lane` distinguishes the gmeet per-channel path from
+ *  the single mixed stream. The sink derives `seq`/`rms` if the bridge doesn't supply them. */
+export interface CapturedFrame {
+  seq?: number;                     // monotone per-session frame ordinal (sink assigns if absent)
+  ts: number;                       // CAPTURE epoch ms — carried from the frame, NEVER restamped
+  speakerIndex: number;             // CHANNEL id (999 = mixed, 1000 = the local "You" mic)
+  speakerName?: string;             // glow name bound at capture (gmeet), when known
+  hint?: string;                    // mixed-lane "who is lit" hint name (active-speaker), when present
+  pcm: string;                      // base64 of the Float32 PCM bytes (LE) — codec wire payload
+  pcm_len: number;                  // PCM sample count (Float32 elements)
+  rms?: number;                     // root-mean-square level (sink computes if absent)
+  lane: 'gmeet' | 'mixed';          // which pipeline lane this frame feeds
+}
+
+/** TelemetrySink port — the OPTIONAL dual-sink the capture bridge tees raw frames into, BEFORE
+ *  the pipeline. The real adapter persists captured-signal.v1 (file/store); when unset the tap is
+ *  a single undefined-check (zero overhead — the proven O6 capture path is never altered). The
+ *  pipeline path is wholly independent of whether this is present. */
+export interface TelemetrySink {
+  /** Tee one raw capture frame. MUST NOT throw into the capture path (the bridge calls it
+   *  fire-and-forget); the adapter swallows + logs its own faults. */
+  captureFrame(frame: CapturedFrame): void;
+}

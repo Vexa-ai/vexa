@@ -64,6 +64,42 @@ dial at a time to compare runs.
 - A speaker never overlaps itself — every overlap is two different people.
 - Not a workspace package (a CLI harness, run directly) — exempt from `gate:exports`/`gate:node`.
 
+## Telemetry · replay · bug-flag (Group 8 — O-TEL-1/2/3)
+
+Turns a **live meeting bug into a reproducible OFFLINE test**. The raw signal is teed at the bot's
+capture bridge (`services/bot/src/capture-bridge.ts`, the `TelemetrySink` port) as
+[`captured-signal.v1`](../contracts/captured-signal.v1); a stored signal replays through the EXACT
+pipeline; analyze.mjs auto-flags defects as [`flagged-issue.v1`](../contracts/flagged-issue.v1) that
+route back to the replay.
+
+**O-TEL-2 — deterministic replay (the `gate:replay` target).** A small golden captured-signal.v1
+fixture (`replay-fixture/session.captured-signal.jsonl`) replays through the real `@vexa/gmeet-pipeline`
+lane (deterministic mock STT, no model, no server) → the same transcript structure every time. The
+runner lives in the bot package (where the lane resolves); the **exact command** the orchestrator
+wires for `gate:replay`:
+
+```bash
+pnpm --filter @vexa/bot run replay        # from the repo root (v0.12/)
+# equivalently:  cd meetings/services/bot && npx tsx src/replay.test.ts
+# or via this harness:  ./bin/eval.sh replay-test
+```
+
+It asserts: same input ⇒ same output (run twice, byte-identical), the expected Alice→Bob→Alice
+segmentation/attribution from the captured glow names, and transcript.v1-validity.
+
+**`replay` now takes a captured-signal.v1 OR a legacy tape** (auto-detected) and re-sends it into a
+LIVE desktop ingest (re-encoded to the `@vexa/capture-codec` wire) — the server-backed twin of the
+offline gate. Watch the result with `observe`.
+
+**O-TEL-3 — flag→store→surface→replay-routing.** `analyze.mjs --flag-issues` emits flagged-issue.v1
+records (issue_type from its mis-attribution / oversegmentation oracles); `src/flag-store.mjs` is the
+flag store + system queue + `routeToReplay`. The offline eval:
+
+```bash
+node eval/flag.test.mjs        # or ./bin/eval.sh flag-test  (offline, no meeting, no secrets)
+FLAG_SIGNAL=<captured-signal.jsonl> ./bin/eval.sh analyze <p> <native> --flag-issues   # auto-flag a live/replayed transcript
+```
+
 ## Live companion — `observe` ([`src/observe.mjs`](src/observe.mjs))
 
 Where `launch/drive/judge` **score** a synthetic run against ground truth, the live observer

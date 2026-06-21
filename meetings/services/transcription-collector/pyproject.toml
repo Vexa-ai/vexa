@@ -1,0 +1,34 @@
+[project]
+name = "vexa-transcription-collector"
+version = "0.12.0"
+description = "The transcription-collector control-plane carve — the transcript backend the gateway proxies /transcripts + /meetings + /ws/authorize-subscribe to. create_app(store, redis) builds the 3 sealed-api.v1 HTTP routes + /health over injected ports (TranscriptStore, RedisBus); ingest(segment) consumes the transcription_segments redis stream → store → publishes mutable updates to tc:meeting:{id}:mutable (the pubsub the gateway fans in). The O-API-1 conformance drives THIS shipped app."
+requires-python = ">=3.11"
+dependencies = [
+    # FastAPI + Starlette — the collector app + TraceMiddleware (no network at import time).
+    "fastapi>=0.110,<1",
+    "starlette>=0.37",
+    # httpx — starlette's TestClient transport for the conformance/eval suites.
+    "httpx>=0.27,<1",
+    "pydantic>=2",
+    # redis (+ fakeredis) — the real RedisBus adapter runtime + the in-process eval driver.
+    "redis>=5,<6",
+    "fakeredis>=2.21,<3",
+    # jsonschema validates the collector's responses against the SEALED api.v1 components
+    # (loaded BY PATH) — the same oracle the gateway conformance trusts, in-package.
+    "jsonschema>=4.21,<5",
+    "referencing>=0.31,<1",
+    "pytest>=8",
+    # pytest-asyncio drives the ingestion eval's `async def` tests (asyncio_mode=auto).
+    # No SQLAlchemy-async here (the store port is satisfied by an in-memory fake + the
+    # gateway's PG lives in admin-api) so NO greenlet pin is required.
+    "pytest-asyncio>=0.23,<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `tests` on the path so the in-package contracts helper (tests/contracts.py) imports cleanly.
+pythonpath = ["src", "tests"]
+asyncio_mode = "auto"

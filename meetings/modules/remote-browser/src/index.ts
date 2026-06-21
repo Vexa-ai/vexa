@@ -34,6 +34,10 @@ export { getAuthenticatedBrowserArgs, getBrowserSessionArgs, CDP_DEBUG_ARGS } fr
 // The one true persistent-context launch
 export { launchPersistentBrowser } from './browser';
 export type { LaunchPersistentOptions } from './browser';
+// Re-export the Playwright handles this brick's API traffics in, so consumers (the bot
+// composition root + its adapters) type against ONE Page/BrowserContext without a direct
+// playwright dependency of their own.
+export type { Page, BrowserContext } from 'playwright';
 
 // Logged-in validation + login provisioning
 export { validateLoggedIn, AUTH_LOGIN_URLS, AUTH_COOKIES } from './validate';

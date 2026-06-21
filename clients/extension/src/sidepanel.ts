@@ -12,6 +12,7 @@
  */
 import { createTranscriptManager, groupSegments, type TranscriptSegment } from './transcript-rendering';
 import { type CaptureStatus, isActive } from './capture-liveness';
+import { resolveEndpoints, normalizeDeployment, DEFAULT_DEPLOYMENT } from './endpoints';
 
 interface PanelState {
   status: CaptureStatus;
@@ -34,13 +35,19 @@ const $ = (id: string) => document.getElementById(id)!;
 
 const PLATFORMS: Record<string, { name: string; color: string }> = {
   google_meet: { name: 'Google Meet', color: '#22c55e' },
+  zoom: { name: 'Zoom', color: '#2d8cff' },
+  teams: { name: 'Microsoft Teams', color: '#6264a7' },
+  youtube: { name: 'YouTube', color: '#ff0000' },
   note: { name: 'Voice note', color: '#f59e0b' },
 };
 
-const FIELDS = ['apiKey', 'ingestUrl', 'gatewayUrl', 'dashboardUrl', 'language'] as const;
+// `deployment` is a SELECT (the preset) — its default + the URL fields below come
+// from src/endpoints.ts so the panel, background, and unit test agree on one SSOT.
+const FIELDS = ['apiKey', 'deployment', 'ingestUrl', 'gatewayUrl', 'dashboardUrl', 'language'] as const;
 const DEFAULTS: Record<string, string> = {
-  ingestUrl: 'ws://localhost:9099/ingest',
-  gatewayUrl: 'http://localhost:8056',
+  deployment: DEFAULT_DEPLOYMENT,
+  ingestUrl: resolveEndpoints().ingestUrl,
+  gatewayUrl: resolveEndpoints().gatewayUrl,
   dashboardUrl: 'http://localhost:3001',
   language: 'auto',
 };
@@ -67,9 +74,15 @@ function toBrickSeg(s: any): Seg {
   return { ...s, start_time: s.start, end_time: s.end, absolute_start_time: iso, absolute_end_time: iso };
 }
 
+// Deployment-aware gateway base for this panel: the chosen preset's gateway
+// unless an explicit gatewayUrl overrides it (the SAME rule the background uses).
+function gatewayBase(): string {
+  return resolveEndpoints(cfg).gatewayUrl.replace(/\/+$/, '');
+}
+
 function connectFeed(): void {
   if (txWs && (txWs.readyState === WebSocket.OPEN || txWs.readyState === WebSocket.CONNECTING)) return;
-  const base = (cfg.gatewayUrl || DEFAULTS.gatewayUrl).replace(/\/$/, '');
+  const base = gatewayBase();
   try {
     const ws = new WebSocket(base.replace(/^http/, 'ws') + '/ws');
     txWs = ws;
@@ -104,6 +117,9 @@ async function loadConfig(): Promise<void> {
     cfg[f] = stored[f] || DEFAULTS[f] || '';
     ($(f) as HTMLInputElement).value = cfg[f];
   }
+  // Deployment is a closed set — normalize any unknown/legacy stored value.
+  cfg.deployment = normalizeDeployment(cfg.deployment);
+  ($('deployment') as HTMLSelectElement).value = cfg.deployment;
   ($('autoStart') as HTMLInputElement).checked = stored.autoStart !== false;
 }
 
@@ -112,7 +128,9 @@ function bindSettings(): void {
     $(f).addEventListener('change', () => {
       cfg[f] = ($(f) as HTMLInputElement).value.trim();
       chrome.storage.local.set({ [f]: cfg[f] });
-      if (f === 'apiKey' || f === 'gatewayUrl') verifyConnection();
+      // Re-verify when anything that changes the resolved gateway changes — the
+      // deployment preset OR an explicit gateway override OR the key.
+      if (f === 'apiKey' || f === 'gatewayUrl' || f === 'deployment') verifyConnection();
     });
   }
   $('autoStart').addEventListener('change', () =>
@@ -125,7 +143,7 @@ async function verifyConnection(): Promise<void> {
   if (!cfg.apiKey) { text.textContent = 'No API key set'; return; }
   text.textContent = 'Checking…';
   try {
-    const resp = await fetch(`${cfg.gatewayUrl}/bots`, { headers: { 'X-API-Key': cfg.apiKey } });
+    const resp = await fetch(`${gatewayBase()}/bots`, { headers: { 'X-API-Key': cfg.apiKey } });
     if (resp.ok) { row.classList.add('ok'); text.textContent = 'Connected'; }
     else text.textContent = `Gateway responded ${resp.status}`;
   } catch {

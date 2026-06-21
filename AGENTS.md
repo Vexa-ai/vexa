@@ -31,6 +31,10 @@ learning → codify, re-plan). Never drift; always in exactly one mode (ADR-0015
    ways** — a green instrument is provisional; a human "it works" is checked against an instrument. Then
    **instrumentalise the human's verdict** (a golden / eval baseline) so the cheap test calibrates to it.
 4. **An unexpected error is a STOP.** Reality ≠ expectation ⇒ stop. No paper-over, no blind retry.
+   **But UNEXPECTED ≠ unfinished work.** A scaffold you're meant to complete, a stub awaiting its impl, "not
+   built yet" — that is *expected work*: **finish it autonomously, do not stop or escalate.** STOP is reserved for a
+   genuine *contradiction* (a frozen contract field that can't be met, a false premise, a real conflict) — not for
+   remaining scaffolding (Learning #21).
 5. **Root-cause every surprise — earn the learning with the human, promote it twice.** Each surprise is a
    *symptom* of a missing/violated principle. Interpret it **with the human** (never mint a learning from
    an instrument alone), fix the instance, then promote it to **both** the **architecture** (a principle +
@@ -45,6 +49,25 @@ learning → codify, re-plan). Never drift; always in exactly one mode (ADR-0015
    result-vs-objective themselves (P21, ADR-0016/0017).
 
 > *Expect → instrument → (human: minimal, cross-validated) → stop on surprise → root-cause to a principle → codify. Report facts, not evaluations.*
+
+## Every hop is VISIBLE — the objective ledger (the forcing function)
+The loop above silently degrades into "do → report" unless each hop is **written before acting**.
+With no stated expectation there is nothing for reality to violate, so nothing ever registers as
+*unexpected* — and the learning mechanism never fires. So **every** objective is stamped in this exact
+shape, hop by hop, where the human can see it:
+
+- **Objective:** the one current *go*.
+- **Expected:** the concrete, **falsifiable** result predicted *before* acting — the specific
+  numbers / states / shapes that "done" will show, and how they'll be checked.
+- *…act…*
+- **Actual:** raw evidence — command + output, counts/names, and **what was NOT** checked.
+- **Verdict:** **EXPECTED** → continue to the next planned objective (state the next one + its Expected) ·
+  **UNEXPECTED** → **STOP**, interpret *with the human*, learn (loop step 5), re-plan.
+
+**No `Expected` written ⇒ you are not in the loop.** An objective that closes without an explicit
+Actual-vs-Expected **Verdict** is incomplete. There is no automated check for this — **the human reading
+the ledger IS the gate** (the visibility is the enforcement). Keep `Expected` short and testable; an
+unfalsifiable expectation ("it should work") can't catch a surprise.
 
 ## The hard rules (from the constitution)
 - **Green or it didn't happen.** `pnpm gates` must pass; an artifact "exists" only when gate-green (P9).

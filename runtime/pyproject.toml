@@ -3,7 +3,17 @@ name = "vexa-runtime"
 version = "0.12.0"
 description = "The runtime kernel — spawns/executes workloads (implements runtime.v1)."
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2", "jsonschema>=4", "fastapi>=0.110", "httpx>=0.27", "pytest>=8"]
+dependencies = [
+    "pydantic>=2,<3",
+    "jsonschema>=4,<5",
+    "referencing>=0.30,<0.40",
+    "fastapi>=0.110,<1",
+    "httpx>=0.27,<0.29",
+    "redis>=5,<6",
+    "fakeredis>=2.20,<3",
+    "croniter>=2,<6",
+    "pytest>=8,<9",
+]
 
 [tool.uv]
 package = false

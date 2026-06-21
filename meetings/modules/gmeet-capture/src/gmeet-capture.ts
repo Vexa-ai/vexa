@@ -65,15 +65,21 @@ export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
       if (connectedStreamIds.has(streamId)) return false;
 
       const ctx = new AudioContext({ sampleRate: SR });
+      // Chrome's autoplay policy can create the context SUSPENDED (no user gesture) → the worklet
+      // never runs → zero PCM even while people talk. Resume it explicitly. (L4 capture fix.)
+      void ctx.resume().then(() => log(`stream ${index} ctx.state=${ctx.state}`)).catch(() => { /* */ });
       const source = ctx.createMediaStreamSource(stream);
       // AudioWorklet (audio-thread) instead of the deprecated ScriptProcessor,
       // which duplicates/drops buffers under main-thread load — the captured-audio
       // stutter. connectElement is sync, so wire the node when addModule resolves.
+      let seen = 0, emitted = 0; // L4 frame-flow diagnostic
       createPcmCaptureNode(ctx, (data) => {
         if (!running) return;
+        seen++;
         let maxVal = 0;
         for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
-        if (maxVal > SILENCE) opts.onAudio(index, data); // worklet already yields a fresh copy
+        if (maxVal > SILENCE) { emitted++; if (emitted === 1 || emitted % 100 === 0) log(`stream ${index} AUDIO seen=${seen} emitted=${emitted} max=${maxVal.toFixed(3)}`); opts.onAudio(index, data); } // worklet already yields a fresh copy
+        else if (seen % 250 === 0) log(`stream ${index} silent seen=${seen} emitted=${emitted} max=${maxVal.toFixed(4)} ctx=${ctx.state}`);
       }).then((node) => { source.connect(node); node.connect(ctx.destination); })
         .catch((err: any) => console.log(`[gmeet-capture] worklet init failed: ${err?.message}`));
       connectedStreamIds.add(streamId);

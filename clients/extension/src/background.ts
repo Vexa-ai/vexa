@@ -12,7 +12,8 @@
  */
 
 import { detectMeeting, isMixedHost, MeetingRef } from './meeting';
-import { encodeAudioFrame, encodeEvent } from '@vexa/capture-codec';
+import { resolveEndpoints } from './endpoints';
+import { encodeAudioFrame, encodeEvent, encodeRecordingChunk } from '@vexa/capture-codec';
 import { type CaptureStatus, isActive, onFrameObserved, noSignalCheck } from './capture-liveness';
 
 interface SessionState {
@@ -48,9 +49,11 @@ const state: SessionState = {
   diskBuild: '',
 };
 
-// The desktop ingest WS (the all-Node pipeline). Default ws://localhost:9099/ingest.
-const DEFAULT_INGEST = 'ws://localhost:9099/ingest';
-const DEFAULT_GATEWAY = 'http://localhost:8056';
+// Endpoint resolution is deployment-aware (src/endpoints.ts): the chosen
+// `deployment` preset (default 'desktop' → ws://localhost:9099/ingest +
+// http://localhost:8056) unless explicit ingestUrl/gatewayUrl override it. ONE
+// build thus serves desktop + lite + compose + helm. Every endpoint read below
+// goes through resolveEndpoints(cfg) — there is no separate default constant.
 
 let ws: WebSocket | null = null;
 
@@ -125,9 +128,10 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
   const meeting = meetingRef || meetingForTab(tabId, url)
     || { platform: 'note' as any, nativeMeetingId: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` };
 
-  const cfg = await chrome.storage.local.get(['apiKey', 'ingestUrl', 'language']);
+  const cfg = await chrome.storage.local.get(['apiKey', 'deployment', 'ingestUrl', 'language']);
   const apiKey: string = cfg.apiKey || '';
-  const ingestUrl: string = cfg.ingestUrl || DEFAULT_INGEST;
+  // Deployment-aware: the preset's ingest unless an explicit ingestUrl overrides it.
+  const ingestUrl: string = resolveEndpoints(cfg).ingestUrl;
   const language: string = cfg.language || 'auto';
 
   state.status = 'connecting';
@@ -244,8 +248,9 @@ async function stopCapture(): Promise<void> {
   // ingest server's reconnect grace (~60s) — "stop" must mean stopped.
   const ended = { platform: state.platform, nativeMeetingId: state.nativeMeetingId };
   if (ended.platform && ended.nativeMeetingId && ended.platform !== 'note') {
-    chrome.storage.local.get(['apiKey', 'gatewayUrl']).then((cfg) => {
-      const gw = String(cfg.gatewayUrl || DEFAULT_GATEWAY).replace(/\/+$/, '');
+    chrome.storage.local.get(['apiKey', 'deployment', 'gatewayUrl']).then((cfg) => {
+      // Deployment-aware: the preset's gateway unless an explicit gatewayUrl overrides it.
+      const gw = resolveEndpoints(cfg).gatewayUrl.replace(/\/+$/, '');
       return fetch(`${gw}/extension/sessions/end`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-Key': cfg.apiKey || '' },
@@ -305,6 +310,22 @@ function sendRecordingFrame(frame: number[]): void {
   ws.send(Uint8Array.from(frame).buffer);
 }
 
+// Forward one RECORDING chunk (recording.v1) from the GMEET inpage tee over the
+// same WS. The inpage's @vexa/record-chunker emits base64 WebM/WAV (raw, NOT yet
+// a REC1 frame — unlike the offscreen tee, which pre-encodes); we decode + frame
+// it for the desktop's recording.v1 consumer (master.<fmt> on the final chunk).
+// Gated by `paused` like audio. (The mixed-lane offscreen tee uses RECORDING_CHUNK
+// → sendRecordingFrame above, which relays an already-encoded frame verbatim.)
+function sendRecordingChunk(seq: number, isFinal: boolean, mimeType: string, base64: string): void {
+  if (state.paused) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const fmt = (mimeType || '').toLowerCase().includes('wav') ? 'wav' : 'webm';
+  const bin = atob(base64 || '');
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  ws.send(encodeRecordingChunk(seq, isFinal, fmt, bytes));
+}
+
 // ── Telemetry: merged extension state → ingest server /telemetry ──────────
 // Page diag (attribution/captured-element state) + session state + per-track
 // frame counters, POSTed every 10s while a session is live (plus on status
@@ -315,8 +336,8 @@ const pageDiags: Record<string, any> = {};
 let lastSpeakerMap: Record<string, string> = {};
 async function shipTelemetry(reason: string): Promise<void> {
   try {
-    const cfg = await chrome.storage.local.get(['ingestUrl']);
-    const ingest: string = cfg.ingestUrl || DEFAULT_INGEST;
+    const cfg = await chrome.storage.local.get(['deployment', 'ingestUrl']);
+    const ingest: string = resolveEndpoints(cfg).ingestUrl;
     const url = ingest.replace(/^ws/, 'http').replace(/\/ingest.*$/, '/telemetry');
     const frames: Record<string, any> = {};
     for (const [idx, t] of trackFrames) frames[idx] = { frames: t.frames, msSinceAudio: Date.now() - t.lastAt };
@@ -392,6 +413,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // SAME ingest WS as audio. The desktop's decodeRecordingChunk tells it
       // apart from an audio frame. Dropped while paused, like audio.
       sendRecordingFrame(msg.frame); break;
+    case 'recording-chunk':
+      // recording.v1 chunk from the GMEET inpage tee — raw base64 WebM/WAV, encoded
+      // into a REC1 frame HERE (the offscreen tee pre-encodes; this lane doesn't).
+      sendRecordingChunk(msg.seq, msg.isFinal, msg.mimeType, msg.base64); break;
     case 'speakers':
       Object.assign(lastSpeakerMap, msg.speakers || {});
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -413,6 +438,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (state.paused) break;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(encodeEvent({ kind: 'active-speaker', ts: Date.now(), speaker: msg.name || '', detail: { hint: msg.kind || 'dom-active', isEnd: !!msg.isEnd } }));
+      }
+      break;
+    case 'chat-message':
+      // capture.v1 `chat` event — sender + text from the Zoom/Teams chat panel.
+      if (ws && ws.readyState === WebSocket.OPEN && (msg.text || msg.sender)) {
+        ws.send(encodeEvent({ kind: 'chat', ts: Date.now(), speaker: String(msg.sender || ''), text: String(msg.text || ''), detail: { source: 'meeting-chat' } }));
       }
       break;
     case 'capture-started':

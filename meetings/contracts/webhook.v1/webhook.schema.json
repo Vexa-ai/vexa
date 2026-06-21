@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/webhook.v1",
+  "title": "webhook.v1",
+  "description": "The outbound webhook wire shape: the delivery envelope POSTed to a subscriber's URL, plus the signed-header scheme that authenticates it. Derived from the parent meeting-api's real envelope (webhook_delivery.build_envelope) + header builder (build_headers). Both the system hooks (billing/analytics) and per-client hooks (user-configured webhook_url) share this shape.",
+  "$defs": {
+    "EventType": {
+      "description": "The webhook event types this contract delivers. meeting.* mirror the meeting FSM (lifecycle.v1); recording.* / transcription.* are post-meeting artifacts.",
+      "enum": [
+        "meeting.started",
+        "meeting.status_change",
+        "meeting.completed",
+        "bot.failed",
+        "recording.ready",
+        "transcription.ready"
+      ]
+    },
+    "Envelope": {
+      "description": "The standardized webhook payload envelope. Every delivery — system or per-client — is exactly this shape. The body POSTed to the subscriber is `JSON.stringify(Envelope)`; the HMAC signs `\"<timestamp>.\" + body`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "event_type", "api_version", "created_at", "data"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "description": "unique per delivery: `evt_<hex>` (idempotency key for the receiver)"
+        },
+        "event_type": { "$ref": "#/$defs/EventType" },
+        "api_version": {
+          "type": "string",
+          "description": "date-versioned wire contract, e.g. 2026-03-01"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UTC ISO-8601 timestamp the envelope was built"
+        },
+        "data": {
+          "type": "object",
+          "description": "event-type-specific body. For meeting.* events this is `{ meeting: {...}, status_change?: {...} }`; kept open (no additionalProperties lock) so post-meeting artifact events can carry their own shapes."
+        }
+      }
+    },
+    "SignatureHeaders": {
+      "description": "The headers a verifier recomputes to authenticate a delivery. The signature is `sha256=<hex(hmac_sha256(secret, \"<X-Webhook-Timestamp>.\" + raw_body))>`. X-Webhook-Timestamp bounds replay. Present only when the subscriber configured a webhook_secret.",
+      "type": "object",
+      "required": ["X-Webhook-Signature", "X-Webhook-Timestamp", "Content-Type"],
+      "properties": {
+        "Content-Type": { "const": "application/json" },
+        "X-Webhook-Signature": {
+          "type": "string",
+          "pattern": "^sha256=[0-9a-f]{64}$",
+          "description": "sha256=<hmac of `ts.payload`>"
+        },
+        "X-Webhook-Timestamp": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "unix seconds the signature was computed at (replay window)"
+        },
+        "Authorization": {
+          "type": "string",
+          "description": "Bearer <secret> — legacy shared-secret auth, carried alongside the HMAC for back-compat"
+        }
+      }
+    }
+  }
+}

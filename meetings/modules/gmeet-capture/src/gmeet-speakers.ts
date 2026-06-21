@@ -33,6 +33,10 @@ export interface GmeetSpeakersOptions {
   /** Debounced speaking state change for a NON-self named tile.
    *  isEnd=false → started speaking; isEnd=true → stopped. */
   onSpeaking?: (name: string, isEnd: boolean) => void;
+  /** The LOCAL participant's display name, reported once it is observed on a self tile
+   *  (the data-self-name marker can render late). Lets the channel binder pin a sticky
+   *  self name it refuses to bind to any remote channel — the leak-proof backstop. */
+  onSelf?: (name: string) => void;
   /** Log sink (defaults to console.log). */
   log?: (msg: string) => void;
   /** Poll interval (ms). Default 500. */
@@ -101,6 +105,7 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
 
   /** Names currently lit (non-self, named) — drives start/stop hint edges. */
   const speakingNow = new Set<string>();
+  const reportedSelf = new Set<string>();   // self names already reported via onSelf (fire once each)
 
   // ── DOM reading ─────────────────────────────────────────────────
 
@@ -167,6 +172,15 @@ export function createGmeetSpeakers(opts: GmeetSpeakersOptions = {}): GmeetSpeak
 
   const timer = setInterval(() => {
     const tiles = scanTiles();
+
+    // Report the self/host name (once) so the binder can pin it as never-bindable —
+    // the data-self-name marker can render late, so we watch every scan, not just start.
+    for (const t of tiles) {
+      if (t.self && t.name && !reportedSelf.has(t.name)) {
+        reportedSelf.add(t.name);
+        try { opts.onSelf?.(t.name); } catch { /* consumer error */ }
+      }
+    }
 
     // Currently-lit, non-self, named tiles.
     const litNow = new Set<string>(

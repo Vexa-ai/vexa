@@ -2,7 +2,8 @@
 /**
  * The vexa 0.12 gate suite (ARCHITECTURE.md §4). Each gate is GREEN-ON-EMPTY and becomes
  * real as content lands — "an artifact exists only when gate-green" (P9).
- * Usage: node scripts/gates.mjs [readme|isolation|exports|graph|schema|all]
+ * Usage: node scripts/gates.mjs [readme|isolation|exports|graph|schema|contract-version|python|
+ *                                stack|node|health|access|tracing|replay|telemetry|eval|licenses|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -28,6 +29,25 @@ function walkDirs(dir = ROOT, acc = []) {
   return acc;
 }
 const packageDirs = () => walkDirs().filter((d) => existsSync(join(d, "package.json")));
+
+// recursive: does any non-ignored file under `dir` match `re`? (used by the named eval gates
+// to discover harnesses by filename without hard-coding full paths)
+function findFile(dir, re) {
+  if (!existsSync(dir)) return false;
+  for (const name of readdirSync(dir)) {
+    if (skippable(name)) continue;
+    const p = join(dir, name);
+    let s; try { s = statSync(p); } catch { continue; }
+    if (s.isDirectory()) { if (findFile(p, re)) return true; }
+    else if (re.test(name)) return true;
+  }
+  return false;
+}
+// a Python service that stands up a FastAPI app (→ must answer gate:health). A worker carve
+// (agent-api: spawned by the runtime, liveness = workload lifecycle) builds no app → exempt.
+const hasFastApiApp = (d) => existsSync(join(d, "src")) && findFile(join(d, "src"), /\.py$/) &&
+  (() => { try { execSync(`grep -rql "FastAPI(" ${JSON.stringify(join(d, "src"))}`, { stdio: "pipe" }); return true; } catch { return false; } })();
+const pyPackages = () => walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
 
 // a published contract is a `<domain>/contracts/X.vN` dir carrying JSON Schema file(s)
 const contractVersionDirs = () => walkDirs().filter(
@@ -144,6 +164,25 @@ function gatePython() {
   return true;
 }
 
+// gate:stack — the Group-1 backing-stack evals (postgres·redis·admin-api). A stack-eval package
+// is a Python package (pyproject + tests/) whose tests/ carries a `test_stack_*.py`. Runs them via
+// `uv run pytest`. AUTONOMOUS: the evals use testcontainers (ephemeral docker PG+Redis), no live
+// stack. Green-on-empty. Where docker is absent the evals self-skip (pytest exit 0) → green-or-skip;
+// where docker exists they must PASS. Fails loud with a trimmed message.
+function gateStack() {
+  const pkgs = walkDirs().filter((d) =>
+    existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")) &&
+    readdirSync(join(d, "tests")).some((f) => /^test_stack_.*\.py$/.test(f))
+  );
+  if (!pkgs.length) { console.log("  ✓ gate:stack — no stack-eval packages yet (green-on-empty)"); return true; }
+  for (const d of pkgs) {
+    try { execSync("uv run pytest -q tests", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`stack-eval ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
+  }
+  console.log(`  ✓ gate:stack — ${pkgs.length} backing-stack eval package(s) · testcontainers green-or-skip`);
+  return true;
+}
+
 // gate:node — build + unit-test every workspace TS package via turbo (mirrors gate:python)
 function gateNode() {
   const pkgs = packageDirs().filter((d) => {
@@ -192,7 +231,120 @@ function gateLicenses() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, node: gateNode, licenses: gateLicenses };
+// gate:health (P-ops) — every long-running HTTP service answers a conforming liveness /health.
+// Discovers Python service packages that build a FastAPI app; each MUST ship tests/test_health.py
+// and it MUST pass (asserting GET /health → 200 {status:"ok", service}). A worker carve with no
+// app (agent-api) is correctly out of scope. NOT green-on-empty for a service that has an app but
+// no health eval — that's a RED (a standing service with no liveness probe is a gap).
+function gateHealth() {
+  const svcs = pyPackages().filter(hasFastApiApp);
+  if (!svcs.length) { console.log("  ✓ gate:health — no HTTP services yet (green-on-empty)"); return true; }
+  const missing = svcs.filter((d) => !existsSync(join(d, "tests", "test_health.py")));
+  if (missing.length) return fail(missing.map((d) => `HTTP service exposes no liveness eval: ${rel(d)}/tests/test_health.py missing`));
+  for (const d of svcs) {
+    try { execSync("uv run pytest -q tests/test_health.py", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`health ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  }
+  console.log(`  ✓ gate:health — ${svcs.length} HTTP service(s) answer a conforming /health`);
+  return true;
+}
+
+// gate:access (P20) — the canAccess default-deny is PROVEN: at least one package ships
+// tests/test_access.py and it passes (deny on the read paths, owner-allow). RED if absent — an
+// unproven access layer is a security gap, not an empty no-op.
+function gateAccess() {
+  const pkgs = pyPackages().filter((d) => existsSync(join(d, "tests", "test_access.py")));
+  if (!pkgs.length) return fail(["gate:access — no tests/test_access.py anywhere (canAccess default-deny is unproven)"]);
+  for (const d of pkgs) {
+    try { execSync("uv run pytest -q tests/test_access.py", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`access ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  }
+  console.log(`  ✓ gate:access — ${pkgs.length} access deny-test(s) green (default-deny, P20)`);
+  return true;
+}
+
+// gate:tracing (O-OBS-1) — a synthetic multi-service request threads ONE trace_id through every
+// hop's STRUCTURED log; every line conforms to logevent.v1; a freeform/untraced line fails. The
+// logevent.v1 envelope must exist and the test_tracing.py eval must pass. RED if either is absent.
+function gateTracing() {
+  const hasLogevent = walkDirs().some((d) => /(^|\/)contracts\/logevent\.v\d+$/.test(rel(d).replace(/\\/g, "/")));
+  if (!hasLogevent) return fail(["gate:tracing — logevent.v1 contract (the structured-log envelope) is missing"]);
+  const pkgs = pyPackages().filter((d) => existsSync(join(d, "tests", "test_tracing.py")));
+  if (!pkgs.length) return fail(["gate:tracing — no tests/test_tracing.py (distributed trace is unproven)"]);
+  for (const d of pkgs) {
+    try { execSync("uv run pytest -q tests/test_tracing.py", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`tracing ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  }
+  console.log(`  ✓ gate:tracing — trace_id threads every hop; logs conform to logevent.v1`);
+  return true;
+}
+
+// gate:replay (O-TEL-2) — a stored captured-signal.v1/tape replays through the EXACT pipeline to
+// its expected transcript, deterministically (same in ⇒ same out). Discovers any package exposing a
+// `replay` script and runs it. RED if none — a replay loop with no proof is a gap. (Runs after
+// gate:node so the pipeline dist it imports is freshly built.)
+function gateReplay() {
+  const pkgs = packageDirs().filter((d) => {
+    try { return !!JSON.parse(readFileSync(join(d, "package.json"), "utf8")).scripts?.replay; }
+    catch { return false; }
+  });
+  if (!pkgs.length) return fail(["gate:replay — no package exposes a `replay` harness (deterministic replay is unproven)"]);
+  for (const d of pkgs) {
+    try { execSync("pnpm run replay", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`replay ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
+  }
+  console.log(`  ✓ gate:replay — ${pkgs.length} deterministic replay harness(es) green (same in ⇒ same out)`);
+  return true;
+}
+
+// gate:telemetry (O-TEL-1/3) — captured-signal.v1 + flagged-issue.v1 exist (their goldens conform
+// via gate:schema), and the capture-bridge TelemetrySink tap is proven by src/telemetry.test.ts (a
+// fed frame reaches the sink, conforms, round-trips through @vexa/capture-codec). RED if a contract
+// or the tap test is absent. (Runs after gate:node for a fresh build.)
+function gateTelemetry() {
+  const need = ["captured-signal", "flagged-issue"];
+  const miss = need.filter((n) => !walkDirs().some((d) => new RegExp(`(^|/)contracts/${n}\\.v\\d+$`).test(rel(d).replace(/\\/g, "/"))));
+  if (miss.length) return fail(miss.map((n) => `gate:telemetry — ${n}.v1 contract is missing`));
+  const taps = packageDirs().filter((d) => existsSync(join(d, "src", "telemetry.test.ts")));
+  if (!taps.length) return fail(["gate:telemetry — no capture-bridge TelemetrySink unit test (src/telemetry.test.ts)"]);
+  for (const d of taps) {
+    try { execSync("pnpm exec tsx src/telemetry.test.ts", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`telemetry ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
+  }
+  console.log(`  ✓ gate:telemetry — captured-signal.v1 + flagged-issue.v1 present; capture tap proven`);
+  return true;
+}
+
+// gate:eval (P-completeness) — the umbrella enforcer: EVERY essential path (Groups 2–8) ships an
+// offline eval harness. This is a PRESENCE/completeness check (a path with no harness is RED); the
+// harnesses' PASS/FAIL is enforced by the per-language + per-path runner gates above. Delete any
+// path's eval and this gate goes red — "the autonomous eval IS the bar" cannot silently regress.
+function gateEval() {
+  const PATHS = [
+    ["core-stack",        /^test_stack_.*\.py$/,                        ["identity/services/admin-api"]],
+    ["observability",     /^test_tracing\.py$/,                         ["gateway/services/conformance"]],
+    ["runtime",           /^test_(store|restart|scheduler|enforcement|health|kernel|profiles).*\.py$/, ["runtime"]],
+    ["identity-access",   /^test_access\.py$/,                          ["identity"]],
+    ["meeting-lifecycle", /^test_.*(lifecycle|machine|receiver).*\.py$/, ["meetings/services/meeting-api"]],
+    ["webhooks",          /^test_.*webhook.*\.py$/,                     ["meetings/services/meeting-api"]],
+    ["scheduling",        /^test_.*schedul.*\.py$/,                     ["meetings/services/meeting-api"]],
+    ["api-surface",       /^test_api.*\.py$/,                           ["gateway/services/conformance"]],
+    ["ws-protocol",       /^test_.*ws.*\.py$/,                          ["gateway/services/conformance"]],
+    ["agents",            /^test_.*\.py$/,                              ["agent/services/agent-api"]],
+    ["telemetry-tap",     /^telemetry\.test\.ts$/,                      ["meetings/services/bot"]],
+    ["replay",            /^replay\.test\.ts$/,                         ["meetings/services/bot"]],
+    ["bug-flag",          /^flag\.test\.mjs$/,                          ["meetings/eval"]],
+  ];
+  const missing = [];
+  for (const [label, re, roots] of PATHS) {
+    if (!roots.some((r) => findFile(join(ROOT, r), re))) missing.push(`${label} (no harness matching ${re} under ${roots.join(", ")})`);
+  }
+  if (missing.length) return fail(missing.map((m) => `essential path without an offline eval harness: ${m}`));
+  console.log(`  ✓ gate:eval — all ${PATHS.length} essential paths ship an offline eval harness`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

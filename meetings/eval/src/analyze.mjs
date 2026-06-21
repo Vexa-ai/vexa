@@ -15,9 +15,25 @@
 //   node analyze.mjs <platform> <native_meeting_id>      e.g. analyze zoom 89237402037
 //   GATEWAY=http://localhost:8056   GAP=0.5   (max same-speaker gap counted as a cut)
 const GATEWAY = (process.env.GATEWAY || 'http://localhost:8056').replace(/\/+$/, '');
-const PLATFORM = process.argv[2], NATIVE = process.argv[3];
+const ARGV = process.argv.slice(2);
+// --flag-issues (O-TEL-3): also EMIT flagged-issue.v1 records for mis-attr / overseg over a
+// threshold, so the auto-flagger feeds the flag store → the O-TEL-2 replay. Off by default
+// (pure scorer). --flag-out <file> writes the JSON array; else it prints to stdout (FLAG_… section).
+const FLAG_ISSUES = ARGV.includes('--flag-issues');
+const flagOutIx = ARGV.indexOf('--flag-out');
+const FLAG_OUT = flagOutIx >= 0 ? ARGV[flagOutIx + 1] : null;
+// SIGNAL link the emitted issues route to (the captured-signal.v1 / tape the live signal is in).
+const FLAG_SIGNAL = process.env.FLAG_SIGNAL || null;
+// TRACE link (O-OBS-1 ↔ O-TEL-3): the meeting's distributed trace_id, stamped on each emitted
+// issue so a flagged bug pulls its full cross-system trace AND ties to the captured-signal.v1
+// header carrying the SAME trace_id. Sourced from the bot's X-Trace-Id at capture time.
+const FLAG_TRACE = process.env.FLAG_TRACE || null;
+const positional = ARGV.filter((a) => !a.startsWith('--') && a !== FLAG_OUT);
+const PLATFORM = positional[0], NATIVE = positional[1];
 const GAP = Number(process.env.GAP || 0.5);
-if (!PLATFORM || !NATIVE) { console.error('usage: analyze.mjs <platform> <native_meeting_id>'); process.exit(1); }
+// Auto-flag threshold: emit issues only once the count crosses it (a single stray cut isn't a bug).
+const FLAG_MIN = Number(process.env.FLAG_MIN || 1);
+if (!PLATFORM || !NATIVE) { console.error('usage: analyze.mjs <platform> <native_meeting_id> [--flag-issues] [--flag-out <file>]'); process.exit(1); }
 
 const terminal = (t) => /[.?!]$/.test((t || '').trim()) && !/(\.\.\.|…)$/.test((t || '').trim());
 const words = (t) => (t || '').trim().toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, ' ').split(/\s+/).filter(Boolean);
@@ -42,31 +58,48 @@ const selfId = (t) => {
 const labelName = (sp) => { const m = /^spk[-_ ](.+)$/i.exec(sp || ''); return m ? canon(m[1]) : null; };
 const NOISE = process.env.VEXA_NOISE_NAME || '';   // a known noise/silent bot — any segment under its label is a hijack
 
-let res;
-try { res = await fetch(`${GATEWAY}/transcripts/${PLATFORM}/${encodeURIComponent(NATIVE)}`); }
-catch (e) { console.error(`[analyze] gateway ${GATEWAY} unreachable — is the desktop up? (${e.message})`); process.exit(1); }
-const d = await res.json();
+let d;
+// TRANSCRIPT_FILE → score a JSON `{segments:[…]}` dumped from another source (e.g. a STANDALONE
+// bot's transcript.v1 redis stream, via read-redis-transcript.mjs) instead of the gateway. Same
+// scorer either way. Used by the O6 Meet-leg harness, where the bot publishes to redis (no gateway
+// meeting record). Else fetch the gateway as before.
+if (process.env.TRANSCRIPT_FILE) {
+  const { readFileSync } = await import('node:fs');
+  try { d = JSON.parse(readFileSync(process.env.TRANSCRIPT_FILE, 'utf8')); }
+  catch (e) { console.error(`[analyze] TRANSCRIPT_FILE ${process.env.TRANSCRIPT_FILE} unreadable (${e.message})`); process.exit(1); }
+} else {
+  let res;
+  // X-API-Key when set → the cloud gateway (api.cloud.vexa.ai) needs it; the open desktop ignores it.
+  const _h = process.env.VEXA_API_KEY ? { 'X-API-Key': process.env.VEXA_API_KEY } : {};
+  try { res = await fetch(`${GATEWAY}/transcripts/${PLATFORM}/${encodeURIComponent(NATIVE)}`, { headers: _h }); }
+  catch (e) { console.error(`[analyze] gateway ${GATEWAY} unreachable (${e.message})`); process.exit(1); }
+  d = await res.json();
+}
 const segs = (d.segments || []).slice().sort((a, b) => (a.start || 0) - (b.start || 0));
 if (!segs.length) { console.log(`[analyze] no confirmed segments for ${PLATFORM}/${NATIVE}`); process.exit(0); }
 
 const by = {}; let short = 0, segN = 0;
 for (const s of segs) { const sp = s.speaker || '?'; by[sp] = (by[sp] || 0) + 1; if (words(s.text).length <= 3) short++; if (/^seg_\d+$/.test(sp)) segN++; }
 let midcut = 0, dup = 0; const ex = [];
+// O-TEL-3: collect the OFFENDING segments (not just counts) so --flag-issues can emit
+// flagged-issue.v1 records that route to the O-TEL-2 replay. seg = the offending segment.
+const overseg = [];   // {seg, why}
 for (let i = 1; i < segs.length; i++) {
   const p = segs[i - 1], c = segs[i], same = p.speaker === c.speaker, g = (c.start || 0) - (p.end || 0);
-  if (same && g < GAP && !terminal(p.text)) { midcut++; if (ex.length < 10) ex.push(`  ✂ [${c.speaker}] "${trunc(p.text)}" ⟶ "${trunc(c.text)}"  gap=${g.toFixed(1)}s`); }
+  if (same && g < GAP && !terminal(p.text)) { midcut++; overseg.push({ seg: c, why: `mid-utterance cut after "${trunc(p.text)}" (gap ${g.toFixed(1)}s, no terminal punctuation)` }); if (ex.length < 10) ex.push(`  ✂ [${c.speaker}] "${trunc(p.text)}" ⟶ "${trunc(c.text)}"  gap=${g.toFixed(1)}s`); }
   const pw = words(p.text), cw = words(c.text);
-  if (same && pw.length && cw.length && pw[pw.length - 1] === cw[0]) { dup++; if (ex.length < 16) ex.push(`  ⊕ dup("${cw[0]}") [${c.speaker}] "…${trunc(p.text, -1)}" ⟶ "${trunc(c.text)}"`); }
+  if (same && pw.length && cw.length && pw[pw.length - 1] === cw[0]) { dup++; overseg.push({ seg: c, why: `boundary-word dup ("${cw[0]}") across a same-speaker cut` }); if (ex.length < 16) ex.push(`  ⊕ dup("${cw[0]}") [${c.speaker}] "…${trunc(p.text, -1)}" ⟶ "${trunc(c.text)}"`); }
 }
 // Mis-attribution: content self-IDs one speaker, label says another. Hijack: a known
 // silent/noise bot's label reaching the transcript at all. Both are intolerable and were
 // invisible to the old scorer (it only tallied labels). Loss is the benchmark's job.
 let misattr = 0, idd = 0; const maEx = [];
+const misattrSegs = [];   // {seg, said} — the offending segments for --flag-issues
 for (const s of segs) {
   const said = selfId(s.text); if (!said) continue;
   const lab = labelName(s.speaker); if (lab === null) continue;   // label isn't a known speaker → can't judge
   idd++;
-  if (lab !== said) { misattr++; if (maEx.length < 8) maEx.push(`  ✗ [${s.speaker}] but content self-IDs "${said}": "${trunc(s.text)}"`); }
+  if (lab !== said) { misattr++; misattrSegs.push({ seg: s, said }); if (maEx.length < 8) maEx.push(`  ✗ [${s.speaker}] but content self-IDs "${said}": "${trunc(s.text)}"`); }
 }
 const hijack = NOISE ? segs.filter((s) => (s.speaker || '') === NOISE).length : 0;
 
@@ -80,3 +113,33 @@ if (ex.length) { console.log('\nexamples:'); ex.forEach((e) => console.log(e)); 
 if (maEx.length) { console.log('\nmis-attribution:'); maEx.forEach((e) => console.log(e)); }
 console.log(`\nSCORE ${PLATFORM}/${NATIVE} segments=${segs.length} segN=${segN} midcut=${midcut} dup=${dup} short=${short} misattr=${misattr}${NOISE ? ` hijack=${hijack}` : ''}`);
 console.log(`(loss is not visible here — run \`benchmark <tape>\` for the full-audio recall/lost-span oracle)`);
+
+// ── O-TEL-3 auto-flagger: emit flagged-issue.v1 records for the offending segments ──
+// Derives issue_type from analyze.mjs's OWN oracles (mis-attribution, oversegmentation). Each
+// record is system-flagged + carries the SIGNAL link (FLAG_SIGNAL → captured-signal.v1 / tape)
+// so it routes to the O-TEL-2 replay. Emitted only once a count crosses FLAG_MIN.
+if (FLAG_ISSUES) {
+  const sessionStart = d.start_time || new Date().toISOString();
+  const signal = FLAG_SIGNAL
+    ? (/\.captured-signal\.|captured-signal\.v1/.test(FLAG_SIGNAL) ? { captured_signal: FLAG_SIGNAL } : { tape: FLAG_SIGNAL })
+    : undefined;
+  const mk = (seg, issue_type, severity, description) => ({
+    issue_id: `${PLATFORM}-${NATIVE}-${seg.segment_id || Math.round((seg.start || 0) * 1000)}-${issue_type}`,
+    platform: PLATFORM, native_meeting_id: String(NATIVE), session_start_time: sessionStart,
+    segment_id: String(seg.segment_id ?? `${seg.speaker}:${Math.round((seg.start || 0) * 1000)}`),
+    speaker: seg.speaker || '', text: seg.text || '', start: seg.start || 0, end: seg.end || 0,
+    issue_type, severity, description,
+    ...(signal ? { signal } : {}),
+    ...(FLAG_TRACE ? { trace_id: FLAG_TRACE } : {}),
+    flagged_by: 'system', status: 'open', created_at: new Date().toISOString(),
+  });
+  const out = [];
+  if (misattr >= FLAG_MIN) for (const { seg, said } of misattrSegs)
+    out.push({ ...mk(seg, 'mis-attribution', 'high', `content self-IDs "${said}" but label is "${seg.speaker}"`), ground_truth: said });
+  if (midcut + dup >= FLAG_MIN) for (const { seg, why } of overseg)
+    out.push(mk(seg, 'oversegment', 'medium', why));
+
+  const json = JSON.stringify(out, null, 2);
+  if (FLAG_OUT) { const { writeFileSync } = await import('node:fs'); writeFileSync(FLAG_OUT, json + '\n'); console.log(`\nFLAG ${out.length} flagged-issue.v1 record(s) → ${FLAG_OUT}`); }
+  else { console.log(`\nFLAG ${out.length} flagged-issue.v1 record(s):`); console.log(json); }
+}
