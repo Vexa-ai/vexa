@@ -1,65 +1,39 @@
-# Build stage
+# syntax=docker/dockerfile:1
+# 0.12 dashboard image — the vendored Next.js app (clients/dashboard) wired to the compose gateway.
+# Build context = REPO ROOT (so it can pull in the vendored packages/transcript-rendering):
+#   docker build -f clients/dashboard/Dockerfile --build-arg VEXA_API_URL=http://gateway:8000 -t vexa-dashboard:dev .
+# (0.12 layout: clients/dashboard + packages/ at root — main's image used services/dashboard.)
 FROM node:20-alpine AS builder
-
 WORKDIR /app
 
-# Copy transcript-rendering built package
+# The vendored transcript-rendering dep (prebuilt dist), rewired from the file: path to an absolute one.
 COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
 COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
+COPY clients/dashboard/package.json ./
+RUN sed -i 's|"@vexaai/transcript-rendering": "file:../../packages/transcript-rendering"|"@vexaai/transcript-rendering": "file:/transcript-rendering"|' package.json \
+ && npm install --ignore-scripts --no-audit --no-fund \
+ && rm -rf node_modules/@vexaai/transcript-rendering && cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
 
-# Install dependencies (package.json only — no lockfile, to avoid path mismatch after sed)
-COPY services/dashboard/package.json ./
-RUN sed -i 's|"@vexaai/transcript-rendering": "file:../../packages/transcript-rendering"|"@vexaai/transcript-rendering": "file:/transcript-rendering"|' package.json && \
-    npm install --ignore-scripts
-# Ensure transcript-rendering is physically copied (not symlinked)
-RUN rm -rf node_modules/@vexaai/transcript-rendering && \
-    cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
+COPY clients/dashboard/src ./src
+COPY clients/dashboard/public ./public
+COPY clients/dashboard/scripts ./scripts
+COPY clients/dashboard/next.config.ts clients/dashboard/tsconfig.json clients/dashboard/postcss.config.mjs clients/dashboard/eslint.config.mjs clients/dashboard/components.json ./
 
-# Copy source code
-COPY services/dashboard/src ./src
-COPY services/dashboard/public ./public
-COPY services/dashboard/scripts ./scripts
-COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs services/dashboard/eslint.config.mjs ./
-COPY services/dashboard/components.json ./
-COPY VERSION /repo/VERSION
-COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
-
-# Version disclosure (NEXT_PUBLIC_VEXA_OSS_VERSION + RELEASE_DATE).
-#
-# The generator validates any env/build-arg override against the canonical
-# VERSION and Chart.yaml copied above, then the assertion checks the compiled
-# Next.js bundle. This prevents digest-retagged or stale-build dashboard images
-# from silently displaying an older release identity.
-ARG NEXT_PUBLIC_VEXA_OSS_VERSION
-ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+# next.config.ts requires VEXA_API_URL at build time (bakes the /ws + /b rewrites); the release-version
+# generator takes the explicit env (0.12 has no helm Chart.yaml to read from).
 ARG VEXA_API_URL
-ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
-ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
-ENV VEXA_API_URL=$VEXA_API_URL
-ENV VEXA_REPO_ROOT=/repo
+ENV VEXA_API_URL=$VEXA_API_URL \
+    NEXT_PUBLIC_VEXA_OSS_VERSION=0.12.0 \
+    NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=2026-06-21
+RUN npm run build
 
-# Build application (npm prebuild → generate-release-version.js → next build)
-RUN npm run build && npm run assert-release-version
-
-# Production stage
+# ── production runner (Next.js standalone) ──
 FROM node:20-alpine AS runner
-
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --chown=nextjs:nodejs services/dashboard/docker-entrypoint.sh ./docker-entrypoint.sh
-
-USER nextjs
-
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY clients/dashboard/docker-entrypoint.sh ./docker-entrypoint.sh
 EXPOSE 3000
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
 ENTRYPOINT ["./docker-entrypoint.sh"]
