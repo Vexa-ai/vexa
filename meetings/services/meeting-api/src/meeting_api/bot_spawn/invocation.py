@@ -176,10 +176,16 @@ def build_workload_spec(
     callback_url: Optional[str] = None,
     extra_env: Optional[dict[str, str]] = None,
 ) -> dict:
-    """Wrap ``invocation`` as the bot's ONE config env var (``BOT_CONFIG``) inside a ``runtime.v1``
+    """Wrap ``invocation`` as the bot's ONE config env var (``VEXA_BOT_CONFIG``) inside a ``runtime.v1``
     ``WorkloadSpec`` (``profile="meeting-bot"``). The bot image resolves from the kernel's profile
-    registry — NOT carried in the spec. Validated against the sealed schema."""
-    env: dict[str, str] = {"BOT_CONFIG": json.dumps(invocation, separators=(",", ":"))}
+    registry — NOT carried in the spec. Validated against the sealed schema.
+
+    The sealed ``invocation.v1`` contract (ADR-0002) names this env var ``VEXA_BOT_CONFIG`` — what the
+    carved v0.12 bot (``config.ts``) and the runtime profile read. We ALSO emit the legacy ``BOT_CONFIG``
+    alias so the 0.11-derived published image (``vexaai/vexa-bot:dev``) still boots; ``VEXA_BOT_CONFIG``
+    is authoritative. (The mock-bot L3 lane surfaced this: the carved bot got no config under ``BOT_CONFIG``.)"""
+    payload = json.dumps(invocation, separators=(",", ":"))
+    env: dict[str, str] = {"VEXA_BOT_CONFIG": payload, "BOT_CONFIG": payload}
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items()})
     spec: dict[str, Any] = {

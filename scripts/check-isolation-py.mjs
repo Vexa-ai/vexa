@@ -99,7 +99,7 @@ function discover() {
       if (!existsSync(join(d, "pyproject.toml")) || !existsSync(join(d, "src"))) continue;
       const module = moduleOf(d);
       if (!module) continue;
-      pkgs.push({ dir: d, module, srcDir: join(d, "src"), deps: declaredDeps(d) });
+      pkgs.push({ dir: d, module, srcDir: join(d, "src"), testsDir: join(d, "tests"), deps: declaredDeps(d) });
     }
   }
   return pkgs;
@@ -139,8 +139,13 @@ const violations = [];   // isolation: forbidden sibling imports
 const edges = new Set();  // graph: "importer→imported" real src→src edges
 let scanned = 0;
 
+// isolation/graph scan src/ (prod imports); test-isolation scans tests/ (P9 — gate the test lane too,
+// so a test can't reach around a contract into a sibling's internals where prod imports can't).
+const scanDir = (pkg) => (mode === "test-isolation" ? pkg.testsDir : pkg.srcDir);
 for (const pkg of pkgs) {
-  for (const file of pyFiles(pkg.srcDir)) {
+  const dir = scanDir(pkg);
+  if (!existsSync(dir)) continue;
+  for (const file of pyFiles(dir)) {
     scanned++;
     for (const top of imports(file)) {
       if (top === pkg.module) continue;          // own module (intra-package)
@@ -162,6 +167,15 @@ if (mode === "isolation") {
     process.exit(1);
   }
   console.log(`✅ PY-ISOLATION VERIFIED — scanned ${scanned} src/*.py across ${pkgs.length} package(s); every sibling import is own-module, declared, or an allowed edge.`);
+  process.exit(0);
+}
+
+if (mode === "test-isolation") {
+  if (violations.length) {
+    console.error("❌ PY-TEST-ISOLATION VIOLATION (a test reaches across a module boundary):\n  " + violations.join("\n  "));
+    process.exit(1);
+  }
+  console.log(`✅ PY-TEST-ISOLATION VERIFIED — scanned ${scanned} tests/*.py across ${pkgs.length} package(s); no test imports a sibling's internals (own-module, declared, or an allowed edge only).`);
   process.exit(0);
 }
 

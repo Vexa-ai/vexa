@@ -4,7 +4,7 @@
  * real as content lands — "an artifact exists only when gate-green" (P9).
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|python|stack|node|health|access|tracing|replay|
- *                                telemetry|eval|licenses|compose|all]
+ *                                telemetry|eval|licenses|compose|execution-env|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -138,6 +138,32 @@ function gateGraphPy() {
   try { execSync(`node ${JSON.stringify(s)} --mode=graph`, { stdio: "pipe" }); }
   catch (e) { return fail([`python graph:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
   console.log("  ✓ gate:graph-py — Python cross-package edges acyclic + allow-listed");
+  return true;
+}
+
+// gate:test-isolation (P2/P9) — the TEST lane obeys the SAME module boundary as prod: a test must not
+// reach around a contract into a sibling package's internals. TS test files (`*.test.ts`) already live
+// under each brick's src/ and so are covered by gate:isolation; this closes the Python gap by scanning
+// every Python package's tests/ with the same allowed-edges rule (check-isolation-py.mjs --mode=test-isolation).
+// Green-on-empty.
+function gateTestIsolation() {
+  const s = join(ROOT, "scripts", "check-isolation-py.mjs");
+  try { execSync(`node ${JSON.stringify(s)} --mode=test-isolation`, { stdio: "pipe" }); }
+  catch (e) { return fail([`python test-isolation:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
+  console.log("  ✓ gate:test-isolation — no Python test imports a sibling module's internals (test lane gated, P2)");
+  return true;
+}
+
+// gate:arch-report (P9) — the architecture-compliance map is GREEN: every modularity principle
+// (P2·P3·P4·P6·P12) resolves to a passing gate. scripts/arch-report.mjs --check re-runs each and fails
+// loud if any is red — so "fully modular" is a claim backed by mechanical evidence, and docs/ARCH-COMPLIANCE.md
+// is regenerable + current. Green-on-empty before the report generator lands.
+function gateArchReport() {
+  const s = join(ROOT, "scripts", "arch-report.mjs");
+  if (!existsSync(s)) { console.log("  ✓ gate:arch-report — no report generator yet (green-on-empty)"); return true; }
+  try { execSync(`node ${JSON.stringify(s)} --check`, { stdio: "pipe" }); }
+  catch (e) { return fail([`arch-report:\n${(e.stdout || e.stderr || e).toString().slice(0, 900)}`]); }
+  console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate (P9)");
   return true;
 }
 
@@ -393,7 +419,26 @@ function gateEval() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose };
+// gate:execution-env (ADR-0020) — the execution-target registry conforms. Planning resolves every stage's
+// `Runs on:`/`Resources:` against this registry IN ADVANCE (the AGENTS.md rule); this gate is the mechanical
+// half: the committed template (deploy/execution-targets.example.json) MUST exist + conform to
+// execution-targets.v1, and the gitignored real file (deploy/execution-targets.json) is validated when present
+// (CI sees only the template). Secrets are references only — enforced by the schema's secret_ref pattern (P14).
+// GREEN-ON-EMPTY before the contract lands.
+function gateExecutionEnv() {
+  const v = join(ROOT, "deploy", "contracts", "execution-targets.v1", "validate.mjs");
+  if (!existsSync(v)) { console.log("  ✓ gate:execution-env — no registry contract yet (green-on-empty)"); return true; }
+  const example = join(ROOT, "deploy", "execution-targets.example.json");
+  if (!existsSync(example)) return fail(["gate:execution-env — committed template deploy/execution-targets.example.json missing"]);
+  const real = join(ROOT, "deploy", "execution-targets.json");
+  const files = [example, ...(existsSync(real) ? [real] : [])];
+  try { execSync(`node ${JSON.stringify(v)} ${files.map((f) => `--file ${JSON.stringify(f)}`).join(" ")}`, { stdio: "pipe" }); }
+  catch (e) { return fail([`execution-env registry:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  console.log(`  ✓ gate:execution-env — ${files.length} registry file(s) conform to execution-targets.v1${existsSync(real) ? "" : " (template only — real registry gitignored/absent)"}`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

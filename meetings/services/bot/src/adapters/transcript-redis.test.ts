@@ -65,11 +65,15 @@ async function main(): Promise<void> {
 
     const payload = JSON.parse(xadds[0]!.fields.payload) as Record<string, unknown>;
     check('xAdd: payload type = transcription', payload.type === 'transcription', String(payload.type));
-    check('xAdd: payload carries the segment fields', payload.segment_id === seg.segment_id && payload.text === 'hello world');
+    // The collector ingest envelope: { type, meeting_id, segments:[…] } — meeting_id routes, the list drains.
+    check('xAdd: payload carries meeting_id', payload.meeting_id !== undefined && payload.meeting_id !== null, String(payload.meeting_id));
+    const segs = payload.segments as Array<Record<string, unknown>>;
+    check('xAdd: payload.segments is a one-element list with the segment',
+      Array.isArray(segs) && segs.length === 1 && segs[0]?.segment_id === seg.segment_id && segs[0]?.text === 'hello world',
+      JSON.stringify(payload.segments));
 
-    // the payload (minus the discriminator) round-trips a transcript.v1-VALID segment (P8)
-    const { type: _t, ...roundTripped } = payload;
-    check('xAdd: payload round-trips a transcript.v1-valid segment', !!validateSeg(roundTripped), ajv.errorsText(validateSeg.errors));
+    // segments[0] round-trips a transcript.v1-VALID segment (P8)
+    check('xAdd: payload.segments[0] round-trips a transcript.v1-valid segment', !!validateSeg(segs?.[0]), ajv.errorsText(validateSeg.errors));
 
     // Leg 2 — live mutable channel
     check('publish: exactly one', pubs.length === 1, String(pubs.length));

@@ -76,6 +76,23 @@ class MeetingRepo(Protocol):
         ``continue_meeting`` reopen not double-count the row it is about to reuse."""
         ...
 
+    async def update_meeting_status(
+        self,
+        *,
+        session_uid: str,
+        status: str,
+        completion_reason: Optional[str] = None,
+        failure_stage: Optional[str] = None,
+        data: Optional[dict] = None,
+    ) -> None:
+        """Persist a bot ``lifecycle.v1`` advance to the DB meeting row (the session's meeting): set
+        ``status`` and merge ``completion_reason`` / ``failure_stage`` + the receiver's forensics into
+        ``meeting.data`` JSONB. Maps ``session_uid`` (== the bot's ``connectionId``) → meeting via
+        ``meeting_sessions``; a no-op for an unknown session (e.g. a self-host bot). So the live FSM is
+        DURABLE + QUERYABLE (``GET /meetings`` reflects it, survives a restart) — not only the
+        in-process ``MeetingStore`` (restored from main; the mock-bot L3 lane proved the carve dropped it)."""
+        ...
+
 
 @runtime_checkable
 class RuntimeClient(Protocol):
