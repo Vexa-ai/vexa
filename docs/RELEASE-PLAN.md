@@ -129,8 +129,15 @@ to `claude/busy-bouman-9ea75f` ([`docs/PARITY-MAIN.md`](PARITY-MAIN.md) · [`doc
   `transcriptionServiceUrl:<MISSING>`) + `internal@vexa.ai` `/balance`=0 (`/purchase`). Learning #28.
 - **The mock lane caught 5 real backend bugs O6 (L4) missed** (it bypassed the control plane — raw-stream reads + the
   legacy image). **Fixed + gate-green:** `VEXA_BOT_CONFIG` (was `BOT_CONFIG`) · lifecycle now persists to the DB (✅ confirmed
-  live via the API) · transcript envelope matches the collector. **Flagged (tasks):** `DELETE /bots` route unmounted · max-bots
-  TOCTOU overspill · `bot_spawn` STT-wiring · bot-orphan-on-terminal. Learning #27. **Close: `pnpm gates` GREEN (exit 0); meeting-api 143 pass.**
+  live via the API) · transcript envelope matches the collector · **`bot_spawn` STT-wiring** (the invocation now carries
+  `transcriptionServiceUrl/Token` — an API-spawned bot transcribes). **Flagged (tasks):** `DELETE /bots` route unmounted ·
+  max-bots TOCTOU overspill · bot-orphan-on-terminal. Learning #27. **Close: `pnpm gates` GREEN (exit 0); meeting-api 143 pass.**
+- **Dashboard wired + full-surface harness (✅ green on bbb).** main's dashboard de-vendored enough to BUILD in 0.12
+  (`packages/transcript-rendering` + the docs helpers it was missing; 0.12-layout Dockerfile + `docker-compose.dashboard.yml`
+  overlay → `vexa-dashboard:dev`, gateway-wired, self-host auth). `make -C deploy/compose dashboard-harness` proves the two
+  flows the user asked for against the real stack via the MOCK bot: **config · send-bot (the dashboard proxy → gateway →
+  runtime) · real-time WS transcript** (through the dashboard's own `/ws`). Caught + fixed a real bug: `/api/config` was
+  build-time-cached (`authToken:null`) → `force-dynamic`. Real-bot real transcript = a real-bot run + the internal STT.
 
 ## Done (audit trail)
 - **Re-grounded** on main's real stack (deployments/images/postgres); discarded the sqlite meeting-api tangent (Learning #20).
