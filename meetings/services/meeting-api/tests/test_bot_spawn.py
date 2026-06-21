@@ -43,6 +43,23 @@ def test_invocation_conforms_to_invocation_v1():
     assert inv["connectionId"] == "conn-1"
 
 
+def test_invocation_carries_stt_creds_when_provided():
+    """The bot can only transcribe if the invocation carries the STT URL+token (the mock-bot/dashboard
+    validation found these were dropped). When provided they ride the invocation; when not, they are
+    omitted (None-stripped) and the bot joins+captures without transcribing."""
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    base = dict(meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/abc-defg-hij",
+                bot_name="VexaBot", token=token, native_meeting_id="abc-defg-hij",
+                connection_id="conn-1", redis_url="redis://redis:6379/0")
+    inv = build_invocation(**base, transcription_service_url="https://transcription.vexa.ai",
+                           transcription_service_token="tok-123")
+    conforms_invocation(inv)
+    assert inv["transcriptionServiceUrl"] == "https://transcription.vexa.ai"
+    assert inv["transcriptionServiceToken"] == "tok-123"
+    # absent → omitted, not null
+    assert "transcriptionServiceUrl" not in build_invocation(**base)
+
+
 def test_workload_spec_conforms_to_runtime_v1():
     inv = build_invocation(
         meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/x",

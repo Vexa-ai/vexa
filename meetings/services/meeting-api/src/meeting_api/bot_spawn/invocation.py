@@ -138,6 +138,8 @@ def build_invocation(
     recording_enabled: bool = False,
     capture_modes: Optional[list[str]] = None,
     recording_upload_url: Optional[str] = None,
+    transcription_service_url: Optional[str] = None,
+    transcription_service_token: Optional[str] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
@@ -157,6 +159,8 @@ def build_invocation(
         "task": task,
         "transcriptionTier": transcription_tier,
         "transcribeEnabled": transcribe_enabled,
+        "transcriptionServiceUrl": transcription_service_url,
+        "transcriptionServiceToken": transcription_service_token,
         "recordingEnabled": recording_enabled,
         "captureModes": capture_modes,
         "recordingUploadUrl": recording_upload_url,

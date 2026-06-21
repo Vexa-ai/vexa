@@ -170,6 +170,10 @@ services:
       # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like
       # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
       - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
+      # STT the spawned bot transcribes with — bot_spawn threads these into the invocation (registry
+      # `stt` resource; the funded internal@vexa.ai token). Unset → bot joins+captures but no transcript.
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}

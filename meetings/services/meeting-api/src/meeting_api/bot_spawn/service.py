@@ -170,6 +170,12 @@ async def request_bot(
     internal_secret = internal_secret if internal_secret is not None else os.getenv(
         "INTERNAL_API_SECRET"
     )
+    # STT creds the bot transcribes with — sourced from the meeting-api process env (the parent's
+    # request_bot did the same). Without these the bot joins + captures but cannot transcribe (the
+    # invocation has no STT). None-safe: omitted from the invocation when unset (transcribe still
+    # gated by transcribe_enabled).
+    transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
+    transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
     token = mint_meeting_token(
         meeting_id, user_id, platform, native_meeting_id, secret=token_secret
     )
@@ -188,6 +194,8 @@ async def request_bot(
         meeting_api_callback_url=f"{meeting_api_url}/bots/internal/callback/lifecycle",
         internal_secret=internal_secret,
         transcribe_enabled=transcribe_enabled,
+        transcription_service_url=transcription_service_url,
+        transcription_service_token=transcription_service_token,
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
