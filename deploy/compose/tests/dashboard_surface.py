@@ -108,7 +108,19 @@ def main() -> int:
     assert not bad, f"[4/api-surface] routes returned 5xx (server-config/code error): {bad}"
     print(f"[4/api-surface] {len(routes)} routes — none 5xx (no server-config/code errors)")
 
-    print("\n✅ DASHBOARD FULL SURFACE GREEN — health(all-configured) · config · send-bot · live WS transcript · API surface (no 5xx).")
+    # 5. login surface — direct-login must yield a VALID session: the cookie token resolves an identity
+    #    via the gateway's /auth/me. (The carve had dropped /auth/me, so login bounced to /login — this
+    #    step fails loudly on that class.)
+    code, login = http("POST", f"{DASH}/api/auth/send-magic-link",
+                       headers={"Content-Type": "application/json"},
+                       body=json.dumps({"email": "harness@vexa.ai"}).encode())
+    assert code == 200 and login.get("mode") == "direct" and login.get("token"), f"[5/login] direct-login: {code} {login}"
+    code, me = http("GET", f"{DASH}/api/auth/me", headers={"Cookie": f"vexa-token={login['token']}"})
+    assert code == 200 and me.get("authenticated") and me.get("user", {}).get("email"), \
+        f"[5/login] /api/auth/me with the session cookie did not authenticate (gateway /auth/me?): {code} {me}"
+    print(f"[5/login] direct-login → session authenticated as {me['user']['email']}")
+
+    print("\n✅ DASHBOARD FULL SURFACE GREEN — health · config · send-bot · live WS transcript · API surface · login session.")
     return 0
 
 
