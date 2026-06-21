@@ -8,6 +8,12 @@ import { resolveBrowserApiUrl } from "@/lib/browser-api-url";
  * This solves the Next.js limitation where NEXT_PUBLIC_* vars are only available at build time.
  * Also returns the user's auth token for WebSocket authentication.
  */
+// Must run per-request at runtime: this route's whole purpose is to read RUNTIME env (VEXA_API_KEY,
+// VEXA_PUBLIC_API_URL, the auth cookie). Without this, Next.js prerenders it at build time and serves a
+// stale snapshot (authToken=null, internal wsUrl) — exactly the bug the dashboard harness surfaced.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET(request: NextRequest) {
   const apiUrl = process.env.VEXA_API_URL;
   if (!apiUrl) {
