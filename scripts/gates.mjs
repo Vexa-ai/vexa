@@ -167,6 +167,27 @@ function gateArchReport() {
   return true;
 }
 
+// gate:parity (P4/P9) — the "on-par-with-main" claim is COMPLETE: every capability + api.v1 endpoint row
+// in docs/PARITY-MAIN.md maps to a green proof (✅) — no row left unmapped (empty/TODO/gap/—) or red. Only
+// the on-par sections (§1 capability matrix, §2 endpoints) are enforced; §3 enhancements may list ⏳ planned
+// gates (A:V2/A:V3/Lane B). So "0.12 ≡ main" is a checked claim, not prose. Green-on-empty before the matrix lands.
+function gateParity() {
+  const f = join(ROOT, "docs", "PARITY-MAIN.md");
+  if (!existsSync(f)) { console.log("  ✓ gate:parity — no parity matrix yet (green-on-empty)"); return true; }
+  const text = readFileSync(f, "utf8");
+  const enforced = text.split(/^## /m).filter((s) => /^[12] ·/.test(s.trim())).join("\n");
+  const rows = enforced.split("\n").filter((l) =>
+    l.trim().startsWith("|") && !/^\s*\|\s*-+/.test(l) && !/\|\s*Proof\s*\|/.test(l));
+  const bad = [];
+  for (const r of rows) {
+    if (!r.includes("✅") || /\bTODO\b|\bgap\b|\bnone\b|⏳/i.test(r)) bad.push(r.trim().slice(0, 90));
+  }
+  if (!rows.length) return fail(["gate:parity — PARITY-MAIN.md has no capability/endpoint rows to check"]);
+  if (bad.length) return fail(["gate:parity — unmapped/incomplete on-par row(s):", ...bad.map((b) => "    " + b)]);
+  console.log(`  ✓ gate:parity — ${rows.length} capability/endpoint row(s) each map to a green proof (api.v1 ≡ main 1.5.0)`);
+  return true;
+}
+
 // gate:schema (P4/P8) — schemas/*.v1 goldens conform on both languages (real in Stage 1)
 function gateSchema() {
   const contracts = walkDirs().filter(
@@ -438,7 +459,7 @@ function gateExecutionEnv() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport };
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
