@@ -7,7 +7,14 @@ PROJECT ?= vexa-v012
 BROWSER_IMAGE ?= mock-bot:dev
 COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 
-.PHONY: stack-test stack-test-bot stack-test-mock up down build ps logs
+.PHONY: stack-test stack-test-bot stack-test-mock dashboard-harness up down build ps logs
+
+## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
+## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).
+## Needs mock-bot:dev + vexa-dashboard:dev (docker build -f clients/dashboard/Dockerfile --build-arg
+## VEXA_API_URL=http://gateway:8000 -t vexa-dashboard:dev ../.. from the repo root).
+dashboard-harness:
+	./bin/dashboard-harness.sh
 
 ## stack-test — the always-on gate:compose proof (brings the stack up + down itself).
 stack-test:
