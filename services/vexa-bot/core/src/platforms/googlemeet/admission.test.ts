@@ -9,6 +9,13 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
+
+// __dirname is undefined when this file runs in ESM scope (Node 24 + tsx treats
+// the TS source as ESM despite "type": "commonjs"). Resolve the module directory
+// in an ESM-safe way so the test works on a contributor laptop, not only inside
+// the Docker toolchain (issue #440).
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 let passed = 0;
 let failed = 0;
@@ -50,8 +57,8 @@ function expectOrder(
   failed++;
 }
 
-const ADMISSION_TS = path.join(__dirname, 'admission.ts');
-const SELECTORS_TS = path.join(__dirname, 'selectors.ts');
+const ADMISSION_TS = path.join(moduleDir, 'admission.ts');
+const SELECTORS_TS = path.join(moduleDir, 'selectors.ts');
 const admissionBody = fs.readFileSync(ADMISSION_TS, 'utf-8');
 
 console.log('\n=== Google Meet admission rejection handling ===');

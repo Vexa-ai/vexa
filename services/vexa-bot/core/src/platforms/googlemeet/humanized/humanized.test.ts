@@ -11,11 +11,17 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "node:url";
 import { MocapEngine, type Rect } from "./mocapEngine";
 import { X11Input } from "./x11Input";
 import { HumanizedInteractor } from "./humanizedInteraction";
 import { MOCAP_LIBRARY } from "./mocap-data";
 import { googleJoinButtonSelectors, googleNameInputSelectors } from "../selectors";
+
+// __dirname is undefined when this file runs in ESM scope (Node 24 + tsx treats
+// the TS source as ESM despite "type": "commonjs"). Resolve the module directory
+// in an ESM-safe way so the test works on a contributor laptop (issue #440).
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 let passed = 0;
 let failed = 0;
@@ -142,7 +148,7 @@ console.log("\nTest 4: X11Input command emission (dryRun)");
   console.log("\nTest 7: locale-agnostic join/name selectors (hu UI)");
   {
     const selectorsSrc = fs.readFileSync(
-      path.join(__dirname, "..", "selectors.ts"),
+      path.join(moduleDir, "..", "selectors.ts"),
       "utf-8"
     );
     // (a) join button: a locale-agnostic structural selector precedes the
@@ -201,7 +207,7 @@ console.log("\nTest 4: X11Input command emission (dryRun)");
   // ── 8. join.ts fails LOUD (screenshot) when no selector matches ─
   console.log("\nTest 8: join.ts fails loud when controls are missing");
   {
-    const joinSrc = fs.readFileSync(path.join(__dirname, "..", "join.ts"), "utf-8");
+    const joinSrc = fs.readFileSync(path.join(moduleDir, "..", "join.ts"), "utf-8");
     assert(/waitForAnySelector/.test(joinSrc), "join.ts uses an ordered multi-selector resolver");
     const fn = joinSrc.slice(joinSrc.indexOf("export async function waitForAnySelector"));
     assert(/screenshot/.test(fn) && /throw new Error/.test(fn), "selector resolver screenshots + throws on total miss (no silent skip)");
