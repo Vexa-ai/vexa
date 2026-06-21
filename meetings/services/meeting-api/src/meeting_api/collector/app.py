@@ -125,6 +125,22 @@ def build_router(
         )
         return JSONResponse(content={"meetings": meetings})
 
+    # --- GET /meetings/{meeting_id} → the single meeting (api.v1; carve of main). The dashboard's
+    # meeting-detail page fetches this; the carve had only the list, so the detail view 404'd. Reuses
+    # list_meetings + filters by id (owner-scoped, so a non-owner can't read another user's meeting). ---
+    @router.get("/meetings/{meeting_id}")
+    async def get_meeting(
+        request: Request,
+        meeting_id: int,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        meetings = await store.list_meetings(user_id)
+        meeting = next((m for m in meetings if m.get("id") == meeting_id), None)
+        if meeting is None:
+            return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
+        return JSONResponse(content=meeting)
+
     # --- POST /ws/authorize-subscribe → the gateway /ws authorizer hop ---
     @router.post("/ws/authorize-subscribe")
     async def ws_authorize_subscribe(

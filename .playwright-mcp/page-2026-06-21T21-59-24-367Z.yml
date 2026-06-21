@@ -1,0 +1,89 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e23]
+  - generic [ref=e59]:
+    - banner [ref=e60]:
+      - generic [ref=e61]:
+        - generic [ref=e62]:
+          - link "Vexa Logo vexa" [ref=e63] [cursor=pointer]:
+            - /url: /
+            - img "Vexa Logo" [ref=e65]
+            - generic [ref=e66]: vexa
+          - link "0.12.0" [ref=e67] [cursor=pointer]:
+            - /url: https://github.com/Vexa-ai/vexa/releases/tag/v0.12.0
+            - generic [ref=e68]: 0.12.0
+        - generic [ref=e69]:
+          - link "Full Documentation" [ref=e70] [cursor=pointer]:
+            - /url: https://docs.vexa.ai/
+            - img
+            - generic [ref=e71]: Full Documentation
+          - button "Toggle theme" [ref=e72]:
+            - img
+            - generic [ref=e73]: Toggle theme
+          - button "User menu" [ref=e74]:
+            - img
+            - generic [ref=e75]: User menu
+    - generic [ref=e76]:
+      - complementary [ref=e77]:
+        - generic [ref=e78]:
+          - navigation [ref=e82]:
+            - link "Meetings" [ref=e83] [cursor=pointer]:
+              - /url: /meetings
+              - img [ref=e84]
+              - text: Meetings
+            - button "Join Meeting" [ref=e87]:
+              - img [ref=e88]
+              - text: Join Meeting
+            - generic [ref=e89]:
+              - link "Webhooks" [ref=e90] [cursor=pointer]:
+                - /url: /webhooks
+                - img [ref=e91]
+                - text: Webhooks
+              - link "MCP MCP Setup" [ref=e95] [cursor=pointer]:
+                - /url: /mcp
+                - img "MCP" [ref=e97]
+                - text: MCP Setup
+              - link "Profile" [ref=e98] [cursor=pointer]:
+                - /url: /profile
+                - img [ref=e99]
+                - text: Profile
+            - generic [ref=e102]:
+              - generic [ref=e104]:
+                - img [ref=e105]
+                - generic [ref=e107]: Admin
+              - button "Unlock Admin" [ref=e108]:
+                - img [ref=e109]
+                - generic [ref=e112]: Unlock Admin
+          - generic [ref=e113]:
+            - link "API Docs" [ref=e114] [cursor=pointer]:
+              - /url: https://docs.vexa.ai/
+              - img [ref=e115]
+              - text: API Docs
+            - link "Report a Bug" [ref=e117] [cursor=pointer]:
+              - /url: https://github.com/Vexa-ai/vexa/issues/new?labels=bug,hosted&title=[Hosted]%20&body=%23%23%20Environment%0AHosted%20service%20(dashboard.vexa.ai)%0A%0A%23%23%20Description%0A%0A%23%23%20Steps%20to%20reproduce%0A1.%20%0A%0A%23%23%20Expected%20behavior%0A%0A%23%23%20Actual%20behavior%0A
+              - img [ref=e118]
+              - text: Report a Bug
+            - generic [ref=e128]:
+              - generic [ref=e129]: vexa
+              - link "0.12.0" [ref=e130] [cursor=pointer]:
+                - /url: https://github.com/Vexa-ai/vexa/releases/tag/v0.12.0
+                - generic [ref=e131]: 0.12.0
+      - main [ref=e132]:
+        - generic [ref=e238]:
+          - button "Back" [ref=e239]:
+            - img
+            - text: Back
+          - generic [ref=e242]:
+            - img [ref=e247]
+            - heading "Not Found" [level=3] [ref=e250]
+            - paragraph [ref=e251]: The requested resource could not be found.
+            - paragraph [ref=e252]: Meeting with ID 1 not found
+            - button "Try Again" [ref=e253]:
+              - img
+              - text: Try Again
+    - region "Notifications alt+T":
+      - list:
+        - listitem [ref=e254]:
+          - img [ref=e256]
+          - generic [ref=e259]:
+            - generic [ref=e260]: Bot joining meeting
+            - generic [ref=e261]: The transcription bot is connecting...

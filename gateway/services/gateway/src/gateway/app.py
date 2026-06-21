@@ -238,6 +238,12 @@ def create_app(
     async def meetings(request: Request):
         return await _forward("GET", _meeting("/meetings"), request)
 
+    # Single meeting (carve of main.py:788) — the dashboard's meeting-detail page needs it; the carve
+    # had only the list, so the detail view 404'd. Forwards to meeting-api's GET /meetings/{id}.
+    @app.get("/meetings/{meeting_id}")
+    async def meeting(meeting_id: int, request: Request):
+        return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)
+
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")
     async def websocket_multiplex(ws: WebSocket):

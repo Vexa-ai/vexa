@@ -1,0 +1,173 @@
+- generic:
+  - alert
+  - generic:
+    - banner:
+      - generic:
+        - generic:
+          - link:
+            - /url: /
+            - generic:
+              - img
+            - generic: vexa
+          - link:
+            - /url: https://github.com/Vexa-ai/vexa/releases/tag/v0.12.0
+            - generic: 0.12.0
+        - generic:
+          - link:
+            - /url: https://docs.vexa.ai/
+            - img
+            - generic: Full Documentation
+          - button:
+            - img
+            - generic: Toggle theme
+          - button:
+            - img
+            - generic: User menu
+    - generic:
+      - complementary:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - navigation:
+                  - link:
+                    - /url: /meetings
+                    - img
+                    - text: Meetings
+                  - button:
+                    - img
+                    - text: Join Meeting
+                  - generic:
+                    - link:
+                      - /url: /webhooks
+                      - img
+                      - text: Webhooks
+                    - link:
+                      - /url: /mcp
+                      - generic:
+                        - img
+                      - text: MCP Setup
+                    - link:
+                      - /url: /profile
+                      - img
+                      - text: Profile
+                  - generic:
+                    - generic:
+                      - generic:
+                        - img
+                        - generic: Admin
+                    - button:
+                      - img
+                      - generic: Unlock Admin
+          - generic:
+            - link:
+              - /url: https://docs.vexa.ai/
+              - img
+              - text: API Docs
+            - link:
+              - /url: https://github.com/Vexa-ai/vexa/issues/new?labels=bug,hosted&title=[Hosted]%20&body=%23%23%20Environment%0AHosted%20service%20(dashboard.vexa.ai)%0A%0A%23%23%20Description%0A%0A%23%23%20Steps%20to%20reproduce%0A1.%20%0A%0A%23%23%20Expected%20behavior%0A%0A%23%23%20Actual%20behavior%0A
+              - img
+              - text: Report a Bug
+            - generic:
+              - generic:
+                - generic: vexa
+                - link:
+                  - /url: https://github.com/Vexa-ai/vexa/releases/tag/v0.12.0
+                  - generic: 0.12.0
+      - main:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - heading [level=1]: Meetings
+                - paragraph: Browse and search your meeting transcriptions
+              - generic:
+                - button:
+                  - img
+                - generic:
+                  - button:
+                    - img
+                    - generic: Join Meeting
+            - generic:
+              - generic:
+                - img
+                - textbox:
+                  - /placeholder: Search meetings...
+              - generic:
+                - combobox:
+                  - generic: All Platforms
+                  - img
+                - combobox:
+                  - generic: All Status
+                  - img
+          - generic:
+            - generic:
+              - table:
+                - rowgroup:
+                  - row:
+                    - columnheader: Platform
+                    - columnheader: Meeting
+                    - columnheader: Status
+                    - columnheader: Duration
+                    - columnheader: Participants
+                    - columnheader: Time
+                - rowgroup:
+                  - row:
+                    - cell:
+                      - generic:
+                        - img
+                        - paragraph: No meetings yet
+                        - button:
+                          - img
+                          - text: Join your first meeting
+    - region "Notifications alt+T"
+  - dialog "Join a Meeting" [ref=e175]:
+    - generic [ref=e176]:
+      - heading "Join a Meeting" [level=2] [ref=e177]:
+        - img [ref=e179]
+        - text: Join a Meeting
+      - paragraph [ref=e182]: Paste a Google Meet, Zoom, or Teams URL to start transcribing automatically
+    - generic [ref=e183]:
+      - button "Meeting" [ref=e184]:
+        - img [ref=e185]
+        - text: Meeting
+      - button "Browser" [ref=e188]:
+        - img [ref=e189]
+        - text: Browser
+    - generic [ref=e191]:
+      - generic [ref=e192]:
+        - generic [ref=e193]: Meeting URL or Code
+        - textbox "Meeting URL or Code" [active] [ref=e195]:
+          - /placeholder: Paste meeting URL (Google Meet, Zoom, or Teams)...
+      - generic [ref=e196]:
+        - generic [ref=e197]: Bot Name
+        - textbox "Bot Name" [ref=e198]:
+          - /placeholder: Vexa
+          - text: Vexa
+      - generic [ref=e199]:
+        - generic [ref=e200] [cursor=pointer]:
+          - img [ref=e201]
+          - text: Real-time Transcription
+        - switch "Real-time Transcription" [checked] [ref=e204] [cursor=pointer]
+      - generic [ref=e205]:
+        - generic [ref=e206]:
+          - img [ref=e207]
+          - text: Transcription Language
+        - combobox [ref=e210]:
+          - generic [ref=e211]: Auto-detect
+          - img
+        - paragraph [ref=e212]: "Auto-detect: the service will detect the language automatically."
+      - generic [ref=e213]:
+        - generic [ref=e214]:
+          - img [ref=e215]
+          - text: Authenticated
+          - generic [ref=e219]: Soon
+        - switch "Authenticated Soon" [disabled] [ref=e220]
+      - generic [ref=e221]:
+        - button "Start Transcription" [disabled]:
+          - img
+          - text: Start Transcription
+    - button "Close" [ref=e222]:
+      - img
+      - generic [ref=e223]: Close
