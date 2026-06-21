@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# gate:compose runner — the autonomous stack-readiness proof (P5).
+#
+# Brings up the REAL v0.12 compose stack, runs the always-on proof subset (steps 1·2·4·5·6c·6d·6b),
+# tears it down (down -v) in the test's own finally. GREEN-OR-SKIP when docker is absent.
+#
+#   bin/stack-test            # always-on subset (the routine gate)
+#   COMPOSE_BOT=1 bin/stack-test   # + the real bot-spawn proof (steps 3·6a; slow, ~7GB image)
+#
+# Env knobs: COMPOSE_NO_BUILD=1 (reuse cached images, skip --build), pytest args pass through ("$@").
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TESTS="$HERE/../tests"
+
+if ! docker info >/dev/null 2>&1; then
+  echo "  ↳ gate:compose — docker not available → skip (green-or-skip)"
+  exit 0
+fi
+
+cd "$TESTS"
+exec uv run --quiet pytest -q "$@"

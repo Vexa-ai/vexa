@@ -49,7 +49,10 @@ def build_production_app():
     database_url = _database_url()
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     runtime_api_url = os.getenv("RUNTIME_API_URL", "http://runtime:8090")
-    token_secret = os.getenv("INTERNAL_API_SECRET") or None
+    # MeetingToken is HS256-signed (mint) AND verified (recordings upload) with the SAME secret =
+    # ADMIN_TOKEN, exactly like main. (INTERNAL_API_SECRET is for the gateway↔admin-api internal
+    # validation only — a different concern.) None → the recordings verifier falls back to ADMIN_TOKEN.
+    token_secret = os.getenv("ADMIN_TOKEN") or None
 
     engine = create_async_engine(database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)

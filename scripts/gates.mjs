@@ -4,7 +4,7 @@
  * real as content lands — "an artifact exists only when gate-green" (P9).
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|python|stack|node|health|access|tracing|replay|
- *                                telemetry|eval|licenses|all]
+ *                                telemetry|eval|licenses|compose|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -210,6 +210,28 @@ function gateStack() {
   return true;
 }
 
+// gate:compose (P5) — the autonomous stack-readiness proof: bring up the REAL deploy/compose stack
+// and prove it is ready to run the vexa bot. The harness (deploy/compose/tests/stack_test.py, driven
+// by bin/stack-test) owns the full up→prove→down(-v) lifecycle; this gate just dispatches it.
+// GREEN-OR-SKIP like gate:stack: detect docker (`docker info`); if absent → print a skip line +
+// return green. GREEN-ON-EMPTY if the compose file is missing. When docker IS present it runs the
+// ALWAYS-ON proof subset (health · auth surface · transcript dataflow · recording→minio · max-bots ·
+// continue_meeting · join-retry-wiring) and fails LOUD on any assertion. The real bot-spawn proof
+// (steps 3·6a — a live vexaai/vexa-bot:dev container reaching `joining`) is opt-in behind COMPOSE_BOT=1
+// (slow/flaky for a routine gate), runnable via `make -C deploy/compose stack-test-bot`.
+function gateCompose() {
+  const composeFile = join(ROOT, "deploy", "compose", "docker-compose.yml");
+  const runner = join(ROOT, "deploy", "compose", "bin", "stack-test");
+  if (!existsSync(composeFile)) { console.log("  ✓ gate:compose — no compose stack yet (green-on-empty)"); return true; }
+  try { execSync("docker info", { stdio: "pipe" }); }
+  catch { console.log("  ✓ gate:compose — docker not available → skip (green-or-skip)"); return true; }
+  if (!existsSync(runner)) return fail([`gate:compose — compose stack present but no readiness proof (deploy/compose/bin/stack-test missing)`]);
+  try { execSync(`bash ${JSON.stringify(runner)}`, { stdio: "pipe" }); }
+  catch (e) { return fail([`compose stack-readiness proof:\n${(e.stdout || e.stderr || e).toString().slice(-3000)}`]); }
+  console.log("  ✓ gate:compose — REAL compose stack proven bot-ready (health·auth·transcript·recording·control-plane)");
+  return true;
+}
+
 // gate:node — build + unit-test every workspace TS package via turbo (mirrors gate:python)
 function gateNode() {
   const pkgs = packageDirs().filter((d) => {
@@ -371,7 +393,7 @@ function gateEval() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses };
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

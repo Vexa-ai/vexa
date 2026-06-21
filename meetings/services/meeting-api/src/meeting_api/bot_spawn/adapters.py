@@ -97,7 +97,8 @@ class SqlAlchemyMeetingRepo:
                 data.pop(k, None)
             m.data = data
             flag_modified(m, "data")
-            m.updated_at = datetime.now(timezone.utc)
+            # updated_at is set server-side by the column's onupdate=func.now() (main's pattern);
+            # never write a tz-aware Python datetime into the naive column (asyncpg DataError).
             await db.commit()
             await db.refresh(m)
             return _row_to_dict(m)
@@ -162,7 +163,8 @@ class SqlAlchemyMeetingRepo:
                 await db.execute(select(Meeting).where(Meeting.id == meeting_id))
             ).scalars().first()
             m.bot_container_id = bot_container_id
-            m.updated_at = datetime.now(timezone.utc)
+            # updated_at is set server-side by the column's onupdate=func.now() (main's pattern);
+            # never write a tz-aware Python datetime into the naive column (asyncpg DataError).
             await db.commit()
             await db.refresh(m)
             return _row_to_dict(m)
