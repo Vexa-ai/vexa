@@ -30,6 +30,10 @@ services:
       - POSTGRES_DB=${DB_NAME:-vexa}
       - POSTGRES_USER=${DB_USER:-postgres}
       - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      # The backend operates only UTC time. Pin the DB clock to UTC so func.now()/server_default/
+      # onupdate (the naive timestamp columns' server-side values, main's pattern) are guaranteed UTC.
+      - TZ=UTC
+      - PGTZ=UTC
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5458}:5432"
     healthcheck:
