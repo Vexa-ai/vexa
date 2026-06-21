@@ -5,7 +5,8 @@ import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "..
 import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
-  googleRejectionIndicators
+  googleRejectionIndicators,
+  googleConsentPromptIndicators
 } from "./selectors";
 
 /**
@@ -169,6 +170,16 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
     return false;
   }
 
+  // 1b. NEGATIVE GUARD: a Gemini "take notes" consent prompt is a pre-admission
+  // consent gate. Meeting controls can be visible behind it, but the bot is not
+  // truly participating until a human accepts/declines — reporting admitted here
+  // yields "status active, 0 transcriptions" (issue #429). Suppress admission.
+  const consentPending = await hasConsentPrompt(page);
+  if (consentPending) {
+    log(`⚠️ Gemini consent prompt visible — suppressing admission (consent pending; bot not truly in the call)`);
+    return false;
+  }
+
   // Wake the UI before probing. Google Meet auto-hides the in-call toolbar
   // (mic/camera/present/leave) after a few seconds of no pointer activity — and the
   // bot never moves a real mouse. Once admitted (especially when a participant is
@@ -241,6 +252,25 @@ export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean
   return false;
 }
 
+// Detect Google's Gemini "take notes for me" in-call consent prompt — a consent
+// gate where the bot isn't truly participating until a human accepts/declines
+// (issue #429). Mirrors checkForWaitingRoomIndicators: a pre-admission state that
+// suppresses the "admitted" signal. Consent must be a human decision, so callers
+// escalate to needs_human_help rather than auto-clicking it.
+export async function hasConsentPrompt(page: Page): Promise<boolean> {
+  for (const selector of googleConsentPromptIndicators) {
+    try {
+      const element = await page.locator(selector).first();
+      if (await element.isVisible()) {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 async function throwIfGoogleAdmissionRejected(page: Page, context: string): Promise<void> {
   const isRejected = await checkForGoogleRejection(page);
   if (isRejected) {
@@ -287,7 +317,17 @@ export async function waitForGoogleMeetingAdmission(
       log("Successfully admitted to the Google Meet meeting - no waiting room required");
       return true;
     }
-    
+
+    // Consent gate: if Google's Gemini "take notes" consent prompt is present,
+    // the bot is held behind a human decision (accept/decline) — not admitted.
+    // Do NOT auto-click it; consent is the user's choice (issue #429). Summon a
+    // human via needs_human_help and keep polling, so admission proceeds once
+    // consent is granted (mirrors the reCAPTCHA "stay for human solve" handling).
+    if (await hasConsentPrompt(page)) {
+      log("🧑‍⚖️ Gemini consent prompt detected — bot is behind a consent gate (not admitted). Escalating to needs_human_help; not auto-consenting.");
+      await triggerEscalation(botConfig, "consent_required");
+    }
+
     log("Bot not yet admitted - checking for Google Meet waiting room indicators...");
     
     // Check for waiting room indicators using visibility checks
