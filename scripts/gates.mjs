@@ -317,6 +317,22 @@ function gateNode() {
   return true;
 }
 
+// gate:eval-baseline (P19, Lane B / B:V2) — the WORKER-L4 eval is a standing, REUSABLE instrument: the
+// bot-eval verdict oracle self-test (meetings/services/bot/eval/verify.sh — clean→PASS, misattr→FAIL→brick)
+// passes OFFLINE, and the recorded ground truth (meetings/eval/BASELINE.md) exists. This gates that the
+// instrument is ready + calibrated; the live L4 SCORING (the bot on a real meeting ≥ BASELINE) is the
+// human-gated run (B:V1), reproduced offline on red via gate:replay. Green-on-empty before the harness lands.
+function gateEvalBaseline() {
+  const verify = join(ROOT, "meetings", "services", "bot", "eval", "verify.sh");
+  const baseline = join(ROOT, "meetings", "eval", "BASELINE.md");
+  if (!existsSync(verify)) { console.log("  ✓ gate:eval-baseline — no worker-eval harness yet (green-on-empty)"); return true; }
+  if (!existsSync(baseline)) return fail(["gate:eval-baseline — meetings/eval/BASELINE.md (recorded L4 ground truth) missing"]);
+  try { execSync(`bash ${JSON.stringify(verify)}`, { cwd: ROOT, stdio: "pipe" }); }
+  catch (e) { return fail([`eval-baseline oracle self-test:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  console.log("  ✓ gate:eval-baseline — worker-L4 eval oracle self-test passes + BASELINE.md recorded (reusable instrument; live score is B:V1)");
+  return true;
+}
+
 // gate:licenses (P17) — every resolved dep is OSS-licence-clean (FINOS Cat A/B/X). Uses pnpm's
 // built-in licence index (no added dependency to vet — itself a P17 win). Cat A (permissive) passes;
 // Cat B (LGPL/MPL/EPL) must be listed in license-exceptions.json; Cat X (GPL/AGPL/SSPL/BSL/…) and
@@ -484,7 +500,7 @@ function gateExecutionEnv() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos };
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

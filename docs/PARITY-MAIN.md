@@ -61,7 +61,7 @@ The *set being green* IS "better than main"; main ships per-service tests only, 
 | Real-stack control-plane proof | `gate:compose` (+MOCK_BOT, L3 anywhere) | none | ✅ |
 | Concurrency-stress proof | `gate:compose-stress` | none | ⏳ A:V2 |
 | Fault-injection proof | `gate:compose-chaos` | none | ⏳ A:V3 |
-| Reusable worker-L4 eval | `gate:eval-baseline` | manual | ⏳ Lane B |
+| Reusable worker-L4 eval instrument | `gate:eval-baseline` | manual | ✅ (live score = B:V1, human-gated) |
 | OSS-licence-clean (SBOM) | `gate:licenses` | none | ✅ |
 | Architecture-compliance map | `gate:arch-report` | none | ✅ |
 | Parity completeness | `gate:parity` | none | ✅ |
