@@ -81,6 +81,29 @@ def create_app(
     async def health():
         return {"status": "ok", "service": "gateway"}
 
+    # --- /auth/me — caller identity from the API key (carve of main.py:1487). The dashboard's login
+    # resolves the user via this (GET /auth/me with x-api-key → user_id/email/scopes); the carve had
+    # dropped it, so dashboard session-validation 401'd and login bounced back to /login. Uses the SAME
+    # authorizer (admin-api /internal/validate) as the proxy — no new dependency. Found by the dashboard
+    # full-surface login test.
+    @app.get("/auth/me")
+    async def auth_me(request: Request):
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return Response(content=json.dumps({"detail": "Missing API key"}),
+                            status_code=401, media_type="application/json")
+        user_data = await authorizer.resolve(api_key)
+        if not user_data:
+            return Response(content=json.dumps({"detail": "Invalid API key"}),
+                            status_code=401, media_type="application/json")
+        set_user_id(user_data["user_id"])
+        return {
+            "user_id": user_data["user_id"],
+            "email": user_data.get("email", ""),
+            "scopes": user_data.get("scopes", []),
+            "max_concurrent": user_data.get("max_concurrent", 1),
+        }
+
     # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
     async def _forward(method: str, url: str, request: Request) -> Response:
         client_key = request.headers.get("x-api-key")
