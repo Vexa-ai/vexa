@@ -41,6 +41,20 @@ def http(method, url, headers=None, body=None):
 
 
 def main() -> int:
+    # 0. health surface — the dashboard's own config validator. Every REQUIRED check (adminApi, vexaApi)
+    #    must be configured AND reachable, with no error — i.e. the WHOLE server surface is wired, not just
+    #    send-bot. This is the check that catches "Admin API key not configured" (the /login config error).
+    code, health = http("GET", f"{DASH}/api/health")
+    assert isinstance(health, dict) and "checks" in health, f"[0/health] {code} {health}"
+    checks = health["checks"]
+    for req in ("adminApi", "vexaApi"):
+        c = checks.get(req, {})
+        assert c.get("configured") and c.get("reachable") and not c.get("error"), \
+            f"[0/health] required surface '{req}' not ready: {c}"
+    optional_off = [k for k, v in checks.items() if v.get("optional") and not v.get("configured")]
+    print(f"[0/health] adminApi + vexaApi configured + reachable · authMode={health.get('authMode')}"
+          f" · optional-off (ok): {optional_off}")
+
     # 1. config surface — the dashboard hands the browser its API + WS SSOT.
     code, cfg = http("GET", f"{DASH}/api/config")
     assert code == 200 and isinstance(cfg, dict) and cfg.get("wsUrl") and cfg.get("authToken"), \
@@ -80,7 +94,21 @@ def main() -> int:
     finally:
         ws.close()
 
-    print("\n✅ DASHBOARD SURFACE GREEN — config · send-bot · real-time WS transcript all work through the dashboard.")
+    # 4. API surface sweep — every GET-able route must NOT 500 (a 500 = a server-config/code error, the
+    #    class the user hit). 401/403 (needs a session) and 200 are both fine; only a crash fails.
+    routes = ["/api/health", "/api/config", "/api/auth/me", "/api/profile/keys", "/api/notifications",
+              "/api/ai/config", "/api/webhooks/config", "/api/vexa/meetings", "/api/admin/users"]
+    bad = []
+    for r in routes:
+        code, _ = http("GET", f"{DASH}{r}")
+        tag = "ok" if code < 500 else "5xx"
+        if code >= 500:
+            bad.append(f"{r}→{code}")
+        print(f"      {r} → {code} ({tag})")
+    assert not bad, f"[4/api-surface] routes returned 5xx (server-config/code error): {bad}"
+    print(f"[4/api-surface] {len(routes)} routes — none 5xx (no server-config/code errors)")
+
+    print("\n✅ DASHBOARD FULL SURFACE GREEN — health(all-configured) · config · send-bot · live WS transcript · API surface (no 5xx).")
     return 0
 
 
