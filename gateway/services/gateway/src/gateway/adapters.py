@@ -128,3 +128,14 @@ def build_production_app(
         redis_client,
         meeting_api_url=meeting_api_url,
     )
+
+
+# ── ASGI entrypoint (P4) ─────────────────────────────────────────────────────────────────────
+# ``uvicorn gateway.adapters:app`` (the compose CMD) resolves this. Exposed LAZILY via PEP 562 so
+# merely importing this module never constructs the production app (which needs httpx + redis — the
+# latter is NOT in the offline gate venv). uvicorn touches ``adapters.app`` at startup → the app is
+# built then, with the real adapters, from env (ADMIN_API_URL / MEETING_API_URL / REDIS_URL).
+def __getattr__(name: str):
+    if name == "app":
+        return build_production_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

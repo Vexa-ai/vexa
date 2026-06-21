@@ -1,0 +1,223 @@
+name: vexa-v012
+# v0.12 control plane (P4). The carved analog of deploy/compose/docker-compose.yml (0.11):
+# postgres:17 + redis:7 + minio + minio-init infra, then the four long-running Python services —
+# admin-api · runtime · meeting-api · gateway — each building its own slim uv-based image.
+# Improvement over 0.11: EVERY service carries a healthcheck and depends_on waits on
+# `condition: service_healthy` so the bring-up is ordered + observable.
+#
+# Bot is NOT a compose service: runtime spawns vexaai/vexa-bot:dev (BROWSER_IMAGE) on demand via the
+# mounted /var/run/docker.sock. That published ~3.6GB image is a REFERENCE here, never built.
+
+services:
+  # ─── Infrastructure ───────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redis-data:/data
+    networks: [vexa]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
+    environment:
+      - POSTGRES_DB=${DB_NAME:-vexa}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5458}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vexa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [vexa]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    ports:
+      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - minio-data:/data
+    networks: [vexa]
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key}
+        mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa}
+        exit 0
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    networks: [vexa]
+
+  # ─── Core services ────────────────────────────────────────────────────────────────────────────
+  admin-api:
+    build:
+      context: ../../identity/services/admin-api
+      dockerfile: Dockerfile
+    image: vexaai/v012-admin-api:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${ADMIN_API_PORT:-18057}:8001"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  runtime:
+    build:
+      context: ../../runtime
+      dockerfile: Dockerfile
+    image: vexaai/v012-runtime:${IMAGE_TAG:-dev}
+    # The runtime spawns bot containers via the host Docker socket (DockerBackend → docker CLI).
+    group_add:
+      - "${DOCKER_GID:-0}"
+    ports:
+      - "127.0.0.1:${RUNTIME_API_PORT:-18090}:8090"
+    environment:
+      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:dev}
+      - REDIS_URL=redis://redis:6379/0
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  meeting-api:
+    build:
+      # Wider context (the v0.12 carve root) than the other services: meeting_api validates at the
+      # seam and loads the sealed invocation/lifecycle/webhook/runtime/schedule schemas BY PATH, so
+      # those frozen contract files are vendored into the image (see the Dockerfile).
+      context: ../..
+      dockerfile: meetings/services/meeting-api/Dockerfile
+    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${MEETING_API_PORT:-18080}:8080"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - REDIS_URL=redis://redis:6379/0
+      - RUNTIME_API_URL=http://runtime:8090
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      runtime:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks: [vexa]
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ../../gateway/services/gateway
+      dockerfile: Dockerfile
+    image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
+    ports:
+      - "${API_GATEWAY_HOST_PORT:-18056}:8000"
+    environment:
+      - ADMIN_API_URL=http://admin-api:8001
+      - MEETING_API_URL=http://meeting-api:8080
+      - REDIS_URL=redis://redis:6379/0
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      admin-api:
+        condition: service_healthy
+      meeting-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:
+  minio-data:
+
+networks:
+  vexa:
+    driver: bridge

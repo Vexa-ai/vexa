@@ -139,3 +139,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="unknown workload")
 
     return app
+
+
+# ── ASGI entrypoint (P4) ─────────────────────────────────────────────────────────────────────
+# ``uvicorn runtime_kernel.api:app`` (the compose CMD) resolves this. Built LAZILY via PEP 562 so
+# importing this module never wires a DockerBackend — the app is constructed only when uvicorn
+# touches ``api.app`` at startup, with the real Docker backend + env-driven profile registry.
+def __getattr__(name: str):
+    if name == "app":
+        from .__main__ import build_production_app
+
+        return build_production_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

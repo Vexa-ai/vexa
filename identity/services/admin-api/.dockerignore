@@ -1,0 +1,7 @@
+# Keep the build context to pyproject.toml + uv.lock + src/ (what the Dockerfile COPYs).
+.venv/
+**/__pycache__/
+**/.pytest_cache/
+tests/
+*.md
+.gateignore
