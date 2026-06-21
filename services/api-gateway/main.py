@@ -28,6 +28,7 @@ from meeting_api.schemas import (
     ErrorResponse,
     Platform,
     BotStatusResponse,
+    ParticipantsResponse,
     SpeakRequest, ChatSendRequest, ChatMessagesResponse, ScreenContentRequest,
 )
 
@@ -496,6 +497,19 @@ async def get_bots_status_proxy(request: Request):
     url = f"{MEETING_API_URL}/bots/status"
     return await forward_request(app.state.http_client, "GET", url, request)
 # --- END Route for GET /bots/status ---
+
+# --- Route for GET /bots/{platform}/{native_meeting_id}/participants ---
+@app.get("/bots/{platform}/{native_meeting_id}/participants",
+         tags=["Bot Management"],
+         summary="Get participants detected in a meeting",
+         description="Retrieves the distinct participants (speakers) detected in a meeting, aggregated from its transcript segments.",
+         response_model=ParticipantsResponse,
+         dependencies=[Depends(api_key_scheme)])
+async def get_participants_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward request to Bot Manager to get the meeting's participants."""
+    url = f"{MEETING_API_URL}/bots/{platform.value}/{native_meeting_id}/participants"
+    return await forward_request(app.state.http_client, "GET", url, request)
+# --- END Route for GET /bots/{platform}/{native_meeting_id}/participants ---
 
 @app.get("/bots/id/{meeting_id}",
          tags=["Bot Management"],

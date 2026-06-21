@@ -33,6 +33,12 @@ class TestBotManagementRoutes:
     def test_get_bot_status_exists(self):
         assert ("GET", "/bots/status") in ROUTES
 
+    def test_get_participants_exists(self):
+        assert (
+            "GET",
+            "/bots/{platform}/{native_meeting_id}/participants",
+        ) in ROUTES
+
 
 class TestTranscriptionRoutes:
     def test_get_meetings_exists(self):

@@ -33,6 +33,8 @@ from .schemas import (
     MeetingResponse,
     Platform,
     BotStatusResponse,
+    ParticipantInfo,
+    ParticipantsResponse,
     MeetingConfigUpdate,
     MeetingStatus,
     MeetingCompletionReason,
@@ -1496,6 +1498,70 @@ async def get_user_bots_status(
     except Exception as e:
         logger.error(f"Error fetching bot status for user {current_user.id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve bot status")
+
+
+@router.get(
+    "/bots/{platform}/{native_meeting_id}/participants",
+    response_model=ParticipantsResponse,
+    summary="Get the participants (speakers) detected in a meeting",
+    dependencies=[Depends(get_user_and_token)],
+)
+async def get_meeting_participants(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the distinct participants detected in a meeting.
+
+    Participants are aggregated from the meeting's transcript segments (which
+    carry the speaker attribution produced by the bot's speaker tracking): for
+    each distinct speaker we report the segment count, first/last seen times,
+    and total speaking time. Scoped to the authenticated user; resolves the
+    most recent meeting for the given platform + native meeting id.
+    """
+    from .models import Transcription
+
+    _, current_user = auth_data
+    meeting = await _find_meeting_any_status(
+        db, current_user.id, platform.value, native_meeting_id
+    )
+
+    stmt = (
+        select(
+            Transcription.speaker,
+            func.count(Transcription.id),
+            func.min(Transcription.created_at),
+            func.max(Transcription.created_at),
+            func.coalesce(
+                func.sum(Transcription.end_time - Transcription.start_time), 0.0
+            ),
+        )
+        .where(Transcription.meeting_id == meeting.id)
+        .group_by(Transcription.speaker)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    participants = [
+        ParticipantInfo(
+            name=speaker if speaker else "Unknown",
+            segment_count=count,
+            first_seen=first_seen,
+            last_seen=last_seen,
+            speaking_time_seconds=round(float(duration or 0.0), 3),
+        )
+        for speaker, count, first_seen, last_seen, duration in rows
+    ]
+    # Most active speakers first, then by name for stable ordering.
+    participants.sort(key=lambda p: (-p.segment_count, p.name))
+
+    return ParticipantsResponse(
+        id=meeting.id,
+        platform=meeting.platform,
+        native_meeting_id=meeting.platform_specific_id,
+        participant_count=len(participants),
+        participants=participants,
+    )
 
 
 @router.put(
