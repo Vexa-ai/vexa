@@ -16,7 +16,12 @@ TRUTH = os.environ.get("TRUTH_LOG", str(Path(__file__).parent.parent / "truth.js
 TBASE = os.environ.get("TRANSCRIPTS_BASE", "http://localhost:8056").rstrip("/")
 
 turns = [json.loads(l) for l in open(TRUTH) if l.strip()]
-d = json.load(urllib.request.urlopen(f"{TBASE}/transcripts/{PLATFORM}/{NATIVE}"))
+# TRANSCRIPT_FILE → score a `{segments:[…]}` JSON dumped from another source (the STANDALONE bot's
+# transcript.v1 redis stream, via read-redis-transcript.mjs) instead of the gateway HTTP. Symmetric
+# with analyze.mjs's TRANSCRIPT_FILE branch — same scorer either way. Used by the bot-local harness,
+# where the carved bot publishes to redis with no gateway meeting-record to fetch.
+TF = os.environ.get("TRANSCRIPT_FILE")
+d = json.load(open(TF)) if TF else json.load(urllib.request.urlopen(f"{TBASE}/transcripts/{PLATFORM}/{NATIVE}"))
 segs = [s for s in (d.get('segments') or []) if (s.get('text') or '').strip()]
 
 FIX = {'Врра':'Вера','ИгорИ':'Игорь','ДмДтрий':'Дмитрий','ДДитрий':'Дмитрий','ДДитри':'Дмитрий',
@@ -90,3 +95,11 @@ for s in rsegs:
     else: w+=1
 named=c+w
 print(f"3. ATTRIBUTION (named-rate {100*named/max(1,len(rsegs)):.0f}%): of named, correct={c} wrong={w} → precision {100*c/max(1,named):.0f}%  | unknown {u} ({100*u/max(1,len(rsegs)):.0f}%)")
+
+# Grep-friendly machine line for verdict.mjs (the bot-local harness aggregates this with analyze's
+# SCORE line against BASELINE.md). LEAKAGE is the definitive content-vs-label check → a HARD gate;
+# attribution precision is reported but NOT hard-gated (Learning #18: it over-counts under /speak
+# latency drift). Counts, not just percentages, so the gate reads them directly.
+print(f"\nJUDGE completeness={cov}/{len(rturns)} completeness_pct={100*cov/max(1,len(rturns)):.0f} "
+      f"leakage={leak} leakage_pct={100*leak/max(1,ided):.0f} attribution_pct={100*c/max(1,named):.0f} "
+      f"wrong={w} unknown={u} named={named} truth_turns={len(rturns)}")
