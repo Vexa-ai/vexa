@@ -1,20 +1,25 @@
-"""The ``POST /bots`` core flow — port of the parent ``meetings.request_bot`` happy path.
+"""The ``POST /bots`` flow — port of the parent ``meetings.request_bot`` (P2 core + P3 control-plane).
 
-CORE PATH ONLY (P2). The behavioral follow-ons are P3 and explicitly left as seams here:
-  * continue_meeting (reuse a stopping meeting) — NOT handled; a new spawn always.
-  * max-bots / concurrency quota — surfaced ONLY where the runtime kernel raises it (429); the
-    meeting-api side does no pre-check (parent's ``max_concurrent`` gate is P3).
-  * join-retry / bot-timeout scheduling — NOT handled (the scheduling brick wires that in P3).
+P3 added (all behind the same injected ports, so the flow still runs offline):
+  * **continue_meeting** (P3c) — when the prior meeting for (platform, native_id) is TERMINAL,
+    reuse the SAME meeting row + create a NEW ``MeetingSession`` instead of a fresh meeting (the
+    409 only fires for a CONCURRENT, still-active prior meeting). Transcripts/recordings stay keyed
+    by the meeting row, so a continued run preserves them.
+  * **max-bots** (P3e) — a per-user concurrency pre-check: count the user's ACTIVE bots (excluding
+    infra ``browser_session``) and reject the N+1th with 429 BEFORE spawning; the runtime kernel's
+    own ``QuotaExceeded`` remains the defense-in-depth backstop.
 
 The flow (parent ``meetings.py`` lines ~1010-1403, reduced to the standard-bot branch):
   1. construct the meeting URL (or use the supplied one),
   2. dedup — 409 if the user already has an active/requested meeting for (platform, native_id),
-  3. insert the ``Meeting`` row (status ``requested``) → meeting_id,
+  2b. max-bots — 429 if the user is at their per-user concurrency cap (P3e),
+  2c. continue_meeting — reuse a TERMINAL prior meeting row + add a session (P3c),
+  3. insert the ``Meeting`` row (status ``requested``) → meeting_id (unless reusing one),
   4. mint the MeetingToken + build the ``invocation.v1`` invocation (BOT_CONFIG),
   5. spawn the meeting-bot workload over ``runtime.v1`` (``RuntimeClient.create_workload``),
   6. eager-create the ``MeetingSession`` keyed by the bot's ``connectionId`` (== session_uid),
   7. write the kernel workload id back as ``bot_container_id``,
-  8. return the ``api.v1`` ``MeetingResponse``.
+  8. return the ``api.v1`` ``MeetingResponse`` (now listing its ``sessions``).
 """
 from __future__ import annotations
 
@@ -24,7 +29,11 @@ from typing import Any, Optional
 
 from ..obs import log_event
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
-from .ports import MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
+from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
+
+# Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
+_ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
+_TERMINAL_STATUSES = ("completed", "failed")
 
 # Construct-URL templates per platform (the parent's ``Platform.construct_meeting_url``, core set).
 _URL_TEMPLATES = {
@@ -40,10 +49,18 @@ def construct_meeting_url(platform: str, native_meeting_id: str) -> Optional[str
     return tmpl.format(native_meeting_id=native_meeting_id) if tmpl else None
 
 
-def _meeting_response(row: dict) -> dict:
+def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     """Shape a meeting row into an ``api.v1`` MeetingResponse-conforming dict (required:
-    id, user_id, status, bot_container_id, start_time, end_time, created_at, updated_at)."""
-    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    id, user_id, status, bot_container_id, start_time, end_time, created_at, updated_at).
+
+    P3c — when ``sessions`` is supplied, the response also lists the meeting's ``session_uid``s
+    (the N bots that ran against this meeting row). This rides in ``data.sessions`` (the api.v1
+    ``data`` field is an open object — see the contract note in the bot_spawn README) so the
+    SEALED ``MeetingResponse`` schema is honoured without an edit; a public typed ``sessions``
+    field would need a ``vN+1`` (flagged)."""
+    data = dict(row.get("data")) if isinstance(row.get("data"), dict) else {}
+    if sessions is not None:
+        data["sessions"] = list(sessions)
     return {
         "id": row["id"],
         "user_id": row["user_id"],
@@ -80,36 +97,70 @@ async def request_bot(
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
     transcribe_enabled: bool = True,
+    continue_meeting: bool = False,
+    max_concurrent: Optional[int] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
     internal_secret: Optional[str] = None,
     token_secret: Optional[str] = None,
 ) -> dict:
-    """Run the core spawn flow and return a MeetingResponse-shaped dict.
+    """Run the spawn flow and return a MeetingResponse-shaped dict.
 
-    Raises ``DuplicateMeeting`` (409), ``QuotaExceeded`` (429), or ``SpawnFailed`` (502/failed).
+    Raises ``DuplicateMeeting`` (409), ``MaxBotsExceeded`` / ``QuotaExceeded`` (429), or
+    ``SpawnFailed`` (502/failed).
+
+    ``continue_meeting`` (P3c): if the prior meeting for (platform, native_id) is TERMINAL, reuse
+    that row + add a new session instead of creating a fresh meeting. ``max_concurrent`` (P3e): the
+    per-user cap — the spawn is rejected if the user already has that many ACTIVE bots.
     """
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
 
-    # 2. Dedup.
+    # 2. Dedup — a CONCURRENT (still-active) prior meeting always blocks the spawn (409).
     if await repo.find_active(user_id, platform, native_meeting_id):
         raise DuplicateMeeting(
             f"An active meeting already exists for {platform}/{native_meeting_id}"
         )
 
-    # 3. Insert the Meeting row (status requested).
-    meeting_data: dict[str, Any] = {}
-    if constructed_url:
-        meeting_data["constructed_meeting_url"] = constructed_url
-    meeting_data["transcribe_enabled"] = transcribe_enabled
-    meeting_data["recording_enabled"] = recording_enabled
-    row = await repo.create_meeting(
-        user_id=user_id,
-        platform=platform,
-        native_meeting_id=native_meeting_id,
-        data=meeting_data,
-    )
+    # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
+    #     its id (so its transcripts/recordings survive); a fresh session is appended below.
+    reused_row: Optional[dict] = None
+    if continue_meeting:
+        latest = await repo.find_latest(user_id, platform, native_meeting_id)
+        if latest and latest.get("status") in _TERMINAL_STATUSES:
+            reused_row = latest
+
+    # 2b. max-bots (P3e): per-user concurrency pre-check, BEFORE the runtime call. Count the user's
+    #     ACTIVE bots (browser_session excluded by the repo); reject the N+1th with 429. A reused
+    #     (terminal) row is excluded from the count — it is not active.
+    if max_concurrent is not None and max_concurrent > 0:
+        active = await repo.count_active_bots(
+            user_id=user_id,
+            exclude_meeting_id=reused_row["id"] if reused_row else None,
+        )
+        if active >= max_concurrent:
+            log_event(
+                "bot_spawn_max_bots_exceeded", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"active": active, "cap": max_concurrent},
+            )
+            raise MaxBotsExceeded(user_id, max_concurrent)
+
+    # 3. Insert the Meeting row (status requested) — or reopen the reused terminal row.
+    if reused_row is not None:
+        row = await repo.reopen_meeting(meeting_id=reused_row["id"])
+    else:
+        meeting_data: dict[str, Any] = {}
+        if constructed_url:
+            meeting_data["constructed_meeting_url"] = constructed_url
+        meeting_data["transcribe_enabled"] = transcribe_enabled
+        meeting_data["recording_enabled"] = recording_enabled
+        row = await repo.create_meeting(
+            user_id=user_id,
+            platform=platform,
+            native_meeting_id=native_meeting_id,
+            data=meeting_data,
+        )
     meeting_id = row["id"]
 
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
@@ -165,16 +216,23 @@ async def request_bot(
 
     workload_id = result.get("workloadId") or result.get("name") or spec["workloadId"]
 
-    # 6. Eager-create the MeetingSession (connectionId == session_uid).
+    # 6. Eager-create the MeetingSession (connectionId == session_uid). For a continued meeting this
+    #    APPENDS a session to the reused row — N sessions accumulate per meeting (P3c).
     await repo.create_session(meeting_id=meeting_id, session_uid=connection_id)
 
     # 7. Write the kernel workload id back as bot_container_id.
     row = await repo.set_bot_container(meeting_id=meeting_id, bot_container_id=workload_id)
 
+    # The response lists the meeting's sessions (P3c) — all session_uids that ran against this row.
+    sessions = await repo.list_sessions(meeting_id=meeting_id)
+
     # USER-facing: a bot was requested for this user.
     log_event(
         "bot_join_requested", audience="user", span="bots.create",
         user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
-        fields={"platform": platform, "status": row.get("status", "requested")},
+        fields={
+            "platform": platform, "status": row.get("status", "requested"),
+            "continued": reused_row is not None, "session_count": len(sessions),
+        },
     )
-    return _meeting_response(row)
+    return _meeting_response(row, sessions=sessions)

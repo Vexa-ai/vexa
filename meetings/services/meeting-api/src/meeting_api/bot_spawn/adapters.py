@@ -61,6 +61,66 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                )
+                .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+            )
+            m = (await db.execute(stmt)).scalars().first()
+            return _row_to_dict(m) if m else None
+
+    async def reopen_meeting(self, *, meeting_id) -> dict:
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            m = (
+                await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+            ).scalars().first()
+            m.status = "requested"
+            m.end_time = None
+            m.bot_container_id = None
+            data = dict(m.data) if isinstance(m.data, dict) else {}
+            for k in ("completion_reason", "failure_stage"):
+                data.pop(k, None)
+            m.data = data
+            flag_modified(m, "data")
+            m.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(m)
+            return _row_to_dict(m)
+
+    async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
+        from sqlalchemy import func, select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(func.count())
+                .select_from(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+                    Meeting.platform != "browser_session",  # infra excluded (parent meetings.py:1091)
+                )
+            )
+            if exclude_meeting_id is not None:
+                stmt = stmt.where(Meeting.id != exclude_meeting_id)
+            return int((await db.execute(stmt)).scalar() or 0)
+
     async def create_meeting(self, *, user_id, platform, native_meeting_id, data) -> dict:
         from ..sessions.models import Meeting
 
@@ -78,6 +138,19 @@ class SqlAlchemyMeetingRepo:
         async with self._session_factory() as db:
             db.add(new_session(meeting_id, session_uid))
             await db.commit()
+
+    async def list_sessions(self, *, meeting_id) -> list:
+        from sqlalchemy import select
+
+        from ..sessions.models import MeetingSession
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(MeetingSession.session_uid)
+                .where(MeetingSession.meeting_id == meeting_id)
+                .order_by(MeetingSession.session_start_time.asc(), MeetingSession.id.asc())
+            )
+            return [r for (r,) in (await db.execute(stmt)).all()]
 
     async def set_bot_container(self, *, meeting_id, bot_container_id) -> dict:
         from sqlalchemy import select

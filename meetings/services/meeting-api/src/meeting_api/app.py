@@ -103,12 +103,20 @@ def create_app(
 
 def _mount_lifecycle(app: FastAPI, sink: LifecycleSink) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
-    ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware)."""
+    ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
+
+    P3a — each FSM advance emits the sealed ``meeting.status_change`` webhook.v1 envelope and
+    records the full diagnostics (``status_transition[]`` + forensics in ``rec.data``). The
+    receiver is a bot callback → ``transition_source=bot_callback``.
+    """
     import jsonschema
 
-    from .lifecycle.machine import IllegalTransition
+    from .lifecycle.machine import IllegalTransition, TransitionSource
     from .lifecycle.receiver import conforms
+    from .lifecycle.webhook import build_status_change_envelope
     from .obs import log_event
+
+    app.state.status_change_webhooks = []
 
     @app.post("/bots/internal/callback/lifecycle")
     async def lifecycle_callback(request: Request) -> JSONResponse:
@@ -126,7 +134,7 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink) -> None:
                 content={"status": "error", "detail": f"lifecycle.v1 schema violation: {e.message}"},
             )
         try:
-            rec = sink.apply(body)
+            change = sink.apply_change(body, transition_source=TransitionSource.BOT_CALLBACK)
         except IllegalTransition as e:
             return JSONResponse(
                 status_code=409,
@@ -137,6 +145,9 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink) -> None:
                     "to": e.to.value,
                 },
             )
+        rec = change.record
+        envelope = build_status_change_envelope(change)
+        app.state.status_change_webhooks.append(envelope)
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,
@@ -150,6 +161,9 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink) -> None:
                 "meeting_status": rec.status.value if rec.status else None,
                 "completion_reason": rec.completion_reason.value if rec.completion_reason else None,
                 "failure_stage": rec.failure_stage.value if rec.failure_stage else None,
+                "transition_source": change.transition_source.value,
+                "status_transition": rec.status_transition,
+                "data": rec.data,
             },
         )
 

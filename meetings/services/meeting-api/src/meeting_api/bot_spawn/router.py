@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .ports import MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
+from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
 from .service import DuplicateMeeting, request_bot
 
 
@@ -30,6 +30,31 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
+def _resolve_max_concurrent(x_user_limits: Optional[str]) -> Optional[int]:
+    """Parse the gateway's ``X-User-Limits`` header → the per-user max-bots cap (P3e).
+
+    The gateway resolves the user via ``/internal/validate`` (identity.v1) and forwards the limit as
+    a header (the parent's ``auth.validate_request`` reads ``X-User-Limits`` as a bare int or a JSON
+    ``{"max_concurrent_bots"|"max_concurrent": …}``). Absent/unparseable → ``None`` (no pre-check)."""
+    if not x_user_limits:
+        return None
+    raw = x_user_limits.strip()
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        pass
+    try:
+        import json
+
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            v = obj.get("max_concurrent_bots", obj.get("max_concurrent"))
+            return int(v) if v is not None else None
+    except Exception:
+        return None
+    return None
+
+
 def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` ports."""
     router = APIRouter()
@@ -38,8 +63,10 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
     async def create_bot(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        x_user_limits: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
+        max_concurrent = _resolve_max_concurrent(x_user_limits)
         try:
             body = await request.json()
         except Exception:
@@ -70,10 +97,15 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=bool(body.get("recording_enabled", False)),
                 transcribe_enabled=bool(body.get("transcribe_enabled", True)),
+                # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
+                # has no additionalProperties:false), so the wire is not rejected; documenting it as
+                # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
+                continue_meeting=bool(body.get("continue_meeting", False)),
+                max_concurrent=max_concurrent,
             )
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
-        except QuotaExceeded as e:
+        except (MaxBotsExceeded, QuotaExceeded) as e:
             raise HTTPException(status_code=429, detail=str(e) or "Bot concurrency limit reached")
         except SpawnFailed as e:
             raise HTTPException(status_code=502, detail=str(e) or "Failed to start bot workload")

@@ -20,7 +20,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from referencing import Registry, Resource
 
-from .machine import IllegalTransition, LifecycleSink, MeetingStore
+from .machine import IllegalTransition, LifecycleSink, MeetingStore, TransitionSource
+from .webhook import build_status_change_envelope
 from ..obs import TraceMiddleware, log_event
 
 
@@ -49,14 +50,25 @@ def conforms(obj: Dict[str, Any], shape: str) -> None:
     ).validate(obj)
 
 
-def create_app(store: Optional[MeetingStore] = None) -> FastAPI:
-    """Build the receiver app. `store` lets the eval inspect record state after POSTs."""
+def create_app(
+    store: Optional[MeetingStore] = None,
+    *,
+    on_status_change: Optional[Any] = None,
+) -> FastAPI:
+    """Build the receiver app. `store` lets the eval inspect record state after POSTs.
+
+    `on_status_change(envelope)` (optional) is the webhook-emit port: each FSM advance builds the
+    sealed `meeting.status_change` webhook.v1 envelope and hands it here. The eval injects a sink
+    that records every delivery; production wires the WebhookSink. The receiver is a bot callback,
+    so transitions it drives carry `transition_source=bot_callback`.
+    """
     app = FastAPI(title="meeting-api · lifecycle receiver", version="0.12.0")
     # Use `is None` — an empty MeetingStore is falsy (len == 0), so `store or ...`
     # would silently swap in a different store than the caller's.
     sink = LifecycleSink(store=store if store is not None else MeetingStore())
     app.state.sink = sink
     app.state.store = sink.store
+    app.state.status_change_webhooks = []  # every emitted envelope, for the eval
     # Bind the upstream gateway's X-Trace-Id for each request so this hop's structured logs
     # (logevent.v1) correlate with the gateway's on the same trace_id.
     app.add_middleware(TraceMiddleware)
@@ -87,8 +99,9 @@ def create_app(store: Optional[MeetingStore] = None) -> FastAPI:
             )
 
         # 2. Drive the FSM. Illegal transitions → 409 (parent surfaces the same rejection).
+        #    The receiver is a bot callback → transition_source=bot_callback.
         try:
-            rec = sink.apply(body)
+            change = sink.apply_change(body, transition_source=TransitionSource.BOT_CALLBACK)
         except IllegalTransition as e:
             return JSONResponse(
                 status_code=409,
@@ -100,6 +113,15 @@ def create_app(store: Optional[MeetingStore] = None) -> FastAPI:
                     "to": e.to.value,
                 },
             )
+        rec = change.record
+
+        # 3. Emit the meeting.status_change webhook (sealed webhook.v1 envelope).
+        envelope = build_status_change_envelope(change)
+        app.state.status_change_webhooks.append(envelope)
+        if on_status_change is not None:
+            maybe = on_status_change(envelope)
+            if hasattr(maybe, "__await__"):
+                await maybe
 
         # USER-facing: the meeting's lifecycle advanced (surfaced on the user's timeline).
         log_event(
@@ -117,6 +139,9 @@ def create_app(store: Optional[MeetingStore] = None) -> FastAPI:
                 "meeting_status": rec.status.value if rec.status else None,
                 "completion_reason": rec.completion_reason.value if rec.completion_reason else None,
                 "failure_stage": rec.failure_stage.value if rec.failure_stage else None,
+                "transition_source": change.transition_source.value,
+                "status_transition": rec.status_transition,
+                "data": rec.data,
             },
         )
 

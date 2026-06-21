@@ -28,7 +28,15 @@ class MeetingRepo(Protocol):
 
     async def find_active(self, user_id: int, platform: str, native_meeting_id: str) -> Optional[dict]:
         """The user's already-active/-requested meeting for ``(platform, native_id)`` (dedup
-        boundary — a non-None result means ``POST /bots`` returns 409), or ``None``."""
+        boundary — a non-None result means ``POST /bots`` returns 409), or ``None``.
+
+        ACTIVE = status in ``{requested, joining, awaiting_admission, active}`` (parent's non-terminal
+        set; ``stopping`` is in-flight too — see ``_ACTIVE_STATUSES``)."""
+        ...
+
+    async def find_latest(self, user_id: int, platform: str, native_meeting_id: str) -> Optional[dict]:
+        """The user's MOST-RECENT meeting for ``(platform, native_id)`` regardless of status, or
+        ``None``. ``continue_meeting`` reuses this row when it is TERMINAL (completed/failed)."""
         ...
 
     async def create_meeting(
@@ -38,14 +46,34 @@ class MeetingRepo(Protocol):
         ``status``, ``created_at`` …) — the row the response is built from."""
         ...
 
+    async def reopen_meeting(self, *, meeting_id: int) -> dict:
+        """Reset a TERMINAL meeting row back to ``requested`` for a continued run (``continue_meeting``):
+        clear the prior terminal attribution, keep the row id (so transcripts/recordings keyed by it
+        survive). Returns the updated row."""
+        ...
+
     async def create_session(self, *, meeting_id: int, session_uid: str) -> None:
         """Eager-create the ``MeetingSession`` keyed by ``session_uid`` (== the bot's
         ``connectionId``), so a recording upload resolves its meeting before the bot reports
-        ``active`` (parent ``meetings.py`` MeetingSession insert)."""
+        ``active`` (parent ``meetings.py`` MeetingSession insert). N sessions accumulate per
+        meeting (one per bot connection / continued run)."""
+        ...
+
+    async def list_sessions(self, *, meeting_id: int) -> list:
+        """All ``session_uid``s for a meeting, oldest-first — the sessions the response lists."""
         ...
 
     async def set_bot_container(self, *, meeting_id: int, bot_container_id: str) -> dict:
         """Record the kernel-assigned workload id/name on the meeting and return the updated row."""
+        ...
+
+    async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
+        """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
+
+        EXCLUDES infra ``browser_session`` workloads (parent ``meetings.py:1091``
+        ``Meeting.platform != "browser_session"``). The active set is
+        ``{requested, joining, awaiting_admission, active}``. ``exclude_meeting_id`` lets a
+        ``continue_meeting`` reopen not double-count the row it is about to reuse."""
         ...
 
 
@@ -60,7 +88,23 @@ class RuntimeClient(Protocol):
 
 
 class QuotaExceeded(Exception):
-    """The runtime kernel rejected the spawn for owner quota (429) — surfaced as HTTP 429."""
+    """The runtime kernel rejected the spawn for owner quota (429) — surfaced as HTTP 429.
+
+    The defense-in-depth BACKSTOP for the per-user concurrency cap: meeting-api pre-checks the cap
+    (``MaxBotsExceeded``), and the kernel re-checks it via its ``owner_quota`` (this)."""
+
+
+class MaxBotsExceeded(Exception):
+    """meeting-api's OWN per-user concurrency pre-check rejected the spawn (P3e) — HTTP 429.
+
+    Raised BEFORE the runtime call when the user already has ``max_concurrent`` ACTIVE bots
+    (excluding infra ``browser_session``). Distinct from ``QuotaExceeded`` (the kernel's backstop),
+    but both map to 429 at the route."""
+
+    def __init__(self, user_id: int, cap: int):
+        self.user_id = user_id
+        self.cap = cap
+        super().__init__(f"User has reached the maximum concurrent bot limit ({cap}).")
 
 
 class SpawnFailed(Exception):

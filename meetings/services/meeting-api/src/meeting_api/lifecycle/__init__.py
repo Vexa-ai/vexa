@@ -15,6 +15,11 @@ rejects illegal transitions.
 * ``IllegalTransition`` — raised (and surfaced as HTTP 409) on a forbidden transition.
 * ``can_transition`` / ``LEGAL_TRANSITIONS`` — the machine, derived from the parent's
   ``schemas.get_valid_status_transitions`` reduced to the bot's domain lifecycle.
+* ``StatusChange`` / ``TransitionSource`` (P3a) — one FSM advance's result + what drove it
+  (``bot_callback`` / ``user_stop`` / ``scheduler_timeout``), carrying the
+  ``meeting.status_change`` webhook body.
+* ``build_status_change_envelope`` (P3a) — wrap a ``StatusChange`` as a sealed ``webhook.v1``
+  ``Envelope`` (event_type ``meeting.status_change``).
 """
 from .machine import (
     BotStatus,
@@ -25,8 +30,27 @@ from .machine import (
     LifecycleSink,
     MeetingRecord,
     MeetingStore,
+    StatusChange,
+    TransitionSource,
     can_transition,
 )
+from .retry import (
+    JoinRetryController,
+    RetryClass,
+    RetryOutcome,
+    RetryPolicy,
+    classify_retry,
+    is_transient,
+)
+from .stop import (
+    LeaveCommandPublisher,
+    classify_user_stop,
+    leave_command_channel,
+    leave_command_payload,
+    request_stop,
+    stop_event_for,
+)
+from .webhook import build_status_change_envelope
 
 __all__ = [
     "BotStatus",
@@ -37,5 +61,20 @@ __all__ = [
     "LifecycleSink",
     "MeetingRecord",
     "MeetingStore",
+    "StatusChange",
+    "TransitionSource",
+    "LeaveCommandPublisher",
+    "JoinRetryController",
+    "RetryClass",
+    "RetryOutcome",
+    "RetryPolicy",
+    "build_status_change_envelope",
+    "classify_retry",
+    "classify_user_stop",
+    "is_transient",
+    "leave_command_channel",
+    "leave_command_payload",
+    "request_stop",
+    "stop_event_for",
     "can_transition",
 ]
