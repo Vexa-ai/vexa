@@ -35,9 +35,11 @@
     {
       "name": "stt",
       "kind": "service",
-      "secret_ref": "env:TRANSCRIPTION_SERVICE_TOKEN",
+      "endpoint": "https://transcription.vexa.ai",
+      "secret_ref": "vexa-secrets:<TBD — internal@vexa.ai's funded user token>",
       "env": ["TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"],
-      "notes": "the bot's STT; sourced from the runtime container env on bbb (Lane B)."
+      "validate": "GET https://transcription.vexa.ai/balance with the token → require HTTP 200 AND balance_minutes > 0. The STT tokens are PER-USER (the response carries the account email + balance). Preflight EVERY live run with this; it caught: TRANSCRIPTION_SERVICE_TOKEN=valid-but-0min, REMOTE_TRANSCRIBER_API_KEY/TRANSCRIBER_API_KEY_INTERNAL=403 invalid (Learning #28).",
+      "notes": "the bot's STT at transcription.vexa.ai (OpenAI-compatible /v1/audio/transcriptions; /balance·/purchase·/admin/user-tokens). The funded credential = internal@vexa.ai's user token — record the exact vexa-secrets key once confirmed; it MUST pass the /balance preflight."
     },
     {
       "name": "minio",

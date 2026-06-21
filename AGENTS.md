@@ -23,11 +23,18 @@ The repo carries a **gitignored, host/user-specific** execution-target & resourc
 (`deploy/execution-targets.json`; template `…example.json`; schema `deploy/contracts/execution-targets.v1`):
 the **targets** work may run on (name · arch · caps: docker·compose·amd64-bot·gpu·…) and the **resources** it
 needs (services, credential-sets, storage, a meeting, a human gate) — **secrets by reference, never inline** (P14).
-**In planning mode, before a plan is approved, resolve every stage's `Runs on:` + `Resources:` against the
-registry, and surface any missing/unavailable target or resource as a blocker to clear first** — never enter
-execution on an unresolved one (Learning #22: the amd64 bot's host is `bbb`; consult the registry before
-escalating a "block"). Every objective in the ledger carries a `Runs on:` + `Resources:` line. Enforced by
-`gate:execution-env` + the planning preflight.
+**In planning mode, before a plan is approved, RESOLVE *and VALIDATE* every stage's `Runs on:` + `Resources:`
+against the registry, and surface any missing/unavailable/unhealthy one as a blocker to clear first** — never
+enter execution on an unresolved one (Learning #22: the amd64 bot's host is `bbb`; consult the registry before
+escalating a "block").
+- **Resolve ≠ validate.** A resource is cleared only when a **cheap preflight PROVES it actually works** — the
+  endpoint reachable, the credential authenticates, the account **funded/in-balance**, the host runs what's
+  needed — *not* merely that it is recorded. **Surface the failure model in planning, not at execution**
+  (validation economy, §8.2 — cheap instrument first): a one-call STT probe in planning would have caught the
+  out-of-balance `402` that a 4-hour live run discovered (Learning #28). Each `Resources:` line names HOW it is
+  validated (the preflight check), and the registry records the *working* credential (not a stale/empty one).
+- Every objective in the ledger carries a `Runs on:` + `Resources:` line. Enforced by `gate:execution-env`
+  (the registry conforms) + the planning preflight (each resource's validation check passes).
 
 ## Planning embeds the rules — the plan is self-bounding (ADR-0021)
 A plan does not merely *reference* the constitution; it **embeds the governing rules inline** so execution cannot

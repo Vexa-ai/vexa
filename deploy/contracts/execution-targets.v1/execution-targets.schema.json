@@ -46,6 +46,7 @@
           "pattern": "^(vexa-secrets:|env:)"
         },
         "env": { "type": "array", "items": { "type": "string" }, "description": "the env-var names this resource populates" },
+        "validate": { "type": "string", "description": "the CHEAP PREFLIGHT that proves this resource actually works (reachable · authenticates · funded/in-balance) — run in planning to surface the failure model before execution, not after (Learning #28)" },
         "notes": { "type": "string" }
       }
     }
