@@ -61,6 +61,10 @@ def _compose(*args: str, env: dict | None = None, check: bool = True, timeout: i
 def _stack_env() -> dict:
     return {
         "IMAGE_TAG": "dev",
+        # Pin the project name into the interpolation env too (not just `-p`), so the compose's
+        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa resolves to the SAME network compose creates —
+        # the bot must be spawned onto it to reach meeting-api/redis.
+        "COMPOSE_PROJECT_NAME": PROJECT,
         "ADMIN_TOKEN": ADMIN_TOKEN,
         "INTERNAL_API_SECRET": INTERNAL_API_SECRET,
         "MINIO_BUCKET": MINIO_BUCKET,

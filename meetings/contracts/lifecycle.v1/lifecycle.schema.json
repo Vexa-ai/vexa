@@ -16,9 +16,9 @@
       "enum": ["requested", "joining", "awaiting_admission", "active"]
     },
     "LifecycleEvent": {
-      "description": "One status report. connection_id + status always present; the rest are state-dependent (forensics on terminal states).",
+      "description": "One status report. connection_id + status always present; the rest are state-dependent (forensics on terminal states). LIBERAL ingestion (additionalProperties:true): the control plane validates the core shape but TOLERATES extra fields the real bot emits, matching main's pydantic ignore-extras — the carve's earlier additionalProperties:false rejected the bot's real callbacks.",
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["connection_id", "status"],
       "properties": {
         "connection_id": { "type": "string", "description": "the session uid" },
@@ -37,7 +37,9 @@
             "cpu_usage_usec": { "type": "integer" }
           }
         },
-        "speaker_events": { "type": "array" }
+        "speaker_events": { "type": "array" },
+        "timestamp": { "type": "string", "description": "ISO8601 emit time — the real bot sends it on every callback" },
+        "error_details": { "type": "string", "description": "terminal: free-text error context from the bot" }
       }
     }
   }

@@ -458,6 +458,21 @@ def test_03_real_bot_spawn_joining(stack):
                 advanced = True
                 break
             time.sleep(3)
+        if not advanced:
+            def _cap(*c):
+                try:
+                    return subprocess.run(c, capture_output=True, text=True, timeout=20).stdout[-3000:]
+                except Exception as e:
+                    return f"<{e}>"
+            print("\n=== DIAG: bot did not report joining ===")
+            print("[bot state/nets] " + _cap(
+                "docker", "inspect", "-f",
+                "Status={{.State.Status}} Exit={{.State.ExitCode}} Nets={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}",
+                container_name))
+            print("--- bot logs (tail 80) ---\n" + _cap("docker", "logs", "--tail", "80", container_name))
+            print("--- runtime logs (tail 40) ---\n" + stack.logs("runtime", tail=40))
+            print("--- meeting-api logs (tail 40) ---\n" + stack.logs("meeting-api", tail=40))
+            print(f"--- connection_id={connection_id!r} workload_id={workload_id!r} ---")
         assert advanced, "bot did not report a `joining` lifecycle callback within 90s"
         print(f"\n[3/bot] real container {container_name} appeared in docker ps; meeting advanced to joining")
     finally:

@@ -117,7 +117,8 @@ services:
       context: ../../runtime
       dockerfile: Dockerfile
     image: vexaai/v012-runtime:${IMAGE_TAG:-dev}
-    # The runtime spawns bot containers via the host Docker socket (DockerBackend → docker CLI).
+    # The runtime spawns bot containers via the host Docker socket (DockerBackend → socket API,
+    # requests_unixsocket — no docker CLI in the image, like main).
     group_add:
       - "${DOCKER_GID:-0}"
     ports:
@@ -128,6 +129,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
+      # + redis. Must equal the project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_vexa
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
