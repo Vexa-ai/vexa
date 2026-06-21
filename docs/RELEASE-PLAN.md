@@ -115,6 +115,19 @@ local `pnpm gates` + pre-push, what-each-gate-checks/if-it-fails, preserved auth
 - desktop `live_sessions` cosmetic counter bug. prod bot backend 503s on concurrent spawns — launch one-by-one (eval rig).
 - mixed lane warm-up ~25s / oversegmentation ~20%.
 
+## Backend SoC validation — ✅ Lane A done; Lane B human-gated (2026-06-21)
+A contract-faithful **mock bot** (reuses the real orchestrator+adapters, fakes only Join+Pipeline) validates the
+**control plane at L3 on the real compose stack** — backend ⊥ worker, runnable anywhere. All green on bbb, committed
+to `claude/busy-bouman-9ea75f` ([`docs/PARITY-MAIN.md`](PARITY-MAIN.md) · [`docs/ARCH-COMPLIANCE.md`](ARCH-COMPLIANCE.md)).
+- **Lane A (✅):** A:V1 lifecycle/edge-cases (`gate:compose`+MOCK_BOT, 16 passed) · A:V2 stress · A:V3 chaos · A:V4
+  modularity (`gate:test-isolation`/`gate:arch-report`) · A:V5 parity (`gate:parity`). New: execution-target registry
+  (`gate:execution-env`, ADR-0020) + planning-embeds-rules (ADR-0021).
+- **Lane B (autonomous done; B:V1 human-gated):** the worker-L4 eval oracle is reusable + gated (`gate:eval-baseline`);
+  the **live score** (real bot on `rvf-kywf-pxb` ≥ BASELINE) awaits the human admit.
+- **The mock lane caught 5 real backend bugs O6 (L4) missed** (it bypassed the control plane — raw-stream reads + the
+  legacy image). **Fixed:** `VEXA_BOT_CONFIG` (was `BOT_CONFIG`) · lifecycle now persists to the DB · transcript
+  envelope matches the collector. **Flagged (tasks):** `DELETE /bots` route unmounted · max-bots TOCTOU overspill. Learning #27.
+
 ## Done (audit trail)
 - **Re-grounded** on main's real stack (deployments/images/postgres); discarded the sqlite meeting-api tangent (Learning #20).
 - **Contracts sealed to main:** `api.v1` (17/17) + `ws.v1` (7/7); 8 sealed, gates green.
