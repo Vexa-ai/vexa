@@ -2,8 +2,9 @@
 /**
  * The vexa 0.12 gate suite (ARCHITECTURE.md §4). Each gate is GREEN-ON-EMPTY and becomes
  * real as content lands — "an artifact exists only when gate-green" (P9).
- * Usage: node scripts/gates.mjs [readme|isolation|exports|graph|schema|contract-version|python|
- *                                stack|node|health|access|tracing|replay|telemetry|eval|licenses|all]
+ * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
+ *                                contract-version|python|stack|node|health|access|tracing|replay|
+ *                                telemetry|eval|licenses|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -111,6 +112,32 @@ function gateGraph() {
   try { execSync(`npx depcruise --config .dependency-cruiser.cjs --no-progress ${targets.join(" ")}`, { stdio: "pipe" }); }
   catch (e) { return fail([`dependency-cruiser:\n${(e.stdout || e.stderr || e).toString()}`]); }
   console.log("  ✓ gate:graph — acyclic + allowed-edges");
+  return true;
+}
+
+// gate:isolation-py (P2, Python twin) — the Python modular-monolith boundary check. Mirrors the TS
+// bricks' check-isolation.js: scans every Python package's src/**\/*.py imports; a sibling-package
+// import is allowed ONLY if it is the package's own module, a declared pyproject dependency, or an
+// entry in scripts/check-isolation-py.mjs's ALLOWED_EDGES table (the legit test→prod + shared-models
+// edges). A forbidden cross-package import → RED, with the file path. Green-on-empty.
+function gateIsolationPy() {
+  const s = join(ROOT, "scripts", "check-isolation-py.mjs");
+  try { execSync(`node ${JSON.stringify(s)} --mode=isolation`, { stdio: "pipe" }); }
+  catch (e) { return fail([`python isolation:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
+  console.log("  ✓ gate:isolation-py — every Python sibling import is own-module, declared, or an allowed edge");
+  return true;
+}
+
+// gate:graph-py (P3, Python twin) — the Python allowed-edges DAG (the .dependency-cruiser.cjs intent
+// for Python). Encodes: acyclic; runtime_kernel imports nothing above; every real src→src
+// cross-package edge is an allow-listed entry; gateway_conformance → {gateway, meeting_api} only
+// (P2 folded the collector into meeting_api). A cycle or an unlisted edge → RED. Shares the one scan
+// with isolation-py (DRY). Green-on-empty.
+function gateGraphPy() {
+  const s = join(ROOT, "scripts", "check-isolation-py.mjs");
+  try { execSync(`node ${JSON.stringify(s)} --mode=graph`, { stdio: "pipe" }); }
+  catch (e) { return fail([`python graph:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
+  console.log("  ✓ gate:graph-py — Python cross-package edges acyclic + allow-listed");
   return true;
 }
 
@@ -344,7 +371,7 @@ function gateEval() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, exports: gateExports, graph: gateGraph, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses };
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

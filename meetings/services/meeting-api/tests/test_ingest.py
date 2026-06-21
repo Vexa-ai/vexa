@@ -17,9 +17,9 @@ import json
 import fakeredis.aioredis
 import pytest
 
-from transcription_collector import consume_segments, ingest
-from transcription_collector.fakes import FakeRedisBus, InMemoryTranscriptStore
-from transcription_collector.ingest import STREAM_NAME, _mutable_channel
+from meeting_api.collector import consume_segments, ingest
+from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
+from meeting_api.collector.ingest import STREAM_NAME, _mutable_channel
 
 
 @pytest.fixture

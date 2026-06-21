@@ -1,9 +1,10 @@
 """The `/ws` multiplex conformance harness — fakes that satisfy the PRODUCTION gateway's
-ports, driving `gateway.app._run_multiplex` (the SHIPPED control loop + fan-in).
+ports, driving `gateway.run_multiplex` (the SHIPPED control loop + fan-in).
 
 Before the carve `WSMultiplexHarness.run` re-implemented `main.websocket_multiplex` by hand.
-It is now a **thin driver**: `run()` calls the production `_run_multiplex` against these fakes,
-so every ws.v1 assertion in `test_ws_protocol.py` exercises the shipped multiplex.
+It is now a **thin driver**: `run()` calls the production `run_multiplex` (the public front-door
+entry — no longer the private `gateway.app._run_multiplex`) against these fakes, so every ws.v1
+assertion in `test_ws_protocol.py` exercises the shipped multiplex.
 
 The fakes:
 - `FakeWebSocket` — captures every `send_text` (so a test asserts the JSON frame the gateway
@@ -14,13 +15,14 @@ The fakes:
   subscribe/unsubscribe/listen). A payload PUBLISHed to a subscribed channel is forwarded
   VERBATIM to the socket, as the production `fan_in` does (forwards the raw redis payload).
 - `CollectorAuthorizer` — the gateway's `Authorizer` port, whose `authorize_subscribe` hop now
-  POSTs the REAL, SHIPPED collector's `/ws/authorize-subscribe` (`transcription_collector.create_app`)
-  over an in-process ASGI transport, instead of a hand-rolled fake. The collector's production code
-  decides authorization (DB-ownership boundary) and returns the `authorized` list (with `meeting_id`
-  so the gateway knows which redis channels to fan in). `resolve` stays a stub (the `/ws` loop only
-  needs a non-empty api_key). `FakeAuthorizer` is kept as a thin alias for backward-compatible
-  construction from an `(platform, native_id) → {meeting_id, user_id}` map — it seeds the real
-  collector's store from that map, so the same tests now drive shipped collector code.
+  POSTs the REAL, SHIPPED (folded-in) collector's `/ws/authorize-subscribe`
+  (`meeting_api.collector.create_app`) over an in-process ASGI transport, instead of a hand-rolled
+  fake. The collector's production code decides authorization (DB-ownership boundary) and returns
+  the `authorized` list (with `meeting_id` so the gateway knows which redis channels to fan in).
+  `resolve` stays a stub (the `/ws` loop only needs a non-empty api_key). `FakeAuthorizer` is kept
+  as a thin alias for backward-compatible construction from an
+  `(platform, native_id) → {meeting_id, user_id}` map — it seeds the real collector's store from
+  that map, so the same tests now drive shipped collector code.
 """
 from __future__ import annotations
 
@@ -31,10 +33,10 @@ from typing import Any, Optional
 import httpx
 from starlette.websockets import WebSocketDisconnect
 
-from transcription_collector import create_app as create_collector_app
-from transcription_collector.fakes import InMemoryTranscriptStore
+from meeting_api.collector import create_app as create_collector_app
+from meeting_api.collector.fakes import InMemoryTranscriptStore
 
-from gateway.app import _run_multiplex
+from gateway import run_multiplex
 
 
 class FakeWebSocket:
@@ -237,7 +239,7 @@ FakeAuthorizer = CollectorAuthorizer
 
 
 class WSMultiplexHarness:
-    """Drives the PRODUCTION `gateway.app._run_multiplex` against the fakes above."""
+    """Drives the PRODUCTION `gateway.run_multiplex` against the fakes above."""
 
     def __init__(self, ws: FakeWebSocket, redis: FakeRedis, authorizer: FakeAuthorizer):
         self.ws = ws
@@ -246,7 +248,7 @@ class WSMultiplexHarness:
 
     async def run(self) -> None:
         """Drive the shipped control loop until the client message queue drains / disconnects."""
-        await _run_multiplex(self.ws, self.authorizer, self.redis)
+        await run_multiplex(self.ws, self.authorizer, self.redis)
 
     async def deliver(self, channel: str, payload: dict[str, Any],
                       *, expect_forward: bool = True) -> None:

@@ -1,8 +1,12 @@
 """Production adapters — the real implementations of the ``ports.py`` Protocols.
 
 These are the wiring used when the gateway runs for real: an ``httpx.AsyncClient`` for the
-admin-api token-validation hop, the meeting-api / transcription-collector forward, and the
-``/ws`` subscribe-authorization hop; a ``redis.asyncio`` client for the ``/ws`` fan-in.
+admin-api token-validation hop, the meeting-api forward, and the ``/ws`` subscribe-authorization
+hop; a ``redis.asyncio`` client for the ``/ws`` fan-in.
+
+v0.12 P2 folded the transcription-collector INTO meeting-api (one modular monolith), so both the
+proxy forward AND the ``/ws/authorize-subscribe`` hop target meeting-api — there is no longer a
+separate collector URL.
 
 They are deliberately thin — the carved behavior lives in ``app.py``; these only translate
 the port calls to the concrete clients, exactly as ``services/api-gateway/main.py`` does
@@ -34,17 +38,18 @@ class HttpxDownstreamClient:
 
 
 class AdminApiAuthorizer:
-    """``Authorizer`` over the admin-api + transcription-collector hops.
+    """``Authorizer`` over the admin-api + meeting-api hops.
 
     ``resolve`` POSTs ``/internal/validate`` to admin-api (carrying ``X-Internal-Secret`` when
     configured, and forwarding the request trace_id); ``authorize_subscribe`` POSTs
-    ``/ws/authorize-subscribe`` to transcription-collector with the resolved user identity.
+    ``/ws/authorize-subscribe`` to meeting-api (which now hosts the folded-in collector, P2) with
+    the resolved user identity.
     """
 
-    def __init__(self, client, admin_api_url: str, transcription_collector_url: str):
+    def __init__(self, client, admin_api_url: str, meeting_api_url: str):
         self._client = client
         self._admin_api_url = admin_api_url.rstrip("/")
-        self._tc_url = transcription_collector_url.rstrip("/")
+        self._meeting_api_url = meeting_api_url.rstrip("/")
 
     async def resolve(self, api_key: str) -> Optional[dict]:
         try:
@@ -73,7 +78,7 @@ class AdminApiAuthorizer:
             auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
         try:
             resp = await self._client.post(
-                f"{self._tc_url}/ws/authorize-subscribe",
+                f"{self._meeting_api_url}/ws/authorize-subscribe",
                 headers=auth_headers,
                 json={"meetings": meetings},
             )
@@ -88,13 +93,15 @@ def build_production_app(
     *,
     admin_api_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
-    transcription_collector_url: Optional[str] = None,
     redis_url: Optional[str] = None,
 ):
     """Construct the gateway with real httpx + redis adapters from env (the prod entrypoint).
 
     Lazy-imports ``httpx`` and ``redis`` so the package can be imported (and unit-tested with
     fakes) without those runtime deps installed in the test venv.
+
+    v0.12 P2: there is ONE downstream control plane — meeting-api (it hosts the folded-in
+    collector). Both the proxy forward and the ``/ws/authorize-subscribe`` hop target it.
     """
     import httpx
     import redis.asyncio as aioredis
@@ -103,9 +110,6 @@ def build_production_app(
 
     admin_api_url = admin_api_url or os.getenv("ADMIN_API_URL", "http://admin-api:8001")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
-    transcription_collector_url = transcription_collector_url or os.getenv(
-        "TRANSCRIPTION_COLLECTOR_URL", "http://transcription-collector:8000"
-    )
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
     http_client = httpx.AsyncClient(timeout=30.0)
@@ -115,7 +119,7 @@ def build_production_app(
         health_check_interval=30, retry_on_timeout=True,
     )
 
-    authorizer = AdminApiAuthorizer(http_client, admin_api_url, transcription_collector_url)
+    authorizer = AdminApiAuthorizer(http_client, admin_api_url, meeting_api_url)
     downstream = HttpxDownstreamClient(http_client)
 
     return create_app(
@@ -123,5 +127,4 @@ def build_production_app(
         downstream,
         redis_client,
         meeting_api_url=meeting_api_url,
-        transcription_collector_url=transcription_collector_url,
     )

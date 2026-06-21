@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from transcription_collector import create_app
-from transcription_collector.fakes import InMemoryTranscriptStore
+from meeting_api.collector import create_app
+from meeting_api.collector.fakes import InMemoryTranscriptStore
 
-from contracts import assert_api_conforms
+from collector_contracts import assert_api_conforms
 
 USER = 7
 GATEWAY_HEADERS = {"x-user-id": str(USER)}

@@ -43,10 +43,11 @@ ROUTE_SCOPES: Dict[str, Set[str]] = {
     "/recordings": {"tx", "bot"},
 }
 
-# Default sentinel base URLs. The DownstreamClient (real httpx or the fake ASGI transport)
-# resolves them; what matters is the PATH the gateway forwards to (verbatim from the route).
+# Default sentinel base URL. The DownstreamClient (real httpx or the fake ASGI transport) resolves
+# it; what matters is the PATH the gateway forwards to (verbatim from the route). v0.12 P2 folded
+# the transcription-collector INTO meeting-api (one modular monolith), so /transcripts + /meetings
+# now forward to the SAME target as /bots — the standalone collector URL is gone.
 _DEFAULT_MEETING_API_URL = "http://meeting-api"
-_DEFAULT_TRANSCRIPTION_COLLECTOR_URL = "http://transcription-collector"
 
 
 def _required_scopes(path: str) -> Optional[Set[str]]:
@@ -62,12 +63,12 @@ def create_app(
     redis: RedisBus,
     *,
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
-    transcription_collector_url: str = _DEFAULT_TRANSCRIPTION_COLLECTOR_URL,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
     ``authorizer``  — resolves ``x-api-key`` → user/scopes (admin-api ``/internal/validate``).
-    ``downstream``  — forwards proxied HTTP requests to meeting-api / transcription-collector.
+    ``downstream``  — forwards proxied HTTP requests to meeting-api (the unified control plane:
+                      /bots + /transcripts + /meetings + /recordings all live there now, P2).
     ``redis``       — pub/sub bus for the ``/ws`` fan-in.
     """
     app = FastAPI(title="Vexa API Gateway (v0.12)")
@@ -173,9 +174,6 @@ def create_app(
     def _meeting(path: str) -> str:
         return f"{meeting_api_url}{path}"
 
-    def _tc(path: str) -> str:
-        return f"{transcription_collector_url}{path}"
-
     # ---- CORE routes (each forwards to the matching downstream path, per main's route table) ----
     @app.get("/bots")
     async def list_bots(request: Request):
@@ -203,7 +201,7 @@ def create_app(
 
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("GET", _tc(f"/transcripts/{platform}/{native_meeting_id}"), request)
+        return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)
 
     @app.get("/recordings")
     async def list_recordings(request: Request):
@@ -215,18 +213,22 @@ def create_app(
 
     @app.get("/meetings")
     async def meetings(request: Request):
-        return await _forward("GET", _tc("/meetings"), request)
+        return await _forward("GET", _meeting("/meetings"), request)
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")
     async def websocket_multiplex(ws: WebSocket):
-        await _run_multiplex(ws, authorizer, redis)
+        await run_multiplex(ws, authorizer, redis)
 
     return app
 
 
-async def _run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) -> None:
+async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) -> None:
     """The ``/ws`` control loop + fan-in, carved verbatim from main.websocket_multiplex.
+
+    PUBLIC (P2 follow-up): the conformance ws-harness drives this directly to exercise the SHIPPED
+    multiplex against its fakes — exposed on the front door (``gateway.run_multiplex``) so the
+    harness no longer reaches for a private (the P1-flagged smell).
 
     accept → authenticate (missing key → error + close 4401) → loop over client frames:
       subscribe   → authorize, register a redis fan-in per meeting, ack ``subscribed``;
@@ -379,3 +381,8 @@ async def _run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus)
     finally:
         for task in sub_tasks.values():
             task.cancel()
+
+
+# Backward-compatible private alias (kept so any existing internal reference still resolves; the
+# public name ``run_multiplex`` is the front door the conformance harness now imports).
+_run_multiplex = run_multiplex

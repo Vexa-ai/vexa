@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
@@ -52,31 +52,24 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
-def create_app(
+def build_router(
     store: TranscriptStore,
     redis: RedisBus,
     *,
     log_event: Callable[..., dict] = _default_log_event,
-    trace_middleware: type = _DefaultTraceMiddleware,
-) -> FastAPI:
-    """Build the collector FastAPI app over the injected ports.
+) -> APIRouter:
+    """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
-    ``store`` — read transcripts / list meetings / authorize subscribe / append segments.
-    ``redis`` — the segment-ingestion bus (consumed by ``ingest`` / ``consume_segments``).
-    ``log_event`` / ``trace_middleware`` — the lane's logevent.v1 emitter (injectable so the
-    in-process conformance chain binds the gateway's shared contextvars).
+    The same handlers ``create_app`` registers, factored out so the unified meeting-api app
+    (``meeting_api.app.create_app``) can ``include_router`` them onto its ONE FastAPI app
+    alongside lifecycle / bot_spawn / recordings — the modular-monolith composition (P2). The
+    standalone ``create_app`` below mounts this same router under its own ``/health`` +
+    TraceMiddleware so the conformance harness + this module's tests keep driving shipped code.
     """
-    app = FastAPI(title="Vexa Transcription Collector (v0.12)")
-    # The hop: read the gateway-forwarded X-Trace-Id and bind it (logevent.v1 trace_id).
-    app.add_middleware(trace_middleware)
-
-    # --- liveness probe (gate:health): the collector process is up. No auth, no store call. ---
-    @app.get("/health")
-    async def health():
-        return {"status": "ok", "service": "transcription-collector"}
+    router = APIRouter()
 
     # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
-    @app.get("/transcripts/{platform}/{native_meeting_id}")
+    @router.get("/transcripts/{platform}/{native_meeting_id}")
     async def get_transcript(
         platform: str,
         native_meeting_id: str,
@@ -110,7 +103,7 @@ def create_app(
         return JSONResponse(content=doc)
 
     # --- GET /meetings → api.v1 MeetingListResponse ---
-    @app.get("/meetings")
+    @router.get("/meetings")
     async def get_meetings(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
@@ -133,7 +126,7 @@ def create_app(
         return JSONResponse(content={"meetings": meetings})
 
     # --- POST /ws/authorize-subscribe → the gateway /ws authorizer hop ---
-    @app.post("/ws/authorize-subscribe")
+    @router.post("/ws/authorize-subscribe")
     async def ws_authorize_subscribe(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
@@ -182,4 +175,36 @@ def create_app(
         )
         return JSONResponse(content={"authorized": authorized, "errors": errors, "user_id": user_id})
 
+    return router
+
+
+def create_app(
+    store: TranscriptStore,
+    redis: RedisBus,
+    *,
+    log_event: Callable[..., dict] = _default_log_event,
+    trace_middleware: type = _DefaultTraceMiddleware,
+) -> FastAPI:
+    """Build the STANDALONE collector FastAPI app over the injected ports.
+
+    Used by the gateway conformance harness + this module's own tests (it is no longer a
+    separately-deployed service — the unified ``meeting_api.app.create_app`` mounts
+    ``build_router`` instead, and exposes the one shared ``/health``). Keeping ``create_app``
+    means those harnesses keep driving the SAME shipped handlers.
+
+    ``store`` — read transcripts / list meetings / authorize subscribe / append segments.
+    ``redis`` — the segment-ingestion bus (consumed by ``ingest`` / ``consume_segments``).
+    ``log_event`` / ``trace_middleware`` — the lane's logevent.v1 emitter (injectable so the
+    in-process conformance chain binds the gateway's shared contextvars).
+    """
+    app = FastAPI(title="Vexa Transcription Collector (v0.12)")
+    # The hop: read the gateway-forwarded X-Trace-Id and bind it (logevent.v1 trace_id).
+    app.add_middleware(trace_middleware)
+
+    # --- liveness probe (gate:health): the collector process is up. No auth, no store call. ---
+    @app.get("/health")
+    async def health():
+        return {"status": "ok", "service": "transcription-collector"}
+
+    app.include_router(build_router(store, redis, log_event=log_event))
     return app

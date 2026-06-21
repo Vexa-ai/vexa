@@ -6,3 +6,13 @@ Public surface:
   - app.main      : create_app() FastAPI surface (3 auth tiers, /internal/validate)
   - token_scope   : vxa_<scope>_ token minting
 """
+
+# Front door (P6): the public submodules/subpackages. Self-contained (no cross-package imports),
+# so eager-importing them here is safe (matches the meeting_api / transcription_collector convention).
+from . import app, schema, token_scope
+
+__all__ = [
+    "schema",
+    "app",
+    "token_scope",
+]

@@ -1,17 +1,20 @@
-"""The downstream the gateway proxies to — SPLIT into a REAL collector + a faked meeting-api.
+"""The downstream the gateway proxies to — drives the REAL, UNIFIED meeting-api + a faked /bots.
 
 The real gateway (`services/api-gateway/main.py`) is a thin proxy: it authenticates `x-api-key`
-then forwards to `MEETING_API_URL` / `TRANSCRIPTION_COLLECTOR_URL` and returns the downstream body
-verbatim. This harness stands up ONE in-process FastAPI app the gateway-under-test talks to over an
-ASGI transport (no sockets), and that app is now built in two halves:
+then forwards to `MEETING_API_URL` and returns the downstream body verbatim. v0.12 P2 folded the
+transcription-collector INTO meeting-api (one modular monolith), so there is now ONE downstream.
+This harness stands up ONE in-process FastAPI app the gateway-under-test talks to over an ASGI
+transport (no sockets), built in two halves:
 
   * **`/transcripts/{platform}/{native_meeting_id}` + `/meetings` (+ the `/ws/authorize-subscribe`
-    hop the ws_harness uses)** are served by the REAL, SHIPPED collector
-    (`transcription_collector.create_app`) injected with an in-memory store seeded to the api.v1
-    goldens. Those conformance assertions therefore drive shipped collector code, one hop downstream
-    of the gateway carve. The collector imports nothing from here.
-  * **`/bots*`** stay FAKED (golden replay): meeting-api's `/bots` serving is NOT carved into v0.12
-    yet, so it remains a port-fake — explicitly noted, not an oversight.
+    hop the ws_harness uses)** are served by the REAL, SHIPPED, UNIFIED meeting-api app
+    (`meeting_api.create_app`) — its folded-in collector module, injected with an in-memory store
+    seeded to the api.v1 goldens. Those conformance assertions therefore drive shipped meeting-api
+    code, one hop downstream of the gateway carve. meeting-api imports nothing from here.
+  * **`/bots*`** stay FAKED (golden replay): meeting-api's `/bots` flow IS carved into v0.12
+    (`meeting_api.bot_spawn`), but the conformance asserts the FROZEN api.v1 `MeetingResponse`
+    goldens (and needs no ADMIN_TOKEN / runtime kernel), so `/bots*` remains a golden port-fake —
+    explicitly noted, not an oversight. The `bot_spawn` flow is covered by meeting-api's own tests.
   * **`/internal/validate`** (the admin-api token endpoint the gateway calls) and **`/recordings`**
     (proxied to meeting-api; no sealed api.v1 component) are faked here too.
 
@@ -27,13 +30,12 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 
-from transcription_collector import create_app as create_collector_app
-from transcription_collector.fakes import InMemoryTranscriptStore
+from meeting_api import create_app as create_meeting_api_app
+from meeting_api.collector.fakes import InMemoryTranscriptStore
 
 from .contracts import CONTRACTS_DIR
 from .downstream_obs import TraceMiddleware as DownstreamTraceMiddleware
 from .downstream_obs import log_event as downstream_log_event
-from .downstream_obs import make_log_event, make_trace_middleware
 
 _GOLDEN_DIR = CONTRACTS_DIR / "api.v1" / "golden"
 
@@ -97,40 +99,33 @@ def build_collector_store() -> InMemoryTranscriptStore:
 
 
 def build_fake_downstream() -> FastAPI:
-    """The downstream app the gateway forwards to: the REAL collector (`/transcripts`, `/meetings`,
-    `/ws/authorize-subscribe`) PLUS faked meeting-api routes (`/bots*`, `/recordings`) and the
-    admin-api `/internal/validate`. One app, in-process, no sockets.
+    """The downstream app the gateway forwards to: the REAL, UNIFIED meeting-api (`/transcripts`,
+    `/meetings`, `/ws/authorize-subscribe`) PLUS faked `/bots*` + `/recordings` and the admin-api
+    `/internal/validate`. One app, in-process, no sockets.
 
-    Shape: a parent ``FastAPI`` carries the faked routes + admin-api; the collector routes are
-    PROXIED in-process to the SHIPPED ``transcription_collector.create_app`` over an httpx ASGI
-    transport — so the gateway's forward to ``/transcripts`` / ``/meetings`` reaches the REAL
-    collector's production code, while ``/bots*`` stay golden fakes."""
-    app = FastAPI(title="downstream (REAL collector + faked meeting-api)")
+    Shape: a parent ``FastAPI`` carries the faked routes + admin-api; the meeting-api routes are
+    PROXIED in-process to the SHIPPED ``meeting_api.create_app`` (its folded-in collector module)
+    over an httpx ASGI transport — so the gateway's forward to ``/transcripts`` / ``/meetings``
+    reaches the REAL unified meeting-api's production code, while ``/bots*`` stay golden fakes."""
+    app = FastAPI(title="downstream (REAL unified meeting-api + faked /bots)")
     # This hop's trace middleware/emitter (service=meeting-api) binds the SAME contextvars, so the
     # faked /bots lines correlate on the gateway's forwarded trace_id.
     app.add_middleware(DownstreamTraceMiddleware)
 
-    # Build the SHIPPED collector bound to a collector-emitter that shares the gateway's contextvars
-    # (so a trace_id forwarded over X-Trace-Id is read back and bound for the collector hop — the
-    # cross-process X-Trace-Id propagation, modelled in one process). The proxy below forwards the
-    # X-Trace-Id header so the collector hop joins the same trace.
-    collector_log_event = make_log_event("transcription-collector")
-    collector_trace_mw = make_trace_middleware(collector_log_event)
-    collector_app = create_collector_app(
-        build_collector_store(),
-        redis=None,
-        log_event=collector_log_event,
-        trace_middleware=collector_trace_mw,
-    )
-    collector_client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=collector_app),
-        base_url="http://transcription-collector",
+    # Build the SHIPPED, UNIFIED meeting-api app seeded to the api.v1 golden meeting. Its own
+    # TraceMiddleware reads the forwarded X-Trace-Id and binds it for the meeting-api hop — the
+    # cross-process X-Trace-Id propagation, modelled in one process. The proxy below forwards the
+    # X-Trace-Id header so the meeting-api hop joins the same trace.
+    meeting_api_app = create_meeting_api_app(transcript_store=build_collector_store())
+    meeting_api_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=meeting_api_app),
+        base_url="http://meeting-api",
     )
 
-    async def _proxy_to_collector(request: Request, path: str) -> Response:
-        """Forward a request verbatim to the REAL collector app (in-process), returning its
-        response body + status unchanged — the gateway already injected x-user-id + x-trace-id."""
-        upstream = await collector_client.request(
+    async def _proxy_to_meeting_api(request: Request, path: str) -> Response:
+        """Forward a request verbatim to the REAL unified meeting-api app (in-process), returning
+        its response body + status unchanged — the gateway already injected x-user-id + x-trace-id."""
+        upstream = await meeting_api_client.request(
             request.method,
             path,
             params=dict(request.query_params) or None,
@@ -144,18 +139,18 @@ def build_fake_downstream() -> FastAPI:
             media_type=upstream.headers.get("content-type", "application/json"),
         )
 
-    # --- transcription-collector (REAL, SHIPPED) — proxied in-process ---
+    # --- meeting-api collector module (REAL, SHIPPED, UNIFIED) — proxied in-process ---
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
-        return await _proxy_to_collector(request, f"/transcripts/{platform}/{native_meeting_id}")
+        return await _proxy_to_meeting_api(request, f"/transcripts/{platform}/{native_meeting_id}")
 
     @app.get("/meetings")
     async def meetings(request: Request):
-        return await _proxy_to_collector(request, "/meetings")
+        return await _proxy_to_meeting_api(request, "/meetings")
 
     @app.post("/ws/authorize-subscribe")
     async def ws_authorize_subscribe(request: Request):
-        return await _proxy_to_collector(request, "/ws/authorize-subscribe")
+        return await _proxy_to_meeting_api(request, "/ws/authorize-subscribe")
 
     # --- admin-api token validation (gateway calls this to resolve x-api-key) ---
     @app.post("/internal/validate")

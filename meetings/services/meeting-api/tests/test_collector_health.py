@@ -5,8 +5,8 @@ call. 200 + {status:"ok", service:"transcription-collector"} = the process is up
 """
 from fastapi.testclient import TestClient
 
-from transcription_collector import create_app
-from transcription_collector.fakes import InMemoryTranscriptStore
+from meeting_api.collector import create_app
+from meeting_api.collector.fakes import InMemoryTranscriptStore
 
 
 def _app():

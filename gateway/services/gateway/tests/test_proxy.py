@@ -65,10 +65,14 @@ def test_identity_headers_injected_and_spoof_stripped():
 
 
 def test_downstream_target_url_matches_route_table():
-    """/transcripts forwards to the transcription-collector base; /bots to meeting-api."""
+    """v0.12 P2: the transcription-collector is folded INTO meeting-api (one modular monolith), so
+    /transcripts + /meetings forward to the SAME meeting-api base as /bots — there is no longer a
+    separate transcription-collector target."""
     client, downstream = _client()
     client.get("/transcripts/google_meet/abc", headers=AUTH)
     assert downstream.last["url"].endswith("/transcripts/google_meet/abc")
-    assert "transcription-collector" in downstream.last["url"]
+    assert "meeting-api" in downstream.last["url"]
+    client.get("/meetings", headers=AUTH)
+    assert "meeting-api" in downstream.last["url"]
     client.get("/bots/status", headers=AUTH)
     assert "meeting-api" in downstream.last["url"]

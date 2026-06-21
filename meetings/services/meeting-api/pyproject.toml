@@ -1,7 +1,7 @@
 [project]
 name = "vexa-meeting-api"
 version = "0.12.0"
-description = "The cloud meeting-api control-plane carve — recording.v1 master codec (Python twin) + the O-MTG-1 lifecycle receiver/FSM (lifecycle.v1) + the O-MTG-2 webhooks brick (webhook.v1: HMAC sign/verify, SSRF guard, event-filter, redis-backed retry) + the O-MTG-3 scheduling brick (schedule.v1: ScheduledBot{cron|at} → POST /bots job, Clock-gated fire/re-arm/cancel)."
+description = "The cloud meeting-api modular monolith (P2) — ONE uvicorn-able app (create_app) composing front-doored modules: lifecycle (lifecycle.v1 receiver/FSM), bot_spawn (POST /bots → invocation.v1 + runtime.v1 spawn), collector (the folded-in transcript backend: /transcripts, /meetings, /ws/authorize-subscribe + the segments consumer, api.v1), recordings (chunk upload + finalize → meeting.data JSONB, recording.v1), sessions (the MeetingSession model + shared SQLAlchemy mirror), webhooks (webhook.v1), scheduling (schedule.v1), and the recording.v1 master codec."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110,<1",
@@ -11,6 +11,7 @@ dependencies = [
     "redis>=5,<6",
     "fakeredis>=2.21,<3",
     "croniter>=2,<4",
+    "python-multipart>=0.0.9",   # recordings chunk upload — FastAPI UploadFile/Form parsing
     "pytest>=8",
     "pytest-asyncio>=0.23,<2",
 ]
@@ -20,5 +21,7 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# `tests` is on the path so the relocated collector tests import their in-package api.v1 oracle
+# (`collector_contracts`) — the same helper the standalone collector tests used.
+pythonpath = ["src", "tests"]
 asyncio_mode = "auto"
