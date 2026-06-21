@@ -23,7 +23,7 @@ import pytest
 
 COMPOSE_DIR = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = COMPOSE_DIR / "docker-compose.yml"
-PROJECT = "vexa-compose-gate"  # an isolated project name so we never collide with a dev `up`
+PROJECT = os.getenv("COMPOSE_PROJECT", "vexa-compose-gate")  # override on a shared host (e.g. bbb prod box)
 
 # The four built services + the host ports they publish (mirrors docker-compose.yml defaults).
 GATEWAY_URL = "http://127.0.0.1:18056"

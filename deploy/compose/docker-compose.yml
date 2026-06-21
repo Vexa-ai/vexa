@@ -197,7 +197,7 @@ services:
       dockerfile: Dockerfile
     image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
     ports:
-      - "${API_GATEWAY_HOST_PORT:-18056}:8000"
+      - "127.0.0.1:${API_GATEWAY_HOST_PORT:-18056}:8000"
     environment:
       - ADMIN_API_URL=http://admin-api:8001
       - MEETING_API_URL=http://meeting-api:8080
