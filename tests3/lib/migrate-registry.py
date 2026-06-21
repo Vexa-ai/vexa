@@ -25,6 +25,12 @@ Type mappings:
   health  → http           (url + expect_code)  OR  script (url is a special method name)
   contract→ http  OR script (same disambiguation)
   (entries in test-registry.yaml) → script (script: path)
+
+Usage:
+  python3 tests3/lib/migrate-registry.py            # regenerate tests3/registry.yaml
+  python3 tests3/lib/migrate-registry.py --check    # verify registry.yaml is in sync
+                                                     # with its sources (CI parity gate;
+                                                     # exits 1 on drift, writes nothing)
 """
 from __future__ import annotations
 
@@ -163,6 +169,7 @@ def migrate_test(name: str, spec: dict) -> dict:
 
 
 def main() -> int:
+    check_only = "--check" in sys.argv[1:]
     checks_path = T3 / "checks" / "registry.json"
     tests_path = T3 / "test-registry.yaml"
     out_path = T3 / "registry.yaml"
@@ -201,7 +208,21 @@ def main() -> int:
         "# by tests3/lib/migrate-registry.py. See tests3/README.md §3.3.\n\n"
     )
     body = yaml.safe_dump(ordered, default_flow_style=False, sort_keys=False, width=120)
-    out_path.write_text(header + body)
+    content = header + body
+
+    if check_only:
+        current = out_path.read_text() if out_path.exists() else ""
+        if current != content:
+            print(
+                f"ERROR: {out_path.relative_to(ROOT)} is out of sync with its generator.\n"
+                "  Run `python3 tests3/lib/migrate-registry.py` and commit the result.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"  {out_path.relative_to(ROOT)} is in sync with its sources")
+        return 0
+
+    out_path.write_text(content)
 
     # Stats
     by_type = {}
