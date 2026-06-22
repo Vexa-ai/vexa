@@ -46,12 +46,9 @@ WORKDIR /build
 # whole tree is simplest+robust for a carved monorepo; the dep layer still caches
 # on the lockfile via the cache mount below.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json turbo.json ./
-# The full source tree (workspace globs in pnpm-workspace.yaml resolve under here).
-COPY meetings ./meetings
-COPY runtime ./runtime
-COPY gateway ./gateway
-COPY agent ./agent
-COPY identity ./identity
+# The full source tree (workspace globs in pnpm-workspace.yaml resolve under here). The five backend
+# domains live under core/ (gateway · identity · meetings · runtime · agent); the rest stay at root.
+COPY core ./core
 COPY integrations ./integrations
 COPY clients ./clients
 COPY sdks ./sdks
@@ -82,10 +79,10 @@ RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter 
 RUN pnpm --filter "@vexa/bot..." run build
 
 # Sanity: the entry the runtime will exec + the capture bundle must exist after the build.
-RUN test -f /build/meetings/services/bot/dist/index.js \
+RUN test -f /build/core/meetings/services/bot/dist/index.js \
     && echo "[builder] @vexa/bot dist/index.js present" \
-    && test -s /build/meetings/services/bot/dist/browser-utils.global.js \
-    && echo "[builder] capture bundle browser-utils.global.js present ($(wc -c < /build/meetings/services/bot/dist/browser-utils.global.js) bytes)"
+    && test -s /build/core/meetings/services/bot/dist/browser-utils.global.js \
+    && echo "[builder] capture bundle browser-utils.global.js present ($(wc -c < /build/core/meetings/services/bot/dist/browser-utils.global.js) bytes)"
 
 # Bake the mixed-lane diarization model (onnx-community/pyannote-segmentation-3.0)
 # into an image-resident HF cache so the Zoom/Teams lane loads it OFFLINE at
@@ -96,7 +93,7 @@ ENV VEXA_HF_CACHE=/opt/hf-cache
 # The script self-resolves @huggingface/transformers via the mixed-pipeline
 # package (the bot doesn't list it as a direct dep — it's transitive), so CWD
 # doesn't matter; run from /build for a stable path to the script.
-RUN cd /build && node meetings/services/bot/warm-hf-cache.mjs
+RUN cd /build && node core/meetings/services/bot/warm-hf-cache.mjs
 
 # ------------------------------------------------------------------------------
 # Stage 2: runtime — the ephemeral worker. Same env base; add the bot's own audio
@@ -133,7 +130,7 @@ COPY --from=builder /build /app
 # in the tree above (meetings/services/bot/dist/), but the bot resolves it from
 # /app, so place it there explicitly so window.VexaBrowserUtils is present on every
 # page navigation (the gmeet per-channel + mixed-lane capture wiring depends on it).
-COPY --from=builder /build/meetings/services/bot/dist/browser-utils.global.js /app/browser-utils.global.js
+COPY --from=builder /build/core/meetings/services/bot/dist/browser-utils.global.js /app/browser-utils.global.js
 
 # The baked HF model cache (mixed-lane pyannote segmentation), carried from the
 # builder. VEXA_HF_CACHE points the @huggingface/transformers env.cacheDir here
@@ -143,7 +140,7 @@ ENV VEXA_HF_CACHE=/opt/hf-cache
 
 # Entrypoint: bring up Xvfb + PulseAudio (the env the browser/capture/speak path
 # expects), then run the worker. Boot → validate config → launch browser → join.
-COPY meetings/services/bot/entrypoint.sh /app/entrypoint.sh
+COPY core/meetings/services/bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # noVNC (browser view) — present in the env base; harmless if unused.

@@ -38,7 +38,7 @@ pactl set-source-mute virtual_mic 1 2>/dev/null || true
 # Run the worker from its package dir so the schema path (src→../../../contracts)
 # and the pnpm-linked workspace deps resolve. Always emit start + exit breadcrumbs
 # so an instant crash is never silent in container stdout.
-cd /app/meetings/services/bot
+cd /app/core/meetings/services/bot
 echo "[entrypoint] Starting @vexa/bot worker (node dist/index.js, DISPLAY=${DISPLAY})..."
 node dist/index.js
 EXIT_CODE=$?

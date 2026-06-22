@@ -13,6 +13,7 @@ packages:
   - "integrations/out/*"
   - "clients/*"
   - "!clients/dashboard" # vendored full Next.js app (own npm); refactor pending
+  - "!clients/dashboard_new" # fresh modular dashboard — its own npm workspace (modules/*), not pnpm
   - "sdks/*"
   - "schemas/*"
   - "tools/*"
