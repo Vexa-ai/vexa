@@ -163,8 +163,10 @@ fail-closed; owner-scoped 404 (no leak); bounded/typed pagination; idempotent DE
 - ✅ **Confirmed solid:** REST anti-spoofing — the gateway strips client-sent `x-user-id`/`x-user-scopes`/
   `x-user-limits`/`x-user-webhook-*` and injects its own resolved identity (client `x-user-id:999999` →
   downstream sees the real `7`).
-- All 5 fixed in app.py (verified via XPASS); existing conformance (46) non-regressing. Live verify + the
-  regenerated `test_gateway_seam.py` pending.
+- All 5 fixed in app.py; existing conformance (46) non-regressing. **GW1 + GW5 L4-verified live on bbb**:
+  a non-object WS frame (`[1,2,3]`) → `invalid_json` and the socket SURVIVED (then a valid subscribe was
+  processed → `authorization_service_error` frame, not a silent empty ack). GW2/GW3/GW4 offline-verified
+  (XPASS). `test_gateway_seam.py` regenerated as the standing suite (a strip-script bug ate the first copy).
 
 ## Seam suites added (standing regression, ~190 cases)
 `test_lifecycle_seam.py` (60p/2s/1xf) · `test_webhook_seam.py` (59p/2xf) · `test_api_agility.py` (58p/3xf)
