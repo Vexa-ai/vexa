@@ -1,21 +1,39 @@
 # docker-compose.dev.yml — DEV-CONTAINER overrides: hot code connection to the running images.
 #
-# Each service here mounts its SOURCE from the on-host checkout over the image's baked copy and runs
-# under a file-watcher that restarts the process on change. So the loop is: edit (or `git pull`) on the
-# host → the watcher restarts the service → the change is live, with NO image rebuild.
+# Each service mounts its SOURCE from the on-host checkout over the image's baked copy and runs under a
+# file-watcher that restarts the process on change. So the loop is: edit (or `git pull`) on the host →
+# the watcher restarts the service → the change is live, with NO image rebuild.
 #
-# Layer it LAST, on top of the base files, on the same project:
+# Layer it LAST, on the same project:
 #   docker compose -p vexa-dash \
 #     -f docker-compose.yml -f docker-compose.dashboard.yml -f docker-compose.stt.yml \
-#     -f docker-compose.dev.yml up -d --no-deps meeting-api
+#     -f docker-compose.dev.yml up -d --no-build --no-deps admin-api runtime meeting-api gateway
 #
-# Paths are relative to this file (deploy/compose/) → ../../core/... is the repo root's source.
-# `watchfiles` ships with uvicorn[standard] (already in the image); it reruns the target command when
-# any *.py under the mounted dir changes. meeting_api does async adapter wiring in __main__ before
-# uvicorn.run (no importable module-level app), so a process-RESTART watcher is the right model rather
-# than uvicorn's in-process --reload.
+# The four control-plane services are interpreted Python (`python -m <pkg>`, src on PYTHONPATH=/app/src)
+# and `uvicorn[standard]` ships `watchfiles`, so a process-RESTART watcher fits — these entrypoints do
+# async adapter wiring before uvicorn.run (no importable module-level app, so uvicorn --reload doesn't
+# apply). Paths are relative to this file (deploy/compose/) → ../../core/... is the repo source.
+#
+# The BOT is NOT here: it is a compiled `node dist/index.js` + an esbuild browser bundle, spawned
+# per-meeting by the runtime kernel — its hot loop is the runtime docker_backend dev-mount + a host
+# watch-build, set up separately.
 services:
+  admin-api:
+    volumes:
+      - ../../core/identity/services/admin-api/src:/app/src
+    command: ["python", "-m", "watchfiles", "python -m admin_api", "/app/src"]
+
+  runtime:
+    volumes:
+      - ../../core/runtime/src:/app/src
+    command: ["python", "-m", "watchfiles", "python -m runtime_kernel", "/app/src"]
+
   meeting-api:
     volumes:
       - ../../core/meetings/services/meeting-api/src:/app/src
     command: ["python", "-m", "watchfiles", "python -m meeting_api", "/app/src"]
+
+  gateway:
+    volumes:
+      - ../../core/gateway/services/gateway/src:/app/src
+    command: ["python", "-m", "watchfiles", "python -m gateway", "/app/src"]
