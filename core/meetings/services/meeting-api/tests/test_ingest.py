@@ -77,12 +77,28 @@ async def test_ingest_publishes_mutable_on_gateway_channel(store, bus):
 async def test_ingest_filters_malformed_segments(store, bus):
     n = await ingest(store, bus, _message(1, [
         {"start": 1.0, "end": 2.0, "text": "no id"},                       # missing segment_id
-        {"segment_id": "z", "start": 5.0, "end": 5.0, "text": "zero len"},  # zero-length
+        {"segment_id": "z", "start": 5.0, "end": 5.0, "text": "zero final",  # zero-length COMPLETED → drop
+         "completed": True},
         {"segment_id": "ok", "start": 1.0, "end": 2.0, "text": "kept", "completed": True},
     ]))
     assert n == 1
     doc = await store.get_transcript(7, "google_meet", "abc-defg-hij")
     assert [s["text"] for s in doc["segments"]] == ["kept"]
+
+
+async def test_ingest_keeps_zero_length_pending_draft(store, bus):
+    """A live DRAFT (completed=False) has no end yet — `start == end` is its placeholder. It MUST be
+    ingested + published as `pending` (it's the live in-progress text the dashboard renders), unlike a
+    zero-length COMPLETED segment which is garbage and dropped."""
+    n = await ingest(store, bus, _message(1, [
+        {"segment_id": "ch-0:1:draft", "start": 5.0, "end": 5.0, "text": "being spoken",
+         "speaker": "Alice", "completed": False},
+    ]))
+    assert n == 1, "a zero-duration pending draft must be kept, not filtered"
+    channel, raw = bus.published[-1]
+    payload = json.loads(raw)
+    assert payload["pending"] and payload["pending"][0]["text"] == "being spoken"
+    assert payload["confirmed"] == []
 
 
 async def test_ingest_corrects_inverted_timestamps(store, bus):

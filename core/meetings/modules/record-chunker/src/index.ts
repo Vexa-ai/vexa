@@ -49,6 +49,15 @@ export interface MediaRecorderChunkerOptions extends RecordingTapOptions {
 
 const BUFFER_CAP = 10;
 
+/** The 4-byte EBML magic every valid webm/Matroska stream starts with (`1a 45 df a3`). */
+const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3];
+
+/** True when `bytes` begins with the EBML header (i.e. it is a self-describing webm init segment,
+ *  not a cluster-only continuation chunk). */
+function isWebmHeader(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && EBML_MAGIC.every((b, i) => bytes[i] === b);
+}
+
 const blog = (msg: string) => { try { (window as any).logBot?.(msg); } catch { /* */ } };
 
 /**
@@ -63,6 +72,15 @@ export class MediaRecorderChunker implements RecordingTap {
   private pending: Blob[] = [];
   private resolveFinalChunk: (() => void) | null = null;
   private mimeType = "audio/webm";
+  /**
+   * The webm EBML init segment retained from the FIRST self-describing blob (chunk 0:
+   * `1a 45 df a3` EBML + Segment + Tracks + first Cluster). Held so it can be re-attached to a
+   * later surviving chunk when chunk 0's own delivery fails over the page→Node base64 bridge;
+   * without it the assembler would build a headerless (mid-Matroska `43 b6 75 …`) master from the
+   * cluster-only survivors, which no player accepts. */
+  private initSegment: Uint8Array | null = null;
+  /** False until a chunk carrying the EBML header has been ACK'd by `onChunk` (returned truthy). */
+  private initSegmentDelivered = false;
 
   constructor(opts: MediaRecorderChunkerOptions) {
     this.opts = opts;
@@ -123,7 +141,31 @@ export class MediaRecorderChunker implements RecordingTap {
 
       try {
         const arrBuffer = await event.data.arrayBuffer();
-        const bytes = new Uint8Array(arrBuffer);
+        let bytes = new Uint8Array(arrBuffer);
+
+        // Retain the EBML init segment from the FIRST self-describing blob. webm/Matroska always
+        // starts with `1a 45 df a3`; MediaRecorder puts EBML + Segment + Tracks in chunk 0.
+        if (!this.initSegment && isWebmHeader(bytes)) this.initSegment = bytes;
+
+        // If the init segment has NOT yet been delivered (chunk 0's own send failed over the
+        // bridge) and THIS chunk is cluster-only, PREPEND the retained header so the master is
+        // never assembled headerless. The byte-concat codec keeps this valid: a chunk that is
+        // [EBML init][cluster] is exactly what a self-describing chunk 0 looks like.
+        if (this.initSegment && !this.initSegmentDelivered && !isWebmHeader(bytes)) {
+          const merged = new Uint8Array(this.initSegment.length + bytes.length);
+          merged.set(this.initSegment, 0);
+          merged.set(bytes, this.initSegment.length);
+          bytes = merged;
+          blog(`[record-chunker] chunk ${seq} re-attached EBML init segment (${this.initSegment.length}B) — chunk 0 delivery was lost`);
+        }
+
+        const carriesHeader = isWebmHeader(bytes);
+        // OPTIMISTICALLY mark the init segment delivered the moment a header-bearing chunk is
+        // DISPATCHED (not after its await resolves), so a chunk emitted while chunk 0 is still
+        // in flight does not redundantly re-attach the header. On a confirmed failure below we
+        // clear the flag again so the NEXT surviving chunk carries the retained init segment.
+        if (carriesHeader) this.initSegmentDelivered = true;
+
         let binary = "";
         const encodeChunkSize = 0x8000;
         for (let i = 0; i < bytes.length; i += encodeChunkSize) {
@@ -133,8 +175,12 @@ export class MediaRecorderChunker implements RecordingTap {
         blog(`[record-chunker] chunk ${seq} (${bytes.length} bytes)`);
         try {
           const ok = await this.opts.onChunk({ base64, chunkSeq: seq, isFinal: false, mimeType: this.mimeType });
+          // A header-bearing chunk that the sink REJECTED is not delivered — clear the flag so the
+          // retained init segment is re-attached to the next surviving (cluster-only) chunk.
+          if (!ok && carriesHeader) this.initSegmentDelivered = false;
           if (!ok) blog(`[record-chunker] chunk ${seq} callback returned false — sink rejected; reconciler will re-fetch`);
         } catch (cbErr: any) {
+          if (carriesHeader) this.initSegmentDelivered = false;
           blog(`[record-chunker] chunk ${seq} callback threw: ${cbErr?.message || cbErr}; reconciler will re-fetch`);
         } finally {
           const idx = this.pending.indexOf(event.data);

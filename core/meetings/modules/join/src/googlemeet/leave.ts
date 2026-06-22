@@ -148,15 +148,30 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
   }
 
   try {
-    const result = await page.evaluate(async () => {
-      if (typeof (window as any).performLeaveAction === "function") {
-        return await (window as any).performLeaveAction();
-      } else {
-        (window as any).logBot?.("[Node Eval Error] performLeaveAction function not found on window.");
-        console.error("[Node Eval Error] performLeaveAction function not found on window.");
-        return false;
+    // Inline the leave-click (self-contained): try each leave selector and click the first visible
+    // match. Self-contained so it never depends on a separately-injected window.performLeaveAction.
+    const result = await page.evaluate(async (selectors: string[]) => {
+      const blog = (m: string) => { try { (window as any).logBot?.(m); } catch { /* */ } };
+      for (const selector of selectors) {
+        try {
+          const button = document.querySelector(selector) as HTMLElement | null;
+          if (!button) continue;
+          const rect = button.getBoundingClientRect();
+          const cs = getComputedStyle(button);
+          const visible = rect.width > 0 && rect.height > 0
+            && cs.display !== "none" && cs.visibility !== "hidden" && cs.opacity !== "0";
+          if (!visible) continue;
+          button.scrollIntoView({ behavior: "smooth", block: "center" });
+          await new Promise((r) => setTimeout(r, 300));
+          button.click();
+          await new Promise((r) => setTimeout(r, 800));
+          blog(`[leave] clicked leave button via ${selector}`);
+          return true;
+        } catch { /* try the next selector */ }
       }
-    });
+      blog("[leave] no visible leave button matched any selector");
+      return false;
+    }, googleLeaveSelectors);
     logJSON({
       level: "info",
       msg: "[leaveGoogleMeet] Browser leave action complete",

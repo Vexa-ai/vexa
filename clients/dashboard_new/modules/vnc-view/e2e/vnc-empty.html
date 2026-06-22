@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VncView L4 — empty (placeholder) fixture</title>
+  </head>
+  <body>
+    <!--
+      vnc-empty.html — the L4 fixture page for the EMPTY case.
+
+      A REAL browser loads this. It mounts the bundled REAL <VncView> into #root with vncUrl="". If
+      chromium paints the loading placeholder (and NO iframe), the component's empty state is what a
+      human's browser renders while the bot URL is still resolving. That is the whole assertion.
+
+      DOM contract the spec reads:
+        [data-testid="vnc-placeholder"]       → the placeholder container exists
+        [data-testid="vnc-placeholder-text"]  → text === GOLDEN_PLACEHOLDER_TEXT
+        [data-testid="vnc-iframe"]            → MUST NOT exist
+        #harness-ready / #harness-error       → as in vnc-url.html
+    -->
+    <h1 style="position:absolute;left:-9999px">VncView L4 — empty</h1>
+    <div id="root" style="width: 640px; height: 480px"></div>
+
+    <script type="module">
+      import "./vnc-bundle.js";
+
+      function fail(err) {
+        const marker = document.createElement("pre");
+        marker.id = "harness-error";
+        marker.textContent = String((err && err.stack) || err);
+        document.body.appendChild(marker);
+      }
+
+      try {
+        const root = document.getElementById("root");
+        window.mountVncView(root, { vncUrl: "" });
+
+        const ready = document.createElement("div");
+        ready.id = "harness-ready";
+        document.body.appendChild(ready);
+      } catch (err) {
+        fail(err);
+      }
+    </script>
+  </body>
+</html>

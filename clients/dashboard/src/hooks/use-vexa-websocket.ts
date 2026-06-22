@@ -10,6 +10,7 @@ import type {
 import { useLiveStore } from "@/stores/live-store";
 import { vexaAPI } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
+import { resolveStatusFromMessage } from "@/lib/ws-status";
 
 interface UseVexaWebSocketOptions {
   platform: Platform;
@@ -190,13 +191,18 @@ export function useVexaWebSocket(
             break;
 
           case "meeting.status":
-            // Status is now in payload
-            const status = message.payload?.status;
+          case "bot_status": {
+            // meeting.status nests status under payload; bot_status (the sealed
+            // ws.v1 contract frame, #/$defs/BotStatus) carries it at the top
+            // level. resolveStatusFromMessage handles both — keep both cases so
+            // the legacy meeting.status frame stays supported for back-compat.
+            const status = resolveStatusFromMessage(message);
             if (status) {
               setBotStatus(status);
               onStatusChange?.(status);
             }
             break;
+          }
 
           case "subscribed":
             console.log("WebSocket: Subscribed to meeting", message.meetings);

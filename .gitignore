@@ -11,3 +11,6 @@ __pycache__/
 .env.*
 .recordings/
 deploy/execution-targets.json
+# local test/debug artifacts (Playwright MCP screenshots + snapshots)
+.playwright-mcp/
+/*.png

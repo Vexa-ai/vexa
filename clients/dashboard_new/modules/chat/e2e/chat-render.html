@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>dash-chat L4 render fixture</title>
+  </head>
+  <body>
+    <!--
+      chat-render.html — the L4 fixture page.
+
+      A REAL browser loads this. It mounts the REAL @vexa/dash-chat <ChatPanel> (bundled into
+      chat-bundle.js by esbuild from the brick source, with react + react-dom inlined) over the golden
+      messages, into #root. If chromium paints both message bubbles — sender + text + time — into the
+      DOM, the component renders messages a human's browser can read. That is the whole assertion.
+
+      DOM contract the spec reads:
+        #root .dash-chat-bubble  → one per message
+        .dash-chat-sender        → the sender text
+        .dash-chat-text          → the message body
+        #harness-ready           → exists once the mount completed (deterministic wait point)
+        #harness-error           → exists with the error text if the mount threw
+    -->
+    <h1>dash-chat L4 render fixture</h1>
+    <div id="root"></div>
+    <script type="module" src="./chat-bundle.js"></script>
+  </body>
+</html>

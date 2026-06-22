@@ -97,6 +97,13 @@ class InMemoryMeetingRepo:
         row["bot_container_id"] = bot_container_id
         return dict(row)
 
+    async def get_status_by_session(self, *, session_uid) -> Optional[str]:
+        sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
+        if sess is None:
+            return None
+        row = self._meetings.get(sess["meeting_id"])
+        return row["status"] if row else None
+
     async def update_meeting_status(
         self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None
     ) -> None:
@@ -113,6 +120,7 @@ class InMemoryMeetingRepo:
             row["data"]["failure_stage"] = failure_stage
         for k, v in (data or {}).items():
             row["data"][k] = v
+        return dict(row)
 
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         return sum(

@@ -108,6 +108,15 @@ def apply_chunk_to_recording(
     })
     rec_payload["media_files"] = media_files
 
+    # Advertise the stable master route per available media type so a player can surface the recording
+    # as soon as a chunk lands (clients gate on ``playback_url.audio``); the master is built and its
+    # bytes resolved lazily on the first ``GET /recordings/{id}/master`` (finalize-on-read).
+    _types_present = {mf["type"] for mf in media_files}
+    rec_payload["playback_url"] = {
+        "audio": f"/recordings/{recording_id}/master?type=audio" if "audio" in _types_present else None,
+        "video": f"/recordings/{recording_id}/master?type=video" if "video" in _types_present else None,
+    }
+
     if is_final:
         rec_payload["status"] = _STATUS_COMPLETED
         rec_payload["completed_at"] = _now_iso()

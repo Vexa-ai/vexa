@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>dash-transcript-viewer L4 render fixture</title>
+  </head>
+  <body>
+    <!--
+      render.html — the L4 fixture page.
+
+      A REAL browser loads this. It mounts the REAL @vexa/dash-transcript-viewer component (bundled into
+      render-bundle.js by esbuild from the brick source, with react/react-dom) into #root over the golden
+      props (two segments, speakers "Anna" + "Zoya", isLive). If chromium paints both speakers + their
+      texts into the DOM, the component renders what a human's browser would render. That is the whole
+      assertion.
+
+      DOM contract the spec reads (the component emits these data-testids):
+        [data-testid="segment-speaker"] → one per rendered segment, text is the speaker name
+        [data-testid="segment-text"]    → one per rendered segment, text is the segment text
+        [data-testid="live-indicator"]  → present because isLive=true
+        #harness-ready                  → exists once React has rendered (deterministic wait point)
+        #harness-error                  → exists with the error text if mounting threw
+    -->
+    <div id="root"></div>
+    <script type="module" src="./render-bundle.js"></script>
+  </body>
+</html>

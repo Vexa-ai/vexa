@@ -81,11 +81,9 @@ def create_app(
     async def health():
         return {"status": "ok", "service": "gateway"}
 
-    # --- /auth/me — caller identity from the API key (carve of main.py:1487). The dashboard's login
-    # resolves the user via this (GET /auth/me with x-api-key → user_id/email/scopes); the carve had
-    # dropped it, so dashboard session-validation 401'd and login bounced back to /login. Uses the SAME
-    # authorizer (admin-api /internal/validate) as the proxy — no new dependency. Found by the dashboard
-    # full-surface login test.
+    # --- /auth/me — caller identity from the API key (GET /auth/me with x-api-key →
+    # user_id/email/scopes); the dashboard's login + session-validation resolve the user via this.
+    # Uses the SAME authorizer (admin-api /internal/validate) as the proxy — no new dependency.
     @app.get("/auth/me")
     async def auth_me(request: Request):
         api_key = request.headers.get("x-api-key")
@@ -159,12 +157,23 @@ def create_app(
         # Strip any client-supplied identity headers first (anti-spoofing, main.py:294-296).
         excluded = {"host", "content-length", "transfer-encoding"}
         headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
-        for h in ("x-user-id", "x-user-scopes", "x-user-limits"):
+        for h in ("x-user-id", "x-user-scopes", "x-user-limits",
+                  "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"):
             headers.pop(h, None)
         headers["x-api-key"] = client_key
         headers["x-user-id"] = str(user_id)
         headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
         headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
+        # Per-user webhook config (identity owns it; /internal/validate returns it from user.data).
+        # Forwarded so bot_spawn persists it into meeting.data → the lifecycle callback delivers from
+        # there, with NO cross-domain users-table read (the carve's principled path; main read the user
+        # row inline as a monolith).
+        if user_data.get("webhook_url"):
+            headers["x-user-webhook-url"] = str(user_data["webhook_url"])
+            if user_data.get("webhook_secret"):
+                headers["x-user-webhook-secret"] = str(user_data["webhook_secret"])
+            if user_data.get("webhook_events"):
+                headers["x-user-webhook-events"] = json.dumps(user_data["webhook_events"])
         headers[TRACE_HEADER] = get_trace_id() or ""
 
         content = await request.body()
@@ -234,12 +243,24 @@ def create_app(
     async def get_recording(recording_id: int, request: Request):
         return await _forward("GET", _meeting(f"/recordings/{recording_id}"), request)
 
+    # finalize-on-read master metadata (audio|video); the recording player fetches this, then the
+    # raw_url it returns. ?type= is preserved by _forward.
+    @app.get("/recordings/{recording_id}/master")
+    async def get_recording_master(recording_id: int, request: Request):
+        return await _forward("GET", _meeting(f"/recordings/{recording_id}/master"), request)
+
+    # The master byte stream the recording player loads (the master metadata's raw_url points here).
+    @app.get("/recordings/{recording_id}/media/{media_file_id}/raw")
+    async def get_recording_media_raw(recording_id: int, media_file_id: int, request: Request):
+        return await _forward(
+            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
+        )
+
     @app.get("/meetings")
     async def meetings(request: Request):
         return await _forward("GET", _meeting("/meetings"), request)
 
-    # Single meeting (carve of main.py:788) — the dashboard's meeting-detail page needs it; the carve
-    # had only the list, so the detail view 404'd. Forwards to meeting-api's GET /meetings/{id}.
+    # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")
     async def meeting(meeting_id: int, request: Request):
         return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)

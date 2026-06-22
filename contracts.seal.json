@@ -3,7 +3,7 @@
   "core/agent/contracts/workspace.v1": "4310ecde33e55b8daf331cc2d86d924a0dc8f7af762a89efbd97dc0d655ff35c",
   "core/gateway/contracts/api.v1": "94b08b9a92628c0b16b54bfd2db4f11eec9837082b840ad62e2d0606fb3d450b",
   "core/gateway/contracts/logevent.v1": "7ab25cc7d935e03ea1aec29a0d717576bcfa1a37d7c412400227c98e1df3ed59",
-  "core/gateway/contracts/ws.v1": "b1f83b5e9c8f02c81eed84f9556188b3440ce63bbcad5d94a4ae8c4de546de2b",
+  "core/gateway/contracts/ws.v1": "2a05faeb7c6f49336a69ba6cf1a2074f07d32c1620fd85fa111d249c84705017",
   "core/identity/contracts/identity.v1": "6b516339f253ee043c7e498293cb4639f81c840f8c36db5ca0f9f115ed7f8a4b",
   "core/meetings/contracts/acts.v1": "1eaa34d27c52b0eb987a278115a1966c058f615ca16e3391b00107a6779dec4f",
   "core/meetings/contracts/captured-signal.v1": "78db9e8188a27ca88d3a07ad5a8d0ef458e63fa207538ae19429f86d59857332",
@@ -13,5 +13,6 @@
   "core/meetings/contracts/transcript.v1": "ed1364a660870038748bf93030859b70adb689547cc2a7f78abee6239608ba7d",
   "core/meetings/contracts/webhook.v1": "d043f0f5c51b08532b04ff00a5f6b62f99d0cccc79c58c82bd28a55b17755deb",
   "core/runtime/contracts/runtime.v1": "9d67b9379e0d34c4d715764a467e7f6e6543a5db8177fc284fb4a7418067bc18",
-  "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648"
+  "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648",
+  "deploy/contracts/execution-targets.v1": "0c644571b7823024aa2e7ec6a135a55202233155c6c60eef79f1f4ec063e6375"
 }

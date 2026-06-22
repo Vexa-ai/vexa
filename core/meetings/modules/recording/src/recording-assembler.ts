@@ -69,7 +69,26 @@ export interface RecordingAssembler {
   close(key: string): void;
 }
 
-interface Session { format: RecordingMasterFormat; chunks: Map<number, Buffer>; }
+interface Session {
+  format: RecordingMasterFormat;
+  chunks: Map<number, Buffer>;
+  /**
+   * The EBML init segment retained from the FIRST self-describing webm chunk this
+   * session saw (a MediaRecorder chunk 0: `1a 45 df a3` EBML + Segment + Tracks).
+   * Guarantees the assembled webm master is never headerless when chunk 0 is lost in
+   * transit (e.g. a dropped bridge callback or a recorder restart): its header is
+   * re-attached to a surviving cluster-only chunk. WAV needs no such guard — its codec
+   * prepends one corrected RIFF header from the surviving chunks.
+   */
+  initSegment?: Buffer;
+}
+
+/** The 4-byte EBML magic every valid webm/Matroska file starts with. */
+const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3];
+
+function startsWithEbmlHeader(buf: Buffer): boolean {
+  return buf.length >= 4 && EBML_MAGIC.every((b, i) => buf[i] === b);
+}
 
 /**
  * Create an in-memory recording.v1 assembler. Accumulates chunks keyed by
@@ -89,6 +108,15 @@ export function createRecordingAssembler(opts: RecordingAssemblerOptions): Recor
     sessions.delete(key);                // clear before assembling so a re-record reuses the key cleanly
     const ordered = [...s.chunks.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
     if (ordered.length === 0) { log(`[recording] ${key} ${reason} with no media chunks — nothing to assemble`); return; }
+    // Guard the webm init segment: the master is a faithful byte-concat, so if chunk 0 (the
+    // self-describing EBML header) is absent from the finalized set the master would start
+    // mid-Matroska (`43 b6 75 …`) and no player would accept it. When the first surviving
+    // chunk is cluster-only, prepend the retained init segment so the master is always a
+    // valid webm. (WAV needs no guard — its codec prepends one corrected RIFF header.)
+    if (s.format === "webm" && ordered.length > 0 && !startsWithEbmlHeader(ordered[0]) && s.initSegment) {
+      log(`[recording] ${key} ${reason} — first chunk is headerless (cluster-only); prepending retained EBML init segment (${s.initSegment.length}B)`);
+      ordered.unshift(s.initSegment);
+    }
     try {
       const master = buildRecordingMaster(s.format, ordered);
       log(`[recording] ${key} master assembled (${reason}) — ${s.format}, ${ordered.length} chunk(s), ${master.length}B`);
@@ -102,6 +130,14 @@ export function createRecordingAssembler(opts: RecordingAssemblerOptions): Recor
     chunk(key, seq, isFinal, format, bytes) {
       let s = sessions.get(key);
       if (!s) { s = { format, chunks: new Map() }; sessions.set(key, s); }
+      // Retain the EBML init segment from the FIRST self-describing webm chunk this session
+      // sees (a MediaRecorder chunk 0 carrying EBML + Segment + Tracks). It is the only chunk
+      // that can re-form a valid container if a later cluster-only chunk becomes chunk[0] of the
+      // finalized set (chunk 0 lost in transit). Captured here — outside finalize() — so it
+      // survives even if chunk 0 itself never makes it into s.chunks for THIS finalize cycle.
+      if (s.format === "webm" && bytes.length && startsWithEbmlHeader(Buffer.from(bytes)) && !s.initSegment) {
+        s.initSegment = Buffer.from(bytes);
+      }
       // Non-empty chunks carry media; the empty is_final chunk is signal-only.
       if (bytes.length) s.chunks.set(seq, Buffer.from(bytes));
       if (isFinal) finalize(key, "is_final");

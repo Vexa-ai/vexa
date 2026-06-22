@@ -43,7 +43,7 @@ async def upload_chunk(
     repo: RecordingRepo,
     storage: Storage,
     *,
-    token_meeting_id: int,
+    token_meeting_id: Optional[int],
     session_uid: str,
     data: bytes,
     media_type: str = "audio",
@@ -66,8 +66,9 @@ async def upload_chunk(
         raise SessionNotFound(f"no MeetingSession for session_uid {session_uid}")
 
     meeting_id = session["meeting_id"]
-    if meeting_id != token_meeting_id:
-        # The MeetingToken was minted for a different meeting — fail closed.
+    if token_meeting_id is not None and meeting_id != token_meeting_id:
+        # A MeetingToken was used and was minted for a different meeting — fail closed.
+        # (token_meeting_id is None for internal-secret auth, which is already meeting-scoped by session.)
         raise SessionNotFound("MeetingToken meeting_id does not match the session's meeting")
 
     owner = await repo.owner_of(meeting_id)
@@ -150,9 +151,13 @@ async def finalize_master(
     mf["is_final"] = True
     mf["finalized_at"] = _now_iso()
     mf["finalized_by"] = "recording_finalizer.master"
+    # Merge — don't clobber the other media type's route (apply_chunk stamps both eagerly).
+    existing_pb = rec.get("playback_url") or {}
     rec["playback_url"] = {
-        "audio": f"/recordings/{recording_id}/master?type=audio" if media_type == "audio" else None,
-        "video": f"/recordings/{recording_id}/master?type=video" if media_type == "video" else None,
+        "audio": existing_pb.get("audio")
+        or (f"/recordings/{recording_id}/master?type=audio" if media_type == "audio" else None),
+        "video": existing_pb.get("video")
+        or (f"/recordings/{recording_id}/master?type=video" if media_type == "video" else None),
     }
     others = [r for r in recordings if r.get("id") != recording_id]
     await repo.put_recordings(meeting_id, others + [rec])

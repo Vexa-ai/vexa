@@ -12,6 +12,7 @@ HTTP status the gateway forwards verbatim:
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -19,6 +20,14 @@ from fastapi.responses import JSONResponse
 
 from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
 from .service import DuplicateMeeting, request_bot
+
+
+def _resolve_recording_enabled(value: Optional[object]) -> bool:
+    """Recording default: an explicit request value wins; else the ``RECORDING_ENABLED`` env
+    (default ``true``), so a dashboard bot records by default."""
+    if value is not None:
+        return bool(value)
+    return os.getenv("RECORDING_ENABLED", "true").lower() == "true"
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -64,9 +73,22 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
         x_user_limits: Optional[str] = Header(default=None),
+        x_user_webhook_url: Optional[str] = Header(default=None),
+        x_user_webhook_secret: Optional[str] = Header(default=None),
+        x_user_webhook_events: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         max_concurrent = _resolve_max_concurrent(x_user_limits)
+        # Per-user webhook config the gateway forwarded from identity (persisted into meeting.data).
+        webhook_events = None
+        if x_user_webhook_events:
+            try:
+                import json as _json
+
+                parsed = _json.loads(x_user_webhook_events)
+                webhook_events = parsed if isinstance(parsed, dict) else None
+            except Exception:
+                webhook_events = None
         try:
             body = await request.json()
         except Exception:
@@ -95,13 +117,16 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 language=body.get("language"),
                 task=body.get("task"),
                 transcription_tier=body.get("transcription_tier", "realtime"),
-                recording_enabled=bool(body.get("recording_enabled", False)),
+                recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
                 transcribe_enabled=bool(body.get("transcribe_enabled", True)),
                 # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
                 continue_meeting=bool(body.get("continue_meeting", False)),
                 max_concurrent=max_concurrent,
+                webhook_url=x_user_webhook_url,
+                webhook_secret=x_user_webhook_secret,
+                webhook_events=webhook_events,
             )
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>dash-meetings-list L4 render fixture</title>
+  </head>
+  <body>
+    <!--
+      list-render.html — the L4 fixture page.
+
+      A REAL browser loads this. It mounts the REAL @vexa/dash-meetings-list MeetingsList component
+      (bundled into list-bundle.js by esbuild from the brick source) over the golden meetings, with
+      an onOpen handler that records clicks onto window. If chromium paints the rows into the DOM and
+      a click fires onOpen, the brick is renderable + interactive in a human's browser. That is the
+      whole assertion.
+
+      DOM contract the spec reads (set by MeetingsList itself):
+        [data-testid="meetings-list"]   → the root container
+        [data-testid="meeting-row"]     → one per meeting; data-meeting-id + data-status
+        [data-testid="meeting-status"]  → status dot + label
+        [data-testid="meeting-duration"]→ formatted duration
+        #harness-ready                  → exists once mount() has run (deterministic wait point)
+        #harness-error                  → exists with the error text if mounting threw
+      And the click seam:
+        window.__opened / window.__lastOpenedId → set by the injected onOpen
+    -->
+    <h1>dash-meetings-list L4 render fixture</h1>
+    <div id="root"></div>
+
+    <script type="module">
+      import { mount } from "./list-bundle.js";
+      import { GOLDEN_MEETINGS } from "./golden.js";
+
+      function fail(err) {
+        const marker = document.createElement("pre");
+        marker.id = "harness-error";
+        marker.textContent = String((err && err.stack) || err);
+        document.body.appendChild(marker);
+      }
+
+      try {
+        const root = document.getElementById("root");
+        mount(root, GOLDEN_MEETINGS);
+
+        // deterministic ready marker for the spec to await
+        const ready = document.createElement("div");
+        ready.id = "harness-ready";
+        document.body.appendChild(ready);
+      } catch (err) {
+        fail(err);
+      }
+    </script>
+  </body>
+</html>

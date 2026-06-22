@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VncView L4 — golden URL fixture</title>
+  </head>
+  <body>
+    <!--
+      vnc-url.html — the L4 fixture page for the NON-EMPTY case.
+
+      A REAL browser loads this. It loads the bundled REAL <VncView> (vnc-bundle.js, esbuilt from the
+      brick source) and mounts it into #root with the golden vncUrl. If chromium paints an <iframe>
+      whose src is the golden URL, the component delivers the per-bot viewer a human's browser can
+      render. That is the whole assertion.
+
+      DOM contract the spec reads:
+        [data-testid="vnc-iframe"]  → an <iframe> with src === GOLDEN_VNC_URL
+        #harness-ready              → exists once the component has mounted (deterministic wait point)
+        #harness-error             → exists with error text if mounting threw (silent blank → fail)
+    -->
+    <h1 style="position:absolute;left:-9999px">VncView L4 — golden URL</h1>
+    <div id="root" style="width: 640px; height: 480px"></div>
+
+    <script type="module">
+      import { GOLDEN_VNC_URL } from "./golden.js";
+      import "./vnc-bundle.js";
+
+      function fail(err) {
+        const marker = document.createElement("pre");
+        marker.id = "harness-error";
+        marker.textContent = String((err && err.stack) || err);
+        document.body.appendChild(marker);
+      }
+
+      try {
+        const root = document.getElementById("root");
+        // mountVncView is exposed on window by vnc-entry.tsx (bundled above)
+        window.mountVncView(root, { vncUrl: GOLDEN_VNC_URL });
+
+        const ready = document.createElement("div");
+        ready.id = "harness-ready";
+        document.body.appendChild(ready);
+      } catch (err) {
+        fail(err);
+      }
+    </script>
+  </body>
+</html>

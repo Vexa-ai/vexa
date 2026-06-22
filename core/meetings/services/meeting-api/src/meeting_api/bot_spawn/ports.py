@@ -76,6 +76,14 @@ class MeetingRepo(Protocol):
         ``continue_meeting`` reopen not double-count the row it is about to reuse."""
         ...
 
+    async def get_status_by_session(self, *, session_uid: str) -> Optional[str]:
+        """Resolve ``session_uid`` (== the bot's ``connectionId``) → the meeting's CURRENT persisted
+        status string, or ``None`` for an unknown session. Used to REHYDRATE the in-memory lifecycle
+        FSM after a meeting-api restart (LIFECYCLE-409): the in-memory store is non-durable, so the
+        callback reconciles a fresh/empty record against the DB's real status BEFORE applying the
+        bot's event (else a terminal event on an empty store creates a status=None record and 409s)."""
+        ...
+
     async def update_meeting_status(
         self,
         *,
@@ -84,13 +92,15 @@ class MeetingRepo(Protocol):
         completion_reason: Optional[str] = None,
         failure_stage: Optional[str] = None,
         data: Optional[dict] = None,
-    ) -> None:
-        """Persist a bot ``lifecycle.v1`` advance to the DB meeting row (the session's meeting): set
+    ) -> Optional[dict]:
+        """Persist a bot ``lifecycle.v1`` advance to the DB meeting row + RETURN the updated row dict
+        (incl. ``data`` — so the lifecycle callback can deliver the per-user webhook from
+        ``meeting.data`` without a second read), or ``None`` for an unknown session. Set
         ``status`` and merge ``completion_reason`` / ``failure_stage`` + the receiver's forensics into
         ``meeting.data`` JSONB. Maps ``session_uid`` (== the bot's ``connectionId``) → meeting via
         ``meeting_sessions``; a no-op for an unknown session (e.g. a self-host bot). So the live FSM is
         DURABLE + QUERYABLE (``GET /meetings`` reflects it, survives a restart) — not only the
-        in-process ``MeetingStore`` (restored from main; the mock-bot L3 lane proved the carve dropped it)."""
+        in-process ``MeetingStore``."""
         ...
 
 

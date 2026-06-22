@@ -8,7 +8,7 @@ sub-package of ``meeting_api`` mounted here (the v0.12 analog of the parent ``ma
     POST ``/bots/internal/callback/lifecycle``.
   * **bot_spawn** — POST ``/bots``: build the invocation.v1 invocation + mint the MeetingToken +
     spawn the meeting-bot over runtime.v1, eager-creating the MeetingSession on spawn.
-  * **collector** — the folded-in transcript backend (was the standalone transcription-collector):
+  * **collector** — the folded-in transcript backend (collector domain):
     GET ``/transcripts/{platform}/{native_meeting_id}``, GET ``/meetings``,
     POST ``/ws/authorize-subscribe`` (+ the ``transcription_segments`` → ``tc:…:mutable`` consumer).
   * **recordings** — POST ``/internal/recordings/upload``, GET ``/recordings``,
@@ -53,6 +53,10 @@ def create_app(
     # lifecycle store
     meeting_store: Optional[MeetingStore] = None,
     token_secret: Optional[str] = None,
+    # user-stop (DELETE /bots) redis command publisher
+    command_publisher: Optional["object"] = None,
+    # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
+    webhook_sink: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -80,10 +84,21 @@ def create_app(
     sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
     app.state.lifecycle_sink = sink
     app.state.lifecycle_store = sink.store
-    _mount_lifecycle(app, sink, meeting_repo)
+    app.state.webhook_sink = webhook_sink
+    # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
+    # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
+    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis)
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
+
+    # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
+    from .lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router
+
+    if command_publisher is None:
+        command_publisher = InMemoryCommandPublisher()
+    app.state.command_publisher = command_publisher
+    app.include_router(build_stop_router(meeting_repo, command_publisher))
 
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
@@ -103,7 +118,13 @@ def create_app(
 # ── lifecycle mount (the receiver's callback route, on the shared app) ───────────────────────────
 
 
-def _mount_lifecycle(app: FastAPI, sink: LifecycleSink, meeting_repo: "_bot_spawn.MeetingRepo") -> None:
+def _mount_lifecycle(
+    app: FastAPI,
+    sink: LifecycleSink,
+    meeting_repo: "_bot_spawn.MeetingRepo",
+    webhook_sink: "object" = None,
+    redis: "object" = None,
+) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
 
@@ -113,6 +134,11 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink, meeting_repo: "_bot_spaw
     to the DB meeting row via ``meeting_repo`` (durable + queryable status, not only the in-process
     store). Also mounts ``POST /runtime/callback`` so the runtime kernel's workload callbacks ACK
     (no 404-retry).
+
+    Before applying an event the callback REHYDRATES the in-memory FSM record from the DB meeting
+    status, so the FSM survives a process restart (the in-process store starts empty) and a terminal
+    callback reconciles against the durable status. After a persisted advance it PUBLISHES a ws.v1
+    ``BotStatus`` frame to ``bm:meeting:{id}:status`` for the gateway ``/ws`` to forward to clients.
     """
     import jsonschema
 
@@ -138,6 +164,25 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink, meeting_repo: "_bot_spaw
                 status_code=422,
                 content={"status": "error", "detail": f"lifecycle.v1 schema violation: {e.message}"},
             )
+        # LIFECYCLE-409 fix: rehydrate the in-memory FSM record from the DB's CURRENT status before
+        # applying the event. The in-memory MeetingStore is non-durable — after a meeting-api restart
+        # it is empty, so a bot's terminal `completed` event would land on a fresh status=None record
+        # → can_transition(None, COMPLETED) is False → IllegalTransition → 409, the bot retries 3x,
+        # all 409, and the meeting stays stuck `active`. Seeding the record from the persisted status
+        # first makes active/stopping → completed a legal transition again. Best-effort: a DB hiccup
+        # must never fail the callback (we fall back to the in-process record as-is).
+        connection_id = body.get("connection_id")
+        if connection_id:
+            existing = sink.store.get(connection_id)
+            if existing is None or existing.status is None:
+                try:
+                    persisted = await meeting_repo.get_status_by_session(session_uid=connection_id)
+                except Exception as e:  # noqa: BLE001 — rehydration is best-effort
+                    persisted = None
+                    log_event("lifecycle_rehydrate_failed", audience="system", level="warning",
+                              span="lifecycle.callback", fields={"error": str(e)})
+                if persisted:
+                    sink.store.rehydrate(connection_id, persisted)
         try:
             change = sink.apply_change(body, transition_source=TransitionSource.BOT_CALLBACK)
         except IllegalTransition as e:
@@ -156,9 +201,13 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink, meeting_repo: "_bot_spaw
         # Persist the FSM advance to the DB meeting row → durable + queryable (GET /meetings reflects
         # it, survives a restart), not only the in-process MeetingStore. Best-effort: a DB hiccup must
         # never fail the bot's lifecycle callback (the in-process FSM + webhook already advanced).
-        if rec.status is not None:
+        # On an idempotent replay (change.no_op) the FSM did not actually advance — skip the
+        # re-persist + re-deliver so a redelivered terminal does not fire a duplicate webhook /
+        # publish. We still return 200 (handled below) — the redelivery is acknowledged as a no-op.
+        meeting_row = None
+        if rec.status is not None and not change.no_op:
             try:
-                await meeting_repo.update_meeting_status(
+                meeting_row = await meeting_repo.update_meeting_status(
                     session_uid=rec.connection_id,
                     status=rec.status.value,
                     completion_reason=rec.completion_reason.value if rec.completion_reason else None,
@@ -168,6 +217,50 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink, meeting_repo: "_bot_spaw
             except Exception as e:  # noqa: BLE001 — persistence is best-effort
                 log_event("lifecycle_persist_failed", audience="system", level="warning",
                           span="lifecycle.callback", fields={"error": str(e)})
+        # Deliver the sealed meeting.status_change webhook to the user's configured endpoint (per-user
+        # config rides on meeting.data — set at spawn from identity via the gateway; NO users-table read).
+        # Best-effort: a delivery hiccup must never fail the bot's lifecycle callback (P3a).
+        if webhook_sink is not None and isinstance(meeting_row, dict):
+            data = meeting_row.get("data") if isinstance(meeting_row.get("data"), dict) else {}
+            url = data.get("webhook_url")
+            if url:
+                try:
+                    await webhook_sink.deliver(
+                        url, envelope, data.get("webhook_secret"),
+                        events_config=data.get("webhook_events"),
+                        label=f"meeting:{meeting_row.get('id')}",
+                    )
+                except Exception as e:  # noqa: BLE001 — delivery is best-effort
+                    log_event("webhook_deliver_failed", audience="system", level="warning",
+                              span="lifecycle.callback", fields={"error": str(e)})
+        # Publish each persisted FSM advance to bm:meeting:{id}:status in the canonical 0.10.6 WS
+        # contract shape (the source of truth; api-gateway forwards the redis payload verbatim):
+        #   {type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id, ts}
+        # `status` is the raw BotStatus value (e.g. 'needs_help'); clients translate to their own
+        # vocabulary on THEIR side (the core emits the contract, never a client's naming). Skipped on
+        # a no-op advance (idempotent replay) / unknown session. Best-effort: never fail the callback.
+        if redis is not None and not change.no_op and isinstance(meeting_row, dict) and rec.status is not None:
+            meeting_id = meeting_row.get("id")
+            if meeting_id is not None:
+                import json as _json
+                from datetime import datetime, timezone
+
+                frame = {
+                    "type": "meeting.status",
+                    "meeting": {
+                        "id": meeting_id,
+                        "platform": meeting_row.get("platform"),
+                        "native_id": meeting_row.get("native_meeting_id"),
+                    },
+                    "payload": {"status": rec.status.value},
+                    "user_id": meeting_row.get("user_id"),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+                try:
+                    await redis.publish(f"bm:meeting:{meeting_id}:status", _json.dumps(frame))
+                except Exception as e:  # noqa: BLE001 — publish is best-effort
+                    log_event("ws_status_publish_failed", audience="system", level="warning",
+                              span="lifecycle.callback", fields={"error": str(e)})
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,

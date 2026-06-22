@@ -20,9 +20,13 @@ SDKs, and any client build against.
   gateway's `POST /ws/authorize-subscribe` path — production-only, not exercised by the offline
   conformance harness): `authorization_service_error` (carries `status`+`detail`),
   `authorization_call_failed` (carries `details`).
-- **Server → client (live data, forwarded raw from redis):**
-  - `TranscriptionSegment` `{type:"transcription_segment", text, speaker?, start_time?, end_time?, language?, completed?, segment_id?}` — from `tc:meeting:{id}:mutable`.
-  - `BotStatus` `{type:"bot_status", status, meeting_id?}` — from `bm:meeting:{id}:status`.
+- **Server → client (live data, forwarded raw from redis) — the canonical 0.10.6 shapes:**
+  - `Transcript` `{type:"transcript", speaker?, confirmed[], pending[], meeting?, ts?}` — the per-speaker
+    bundle the collector publishes + the dashboard renders live — from `tc:meeting:{id}:mutable`.
+  - `TranscriptionSegment` `{type:"transcription_segment", text, speaker?, …}` — a single segment, also
+    valid on `tc:meeting:{id}:mutable` (the G5 sample shape).
+  - `MeetingStatus` `{type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id?, ts?}`
+    — from `bm:meeting:{id}:status` (status under `payload.status`).
   - `ChatMessage` `{type:"chat_message", sender?, text}` — from `va:meeting:{id}:chat`.
 
   Data messages are **type-tagged and additive** (the gateway forwards the producer's raw
@@ -31,7 +35,7 @@ SDKs, and any client build against.
 ## The seam (what conforms to this)
 | Consumer | How |
 |---|---|
-| `clients/dashboard` | proxies `/ws`; renders `transcription_segment` live + `bot_status`/`chat_message` |
+| `clients/dashboard_new` | proxies `/ws`; renders `transcript` live + `meeting.status`/`chat_message` |
 | `meetings/services/meeting-api` (+ collector) | publishes the data shapes to the redis channels above |
 | SDKs / any client | subscribe + consume the type-tagged stream |
 

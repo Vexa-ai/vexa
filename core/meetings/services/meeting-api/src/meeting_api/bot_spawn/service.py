@@ -103,6 +103,11 @@ async def request_bot(
     meeting_api_url: Optional[str] = None,
     internal_secret: Optional[str] = None,
     token_secret: Optional[str] = None,
+    # Per-user webhook config (the gateway forwards it from identity's /internal/validate). Persisted
+    # into meeting.data so the lifecycle callback delivers status_change events with no users-table read.
+    webhook_url: Optional[str] = None,
+    webhook_secret: Optional[str] = None,
+    webhook_events: Optional[dict] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -155,6 +160,14 @@ async def request_bot(
             meeting_data["constructed_meeting_url"] = constructed_url
         meeting_data["transcribe_enabled"] = transcribe_enabled
         meeting_data["recording_enabled"] = recording_enabled
+        # Per-user webhook config carried on the meeting (delivered by the lifecycle callback). These
+        # are stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS).
+        if webhook_url:
+            meeting_data["webhook_url"] = webhook_url
+            if webhook_secret:
+                meeting_data["webhook_secret"] = webhook_secret
+            if webhook_events:
+                meeting_data["webhook_events"] = webhook_events
         row = await repo.create_meeting(
             user_id=user_id,
             platform=platform,
@@ -199,6 +212,9 @@ async def request_bot(
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
+        # A human-in-the-loop dashboard join needs a forgiving lobby window so a late admit does not
+        # fail the meeting; everyoneLeftTimeout matches the O6 config.
+        automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 900000},
     )
 
     # 5. Spawn over runtime.v1.

@@ -1,0 +1,17 @@
+{
+  "name": "@vexa/dashboard-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The L4 bulletproof harness: a real chromium (Playwright) loads a static fixture that runs the bundled @vexa/dash-ws brick over its FakeWsTransport, injects golden ws.v1 frames, and proves the REAL DOM renders them. This is the instrument that replaces node-ws/curl false-greens — green-in-Playwright means green-for-the-human's-browser. Graduates to the real stack by swapping the fake transport for a WebSocket-backed one and injecting goldens via redis; the DOM assertions are unchanged.",
+  "type": "module",
+  "scripts": {
+    "bundle": "node build-bundle.mjs",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install:browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "esbuild": "^0.28.1"
+  }
+}

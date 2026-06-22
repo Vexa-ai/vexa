@@ -5,7 +5,7 @@ FakeAuthorizer), OFFLINE — no real WebSocket, no real redis, no meetings. Ever
 forwarded frame is validated BY PATH against its sealed ``ws.v1 #/$defs/<Shape>``:
 
   * subscribe        → a ``Subscribed`` ack frame conforms,
-  * forwarded redis  → ``TranscriptionSegment`` / ``BotStatus`` / ``ChatMessage`` data frames
+  * forwarded redis  → ``Transcript``/``TranscriptionSegment`` / ``MeetingStatus`` / ``ChatMessage`` data frames
                        (forwarded raw from tc/bm/va channels) conform,
   * malformed input  → an ``Error`` frame (invalid_json / unknown_action / missing_api_key)
                        conforms.
@@ -87,13 +87,16 @@ async def test_forwarded_transcription_segment_conforms():
     assert_ws_conforms("TranscriptionSegment", seg[0])
 
 
-async def test_forwarded_bot_status_conforms():
-    """A payload on bm:meeting:{id}:status → conforms to ws.v1 #/$defs/BotStatus."""
+async def test_forwarded_meeting_status_conforms():
+    """A payload on bm:meeting:{id}:status → conforms to ws.v1 #/$defs/MeetingStatus (0.10.6 shape)."""
     frames = await _subscribe_then_deliver(
-        "bm:meeting:42:status", {"type": "bot_status", "status": "recording", "meeting_id": 42})
-    bs = [f for f in frames if f.get("type") == "bot_status"]
-    assert bs, f"no bot_status frame; frames={frames}"
-    assert_ws_conforms("BotStatus", bs[0])
+        "bm:meeting:42:status",
+        {"type": "meeting.status",
+         "meeting": {"id": 42, "platform": "google_meet", "native_id": "abc-defg-hij"},
+         "payload": {"status": "active"}, "user_id": 7, "ts": "2026-03-27T10:00:00Z"})
+    ms = [f for f in frames if f.get("type") == "meeting.status"]
+    assert ms, f"no meeting.status frame; frames={frames}"
+    assert_ws_conforms("MeetingStatus", ms[0])
 
 
 async def test_forwarded_chat_message_conforms():
@@ -210,7 +213,8 @@ def test_ws_goldens_conform_by_path():
         "UnsubscribeRequest": "UnsubscribeRequest.unsubscribe.json",
         "Subscribed": "Subscribed.ack.json",
         "TranscriptionSegment": "TranscriptionSegment.live.json",
-        "BotStatus": "BotStatus.recording.json",
+        "Transcript": "Transcript.bundle.json",
+        "MeetingStatus": "MeetingStatus.active.json",
         "ChatMessage": "ChatMessage.summary.json",
         "Error": "Error.missing-key.json",
     }
@@ -221,5 +225,5 @@ def test_ws_goldens_conform_by_path():
 
 def test_subscribe_request_schema_is_loadable():
     """The harness can load every ws.v1 $def it asserts against (by path)."""
-    for shape in ("Subscribed", "TranscriptionSegment", "BotStatus", "ChatMessage", "Error"):
+    for shape in ("Subscribed", "TranscriptionSegment", "Transcript", "MeetingStatus", "ChatMessage", "Error"):
         assert ws_def_validator(shape) is not None

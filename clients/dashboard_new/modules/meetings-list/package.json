@@ -1,0 +1,35 @@
+{
+  "name": "@vexa/dash-meetings-list",
+  "version": "0.1.0",
+  "description": "The presentational meetings-list VIEW: a React component { meetings: MeetingResponse[], onOpen? } that renders one clickable row per meeting (platform icon, native id, status dot + label, duration). Props in, DOM out — no store, no fetch, no ws; data is injected and typed by @vexa/dash-contracts. The clean modular replacement for the vendored dashboard's app/meetings/page.tsx + components/meetings/meeting-list.tsx.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "playwright test --config e2e/playwright.config.ts",
+    "test:bundle": "node e2e/build-bundle.mjs",
+    "install:browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "@vexa/dash-contracts": "0.1.0"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "esbuild": "^0.28.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.0"
+  }
+}

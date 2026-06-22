@@ -21,11 +21,26 @@ async function proxyRequest(
 
   // Get user's token from HTTP-only cookie (set during login)
   const cookieStore = await cookies();
-  const userToken = cookieStore.get(getAuthCookieName())?.value;
+  let userToken = cookieStore.get(getAuthCookieName())?.value;
+  const SELF_HOST_KEY = (process.env.VEXA_API_KEY || "").trim();
 
-  // VEXA_API_KEY from env is used ONLY for the meetings list endpoint
-  // (pre-login browsing). All other endpoints require a user cookie.
-  const VEXA_API_KEY = userToken || process.env.VEXA_API_KEY || "";
+  // A cookie token that no longer authenticates (401 at the gateway) would leave a self-host
+  // dashboard showing an empty UI instead of the baked identity's data. Validate the cookie once;
+  // if it's dead, drop it and fall back to the self-host key so the dashboard still renders.
+  if (userToken && SELF_HOST_KEY && userToken !== SELF_HOST_KEY) {
+    try {
+      const check = await fetch(`${VEXA_API_URL}/auth/me`, {
+        headers: { "X-API-Key": userToken },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (check.status === 401 || check.status === 403) userToken = undefined;
+    } catch {
+      /* transient gateway blip — keep the cookie rather than lock the user out */
+    }
+  }
+
+  // The user's cookie token if valid, else the self-host baked key.
+  const VEXA_API_KEY = userToken || SELF_HOST_KEY;
 
   const { path } = await params;
   const pathString = path.join("/");

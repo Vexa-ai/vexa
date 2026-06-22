@@ -76,6 +76,16 @@ def build_production_app():
         secret_key=os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_SECRET_KEY"),
     )
 
+    # Per-user webhook delivery (WebhookSink: SSRF-guard → event-filter → sign → POST → enqueue-retry).
+    # httpx transport; failures route to the redis RetryQueue the background drain loop sweeps.
+    from .webhooks import RetryQueue, WebhookSink
+
+    async def _webhook_transport(url: str, body: bytes, headers: dict):
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await client.post(url, content=body, headers=headers)
+
+    webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
+
     app = create_app(
         transcript_store=transcript_store,
         redis=segment_bus,
@@ -84,9 +94,13 @@ def build_production_app():
         recording_repo=recording_repo,
         storage=storage,
         token_secret=token_secret,
+        # The user-stop route (DELETE /bots) publishes the bot's `leave` command on redis pub/sub.
+        # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
+        command_publisher=redis_client,
+        webhook_sink=webhook_sink,
     )
 
-    _attach_background_loops(app, transcript_store, segment_bus, redis_client)
+    _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo)
     return app
 
 
@@ -99,13 +113,18 @@ def _minio_endpoint_url() -> str:
     return f"{scheme}://{endpoint}"
 
 
-def _attach_background_loops(app, transcript_store, segment_bus, redis_client) -> None:
+def _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo=None) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops."""
     from .collector.ingest import consume_segments
 
     seg_interval = float(os.getenv("SEGMENT_CONSUMER_INTERVAL", "0.5"))
     webhook_interval = float(os.getenv("WEBHOOK_DRAIN_INTERVAL", "5"))
     scheduler_interval = float(os.getenv("SCHEDULER_TICK_INTERVAL", "1"))
+    # Stop-reconcile backstop: a meeting whose bot was told to leave but never sent its own terminal
+    # callback would stay `stopping` forever. After a grace window, complete it through the same
+    # lifecycle callback the bot uses — so the FSM, webhook, and ws status frame all fire identically.
+    stop_grace = float(os.getenv("STOP_RECONCILE_GRACE_S", "45"))
+    stop_interval = float(os.getenv("STOP_RECONCILE_INTERVAL_S", "15"))
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
@@ -153,12 +172,43 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client) -
                 log.exception("scheduler tick failed")
             await asyncio.sleep(scheduler_interval)
 
+    async def _stop_reconcile_loop() -> None:
+        # Complete meetings stuck in `stopping` past the grace window by POSTing a synthetic
+        # `completed` to this process's OWN lifecycle callback — reusing the exact rehydrate →
+        # persist → webhook → ws-publish path the bot's callback drives (no duplicate logic).
+        if meeting_repo is None or not hasattr(meeting_repo, "list_stale_stopping"):
+            return
+        import httpx
+
+        port = int(os.getenv("PORT", "8080"))
+        callback = f"http://127.0.0.1:{port}/bots/internal/callback/lifecycle"
+        secret = os.getenv("INTERNAL_API_SECRET")
+        headers = {"content-type": "application/json"}
+        if secret:
+            headers["x-internal-secret"] = secret
+        while True:
+            try:
+                stale = await meeting_repo.list_stale_stopping(older_than_seconds=stop_grace)
+                for meeting_id, session_uid in stale:
+                    body = {"connection_id": session_uid, "status": "completed",
+                            "completion_reason": "stopped"}
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        r = await client.post(callback, json=body, headers=headers)
+                    log.info("stop-reconcile completed stuck meeting %s (session %s) → %s",
+                             meeting_id, session_uid, r.status_code)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("stop-reconcile tick failed")
+            await asyncio.sleep(stop_interval)
+
     @asynccontextmanager
     async def lifespan(_app):
         tasks = [
             asyncio.create_task(_segment_consumer_loop(), name="segment-consumer"),
             asyncio.create_task(_webhook_drain_loop(), name="webhook-drain"),
             asyncio.create_task(_scheduler_tick_loop(), name="scheduler-tick"),
+            asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:

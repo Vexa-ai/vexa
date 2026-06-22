@@ -129,6 +129,18 @@ def create_app() -> FastAPI:
         response.status_code = status.HTTP_201_CREATED
         return UserResponse.model_validate(u)
 
+    # --- GET /admin/users/email/{email} → resolve an existing user by email (api.v1). The dashboard
+    # login (send-magic-link → findUserByEmail) calls this to find an existing account before minting a
+    # session token, so a returning user resolves to their own identity (and meetings) rather than a new
+    # one. Mirrors create_user's lookup.
+    @app.get("/admin/users/email/{email}", response_model=UserResponse,
+             dependencies=[Depends(verify_admin_token)])
+    async def get_user_by_email(email: str, db: AsyncSession = Depends(get_db)):
+        user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return UserResponse.model_validate(user)
+
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,
               status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_admin_token)])
     async def create_token_for_user(user_id: int, scope: str = "bot",

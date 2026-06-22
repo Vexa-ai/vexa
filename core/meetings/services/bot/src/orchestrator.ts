@@ -153,7 +153,14 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       new Promise<void>((resolve) => setTimeout(resolve, 8000)),
     ]);
 
-    await emit('completed', { completion_reason: reason, exit_code: 0 });
+    console.error(`[bot] orchestrator: emitting completed (reason=${reason}, from=${cur})`);
+    try {
+      await emit('completed', { completion_reason: reason, exit_code: 0 });
+      console.error('[bot] orchestrator: completed emitted + flushed');
+    } catch (e) {
+      console.error(`[bot] orchestrator: completed emit THREW: ${String(e)}`);
+      throw e;
+    }
     return { exitCode: 0, status: 'completed', completionReason: reason };
   }
 

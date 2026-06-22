@@ -1,0 +1,22 @@
+{
+  "name": "@vexa/dash-config",
+  "version": "0.1.0",
+  "description": "Resolves the browser's runtime config (the /api/config logic) as ONE pure function: given the request host/proto + the configured/internal API URLs, return { apiUrl, wsUrl, authToken }. Carries Learning #37's both-loopback fix — gateway-direct WS only when the configured port is the published gateway host port, else same-origin. authToken from a single source: cookie || selfHostKey || null.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx src/config.test.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

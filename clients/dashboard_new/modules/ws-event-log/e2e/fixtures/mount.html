@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>dash-ws-event-log L4 mount fixture</title>
+  </head>
+  <body>
+    <!--
+      mount.html — the L4 fixture page.
+
+      A REAL browser loads this. It mounts the REAL @vexa/dash-ws-event-log component (bundled into
+      mount-bundle.js by esbuild from the brick source, with react/react-dom) over the golden events
+      into #root. If chromium paints the rows below, the brick's output is renderable by a human.
+
+      DOM contract the spec reads (see WsEventLog.tsx):
+        [data-testid="ws-event-log"]      → the root container
+        [data-testid="ws-event-row"]      → one per event, NEWEST FIRST
+          [data-testid="ws-event-type"]   → the frame type tag
+          [data-testid="ws-event-summary"]→ the human summary
+        #harness-ready                    → exists once React has rendered (deterministic wait)
+        #harness-error                    → exists with the error text if mounting threw
+    -->
+    <h1>dash-ws-event-log L4 mount fixture</h1>
+    <div id="root"></div>
+
+    <script type="module">
+      import "./mount-bundle.js";
+    </script>
+    <script>
+      // surface a module-load / mount throw as a visible marker so a blank page becomes a hard fail
+      window.addEventListener("error", (e) => {
+        if (document.getElementById("harness-error")) return;
+        const pre = document.createElement("pre");
+        pre.id = "harness-error";
+        pre.textContent = String((e.error && e.error.stack) || e.message);
+        document.body.appendChild(pre);
+      });
+    </script>
+  </body>
+</html>

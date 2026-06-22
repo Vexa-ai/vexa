@@ -6,8 +6,14 @@ import { findUserByEmail, createUser, createUserToken } from "@/lib/vexa-admin-a
 import { cookies } from "next/headers";
 import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
 
+// The login route must NEVER be cached: a cached response would pin one identity's session and
+// re-serve it to every subsequent login. Force dynamic, no store.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+
 const JWT_SECRET = process.env.JWT_SECRET || process.env.VEXA_ADMIN_API_KEY || "default-secret-change-me";
 const MAGIC_LINK_EXPIRY = "15m"; // 15 minutes
+const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
 
 /**
  * Check if SMTP is configured
@@ -89,6 +95,7 @@ function isSecureRequest(): boolean {
 async function handleDirectLogin(email: string): Promise<NextResponse> {
   // Find or create user
   const findResult = await findUserByEmail(email);
+  console.error("[LOGIN-DBG] email=", email, "findResult=", JSON.stringify(findResult).slice(0, 300));
 
   let user;
   let isNewUser = false;
@@ -117,6 +124,7 @@ async function handleDirectLogin(email: string): Promise<NextResponse> {
       );
     }
 
+    console.error("[LOGIN-DBG] createUser=", JSON.stringify(createResult).slice(0, 300));
     user = createResult.data;
     isNewUser = true;
   } else if (findResult.error) {
@@ -157,7 +165,7 @@ async function handleDirectLogin(email: string): Promise<NextResponse> {
     path: "/",
   });
 
-  // Return direct login response
+  // Return direct login response (never cached — see route-level directives)
   return NextResponse.json({
     success: true,
     mode: "direct",
@@ -170,7 +178,7 @@ async function handleDirectLogin(email: string): Promise<NextResponse> {
       created_at: user!.created_at,
     },
     token: apiToken,
-  });
+  }, { headers: NO_STORE });
 }
 
 /**

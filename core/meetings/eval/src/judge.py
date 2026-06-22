@@ -98,8 +98,8 @@ print(f"3. ATTRIBUTION (named-rate {100*named/max(1,len(rsegs)):.0f}%): of named
 
 # Grep-friendly machine line for verdict.mjs (the bot-local harness aggregates this with analyze's
 # SCORE line against BASELINE.md). LEAKAGE is the definitive content-vs-label check → a HARD gate;
-# attribution precision is reported but NOT hard-gated (Learning #18: it over-counts under /speak
-# latency drift). Counts, not just percentages, so the gate reads them directly.
+# attribution precision is reported but NOT hard-gated (it over-counts under /speak latency drift).
+# Counts, not just percentages, so the gate reads them directly.
 print(f"\nJUDGE completeness={cov}/{len(rturns)} completeness_pct={100*cov/max(1,len(rturns)):.0f} "
       f"leakage={leak} leakage_pct={100*leak/max(1,ided):.0f} attribution_pct={100*c/max(1,named):.0f} "
       f"wrong={w} unknown={u} named={named} truth_turns={len(rturns)}")

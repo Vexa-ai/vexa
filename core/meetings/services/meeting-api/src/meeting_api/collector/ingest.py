@@ -43,7 +43,7 @@ def _now_iso() -> str:
 
 def _coerce_segment(raw: dict) -> Optional[dict]:
     """Validate + normalize one stream segment into the store's segment shape, or ``None`` when
-    it is malformed (missing start/end/segment_id, zero/negative duration) — the parent's
+    it is malformed (missing start/end/segment_id, or a zero-length COMPLETED segment) — the parent's
     ``process_stream_message`` segment filtering."""
     if not isinstance(raw, dict):
         return None
@@ -54,10 +54,15 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
         end = float(raw["end"])
     except (TypeError, ValueError):
         return None
-    # Fix inverted timestamps; drop ~zero-length segments.
+    completed = bool(raw.get("completed", False))
+    # Fix inverted timestamps.
     if end < start:
         start, end = end, start
-    if end - start < 1e-3:
+    # Drop ~zero-length COMPLETED segments (garbage finals). A pending DRAFT (completed=False) legitimately
+    # has no end yet — `start == end` is its in-progress placeholder — so it MUST pass: it is the live
+    # "being spoken" text the dashboard renders as a pending draft (filtering it left transcripts
+    # confirmed-only, with no live in-progress text).
+    if completed and end - start < 1e-3:
         return None
     segment_id = raw.get("segment_id")
     if not segment_id:
@@ -69,7 +74,7 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
         "text": raw.get("text") or "",
         "language": raw.get("language"),
         "speaker": raw.get("speaker"),
-        "completed": bool(raw.get("completed", False)),
+        "completed": completed,
         "absolute_start_time": raw.get("absolute_start_time"),
         "absolute_end_time": raw.get("absolute_end_time"),
         "updated_at": _now_iso(),

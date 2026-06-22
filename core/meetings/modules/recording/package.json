@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/golden.test.ts && tsx src/golden-lifecycle.test.ts && tsx src/assemble.smoke.test.ts",
+    "test": "tsx src/golden.test.ts && tsx src/golden-lifecycle.test.ts && tsx src/assemble.smoke.test.ts && tsx src/init-segment.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {

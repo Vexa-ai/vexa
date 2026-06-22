@@ -96,6 +96,7 @@ export type WebSocketMessageType =
   | "transcript.mutable"
   | "transcript.finalized"
   | "meeting.status"
+  | "bot_status"
   | "subscribed"
   | "pong"
   | "error";
@@ -154,6 +155,14 @@ export interface WebSocketStatusMessage {
   ts: string;
 }
 
+// ws.v1 contract frame (#/$defs/BotStatus) — forwarded verbatim by the gateway
+// from redis bm:meeting:{id}:status. status + meeting_id live at the top level.
+export interface WebSocketBotStatusMessage {
+  type: "bot_status";
+  status: MeetingStatus;
+  meeting_id?: number | string;
+}
+
 export interface WebSocketSubscribedMessage {
   type: "subscribed";
   meetings: number[];  // Array of meeting IDs
@@ -188,6 +197,7 @@ export type WebSocketIncomingMessage =
   | WebSocketTranscriptMessage
   | WebSocketTranscriptBundleMessage
   | WebSocketStatusMessage
+  | WebSocketBotStatusMessage
   | WebSocketChatMessage
   | WebSocketSubscribedMessage
   | WebSocketPongMessage

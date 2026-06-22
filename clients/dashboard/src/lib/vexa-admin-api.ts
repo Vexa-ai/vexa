@@ -142,6 +142,10 @@ async function adminRequest<T>(
         ...options.headers,
       },
       signal: controller.signal,
+      // NEVER cache admin lookups: the App Router caches GET fetches by default, which would pin a
+      // transient 404 and make findUserByEmail keep returning NOT_FOUND (so the login would fabricate
+      // a new user instead of resolving the existing one).
+      cache: "no-store",
     });
 
     clearTimeout(timeoutId);

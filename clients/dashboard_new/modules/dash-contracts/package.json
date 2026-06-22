@@ -1,0 +1,26 @@
+{
+  "name": "@vexa/dash-contracts",
+  "version": "0.1.0",
+  "description": "The single consumed-contract brick: the seam between the dashboard and the backend. TS types for the WS frames (0.10.6 ws.v1 truth) + REST shapes (sealed api.v1) the dashboard reads, plus ajv validators that load the on-disk sealed schemas and pin every golden. Conforms to the contracts; never redefines them.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./validate": { "types": "./dist/validate.d.ts", "default": "./dist/validate.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx src/contracts.test.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

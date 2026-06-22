@@ -1,0 +1,40 @@
+{
+  "name": "@vexa/dashboard-new",
+  "version": "0.1.0",
+  "description": "Fresh modular dashboard, built per the repo brick paradigm: each concern is a self-contained brick under modules/ with one front door (src/index.ts), a README, and a test whose exit code is the signal. The 0.10.6 WS contract (core/gateway/contracts/ws.v1) is the consumed truth. The Next.js app here is the composition root that wires the bricks.",
+  "private": true,
+  "workspaces": [
+    "modules/*"
+  ],
+  "scripts": {
+    "dev": "next dev -p 3002",
+    "build": "next build",
+    "start": "next start -p 3002",
+    "test:bricks": "for b in modules/*/; do (cd \"$b\" && npm test) || exit 1; done"
+  },
+  "dependencies": {
+    "@vexa/dash-api-client": "*",
+    "@vexa/dash-auth": "*",
+    "@vexa/dash-chat": "*",
+    "@vexa/dash-config": "*",
+    "@vexa/dash-contracts": "*",
+    "@vexa/dash-join-form": "*",
+    "@vexa/dash-meeting-state": "*",
+    "@vexa/dash-meetings-list": "*",
+    "@vexa/dash-recording-players": "*",
+    "@vexa/dash-status-history": "*",
+    "@vexa/dash-transcript-viewer": "*",
+    "@vexa/dash-vnc-view": "*",
+    "@vexa/dash-ws": "*",
+    "@vexa/dash-ws-event-log": "*",
+    "next": "15.5.19",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "typescript": "^5.6.0"
+  }
+}

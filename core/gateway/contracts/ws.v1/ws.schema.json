@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/contracts/ws.v1",
   "title": "ws.v1 — the public live WebSocket multiplex (/ws), frozen to vexa main",
-  "description": "The /ws endpoint api-gateway serves: api_key auth (x-api-key header or ?api_key=), a subscribe/unsubscribe control protocol, and forwarded live data messages (transcription_segment from tc:meeting:{id}:mutable, bot_status from bm:..:status, chat_message from va:..:chat). The gateway forwards the raw redis payload, so data messages are type-tagged and additive (extra fields allowed). Shapes are pinned by main's G5 WebSocket gate test.",
+  "description": "The /ws endpoint api-gateway serves: api_key auth (x-api-key header or ?api_key=), a subscribe/unsubscribe control protocol, and forwarded live data messages — transcript (the per-speaker confirmed/pending bundle) + transcription_segment from tc:meeting:{id}:mutable, meeting.status from bm:meeting:{id}:status, chat_message from va:meeting:{id}:chat. The gateway forwards the raw redis payload verbatim, so data messages are type-tagged and additive (extra fields allowed). Shapes are the canonical 0.10.6 contract (vexa-0.11 api-gateway + meetings.publish_meeting_status_change).",
   "$defs": {
     "MeetingRef": {
       "type": "object",
@@ -50,7 +50,7 @@
     },
     "TranscriptionSegment": {
       "type": "object",
-      "description": "server → client: a live transcript segment (forwarded from tc:meeting:{id}:mutable). type + text are the floor; the producer adds speaker/timing/segment_id.",
+      "description": "server → client: a single live transcript segment (forwarded from tc:meeting:{id}:mutable). type + text are the floor; the producer adds speaker/timing/segment_id.",
       "required": ["type", "text"],
       "properties": {
         "type": { "const": "transcription_segment" },
@@ -64,14 +64,43 @@
         "session_uid": { "type": ["string", "null"] }
       }
     },
-    "BotStatus": {
+    "Transcript": {
       "type": "object",
-      "description": "server → client: a bot/meeting status update (forwarded from bm:meeting:{id}:status)",
-      "required": ["type", "status"],
+      "description": "server → client: the canonical 0.10.6 per-speaker transcript bundle (forwarded from tc:meeting:{id}:mutable) — `confirmed` (completed) + `pending` (in-progress) segment arrays for one speaker tick. This is what the collector publishes + the dashboard consumes live.",
+      "required": ["type"],
       "properties": {
-        "type": { "const": "bot_status" },
-        "status": { "type": "string" },
-        "meeting_id": { "type": ["integer", "string"] }
+        "type": { "const": "transcript" },
+        "speaker": { "type": ["string", "null"] },
+        "meeting": { "type": "object" },
+        "confirmed": { "type": "array", "items": { "type": "object" } },
+        "pending": { "type": "array", "items": { "type": "object" } },
+        "ts": { "type": ["string", "null"] }
+      }
+    },
+    "MeetingStatus": {
+      "type": "object",
+      "description": "server → client: the canonical 0.10.6 meeting/bot status update (forwarded verbatim from bm:meeting:{id}:status). Status lives under `payload.status`; a `meeting` ref + `user_id` + `ts` are carried alongside (vexa-0.11 meetings.publish_meeting_status_change). Replaces the drifted `bot_status` frame.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "meeting.status" },
+        "meeting": {
+          "type": "object",
+          "properties": {
+            "id": { "type": ["integer", "string"] },
+            "platform": { "type": ["string", "null"] },
+            "native_id": { "type": ["string", "null"] }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "type": "string" },
+            "data": { "type": ["object", "null"] }
+          }
+        },
+        "user_id": { "type": ["integer", "string", "null"] },
+        "ts": { "type": ["string", "null"] }
       }
     },
     "ChatMessage": {

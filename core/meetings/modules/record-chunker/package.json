@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/chunker.smoke.test.ts",
+    "test": "tsx src/chunker.smoke.test.ts && tsx src/init-segment.smoke.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {},

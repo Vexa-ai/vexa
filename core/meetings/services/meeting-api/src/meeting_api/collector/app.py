@@ -125,9 +125,29 @@ def build_router(
         )
         return JSONResponse(content={"meetings": meetings})
 
-    # --- GET /meetings/{meeting_id} → the single meeting (api.v1; carve of main). The dashboard's
-    # meeting-detail page fetches this; the carve had only the list, so the detail view 404'd. Reuses
-    # list_meetings + filters by id (owner-scoped, so a non-owner can't read another user's meeting). ---
+    # --- GET /bots → the dashboard's primary meetings-list source (api.v1). Same DB query + shape as
+    # GET /meetings, plus `has_more` for the proxy's pagination. ---
+    @router.get("/bots")
+    async def list_bots(
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+        limit: Optional[int] = Query(default=None, ge=1, le=100),
+        offset: Optional[int] = Query(default=None, ge=0),
+        status: Optional[str] = Query(default=None),
+        platform: Optional[str] = Query(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        meetings = await store.list_meetings(
+            user_id, status=status, platform=platform, limit=limit, offset=offset
+        )
+        log_event(
+            "bots_listed", audience="user", span="bots.list",
+            user_id=user_id, fields={"count": len(meetings)},
+        )
+        return JSONResponse(content={"meetings": meetings, "has_more": False})
+
+    # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
+    # Reuses list_meetings + filters by id (owner-scoped, so a non-owner can't read another's meeting). ---
     @router.get("/meetings/{meeting_id}")
     async def get_meeting(
         request: Request,

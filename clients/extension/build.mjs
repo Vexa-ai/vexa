@@ -11,12 +11,12 @@ const WATCH = process.argv.includes('--watch');
 // bundles the TS source in. gmeet (per-channel) + mixed-capture-core (the mixed
 // lane — YouTube, Zoom, and Teams via zoom-capture/teams-capture).
 const vexaAlias = {
-  '@vexa/gmeet-capture': resolve(__dirname, '../../meetings/modules/gmeet-capture/src/index.ts'),
-  '@vexa/capture-codec': resolve(__dirname, '../../meetings/modules/capture-codec/src/index.ts'),
-  '@vexa/mixed-capture-core': resolve(__dirname, '../../meetings/modules/mixed-capture-core/src/index.ts'),
-  '@vexa/zoom-capture': resolve(__dirname, '../../meetings/modules/zoom-capture/src/index.ts'),
-  '@vexa/teams-capture': resolve(__dirname, '../../meetings/modules/teams-capture/src/index.ts'),
-  '@vexa/record-chunker': resolve(__dirname, '../../meetings/modules/record-chunker/src/index.ts'),
+  '@vexa/gmeet-capture': resolve(__dirname, '../../core/meetings/modules/gmeet-capture/src/index.ts'),
+  '@vexa/capture-codec': resolve(__dirname, '../../core/meetings/modules/capture-codec/src/index.ts'),
+  '@vexa/mixed-capture-core': resolve(__dirname, '../../core/meetings/modules/mixed-capture-core/src/index.ts'),
+  '@vexa/zoom-capture': resolve(__dirname, '../../core/meetings/modules/zoom-capture/src/index.ts'),
+  '@vexa/teams-capture': resolve(__dirname, '../../core/meetings/modules/teams-capture/src/index.ts'),
+  '@vexa/record-chunker': resolve(__dirname, '../../core/meetings/modules/record-chunker/src/index.ts'),
 };
 
 const outdir = 'dist';
@@ -29,7 +29,7 @@ const pad = (n) => String(n).padStart(2, '0');
 // SSOT) and resolve its two interpolations (BLOCK, the processor name), so the
 // shipped worklet file is generated from the brick and never duplicated here.
 function extractWorkletSrc() {
-  const path = resolve(__dirname, '../../meetings/modules/gmeet-capture/src/pcm-capture.ts');
+  const path = resolve(__dirname, '../../core/meetings/modules/gmeet-capture/src/pcm-capture.ts');
   const src = readFileSync(path, 'utf8');
   const block = src.match(/const BLOCK\s*=\s*(\d+)/)?.[1];
   const proc = src.match(/PCM_WORKLET_PROCESSOR\s*=\s*'([^']+)'/)?.[1];

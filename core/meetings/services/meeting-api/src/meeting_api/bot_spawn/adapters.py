@@ -103,6 +103,22 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
+    async def get_status_by_session(self, *, session_uid) -> Optional[str]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            sess = (
+                await db.execute(select(MeetingSession).where(MeetingSession.session_uid == session_uid))
+            ).scalars().first()
+            if sess is None:
+                return None
+            status = (
+                await db.execute(select(Meeting.status).where(Meeting.id == sess.meeting_id))
+            ).scalars().first()
+            return status
+
     async def update_meeting_status(
         self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None
     ) -> None:
@@ -139,6 +155,13 @@ class SqlAlchemyMeetingRepo:
             if status in ("completed", "failed") and m.end_time is None:
                 m.end_time = now
             await db.commit()
+            # Refresh BEFORE _row_to_dict: `updated_at` has a server-side onupdate, so it is expired
+            # post-commit; reading it in _row_to_dict would trigger implicit async IO (MissingGreenlet).
+            # The other write adapters (create_meeting/set_bot_container/reopen) follow the same pattern.
+            await db.refresh(m)
+            # Return the updated row so the lifecycle callback can deliver the per-user webhook from
+            # meeting.data (and the stop route gets a clean dict) without a second query.
+            return _row_to_dict(m)
 
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         from sqlalchemy import func, select
@@ -158,6 +181,35 @@ class SqlAlchemyMeetingRepo:
             if exclude_meeting_id is not None:
                 stmt = stmt.where(Meeting.id != exclude_meeting_id)
             return int((await db.execute(stmt)).scalar() or 0)
+
+    async def list_stale_stopping(self, *, older_than_seconds: float) -> list[tuple[int, str]]:
+        """Meetings stuck in ``stopping`` longer than ``older_than_seconds``, with their latest
+        session_uid — the stop-reconcile backstop completes these (the bot was told to leave but
+        never sent its own terminal callback). Returns ``[(meeting_id, session_uid), …]``."""
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting.id, Meeting.updated_at, MeetingSession.session_uid)
+                    .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
+                    .where(Meeting.status == "stopping")
+                    .order_by(MeetingSession.id.desc())
+                )
+            ).all()
+        now = datetime.now(timezone.utc)
+        out: dict[int, str] = {}
+        for mid, upd, sid in rows:
+            if mid in out or upd is None or not sid:
+                continue
+            u = upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
+            if (now - u).total_seconds() >= older_than_seconds:
+                out[mid] = sid
+        return list(out.items())
 
     async def create_meeting(self, *, user_id, platform, native_meeting_id, data) -> dict:
         from ..sessions.models import Meeting
