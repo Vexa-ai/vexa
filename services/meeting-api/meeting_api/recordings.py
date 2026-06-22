@@ -241,7 +241,11 @@ async def internal_upload_recording(
 
     try:
         storage = get_storage_client()
-        storage.upload_file(storage_path, file_data, content_type=content_type)
+        # boto3 is synchronous; offload to a worker thread so the per-chunk
+        # upload does not block the event loop (and stall liveness probes).
+        await asyncio.to_thread(
+            storage.upload_file, storage_path, file_data, content_type=content_type
+        )
     except Exception as e:
         logger.error(f"Storage upload failed for {session_uid}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
@@ -508,7 +512,7 @@ async def download_media_file(
     # the dashboard can fall back to /raw (Pack P: this is the LAST
     # allowed fallback in the playback path until master_ready flag exists).
     try:
-        master_present = storage.file_exists(storage_path)
+        master_present = await asyncio.to_thread(storage.file_exists, storage_path)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning(f"file_exists check failed for {storage_path}: {e}")
         master_present = False
@@ -522,7 +526,7 @@ async def download_media_file(
         # fallback — local storage is dev-only.
         url = f"/recordings/{recording_id}/media/{media_file_id}/raw"
     else:
-        url = storage.get_presigned_url(storage_path, expires=3600)
+        url = await asyncio.to_thread(storage.get_presigned_url, storage_path, expires=3600)
 
     return {
         "url": url,
@@ -569,7 +573,7 @@ async def download_media_file_raw(
         raise HTTPException(status_code=404, detail="Media file not found")
 
     try:
-        data = get_storage_client().download_file(storage_path)
+        data = await asyncio.to_thread(get_storage_client().download_file, storage_path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Media file content not found in storage")
     except Exception as e:
