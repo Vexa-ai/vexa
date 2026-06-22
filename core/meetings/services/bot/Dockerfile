@@ -46,13 +46,12 @@ WORKDIR /build
 # whole tree is simplest+robust for a carved monorepo; the dep layer still caches
 # on the lockfile via the cache mount below.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json turbo.json ./
-# The full source tree (workspace globs in pnpm-workspace.yaml resolve under here). The five backend
-# domains live under core/ (gateway · identity · meetings · runtime · agent); the rest stay at root.
+# The source the bot build needs: the five backend domains under core/ (the bot + its @vexa/* workspace
+# deps all live under core/meetings/modules/*), plus scripts/. The other pnpm-workspace globs
+# (integrations/* · clients/* · sdks/* · tools/*) are green-on-empty: a fresh git clone omits empty
+# dirs and the bot depends on none of them, so they are intentionally NOT copied (COPYing an absent
+# dir fails the build).
 COPY core ./core
-COPY integrations ./integrations
-COPY clients ./clients
-COPY sdks ./sdks
-COPY tools ./tools
 COPY scripts ./scripts
 # NB: `schemas/` is a pnpm-workspace glob that is green-on-empty (no packages in
 # this carved tree) — it isn't present, so it's intentionally not COPYed here.
