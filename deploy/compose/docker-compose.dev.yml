@@ -1,0 +1,21 @@
+# docker-compose.dev.yml — DEV-CONTAINER overrides: hot code connection to the running images.
+#
+# Each service here mounts its SOURCE from the on-host checkout over the image's baked copy and runs
+# under a file-watcher that restarts the process on change. So the loop is: edit (or `git pull`) on the
+# host → the watcher restarts the service → the change is live, with NO image rebuild.
+#
+# Layer it LAST, on top of the base files, on the same project:
+#   docker compose -p vexa-dash \
+#     -f docker-compose.yml -f docker-compose.dashboard.yml -f docker-compose.stt.yml \
+#     -f docker-compose.dev.yml up -d --no-deps meeting-api
+#
+# Paths are relative to this file (deploy/compose/) → ../../core/... is the repo root's source.
+# `watchfiles` ships with uvicorn[standard] (already in the image); it reruns the target command when
+# any *.py under the mounted dir changes. meeting_api does async adapter wiring in __main__ before
+# uvicorn.run (no importable module-level app), so a process-RESTART watcher is the right model rather
+# than uvicorn's in-process --reload.
+services:
+  meeting-api:
+    volumes:
+      - ../../core/meetings/services/meeting-api/src:/app/src
+    command: ["python", "-m", "watchfiles", "python -m meeting_api", "/app/src"]
