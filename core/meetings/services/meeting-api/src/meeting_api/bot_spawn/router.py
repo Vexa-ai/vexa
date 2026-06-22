@@ -19,15 +19,25 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
-from .service import DuplicateMeeting, request_bot
+from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
     """Recording default: an explicit request value wins; else the ``RECORDING_ENABLED`` env
-    (default ``true``), so a dashboard bot records by default."""
-    if value is not None:
-        return bool(value)
-    return os.getenv("RECORDING_ENABLED", "true").lower() == "true"
+    (default ``true``), so a dashboard bot records by default. The request value is type-validated —
+    a bool is honored, a string is parsed (``"true"``/``"false"`` etc.), and any other type is a 422
+    (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``)."""
+    if value is None:
+        return os.getenv("RECORDING_ENABLED", "true").lower() == "true"
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off", ""):
+            return False
+    raise HTTPException(status_code=422, detail="recording_enabled must be a boolean")
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -103,6 +113,18 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             raise HTTPException(
                 status_code=422,
                 detail="'platform' and 'native_meeting_id' (or 'meeting_url') are required",
+            )
+        # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
+        # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
+        # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
+        # explicit meeting_url (required for zoom + white-label/unknown platforms).
+        if not meeting_url and construct_meeting_url(platform, native_meeting_id) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"unsupported platform '{platform}' without a meeting_url — "
+                    "use google_meet/teams, or provide meeting_url (required for zoom)"
+                ),
             )
 
         try:

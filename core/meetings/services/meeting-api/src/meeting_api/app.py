@@ -196,8 +196,15 @@ def _mount_lifecycle(
                 },
             )
         rec = change.record
-        envelope = build_status_change_envelope(change)
-        app.state.status_change_webhooks.append(envelope)
+        # Build + record the status_change envelope only on a REAL advance — an idempotent replay
+        # (change.no_op, e.g. the bot's 3x terminal retry) must NOT double-count it. The persist, the
+        # webhook deliver, and the ws publish below are already no_op-gated (they hang off meeting_row,
+        # set only on a real persist), so end-user delivery is exactly-once; this keeps the in-process
+        # envelope log honest too.
+        envelope = None
+        if not change.no_op:
+            envelope = build_status_change_envelope(change)
+            app.state.status_change_webhooks.append(envelope)
         # Persist the FSM advance to the DB meeting row → durable + queryable (GET /meetings reflects
         # it, survives a restart), not only the in-process MeetingStore. Best-effort: a DB hiccup must
         # never fail the bot's lifecycle callback (the in-process FSM + webhook already advanced).

@@ -126,17 +126,31 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         confirmed = [s for s in persisted if s["completed"]]
         pending = [s for s in persisted if not s["completed"]]
         speaker = persisted[0].get("speaker") or ""
-        await redis.publish(
-            _mutable_channel(meeting_id),
-            json.dumps({
-                "type": "transcript",
-                "meeting": {"id": meeting_id},
-                "speaker": speaker,
-                "confirmed": confirmed,
-                "pending": pending,
-                "ts": _now_iso(),
-            }),
-        )
+        # FAULT-ISOLATED (P18): the segments are already persisted (durable). A transient redis blip on
+        # the live :mutable publish must NOT propagate out of ingest() — that would abort the batch
+        # BEFORE consume_segments acks it, leaving the whole batch unacked + re-raised. Surface it and
+        # return the persisted count (the dashboard recovers the segment on its next REST refresh).
+        try:
+            await redis.publish(
+                _mutable_channel(meeting_id),
+                json.dumps({
+                    "type": "transcript",
+                    "meeting": {"id": meeting_id},
+                    "speaker": speaker,
+                    "confirmed": confirmed,
+                    "pending": pending,
+                    "ts": _now_iso(),
+                }),
+            )
+        except Exception as e:  # noqa: BLE001 — publish is best-effort; persistence already succeeded
+            try:
+                from ..obs import log_event
+
+                log_event("segment_publish_failed", audience="system", level="warning",
+                          span="collector.ingest",
+                          fields={"meeting_id": meeting_id, "error": str(e)})
+            except Exception:
+                pass
 
     return len(persisted)
 
