@@ -10,3 +10,4 @@ __pycache__/
 .env
 .env.*
 .recordings/
+deploy/execution-targets.json

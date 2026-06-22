@@ -45,8 +45,12 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
   const channel = mutableChannel(meetingId);
 
   async function publish(segment: TranscriptSegment): Promise<void> {
-    // Leg 1: durable stream → collector. The discriminator + segment fields, flattened.
-    const payload = JSON.stringify({ type: 'transcription', ...segment });
+    // Leg 1: durable stream → collector. The collector's `ingest` REQUIRES the envelope
+    // `{ type, meeting_id, segments:[…] }` — meeting_id to route the segment to its meeting, a
+    // `segments` LIST to drain (a payload missing either is silently dropped: ingest.py `return 0`).
+    // Emit that, not a flat segment, so the bot's transcripts actually reach the collector. (The
+    // mock-bot L3 lane caught the flat form: O6 read the raw stream directly and never exercised the collector.)
+    const payload = JSON.stringify({ type: 'transcription', meeting_id: meetingId, segments: [segment] });
     await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
 
     // Leg 2: live mutable channel → gateway → dashboard.

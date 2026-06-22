@@ -18,6 +18,33 @@ it one **objective** at a time under the loop below. **Goal** = destination (end
 **expected** (→ next objective, autonomously) or **unexpected** (→ stop, interpret *with the human*, as
 learning → codify, re-plan). Never drift; always in exactly one mode (ADR-0015/0017).
 
+## Where work runs — the execution-target registry (ADR-0020)
+The repo carries a **gitignored, host/user-specific** execution-target & resource registry
+(`deploy/execution-targets.json`; template `…example.json`; schema `deploy/contracts/execution-targets.v1`):
+the **targets** work may run on (name · arch · caps: docker·compose·amd64-bot·gpu·…) and the **resources** it
+needs (services, credential-sets, storage, a meeting, a human gate) — **secrets by reference, never inline** (P14).
+**In planning mode, before a plan is approved, RESOLVE *and VALIDATE* every stage's `Runs on:` + `Resources:`
+against the registry, and surface any missing/unavailable/unhealthy one as a blocker to clear first** — never
+enter execution on an unresolved one (Learning #22: the amd64 bot's host is `bbb`; consult the registry before
+escalating a "block").
+- **Resolve ≠ validate.** A resource is cleared only when a **cheap preflight PROVES it actually works** — the
+  endpoint reachable, the credential authenticates, the account **funded/in-balance**, the host runs what's
+  needed — *not* merely that it is recorded. **Surface the failure model in planning, not at execution**
+  (validation economy, §8.2 — cheap instrument first): a one-call STT probe in planning would have caught the
+  out-of-balance `402` that a 4-hour live run discovered (Learning #28). Each `Resources:` line names HOW it is
+  validated (the preflight check), and the registry records the *working* credential (not a stale/empty one).
+- Every objective in the ledger carries a `Runs on:` + `Resources:` line. Enforced by `gate:execution-env`
+  (the registry conforms) + the planning preflight (each resource's validation check passes).
+
+## Planning embeds the rules — the plan is self-bounding (ADR-0021)
+A plan does not merely *reference* the constitution; it **embeds the governing rules inline** so execution cannot
+drift. It (a) states the **end-goal** as a falsifiable, gate-backed definition-of-done (ADR-0017); (b) carries a
+**"Rules in force"** block with the *text* of every principle/loop-rule the work must obey; (c) walks each
+objective as a **visible hop** — *Objective → Expected → Observation (facts + what was NOT checked) → Verdict
+(expected→continue · unexpected→STOP+learn+re-plan) → end-goal check* — naming its principles/gates and an
+explicit **"Unexpected if:"** trigger; and (d) operationalizes any "better than X" claim as a **specific green
+gate** (P9), never prose. A plan without inline rules + per-hop `Expected` is not in the loop.
+
 ## How you work — the expectation–reality loop (§8)
 1. **Expect first.** State what the system *should* do and what "done" looks like for the current
    objective *before* acting. You can't detect a divergence you never defined.

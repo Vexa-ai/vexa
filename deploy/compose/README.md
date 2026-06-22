@@ -6,10 +6,10 @@ building its own slim `uv`-based image from `<service>/Dockerfile`:
 
 | service      | build context                          | host port | entrypoint                         |
 |--------------|----------------------------------------|-----------|------------------------------------|
-| admin-api    | `identity/services/admin-api`          | 18057     | `python -m admin_api`              |
-| runtime      | `runtime`                              | 18090     | `python -m runtime_kernel`         |
-| meeting-api  | `meetings/services/meeting-api`        | 18080     | `python -m meeting_api`            |
-| gateway      | `gateway/services/gateway`             | 18056     | `python -m gateway`                |
+| admin-api    | `core/identity/services/admin-api`     | 18057     | `python -m admin_api`              |
+| runtime      | `core/runtime`                         | 18090     | `python -m runtime_kernel`         |
+| meeting-api  | `core/meetings/services/meeting-api`   | 18080     | `python -m meeting_api`            |
+| gateway      | `core/gateway/services/gateway`        | 18056     | `python -m gateway`                |
 
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts

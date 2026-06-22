@@ -4,7 +4,7 @@
  * real as content lands — "an artifact exists only when gate-green" (P9).
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|python|stack|node|health|access|tracing|replay|
- *                                telemetry|eval|licenses|compose|all]
+ *                                telemetry|eval|licenses|compose|execution-env|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -141,6 +141,53 @@ function gateGraphPy() {
   return true;
 }
 
+// gate:test-isolation (P2/P9) — the TEST lane obeys the SAME module boundary as prod: a test must not
+// reach around a contract into a sibling package's internals. TS test files (`*.test.ts`) already live
+// under each brick's src/ and so are covered by gate:isolation; this closes the Python gap by scanning
+// every Python package's tests/ with the same allowed-edges rule (check-isolation-py.mjs --mode=test-isolation).
+// Green-on-empty.
+function gateTestIsolation() {
+  const s = join(ROOT, "scripts", "check-isolation-py.mjs");
+  try { execSync(`node ${JSON.stringify(s)} --mode=test-isolation`, { stdio: "pipe" }); }
+  catch (e) { return fail([`python test-isolation:\n${(e.stdout || e.stderr || e).toString().slice(0, 1200)}`]); }
+  console.log("  ✓ gate:test-isolation — no Python test imports a sibling module's internals (test lane gated, P2)");
+  return true;
+}
+
+// gate:arch-report (P9) — the architecture-compliance map is GREEN: every modularity principle
+// (P2·P3·P4·P6·P12) resolves to a passing gate. scripts/arch-report.mjs --check re-runs each and fails
+// loud if any is red — so "fully modular" is a claim backed by mechanical evidence, and docs/ARCH-COMPLIANCE.md
+// is regenerable + current. Green-on-empty before the report generator lands.
+function gateArchReport() {
+  const s = join(ROOT, "scripts", "arch-report.mjs");
+  if (!existsSync(s)) { console.log("  ✓ gate:arch-report — no report generator yet (green-on-empty)"); return true; }
+  try { execSync(`node ${JSON.stringify(s)} --check`, { stdio: "pipe" }); }
+  catch (e) { return fail([`arch-report:\n${(e.stdout || e.stderr || e).toString().slice(0, 900)}`]); }
+  console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate (P9)");
+  return true;
+}
+
+// gate:parity (P4/P9) — the "on-par-with-main" claim is COMPLETE: every capability + api.v1 endpoint row
+// in docs/PARITY-MAIN.md maps to a green proof (✅) — no row left unmapped (empty/TODO/gap/—) or red. Only
+// the on-par sections (§1 capability matrix, §2 endpoints) are enforced; §3 enhancements may list ⏳ planned
+// gates (A:V2/A:V3/Lane B). So "0.12 ≡ main" is a checked claim, not prose. Green-on-empty before the matrix lands.
+function gateParity() {
+  const f = join(ROOT, "docs", "PARITY-MAIN.md");
+  if (!existsSync(f)) { console.log("  ✓ gate:parity — no parity matrix yet (green-on-empty)"); return true; }
+  const text = readFileSync(f, "utf8");
+  const enforced = text.split(/^## /m).filter((s) => /^[12] ·/.test(s.trim())).join("\n");
+  const rows = enforced.split("\n").filter((l) =>
+    l.trim().startsWith("|") && !/^\s*\|\s*-+/.test(l) && !/\|\s*Proof\s*\|/.test(l));
+  const bad = [];
+  for (const r of rows) {
+    if (!r.includes("✅") || /\bTODO\b|\bgap\b|\bnone\b|⏳/i.test(r)) bad.push(r.trim().slice(0, 90));
+  }
+  if (!rows.length) return fail(["gate:parity — PARITY-MAIN.md has no capability/endpoint rows to check"]);
+  if (bad.length) return fail(["gate:parity — unmapped/incomplete on-par row(s):", ...bad.map((b) => "    " + b)]);
+  console.log(`  ✓ gate:parity — ${rows.length} capability/endpoint row(s) each map to a green proof (api.v1 ≡ main 1.5.0)`);
+  return true;
+}
+
 // gate:schema (P4/P8) — schemas/*.v1 goldens conform on both languages (real in Stage 1)
 function gateSchema() {
   const contracts = walkDirs().filter(
@@ -232,6 +279,31 @@ function gateCompose() {
   return true;
 }
 
+// gate:compose-stress (A:V2) — the control plane under CONCURRENT load (N mock bots at once): enforcement
+// holds (max-bots never overspills), every FSM reaches terminal under contention. OPT-IN + green-or-skip:
+// runs ONLY when COMPOSE_STRESS=1 (heavy → not in the routine `all`; `all` skips it green). Set
+// MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev too; delegates to the same real-stack runner (stress_test.py
+// runs as part of the session). On a shared host (bbb) pass COMPOSE_PROJECT + MINIO_HOST_PORT to isolate.
+function gateComposeStress() {
+  if (process.env.COMPOSE_STRESS !== "1") {
+    console.log("  ✓ gate:compose-stress — opt-in (COMPOSE_STRESS=1 + MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev) → skip");
+    return true;
+  }
+  return gateCompose();   // COMPOSE_STRESS=1 makes deploy/compose/tests/stress_test.py run on the live stack
+}
+
+// gate:compose-chaos (A:V3) — the control plane RECOVERS from injected dependency faults (a redis/meeting-api
+// blip via docker pause/unpause): the FSM still reaches a clean terminal (retry/backoff), never a silent
+// stall (P18). OPT-IN + green-or-skip: runs ONLY when COMPOSE_CHAOS=1 (heavy; not in the routine `all`).
+// Set MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev; delegates to the same real-stack runner (chaos_test.py).
+function gateComposeChaos() {
+  if (process.env.COMPOSE_CHAOS !== "1") {
+    console.log("  ✓ gate:compose-chaos — opt-in (COMPOSE_CHAOS=1 + MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev) → skip");
+    return true;
+  }
+  return gateCompose();   // COMPOSE_CHAOS=1 makes deploy/compose/tests/chaos_test.py run on the live stack
+}
+
 // gate:node — build + unit-test every workspace TS package via turbo (mirrors gate:python)
 function gateNode() {
   const pkgs = packageDirs().filter((d) => {
@@ -242,6 +314,22 @@ function gateNode() {
   try { execSync("npx turbo run build test --output-logs=errors-only", { cwd: ROOT, stdio: "pipe" }); }
   catch (e) { return fail([`turbo build/test:\n${(e.stdout || e.stderr || e).toString().slice(-2000)}`]); }
   console.log(`  ✓ gate:node — ${pkgs.length} package(s) · build + test green`);
+  return true;
+}
+
+// gate:eval-baseline (P19, Lane B / B:V2) — the WORKER-L4 eval is a standing, REUSABLE instrument: the
+// bot-eval verdict oracle self-test (core/meetings/services/bot/eval/verify.sh — clean→PASS, misattr→FAIL→brick)
+// passes OFFLINE, and the recorded ground truth (core/meetings/eval/BASELINE.md) exists. This gates that the
+// instrument is ready + calibrated; the live L4 SCORING (the bot on a real meeting ≥ BASELINE) is the
+// human-gated run (B:V1), reproduced offline on red via gate:replay. Green-on-empty before the harness lands.
+function gateEvalBaseline() {
+  const verify = join(ROOT, "core", "meetings", "services", "bot", "eval", "verify.sh");
+  const baseline = join(ROOT, "core", "meetings", "eval", "BASELINE.md");
+  if (!existsSync(verify)) { console.log("  ✓ gate:eval-baseline — no worker-eval harness yet (green-on-empty)"); return true; }
+  if (!existsSync(baseline)) return fail(["gate:eval-baseline — core/meetings/eval/BASELINE.md (recorded L4 ground truth) missing"]);
+  try { execSync(`bash ${JSON.stringify(verify)}`, { cwd: ROOT, stdio: "pipe" }); }
+  catch (e) { return fail([`eval-baseline oracle self-test:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  console.log("  ✓ gate:eval-baseline — worker-L4 eval oracle self-test passes + BASELINE.md recorded (reusable instrument; live score is B:V1)");
   return true;
 }
 
@@ -393,7 +481,26 @@ function gateEval() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose };
+// gate:execution-env (ADR-0020) — the execution-target registry conforms. Planning resolves every stage's
+// `Runs on:`/`Resources:` against this registry IN ADVANCE (the AGENTS.md rule); this gate is the mechanical
+// half: the committed template (deploy/execution-targets.example.json) MUST exist + conform to
+// execution-targets.v1, and the gitignored real file (deploy/execution-targets.json) is validated when present
+// (CI sees only the template). Secrets are references only — enforced by the schema's secret_ref pattern (P14).
+// GREEN-ON-EMPTY before the contract lands.
+function gateExecutionEnv() {
+  const v = join(ROOT, "deploy", "contracts", "execution-targets.v1", "validate.mjs");
+  if (!existsSync(v)) { console.log("  ✓ gate:execution-env — no registry contract yet (green-on-empty)"); return true; }
+  const example = join(ROOT, "deploy", "execution-targets.example.json");
+  if (!existsSync(example)) return fail(["gate:execution-env — committed template deploy/execution-targets.example.json missing"]);
+  const real = join(ROOT, "deploy", "execution-targets.json");
+  const files = [example, ...(existsSync(real) ? [real] : [])];
+  try { execSync(`node ${JSON.stringify(v)} ${files.map((f) => `--file ${JSON.stringify(f)}`).join(" ")}`, { stdio: "pipe" }); }
+  catch (e) { return fail([`execution-env registry:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  console.log(`  ✓ gate:execution-env — ${files.length} registry file(s) conform to execution-targets.v1${existsSync(real) ? "" : " (template only — real registry gitignored/absent)"}`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

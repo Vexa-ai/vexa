@@ -115,6 +115,30 @@ local `pnpm gates` + pre-push, what-each-gate-checks/if-it-fails, preserved auth
 - desktop `live_sessions` cosmetic counter bug. prod bot backend 503s on concurrent spawns — launch one-by-one (eval rig).
 - mixed lane warm-up ~25s / oversegmentation ~20%.
 
+## Backend SoC validation — ✅ Lane A done; Lane B human-gated (2026-06-21)
+A contract-faithful **mock bot** (reuses the real orchestrator+adapters, fakes only Join+Pipeline) validates the
+**control plane at L3 on the real compose stack** — backend ⊥ worker, runnable anywhere. All green on bbb, committed
+to `claude/busy-bouman-9ea75f` ([`docs/PARITY-MAIN.md`](PARITY-MAIN.md) · [`docs/ARCH-COMPLIANCE.md`](ARCH-COMPLIANCE.md)).
+- **Lane A (✅):** A:V1 lifecycle/edge-cases (`gate:compose`+MOCK_BOT, 16 passed) · A:V2 stress · A:V3 chaos · A:V4
+  modularity (`gate:test-isolation`/`gate:arch-report`) · A:V5 parity (`gate:parity`). New: execution-target registry
+  (`gate:execution-env`, ADR-0020) + planning-embeds-rules (ADR-0021).
+- **Lane B (worker-L4): harness reusable + gated (`gate:eval-baseline`); live admit DONE.** The real bot — **spawned by the
+  real API** (`POST /bots` → gateway → meeting-api → runtime → `vexaai/vexa-bot:v012`) — joined `rvf-kywf-pxb`, was **admitted**,
+  reached `active`, and captured **3 streams**; the DB read `active` (the persistence fix **proven LIVE against the production
+  bot**, not only the mock). The transcript **score** awaits two deferred items: `bot_spawn` STT-wiring (task; confirmed live as
+  `transcriptionServiceUrl:<MISSING>`) + `internal@vexa.ai` `/balance`=0 (`/purchase`). Learning #28.
+- **The mock lane caught 5 real backend bugs O6 (L4) missed** (it bypassed the control plane — raw-stream reads + the
+  legacy image). **Fixed + gate-green:** `VEXA_BOT_CONFIG` (was `BOT_CONFIG`) · lifecycle now persists to the DB (✅ confirmed
+  live via the API) · transcript envelope matches the collector · **`bot_spawn` STT-wiring** (the invocation now carries
+  `transcriptionServiceUrl/Token` — an API-spawned bot transcribes). **Flagged (tasks):** `DELETE /bots` route unmounted ·
+  max-bots TOCTOU overspill · bot-orphan-on-terminal. Learning #27. **Close: `pnpm gates` GREEN (exit 0); meeting-api 143 pass.**
+- **Dashboard wired + full-surface harness (✅ green on bbb).** main's dashboard de-vendored enough to BUILD in 0.12
+  (`packages/transcript-rendering` + the docs helpers it was missing; 0.12-layout Dockerfile + `docker-compose.dashboard.yml`
+  overlay → `vexa-dashboard:dev`, gateway-wired, self-host auth). `make -C deploy/compose dashboard-harness` proves the two
+  flows the user asked for against the real stack via the MOCK bot: **config · send-bot (the dashboard proxy → gateway →
+  runtime) · real-time WS transcript** (through the dashboard's own `/ws`). Caught + fixed a real bug: `/api/config` was
+  build-time-cached (`authToken:null`) → `force-dynamic`. Real-bot real transcript = a real-bot run + the internal STT.
+
 ## Done (audit trail)
 - **Re-grounded** on main's real stack (deployments/images/postgres); discarded the sqlite meeting-api tangent (Learning #20).
 - **Contracts sealed to main:** `api.v1` (17/17) + `ws.v1` (7/7); 8 sealed, gates green.

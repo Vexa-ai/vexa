@@ -1,0 +1,25 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - img "Vexa Logo" [ref=e5]
+      - generic [ref=e6]: vexa
+    - heading "Drop a bot to your meeting" [level=1] [ref=e7]
+    - generic [ref=e9]:
+      - textbox "Paste meeting URL..." [active] [ref=e10]
+      - button "Continue with meeting URL" [disabled] [ref=e11]:
+        - img [ref=e12]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - img "Google Meet" [ref=e16]
+        - text: Google Meet
+      - generic [ref=e17]:
+        - img "Microsoft Teams" [ref=e18]
+        - text: Microsoft Teams
+      - link "Create a Meet" [ref=e19] [cursor=pointer]:
+        - /url: https://meet.new
+        - img [ref=e20]
+        - text: Create a Meet
+    - button "Already have an account? Sign in" [ref=e21]
+    - paragraph [ref=e22]: Open Source · Developer-first · API-first
+  - region "Notifications alt+T"
+  - alert [ref=e23]

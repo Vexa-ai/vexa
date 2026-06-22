@@ -103,6 +103,43 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
+    async def update_meeting_status(
+        self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None
+    ) -> None:
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            sess = (
+                await db.execute(select(MeetingSession).where(MeetingSession.session_uid == session_uid))
+            ).scalars().first()
+            if sess is None:
+                return  # unknown session (e.g. a self-host bot) — nothing to persist
+            m = (
+                await db.execute(select(Meeting).where(Meeting.id == sess.meeting_id))
+            ).scalars().first()
+            if m is None:
+                return
+            m.status = status
+            merged = dict(m.data) if isinstance(m.data, dict) else {}
+            if completion_reason is not None:
+                merged["completion_reason"] = completion_reason
+            if failure_stage is not None:
+                merged["failure_stage"] = failure_stage
+            for k, v in (data or {}).items():
+                merged[k] = v
+            m.data = merged
+            flag_modified(m, "data")
+            # Naive UTC into the naive time columns (tz-aware → asyncpg DataError, per set_bot_container).
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            if status == "active" and m.start_time is None:
+                m.start_time = now
+            if status in ("completed", "failed") and m.end_time is None:
+                m.end_time = now
+            await db.commit()
+
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         from sqlalchemy import func, select
 

@@ -70,17 +70,19 @@ def create_app(
     async def health():
         return {"status": "ok", "service": "meeting-api"}
 
-    # --- lifecycle: bot lifecycle callbacks + FSM (lifecycle.v1) ---
-    sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
-    app.state.lifecycle_sink = sink
-    app.state.lifecycle_store = sink.store
-    _mount_lifecycle(app, sink)
-
-    # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
+    # --- bot_spawn ports (resolved FIRST: the meeting_repo is also the lifecycle-persistence target) ---
     if meeting_repo is None:
         meeting_repo = _bot_spawn_fakes().InMemoryMeetingRepo()
     if runtime is None:
         runtime = _bot_spawn_fakes().FakeRuntimeClient()
+
+    # --- lifecycle: bot lifecycle callbacks + FSM (lifecycle.v1), PERSISTED to the meeting row ---
+    sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
+    app.state.lifecycle_sink = sink
+    app.state.lifecycle_store = sink.store
+    _mount_lifecycle(app, sink, meeting_repo)
+
+    # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
 
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
@@ -101,13 +103,16 @@ def create_app(
 # ── lifecycle mount (the receiver's callback route, on the shared app) ───────────────────────────
 
 
-def _mount_lifecycle(app: FastAPI, sink: LifecycleSink) -> None:
+def _mount_lifecycle(app: FastAPI, sink: LifecycleSink, meeting_repo: "_bot_spawn.MeetingRepo") -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
 
     P3a — each FSM advance emits the sealed ``meeting.status_change`` webhook.v1 envelope and
     records the full diagnostics (``status_transition[]`` + forensics in ``rec.data``). The
-    receiver is a bot callback → ``transition_source=bot_callback``.
+    receiver is a bot callback → ``transition_source=bot_callback``. Each advance is ALSO persisted
+    to the DB meeting row via ``meeting_repo`` (durable + queryable status, not only the in-process
+    store). Also mounts ``POST /runtime/callback`` so the runtime kernel's workload callbacks ACK
+    (no 404-retry).
     """
     import jsonschema
 
@@ -148,6 +153,21 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink) -> None:
         rec = change.record
         envelope = build_status_change_envelope(change)
         app.state.status_change_webhooks.append(envelope)
+        # Persist the FSM advance to the DB meeting row → durable + queryable (GET /meetings reflects
+        # it, survives a restart), not only the in-process MeetingStore. Best-effort: a DB hiccup must
+        # never fail the bot's lifecycle callback (the in-process FSM + webhook already advanced).
+        if rec.status is not None:
+            try:
+                await meeting_repo.update_meeting_status(
+                    session_uid=rec.connection_id,
+                    status=rec.status.value,
+                    completion_reason=rec.completion_reason.value if rec.completion_reason else None,
+                    failure_stage=rec.failure_stage.value if rec.failure_stage else None,
+                    data=rec.data if isinstance(rec.data, dict) else None,
+                )
+            except Exception as e:  # noqa: BLE001 — persistence is best-effort
+                log_event("lifecycle_persist_failed", audience="system", level="warning",
+                          span="lifecycle.callback", fields={"error": str(e)})
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,
@@ -166,6 +186,23 @@ def _mount_lifecycle(app: FastAPI, sink: LifecycleSink) -> None:
                 "data": rec.data,
             },
         )
+
+    @app.post("/runtime/callback")
+    async def runtime_callback(request: Request) -> JSONResponse:
+        """ACK the runtime kernel's workload-level callback (state/terminal events). The bot's own
+        ``lifecycle.v1`` callback is the meeting-status source of truth (persisted above); this route
+        exists so the kernel's callback does not 404-retry. (Mapping a never-started workload →
+        meeting ``failed`` is a follow-up; the started-bot path is fully covered by the bot callback.)"""
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        log_event(
+            "runtime_callback", audience="system", span="runtime.callback",
+            fields={"workload_id": body.get("workloadId") or body.get("workload_id"),
+                    "state": body.get("state")},
+        )
+        return JSONResponse(status_code=200, content={"status": "accepted"})
 
 
 # ── lazy fake imports (keep the default in-memory stack off the prod import path) ────────────────
