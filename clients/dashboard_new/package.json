@@ -8,7 +8,9 @@
   ],
   "scripts": {
     "dev": "next dev -p 3002",
+    "dev:bricks": "for b in modules/*/; do (cd \"$b\" && npx tsc --watch --preserveWatchOutput &) ; done; wait",
     "build": "next build",
+    "build:bricks": "for b in modules/*/; do (cd \"$b\" && npm run build) || exit 1; done",
     "start": "next start -p 3002",
     "test:bricks": "for b in modules/*/; do (cd \"$b\" && npm test) || exit 1; done"
   },
