@@ -22,6 +22,12 @@ K8S_IMAGE_PULL_SECRET = os.getenv("K8S_IMAGE_PULL_SECRET", "")
 PROCESS_LOGS_DIR = os.getenv("PROCESS_LOGS_DIR", "/var/log/containers")
 PROCESS_REAPER_INTERVAL = int(os.getenv("PROCESS_REAPER_INTERVAL", "30"))
 
+# RunPod backend
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
+RUNPOD_GPU_TYPE = os.getenv("RUNPOD_GPU_TYPE", "NVIDIA GeForce RTX 3090")
+RUNPOD_CLOUD_TYPE = os.getenv("RUNPOD_CLOUD_TYPE", "COMMUNITY")
+RUNPOD_CONTAINER_DISK_GB = int(os.getenv("RUNPOD_CONTAINER_DISK_GB", "40"))
+RUNPOD_POLL_INTERVAL = int(os.getenv("RUNPOD_POLL_INTERVAL", "15"))
 # Profiles
 PROFILES_PATH = os.getenv("PROFILES_PATH", "profiles.yaml")
 

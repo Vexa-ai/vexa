@@ -14,6 +14,11 @@ RUNTIME_API_TOKEN = os.environ.get("RUNTIME_API_TOKEN", "")
 # Self URL — used for callback_url in container creation
 MEETING_API_URL = os.environ.get("MEETING_API_URL", "http://meeting-api:8080")
 
+# Bot-facing URLs — passed to bot pods via BOT_CONFIG.
+# On RunPod, bots need the stateful pod's public IP, while internal services
+# use localhost. Defaults to the internal URLs for Docker Compose compatibility.
+BOT_REDIS_URL = os.environ.get("BOT_REDIS_URL", REDIS_URL)
+BOT_MEETING_API_URL = os.environ.get("BOT_MEETING_API_URL", MEETING_API_URL)
 # Bot image / profile
 BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE_NAME", "vexaai/vexa-bot:latest")
 

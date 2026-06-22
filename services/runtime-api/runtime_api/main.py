@@ -87,7 +87,7 @@ def create_app() -> FastAPI:
         logger.info(f"Backend '{config.ORCHESTRATOR_BACKEND}' initialized")
 
         # Process backend needs Redis reference
-        if config.ORCHESTRATOR_BACKEND == "process":
+        if config.ORCHESTRATOR_BACKEND in ("process", "runpod"):
             backend.set_redis(app.state.redis)
 
         # Reconcile state with backend reality
@@ -138,8 +138,11 @@ def _create_backend():
     elif backend_name == "process":
         from runtime_api.backends.process import ProcessBackend
         return ProcessBackend()
+    elif backend_name == "runpod":
+        from runtime_api.backends.runpod import RunPodBackend
+        return RunPodBackend()
     else:
-        raise ValueError(f"Unknown backend: {backend_name}. Use: docker, kubernetes, process")
+        raise ValueError(f"Unknown backend: {backend_name}. Use: docker, kubernetes, process, runpod")
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
