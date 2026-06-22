@@ -37,6 +37,73 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
+def _parse_range(range_header: Optional[str], total: int) -> Optional[tuple[int, int]]:
+    """Parse an HTTP ``Range: bytes=start-end`` header against a known total size.
+
+    Returns the resolved INCLUSIVE ``(start, end)`` byte offsets, or ``None`` when there is no
+    range / it is not a byte range we honor (caller serves the full 200 body). Raises
+    ``HTTPException(416)`` for a syntactically valid but unsatisfiable range. Forms handled:
+    ``bytes=start-end``, ``bytes=start-`` (to EOF), ``bytes=-suffix`` (last N bytes); a multi-range
+    header (commas) honors only the FIRST range.
+    """
+    if not range_header:
+        return None
+    spec = range_header.strip()
+    if not spec.lower().startswith("bytes="):
+        return None  # only byte ranges; fall back to full body
+    spec = spec[len("bytes="):]
+    first = spec.split(",", 1)[0].strip()  # multi-range → honor the first
+    if "-" not in first:
+        return None
+    start_s, _, end_s = first.partition("-")
+    start_s, end_s = start_s.strip(), end_s.strip()
+    try:
+        if start_s == "":
+            # bytes=-suffix → the last `suffix` bytes
+            if end_s == "":
+                return None
+            suffix = int(end_s)
+            if suffix <= 0:
+                return None
+            start = max(0, total - suffix)
+            end = total - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s != "" else total - 1
+    except ValueError:
+        return None  # unparseable → fall back to full body
+    if start < 0:
+        return None
+    if start >= total:
+        # Syntactically valid but unsatisfiable → 416 with Content-Range: bytes */total.
+        raise HTTPException(
+            status_code=416,
+            detail="Requested range not satisfiable",
+            headers={"Content-Range": f"bytes */{total}", "Accept-Ranges": "bytes"},
+        )
+    end = min(end, total - 1)  # clamp to the last byte
+    if end < start:
+        return None  # e.g. bytes=5-3 → ignore, serve full body
+    return start, end
+
+
+async def _storage_size(storage: Storage, key: str) -> Optional[int]:
+    """Object size without fetching the body when the adapter exposes ``size``; else ``None``."""
+    sizer = getattr(storage, "size", None)
+    if sizer is None:
+        return None
+    return await sizer(key)
+
+
+async def _storage_get_range(storage: Storage, key: str, start: int, end: int) -> Optional[bytes]:
+    """Fetch ONLY ``[start, end]`` (inclusive) when the adapter exposes ``get_range`` (S3 passes the
+    Range through to ``get_object``); else ``None`` so the caller slices a full ``get()``."""
+    getter = getattr(storage, "get_range", None)
+    if getter is None:
+        return None
+    return await getter(key, start, end)
+
+
 def build_router(
     repo: RecordingRepo,
     storage: Storage,
@@ -187,7 +254,6 @@ def build_router(
         storage_path = mf.get("storage_path")
         if not storage_path:
             raise HTTPException(status_code=404, detail="Media file has no storage path")
-        data = await storage.get(storage_path)
         media_format = mf.get("format", "webm")
         if media_format == "wav":
             content_type = "audio/wav"
@@ -195,10 +261,43 @@ def build_router(
             content_type = "audio/webm" if mf.get("type") == "audio" else "video/webm"
         else:
             content_type = "application/octet-stream"
+
+        # Honor HTTP Range so the <audio>/<video> element + dashboard proxy can seek without
+        # downloading the whole master. Resolve total size cheaply (S3 head) when we can; only fall
+        # back to fetching the full body if neither size() nor get_range() are available.
+        range_header = request.headers.get("range") or request.headers.get("Range")
+        total = await _storage_size(storage, storage_path)
+        full_body: Optional[bytes] = None
+        if total is None:
+            full_body = await storage.get(storage_path)
+            total = len(full_body)
+
+        rng = _parse_range(range_header, total)  # may raise 416
+        if rng is None:
+            data = full_body if full_body is not None else await storage.get(storage_path)
+            return Response(
+                content=data,
+                media_type=content_type,
+                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data))},
+            )
+
+        start, end = rng
+        slice_bytes: Optional[bytes] = None
+        if full_body is None:
+            slice_bytes = await _storage_get_range(storage, storage_path, start, end)
+        if slice_bytes is None:
+            if full_body is None:
+                full_body = await storage.get(storage_path)
+            slice_bytes = full_body[start : end + 1]
         return Response(
-            content=data,
+            content=slice_bytes,
+            status_code=206,
             media_type=content_type,
-            headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data))},
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Content-Length": str(len(slice_bytes)),
+            },
         )
 
     return router

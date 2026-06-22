@@ -34,6 +34,16 @@ class Storage(Protocol):
 
     async def exists(self, key: str) -> bool: ...
 
+    async def size(self, key: str) -> int:
+        """Object byte size WITHOUT fetching the body — lets the raw media route resolve
+        ``Content-Range`` / a 416 for an HTTP Range without downloading the whole master."""
+        ...
+
+    async def get_range(self, key: str, start: int, end: int) -> bytes:
+        """The INCLUSIVE byte slice ``[start, end]`` — S3/MinIO pass the Range through to
+        ``get_object`` so seeking fetches only the requested window, not the whole object."""
+        ...
+
 
 @runtime_checkable
 class RecordingRepo(Protocol):

@@ -120,8 +120,21 @@ no session row, meeting stuck `requested`. Fix: compensating teardown on post-sp
 `collector/ingest.py:129` — `redis.publish()` un-wrapped; a blip aborts the batch before its ack. Fix:
 try/except + log, still return the persisted count (match the lifecycle path).
 
-### Priority order for synthesis
-HIGH: ROB1, ROB2 · MED: A2, A4, WH1, ROB3, ROB4 · P2: A1 · P3: R1, WH2 · LOW: A3, WH3, L1.
+### Synthesis status (live progress)
+- 🟢 **A1** platform→422 — fixed (router) + **L4-verified live on bbb** (gmeet/webex/non-string → 422).
+- 🟢 **A2** recording_enabled type-validate — fixed + **L4-verified** (bad type → 422).
+- 🟢 **L1** no-op envelope dedup — fixed (app.py) + offline-green.
+- 🟢 **ROB4** collector publish fault-isolation — fixed (ingest.py) + offline-green.
+- 🟢 **R1** recordings HTTP Range — fixed (206/Content-Range/416, S3 Range pass-through) + offline-green; L4 pending deploy.
+- 🟢 **WH3** double-backoff — fixed (retry.py: drain indexes by `attempt+1`); effective schedule now
+  `[60,300,1800,7200]`, total bounded attempts = 5 (was 6). Offline-green.
+- 🟢 **WH1** dead-letter queue — fixed: exhausted/age-expired envelopes pushed to redis `webhook:dead_letter`
+  (LTRIM-capped 1000) + `webhook_dead_lettered` log. Offline-green.
+- 🟡 **ROB1, ROB2, ROB3, A4** (TOCTOU + orphan + fail-fast) — fix in progress (review + live-DB verify pending).
+- ⏸️ **WH2** SSRF-TOCTOU (DNS rebinding) — deferred (needs IP-pin + httpx resolution hook); xfail kept.
+- ⏸️ **A3** DELETE invalid platform → 404 vs 422 — left as documented drift (idempotent-delete semantics OK).
+
+Batch 1 (A1/A2/L1/ROB4) committed `657036b` + deployed to bbb via the dev loop (watchfiles reload).
 
 **Already-mature (confirmed):** lifecycle publish-failure → still 200 + DB advances; segment durability
 under publish failure; all 4 background loops survive a throwing tick; sequential cap+dedup correct; auth

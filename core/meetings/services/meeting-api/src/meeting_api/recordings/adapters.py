@@ -45,6 +45,14 @@ class S3Storage:
     async def get(self, key: str) -> bytes:
         return self._c().get_object(Bucket=self._bucket, Key=key)["Body"].read()
 
+    async def size(self, key: str) -> int:
+        return int(self._c().head_object(Bucket=self._bucket, Key=key)["ContentLength"])
+
+    async def get_range(self, key: str, start: int, end: int) -> bytes:
+        # Pass the byte range through to S3 (inclusive offsets) so we fetch only the requested window.
+        resp = self._c().get_object(Bucket=self._bucket, Key=key, Range=f"bytes={start}-{end}")
+        return resp["Body"].read()
+
     async def exists(self, key: str) -> bool:
         from botocore.exceptions import ClientError
 

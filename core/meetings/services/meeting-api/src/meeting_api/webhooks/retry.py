@@ -19,6 +19,11 @@ from .delivery import build_headers
 
 RETRY_QUEUE_KEY = "webhook:retry_queue"
 
+# A dead-letter list for envelopes that exhaust the schedule or age out — so a
+# permanently-failed delivery (e.g. a meeting.completed) is observable, not silently dropped.
+DEAD_LETTER_KEY = "webhook:dead_letter"
+DEAD_LETTER_MAX = 1000  # cap the DLQ length (keep the most recent N entries)
+
 # attempt -> delay until next retry (seconds). The parent's exact schedule.
 BACKOFF_SCHEDULE = [60, 300, 1800, 7200]  # 1m, 5m, 30m, 2h
 
@@ -61,8 +66,13 @@ class RetryQueue:
         return await self.redis.llen(self.key)
 
 
-async def _deliver_one(entry: dict, transport: Transport) -> bool:
-    """Attempt one queued delivery. True = success (or permanent 4xx → stop retrying)."""
+async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optional[int], Optional[str]]:
+    """Attempt one queued delivery.
+
+    Returns ``(success, status_code, error)``. ``success`` is True on a 2xx (or a
+    permanent 4xx → stop retrying); the status_code/error are surfaced so a permanently
+    failed entry can be dead-lettered with its last outcome.
+    """
     url = entry["url"]
     envelope = entry["payload"]
     secret = entry.get("webhook_secret")
@@ -73,12 +83,62 @@ async def _deliver_one(entry: dict, transport: Transport) -> bool:
         resp = await transport(url, payload_bytes, headers)
         code = getattr(resp, "status_code", 0)
         if code < 300:
-            return True
+            return True, code, None
         if code >= 500 or code == 429:
-            return False  # transient — re-enqueue
-        return True  # 4xx (non-429) — permanent, drop (don't re-enqueue)
-    except Exception:  # noqa: BLE001 — transport error is transient
-        return False
+            return False, code, f"HTTP {code}"  # transient — re-enqueue
+        return True, code, f"HTTP {code}"  # 4xx (non-429) — permanent, drop (don't re-enqueue)
+    except Exception as e:  # noqa: BLE001 — transport error is transient
+        return False, None, str(e)
+
+
+async def _dead_letter(
+    redis: Any,
+    entry: dict,
+    *,
+    reason: str,
+    status_code: Optional[int] = None,
+    error: Optional[str] = None,
+    now: float,
+    key: str = DEAD_LETTER_KEY,
+) -> None:
+    """Persist a permanently-failed envelope to the dead-letter list + log it.
+
+    Without this an exhausted / aged-out webhook (e.g. a meeting.completed) would vanish
+    with no operator visibility. The DLQ record carries the routing + last-failure metadata;
+    the list is capped (LTRIM) so it can't grow unbounded.
+    """
+    record = {
+        "url": entry.get("url"),
+        "payload": entry.get("payload"),
+        "label": entry.get("label", ""),
+        "attempts": entry.get("attempt", 0),
+        "reason": reason,
+        "last_status_code": status_code,
+        "last_error": error,
+        "created_at": entry.get("created_at"),
+        "dead_lettered_at": now,
+    }
+    if entry.get("metadata"):
+        record["metadata"] = entry["metadata"]
+    await redis.rpush(key, json.dumps(record))
+    # Keep only the most recent DEAD_LETTER_MAX entries.
+    await redis.ltrim(key, -DEAD_LETTER_MAX, -1)
+
+    try:
+        from ..obs import log_event
+    except Exception:  # noqa: BLE001 — never let logging wiring break the drain
+        log_event = None
+    if log_event is not None:
+        log_event(
+            "webhook_dead_lettered", audience="system", level="warning",
+            span="webhook.retry_drain",
+            fields={
+                "url": record["url"], "label": record["label"],
+                "attempts": record["attempts"], "reason": reason,
+                "last_status_code": status_code, "last_error": error,
+                "created_at": record["created_at"],
+            },
+        )
 
 
 async def drain_retry_queue(
@@ -91,9 +151,14 @@ async def drain_retry_queue(
     """One worker sweep: process every READY entry once. Returns #processed.
 
     Entries not yet due (`next_retry_at > now`) are re-queued untouched. Entries past
-    MAX_AGE are dropped. Failed-but-retryable entries get a bumped `attempt` + the next
-    backoff and are re-queued, until the schedule is exhausted. Pass `now` to drive the
-    clock forward deterministically in the eval (no real sleeps).
+    MAX_AGE, or that exhaust the schedule, are dead-lettered (not silently dropped).
+    Failed-but-retryable entries get a bumped `attempt` + the next backoff and are
+    re-queued. Pass `now` to drive the clock forward deterministically in the eval.
+
+    Backoff is indexed by `attempt + 1`: `enqueue` already set the first wait to
+    BACKOFF_SCHEDULE[0] (60s), so the drain schedules the *next* wait. The effective wait
+    sequence a target experiences is therefore exactly the schedule (60, 300, 1800, 7200),
+    and the total bounded HTTP attempts are 1 sync + len(BACKOFF_SCHEDULE) drain = 5.
     """
     clock = time.time() if now is None else now
     queue_len = await redis.llen(key)
@@ -118,23 +183,31 @@ async def drain_retry_queue(
         attempt = entry.get("attempt", 0)
 
         if clock - created_at > MAX_AGE_SECONDS:
-            processed += 1  # expired — drop
+            processed += 1  # expired — dead-letter (don't deliver)
+            await _dead_letter(redis, entry, reason="max_age_exceeded", now=clock)
             continue
 
         if next_retry_at > clock:
             requeue.append(raw)  # not due yet
             continue
 
-        success = await _deliver_one(entry, transport)
+        success, status_code, error = await _deliver_one(entry, transport)
         processed += 1
 
         if success:
             continue
-        if attempt >= len(BACKOFF_SCHEDULE):
-            continue  # exhausted — drop (permanently failed)
-        entry["attempt"] = attempt + 1
-        backoff_idx = min(attempt, len(BACKOFF_SCHEDULE) - 1)
-        entry["next_retry_at"] = clock + BACKOFF_SCHEDULE[backoff_idx]
+        # The first wait (BACKOFF[0]) was already applied at enqueue, so the next wait is
+        # BACKOFF[attempt + 1]. When that index runs off the end the schedule is exhausted.
+        next_idx = attempt + 1
+        if next_idx >= len(BACKOFF_SCHEDULE):
+            # exhausted — dead-letter (permanently failed)
+            await _dead_letter(
+                redis, entry, reason="schedule_exhausted",
+                status_code=status_code, error=error, now=clock,
+            )
+            continue
+        entry["attempt"] = next_idx
+        entry["next_retry_at"] = clock + BACKOFF_SCHEDULE[next_idx]
         requeue.append(json.dumps(entry))
 
     if requeue:

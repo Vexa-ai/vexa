@@ -31,6 +31,13 @@ class InMemoryStorage:
     async def get(self, key: str) -> bytes:
         return self.blobs[key]
 
+    async def size(self, key: str) -> int:
+        return len(self.blobs[key])
+
+    async def get_range(self, key: str, start: int, end: int) -> bytes:
+        # INCLUSIVE [start, end], like S3's get_object(Range=...).
+        return self.blobs[key][start : end + 1]
+
     async def exists(self, key: str) -> bool:
         return key in self.blobs
 

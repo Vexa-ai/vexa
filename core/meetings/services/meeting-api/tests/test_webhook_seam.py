@@ -42,6 +42,7 @@ from meeting_api.webhooks import (
     sign_payload,
     validate_webhook_url,
 )
+from meeting_api.webhooks.retry import DEAD_LETTER_KEY
 
 SECRET = "whsec_seam_secret"
 URL = "https://hooks.example.com/vexa"
@@ -367,8 +368,8 @@ async def test_enqueue_first_retry_uses_first_backoff(fake_redis):
 
 
 async def test_backoff_delays_match_schedule_each_sweep(fake_redis):
-    """Drive the clock forward sweep-by-sweep and assert the next_retry_at delay applied at
-    each failed attempt is exactly BACKOFF_SCHEDULE[min(attempt, last)]."""
+    """Drive the clock forward sweep-by-sweep and assert the EFFECTIVE wait sequence a target
+    experiences is exactly the documented schedule [60, 300, 1800, 7200] (WH3 fixed)."""
     queue = RetryQueue(fake_redis)
     t = ScriptedTransport(default_code=500)  # always fail → keep re-queuing
     sink = WebhookSink(transport=t, queue=queue, resolver=_PUBLIC)
@@ -381,7 +382,10 @@ async def test_backoff_delays_match_schedule_each_sweep(fake_redis):
     await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 1}),
                         webhook_secret=SECRET, now=base)
 
-    observed_delays: List[float] = []
+    # The first wait is the one enqueue set (base+60); each later wait is the one a failed drain
+    # sweep sets on the requeued entry. Together they form the effective wait sequence.
+    first_due = json.loads(await fake_redis.lindex(RETRY_QUEUE_KEY, 0))["next_retry_at"]
+    effective_delays: List[float] = [first_due - base]
     clock = base
     for _ in range(len(BACKOFF_SCHEDULE) + 2):
         depth = await queue.depth()
@@ -395,15 +399,13 @@ async def test_backoff_delays_match_schedule_each_sweep(fake_redis):
         if await queue.depth() == 0:
             break
         nxt = json.loads(await fake_redis.lindex(RETRY_QUEUE_KEY, 0))
-        observed_delays.append(nxt["next_retry_at"] - clock)
+        effective_delays.append(nxt["next_retry_at"] - clock)
 
-    # MEASURED behavior: the requeue delay on a failed sweep is BACKOFF_SCHEDULE[min(attempt, last)]
-    # with attempt advancing 0→1→2→3. So the delays SET during the drain are exactly the schedule
-    # [60, 300, 1800, 7200]. NOTE the off-by-one quirk: enqueue() ALSO set the very first
-    # next_retry_at to +60 (schedule[0]), so the EFFECTIVE wait sequence a target experiences is
-    # 60, 60, 300, 1800, 7200 — the 1m backoff fires twice. Documented as a low-severity finding.
-    assert observed_delays == [float(d) for d in BACKOFF_SCHEDULE], (
-        f"backoff delays diverged from the documented schedule: {observed_delays} "
+    # WH3 FIXED: enqueue sets the first wait to BACKOFF[0] (60) and the drain indexes the NEXT
+    # wait by attempt+1, so the effective sequence is exactly [60, 300, 1800, 7200] — the 1m
+    # backoff no longer fires twice. The delays SET during drain are BACKOFF_SCHEDULE[1:].
+    assert effective_delays == [float(d) for d in BACKOFF_SCHEDULE], (
+        f"effective wait sequence diverged from the documented schedule: {effective_delays} "
         f"!= {[float(d) for d in BACKOFF_SCHEDULE]}"
     )
 
@@ -455,18 +457,18 @@ async def test_exhausted_schedule_drops_entry(fake_redis):
         await drain_retry_queue(fake_redis, t, now=clock)
         sweeps += 1
     assert await queue.depth() == 0, "entry must be dropped after the schedule is exhausted"
-    # MEASURED: the entry is DELIVERED on attempts 0,1,2,3 (re-queued each time) and AGAIN on
-    # the attempt==4 sweep, where _deliver_one runs first and only THEN the `attempt >= len`
-    # exhaustion `continue` drops it. So it survives 5 due sweeps total before vanishing.
-    assert sweeps == len(BACKOFF_SCHEDULE) + 1, f"unexpected sweep count {sweeps}"
+    # WH3 FIXED: the entry is DELIVERED on attempts 0,1,2,3 (re-queued each time); on the
+    # attempt==3 sweep _deliver_one runs, fails, and next_idx==4 exhausts the schedule → the
+    # entry is dead-lettered instead of re-queued. So it survives exactly len(schedule) due sweeps.
+    assert sweeps == len(BACKOFF_SCHEDULE), f"unexpected sweep count {sweeps}"
 
 
 async def test_total_delivery_attempts_is_bounded(fake_redis):
-    """End-to-end: 1 initial sync attempt + 5 drain attempts = exactly 6 HTTP POSTs, then drop.
+    """End-to-end: 1 initial sync attempt + 4 drain attempts = exactly 5 HTTP POSTs, then drop.
 
-    MEASURED (not the naive 1+len(schedule)=5): the queued entry is delivered on drain attempts
-    0,1,2,3 AND once more on the attempt==4 sweep (delivery happens before the exhaustion drop).
-    The bound proves there is NO infinite retry loop — it terminates at 6 total POSTs."""
+    WH3 FIXED: the queued entry is delivered on drain attempts 0,1,2,3; the attempt==3 sweep
+    fails and exhausts the schedule (dead-lettered, no extra delivery). The bound is the intended
+    1 + len(schedule) = 5 and proves there is NO infinite retry loop."""
     queue = RetryQueue(fake_redis)
     t = ScriptedTransport(default_code=500)
     sink = WebhookSink(transport=t, queue=queue, resolver=_PUBLIC)
@@ -492,10 +494,10 @@ async def test_total_delivery_attempts_is_bounded(fake_redis):
         await drain_retry_queue(fake_redis, t, now=clock)
 
     assert await queue.depth() == 0
-    # 1 sync + 5 drain (attempts 0..4; the attempt==4 sweep delivers, fails, then drops) = 6.
-    expected_total = 1 + (len(BACKOFF_SCHEDULE) + 1)
+    # 1 sync + 4 drain (attempts 0..3; the attempt==3 sweep delivers, fails, then dead-letters) = 5.
+    expected_total = 1 + len(BACKOFF_SCHEDULE)
     assert t.calls == expected_total, (
-        f"expected 1 sync + {len(BACKOFF_SCHEDULE) + 1} drain attempts = "
+        f"expected 1 sync + {len(BACKOFF_SCHEDULE)} drain attempts = "
         f"{expected_total} total HTTP POSTs (bounded, no infinite loop); got {t.calls}"
     )
 
@@ -512,24 +514,14 @@ async def test_expired_entry_dropped_before_delivery(fake_redis):
     assert t.calls == 0, "an expired entry must be dropped without attempting delivery"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (medium): exhausted + age-expired entries are SILENTLY DROPPED (retry.py "
-        "drain_retry_queue uses `continue`, no dead-letter list). At-least-once delivery is "
-        "therefore NOT guaranteed and there is no operator visibility into permanently-failed "
-        "webhooks — they vanish. Expected: a dead-letter queue / persisted failure record / "
-        "log_event so the user can see a meeting.completed webhook was abandoned. This test "
-        "asserts a DLQ key accumulates the dropped entry; it does not, so it xfails until a "
-        "dead-letter sink is added."
-    ),
-)
-async def test_dead_letter_on_permanent_failure(fake_redis):
+async def test_dead_letter_on_permanent_failure(fake_redis, capsys):
+    """WH1 FIXED: an envelope that exhausts the schedule lands in the dead-letter queue
+    (with routing + last-failure metadata) and emits a `webhook_dead_lettered` log event."""
     queue = RetryQueue(fake_redis)
     t = ScriptedTransport(default_code=500)
     base = 60_000_000_000.0
     await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 99}),
-                        webhook_secret=SECRET, now=base)
+                        webhook_secret=SECRET, now=base, label="meeting:99")
     clock = base
     for _ in range(len(BACKOFF_SCHEDULE) + 2):
         if await queue.depth() == 0:
@@ -537,12 +529,51 @@ async def test_dead_letter_on_permanent_failure(fake_redis):
         cur = await fake_redis.lindex(RETRY_QUEUE_KEY, 0)
         clock = json.loads(cur)["next_retry_at"] + 1
         await drain_retry_queue(fake_redis, t, now=clock)
-    # A dead-letter queue should hold the abandoned envelope. None exists today.
-    dlq_depth = await fake_redis.llen("webhook:dead_letter")
+
+    # The permanently-failed envelope lands in the dead-letter queue (not silently dropped).
+    assert await fake_redis.llen(RETRY_QUEUE_KEY) == 0, "retry queue must be drained"
+    dlq_depth = await fake_redis.llen(DEAD_LETTER_KEY)
     assert dlq_depth == 1, (
         "expected the permanently-failed envelope to land in a dead-letter queue "
-        f"('webhook:dead_letter'); found {dlq_depth} — it was silently dropped"
+        f"('{DEAD_LETTER_KEY}'); found {dlq_depth}"
     )
+    record = json.loads(await fake_redis.lindex(DEAD_LETTER_KEY, 0))
+    assert record["url"] == URL
+    assert record["label"] == "meeting:99"
+    assert record["reason"] == "schedule_exhausted"
+    assert record["last_status_code"] == 500
+    assert record["payload"]["data"] == {"m": 99}  # the original envelope is preserved
+    assert record["created_at"] == base
+
+    # An operator-visible log_event was emitted (audience=system, level=warning).
+    lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip().startswith("{")]
+    dl_logs = [e for e in lines if e.get("event") == "webhook_dead_lettered"]
+    assert len(dl_logs) == 1, "expected exactly one webhook_dead_lettered log event"
+    log = dl_logs[0]
+    assert log["audience"] == "system" and log["level"] == "warning"
+    assert log["fields"]["url"] == URL
+    assert log["fields"]["reason"] == "schedule_exhausted"
+    assert log["fields"]["last_status_code"] == 500
+
+
+async def test_dead_letter_on_age_expiry(fake_redis, capsys):
+    """WH1 FIXED: an age-expired entry is dead-lettered (not silently dropped) without a delivery."""
+    queue = RetryQueue(fake_redis)
+    t = ScriptedTransport(default_code=500)
+    base = 61_000_000_000.0
+    await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 7}),
+                        webhook_secret=SECRET, now=base, label="meeting:7")
+    await drain_retry_queue(fake_redis, t, now=base + MAX_AGE_SECONDS + 1)
+    assert await queue.depth() == 0
+    assert t.calls == 0, "an expired entry must be dead-lettered without attempting delivery"
+    assert await fake_redis.llen(DEAD_LETTER_KEY) == 1
+    record = json.loads(await fake_redis.lindex(DEAD_LETTER_KEY, 0))
+    assert record["reason"] == "max_age_exceeded" and record["label"] == "meeting:7"
+    lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip().startswith("{")]
+    assert any(
+        e.get("event") == "webhook_dead_lettered" and e["fields"]["reason"] == "max_age_exceeded"
+        for e in lines
+    ), "expected a webhook_dead_lettered log for the age-expired entry"
 
 
 # ════════════════════════════════════════════════════════════════════════════════════
