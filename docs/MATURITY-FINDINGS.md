@@ -151,6 +151,21 @@ Batch 1 (A1/A2/L1/ROB4) committed `657036b` + deployed to bbb via the dev loop (
 under publish failure; all 4 background loops survive a throwing tick; sequential cap+dedup correct; auth
 fail-closed; owner-scoped 404 (no leak); bounded/typed pagination; idempotent DELETE.
 
+## Round 2 — gateway / WS public front door (all fixed in `gateway/app.py`)
+- 🟢 **GW1 (HIGH, DoS)** `/ws` non-object-but-valid JSON (`[1,2,3]`, `42`, `null`) → `msg.get()` AttributeError
+  **crashed the socket**. Fix: `if not isinstance(msg, dict): invalid_json; continue`.
+- 🟢 **GW2 (HIGH, DoS)** `/ws` `authorize_subscribe()` raising → unguarded await **crashed the socket** (all
+  subscriptions lost). Fix: try/except → `authorization_call_failed` frame + continue.
+- 🟢 **GW3 (MED)** REST upstream connection-refused → leaked **500**. Fix: `httpx.RequestError` → **502**.
+- 🟢 **GW4 (MED)** REST upstream timeout → leaked **500**. Fix: `httpx.TimeoutException` → **504**.
+- 🟢 **GW5 (MED)** `/ws` downstream authz non-200 (`errors` carried, none authorized) → silent empty
+  `subscribed` ack. Fix: emit `authorization_service_error` / `authorization_call_failed` frame.
+- ✅ **Confirmed solid:** REST anti-spoofing — the gateway strips client-sent `x-user-id`/`x-user-scopes`/
+  `x-user-limits`/`x-user-webhook-*` and injects its own resolved identity (client `x-user-id:999999` →
+  downstream sees the real `7`).
+- All 5 fixed in app.py (verified via XPASS); existing conformance (46) non-regressing. Live verify + the
+  regenerated `test_gateway_seam.py` pending.
+
 ## Seam suites added (standing regression, ~190 cases)
 `test_lifecycle_seam.py` (60p/2s/1xf) · `test_webhook_seam.py` (59p/2xf) · `test_api_agility.py` (58p/3xf)
 · `test_robustness_seam.py` (11p/4xf). Each xfail is `strict=True` → flips to a pass when its bug is fixed.

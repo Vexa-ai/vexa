@@ -29,6 +29,8 @@ import asyncio
 import json
 from typing import Dict, List, Optional, Set, Tuple
 
+import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
+
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 
 from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
@@ -177,13 +179,23 @@ def create_app(
         headers[TRACE_HEADER] = get_trace_id() or ""
 
         content = await request.body()
-        resp = await downstream.request(
-            method,
-            url,
-            headers=headers,
-            params=dict(request.query_params) or None,
-            content=content,
-        )
+        # A public gateway must not LEAK its own 500 for an UPSTREAM fault: map a slow upstream → 504 and
+        # an unreachable/transport-failed upstream → 502, so a client can tell "backend down" from
+        # "gateway broke" (and get a retryable signal). Timeout is a subclass of RequestError → catch it first.
+        try:
+            resp = await downstream.request(
+                method,
+                url,
+                headers=headers,
+                params=dict(request.query_params) or None,
+                content=content,
+            )
+        except httpx.TimeoutException:
+            return Response(content=json.dumps({"detail": "upstream timeout"}),
+                            status_code=504, media_type="application/json")
+        except httpx.RequestError as e:
+            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
+                            status_code=502, media_type="application/json")
 
         # SYSTEM/debug event: the proxy hop completed.
         log_event(
@@ -350,6 +362,11 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
             except Exception:
                 await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
                 continue
+            # Syntactically-valid but NON-OBJECT JSON ([1,2,3], 42, "x", null): guard before `.get()`,
+            # else AttributeError escapes run_multiplex and KILLS the socket — a trivial public-edge DoS.
+            if not isinstance(msg, dict):
+                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
+                continue
 
             action = msg.get("action")
             if action == "subscribe":
@@ -377,8 +394,24 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
                         "details": "no valid meeting objects"}))
                     continue
 
-                result = await authorizer.authorize_subscribe(api_key, payload_meetings)
+                # The downstream authorize hop must never crash the socket: a RAISE → authorization_call_failed
+                # frame + continue; a non-200 (errors carried, nothing authorized) → authorization_service_error
+                # frame, NOT a misleading empty `subscribed` ack that hides the auth backend being down.
+                try:
+                    result = await authorizer.authorize_subscribe(api_key, payload_meetings)
+                except Exception as e:  # noqa: BLE001 — surface as a protocol error, keep the socket alive
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "authorization_call_failed", "details": str(e)}))
+                    continue
                 authorized = result.get("authorized") or []
+                auth_errors = result.get("errors") or []
+                if not authorized and auth_errors:
+                    first = str(auth_errors[0])
+                    code = ("authorization_call_failed"
+                            if first.startswith("authorization_call_failed")
+                            else "authorization_service_error")
+                    await ws.send_text(json.dumps({"type": "error", "error": code, "details": first}))
+                    continue
                 subscribed: List[Dict[str, str]] = []
                 for item in authorized:
                     plat = item.get("platform"); nid = item.get("native_id")
