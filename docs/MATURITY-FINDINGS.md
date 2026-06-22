@@ -125,12 +125,23 @@ try/except + log, still return the persisted count (match the lifecycle path).
 - 🟢 **A2** recording_enabled type-validate — fixed + **L4-verified** (bad type → 422).
 - 🟢 **L1** no-op envelope dedup — fixed (app.py) + offline-green.
 - 🟢 **ROB4** collector publish fault-isolation — fixed (ingest.py) + offline-green.
-- 🟢 **R1** recordings HTTP Range — fixed (206/Content-Range/416, S3 Range pass-through) + offline-green; L4 pending deploy.
+- 🟢 **R1** recordings HTTP Range — fixed + **L4-verified live** (bytes=0-1023 → 206 + 1024 bytes; mid-file 206; no-range 200).
 - 🟢 **WH3** double-backoff — fixed (retry.py: drain indexes by `attempt+1`); effective schedule now
   `[60,300,1800,7200]`, total bounded attempts = 5 (was 6). Offline-green.
 - 🟢 **WH1** dead-letter queue — fixed: exhausted/age-expired envelopes pushed to redis `webhook:dead_letter`
   (LTRIM-capped 1000) + `webhook_dead_lettered` log. Offline-green.
-- 🟡 **ROB1, ROB2, ROB3, A4** (TOCTOU + orphan + fail-fast) — fix in progress (review + live-DB verify pending).
+- 🟢 **ROB1+ROB2** TOCTOU — fixed: `create_meeting_guarded` does dedup+cap+insert in ONE txn behind a
+  cluster-wide `pg_advisory_xact_lock(user_id)` (serializes concurrent same-user spawns) + a unique
+  partial-index backstop (`IntegrityError`→`DuplicateMeeting`). Reviewed: advisory lock IS the
+  cross-process mechanism (sound). Offline-green (SlowRepo+gather). L4 (live PG) verify next.
+- 🟢 **ROB3** partial-spawn orphan — fixed: post-spawn DB writes wrapped → on failure `runtime.delete_workload`
+  teardown + re-raise `SpawnFailed` (502). `delete_workload` added to the runtime port/adapters. Offline-green.
+- 🟢 **A4** ADMIN_TOKEN fail-fast — `build_production_app` validates required env at boot (clear RuntimeError),
+  not a 500/spawn. (ADMIN_TOKEN confirmed set on bbb → safe reload.) Offline-green.
+- ⚠️ **Index backstop deploy note:** the unique partial index is in the meeting-api model MIRROR; the DDL
+  SSOT is admin-api `ensure_schema` (create_all only makes it on a FRESH DB). bbb's existing `meetings`
+  table relies on the advisory lock (correct); the index must be added to admin-api models + manually
+  `CREATE`d on existing DBs for the multi-replica backstop. Follow-up (advisory lock suffices for correctness).
 - ⏸️ **WH2** SSRF-TOCTOU (DNS rebinding) — deferred (needs IP-pin + httpx resolution hook); xfail kept.
 - ⏸️ **A3** DELETE invalid platform → 404 vs 422 — left as documented drift (idempotent-delete semantics OK).
 

@@ -36,8 +36,34 @@ def _database_url() -> str:
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
 
 
+# Config the production boot REQUIRES to be functional. Validated fail-fast in build_production_app so
+# a misconfigured deploy refuses to boot (A4) — rather than booting fine and 500-ing every POST /bots
+# when the MeetingToken mint hits a missing ADMIN_TOKEN deep in the request path.
+_REQUIRED_ENV = ("ADMIN_TOKEN",)
+
+
+def _require_config(env: "os._Environ | dict | None" = None) -> None:
+    """Fail-fast on missing required config (A4). ADMIN_TOKEN is HS256-signing the MeetingToken every
+    spawn mints (invocation.mint_meeting_token) AND the recordings-upload verifier checks — unset, the
+    deploy 500s every POST /bots. Raise a clear, actionable error at boot instead.
+
+    Raises ``RuntimeError`` naming every missing var, so the failure points straight at the misconfig.
+    """
+    src = env if env is not None else os.environ
+    missing = [name for name in _REQUIRED_ENV if not (src.get(name) or "").strip()]
+    if missing:
+        raise RuntimeError(
+            "meeting-api is misconfigured and refuses to boot — required environment "
+            f"variable(s) not set: {', '.join(missing)}. "
+            "ADMIN_TOKEN HS256-signs the per-spawn MeetingToken (and the recordings-upload verifier); "
+            "without it every POST /bots would 500. Set it and restart."
+        )
+
+
 def build_production_app():
     """Wire the unified meeting-api with the real adapters + the lifespan-driven loops."""
+    _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
+
     import redis.asyncio as aioredis
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 

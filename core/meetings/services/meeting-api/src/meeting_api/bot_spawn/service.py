@@ -29,7 +29,18 @@ from typing import Any, Optional
 
 from ..obs import log_event
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
-from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
+from .ports import (
+    DuplicateMeeting,
+    MaxBotsExceeded,
+    MeetingRepo,
+    QuotaExceeded,
+    RuntimeClient,
+    SpawnFailed,
+)
+
+# Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
+# already do ``from .service import DuplicateMeeting`` (the router) keep working.
+__all__ = ["request_bot", "construct_meeting_url", "DuplicateMeeting"]
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
@@ -79,10 +90,6 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     }
 
 
-class DuplicateMeeting(Exception):
-    """The user already has an active/requested meeting for (platform, native_id) → HTTP 409."""
-
-
 async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,
@@ -121,38 +128,40 @@ async def request_bot(
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
 
-    # 2. Dedup — a CONCURRENT (still-active) prior meeting always blocks the spawn (409).
-    if await repo.find_active(user_id, platform, native_meeting_id):
-        raise DuplicateMeeting(
-            f"An active meeting already exists for {platform}/{native_meeting_id}"
-        )
-
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
-    #     its id (so its transcripts/recordings survive); a fresh session is appended below.
+    #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
+    #     stays a plain query — the reused-row path reopens an existing terminal row (no NEW active row
+    #     is inserted), so it is not part of the dedup/cap TOCTOU window.
     reused_row: Optional[dict] = None
     if continue_meeting:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
         if latest and latest.get("status") in _TERMINAL_STATUSES:
             reused_row = latest
 
-    # 2b. max-bots (P3e): per-user concurrency pre-check, BEFORE the runtime call. Count the user's
-    #     ACTIVE bots (browser_session excluded by the repo); reject the N+1th with 429. A reused
-    #     (terminal) row is excluded from the count — it is not active.
-    if max_concurrent is not None and max_concurrent > 0:
-        active = await repo.count_active_bots(
-            user_id=user_id,
-            exclude_meeting_id=reused_row["id"] if reused_row else None,
-        )
-        if active >= max_concurrent:
-            log_event(
-                "bot_spawn_max_bots_exceeded", audience="user", level="warning",
-                span="bots.create", user_id=user_id,
-                fields={"active": active, "cap": max_concurrent},
-            )
-            raise MaxBotsExceeded(user_id, max_concurrent)
-
-    # 3. Insert the Meeting row (status requested) — or reopen the reused terminal row.
+    # 2+2b+3. Dedup + max-bots cap + INSERT, made ATOMIC (ROB1/ROB2). Replaces the old read-check-
+    #     then-act sequence (find_active → count_active_bots → create_meeting), whose three separate
+    #     transactions opened a TOCTOU window: under concurrent POST /bots, every coroutine passed the
+    #     pre-checks before any inserted its `requested` row → over-provision past the cap / double-
+    #     spawn one meeting. create_meeting_guarded does dedup + cap + insert in ONE transaction (the
+    #     real adapter serializes per-user with a pg advisory lock + a unique partial index backstop;
+    #     the fake has no await between the check and the insert). The continue_meeting (reused-
+    #     terminal-row) path reopens an existing row and is unchanged.
     if reused_row is not None:
+        # continue_meeting reopens an EXISTING terminal row (no new active row inserted), so it is not
+        # part of the fresh-insert TOCTOU window — but the per-user cap still applies (a continued run
+        # is an active bot). Keep the original pre-check here, excluding the row being reopened from the
+        # count, to preserve the P3e semantics (test_max_bots.test_continue_meeting_session_counts_against_cap).
+        if max_concurrent is not None and max_concurrent > 0:
+            active = await repo.count_active_bots(
+                user_id=user_id, exclude_meeting_id=reused_row["id"],
+            )
+            if active >= max_concurrent:
+                log_event(
+                    "bot_spawn_max_bots_exceeded", audience="user", level="warning",
+                    span="bots.create", user_id=user_id,
+                    fields={"active": active, "cap": max_concurrent},
+                )
+                raise MaxBotsExceeded(user_id, max_concurrent)
         row = await repo.reopen_meeting(meeting_id=reused_row["id"])
     else:
         meeting_data: dict[str, Any] = {}
@@ -168,12 +177,21 @@ async def request_bot(
                 meeting_data["webhook_secret"] = webhook_secret
             if webhook_events:
                 meeting_data["webhook_events"] = webhook_events
-        row = await repo.create_meeting(
-            user_id=user_id,
-            platform=platform,
-            native_meeting_id=native_meeting_id,
-            data=meeting_data,
-        )
+        try:
+            row = await repo.create_meeting_guarded(
+                user_id=user_id,
+                platform=platform,
+                native_meeting_id=native_meeting_id,
+                data=meeting_data,
+                max_concurrent=(max_concurrent if max_concurrent and max_concurrent > 0 else None),
+            )
+        except MaxBotsExceeded:
+            log_event(
+                "bot_spawn_max_bots_exceeded", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"cap": max_concurrent},
+            )
+            raise
     meeting_id = row["id"]
 
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
@@ -240,12 +258,32 @@ async def request_bot(
 
     workload_id = result.get("workloadId") or result.get("name") or spec["workloadId"]
 
-    # 6. Eager-create the MeetingSession (connectionId == session_uid). For a continued meeting this
-    #    APPENDS a session to the reused row — N sessions accumulate per meeting (P3c).
-    await repo.create_session(meeting_id=meeting_id, session_uid=connection_id)
-
-    # 7. Write the kernel workload id back as bot_container_id.
-    row = await repo.set_bot_container(meeting_id=meeting_id, bot_container_id=workload_id)
+    # 6+7. Eager-create the MeetingSession (connectionId == session_uid) + write the kernel workload id
+    #      back as bot_container_id. The workload is ALREADY running, so a failure here would orphan it
+    #      (a live bot with no session row to resolve its uploads, the meeting stuck `requested`) —
+    #      ROB3. Wrap both DB writes: on failure, tear the just-created workload DOWN (best-effort) and
+    #      re-raise as SpawnFailed so the route maps it to 502 and no half-spawned state is left behind.
+    try:
+        # For a continued meeting this APPENDS a session to the reused row — N sessions per meeting (P3c).
+        await repo.create_session(meeting_id=meeting_id, session_uid=connection_id)
+        row = await repo.set_bot_container(meeting_id=meeting_id, bot_container_id=workload_id)
+    except Exception as e:  # noqa: BLE001 — any post-spawn DB failure must trigger compensation
+        try:
+            await runtime.delete_workload(workload_id)
+        except Exception as teardown_err:  # noqa: BLE001 — teardown is best-effort, never masks the cause
+            log_event(
+                "bot_spawn_orphan_teardown_failed", audience="system", level="error",
+                span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"workload_id": workload_id, "error": str(teardown_err)},
+            )
+        log_event(
+            "bot_spawn_post_spawn_db_failed", audience="system", level="error",
+            span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+            fields={"workload_id": workload_id, "error": str(e)},
+        )
+        raise SpawnFailed(
+            f"post-spawn DB write failed; workload {workload_id} torn down"
+        ) from e
 
     # The response lists the meeting's sessions (P3c) — all session_uids that ran against this row.
     sessions = await repo.list_sessions(meeting_id=meeting_id)

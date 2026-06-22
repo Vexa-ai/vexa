@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .ports import QuotaExceeded, SpawnFailed
+from .ports import DuplicateMeeting, MaxBotsExceeded, QuotaExceeded, SpawnFailed
 
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
 _TERMINAL_STATUSES = ("completed", "failed")
@@ -56,6 +56,56 @@ class InMemoryMeetingRepo:
         return dict(max(rows, key=lambda m: m["id"]))  # id is monotonic → most recent
 
     async def create_meeting(self, *, user_id, platform, native_meeting_id, data) -> dict:
+        mid = self._next_id
+        self._next_id += 1
+        row = {
+            "id": mid,
+            "user_id": user_id,
+            "platform": platform,
+            "native_meeting_id": native_meeting_id,
+            "platform_specific_id": native_meeting_id,
+            "status": "requested",
+            "bot_container_id": None,
+            "start_time": None,
+            "end_time": None,
+            "data": dict(data or {}),
+            "created_at": "2026-06-20T09:00:00Z",
+            "updated_at": "2026-06-20T09:00:00Z",
+        }
+        self._meetings[mid] = row
+        return dict(row)
+
+    async def create_meeting_guarded(
+        self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
+        exclude_meeting_id=None,
+    ) -> dict:
+        """ATOMIC dedup + cap + insert (ROB1/ROB2). The check and the insert run with NO ``await``
+        between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
+        ``count_active_bots`` / ``create_meeting`` methods) cannot interleave concurrent spawns here —
+        modelling the real adapter's single-transaction guard (advisory lock + unique partial index)."""
+        # 1. dedup — an ACTIVE row for (user, platform, native) blocks the spawn (409).
+        for m in self._meetings.values():
+            if (
+                m["user_id"] == user_id
+                and m["platform"] == platform
+                and m["native_meeting_id"] == native_meeting_id
+                and m["status"] in _ACTIVE_STATUSES
+            ):
+                raise DuplicateMeeting(
+                    f"An active meeting already exists for {platform}/{native_meeting_id}"
+                )
+        # 2. cap — count the user's ACTIVE bots (browser_session excluded); reject the N+1th (429).
+        if max_concurrent is not None and max_concurrent > 0:
+            active = sum(
+                1 for m in self._meetings.values()
+                if m["user_id"] == user_id
+                and m["status"] in _ACTIVE_STATUSES
+                and m["platform"] != "browser_session"
+                and m["id"] != exclude_meeting_id
+            )
+            if active >= max_concurrent:
+                raise MaxBotsExceeded(user_id, max_concurrent)
+        # 3. insert — NO await before this point since the dedup read, so the check+insert is atomic.
         mid = self._next_id
         self._next_id += 1
         row = {
@@ -144,6 +194,7 @@ class FakeRuntimeClient:
         self._quota_exceeded = quota_exceeded
         self._fail = fail
         self.specs: list[dict] = []  # every spawned spec, for assertions
+        self.deleted: list[str] = []  # workload ids torn down (ROB3 compensation), for assertions
 
     async def create_workload(self, spec: dict) -> dict[str, Any]:
         self.specs.append(spec)
@@ -152,3 +203,7 @@ class FakeRuntimeClient:
         if self._fail:
             raise SpawnFailed("kernel could not start the workload")
         return {"workloadId": spec["workloadId"], "state": "starting"}
+
+    async def delete_workload(self, workload_id: str) -> None:
+        # Record the teardown so the partial-spawn test asserts the orphaned workload was torn down.
+        self.deleted.append(workload_id)

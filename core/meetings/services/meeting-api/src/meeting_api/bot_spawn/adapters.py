@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ..sessions import new_session
-from .ports import QuotaExceeded, SpawnFailed
+from .ports import DuplicateMeeting, MaxBotsExceeded, QuotaExceeded, SpawnFailed
 
 
 def _row_to_dict(m) -> dict:
@@ -224,6 +224,83 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
+    async def create_meeting_guarded(
+        self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
+        exclude_meeting_id=None,
+    ) -> dict:
+        """ATOMIC dedup + cap + insert in ONE transaction (ROB1/ROB2).
+
+        The TOCTOU-safe spawn primitive. Two layers guard it:
+
+          * a per-user ``pg_advisory_xact_lock(:user_id)`` taken as the FIRST statement so concurrent
+            spawns for the SAME user SERIALIZE through this txn (the lock auto-releases at commit/
+            rollback). With the lock held, the dedup query + cap COUNT + INSERT see a stable snapshot.
+          * a unique partial index on active rows (``uq_meeting_active_user_platform_native`` — see
+            sessions/models.py) as the DB-level backstop: if a racing transaction (or a different
+            meeting-api process not covered by THIS advisory lock) inserted a duplicate active row, the
+            INSERT's commit raises ``IntegrityError`` → mapped to ``DuplicateMeeting``.
+        """
+        from sqlalchemy import bindparam, func, select, text
+        from sqlalchemy.exc import IntegrityError
+
+        from ..sessions.models import Meeting
+
+        active = ["requested", "joining", "awaiting_admission", "active"]
+        async with self._session_factory() as db:
+            # Per-user serialization: hold the advisory lock for the whole transaction. asyncpg needs a
+            # bound int param (not a literal-format string), so bind it explicitly.
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            # 1. dedup — under the lock, an active row for (user, platform, native) blocks the spawn.
+            dup = (
+                await db.execute(
+                    select(Meeting.id).where(
+                        Meeting.user_id == user_id,
+                        Meeting.platform == platform,
+                        Meeting.platform_specific_id == native_meeting_id,
+                        Meeting.status.in_(active),
+                    )
+                )
+            ).scalars().first()
+            if dup is not None:
+                raise DuplicateMeeting(
+                    f"An active meeting already exists for {platform}/{native_meeting_id}"
+                )
+            # 2. cap — count the user's active bots (browser_session excluded); reject the N+1th.
+            if max_concurrent is not None and max_concurrent > 0:
+                count_stmt = (
+                    select(func.count())
+                    .select_from(Meeting)
+                    .where(
+                        Meeting.user_id == user_id,
+                        Meeting.status.in_(active),
+                        Meeting.platform != "browser_session",
+                    )
+                )
+                if exclude_meeting_id is not None:
+                    count_stmt = count_stmt.where(Meeting.id != exclude_meeting_id)
+                n_active = int((await db.execute(count_stmt)).scalar() or 0)
+                if n_active >= max_concurrent:
+                    raise MaxBotsExceeded(user_id, max_concurrent)
+            # 3. insert — still inside the same txn/lock, so check+insert is atomic.
+            m = Meeting(
+                user_id=user_id, platform=platform, platform_specific_id=native_meeting_id,
+                status="requested", data=dict(data or {}),
+            )
+            db.add(m)
+            try:
+                await db.commit()
+            except IntegrityError as e:
+                # The unique partial index backstop fired — a concurrent duplicate active row won the
+                # race (e.g. a spawn in another process the advisory lock didn't cover). Treat as dedup.
+                await db.rollback()
+                raise DuplicateMeeting(
+                    f"An active meeting already exists for {platform}/{native_meeting_id}"
+                ) from e
+            await db.refresh(m)
+            return _row_to_dict(m)
+
     async def create_session(self, *, meeting_id, session_uid) -> None:
         async with self._session_factory() as db:
             db.add(new_session(meeting_id, session_uid))
@@ -274,6 +351,13 @@ class HttpRuntimeClient:
         if resp.status_code != 201:
             raise SpawnFailed(f"runtime kernel returned {resp.status_code}")
         return resp.json()
+
+    async def delete_workload(self, workload_id: str) -> None:
+        """Tear down a workload (``DELETE /workloads/{id}``) — the ROB3 partial-spawn compensation.
+
+        Best-effort: a 404 (already gone) is fine, and any error is left for the caller to log; this
+        teardown must never mask the original post-spawn DB failure that triggered it."""
+        await self._client.delete(f"{self._url}/workloads/{workload_id}", timeout=30.0)
 
 
 def build_production_router(*, database_url: Optional[str] = None, runtime_api_url: Optional[str] = None):

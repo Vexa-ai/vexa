@@ -28,7 +28,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meeting_api import create_app
-from meeting_api.bot_spawn import MaxBotsExceeded, request_bot
+from meeting_api.bot_spawn import MaxBotsExceeded, SpawnFailed, request_bot
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.collector.ingest import consume_segments, ingest
@@ -379,20 +379,14 @@ async def test_sequential_spawns_enforce_cap():
     assert len(runtime.specs) == specs_before, "the cap+1th must be rejected BEFORE the runtime call"
 
 
-@pytest.mark.xfail(
-    reason="BUG: bot_spawn/service.py:142-176 — the max-bots pre-check is a TOCTOU read-check-then-act "
-    "(count_active_bots() then create_meeting()) with no lock/atomicity/DB-constraint. Under "
-    "concurrent spawns (asyncio.gather, N>cap), every coroutine reads the count BEFORE any of them "
-    "inserts its `requested` row, so they ALL pass the cap check and over-provision. Expected: at most "
-    "`cap` workloads provisioned; Actual: all N provisioned (the cap is silently exceeded). Fix: enforce "
-    "the cap atomically — a conditional INSERT (INSERT ... WHERE active_count < cap), a per-user "
-    "advisory lock, or a unique partial index on active rows — not a read-then-write pre-check.",
-    strict=True,
-)
 def test_concurrent_spawns_must_not_over_provision_past_cap():
-    """The race: fire N=5 concurrent spawns for distinct meetings at cap=2. A correct system caps
-    actual provisioning at 2. The SlowRepo introduces the realistic await-suspension points a real
-    async DB has between the count check and the row insert, which is what opens the TOCTOU window."""
+    """FIXED (ROB1): the cap is now enforced ATOMICALLY — service.py replaced the read-check-then-act
+    (count_active_bots() then create_meeting()) with a single create_meeting_guarded() that does
+    dedup+cap+insert in one transaction (the real adapter serializes per-user via pg_advisory_xact_lock
+    + a unique partial index; the fake has no await between the check and the insert). The race: fire
+    N=5 concurrent spawns for distinct meetings at cap=2. A correct system caps actual provisioning at
+    2. The SlowRepo introduces the realistic await-suspension points a real async DB has between the
+    count check and the row insert, which is what opened the TOCTOU window the fix closes."""
 
     async def _run():
         repo, runtime = SlowRepo(), FakeRuntimeClient()
@@ -415,10 +409,11 @@ def test_concurrent_spawns_must_not_over_provision_past_cap():
     )
 
 
-def test_concurrent_spawns_over_provision_is_observable():
-    """A NON-xfail companion that PROVES the race exists (so the gap is visible even if the strict
-    xfail above is ever flipped). With the realistic-yield repo, cap=2 + 5 concurrent spawns
-    over-provisions — we assert the observed over-provisioning directly so the regression is pinned."""
+def test_concurrent_spawns_hold_the_cap_under_load():
+    """Companion to the ROB1 fix: with the realistic-yield SlowRepo, cap=2 + 5 concurrent spawns must
+    NOT over-provision — the atomic create_meeting_guarded() holds the line at exactly the cap. The
+    over-cap spawns raise MaxBotsExceeded (the others succeed); we assert both the provisioned count
+    and the active count stay at the cap. (Before ROB1 this same scenario over-provisioned past 2.)"""
 
     async def _run():
         repo, runtime = SlowRepo(), FakeRuntimeClient()
@@ -429,15 +424,15 @@ def test_concurrent_spawns_over_provision_is_observable():
                                     native_meeting_id=nid, max_concurrent=cap,
                                     redis_url="r", token_secret=SECRET)
 
-        await asyncio.gather(*[spawn(f"obs-{i}") for i in range(5)], return_exceptions=True)
-        return len(runtime.specs)
+        results = await asyncio.gather(*[spawn(f"obs-{i}") for i in range(5)], return_exceptions=True)
+        rejected = [r for r in results if isinstance(r, MaxBotsExceeded)]
+        active = await repo.count_active_bots(user_id=USER)
+        return len(runtime.specs), active, len(rejected)
 
-    provisioned = asyncio.run(_run())
-    assert provisioned > 2, (
-        "expected the documented TOCTOU race to over-provision past cap=2 under concurrency; if this "
-        "fails the race was fixed — flip test_concurrent_spawns_must_not_over_provision_past_cap to "
-        "passing and delete this companion"
-    )
+    provisioned, active, rejected = asyncio.run(_run())
+    assert provisioned <= 2, f"cap=2 must hold under concurrency, but {provisioned} were provisioned"
+    assert active <= 2, f"cap=2 active bots max, but {active} are active"
+    assert rejected >= 3, f"3 of 5 over-cap spawns must be rejected with MaxBotsExceeded, got {rejected}"
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -445,57 +440,48 @@ def test_concurrent_spawns_over_provision_is_observable():
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    reason="BUG: bot_spawn/service.py:227-248 — partial-spawn inconsistency. create_workload() "
-    "succeeds (a real bot workload is now running), but a subsequent DB write (create_session at "
-    ":245, or set_bot_container at :248) failing re-raises with NO compensation: the spawned workload "
-    "is never torn down and no MeetingSession row is created, so the bot's transcript/recording "
-    "uploads (which resolve by session_uid) have nothing to attach to, and the meeting row is stuck "
-    "`requested` with bot_container_id=None. Expected: either the workload is torn down on a post-spawn "
-    "DB failure, or the failure is retried/compensated so state is consistent; Actual: orphaned "
-    "running workload + no session row.",
-    strict=True,
-)
 def test_partial_spawn_does_not_orphan_workload():
+    """FIXED (ROB3): a post-spawn DB write failure no longer orphans the running workload. The runtime
+    spawn (create_workload) succeeds, then create_session raises; service.py now wraps steps 6+7, tears
+    the just-created workload DOWN (runtime.delete_workload) and re-raises as SpawnFailed. So the route
+    maps it to 502 and the kernel is left with NO orphaned bot (which would otherwise keep running with
+    no session row to resolve its uploads)."""
+
     async def _run():
         repo = CreateSessionFailsRepo()
         runtime = FakeRuntimeClient()
-        with pytest.raises(RuntimeError):
+        with pytest.raises(SpawnFailed):
             await request_bot(repo, runtime, user_id=USER, platform="google_meet",
                               native_meeting_id="partial", max_concurrent=None,
                               redis_url="r", token_secret=SECRET)
-        # The workload WAS created (the runtime call came before the failing DB write)...
-        spawned = len(runtime.specs)
-        # ...and a correct system must not leave it orphaned: no session row → no way to resolve the
-        # bot's uploads, and the workload is still running. A consistent system would have torn it
-        # down (specs reflect a teardown) or never have a dangling row.
-        meeting_status = next(iter(repo._meetings.values()))["status"] if repo._meetings else None
-        return spawned, meeting_status
+        # The workload WAS created (the runtime call came before the failing DB write), but it must have
+        # been TORN DOWN — no orphan left running. And no session row should survive.
+        return len(runtime.specs), len(runtime.deleted), len(repo.sessions)
 
-    spawned, meeting_status = asyncio.run(_run())
-    # Expected (consistency): no orphaned workload — either it was never created, or it was torn down.
-    assert spawned == 0, f"a running workload was orphaned by the post-spawn DB failure (specs={spawned})"
+    spawned, torn_down, n_sessions = asyncio.run(_run())
+    assert spawned == 1, "the runtime workload was provisioned before the DB write failed"
+    assert torn_down == 1, "the orphaned workload must be torn down (runtime.delete_workload) on a post-spawn DB failure"
+    assert n_sessions == 0, "no dangling MeetingSession row should survive the failed spawn"
 
 
-def test_partial_spawn_orphan_is_observable():
-    """Companion proving the orphan IS produced today: the workload is created, then the DB write
-    raises, and the meeting row is left stuck `requested` with no session + a live (un-torn-down)
-    workload. Pins the current (buggy) behaviour so the xfail above stays honest."""
+def test_partial_spawn_tears_down_the_exact_workload():
+    """Companion to the ROB3 fix: the workload that was torn down is the SAME id that was spawned (so
+    the compensation targets the right orphan), and the failure surfaces as SpawnFailed (→ 502)."""
 
     async def _run():
         repo = CreateSessionFailsRepo()
         runtime = FakeRuntimeClient()
-        with pytest.raises(RuntimeError):
+        with pytest.raises(SpawnFailed):
             await request_bot(repo, runtime, user_id=USER, platform="google_meet",
                               native_meeting_id="partial2", max_concurrent=None,
                               redis_url="r", token_secret=SECRET)
-        row = next(iter(repo._meetings.values()))
-        return len(runtime.specs), row["status"], len(repo.sessions)
+        spawned_id = runtime.specs[0]["workloadId"]
+        return spawned_id, runtime.deleted
 
-    spawned, status, n_sessions = asyncio.run(_run())
-    assert spawned == 1, "the runtime workload was provisioned before the DB write failed"
-    assert status == "requested", "the meeting row is stuck `requested` (never advanced/cleaned up)"
-    assert n_sessions == 0, "no MeetingSession exists → the bot's uploads cannot resolve their meeting"
+    spawned_id, deleted = asyncio.run(_run())
+    assert deleted == [spawned_id], (
+        f"the torn-down workload must be the one that was spawned: spawned={spawned_id!r} deleted={deleted!r}"
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -517,26 +503,16 @@ def test_duplicate_spawn_sequential_is_409():
 
 
 def test_concurrent_duplicate_spawns_should_dedup_to_one():
-    """Two CONCURRENT POST /bots for the SAME (platform, native_id): the dedup is also a TOCTOU
-    read-check-then-act (find_active() then create_meeting()). With realistic async yields between
-    the check and the insert, both can pass the dedup check and BOTH spawn a bot for one meeting.
-
-    GAP (xfail): the dedup is not atomic, so concurrent identical requests can double-spawn. Expected:
-    exactly one 201 + one 409 (or one spawn); Actual: two spawns for the same meeting.
-    """
+    """FIXED (ROB2): two CONCURRENT POST /bots for the SAME (platform, native_id) now dedup to ONE
+    spawn. The dedup was a TOCTOU read-check-then-act (find_active() then create_meeting()); it is now
+    folded into the atomic create_meeting_guarded() (in-txn dedup under a per-user advisory lock, plus a
+    unique partial index backstop). With realistic async yields between the check and the insert, only
+    one coroutine inserts the active row — the other raises DuplicateMeeting and never spawns."""
     _assert_concurrent_dedup()
 
 
-@pytest.mark.xfail(
-    reason="BUG: bot_spawn/service.py:124-176 — the dedup (find_active) shares the max-bots TOCTOU "
-    "shape: it is a read-check (find_active) then act (create_meeting) with no atomicity. Concurrent "
-    "identical POST /bots both pass the find_active check before either inserts, so a single meeting "
-    "gets TWO bots/workloads. Expected: exactly one spawn for a (platform, native_id) under "
-    "concurrency; Actual: two. Fix: a unique constraint on active (user_id, platform, native_id) or a "
-    "per-key advisory lock around the dedup+insert.",
-    strict=True,
-)
 def test_concurrent_duplicate_spawns_dedup_to_one_strict():
+    """FIXED (ROB2): exactly one spawn for a (platform, native_id) under concurrency."""
     spawned = _run_concurrent_dedup()
     assert spawned == 1, f"concurrent duplicate spawns must dedup to one bot, got {spawned}"
 
@@ -561,8 +537,43 @@ def _run_concurrent_dedup() -> int:
 
 def _assert_concurrent_dedup():
     spawned = _run_concurrent_dedup()
-    # Companion: prove the double-spawn is real today (so the strict xfail stays honest).
-    assert spawned >= 2, (
-        "expected concurrent duplicate spawns to double-provision (dedup TOCTOU); if this fails the "
-        "dedup was made atomic — flip the strict xfail to passing"
+    # Companion to the ROB2 fix: the dedup is now atomic, so concurrent identical requests spawn EXACTLY
+    # one bot (the other is rejected with DuplicateMeeting before it can spawn).
+    assert spawned == 1, (
+        "concurrent duplicate spawns must dedup to one bot now that the dedup+insert is atomic "
+        "(create_meeting_guarded); a count > 1 means the TOCTOU race regressed"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+# (A4) missing ADMIN_TOKEN → fail-fast at startup (a misconfig refuses to boot, not 500-per-spawn)
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def test_startup_requires_admin_token(monkeypatch):
+    """FIXED (A4): the production boot (__main__._require_config, called by build_production_app)
+    REFUSES to start when ADMIN_TOKEN is unset — a clear RuntimeError naming the missing var — instead
+    of booting fine and 500-ing every POST /bots when mint_meeting_token hits the missing secret deep
+    in the request path. So a misconfigured deploy fails loud at boot (P18)."""
+    import meeting_api.__main__ as entry
+
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    with pytest.raises(RuntimeError) as ei:
+        entry._require_config()
+    msg = str(ei.value)
+    assert "ADMIN_TOKEN" in msg, f"the error must name the missing var, got: {msg!r}"
+
+    # And with it set, the config check passes (the happy path the deploy actually runs).
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    entry._require_config()  # must not raise
+
+
+def test_mint_meeting_token_surfaces_clear_config_error(monkeypatch):
+    """The per-request mint also surfaces a CLEAR error (not a cryptic crypto failure) when ADMIN_TOKEN
+    is unset — the deep cause the A4 startup gate prevents reaching in production."""
+    from meeting_api.bot_spawn.invocation import mint_meeting_token
+
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    with pytest.raises(ValueError) as ei:
+        mint_meeting_token(1, USER, "google_meet", "x")
+    assert "ADMIN_TOKEN" in str(ei.value)

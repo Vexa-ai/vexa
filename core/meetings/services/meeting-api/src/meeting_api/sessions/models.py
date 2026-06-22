@@ -73,6 +73,18 @@ class Meeting(Base):
             "user_id", "platform", "platform_specific_id", "created_at",
         ),
         Index("ix_meeting_data_gin", "data", postgresql_using="gin"),
+        # ROB1/ROB2 DB-level backstop: at most ONE ACTIVE (non-terminal) meeting per
+        # (user, platform, native_meeting_id). A unique PARTIAL index — terminal rows
+        # (completed/failed) are NOT covered, so continue_meeting can reopen a prior terminal row and
+        # a user can re-meet the same native id once the previous run ends. Concurrent duplicate
+        # spawns that slip past the in-txn advisory-lock dedup (e.g. across meeting-api processes) hit
+        # this index → IntegrityError → mapped to DuplicateMeeting in create_meeting_guarded.
+        Index(
+            "uq_meeting_active_user_platform_native",
+            "user_id", "platform", "platform_specific_id",
+            unique=True,
+            postgresql_where=text("status NOT IN ('completed', 'failed')"),
+        ),
     )
 
 

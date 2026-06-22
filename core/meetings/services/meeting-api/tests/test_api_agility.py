@@ -386,9 +386,11 @@ def test_post_bots_string_bool_should_not_silently_coerce():
 
 def test_post_bots_without_admin_token_500s_on_valid_request(monkeypatch):
     """ROBUSTNESS NOTE: with ADMIN_TOKEN unset the MeetingToken mint raises ValueError mid-flow →
-    an UNHANDLED 500 on an otherwise-valid request. Documented here (not xfail — it is a server
-    misconfig, not a bad-input bug) so the blast radius of the misconfig is visible: a deploy that
-    forgets ADMIN_TOKEN turns every POST /bots into a 500. Consider failing fast at startup."""
+    an UNHANDLED 500 on an otherwise-valid request. This is why the PRODUCTION boot now fails fast
+    (A4): ``__main__._require_config`` refuses to build the app at all when ADMIN_TOKEN is unset, so a
+    real deploy never reaches this state (see test_startup_requires_admin_token in
+    test_robustness_seam). This test still pins the per-request blast radius for the create_app path
+    (which is intentionally NOT gated, so the offline harness can stand the app up without secrets)."""
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     c = _client()
     with pytest.raises(Exception):

@@ -46,6 +46,33 @@ class MeetingRepo(Protocol):
         ``status``, ``created_at`` …) — the row the response is built from."""
         ...
 
+    async def create_meeting_guarded(
+        self,
+        *,
+        user_id: int,
+        platform: str,
+        native_meeting_id: str,
+        data: dict,
+        max_concurrent: Optional[int] = None,
+        exclude_meeting_id: Optional[int] = None,
+    ) -> dict:
+        """ATOMIC dedup + cap-check + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
+
+        Performs, in a SINGLE transaction with NO yield point between the checks and the insert:
+          1. dedup — if the user already has an ACTIVE row for ``(platform, native_meeting_id)``,
+             raise ``DuplicateMeeting`` (→ HTTP 409);
+          2. cap — if ``max_concurrent`` is set and the user already has ``>= max_concurrent`` ACTIVE
+             bots (``browser_session`` excluded; ``exclude_meeting_id`` not counted), raise
+             ``MaxBotsExceeded`` (→ HTTP 429);
+          3. insert the ``Meeting`` row (status ``requested``) and return it as a dict.
+
+        The real (SQLAlchemy) adapter serializes concurrent spawns for the SAME user with a per-user
+        ``pg_advisory_xact_lock`` and backstops dedup with a unique partial index on active rows; the
+        in-memory fake performs the check+insert with no ``await`` between them so the race closes
+        offline too. Replaces the old separate ``find_active`` + ``count_active_bots`` +
+        ``create_meeting`` pre-check sequence on the fresh-insert path."""
+        ...
+
     async def reopen_meeting(self, *, meeting_id: int) -> dict:
         """Reset a TERMINAL meeting row back to ``requested`` for a continued run (``continue_meeting``):
         clear the prior terminal attribution, keep the row id (so transcripts/recordings keyed by it
@@ -113,6 +140,14 @@ class RuntimeClient(Protocol):
     async def create_workload(self, spec: dict) -> dict:
         ...
 
+    async def delete_workload(self, workload_id: str) -> None:
+        """Tear down a previously-spawned workload (``DELETE /workloads/{id}`` on the kernel).
+
+        The COMPENSATION for a partial spawn (ROB3): when a post-spawn DB write fails, the just-created
+        workload must be torn down so no orphaned bot keeps running with no session row to resolve its
+        uploads. Best-effort — a teardown that itself fails must not mask the original spawn failure."""
+        ...
+
 
 class QuotaExceeded(Exception):
     """The runtime kernel rejected the spawn for owner quota (429) — surfaced as HTTP 429.
@@ -135,4 +170,16 @@ class MaxBotsExceeded(Exception):
 
 
 class SpawnFailed(Exception):
-    """The runtime kernel could not start the workload (non-201, non-429) — meeting → failed."""
+    """The runtime kernel could not start the workload (non-201, non-429) — meeting → failed.
+
+    ALSO raised (ROB3) when a post-spawn DB write fails AFTER the workload was created: the orphaned
+    workload is torn down (``RuntimeClient.delete_workload``) and the spawn is re-raised as this, so
+    the route maps it to 502 and no inconsistent half-spawned state is left behind."""
+
+
+class DuplicateMeeting(Exception):
+    """The user already has an active/requested meeting for (platform, native_id) → HTTP 409.
+
+    Raised by ``MeetingRepo.create_meeting_guarded`` (the atomic dedup) — either because the in-txn
+    dedup query found an active row, or because the unique partial index on active rows rejected the
+    concurrent insert (the DB-level backstop). Re-exported from ``service`` for the router's mapping."""
