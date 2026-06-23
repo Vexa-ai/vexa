@@ -93,6 +93,28 @@ Add a row per known failure class; a row is "done" when every named probe is gre
     dies mid-meeting) is a follow-up — a grace-windowed stale-active reconcile sweep, analogous to CC6.
 # - dashboard_new-client-calls-are-served-or-stably-rejected (DF/contract)  status: open
 
+# ── Stress / shake (heavy concurrency + load) ─────────────────────────────────────────────────────
+- id: stress-system-control-plane
+  status: green
+  seam: "request_bot / upload_chunk / reconcile under asyncio.gather at scale"
+  seam_probe: core/meetings/services/meeting-api/tests/test_stress_seam.py
+  expected:
+    spawn_cap: 50 concurrent @ cap 5 → exactly 5 provisioned
+    recording_flood: 26 concurrent chunks → chunk_count 26 (no lost update)
+    reconcile: 200 stale → 200 completed + 200 workloads killed
+  note: concurrent dedup/cap MULTI-PROCESS correctness is the PG advisory-lock+unique-index → L4 (compose-stress).
+- id: stress-bot-orchestrator
+  status: green
+  module_probe: core/meetings/services/bot/src/stress.test.ts
+  expected:
+    act_flood: 200 leave acts → exactly one clean terminal
+    report_flood: 500 rapid reports → still legal, reaches active→completed
+    fail_under_load: pipeline OOM → failed + leave (no ghost participant)
+- id: stress-gateway-rate-limit-burst
+  status: green
+  module_probe: core/gateway/services/gateway/tests/test_ratelimit.py
+  expected: { burst_5000_at_cap_100: exactly 100 allowed, 500_users_x10_at_cap_5: each exactly 5 }
+
 # ── Gateway edge robustness ──────────────────────────────────────────────────────────────────────
 - id: gateway-per-user-rate-limit-429
   status: green
