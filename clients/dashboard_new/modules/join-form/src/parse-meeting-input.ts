@@ -57,7 +57,11 @@ export function parseMeetingInput(input: string): ParsedMeetingInput | null {
   const zoomUrl = trimmed.match(/(?:https?:\/\/)?(?:[\w-]+\.)?zoom\.us\/j\/(\d+)/i);
   if (zoomUrl) {
     const passcode = extractParam(trimmed, "pwd");
-    return { platform: "zoom", nativeId: zoomUrl[1], passcode };
+    // Zoom REQUIRES meeting_url on POST /bots (the backend 422s a zoom request without it — the join
+    // needs the full link, incl. its pwd, not just the numeric id). Preserve the original URL so the
+    // form sends it as meeting_url, exactly as the Teams branch does.
+    const originalUrl = trimmed.startsWith("http") ? trimmed : `https://${trimmed}`;
+    return { platform: "zoom", nativeId: zoomUrl[1], passcode, originalUrl };
   }
 
   // ── bare numeric ids ─────────────────────────────────────────────────────────────────────────────

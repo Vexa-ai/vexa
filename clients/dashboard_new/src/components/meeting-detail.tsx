@@ -185,12 +185,47 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const chat: ChatMessage[] = (snapshot?.chat ?? []).map((c) => ({ sender: c.sender, text: c.text, is_from_bot: true }));
   const isLive = LIVE_STATUSES.has(status);
 
-  const segStarts = segments
-    .map((s) => (typeof s.start_time === "number" ? s.start_time : parseFloat(String(s.start_time))))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  const recAnchor = segStarts.length ? Math.min(...segStarts) : 0;
-  const toRecordingOffset = (startSeconds: number) =>
-    Math.max(0, startSeconds > 1_000_000_000 && recAnchor ? startSeconds - recAnchor : startSeconds);
+  // Recording playback alignment. The master plays from t=0 = the recording's START (when the bot began
+  // capturing) — NOT the first utterance. A segment's wall-clock `absolute_start_time` is the reliable
+  // clock; its `start_time` is seconds-from-session-start for REST segments but an EPOCH for live ones,
+  // so it can't be seeked-to directly. We derive the recording origin in wall-clock — origin =
+  // absolute_start_time − start_time for any segment with a relative (seconds-scale) start_time, taking
+  // the EARLIEST such anchor (this is the old dashboard's `sessionStart = absolute − start_time`) — then
+  // seek by the absolute delta from that origin. Anchoring on the origin (not min-of-utterance-starts)
+  // is what fixes clicks landing early by the lead-in silence.
+  const EPOCH_SCALE = 1_000_000_000; // a `start` ≥ this is an epoch (seconds since 1970), not an offset
+  const recordingStartMs: number | null = (() => {
+    let anchor: number | null = null;
+    for (const s of segments) {
+      if (!s.absolute_start_time) continue;
+      const absMs = Date.parse(s.absolute_start_time);
+      if (!Number.isFinite(absMs)) continue;
+      const rel = typeof s.start_time === "number" ? s.start_time : parseFloat(String(s.start_time));
+      const candidate = Number.isFinite(rel) && rel >= 0 && rel < EPOCH_SCALE ? absMs - rel * 1000 : absMs;
+      if (anchor === null || candidate < anchor) anchor = candidate;
+    }
+    if (anchor === null && meeting?.start_time) {
+      const m = Date.parse(meeting.start_time);
+      if (Number.isFinite(m)) anchor = m;
+    }
+    return anchor;
+  })();
+
+  const seekToSegment = (startSeconds: number, absoluteStartTime?: string) => {
+    const player = audioRef.current;
+    if (!player) return;
+    // Prefer the absolute clock against the recording origin — consistent for both relative (REST) and
+    // epoch (live) start_times, and anchored to the recording's t=0.
+    if (absoluteStartTime && recordingStartMs !== null) {
+      const offset = (Date.parse(absoluteStartTime) - recordingStartMs) / 1000;
+      if (Number.isFinite(offset)) {
+        player.seekTo(Math.max(0, offset));
+        return;
+      }
+    }
+    // Fallback: a plausibly-relative start_time is already a recording offset.
+    if (Number.isFinite(startSeconds) && startSeconds < EPOCH_SCALE) player.seekTo(Math.max(0, startSeconds));
+  };
 
   const botId = meeting.bot_container_id;
   const vncUrl =
@@ -226,7 +261,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 segments={segments}
                 isLive={isLive}
                 playbackTime={playbackTime}
-                onSegmentClick={(startSeconds) => audioRef.current?.seekTo(toRecordingOffset(startSeconds))}
+                onSegmentClick={seekToSegment}
               />
             </div>
           </Panel>
