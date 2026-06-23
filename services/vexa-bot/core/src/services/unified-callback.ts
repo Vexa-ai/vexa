@@ -13,6 +13,7 @@ export type CompletionReason =
   | "validation_error"
   | "awaiting_admission_timeout"
   | "awaiting_admission_rejected"
+  | "never_admitted"
   | "left_alone"
   | "evicted"
   | "max_bot_time_exceeded"
@@ -266,6 +267,8 @@ export function mapExitReasonToStatus(
         return { status: "completed", completionReason: "evicted" };
       case "admission_rejected_by_admin":
         return { status: "completed", completionReason: "awaiting_admission_rejected" };
+      case "admission_never_admitted":
+        return { status: "completed", completionReason: "never_admitted" };
       default:
         return { status: "completed", completionReason: "stopped" };
     }

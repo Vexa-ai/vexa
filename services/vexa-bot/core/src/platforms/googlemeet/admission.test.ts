@@ -88,5 +88,23 @@ expectFileContains(
   'Ask to join again',
 );
 
+expectFileContains(
+  'admission.ts exports never_admitted outcome',
+  ADMISSION_TS,
+  '"never_admitted"',
+);
+
+expectFileContains(
+  'admission.ts has classifyRejectionOutcome',
+  ADMISSION_TS,
+  'classifyRejectionOutcome',
+);
+
+expectFileContains(
+  'admission.ts has explicit deny text check',
+  ADMISSION_TS,
+  'hasExplicitDenyText',
+);
+
 console.log(`\n=== googlemeet admission summary: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);
