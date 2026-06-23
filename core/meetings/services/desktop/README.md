@@ -38,7 +38,10 @@ TRANSCRIPTION_SERVICE_URL=https://transcription.vexa.ai TRANSCRIPTION_SERVICE_TO
 ```
 
 ## Verify
-`pnpm --filter @vexa/desktop test` runs three, cheapest first:
+`pnpm --filter @vexa/desktop test` runs cheapest first:
+- **L2** `transcript-store.test.ts` — the store UPSERTS confirmed segments by `segment_id`: a late-box
+  claim / cluster re-resolve re-publishes the same id with the real name and REPLACES the provisional
+  (empty-speaker) copy in place — no ghost duplicate in `GET /transcripts`.
 - **L2** `recording-sink.test.ts` — the `RecordingSink` port fed synthetic recording.v1 chunks via an
   in-memory fake (no WS, no disk); asserts the `buildRecordingMaster` output.
 - **L3** `recording-e2e.test.ts` — synthetic recording.v1 over the real ingest WS → decode → sink → a

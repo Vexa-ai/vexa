@@ -74,6 +74,16 @@ function recordingPlayerPage(platform: string, native: string, src: string, form
 }
 
 interface Meeting { id: number; platform: string; native_meeting_id: string; status: string; start_time: string; segments: TranscriptSegment[]; }
+
+/** UPSERT a confirmed segment into the store by segment_id. A repaint/rename
+ *  (late-box claim, cluster re-resolve) re-publishes the SAME id with the corrected
+ *  speaker — replace in place (preserving order) so the persisted transcript matches
+ *  what live WS clients show, instead of keeping the stale provisional copy (empty
+ *  speaker) AS WELL AS the named one (the duplicate GET /transcripts was returning). */
+export function upsertSegment(segments: TranscriptSegment[], seg: TranscriptSegment): void {
+  const i = segments.findIndex((x) => x.segment_id === seg.segment_id);
+  if (i >= 0) segments[i] = seg; else segments.push(seg);
+}
 export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; canAccess?: CanAccess; }
 export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
 
@@ -141,9 +151,17 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
 
   // Live delivery (WS) + persist CONFIRMED to the store.
   const liveClients = new Map<WebSocket, Set<string>>();
+  // Persist a CONFIRMED segment, UPSERTING by segment_id. A later repaint/rename
+  // (late-box claim, cluster re-resolve) re-publishes the SAME id with the corrected
+  // speaker — replace in place so the store matches what live WS clients show (they
+  // upsert by id) instead of accumulating the stale provisional copy (empty speaker)
+  // ALONGSIDE the named one — the "ghost duplicate" GET /transcripts was returning.
+  const persist = (m: Meeting | undefined, seg: TranscriptSegment): void => {
+    if (m) upsertSegment(m.segments, seg);
+  };
   const broadcast = (key: string, seg: TranscriptSegment) => {
     const m = meetings.get(key);
-    if (seg.completed && m) m.segments.push(seg);
+    if (seg.completed) persist(m, seg);
     if (seg.completed) log(`  [${seg.speaker}] ${seg.text}`);
     const msg = JSON.stringify({ type: 'transcript', meeting: key, confirmed: seg.completed ? [seg] : [], pending: seg.completed ? [] : [seg] });
     for (const [c, keys] of liveClients) if (c.readyState === WebSocket.OPEN && (keys.size === 0 || keys.has(key))) c.send(msg);
@@ -157,7 +175,7 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   });
   const broadcastBatch = (key: string, speaker: string, confirmed: TranscriptSegment[], pending: TranscriptSegment[]) => {
     const m = meetings.get(key);
-    if (m) for (const s of confirmed) m.segments.push(s);
+    for (const s of confirmed) persist(m, s);
     for (const s of confirmed) log(`  [${speaker}] ${s.text}`);
     const msg = JSON.stringify({ type: 'transcript', meeting: key, speaker, confirmed, pending });
     for (const [c, keys] of liveClients) if (c.readyState === WebSocket.OPEN && (keys.size === 0 || keys.has(key))) c.send(msg);

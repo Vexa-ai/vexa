@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/desktop.ts",
-    "test": "tsx src/recording-sink.test.ts && tsx src/recording-e2e.test.ts && tsx src/health.test.ts && tsx src/access.test.ts && tsx src/desktop-e2e.live.test.ts",
+    "test": "tsx src/transcript-store.test.ts && tsx src/recording-sink.test.ts && tsx src/recording-e2e.test.ts && tsx src/health.test.ts && tsx src/access.test.ts && tsx src/desktop-e2e.live.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
