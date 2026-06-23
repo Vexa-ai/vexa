@@ -109,5 +109,10 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
 }
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
+// AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure). It is THROWN by the
+// admission wait; the JoinDriver adapter catches it and maps the outcome → a JoinOutcome so a host DENIAL
+// is recorded as a permanent `rejected`, not collapsed into a transient (retried) `join_failure` (G1).
+export { AdmissionError } from "./googlemeet/admission";
+export type { AdmissionOutcome } from "./googlemeet/admission";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };

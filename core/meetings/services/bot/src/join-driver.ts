@@ -8,13 +8,34 @@
 import type { Page } from '@vexa/remote-browser';
 import {
   joinMeeting,
+  AdmissionError,
   leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting,
   startGoogleRemovalMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor,
-  type JoinState, type Platform as JoinPlatform,
+  type JoinState, type Platform as JoinPlatform, type AdmissionOutcome,
 } from '@vexa/join';
 import type { BotStatus } from './contracts.js';
 import type { Invocation } from './config.js';
 import type { JoinDriver, JoinOutcome } from './ports.js';
+
+/**
+ * Map @vexa/join's typed AdmissionError `outcome` → a JoinOutcome (G1).
+ *
+ * The admission wait THROWS an `AdmissionError` carrying a precise `outcome`; without this the
+ * orchestrator's catch blanket-maps every throw to a transient `join_failure` → the retry classifier
+ * (`lifecycle/retry.py`) RE-SPAWNS a bot that was actually DENIED, burning quota. Mapping the outcome
+ * keeps the truth: a `denial` → `rejected` → `awaiting_admission_rejected` (PERMANENT, no retry); a
+ * `lobby_timeout` → `timeout` → `awaiting_admission_timeout` (transient, a legit retry); a `join_failure`
+ * stays `error` → `join_failure` (transient). NB: a distinct `blocked` reason needs a sealed-contract
+ * `CompletionReason` value (lane:contract) — until then a detected block surfaces via this same path.
+ */
+export function admissionOutcomeToJoinOutcome(outcome: AdmissionOutcome): JoinOutcome {
+  switch (outcome) {
+    case 'denial':        return 'rejected';
+    case 'lobby_timeout': return 'timeout';
+    case 'join_failure':  return 'error';
+    default:              return 'error';
+  }
+}
 
 /** @vexa/join JoinState → lifecycle.v1 BotStatus (null = not a bot-status transition). */
 function mapState(s: JoinState): BotStatus | null {
@@ -36,14 +57,24 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
   const platform = joinPlatform(inv.platform);
   return {
     async join(report): Promise<JoinOutcome> {
-      const r = await joinMeeting(page, {
-        meetingUrl: inv.meetingUrl ?? '',
-        platform,
-        botName: inv.botName,
-        authenticated: inv.authenticated,            // join as a signed-in user (persistent context)
-        waitingRoomTimeoutMs: inv.automaticLeave?.waitingRoomTimeout,
-        hooks: { onState: (s: JoinState) => { const bs = mapState(s); if (bs) void report(bs); } },
-      });
+      let r;
+      try {
+        r = await joinMeeting(page, {
+          meetingUrl: inv.meetingUrl ?? '',
+          platform,
+          botName: inv.botName,
+          authenticated: inv.authenticated,            // join as a signed-in user (persistent context)
+          waitingRoomTimeoutMs: inv.automaticLeave?.waitingRoomTimeout,
+          hooks: { onState: (s: JoinState) => { const bs = mapState(s); if (bs) void report(bs); } },
+        });
+      } catch (e) {
+        // A TYPED admission verdict (denial/lobby_timeout/join_failure) → map its outcome so the
+        // control plane records the truth, not a generic retried `join_failure` (G1). A genuinely
+        // unexpected throw (browser crash, navigation error) is NOT an AdmissionError → re-raise so
+        // the orchestrator classifies it as a transient join_failure.
+        if (e instanceof AdmissionError) return admissionOutcomeToJoinOutcome(e.outcome);
+        throw e;
+      }
       if (r.admitted) { await report('active'); return 'admitted'; }
       return (r.state === 'blocked' || r.state === 'needs_human_help') ? 'blocked' : 'rejected';
     },
