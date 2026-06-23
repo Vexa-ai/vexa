@@ -379,6 +379,25 @@ def test_post_bots_string_bool_should_not_silently_coerce():
         assert r.status_code == 422
 
 
+# FIXED (CC3): transcribe_enabled used a bare bool() so the string "false" became True — the unfixed
+# twin of A2. _resolve_transcribe_enabled now parses/validates it. Standing regression guard.
+def test_post_bots_transcribe_enabled_string_false_is_false():
+    repo = InMemoryMeetingRepo()
+    c = _client(repo=repo)
+    r = c.post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "transcribe-coerce",
+        "transcribe_enabled": "false",
+    })
+    # Honour the string's intent OR 422 — but NEVER flip "false"→True (which silently enables transcription).
+    if r.status_code == 201:
+        m = next(v for v in repo._meetings.values() if v["native_meeting_id"] == "transcribe-coerce")
+        assert m["data"].get("transcribe_enabled") is False, (
+            "transcribe_enabled='false' silently coerced to True"
+        )
+    else:
+        assert r.status_code == 422
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 #  POST /bots — server misconfiguration robustness (no ADMIN_TOKEN → MeetingToken mint fails)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

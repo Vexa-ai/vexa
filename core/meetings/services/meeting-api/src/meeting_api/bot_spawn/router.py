@@ -40,6 +40,23 @@ def _resolve_recording_enabled(value: Optional[object]) -> bool:
     raise HTTPException(status_code=422, detail="recording_enabled must be a boolean")
 
 
+def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
+    """Transcription default: an explicit request value wins; else the ``TRANSCRIBE_ENABLED`` env
+    (default ``true``). Type-validated like ``recording_enabled`` (CC3) — a bare ``bool(...)`` turned the
+    JSON string ``"false"`` into ``True``, silently ENABLING transcription a caller asked to disable."""
+    if value is None:
+        return os.getenv("TRANSCRIBE_ENABLED", "true").lower() == "true"
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off", ""):
+            return False
+    raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
+
+
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
     if not x_user_id:
         raise HTTPException(status_code=401, detail="Missing user identity")
@@ -140,7 +157,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 task=body.get("task"),
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
-                transcribe_enabled=bool(body.get("transcribe_enabled", True)),
+                transcribe_enabled=_resolve_transcribe_enabled(body.get("transcribe_enabled")),
                 # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.

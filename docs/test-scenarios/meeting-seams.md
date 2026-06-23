@@ -46,7 +46,13 @@ Add a row per known failure class; a row is "done" when every named probe is gre
 # - recording-concurrent-finalize-no-jsonb-lost-update      (G3)   status: open
 # - recording-s3-ops-do-not-block-event-loop                (G4)   status: open
 # - webhook-billing-exactly-once-per-meter-session          (G5)   status: open
-# - spawn-transcribe-enabled-string-false-is-false          (CC3)  status: open
+- id: spawn-transcribe-enabled-string-false-is-false
+  status: green
+  seam: "POST /bots -> bot_spawn/router -> meeting.data"
+  seam_probe: core/meetings/services/meeting-api/tests/test_api_agility.py  # test_post_bots_transcribe_enabled_string_false_is_false
+  expected:
+    request: { transcribe_enabled: "false" }
+    persisted: { transcribe_enabled: false }   # _resolve_transcribe_enabled — no bare bool() coercion (was: "false" -> True)
 # - spawn-transcribe-requested-without-stt-fails-loud       (CC4)  status: open
 # - stop-active-bot-missed-leave-reconcile-kills-workload   (CC6)  status: open
 # - runtime-workload-death-pre-join-drives-meeting-failed   (CC5)  status: open
