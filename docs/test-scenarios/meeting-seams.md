@@ -60,7 +60,14 @@ Add a row per known failure class; a row is "done" when every named probe is gre
   expected:
     transcribe_true_no_stt: 503        # fail loud (P18) — never a silent deaf bot
     transcribe_false_no_stt: 201       # recording-only is legitimate; 503 fires ONLY when transcription is requested
-# - stop-active-bot-missed-leave-reconcile-kills-workload   (CC6)  status: open
+- id: stop-active-bot-missed-leave-reconcile-kills-workload
+  status: green
+  seam: "stop -> stale `stopping` -> reconcile sweep -> runtime.delete_workload"
+  seam_probe: core/meetings/services/meeting-api/tests/test_robustness_seam.py  # test_stop_reconcile_kills_orphan_workload (+ no-container-id, kill-best-effort)
+  expected:
+    db_row: completed                 # via the bot's own lifecycle callback (FSM/webhook/ws fire identically)
+    workload: deleted                 # CC6/ADR-0024 — an active bot that missed the leave is killed, not left orphan
+  note: completes ADR-0024 (guarantee teardown). L4: active bot whose leave is dropped → reconcile → no orphan container.
 # - runtime-workload-death-pre-join-drives-meeting-failed   (CC5)  status: open
 # - dashboard_new-client-calls-are-served-or-stably-rejected (DF/contract)  status: open
 ```

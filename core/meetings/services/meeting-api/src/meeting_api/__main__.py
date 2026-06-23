@@ -130,7 +130,7 @@ def build_production_app():
         webhook_sink=webhook_sink,
     )
 
-    _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo)
+    _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client)
     return app
 
 
@@ -143,7 +143,7 @@ def _minio_endpoint_url() -> str:
     return f"{scheme}://{endpoint}"
 
 
-def _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo=None) -> None:
+def _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops."""
     from .collector.ingest import consume_segments
 
@@ -206,12 +206,14 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             await asyncio.sleep(scheduler_interval)
 
     async def _stop_reconcile_loop() -> None:
-        # Complete meetings stuck in `stopping` past the grace window by POSTing a synthetic
-        # `completed` to this process's OWN lifecycle callback — reusing the exact rehydrate →
-        # persist → webhook → ws-publish path the bot's callback drives (no duplicate logic).
+        # Complete meetings stuck in `stopping` past the grace window AND kill any orphan workload (CC6 /
+        # ADR-0024) — through the importable reconcile sweep, reusing the bot's OWN lifecycle callback so
+        # the FSM → persist → webhook → ws-publish path fires identically (no duplicate logic).
         if meeting_repo is None or not hasattr(meeting_repo, "list_stale_stopping"):
             return
         import httpx
+
+        from .lifecycle.reconcile import reconcile_stale_stopping_sweep
 
         port = int(os.getenv("PORT", "8080"))
         callback = f"http://127.0.0.1:{port}/bots/internal/callback/lifecycle"
@@ -219,16 +221,17 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
         headers = {"content-type": "application/json"}
         if secret:
             headers["x-internal-secret"] = secret
+
+        async def _post_lifecycle(body: dict):
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(callback, json=body, headers=headers)
+                return r.status_code
+
         while True:
             try:
-                stale = await meeting_repo.list_stale_stopping(older_than_seconds=stop_grace)
-                for meeting_id, session_uid in stale:
-                    body = {"connection_id": session_uid, "status": "completed",
-                            "completion_reason": "stopped"}
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        r = await client.post(callback, json=body, headers=headers)
-                    log.info("stop-reconcile completed stuck meeting %s (session %s) → %s",
-                             meeting_id, session_uid, r.status_code)
+                await reconcile_stale_stopping_sweep(
+                    meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:

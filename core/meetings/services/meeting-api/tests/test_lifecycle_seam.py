@@ -73,8 +73,8 @@ class _ReconcileRepo(InMemoryMeetingRepo):
     is considered stale, paired with its latest session_uid.
     """
 
-    def list_stale_stopping_sync(self) -> list[tuple[int, str]]:
-        out: dict[int, str] = {}
+    def list_stale_stopping_sync(self) -> list[tuple[int, str, object]]:
+        out: dict[int, tuple] = {}
         # latest session per meeting (mirror the SQL adapter's MeetingSession.id desc)
         for s in reversed(self.sessions):
             mid = s["meeting_id"]
@@ -82,10 +82,10 @@ class _ReconcileRepo(InMemoryMeetingRepo):
             if row is None or row["status"] != "stopping":
                 continue
             if mid not in out:
-                out[mid] = s["session_uid"]
-        return list(out.items())
+                out[mid] = (s["session_uid"], row.get("bot_container_id"))
+        return [(mid, sid, bcid) for mid, (sid, bcid) in out.items()]
 
-    async def list_stale_stopping(self, *, older_than_seconds: float) -> list[tuple[int, str]]:
+    async def list_stale_stopping(self, *, older_than_seconds: float) -> list[tuple[int, str, object]]:
         return self.list_stale_stopping_sync()
 
 
@@ -372,7 +372,7 @@ def _reconcile_once(client: TestClient, repo: _ReconcileRepo) -> list[tuple[int,
     """Run ONE reconcile sweep exactly as ``_stop_reconcile_loop`` would: for each stale stopping,
     POST the synthetic completed callback. Returns [(meeting_id, session_uid, status_code), …]."""
     out = []
-    for meeting_id, session_uid in repo.list_stale_stopping_sync():
+    for meeting_id, session_uid, _bot_container_id in repo.list_stale_stopping_sync():
         r = client.post(ENDPOINT, json={
             "connection_id": session_uid, "status": "completed", "completion_reason": "stopped",
         })

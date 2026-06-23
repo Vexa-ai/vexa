@@ -357,6 +357,91 @@ def test_stop_reconcile_loop_survives_a_throwing_repo(monkeypatch):
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────
+# (b2) CC6 — stop-reconcile GUARANTEES teardown: a stale `stopping` meeting whose ACTIVE bot missed
+#      the fire-and-forget leave must have its WORKLOAD killed, not just its DB row completed (ADR-0024).
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+
+
+class _StaleStoppingRepo:
+    """Minimal repo for the reconcile sweep: returns the given stale `stopping` rows verbatim."""
+
+    def __init__(self, stale):
+        self._stale = stale
+
+    async def list_stale_stopping(self, *, older_than_seconds):
+        return list(self._stale)
+
+
+async def test_stop_reconcile_kills_orphan_workload():
+    """An ACTIVE bot that missed the graceful leave leaves the meeting stuck `stopping` with a LIVE
+    workload. The reconcile sweep must complete the DB row AND kill the workload (CC6 / ADR-0024) —
+    a stop GUARANTEES teardown, it does not merely request it over a channel the bot may have missed."""
+    import logging
+
+    from meeting_api.lifecycle.reconcile import reconcile_stale_stopping_sweep
+
+    repo = _StaleStoppingRepo([(42, "sess-42", "mtg-42-deadbeef")])
+    runtime = FakeRuntimeClient()
+    posted: list[dict] = []
+
+    async def post_lifecycle(body):
+        posted.append(body)
+        return 200
+
+    n = await reconcile_stale_stopping_sweep(
+        repo, runtime, post_lifecycle, stop_grace=45, log=logging.getLogger("t"),
+    )
+
+    assert n == 1
+    assert runtime.deleted == ["mtg-42-deadbeef"], "the orphan workload must be torn down"
+    assert posted and posted[0]["status"] == "completed", "the DB row must also be completed via the callback"
+
+
+async def test_stop_reconcile_no_container_id_does_not_crash():
+    """A stale `stopping` meeting whose bot_container_id was never written still completes — the sweep
+    skips the kill (nothing to target) and never raises."""
+    import logging
+
+    from meeting_api.lifecycle.reconcile import reconcile_stale_stopping_sweep
+
+    repo = _StaleStoppingRepo([(7, "sess-7", None)])
+    runtime = FakeRuntimeClient()
+
+    async def post_lifecycle(body):
+        return 200
+
+    n = await reconcile_stale_stopping_sweep(
+        repo, runtime, post_lifecycle, stop_grace=45, log=logging.getLogger("t"),
+    )
+    assert n == 1
+    assert runtime.deleted == [], "no container id → no kill, no crash"
+
+
+async def test_stop_reconcile_kill_failure_is_best_effort():
+    """A runtime.delete_workload that RAISES is caught (logged), never failing the sweep — the row is
+    still completed and the loop survives (the next tick retries)."""
+    import logging
+
+    from meeting_api.lifecycle.reconcile import reconcile_stale_stopping_sweep
+
+    class _ThrowingRuntime(FakeRuntimeClient):
+        async def delete_workload(self, workload_id):
+            raise RuntimeError("kernel unreachable")
+
+    repo = _StaleStoppingRepo([(9, "sess-9", "mtg-9-x")])
+    posted: list[dict] = []
+
+    async def post_lifecycle(body):
+        posted.append(body)
+        return 200
+
+    n = await reconcile_stale_stopping_sweep(
+        repo, _ThrowingRuntime(), post_lifecycle, stop_grace=45, log=logging.getLogger("t"),
+    )
+    assert n == 1 and posted, "the sweep survives a kill failure and still completes the row"
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────
 # (c) max_concurrent_bots — sequential cap enforcement + the CONCURRENT over-provision race
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 

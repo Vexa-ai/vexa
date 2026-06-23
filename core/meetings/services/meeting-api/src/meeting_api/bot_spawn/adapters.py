@@ -182,10 +182,14 @@ class SqlAlchemyMeetingRepo:
                 stmt = stmt.where(Meeting.id != exclude_meeting_id)
             return int((await db.execute(stmt)).scalar() or 0)
 
-    async def list_stale_stopping(self, *, older_than_seconds: float) -> list[tuple[int, str]]:
-        """Meetings stuck in ``stopping`` longer than ``older_than_seconds``, with their latest
-        session_uid — the stop-reconcile backstop completes these (the bot was told to leave but
-        never sent its own terminal callback). Returns ``[(meeting_id, session_uid), …]``."""
+    async def list_stale_stopping(
+        self, *, older_than_seconds: float
+    ) -> list[tuple[int, str, Optional[str]]]:
+        """Meetings stuck in ``stopping`` longer than ``older_than_seconds`` — with their latest
+        session_uid AND ``bot_container_id``. The stop-reconcile backstop completes these (the bot was
+        told to leave but never sent its own terminal callback) AND kills the workload (CC6), since an
+        ACTIVE bot that missed the fire-and-forget leave is an orphan until torn down. Returns
+        ``[(meeting_id, session_uid, bot_container_id), …]`` (bot_container_id may be ``None``)."""
         from datetime import datetime, timezone
 
         from sqlalchemy import select
@@ -195,21 +199,22 @@ class SqlAlchemyMeetingRepo:
         async with self._session_factory() as db:
             rows = (
                 await db.execute(
-                    select(Meeting.id, Meeting.updated_at, MeetingSession.session_uid)
+                    select(Meeting.id, Meeting.updated_at, MeetingSession.session_uid,
+                           Meeting.bot_container_id)
                     .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
                     .where(Meeting.status == "stopping")
                     .order_by(MeetingSession.id.desc())
                 )
             ).all()
         now = datetime.now(timezone.utc)
-        out: dict[int, str] = {}
-        for mid, upd, sid in rows:
+        out: dict[int, tuple[str, Optional[str]]] = {}
+        for mid, upd, sid, bcid in rows:
             if mid in out or upd is None or not sid:
                 continue
             u = upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
             if (now - u).total_seconds() >= older_than_seconds:
-                out[mid] = sid
-        return list(out.items())
+                out[mid] = (sid, bcid)
+        return [(mid, sid, bcid) for mid, (sid, bcid) in out.items()]
 
     async def create_meeting(self, *, user_id, platform, native_meeting_id, data) -> dict:
         from ..sessions.models import Meeting
