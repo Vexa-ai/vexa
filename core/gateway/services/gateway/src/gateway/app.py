@@ -65,6 +65,7 @@ def create_app(
     redis: RedisBus,
     *,
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
+    rate_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -126,6 +127,17 @@ def create_app(
         # Bind the resolved user to the trace context so every later line carries user_id.
         user_id = user_data["user_id"]
         set_user_id(user_id)
+
+        # Per-user request rate limit (WS-6) — a valid key could otherwise fire unlimited requests at
+        # the control plane (the max_concurrent_bots cap bounds active bots, not request rate). 429 when
+        # the per-user token bucket is empty; the bucket refills continuously (Retry-After: 1s).
+        if rate_limiter is not None and not rate_limiter.allow(str(user_id)):
+            return Response(
+                content=json.dumps({"detail": "Rate limit exceeded"}),
+                status_code=429,
+                media_type="application/json",
+                headers={"Retry-After": "1"},
+            )
 
         # Scope enforcement (main.py:341-351).
         required = _required_scopes(request.url.path)

@@ -122,11 +122,14 @@ def build_production_app(
     authorizer = AdminApiAuthorizer(http_client, admin_api_url, meeting_api_url)
     downstream = HttpxDownstreamClient(http_client)
 
+    from .ratelimit import from_env as _rate_limiter_from_env
+
     return create_app(
         authorizer,
         downstream,
         redis_client,
         meeting_api_url=meeting_api_url,
+        rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
 
 

@@ -52,6 +52,32 @@ def test_authed_request_passes_body_and_status_verbatim():
     assert r.json() == {"id": 99, "platform": "google_meet"}
 
 
+def test_rate_limit_returns_429_past_the_per_user_cap():
+    """WS-6: with a per-user limiter injected, requests up to the bucket pass (verbatim), the next is
+    throttled with 429 + Retry-After — closing the unlimited-requests-on-a-valid-key DoS gap."""
+    from gateway.ratelimit import PerUserRateLimiter
+
+    now = {"t": 0.0}
+    limiter = PerUserRateLimiter(capacity=2, refill_per_sec=0, clock=lambda: now["t"])
+    app = create_app(FakeAuthorizer(), FakeDownstream(status_code=200, body={"meetings": []}),
+                     FakeRedis(), rate_limiter=limiter)
+    client = TestClient(app)
+
+    assert client.get("/bots/status", headers=AUTH).status_code == 200
+    assert client.get("/bots/status", headers=AUTH).status_code == 200
+    r = client.get("/bots/status", headers=AUTH)
+    assert r.status_code == 429
+    assert r.json()["detail"] == "Rate limit exceeded"
+    assert r.headers.get("retry-after") == "1"
+
+
+def test_rate_limit_does_not_apply_when_unconfigured():
+    """Default (no limiter) → no throttling: a burst of requests all pass (back-compat for harnesses)."""
+    client, _ = _client()  # _client builds create_app WITHOUT a rate_limiter
+    for _ in range(20):
+        assert client.get("/bots/status", headers=AUTH).status_code == 200
+
+
 def test_identity_headers_injected_and_spoof_stripped():
     """The gateway injects x-user-id from the resolved token and STRIPS client-supplied
     identity headers (anti-spoofing, main.py:294-296)."""

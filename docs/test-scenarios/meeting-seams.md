@@ -93,6 +93,17 @@ Add a row per known failure class; a row is "done" when every named probe is gre
     dies mid-meeting) is a follow-up — a grace-windowed stale-active reconcile sweep, analogous to CC6.
 # - dashboard_new-client-calls-are-served-or-stably-rejected (DF/contract)  status: open
 
+# ── Gateway edge robustness ──────────────────────────────────────────────────────────────────────
+- id: gateway-per-user-rate-limit-429
+  status: green
+  seam: "gateway _forward -> PerUserRateLimiter.allow(user_id)"
+  module_probe: core/gateway/services/gateway/tests/test_ratelimit.py        # token-bucket logic
+  seam_probe: core/gateway/services/gateway/tests/test_proxy.py              # test_rate_limit_returns_429_past_the_per_user_cap
+  expected:
+    over_cap: 429 (+ Retry-After)        # closes the unlimited-requests-on-a-valid-key DoS gap (WS-6)
+    unconfigured: no throttling          # default create_app has no limiter; prod enables generous defaults
+  note: per-user token bucket; prod from_env (burst 120 / 40 rps, GATEWAY_RATE_LIMIT_*). WS connection cap = follow-up.
+
 # ── Deep integration cascades (L3-lite: the real app, multi-module, faked transports) ─────────────
 - id: full-meeting-lifecycle-cascade
   status: green
