@@ -60,3 +60,54 @@ def _log_orphan_kill_failed(meeting_id, workload_id, err) -> None:
                   fields={"meeting_id": meeting_id, "workload_id": workload_id, "error": str(err)})
     except Exception:
         pass
+
+
+# Workload states the runtime kernel reports as TERMINAL (the workload is gone).
+TERMINAL_WORKLOAD_STATES = frozenset({"destroyed", "failed", "exited", "crashed", "stopped", "error"})
+# Meeting statuses where the bot has NOT yet reported `active` — a terminal workload here means the bot
+# never started and never will (image-pull fail, OOM, crash on boot), so it can be classed `failed`
+# unambiguously. `active`/`stopping` are owned by the bot's own callback + the stop-reconcile (a normal
+# teardown destroys the workload AFTER the meeting is already terminal) — covered separately to avoid
+# racing a legitimate completion.
+_PRE_ACTIVE_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+
+
+async def synthesize_failed_for_dead_workload(
+    repo: Any,
+    workload_id: Optional[str],
+    state: Optional[str],
+    drive_failed: Callable[[dict], Awaitable[Any]],
+    *,
+    log: Any,
+) -> bool:
+    """CC5 — a workload that reached a TERMINAL state while its meeting is still PRE-ACTIVE means the bot
+    never started/reported and never will. Drive a synthetic ``failed`` (through ``drive_failed`` — the
+    bot's own lifecycle callback in prod) so the meeting does not hang ``requested``/``joining`` forever.
+
+    Returns True iff a synthetic ``failed`` was driven. No-op (False) when the state isn't terminal, the
+    workload is unknown, or the meeting already advanced to ``active``/a terminal status (the bot's
+    callback is the source of truth for a STARTED bot). Best-effort: never raises."""
+    if not workload_id or state not in TERMINAL_WORKLOAD_STATES or repo is None:
+        return False
+    try:
+        info = await repo.find_by_container(bot_container_id=workload_id)
+    except Exception as e:  # noqa: BLE001 — lookup is best-effort
+        log.warning("runtime-callback: find_by_container failed for %s: %s", workload_id, e)
+        return False
+    if not info or info.get("status") not in _PRE_ACTIVE_STATUSES or not info.get("session_uid"):
+        return False
+    synthetic = {
+        "connection_id": info["session_uid"],
+        "status": "failed",
+        "failure_stage": info["status"],            # the stage the bot died IN (requested/joining/…)
+        "completion_reason": "join_failure",        # workload died before the bot could join/report
+        "reason": f"workload {state} before the bot reported (never started)",
+    }
+    try:
+        await drive_failed(synthetic)
+        log.info("runtime-callback: drove synthetic failed for meeting %s (workload %s %s)",
+                 info.get("meeting_id"), workload_id, state)
+        return True
+    except Exception as e:  # noqa: BLE001 — best-effort; the stop/stale sweeps remain the backstop
+        log.warning("runtime-callback: synthetic failed POST failed for %s: %s", workload_id, e)
+        return False

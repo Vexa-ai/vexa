@@ -154,6 +154,17 @@ class InMemoryMeetingRepo:
         row = self._meetings.get(sess["meeting_id"])
         return row["status"] if row else None
 
+    async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
+        row = next(
+            (m for m in self._meetings.values() if m.get("bot_container_id") == bot_container_id), None
+        )
+        if row is None:
+            return None
+        sid = next(
+            (s["session_uid"] for s in reversed(self.sessions) if s["meeting_id"] == row["id"]), None
+        )
+        return {"meeting_id": row["id"], "status": row["status"], "session_uid": sid}
+
     async def update_meeting_status(
         self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None
     ) -> None:

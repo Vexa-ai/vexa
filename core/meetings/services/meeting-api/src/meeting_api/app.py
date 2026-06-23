@@ -292,18 +292,49 @@ def _mount_lifecycle(
     @app.post("/runtime/callback")
     async def runtime_callback(request: Request) -> JSONResponse:
         """ACK the runtime kernel's workload-level callback (state/terminal events). The bot's own
-        ``lifecycle.v1`` callback is the meeting-status source of truth (persisted above); this route
-        exists so the kernel's callback does not 404-retry. (Mapping a never-started workload →
-        meeting ``failed`` is a follow-up; the started-bot path is fully covered by the bot callback.)"""
+        ``lifecycle.v1`` callback is the meeting-status source of truth for a STARTED bot; this route
+        also drives a synthetic ``failed`` (CC5) when a workload reaches a TERMINAL state while its
+        meeting is still PRE-ACTIVE — i.e. the bot never started/reported and never will, so the meeting
+        would otherwise hang ``requested``/``joining`` forever."""
         try:
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
+        workload_id = body.get("workloadId") or body.get("workload_id")
+        state = body.get("state")
         log_event(
             "runtime_callback", audience="system", span="runtime.callback",
-            fields={"workload_id": body.get("workloadId") or body.get("workload_id"),
-                    "state": body.get("state")},
+            fields={"workload_id": workload_id, "state": state},
         )
+        # CC5 — never-started workload → meeting failed. Reuse the bot's OWN lifecycle callback (POST to
+        # self) so the FSM/persist/webhook/ws path fires identically; the decision is best-effort + only
+        # fires for a PRE-ACTIVE meeting (a normal teardown destroys the workload AFTER the meeting is
+        # already terminal → no-op). Imported lazily to keep the prod import path lean.
+        try:
+            import logging as _logging
+            import os as _os
+
+            from .lifecycle.reconcile import synthesize_failed_for_dead_workload
+
+            async def _drive_failed(event: dict):
+                import httpx
+
+                port = int(_os.getenv("PORT", "8080"))
+                url = f"http://127.0.0.1:{port}/bots/internal/callback/lifecycle"
+                headers = {"content-type": "application/json"}
+                secret = _os.getenv("INTERNAL_API_SECRET")
+                if secret:
+                    headers["x-internal-secret"] = secret
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    return (await client.post(url, json=event, headers=headers)).status_code
+
+            await synthesize_failed_for_dead_workload(
+                meeting_repo, workload_id, state, _drive_failed,
+                log=_logging.getLogger("meeting_api.runtime.callback"),
+            )
+        except Exception as e:  # noqa: BLE001 — the runtime ACK must never fail on the CC5 backstop
+            log_event("runtime_callback_cc5_error", audience="system", level="warning",
+                      span="runtime.callback", fields={"error": str(e)})
         return JSONResponse(status_code=200, content={"status": "accepted"})
 
 

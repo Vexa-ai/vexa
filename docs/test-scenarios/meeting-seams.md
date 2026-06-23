@@ -68,6 +68,15 @@ Add a row per known failure class; a row is "done" when every named probe is gre
     db_row: completed                 # via the bot's own lifecycle callback (FSM/webhook/ws fire identically)
     workload: deleted                 # CC6/ADR-0024 — an active bot that missed the leave is killed, not left orphan
   note: completes ADR-0024 (guarantee teardown). L4: active bot whose leave is dropped → reconcile → no orphan container.
-# - runtime-workload-death-pre-join-drives-meeting-failed   (CC5)  status: open
+- id: runtime-workload-death-pre-join-drives-meeting-failed
+  status: green
+  seam: "runtime kernel -> POST /runtime/callback -> synthesize failed -> bot's own lifecycle callback"
+  seam_probe: core/meetings/services/meeting-api/tests/test_robustness_seam.py  # test_runtime_callback_drives_failed_for_pre_active_dead_workload (+ active-noop, non-terminal/unknown-noop, fake roundtrip)
+  expected:
+    pre_active_terminal_workload: { status: failed, failure_stage: "<the pre-active stage>", completion_reason: join_failure }
+    active_or_terminal_meeting: noop      # owned by the bot's own callback — don't race a legit completion
+  note: >
+    Scoped to PRE-ACTIVE (requested/joining/awaiting_admission). The active-crash case (a workload that
+    dies mid-meeting) is a follow-up — a grace-windowed stale-active reconcile sweep, analogous to CC6.
 # - dashboard_new-client-calls-are-served-or-stably-rejected (DF/contract)  status: open
 ```

@@ -442,6 +442,96 @@ async def test_stop_reconcile_kill_failure_is_best_effort():
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────
+# (b3) CC5 — a workload that DIES before the bot reports drives the meeting to `failed` (no hang).
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+
+
+class _ContainerRepo:
+    """Minimal repo for the CC5 decision: maps workload_id → {meeting_id, status, session_uid}."""
+
+    def __init__(self, by_container):
+        self._by_container = by_container
+
+    async def find_by_container(self, *, bot_container_id):
+        return self._by_container.get(bot_container_id)
+
+
+def _cc5_log():
+    import logging
+    return logging.getLogger("cc5-test")
+
+
+async def test_runtime_callback_drives_failed_for_pre_active_dead_workload():
+    """A terminal workload state while the meeting is still PRE-ACTIVE → a synthetic `failed` is driven
+    (the bot never started/reported and never will), so the meeting does not hang `joining` forever."""
+    from meeting_api.lifecycle.reconcile import synthesize_failed_for_dead_workload
+
+    repo = _ContainerRepo({"mtg-5-x": {"meeting_id": 5, "status": "joining", "session_uid": "sess-5"}})
+    driven = []
+
+    async def drive_failed(ev):
+        driven.append(ev)
+        return 200
+
+    ok = await synthesize_failed_for_dead_workload(repo, "mtg-5-x", "destroyed", drive_failed, log=_cc5_log())
+    assert ok is True
+    assert len(driven) == 1
+    ev = driven[0]
+    assert ev["status"] == "failed"
+    assert ev["connection_id"] == "sess-5"
+    assert ev["failure_stage"] == "joining"          # the stage it died in
+    assert ev["completion_reason"] == "join_failure"
+
+
+async def test_runtime_callback_noop_when_meeting_already_active():
+    """An ACTIVE meeting is owned by the bot's own lifecycle callback — a runtime `destroyed` must NOT
+    override it (that would race a legitimate completion)."""
+    from meeting_api.lifecycle.reconcile import synthesize_failed_for_dead_workload
+
+    repo = _ContainerRepo({"mtg-6-x": {"meeting_id": 6, "status": "active", "session_uid": "sess-6"}})
+    driven = []
+
+    async def drive_failed(ev):
+        driven.append(ev)
+        return 200
+
+    ok = await synthesize_failed_for_dead_workload(repo, "mtg-6-x", "destroyed", drive_failed, log=_cc5_log())
+    assert ok is False and driven == []
+
+
+async def test_runtime_callback_noop_for_non_terminal_state_or_unknown_workload():
+    from meeting_api.lifecycle.reconcile import synthesize_failed_for_dead_workload
+
+    repo = _ContainerRepo({"mtg-7-x": {"meeting_id": 7, "status": "joining", "session_uid": "sess-7"}})
+    driven = []
+
+    async def drive_failed(ev):
+        driven.append(ev)
+        return 200
+
+    # non-terminal workload state → no-op
+    assert await synthesize_failed_for_dead_workload(repo, "mtg-7-x", "starting", drive_failed, log=_cc5_log()) is False
+    # unknown workload → no-op
+    assert await synthesize_failed_for_dead_workload(repo, "ghost", "destroyed", drive_failed, log=_cc5_log()) is False
+    assert driven == []
+
+
+async def test_fake_find_by_container_roundtrip():
+    """The InMemory fake's find_by_container resolves a spawned meeting by its workload id (so the CC5
+    seam test and the SQL adapter agree on the contract)."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    m = await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                          native_meeting_id="cc5-roundtrip", max_concurrent=5,
+                          redis_url="r", token_secret=SECRET)
+    workload_id = runtime.specs[-1]["workloadId"]
+    repo.set_status(m["id"], "joining")
+    info = await repo.find_by_container(bot_container_id=workload_id)
+    assert info is not None
+    assert info["status"] == "joining"
+    assert info["session_uid"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────
 # (c) max_concurrent_bots — sequential cap enforcement + the CONCURRENT over-provision race
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 

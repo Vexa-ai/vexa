@@ -119,6 +119,32 @@ class SqlAlchemyMeetingRepo:
             ).scalars().first()
             return status
 
+    async def find_by_container(self, *, bot_container_id) -> Optional[dict]:
+        """The meeting + latest session for a workload id — used by the runtime callback (CC5) to drive a
+        synthetic ``failed`` for a workload that died before the bot reported. ``{meeting_id, status,
+        session_uid}`` or ``None``."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting.id, Meeting.status).where(Meeting.bot_container_id == bot_container_id)
+                )
+            ).first()
+            if row is None:
+                return None
+            mid, status = row
+            sid = (
+                await db.execute(
+                    select(MeetingSession.session_uid)
+                    .where(MeetingSession.meeting_id == mid)
+                    .order_by(MeetingSession.id.desc())
+                )
+            ).scalars().first()
+            return {"meeting_id": mid, "status": status, "session_uid": sid}
+
     async def update_meeting_status(
         self, *, session_uid, status, completion_reason=None, failure_stage=None, data=None
     ) -> None:
