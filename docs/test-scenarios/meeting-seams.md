@@ -92,4 +92,20 @@ Add a row per known failure class; a row is "done" when every named probe is gre
     Scoped to PRE-ACTIVE (requested/joining/awaiting_admission). The active-crash case (a workload that
     dies mid-meeting) is a follow-up — a grace-windowed stale-active reconcile sweep, analogous to CC6.
 # - dashboard_new-client-calls-are-served-or-stably-rejected (DF/contract)  status: open
+
+# ── Deep integration cascades (L3-lite: the real app, multi-module, faked transports) ─────────────
+- id: full-meeting-lifecycle-cascade
+  status: green
+  seam: "POST /bots -> lifecycle(joining→active→completed) -> {persist, ws fan-out, HMAC webhook}"
+  cascade_probe: core/meetings/services/meeting-api/tests/test_lifecycle_cascade.py  # test_full_meeting_lifecycle_cascade
+  expected:
+    persist: status=completed (repo)
+    ws: bm:{id}:status frames [joining, active, completed]
+    webhook: 3 signed meeting.status_change deliveries to the per-user url (event-filter honored)
+    envelope_log: 3 (one per real advance — no double-count)
+- id: stop-cascade-tears-down-booting-bot-no-orphan
+  status: green
+  seam: "POST /bots -> DELETE /bots (booting) -> stop_router -> {leave published, runtime.delete_workload}"
+  cascade_probe: core/meetings/services/meeting-api/tests/test_lifecycle_cascade.py  # test_stop_cascade_tears_down_a_booting_bot_no_orphan
+  expected: { status: stopping, leave: published, workload: deleted }   # ORPH1/B1 end to end
 ```
