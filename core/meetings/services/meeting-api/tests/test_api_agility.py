@@ -469,17 +469,23 @@ def test_get_meeting_after_post_reflects_it():
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DRIFT: DELETE /bots/{platform}/{native_meeting_id} types `platform` as a bare str "
-           "(stop_router.py:64), but the sealed api.v1 path param is the Platform enum. An invalid "
-           "platform like 'discord' returns 404 (find_active misses) instead of the schema's 422 "
-           "Validation Error. The shapes a client must handle differ from the contract.",
-)
 def test_delete_bots_invalid_platform_should_be_422():
+    """A3 FIXED: DELETE /bots/{platform}/{native_meeting_id} validates `platform` against the
+    sealed api.v1 Platform enum BEFORE find_active. An unsupported platform (e.g. 'discord') is a
+    422 Validation Error — matching the contract — instead of leaking a 404 from a find_active miss."""
     c = _client()
     r = c.delete("/bots/discord/some-id", headers=HEADERS)
     assert r.status_code == 422, f"invalid platform → {r.status_code} (contract says 422)"
+    _assert_error_envelope(r)
+
+
+@pytest.mark.parametrize("platform", ["google_meet", "zoom", "teams", "browser_session"])
+def test_delete_bots_valid_platform_nonexistent_is_404(platform):
+    """Idempotent-delete preserved: a VALID platform with no active meeting still → 404
+    (the 422 guard only rejects platforms outside the sealed enum, not unknown meetings)."""
+    c = _client()
+    r = c.delete(f"/bots/{platform}/never-existed", headers=HEADERS)
+    assert r.status_code == 404, f"valid platform, no meeting → {r.status_code} (want 404)"
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

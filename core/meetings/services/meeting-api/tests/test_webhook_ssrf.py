@@ -55,7 +55,10 @@ def test_blocked_urls(url):
     ],
 )
 def test_allowed_urls(url):
-    assert validate_webhook_url(url, resolver=_PUBLIC) == url
+    # WH2: the guard returns a PinnedURL (connection-safe handle); .url is the original URL.
+    out = validate_webhook_url(url, resolver=_PUBLIC)
+    assert out.url == url
+    assert out.pinned_ips, "a valid URL must carry the resolved+validated pinned IP(s)"
 
 
 def test_dns_rebinding_to_private_blocked():

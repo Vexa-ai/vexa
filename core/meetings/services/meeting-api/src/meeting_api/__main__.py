@@ -104,10 +104,14 @@ def build_production_app():
 
     # Per-user webhook delivery (WebhookSink: SSRF-guard → event-filter → sign → POST → enqueue-retry).
     # httpx transport; failures route to the redis RetryQueue the background drain loop sweeps.
+    # WH2: the transport is IP-PINNED — it re-resolves + re-validates the host at connect time and
+    # dials the validated IP (preserving Host + TLS SNI), closing the DNS-rebinding TOCTOU window
+    # between submit-time validate_webhook_url and the actual socket connect.
     from .webhooks import RetryQueue, WebhookSink
+    from .webhooks.ssrf import build_pinned_transport
 
     async def _webhook_transport(url: str, body: bytes, headers: dict):
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
             return await client.post(url, content=body, headers=headers)
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
@@ -167,11 +171,14 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
         import httpx
 
         from .webhooks.retry import drain_retry_queue
+        from .webhooks.ssrf import build_pinned_transport
 
         # The injected Transport: POST the signed envelope; return the response (its .status_code
-        # drives the retry/permanent decision in retry._deliver_one).
+        # drives the retry/permanent decision in retry._deliver_one). WH2: IP-pinned at connect
+        # (re-resolve + re-validate + dial the validated IP) so a rebinding flip can't slip an
+        # internal target into a retry sweep either.
         async def _transport(url: str, body: bytes, headers: dict):
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
                 return await client.post(url, content=body, headers=headers)
 
         while True:

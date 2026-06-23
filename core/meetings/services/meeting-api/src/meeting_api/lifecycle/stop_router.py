@@ -62,6 +62,12 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
 # finalizes its recording cleanly); the reconcile loop is the backstop if it never completes.
 _BOOTING_STATUSES = {"requested", "joining", "awaiting_admission"}
 
+# The sealed api.v1 `Platform` enum — the DELETE path param is typed as this enum in the contract, so an
+# unsupported platform is a VALIDATION error (422), not a missing-resource (404). Mirrors the POST /bots
+# platform guard (A1/A3): reject a non-enum platform up front, BEFORE the find_active lookup (which would
+# otherwise miss and 404 — drifting from the contract a client must code against).
+_SUPPORTED_PLATFORMS = frozenset({"google_meet", "zoom", "teams", "browser_session"})
+
 
 def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=None) -> APIRouter:
     """The user-stop route over the injected ``MeetingRepo`` + ``CommandPublisher`` (+ optional runtime
@@ -75,6 +81,18 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
+        # A3: the sealed path param is the `Platform` enum → an unsupported platform is a 422
+        # (validation error), not a 404. Reject it BEFORE find_active (which would miss → 404),
+        # mirroring the POST /bots platform guard. Valid platforms keep idempotent-delete
+        # semantics (a nonexistent meeting on a valid platform still → 404 below).
+        if platform not in _SUPPORTED_PLATFORMS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"unsupported platform '{platform}' — "
+                    f"must be one of: {', '.join(sorted(_SUPPORTED_PLATFORMS))}"
+                ),
+            )
         meeting = await repo.find_active(user_id, platform, native_meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="No active meeting for this bot")

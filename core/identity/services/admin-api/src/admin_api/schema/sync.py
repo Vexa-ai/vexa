@@ -96,10 +96,19 @@ def _sync_indexes(conn: Connection, base):
         for index in table.indexes:
             if index.name and index.name in existing:
                 continue
+            # Per-index SAVEPOINT: a failed CREATE INDEX (e.g. a UNIQUE index on a table that still
+            # holds rows violating it) must NOT poison the surrounding convergence transaction —
+            # without the nested begin, the aborted txn would roll back the whole ensure_schema pass.
             try:
-                index.create(conn)
-            except Exception as e:  # already present under a different detection path
-                logger.debug("index %s skipped: %s", index.name, e)
+                with conn.begin_nested():
+                    index.create(conn)
+            except Exception as e:
+                # Most often a benign race (index already present under a different detection path) —
+                # but a UNIQUE index failing on duplicate data is a real, actionable miss, so surface
+                # it at WARNING rather than swallowing it at debug. The savepoint rolled back, so the
+                # rest of the convergence still applies.
+                level = logging.WARNING if getattr(index, "unique", False) else logging.DEBUG
+                logger.log(level, "index %s not created: %s", index.name, e)
 
 
 def _ensure_schema_sync(conn: Connection, base):

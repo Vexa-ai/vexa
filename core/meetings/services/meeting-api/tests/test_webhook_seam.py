@@ -239,7 +239,11 @@ def test_ssrf_blocks(url):
     ],
 )
 def test_ssrf_allows_public(url):
-    assert validate_webhook_url(url, resolver=_PUBLIC) == url
+    # WH2: the guard now returns a PinnedURL (a connection-safe handle), not a bare hostname
+    # string. Its raw URL value is preserved (Host/SNI), so .url round-trips the original.
+    out = validate_webhook_url(url, resolver=_PUBLIC)
+    assert out.url == url
+    assert out.pinned_ips, "a valid URL must carry the resolved+validated pinned IP(s)"
 
 
 def test_ssrf_dns_rebinding_to_private_blocked():
@@ -261,27 +265,59 @@ async def test_sink_blocked_url_never_touches_transport():
     assert t.calls == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (low/medium): SSRF guard's resolver stub returning IPv6 loopback ['::1'] is "
-        "correctly blocked, but a host that resolves to a MIX of one public + one private IP "
-        "is also blocked (good). This xfail documents the OPPOSITE gap that is NOT covered: "
-        "the production _resolve_host uses socket.getaddrinfo with NO port/family filter and "
-        "does not re-validate on the actual httpx connect — a TOCTOU rebinding window remains. "
-        "Asserting the in-code guard cannot close a connect-time TOCTOU; flips green only if a "
-        "connect-time pinned-IP check is added."
-    ),
-)
 def test_ssrf_toctou_connect_time_pinning_present():
-    # The guard validates at submit time; httpx later re-resolves at connect time. There is
-    # no IP pinning between the two. We can only prove the gap by absence: validate_webhook_url
-    # returns the URL string (a hostname), not a pinned IP for the transport to dial.
+    # WH2 FIXED: the guard no longer returns a bare re-resolvable hostname URL string. It
+    # returns a PinnedURL (a connection-safe handle) carrying the resolved-and-validated IP(s),
+    # and the production transport (build_pinned_transport) re-resolves + re-validates + dials
+    # the validated IP at connect time — so the submit→connect DNS-rebinding window is closed.
     out = validate_webhook_url("https://hooks.example.com/vexa", resolver=_PUBLIC)
     assert out != "https://hooks.example.com/vexa", (
-        "expected guard to return a pinned IP/connection-safe handle; "
-        f"got the original hostname URL {out!r} — connect-time re-resolution is unguarded"
+        "expected guard to return a pinned IP/connection-safe handle, not the original "
+        f"hostname URL; got {out!r}"
     )
+    # The handle carries the pinned IP the transport must dial (not a re-resolvable hostname).
+    assert out.pinned_ips == ["93.184.216.34"], "guard must pin the resolved+validated IP(s)"
+    assert out.url == "https://hooks.example.com/vexa", "raw URL preserved for Host/SNI"
+
+
+async def test_pinned_transport_revalidates_and_pins_at_connect():
+    """WH2 (connect half): the pinned transport re-resolves + re-validates the host at the
+    moment it dials and PINS to a validated IP — closing the submit→connect rebinding window.
+
+    Drives it with an inner transport that records the actual dialled URL + extensions, so we
+    can prove (a) a host that rebinds to loopback BETWEEN submit and connect is rejected at
+    connect, and (b) a public host is dialled at its validated IP with Host/SNI preserved.
+    """
+    import httpx
+
+    from meeting_api.webhooks.ssrf import SSRFError as _SSRF
+    from meeting_api.webhooks.ssrf import build_pinned_transport
+
+    dialled: List[httpx.Request] = []
+
+    class _Recorder(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            dialled.append(request)
+            return httpx.Response(200, request=request)
+
+    # (a) A host that the connect-time resolver now maps to loopback (a rebind) is REJECTED
+    # at connect — the inner transport is never dialled.
+    pinned = build_pinned_transport(_Recorder(), resolver=_LOOPBACK)
+    async with httpx.AsyncClient(transport=pinned) as client:
+        with pytest.raises(_SSRF):
+            await client.post("https://rebind.example.com/hook", content=b"{}")
+    assert dialled == [], "a connect-time rebind to loopback must never reach the socket"
+
+    # (b) A public host is dialled at its validated IP, with the original Host + TLS SNI kept.
+    pinned_ok = build_pinned_transport(_Recorder(), resolver=_PUBLIC)
+    async with httpx.AsyncClient(transport=pinned_ok) as client:
+        resp = await client.post("https://hooks.example.com/vexa", content=b"{}")
+    assert resp.status_code == 200
+    assert len(dialled) == 1
+    req = dialled[0]
+    assert req.url.host == "93.184.216.34", "connection must be pinned to the validated IP"
+    assert req.headers.get("Host") == "hooks.example.com", "Host header preserved"
+    assert req.extensions.get("sni_hostname") == "hooks.example.com", "TLS SNI preserved"
 
 
 # ════════════════════════════════════════════════════════════════════════════════════

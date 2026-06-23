@@ -12,7 +12,7 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 const ROOT = process.cwd();
-const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__"]);
+const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
 const skippable = (name) => name.startsWith(".") || SKIP.has(name);
 const rel = (p) => p.slice(ROOT.length + 1) || ".";
 const fail = (msgs) => { for (const m of msgs) console.error("  ✗ " + m); return false; };
@@ -400,6 +400,26 @@ function gateAccess() {
   return true;
 }
 
+// gate:contract-conformance (P8) — the SHIPPED meeting-api conforms to the sealed api.v1. gate:schema
+// proves goldens≡schema and gate:contract-version freezes the seal, but neither proves the RUNNING
+// service implements the contract it serves — and it drifted (api.v1 declares routes meeting-api never
+// implemented; the conformance harness drove a FAKE that masked it). This is the OFFLINE STRUCTURAL half:
+// a pytest imports the real create_app(), enumerates app.routes, and asserts every implemented api.v1
+// route matches a declared (path, method) AND every declared route is implemented OR on an explicit,
+// reasoned waiver list (known drift bounded + documented; NEW unwaived drift → RED). Discovers the proof
+// by filename (mirrors gate:access). RED if the proof is absent — an ungated contract is the gap this closes.
+// L4 extension (bbb): live input-fuzzing (schemathesis vs the running OpenAPI) is the dynamic half.
+function gateContractConformance() {
+  const pkgs = pyPackages().filter((d) => existsSync(join(d, "tests", "test_contract_conformance.py")));
+  if (!pkgs.length) return fail(["gate:contract-conformance — no tests/test_contract_conformance.py (api.v1↔impl conformance is unproven)"]);
+  for (const d of pkgs) {
+    try { execSync("uv run pytest -q tests/test_contract_conformance.py", { cwd: d, stdio: "pipe" }); }
+    catch (e) { return fail([`contract-conformance ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
+  }
+  console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (routes ≡ contract; drift waived + documented)`);
+  return true;
+}
+
 // gate:tracing (O-OBS-1) — a synthetic multi-service request threads ONE trace_id through every
 // hop's STRUCTURED log; every line conforms to logevent.v1; a freeform/untraced line fails. The
 // logevent.v1 envelope must exist and the test_tracing.py eval must pass. RED if either is absent.
@@ -500,7 +520,7 @@ function gateExecutionEnv() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline };
+const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

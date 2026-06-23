@@ -138,6 +138,59 @@ def test_meeting_session_unique_constraint(engine):
             s.commit()
 
 
+def test_meeting_active_unique_partial_index(engine):
+    """uq_meeting_active_user_platform_native — the ROB1/ROB2 spawn-dedup DB backstop.
+
+    At most ONE active (status NOT IN completed/failed) meeting per (user, platform, native id):
+      - two active rows for the same key  → IntegrityError (the backstop fires);
+      - active + a terminal (completed) row for the same key → allowed (terminal not covered);
+      - re-opening a NEW active row once the prior one is terminal → allowed.
+    Also asserts `ensure_schema_sync` actually built the index (it is partial+unique, so the
+    additive _sync_indexes path must emit `WHERE` / `UNIQUE` correctly).
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    # The index exists with the partial predicate (not silently skipped by _sync_indexes).
+    idx = {i["name"]: i for i in inspect(engine).get_indexes("meetings")}
+    assert "uq_meeting_active_user_platform_native" in idx, "backstop index missing"
+    assert idx["uq_meeting_active_user_platform_native"]["unique"] is True
+
+    key = dict(user_id=7, platform="google_meet", platform_specific_id="abc-defg-hij")
+
+    # Two active rows for the same (user, platform, native) → rejected.
+    with Session(engine) as s:
+        s.add(Meeting(status="requested", **key))
+        s.add(Meeting(status="active", **key))
+        with pytest.raises(IntegrityError):
+            s.commit()
+
+    # active + terminal(completed) for the same key → allowed (terminal rows are NOT covered).
+    with Session(engine) as s:
+        s.add(Meeting(status="completed", **key))
+        s.add(Meeting(status="active", **key))
+        s.commit()
+
+    # With one active row present, a second active row still collides...
+    with Session(engine) as s:
+        s.add(Meeting(status="active", **key))
+        with pytest.raises(IntegrityError):
+            s.commit()
+
+    # ...but once that active row goes terminal, a fresh active row is allowed (re-meet / reopen).
+    with Session(engine) as s:
+        live = (
+            s.query(Meeting)
+            .filter_by(status="active", **key)
+            .order_by(Meeting.id.desc())
+            .first()
+        )
+        live.status = "failed"
+        s.commit()
+    with Session(engine) as s:
+        s.add(Meeting(status="requested", **key))
+        s.commit()   # no collision — all prior rows are terminal
+
+
 def test_recordings_live_in_meeting_data_jsonb(engine):
     """The REAL recording target: meetings.data['recordings'][] (mirrors
     `recordings.internal_upload_recording`). Assert a recording payload round-trips through

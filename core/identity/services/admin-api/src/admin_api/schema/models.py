@@ -87,6 +87,23 @@ class Meeting(Base):
         Index("ix_meeting_user_platform_native_id_created_at",
               "user_id", "platform", "platform_specific_id", "created_at"),
         Index("ix_meeting_data_gin", "data", postgresql_using="gin"),
+        # ROB1/ROB2 DB-level backstop (mirror of meeting-api's sessions/models.py): at most ONE
+        # ACTIVE (non-terminal) meeting per (user, platform, native_meeting_id). Unique PARTIAL
+        # index — terminal rows (completed/failed) are NOT covered, so a user can re-meet the same
+        # native id once the prior run ends and continue_meeting can reopen a terminal row. The
+        # in-txn pg_advisory_xact_lock in create_meeting_guarded serializes same-process spawns;
+        # this index backstops the cross-process race → IntegrityError → DuplicateMeeting.
+        #
+        # ⚠ PROD ROLLOUT: this CREATE UNIQUE INDEX FAILS on a table that already holds duplicate
+        # active rows, and _sync_indexes swallows that failure silently. The index must be built
+        # out-of-band on prod (dedup + CREATE UNIQUE INDEX CONCURRENTLY) BEFORE this change deploys
+        # — see schema/MIGRATION-0002-meeting-active-dedup-index.md.
+        Index(
+            "uq_meeting_active_user_platform_native",
+            "user_id", "platform", "platform_specific_id",
+            unique=True,
+            postgresql_where=text("status NOT IN ('completed', 'failed')"),
+        ),
     )
 
 
