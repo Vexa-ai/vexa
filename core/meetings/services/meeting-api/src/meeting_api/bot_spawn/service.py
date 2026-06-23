@@ -285,6 +285,23 @@ async def request_bot(
             f"post-spawn DB write failed; workload {workload_id} torn down"
         ) from e
 
+    # Reconcile a stop that RACED the spawn (the spawn/stop design-gap fix): if a DELETE marked this
+    # meeting stopping/terminal while the workload was being created, tear the just-spawned workload down
+    # now — otherwise it boots, joins, and never receives the (already-published) leave command → orphan.
+    # The stop's own direct teardown can't target a workload whose id wasn't written yet; this closes that
+    # window (DELETE arriving before set_bot_container).
+    raced_status = await repo.get_status_by_session(session_uid=connection_id)
+    if raced_status in ("stopping", "completed", "failed"):
+        try:
+            await runtime.delete_workload(workload_id)
+            log_event("bot_spawn_raced_stop_torn_down", audience="system", level="warning",
+                      span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+                      fields={"workload_id": workload_id, "raced_status": raced_status})
+        except Exception as teardown_err:  # noqa: BLE001 — teardown is best-effort, never masks the spawn
+            log_event("bot_spawn_raced_stop_teardown_failed", audience="system", level="error",
+                      span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+                      fields={"workload_id": workload_id, "error": str(teardown_err)})
+
     # The response lists the meeting's sessions (P3c) — all session_uids that ran against this row.
     sessions = await repo.list_sessions(meeting_id=meeting_id)
 

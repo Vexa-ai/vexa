@@ -56,8 +56,16 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
-def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher) -> APIRouter:
-    """The user-stop route over the injected ``MeetingRepo`` + ``CommandPublisher`` ports."""
+# Statuses where the bot is still BOOTING — it has not yet subscribed to its command channel, so the
+# fire-and-forget leave below can be LOST (the POST→immediate-DELETE orphan). For these we ALSO tear the
+# workload down directly. An `active`/`needs_help` bot IS listening → trust the graceful leave (so it
+# finalizes its recording cleanly); the reconcile loop is the backstop if it never completes.
+_BOOTING_STATUSES = {"requested", "joining", "awaiting_admission"}
+
+
+def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=None) -> APIRouter:
+    """The user-stop route over the injected ``MeetingRepo`` + ``CommandPublisher`` (+ optional runtime
+    ``RuntimeClient`` for the direct-teardown guarantee) ports."""
     router = APIRouter()
 
     @router.delete("/bots/{platform}/{native_meeting_id}")
@@ -71,6 +79,8 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher) -> APIRout
         if not meeting:
             raise HTTPException(status_code=404, detail="No active meeting for this bot")
         meeting_id = meeting["id"]
+        status = meeting.get("status")
+        bot_container_id = meeting.get("bot_container_id")
         # Mark stop-requested + move to 'stopping' (mirrors main's DELETE), keyed by the latest session
         # so the exit classifier reads the user-intent signal. Best-effort: an unknown session no-ops.
         sessions = await repo.list_sessions(meeting_id=meeting_id)
@@ -78,10 +88,18 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher) -> APIRout
             await repo.update_meeting_status(
                 session_uid=sessions[-1], status="stopping", data={"stop_requested": True},
             )
-        # Publish the leave command — the bot honours it, leaves, emits its terminal lifecycle event.
+        # Publish the leave command — an ACTIVE (listening) bot honours it, leaves, emits its terminal event.
         await publisher.publish(
             leave_command_channel(meeting_id), json.dumps(leave_command_payload(meeting_id))
         )
+        # GUARANTEE no orphan: a stop must not rely solely on a fire-and-forget command the bot may never
+        # receive. A BOOTING bot (status in _BOOTING_STATUSES) has likely not subscribed yet → directly
+        # tear its workload down (it has nothing to finalize). Best-effort: logged, never fails the stop.
+        if runtime is not None and bot_container_id and status in _BOOTING_STATUSES:
+            try:
+                await runtime.delete_workload(bot_container_id)
+            except Exception as e:  # noqa: BLE001 — teardown is best-effort; the reconcile loop backstops
+                _log_stop_teardown_failed(meeting_id, bot_container_id, e)
         return {
             "status": "stopping",
             "meeting_id": meeting_id,
@@ -89,3 +107,14 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher) -> APIRout
         }
 
     return router
+
+
+def _log_stop_teardown_failed(meeting_id, workload_id, err) -> None:
+    try:
+        from ..obs import log_event
+
+        log_event("stop_workload_teardown_failed", audience="system", level="warning",
+                  span="bots.stop",
+                  fields={"meeting_id": meeting_id, "workload_id": workload_id, "error": str(err)})
+    except Exception:
+        pass

@@ -98,7 +98,9 @@ def create_app(
     if command_publisher is None:
         command_publisher = InMemoryCommandPublisher()
     app.state.command_publisher = command_publisher
-    app.include_router(build_stop_router(meeting_repo, command_publisher))
+    # The stop router also gets the runtime client so a stop can directly tear down a still-booting bot's
+    # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
+    app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
 
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:

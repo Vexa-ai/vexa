@@ -168,6 +168,27 @@ fail-closed; owner-scoped 404 (no leak); bounded/typed pagination; idempotent DE
   processed → `authorization_service_error` frame, not a silent empty ack). GW2/GW3/GW4 offline-verified
   (XPASS). `test_gateway_seam.py` regenerated as the standing suite (a strip-script bug ate the first copy).
 
+## ORPH1 — 🟢 spawn/stop race: POST-then-DELETE orphans the bot (user-reported DESIGN GAP)
+- **Severity:** HIGH (a stopped meeting leaves a real bot running in the meeting; cost + a ghost participant).
+- **Where:** `lifecycle/stop_router.py` / `stop.py` — the stop ONLY published a fire-and-forget
+  `bot_commands:meeting:{id}` `{action:leave}` over redis PUB/SUB and never tore the workload down.
+- **Root cause (the design gap):** redis PUB/SUB has NO buffering for late subscribers. A DELETE right
+  after POST runs while the bot is still BOOTING (status `requested`, not yet subscribed to its command
+  channel) → the leave is **dropped** → the bot finishes booting, joins, and is never told to leave →
+  **orphan** (DB says `stopping`, the bot is in the meeting). A stop must GUARANTEE teardown, not REQUEST
+  it over an unreliable channel.
+- **Fix (3 layers):**
+  - **B1** the stop now DIRECTLY tears down the workload (`runtime.delete_workload`) when the bot is still
+    booting (status ∈ {requested, joining, awaiting_admission}); an `active`/`needs_help` bot keeps the
+    graceful leave so it finalizes its recording cleanly.
+  - **C** the spawn re-checks status after writing `bot_container_id`; if a DELETE marked it
+    stopping/terminal mid-spawn (the id wasn't written yet, so B1 couldn't target it), the spawn tears the
+    just-created workload down — closing that window.
+  - (follow-up **B2**) the stop-reconcile loop should also kill the workload of a stale-`stopping` meeting,
+    as the backstop for an ACTIVE bot that missed the leave (a redis blip) — not the reported scenario.
+- **Tests:** `test_robustness_seam.py::test_stop_of_booting_bot_tears_down_workload_no_orphan` +
+  `::test_spawn_reconciles_a_stop_that_raced_the_boot`. L4 (live POST→DELETE → no orphan) verified on bbb.
+
 ## Seam suites added (standing regression, ~190 cases)
 `test_lifecycle_seam.py` (60p/2s/1xf) · `test_webhook_seam.py` (59p/2xf) · `test_api_agility.py` (58p/3xf)
 · `test_robustness_seam.py` (11p/4xf). Each xfail is `strict=True` → flips to a pass when its bug is fixed.

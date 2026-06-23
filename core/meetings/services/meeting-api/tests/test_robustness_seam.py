@@ -577,3 +577,45 @@ def test_mint_meeting_token_surfaces_clear_config_error(monkeypatch):
     with pytest.raises(ValueError) as ei:
         mint_meeting_token(1, USER, "google_meet", "x")
     assert "ADMIN_TOKEN" in str(ei.value)
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+# (f) spawn/stop race — POST then immediate DELETE must NOT orphan the bot (design gap)
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def test_stop_of_booting_bot_tears_down_workload_no_orphan():
+    """POST then immediate DELETE while the bot is still BOOTING (status 'requested', not yet subscribed
+    to bot_commands): the fire-and-forget leave would be LOST, so the stop must DIRECTLY tear the
+    workload down — else the bot boots, joins, and orphans. Asserts the workload was deleted."""
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    client = TestClient(create_app(meeting_repo=repo, runtime=runtime))
+    spawn = client.post("/bots", headers={"x-user-id": str(USER)},
+                        json={"platform": "google_meet", "native_meeting_id": "orphan-race"})
+    assert spawn.status_code == 201, spawn.text
+    workload_id = spawn.json()["bot_container_id"]
+    assert workload_id and workload_id not in runtime.deleted
+    r = client.delete("/bots/google_meet/orphan-race", headers={"x-user-id": str(USER)})
+    assert r.status_code == 200, r.text
+    assert workload_id in runtime.deleted, \
+        "a stop of a still-booting bot must tear its workload down (no orphan), not just publish a leave"
+
+
+def test_spawn_reconciles_a_stop_that_raced_the_boot():
+    """A DELETE marks the meeting stopping WHILE the workload is being created (before set_bot_container
+    writes the id, so the stop's own teardown can't target it). The spawn must re-check status after
+    writing the id and tear the just-created workload down — closing that race window."""
+    runtime = FakeRuntimeClient()
+
+    class _StopRacesRepo(InMemoryMeetingRepo):
+        async def set_bot_container(self, *, meeting_id, bot_container_id):
+            row = await super().set_bot_container(meeting_id=meeting_id, bot_container_id=bot_container_id)
+            self._meetings[meeting_id]["status"] = "stopping"  # a concurrent DELETE raced in
+            return row
+
+    client = TestClient(create_app(meeting_repo=_StopRacesRepo(), runtime=runtime))
+    r = client.post("/bots", headers={"x-user-id": str(USER)},
+                    json={"platform": "google_meet", "native_meeting_id": "raced-spawn"})
+    assert r.status_code == 201, r.text
+    assert runtime.deleted, "spawn must tear down the workload when a stop raced its boot (no orphan)"
