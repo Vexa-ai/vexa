@@ -14,6 +14,15 @@ from typing import Any, Dict, List
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _stt_configured(monkeypatch):
+    """CC4 baseline: the product transcribes by default, so the suite runs as a TRANSCRIPTION-configured
+    deployment — STT creds present → a default `transcribe_enabled=true` spawn is served (not 503). A test
+    for the UNCONFIGURED case clears these explicitly (`monkeypatch.delenv`)."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test/transcribe")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "test-stt-token")
+
+
 # --- lifecycle.v1 goldens (the seam) ---------------------------------------------------
 
 def _repo_root() -> Path:

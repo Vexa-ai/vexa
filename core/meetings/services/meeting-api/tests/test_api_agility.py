@@ -398,6 +398,29 @@ def test_post_bots_transcribe_enabled_string_false_is_false():
         assert r.status_code == 422
 
 
+# FIXED (CC4): a transcription bot needs STT. transcribe_enabled (default true) with STT UNCONFIGURED now
+# fails loud (503) instead of silently launching a bot that joins+captures but can never transcribe (P18).
+# (The autouse _stt_configured fixture provides STT for the default suite; here we clear it.)
+def test_post_bots_transcribe_without_stt_fails_loud(monkeypatch):
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_URL", raising=False)
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_TOKEN", raising=False)
+    c = _client(repo=InMemoryMeetingRepo())
+    r = c.post("/bots", headers=HEADERS, json={"platform": "google_meet", "native_meeting_id": "no-stt"})
+    assert r.status_code == 503, f"transcribe (default) + no STT should 503, got {r.status_code}"
+
+
+def test_post_bots_no_transcription_spawns_without_stt(monkeypatch):
+    """A no-transcription bot (transcribe_enabled=false) must spawn even with STT unconfigured —
+    recording-only is a legitimate deployment; the 503 fires ONLY when transcription is requested."""
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_URL", raising=False)
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_TOKEN", raising=False)
+    c = _client(repo=InMemoryMeetingRepo())
+    r = c.post("/bots", headers=HEADERS, json={
+        "platform": "google_meet", "native_meeting_id": "rec-only", "transcribe_enabled": False,
+    })
+    assert r.status_code == 201, f"recording-only spawn should 201 without STT, got {r.status_code}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 #  POST /bots — server misconfiguration robustness (no ADMIN_TOKEN → MeetingToken mint fails)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

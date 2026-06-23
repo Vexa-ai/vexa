@@ -144,6 +144,23 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 ),
             )
 
+        # CC4 — fail loud (P18): a transcription bot needs STT. If transcription resolves ON but the STT
+        # service is not configured, refuse the spawn (before any DB write) rather than silently launch a
+        # bot that joins + captures but can NEVER transcribe. A no-transcription bot must opt out
+        # explicitly: spawn transcribe_enabled=false, or set TRANSCRIBE_ENABLED=false on the deployment.
+        transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
+        if transcribe_enabled and not (
+            os.getenv("TRANSCRIPTION_SERVICE_URL") and os.getenv("TRANSCRIPTION_SERVICE_TOKEN")
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "transcription requested but the STT service is not configured "
+                    "(TRANSCRIPTION_SERVICE_URL/TRANSCRIPTION_SERVICE_TOKEN unset) — set them, or spawn "
+                    "with transcribe_enabled=false"
+                ),
+            )
+
         try:
             meeting = await request_bot(
                 repo,
@@ -157,7 +174,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 task=body.get("task"),
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
-                transcribe_enabled=_resolve_transcribe_enabled(body.get("transcribe_enabled")),
+                transcribe_enabled=transcribe_enabled,
                 # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.

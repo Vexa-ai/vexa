@@ -53,7 +53,13 @@ Add a row per known failure class; a row is "done" when every named probe is gre
   expected:
     request: { transcribe_enabled: "false" }
     persisted: { transcribe_enabled: false }   # _resolve_transcribe_enabled — no bare bool() coercion (was: "false" -> True)
-# - spawn-transcribe-requested-without-stt-fails-loud       (CC4)  status: open
+- id: spawn-transcribe-requested-without-stt-fails-loud
+  status: green
+  seam: "POST /bots -> bot_spawn/router (precondition, before any DB write)"
+  seam_probe: core/meetings/services/meeting-api/tests/test_api_agility.py  # test_post_bots_transcribe_without_stt_fails_loud + _no_transcription_spawns_without_stt
+  expected:
+    transcribe_true_no_stt: 503        # fail loud (P18) — never a silent deaf bot
+    transcribe_false_no_stt: 201       # recording-only is legitimate; 503 fires ONLY when transcription is requested
 # - stop-active-bot-missed-leave-reconcile-kills-workload   (CC6)  status: open
 # - runtime-workload-death-pre-join-drives-meeting-failed   (CC5)  status: open
 # - dashboard_new-client-calls-are-served-or-stably-rejected (DF/contract)  status: open
