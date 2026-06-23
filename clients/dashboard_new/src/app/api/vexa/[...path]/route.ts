@@ -79,6 +79,16 @@ async function proxyRequest(
         const data = await botsResp.json();
         return NextResponse.json({ meetings: data.meetings || [], has_more: data.has_more ?? false });
       }
+      // DF3 — an AUTH rejection from the gateway must SURFACE, never be masked by the empty-list
+      // fallback below (otherwise a stale/invalid token reads as a benign "no meetings"). Only a
+      // NON-auth error (5xx / transient) falls through to the running-containers fallback.
+      if (botsResp.status === 401 || botsResp.status === 403) {
+        const body = await botsResp.text().catch(() => "");
+        return NextResponse.json(
+          { error: "Not authenticated", detail: body || "The gateway rejected the API key (check VEXA_API_KEY)." },
+          { status: botsResp.status, headers: { "Cache-Control": "no-store" } },
+        );
+      }
     } catch (e) {
       console.error("[proxy] GET /bots failed, falling back to /bots/status:", e);
     }
@@ -88,6 +98,13 @@ async function proxyRequest(
       const statusResp = await fetch(`${VEXA_API_URL}/bots/status`, {
         headers: { "X-API-Key": VEXA_API_KEY },
       });
+      // Same guard on the fallback — don't let a 401 here collapse to an empty list either.
+      if (statusResp.status === 401 || statusResp.status === 403) {
+        return NextResponse.json(
+          { error: "Not authenticated", detail: "The gateway rejected the API key (check VEXA_API_KEY)." },
+          { status: statusResp.status, headers: { "Cache-Control": "no-store" } },
+        );
+      }
       if (statusResp.ok) {
         const data = await statusResp.json();
         for (const b of data.running_bots || []) {
