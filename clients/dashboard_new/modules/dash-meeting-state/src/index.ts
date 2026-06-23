@@ -102,8 +102,9 @@ export interface CreateMeetingStateOptions {
   initialStatus?: MeetingStatus | string;
 }
 
-/** The connection sub-state of the store. */
-export type ConnectionState = "idle" | "connecting" | "live" | "closed";
+/** The connection sub-state of the store. `live` is EARNED by an observed frame (DF2), never asserted
+ *  on start(); `error` means the socket reported a protocol/auth error — it is NOT live. */
+export type ConnectionState = "idle" | "connecting" | "live" | "closed" | "error";
 
 /** The immutable snapshot subscribers receive. */
 export interface MeetingState {
@@ -160,7 +161,14 @@ export function createMeetingState(opts: CreateMeetingStateOptions): MeetingStat
 
   // ── reducers wired into the WS client ────────────────────────────────────────────────────────────
 
+  // DF2 — the FIRST observed frame proves the socket is live + subscribed; that is what flips
+  // `connecting → live`. "live" is earned by evidence, never asserted on start().
+  function markLive(): void {
+    if (state.connection === "connecting") setState({ connection: "live" });
+  }
+
   function onStatus(status: MeetingStatus | string): void {
+    markLive();
     setState({ status });
     if (isTerminal(status)) {
       // Meeting ended — tear the socket down and mark the connection closed.
@@ -169,6 +177,7 @@ export function createMeetingState(opts: CreateMeetingStateOptions): MeetingStat
   }
 
   function onTranscript(update: TranscriptUpdate): void {
+    markLive();
     // A `transcription_segment` frame arrives as { segments:[seg] } — treat each as a confirmed seg.
     // Every segment is adapted to the renderer shape (epoch start → absolute_start_time) before it
     // enters the manager, since the live WS frame omits the `absolute_start_time` the renderer requires.
@@ -180,7 +189,14 @@ export function createMeetingState(opts: CreateMeetingStateOptions): MeetingStat
   }
 
   function onChat(frame: ChatMessageFrame): void {
+    markLive();
     setState({ chat: [...state.chat, frame] });
+  }
+
+  // DF2 — a protocol/auth error frame (or an invalid frame) means the connection is NOT live: surface
+  // an `error` state so the UI never shows "live" over a broken socket.
+  function onError(_error: string): void {
+    if (state.connection !== "closed") setState({ connection: "error" });
   }
 
   return {
@@ -213,9 +229,12 @@ export function createMeetingState(opts: CreateMeetingStateOptions): MeetingStat
         onStatus,
         onTranscript,
         onChat,
+        onError,
       });
       wsClient.start();
-      setState({ connection: "live" });
+      // DF2 — do NOT assert "live" here. It's earned when the first frame arrives (markLive), and flips
+      // to "error" if the socket reports a protocol/auth error. A started-but-silent socket stays
+      // "connecting" — truthful, never a falsely-live indicator.
     },
 
     stop,

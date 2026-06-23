@@ -114,7 +114,8 @@ async function main(): Promise<void> {
   // ── connectLive() ────────────────────────────────────────────────────────────────────────────────
   console.log("connectLive:");
   store.connectLive();
-  check("connection is live", store.getState().connection === "live");
+  // DF2 — `connecting`, NOT `live`: "live" is earned by an observed frame, never asserted on start().
+  check("connection is connecting (not yet live — DF2)", store.getState().connection === "connecting");
   check("transport connected with api_key", (transport!.connectedUrl || "").includes("api_key=tok-123"));
   // Open the socket → the client subscribes.
   transport!.fireOpen();
@@ -127,6 +128,8 @@ async function main(): Promise<void> {
   console.log("status active:");
   transport!.emit({ type: "meeting.status", payload: { status: "active" } });
   check("status → active", store.getState().status === "active");
+  // DF2 — the FIRST observed frame flips connecting → live (evidence-based).
+  check("connection → live on the first frame", store.getState().connection === "live");
 
   // ── transcript bundle (confirmed + pending) ──────────────────────────────────────────────────────
   console.log("transcript bundle (confirmed + pending):");
