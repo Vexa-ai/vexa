@@ -188,7 +188,9 @@ def test_04_transcript_dataflow(stack):
     STATE["tx_meeting_id"] = meeting_id
 
     # Connect /ws THROUGH the gateway, authenticate via api_key query param, subscribe to the meeting.
-    ws = WS(f"ws://127.0.0.1:18056/ws?api_key={token}", timeout=15)
+    # Derive the ws origin from the (env-parametrized) gateway URL so the suite isolates on a shared host.
+    ws_base = stack.gateway.replace("http://", "ws://").replace("https://", "wss://")
+    ws = WS(f"{ws_base}/ws?api_key={token}", timeout=15)
     try:
         ws.send_text(json.dumps({"action": "subscribe",
                                  "meetings": [{"platform": platform, "native_id": native_id}]}))

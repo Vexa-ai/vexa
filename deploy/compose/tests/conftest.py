@@ -25,11 +25,18 @@ COMPOSE_DIR = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = COMPOSE_DIR / "docker-compose.yml"
 PROJECT = os.getenv("COMPOSE_PROJECT", "vexa-compose-gate")  # override on a shared host (e.g. bbb prod box)
 
-# The four built services + the host ports they publish (mirrors docker-compose.yml defaults).
-GATEWAY_URL = "http://127.0.0.1:18056"
-ADMIN_API_URL = "http://127.0.0.1:18057"
-MEETING_API_URL = "http://127.0.0.1:18080"
-RUNTIME_URL = "http://127.0.0.1:18090"
+# The four built services + the host ports they publish. The ports read from the SAME env vars the
+# compose file interpolates (API_GATEWAY_HOST_PORT / ADMIN_API_PORT / MEETING_API_PORT /
+# RUNTIME_API_PORT), defaulting to the compose defaults — so the suite runs ISOLATED on a shared host
+# (e.g. bbb, alongside a live vexa-dash) by shifting the published ports without touching defaults.
+GATEWAY_PORT = os.getenv("API_GATEWAY_HOST_PORT", "18056")
+ADMIN_API_HOST_PORT = os.getenv("ADMIN_API_PORT", "18057")
+MEETING_API_HOST_PORT = os.getenv("MEETING_API_PORT", "18080")
+RUNTIME_HOST_PORT = os.getenv("RUNTIME_API_PORT", "18090")
+GATEWAY_URL = f"http://127.0.0.1:{GATEWAY_PORT}"
+ADMIN_API_URL = f"http://127.0.0.1:{ADMIN_API_HOST_PORT}"
+MEETING_API_URL = f"http://127.0.0.1:{MEETING_API_HOST_PORT}"
+RUNTIME_URL = f"http://127.0.0.1:{RUNTIME_HOST_PORT}"
 
 # Env the stack boots with — pinned so the test knows the secrets it must present.
 ADMIN_TOKEN = "gate-admin-token"
