@@ -43,8 +43,21 @@ Add a row per known failure class; a row is "done" when every named probe is gre
     detected block surfaces as awaiting_admission_rejected (permanent — correct retry, imprecise reason).
 
 # ── Remaining campaign seams (rows added as each lands) ───────────────────────
-# - recording-concurrent-finalize-no-jsonb-lost-update      (G3)   status: open
-# - recording-s3-ops-do-not-block-event-loop                (G4)   status: open
+- id: recording-concurrent-finalize-no-jsonb-lost-update
+  status: green
+  seam: "upload_chunk / finalize_master -> repo.mutate_recordings (one FOR UPDATE row lock)"
+  seam_probe: core/meetings/services/meeting-api/tests/test_recordings.py  # test_concurrent_chunk_uploads_do_not_lose_updates
+  expected:
+    two_concurrent_folds: { chunk_count: 3 }   # atomic read->modify->write; old get+put (separate txns) lost one -> 2
+  note: >
+    The fake proves the SERVICE uses the atomic primitive; the SQL adapter's SELECT … FOR UPDATE spanning
+    read→commit is the real cross-process mechanism (L4 on live PG is the altitude-matched proof, per #49).
+- id: recording-s3-ops-do-not-block-event-loop
+  status: green
+  seam: "S3Storage -> asyncio.to_thread"
+  seam_probe: core/meetings/services/meeting-api/tests/test_recordings.py  # test_s3_storage_does_not_block_the_event_loop
+  expected:
+    heartbeat_during_blocking_upload: ticks_freely   # boto3 offloaded to a thread; the loop keeps serving
 # - webhook-billing-exactly-once-per-meter-session          (G5)   status: open
 - id: spawn-transcribe-enabled-string-false-is-false
   status: green

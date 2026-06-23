@@ -124,3 +124,105 @@ def test_upload_route_accepts_valid_token():
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "completed"
+
+
+# ── G4: object-storage I/O must not block the event loop ─────────────────────────────────────────
+
+
+class _BlockingS3Client:
+    """A stub boto3 client whose put_object BLOCKS (sync) — stands in for a slow S3 round-trip."""
+
+    def __init__(self, block_s: float):
+        self._block_s = block_s
+        self.calls = 0
+
+    def put_object(self, **kw):
+        import time
+
+        time.sleep(self._block_s)  # a real, blocking, synchronous call (what boto3 does)
+        self.calls += 1
+        return {}
+
+
+async def test_s3_storage_does_not_block_the_event_loop():
+    """G4: a blocking boto3 call must run OFF the loop (asyncio.to_thread), so the control plane keeps
+    serving lifecycle/webhook/ws traffic during a slow/large S3 op. We run a ~0.3s blocking upload
+    concurrently with a 5ms heartbeat — a non-blocking loop ticks many times; a blocked loop ~never."""
+    import asyncio
+
+    from meeting_api.recordings.adapters import S3Storage
+
+    class _StubS3(S3Storage):
+        def __init__(self, client):
+            super().__init__(bucket="b")
+            self._stub = client
+
+        def _c(self):
+            return self._stub
+
+        # NB: _run is INHERITED (asyncio.to_thread) — that's exactly what's under test.
+
+    storage = _StubS3(_BlockingS3Client(block_s=0.3))
+    ticks = {"n": 0}
+    stop = {"v": False}
+
+    async def heartbeat():
+        while not stop["v"]:
+            ticks["n"] += 1
+            await asyncio.sleep(0.005)
+
+    hb = asyncio.create_task(heartbeat())
+    try:
+        await storage.upload("k", b"x" * 1024, content_type="audio/wav")
+    finally:
+        stop["v"] = True
+        await hb
+
+    assert storage._stub.calls == 1
+    assert ticks["n"] >= 20, (
+        f"event loop appears BLOCKED during the S3 upload (only {ticks['n']} heartbeats in ~0.3s) — "
+        "the boto3 call is not being offloaded to a thread"
+    )
+
+
+# ── G3: concurrent chunk folds must not lose updates (atomic read→modify→write) ──────────────────
+
+
+class _YieldingStorage(InMemoryStorage):
+    """An InMemoryStorage whose upload YIELDS the event loop, so two concurrent uploads genuinely
+    interleave (forcing the read→modify→write race the atomic mutate must serialize)."""
+
+    async def upload(self, key, data, *, content_type):
+        import asyncio
+
+        await asyncio.sleep(0)
+        await super().upload(key, data, content_type=content_type)
+
+
+async def test_concurrent_chunk_uploads_do_not_lose_updates():
+    """G3: two chunk uploads racing on the SAME recording must BOTH be folded. The old
+    get_recordings → apply → put_recordings ran in SEPARATE transactions, so the second put clobbered
+    the first (lost update → chunk_count stuck at 2). The atomic mutate_recordings re-reads the LIVE
+    list under one lock and folds cumulatively → chunk_count 3."""
+    import asyncio
+
+    repo = InMemoryRecordingRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    storage = _YieldingStorage()
+
+    # chunk 0 (sequential) establishes the recording.
+    await upload_chunk(repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+                       data=_wav(), media_format="wav", chunk_seq=0, is_final=False)
+    # chunks 1 + 2 race.
+    await asyncio.gather(
+        upload_chunk(repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+                     data=_wav(), media_format="wav", chunk_seq=1, is_final=False),
+        upload_chunk(repo, storage, token_meeting_id=MEETING_ID, session_uid=SESSION_UID,
+                     data=_wav(), media_format="wav", chunk_seq=2, is_final=False),
+    )
+
+    recs = await repo.get_recordings(MEETING_ID)
+    bot_recs = [r for r in recs if r.get("source") == "bot"]
+    assert len(bot_recs) == 1, f"exactly one recording for the session, got {len(bot_recs)}"
+    mf = next(m for m in bot_recs[0]["media_files"] if m["type"] == "audio")
+    assert mf["chunk_count"] == 3, f"all 3 chunks must be folded (no lost update), got {mf['chunk_count']}"

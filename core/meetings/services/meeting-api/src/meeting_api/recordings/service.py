@@ -81,23 +81,34 @@ async def upload_chunk(
     )
     recording_id = existing_rec["id"] if existing_rec else new_recording_numeric_id()
 
-    # Upload the chunk to object storage.
+    # Upload the chunk to object storage (idempotent by key; OUTSIDE the row lock).
     key = chunk_storage_key(
         user_id=owner or 0, recording_id=recording_id, session_uid=session_uid,
         media_type=media_type, media_format=media_format, chunk_seq=chunk_seq,
     )
     await storage.upload(key, data, content_type=_content_type(media_format))
 
-    # Fold the chunk into the JSONB payload + write back.
-    rec_payload, transitioned = apply_chunk_to_recording(
-        existing_rec,
-        recording_id=recording_id, meeting_id=meeting_id, user_id=owner or 0,
-        session_uid=session_uid, media_type=media_type, media_format=media_format,
-        storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
-        duration_seconds=duration_seconds, sample_rate=sample_rate,
-    )
-    others = [r for r in recordings if r.get("id") != recording_id]
-    await repo.put_recordings(meeting_id, others + [rec_payload])
+    # G3 — fold the chunk into the JSONB ATOMICALLY: the mutator reads the LIVE recordings under one
+    # row lock and folds cumulatively, so a concurrent chunk/finalize can't clobber it (the old
+    # get_recordings → apply → put_recordings were SEPARATE transactions → lost update). The mutator
+    # re-resolves the recording for this session, so it reuses an id created concurrently.
+    def _fold(recs):
+        ex = next(
+            (r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None
+        )
+        rid = ex["id"] if ex else recording_id
+        payload, transitioned_ = apply_chunk_to_recording(
+            ex,
+            recording_id=rid, meeting_id=meeting_id, user_id=owner or 0,
+            session_uid=session_uid, media_type=media_type, media_format=media_format,
+            storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
+            duration_seconds=duration_seconds, sample_rate=sample_rate,
+        )
+        others = [r for r in recs if r.get("id") != rid]
+        return others + [payload], (payload, transitioned_)
+
+    rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+    recording_id = rec_payload["id"]
 
     media_file = next((mf for mf in rec_payload["media_files"] if mf["type"] == media_type), {})
     if transitioned:
@@ -146,22 +157,31 @@ async def finalize_master(
         master_bytes = build_recording_master(chunks, media_format)
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
 
-    # Stamp the media-file as finalized + write back.
-    mf["storage_path"] = master_key
-    mf["is_final"] = True
-    mf["finalized_at"] = _now_iso()
-    mf["finalized_by"] = "recording_finalizer.master"
-    # Merge — don't clobber the other media type's route (apply_chunk stamps both eagerly).
-    existing_pb = rec.get("playback_url") or {}
-    rec["playback_url"] = {
-        "audio": existing_pb.get("audio")
-        or (f"/recordings/{recording_id}/master?type=audio" if media_type == "audio" else None),
-        "video": existing_pb.get("video")
-        or (f"/recordings/{recording_id}/master?type=video" if media_type == "video" else None),
-    }
-    others = [r for r in recordings if r.get("id") != recording_id]
-    await repo.put_recordings(meeting_id, others + [rec])
-    return master_key
+    # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
+    # concurrent chunk upload can't clobber the finalized master pointer (the master bytes are already
+    # uploaded above, idempotently by key). The mutator re-reads the LIVE recording.
+    def _stamp(recs):
+        r = next((x for x in recs if x.get("id") == recording_id), None)
+        if r is None:
+            return recs, None
+        m = next((x for x in r.get("media_files", []) if x.get("type") == media_type), None)
+        if m is None:
+            return recs, None
+        m["storage_path"] = master_key
+        m["is_final"] = True
+        m["finalized_at"] = _now_iso()
+        m["finalized_by"] = "recording_finalizer.master"
+        existing_pb = r.get("playback_url") or {}
+        r["playback_url"] = {
+            "audio": existing_pb.get("audio")
+            or (f"/recordings/{recording_id}/master?type=audio" if media_type == "audio" else None),
+            "video": existing_pb.get("video")
+            or (f"/recordings/{recording_id}/master?type=video" if media_type == "video" else None),
+        }
+        others = [x for x in recs if x.get("id") != recording_id]
+        return others + [r], master_key
+
+    return await repo.mutate_recordings(meeting_id, _stamp)
 
 
 def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:

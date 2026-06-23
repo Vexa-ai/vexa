@@ -35,29 +35,40 @@ class S3Storage:
             )
         return self._client
 
+    async def _run(self, fn, *args, **kwargs):
+        """Run a BLOCKING boto3 call off the event loop (G4). boto3 is synchronous; calling it directly
+        inside an async method stalls the whole control plane (a multi-MB master finalize fetches many
+        objects). ``asyncio.to_thread`` offloads it to the default thread pool so the loop keeps serving
+        lifecycle/webhook/ws traffic. Overridable in tests."""
+        import asyncio
+
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
     async def upload(self, key: str, data: bytes, *, content_type: str) -> None:
-        self._c().put_object(Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
+        await self._run(self._c().put_object, Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
 
     async def list(self, prefix: str) -> list[str]:
-        resp = self._c().list_objects_v2(Bucket=self._bucket, Prefix=prefix)
+        resp = await self._run(self._c().list_objects_v2, Bucket=self._bucket, Prefix=prefix)
         return sorted(o["Key"] for o in resp.get("Contents", []))
 
     async def get(self, key: str) -> bytes:
-        return self._c().get_object(Bucket=self._bucket, Key=key)["Body"].read()
+        obj = await self._run(self._c().get_object, Bucket=self._bucket, Key=key)
+        return await self._run(obj["Body"].read)
 
     async def size(self, key: str) -> int:
-        return int(self._c().head_object(Bucket=self._bucket, Key=key)["ContentLength"])
+        head = await self._run(self._c().head_object, Bucket=self._bucket, Key=key)
+        return int(head["ContentLength"])
 
     async def get_range(self, key: str, start: int, end: int) -> bytes:
         # Pass the byte range through to S3 (inclusive offsets) so we fetch only the requested window.
-        resp = self._c().get_object(Bucket=self._bucket, Key=key, Range=f"bytes={start}-{end}")
-        return resp["Body"].read()
+        resp = await self._run(self._c().get_object, Bucket=self._bucket, Key=key, Range=f"bytes={start}-{end}")
+        return await self._run(resp["Body"].read)
 
     async def exists(self, key: str) -> bool:
         from botocore.exceptions import ClientError
 
         try:
-            self._c().head_object(Bucket=self._bucket, Key=key)
+            await self._run(self._c().head_object, Bucket=self._bucket, Key=key)
             return True
         except ClientError:
             return False
@@ -108,6 +119,23 @@ class SqlAlchemyRecordingRepo:
             m.data = data
             flag_modified(m, "data")
             await db.commit()
+
+    async def mutate_recordings(self, meeting_id, mutator):
+        """Atomic read→modify→write under ONE ``SELECT … FOR UPDATE`` row lock (G3). The lock spans the
+        whole mutation (held from the read through commit), so concurrent chunk-upload / finalize calls
+        serialize instead of clobbering each other (the old get+put released the lock between)."""
+        from sqlalchemy.orm.attributes import flag_modified
+
+        async with self._session_factory() as db:
+            m = await self._meeting(db, meeting_id)  # SELECT … FOR UPDATE
+            data = dict(m.data) if isinstance(m.data, dict) else {}
+            recordings = list(data.get("recordings", []))
+            new_recordings, result = mutator(recordings)
+            data["recordings"] = list(new_recordings)
+            m.data = data
+            flag_modified(m, "data")
+            await db.commit()
+            return result
 
     async def owner_of(self, meeting_id):
         from sqlalchemy import select

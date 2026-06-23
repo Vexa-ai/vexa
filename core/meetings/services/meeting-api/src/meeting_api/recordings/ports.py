@@ -62,6 +62,13 @@ class RecordingRepo(Protocol):
         """Persist the updated ``meeting.data['recordings']`` list (the row-locked write-back)."""
         ...
 
+    async def mutate_recordings(self, meeting_id: int, mutator):
+        """ATOMIC read→modify→write of ``meeting.data['recordings']`` under a SINGLE row lock (G3).
+        ``mutator(recordings) -> (new_recordings, result)`` runs while the lock is held — the
+        separate ``get_recordings`` + ``put_recordings`` released the lock between read and write, so
+        a concurrent chunk-upload / finalize clobbered the other (lost update). Returns ``result``."""
+        ...
+
     async def owner_of(self, meeting_id: int) -> Optional[int]:
         """The ``user_id`` that owns ``meeting_id`` — used to scope ``GET /recordings`` listing."""
         ...
