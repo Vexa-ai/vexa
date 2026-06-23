@@ -57,6 +57,19 @@ const DEFAULT_HINT_LOG_LIMIT = 2000;
 /** Vote-count lead a challenger name needs over the cluster's current name to
  *  flip it — hysteresis against hint flicker (continuous re-resolve). */
 const NAME_SWITCH_MARGIN = 2;
+const envNumber = (name: string, fallback: number): number => {
+  const raw = typeof process !== 'undefined' ? process.env?.[name] : undefined;
+  const n = raw !== undefined ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : fallback;
+};
+/** A hint must cover enough of the actual commit span before it is allowed to
+ *  name a turn. The ±match tolerance decides which hint turns are candidates,
+ *  but support is measured mostly inside the speech span so a stale/incorrect UI
+ *  switch near the edge cannot win solely because it was the only hint present. */
+const MIN_MATCH_COVERAGE = envNumber('VEXA_HINT_MIN_COVERAGE', 0.35);
+const MIN_MATCH_SUPPORT_MS = envNumber('VEXA_HINT_MIN_SUPPORT_MS', 450);
+const MIN_MATCH_CONFIDENCE = envNumber('VEXA_HINT_MIN_CONFIDENCE', 0.6);
+const HINT_SUPPORT_SLACK_MS = envNumber('VEXA_HINT_SUPPORT_SLACK_MS', 500);
 /** Active-speaker FLICKER debounce. A hint turn that opened AND closed in less than
  *  this window is a transient — a noise burst lighting a tile, a UI blip — never a real
  *  speaking turn. Counting its overlap lets it hijack attribution mid-utterance (the
@@ -103,6 +116,10 @@ export interface ClusterNameBinderConfig {
   /** Fired when a cluster that published provisionally gains a majority name.
    *  Caller runs speakerManager.updateSpeakerName(clusterId, name) — idempotent. */
   onLateResolve?: (clusterId: string, resolvedName: string) => void;
+}
+
+export interface ResolveOptions {
+  recordVote?: boolean;
 }
 
 interface HintTurn {
@@ -166,10 +183,11 @@ export class ClusterNameBinder {
   }
 
   /** Resolve a diarizer commit to its final speaker name. */
-  resolve(commit: CommitInfo): ResolvedAttribution {
+  resolve(commit: CommitInfo, opts: ResolveOptions = {}): ResolvedAttribution {
+    const recordVote = opts.recordVote ?? true;
     const winnerByOverlap = this.windowMatch(commit);
     if (winnerByOverlap) {
-      this.updateClusterVote(commit.clusterId, winnerByOverlap.name);
+      if (recordVote) this.recordClusterVote(commit.clusterId, winnerByOverlap.name);
       return { speakerName: winnerByOverlap.name, source: 'window-match', confidence: winnerByOverlap.confidence };
     }
     const winnerByVote = this.clusterMajority(commit.clusterId);
@@ -177,6 +195,10 @@ export class ClusterNameBinder {
       return { speakerName: winnerByVote.name, source: 'cluster-vote', confidence: winnerByVote.confidence };
     }
     return { speakerName: commit.clusterId, source: 'provisional-cluster-id', confidence: 0 };
+  }
+
+  recordClusterVote(clusterId: string, speakerName: string): void {
+    this.updateClusterVote(clusterId, speakerName);
   }
 
   /** Pure window-match — the name lit DURING the commit window (with confidence),
@@ -193,7 +215,10 @@ export class ClusterNameBinder {
     // needs tolerance slack.
     const windowStart = commit.tStartMs - this.matchToleranceMs;
     const windowEnd = commit.tEndMs + this.matchToleranceMs;
-    const agg = new Map<string, { ms: number; lastStart: number }>();
+    const supportStart = commit.tStartMs - HINT_SUPPORT_SLACK_MS;
+    const supportEnd = commit.tEndMs + HINT_SUPPORT_SLACK_MS;
+    const commitDur = Math.max(1, commit.tEndMs - commit.tStartMs);
+    const agg = new Map<string, { ms: number; supportMs: number; lastStart: number }>();
 
     for (const log of this.turns.values()) {
       for (const turn of log) {
@@ -203,8 +228,10 @@ export class ClusterNameBinder {
         const turnEnd = turn.tEndMs ?? (turn.tStartMs + OPEN_TURN_GRACE_MS);
         const o = Math.max(0, Math.min(turnEnd, windowEnd) - Math.max(turn.tStartMs, windowStart));
         if (o <= 0) continue;
-        const a = agg.get(turn.name) ?? { ms: 0, lastStart: -Infinity };
-        a.ms += o; a.lastStart = Math.max(a.lastStart, turn.tStartMs);
+        const support = Math.max(0, Math.min(turnEnd, supportEnd) - Math.max(turn.tStartMs, supportStart));
+        if (support <= 0) continue;
+        const a = agg.get(turn.name) ?? { ms: 0, supportMs: 0, lastStart: -Infinity };
+        a.ms += o; a.supportMs += support; a.lastStart = Math.max(a.lastStart, turn.tStartMs);
         agg.set(turn.name, a);
       }
     }
@@ -213,16 +240,22 @@ export class ClusterNameBinder {
     // Most overlap-ms wins; on a near-tie (within RECENCY_TIE_MS) the MORE RECENT
     // hint wins — so a previous speaker's still-open turn can't out-vote the speaker
     // who actually just started.
-    let best: { name: string; ms: number; lastStart: number } | null = null;
-    let totalMs = 0;
+    let best: { name: string; ms: number; supportMs: number; lastStart: number } | null = null;
+    let totalSupportMs = 0;
     for (const [name, a] of agg) {
-      totalMs += a.ms;
+      totalSupportMs += a.supportMs;
       if (!best) { best = { name, ...a }; continue; }
-      if (a.ms > best.ms + RECENCY_TIE_MS) best = { name, ...a };
-      else if (a.ms >= best.ms - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
+      if (a.supportMs > best.supportMs + RECENCY_TIE_MS) best = { name, ...a };
+      else if (a.supportMs >= best.supportMs - RECENCY_TIE_MS && a.lastStart > best.lastStart) best = { name, ...a };
     }
     if (!best) return null;
-    return { name: best.name, confidence: totalMs > 0 ? best.ms / totalMs : 0 };
+    const coverage = Math.min(1, best.supportMs / commitDur);
+    const confidence = totalSupportMs > 0 ? best.supportMs / totalSupportMs : 0;
+    const requiredSupport = Math.min(MIN_MATCH_SUPPORT_MS, commitDur * 0.8);
+    if (best.supportMs < requiredSupport) return null;
+    if (coverage < MIN_MATCH_COVERAGE) return null;
+    if (confidence < MIN_MATCH_CONFIDENCE) return null;
+    return { name: best.name, confidence: Math.min(coverage, confidence) };
   }
 
   private clusterMajority(clusterId: string): { name: string; confidence: number } | null {

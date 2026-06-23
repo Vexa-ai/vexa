@@ -47,6 +47,15 @@ loaded and there is no network:
 - `concurrency.smoke.test.ts` — overlapping/queued speakers don't erase each other.
 - `flicker.smoke.test.ts` — sticky attribution: a brief flicker hint can't flip an
   already-attributed turn.
+- `hint-evidence.smoke.test.ts` — weak active-speaker evidence (a brief switch that
+  covers little of a long turn) leaves the turn provisional instead of stamping a
+  likely-wrong name; sustained hints still bind.
+- `ending-context.smoke.test.ts` — speech-end cuts send a small trailing context pad
+  to STT so final words survive, while transcript timestamps stay clipped to the
+  committed speech boundary.
+- `short-ui-switch.smoke.test.ts` — a short isolated Zoom/Teams UI speaker switch
+  right after a different speaker stays provisional rather than stamping a wrong name;
+  a longer turn by the new speaker still binds.
 
 In production, `PyannoteSegmenter.create` lazy-downloads the segmentation model from
 Hugging Face on first use (cached thereafter). The remaining live path (real

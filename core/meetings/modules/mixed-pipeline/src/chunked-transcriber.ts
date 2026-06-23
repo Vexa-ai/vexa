@@ -76,6 +76,11 @@ const SILENCE_PROMPT_RESET_MS = 3000;
 /** Cap on the UNCONFIRMED window — if stability stalls this long, the open turn
  *  force-rolls into a fresh turn (everything confirms). Inside Whisper's input. */
 const TURN_MAX_MS = 28_000;
+/** Pyannote's speech-end frame can land a little early. On a clean
+ *  speaker→silence close, send a small trailing context pad to STT so final
+ *  phones/words survive, while clipping published timestamps to the committed
+ *  speech boundary. Speaker→speaker cuts get no pad: attribution wins there. */
+const SILENCE_CLOSE_CONTEXT_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_SILENCE_CLOSE_CONTEXT_MS) || 350);
 /** TTL idle-finalize: if the open turn has unconfirmed pending and no VOICED update
  *  has arrived for this long (speaker paused / segmenter didn't fire a close on
  *  continuous live-mixed audio), commit the pending now instead of waiting. Pairs
@@ -90,6 +95,12 @@ const MIN_SUBMIT_MS = 800;
  *  this pace instead of waiting for the next boundary (which can be 10s away
  *  inside a monologue). Pending ≈ tick + RTT; confirm ≈ 2 ticks. */
 const SUBMIT_TICK_MS = 2000;
+/** A short isolated active-speaker UI switch (Zoom/Teams) right after a different
+ *  published speaker is held provisional rather than stamped — without acoustic
+ *  evidence a brief tile flip is more likely a stale/echoed hint than a real,
+ *  sub-{MAX}ms turn by someone new. Tunable via VEXA_SHORT_UI_SWITCH_*. */
+const SHORT_UI_SWITCH_MAX_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_SHORT_UI_SWITCH_MAX_MS) || 3200);
+const SHORT_UI_SWITCH_GAP_MS = Number((typeof process !== 'undefined' && process.env?.VEXA_SHORT_UI_SWITCH_GAP_MS) || 2500);
 
 export interface ChunkSegment {
   text: string;
@@ -140,7 +151,7 @@ interface RingFrame { pcm: Float32Array; tMs: number }
  *  (speech start / speaker change) or closes the open one (speaker change / end). */
 type SegItem =
   | { kind: 'open'; t0: number; segId: string }
-  | { kind: 'close'; t1: number };
+  | { kind: 'close'; t1: number; contextPadMs?: number };
 interface Turn {
   /** The per-turn segmentation id — the namer's key (no clustering). */
   clusterId: string;
@@ -170,11 +181,17 @@ interface Turn {
    *  the name is locked so later hints (incl. brief "hmm" flickers) can't flip the
    *  turn's pending. Priority is for the unattributed, never for already-attributed. */
   resolvedName: string | null;
+  /** Optional STT-only trailing context used on speech-end closes. Published
+   *  timestamps and confirmed high-water still stop at t1. */
+  contextEndMs?: number;
+  /** Names this turn must NOT be (re)claimed to — a short-UI-switch hint that was
+   *  held provisional, so a later claim/rename can't resurrect the bad name. */
+  blockedNames?: Set<string>;
 }
 /** A committed turn whose hint hasn't arrived yet (provisional segmentation id) —
  *  re-resolved when a later hint produces a window match. Segments live in
  *  clusterSegments, so only the window + key are kept here. */
-interface UnresolvedTurn { clusterId: string; t0: number; t1: number }
+interface UnresolvedTurn { clusterId: string; t0: number; t1: number; blockedNames?: Set<string> }
 
 function rms(s: Float32Array): number {
   if (s.length === 0) return 0;
@@ -228,6 +245,9 @@ export class ChunkedTranscriber {
    *  audio the previous turn already confirmed — without this clamp the same
    *  sentences publish twice (identical timestamps, different turns). */
   private confirmedHighWaterMs = 0;
+  /** The last REAL speaker name published + where it ended — the short-UI-switch
+   *  guard compares a fresh window-match against this to spot a brief tile flip. */
+  private lastPublishedSpeaker: { name: string; endMs: number } | null = null;
 
   private constructor(private readonly cb: ChunkedTranscriberCallbacks) {
     this.log = cb.log || (() => { /* silent */ });
@@ -322,9 +342,10 @@ export class ChunkedTranscriber {
     const claimFrom = isEnd ? Infinity : tMs - CLAIM_WINDOW_MS;
     const still: UnresolvedTurn[] = [];
     for (const u of this.unresolved) {
-      const r = this.binder.resolve({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
-      if (r.source !== 'provisional-cluster-id') continue;        // window-matched → repainted, drop
-      if (u.t1 >= claimFrom) this.claimTurn(u.clusterId, name);   // late-box gap → claim for this speaker
+      const blocked = u.blockedNames ?? new Set<string>();
+      const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
+      if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); continue; }   // window-matched → repaint, drop
+      if (u.t1 >= claimFrom && !blocked.has(name)) this.claimTurn(u.clusterId, name);      // late-box gap → claim for this speaker
       else still.push(u);
     }
     this.unresolved = still.slice(-MAX_UNRESOLVED);
@@ -381,7 +402,7 @@ export class ChunkedTranscriber {
         this.openTurn(ev.tMs);
         break;
       case 'speaker→silence':
-        this.closeTurn(ev.tMs);
+        this.closeTurn(ev.tMs, SILENCE_CLOSE_CONTEXT_MS);
         break;
     }
   }
@@ -403,8 +424,8 @@ export class ChunkedTranscriber {
     void this.pump();
   }
 
-  private closeTurn(t1: number): void {
-    this.queue.push({ kind: 'close', t1 });
+  private closeTurn(t1: number, contextPadMs = 0): void {
+    this.queue.push({ kind: 'close', t1, contextPadMs });
     void this.pump();
   }
 
@@ -490,11 +511,14 @@ export class ChunkedTranscriber {
   }
 
   /** Close the open turn at a boundary: everything confirms (last chance). */
-  private async closeTurnApply(item: { t1: number }): Promise<void> {
+  private async closeTurnApply(item: { t1: number; contextPadMs?: number }): Promise<void> {
     if (!this.turn) return;
     const t = this.turn;
     // Clamp the boundary to available audio and never below confirmed.
     t.t1 = Math.max(t.confirmedUpToMs, Math.min(item.t1, this.latestAudioMs || item.t1));
+    if (item.contextPadMs && item.contextPadMs > 0) {
+      t.contextEndMs = Math.max(t.t1, Math.min(t.t1 + item.contextPadMs, this.latestAudioMs || t.t1));
+    }
     this.lastAudioEndMs = Math.max(this.lastAudioEndMs, t.t1);
     this.turn = null;
     await this.submitTurn(t, true);
@@ -510,8 +534,11 @@ export class ChunkedTranscriber {
     // The trailing un-committed second may belong to the next speaker; the
     // LocalAgreement tail guard (the last forming words never confirm) keeps
     // that bleed out of confirmed output until segmentation rules on it.
-    // Closing turns read exactly to the committed boundary.
-    const spanEnd = closing ? turn.t1 : Math.max(turn.t1, this.latestAudioMs || turn.t1);
+    // Closing turns read exactly to the committed boundary, PLUS a small trailing
+    // STT-only context pad (contextEndMs) so the final phones survive — published
+    // timestamps still clip to publishEnd (the committed speech boundary).
+    const publishEnd = closing ? turn.t1 : Math.max(turn.t1, this.latestAudioMs || turn.t1);
+    const spanEnd = closing ? Math.max(publishEnd, turn.contextEndMs ?? publishEnd) : publishEnd;
     if (spanEnd - spanStart < (closing ? 250 : MIN_SUBMIT_MS)) {
       if (closing) await this.closeOut(turn);
       return;
@@ -543,14 +570,23 @@ export class ChunkedTranscriber {
 
     // Map whisper segments (relative to spanStart) to audio time.
     const lang = this.cb.language || result!.language || 'en';
-    const mapped = gated.map((ws) => ({
-      text: ws.text.trim(),
-      startMs: spanStart + (ws.start || 0) * 1000,
-      endMs: Math.min(spanEnd, spanStart + (ws.end || 0) * 1000) || spanEnd,
-      language: lang,
-      relEnd: ws.end || 0,
-    })).filter(s => {
+    const mapped = gated.map((ws) => {
+      const startMs = spanStart + (ws.start || 0) * 1000;
+      const rawEndMs = spanStart + (ws.end || 0) * 1000;
+      const endMs = Math.min(publishEnd, rawEndMs || publishEnd) || publishEnd;
+      return {
+        text: ws.text.trim(),
+        startMs,
+        endMs,
+        language: lang,
+        relEnd: Math.max(0, (endMs - spanStart) / 1000),
+      };
+    }).filter(s => {
       if (!s.text) return false;
+      // The trailing STT context pad is for recognition only — drop anything that
+      // begins past the committed speech boundary, and any zero/negative span.
+      if (closing && s.startMs >= publishEnd) return false;
+      if (s.endMs <= s.startMs) return false;
       // Prompt echo — whisper parroting the initial_prompt back. Targeted
       // check; the blanket phrase list would also kill legit short answers
       // ("Yes.") inside real-speech windows the RMS gate already vouched for.
@@ -586,6 +622,7 @@ export class ChunkedTranscriber {
       // ONE bundle: confirmed + surviving tail. Splitting them deletes the
       // client's pending block for seconds (the "vanishing transcript" bug).
       this.cb.publish(name, confirmed, closing ? [] : tail);
+      this.rememberPublishedSpeaker(name, confirmed[confirmed.length - 1]?.endMs);
       turn.allConfirmed.push(...confirmed);
       // Track per-key so a later name change repaints these in place.
       let cs = this.clusterSegments.get(turn.clusterId);
@@ -625,6 +662,7 @@ export class ChunkedTranscriber {
       const name = this.resolveName(turn);
       const promoted = turn.pendingTail.map((s, i) => ({ ...s, segmentId: `turn:${turn.turnId}:${i}` }));
       this.cb.publish(name, promoted, []);
+      this.rememberPublishedSpeaker(name, promoted[promoted.length - 1]?.endMs);
       turn.allConfirmed.push(...promoted);
       let cs = this.clusterSegments.get(turn.clusterId);
       if (!cs) { cs = []; this.clusterSegments.set(turn.clusterId, cs); }
@@ -641,9 +679,10 @@ export class ChunkedTranscriber {
     // Register a name vote for the closed turn. If no hint overlaps yet
     // (provisional), queue it for re-resolve when a later hint arrives.
     if (turn.allConfirmed.length > 0) {
-      const r = this.binder.resolve({ clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 });
-      if (r.source === 'provisional-cluster-id') {
-        this.unresolved.push({ clusterId: turn.clusterId, t0: turn.t0, t1: turn.t1 });
+      if (turn.resolvedName) return;
+      const name = this.resolveName(turn);
+      if (name === turn.clusterId) {
+        this.unresolved.push({ clusterId: turn.clusterId, t0: turn.t0, t1: turn.t1, blockedNames: turn.blockedNames });
         if (this.unresolved.length > MAX_UNRESOLVED) this.unresolved.shift();
       }
     }
@@ -657,9 +696,47 @@ export class ChunkedTranscriber {
     // window-match (lag-corrected overlap) casts the per-key vote; the first REAL
     // result locks the name (and onLateResolve → onClusterRename paints it in).
     if (turn.resolvedName) return turn.resolvedName;
-    const r = this.binder.resolve({ clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 });
-    if (r.source !== 'provisional-cluster-id') turn.resolvedName = r.speakerName;
+    const commit = { clusterId: turn.clusterId, tStartMs: turn.t0, tEndMs: turn.t1 };
+    // recordVote:false — we only commit a vote once the result survives the
+    // short-UI-switch guard below, so a held-provisional bad hint never votes.
+    const r = this.binder.resolve(commit, { recordVote: false });
+    if (r.source !== 'provisional-cluster-id' && this.shouldDeferShortUiSwitch(turn, r.speakerName, r.source)) {
+      // A brief isolated tile flip to a NEW name right after a different speaker:
+      // hold provisional and block that name from a later claim/rename.
+      if (!turn.blockedNames) turn.blockedNames = new Set();
+      turn.blockedNames.add(r.speakerName);
+      this.log(`[ChunkedTranscriber] short UI switch held provisional ${turn.clusterId}; speaker=${r.speakerName}`);
+      return turn.clusterId;
+    }
+    if (r.source !== 'provisional-cluster-id') {
+      this.binder.recordClusterVote(turn.clusterId, r.speakerName);
+      turn.resolvedName = r.speakerName;
+    }
     return r.speakerName;
+  }
+
+  private isRealSpeakerName(name: string): boolean {
+    return !!name && !/^seg_\d+$/.test(name);
+  }
+
+  private rememberPublishedSpeaker(name: string, endMs?: number): void {
+    if (!this.isRealSpeakerName(name) || endMs === undefined) return;
+    this.lastPublishedSpeaker = { name, endMs };
+  }
+
+  /** A short, isolated active-speaker window-match to a NEW name immediately after a
+   *  different published speaker. With no acoustic evidence to confirm it, a brief
+   *  tile flip is more likely a stale/echoed hint than a real sub-{MAX}ms turn — so
+   *  hold it provisional rather than stamp a confident wrong name. */
+  private shouldDeferShortUiSwitch(turn: Turn, speakerName: string, source: string): boolean {
+    if (source !== 'window-match') return false;
+    if (!this.isRealSpeakerName(speakerName)) return false;
+    const prev = this.lastPublishedSpeaker;
+    if (!prev || prev.name === speakerName) return false;
+    const durationMs = Math.max(0, turn.t1 - turn.t0);
+    if (durationMs <= 0 || durationMs > SHORT_UI_SWITCH_MAX_MS) return false;
+    const gapMs = Math.max(0, turn.t0 - prev.endMs);
+    return gapMs <= SHORT_UI_SWITCH_GAP_MS;
   }
 
   /** Binder says this key's name changed → repaint its published segments
