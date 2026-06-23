@@ -5,9 +5,18 @@
 # targets below are for hand-driving the stack during development.
 PROJECT ?= vexa-v012
 BROWSER_IMAGE ?= mock-bot:dev
+EMAIL ?= self-host@vexa.ai
+SCOPES ?= bot,tx
 COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 
-.PHONY: stack-test stack-test-bot stack-test-mock dashboard-harness up down build ps logs
+.PHONY: stack-test stack-test-bot stack-test-mock dashboard-harness provision-token up down build ps logs
+
+## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
+## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
+##   DASHBOARD_API_KEY=$$(make -s provision-token ADMIN_TOKEN=<secret>) \
+##     docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
+provision-token:
+	@ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" ./bin/provision-token
 
 ## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
 ## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).

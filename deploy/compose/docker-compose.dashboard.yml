@@ -1,8 +1,14 @@
 # The vendored dashboard (clients/dashboard), wired to the compose gateway. An OVERLAY on
 # docker-compose.yml so the control-plane stack stays dashboard-free by default.
 #
-#   # 1. stack up, 2. mint a token, 3. dashboard up with that token:
-#   DASHBOARD_API_KEY=<token> docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
+#   # 1. stack up, 2. mint a token (idempotent), 3. dashboard up with that token:
+#   DASHBOARD_API_KEY=$(make -s provision-token ADMIN_TOKEN=<admin-secret>) \
+#     docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
+#
+# NOTE: the DASHBOARD_API_KEY token MUST exist in the stack DB. A DB reset (or a fresh `up`) without
+# re-running step 2 leaves the baked key dangling → every request 401s ("Invalid API key"), because the
+# gateway → admin-api /internal/validate correctly rejects a token that isn't in the DB. Re-run
+# `make provision-token` after any DB reset. See deploy/compose/bin/provision-token.
 #
 # Build context is the repo root (../..) so it pulls in packages/transcript-rendering.
 services:
