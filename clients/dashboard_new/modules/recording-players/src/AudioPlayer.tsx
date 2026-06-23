@@ -64,6 +64,52 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+// ── Inline SVG control glyphs. No icon dependency (lucide etc.) — the brick stays dependency-free.
+//    All draw in `currentColor`, so they inherit the button's themed text color. ────────────────────
+function PlayIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M4 3.5v9l8-4.5-8-4.5z" fill="currentColor" />
+    </svg>
+  );
+}
+function PauseIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect x="4" y="3" width="3" height="10" rx="1" fill="currentColor" />
+      <rect x="9" y="3" width="3" height="10" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+function VolumeIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3 6h2.5L9 3v10L5.5 10H3V6z" fill="currentColor" />
+      <path
+        d="M11 5.5a3.5 3.5 0 0 1 0 5M12.5 4a5.5 5.5 0 0 1 0 8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function MuteIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3 6h2.5L9 3v10L5.5 10H3V6z" fill="currentColor" />
+      <path
+        d="M11 6l3 3M14 6l-3 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
   function AudioPlayer(
     { src, fragments, onTimeUpdate, onFragmentChange, className, compact = false },
@@ -321,10 +367,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           alignItems: "center",
           gap: compact ? 6 : 12,
           padding: compact ? "4px 8px" : "8px 16px",
-          background: "rgba(0,0,0,0.04)",
-          border: "1px solid rgba(0,0,0,0.12)",
+          background: "var(--muted, rgba(0,0,0,0.04))",
+          color: "var(--foreground, inherit)",
+          border: "1px solid var(--border, rgba(0,0,0,0.12))",
           borderRadius: 8,
-          font: "13px system-ui, sans-serif",
+          fontFamily: "var(--font-sans, system-ui, sans-serif)",
+          fontSize: 13,
         }}
       >
         {/* The element under test: a real <audio> with the injected source. */}
@@ -338,15 +386,19 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           disabled={!hasSource || (isLoading && !isPlaying)}
           style={{
             flex: "0 0 auto",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
             width: compact ? 24 : 32,
             height: compact ? 24 : 32,
             borderRadius: 6,
             border: "none",
             cursor: hasSource ? "pointer" : "default",
             background: "transparent",
+            color: "var(--primary, #2563eb)",
           }}
         >
-          {isPlaying ? "❚❚" : "▶"}
+          {isPlaying ? <PauseIcon /> : <PlayIcon />}
         </button>
 
         <span
@@ -366,7 +418,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           value={displayTime}
           onChange={handleSeekBarChange}
           disabled={!hasSource}
-          style={{ flex: "1 1 auto", cursor: hasSource ? "pointer" : "default" }}
+          style={{
+            flex: "1 1 auto",
+            cursor: hasSource ? "pointer" : "default",
+            // filled portion → primary; the track inherits the muted surface.
+            accentColor: "var(--primary, #2563eb)",
+          }}
         />
 
         <span
@@ -393,15 +450,19 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           disabled={!hasSource}
           style={{
             flex: "0 0 auto",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
             width: compact ? 24 : 32,
             height: compact ? 24 : 32,
             borderRadius: 6,
             border: "none",
             cursor: hasSource ? "pointer" : "default",
             background: "transparent",
+            color: "var(--muted-foreground, #475569)",
           }}
         >
-          {isMuted ? "🔇" : "🔊"}
+          {isMuted ? <MuteIcon /> : <VolumeIcon />}
         </button>
       </div>
     );

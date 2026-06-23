@@ -40,9 +40,18 @@ export function Providers({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     fetch("/api/config")
-      .then((r) => r.json())
-      .then((c: BrowserRuntimeConfig) => {
-        if (!alive) return;
+      .then(async (r) => {
+        // DF3 — a non-ok /api/config (e.g. a 500 when VEXA_API_URL is unset) must NOT be parsed as
+        // config: its body is an error envelope, not BrowserRuntimeConfig. Leaving config null is the
+        // honest "misconfigured" state — never a silently-wrong config with undefined wsUrl/authToken.
+        if (!r.ok) {
+          console.error(`[providers] /api/config returned ${r.status} — dashboard misconfigured`);
+          return null;
+        }
+        return (await r.json()) as BrowserRuntimeConfig;
+      })
+      .then((c) => {
+        if (!alive || !c) return;
         configRef.current = c;
         setConfig(c);
       })

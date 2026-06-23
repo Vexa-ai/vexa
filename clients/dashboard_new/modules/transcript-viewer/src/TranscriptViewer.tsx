@@ -226,21 +226,23 @@ export function TranscriptViewer({
 
 // ── Inline styles: zero global-CSS dependency so the component paints identically in the bare L4
 //    fixture and on the real stack. ─────────────────────────────────────────────────────────────────
+// Colors read the host's design tokens (shadcn CSS variables) with a FALLBACK to the original literal —
+// so the brick themes (light/dark) inside the app, AND still paints identically in a bare L4 fixture
+// where the vars are undefined (the fallback wins). Framework-light, themeable.
 const styles: Record<string, React.CSSProperties> = {
   root: {
     display: "flex",
     flexDirection: "column",
-    fontFamily:
-      "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-    color: "#0f172a",
-    border: "1px solid #e2e8f0",
+    fontFamily: "var(--font-sans, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif)",
+    color: "var(--card-foreground, #0f172a)",
+    border: "1px solid var(--border, #e2e8f0)",
     borderRadius: 8,
-    background: "#ffffff",
+    background: "var(--card, #ffffff)",
     overflow: "hidden",
   },
   header: {
     padding: "10px 12px",
-    borderBottom: "1px solid #e2e8f0",
+    borderBottom: "1px solid var(--border, #e2e8f0)",
     display: "flex",
     flexDirection: "column",
     gap: 8,
@@ -253,13 +255,13 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 4,
     fontSize: 12,
     fontWeight: 600,
-    color: "#dc2626",
+    color: "var(--destructive, #dc2626)",
   },
   liveDot: {
     width: 8,
     height: 8,
     borderRadius: "50%",
-    background: "#dc2626",
+    background: "var(--destructive, #dc2626)",
     display: "inline-block",
   },
   search: {
@@ -267,7 +269,9 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     padding: "6px 10px",
     fontSize: 13,
-    border: "1px solid #cbd5e1",
+    color: "var(--foreground, #0f172a)",
+    background: "var(--background, #ffffff)",
+    border: "1px solid var(--input, #cbd5e1)",
     borderRadius: 6,
     outline: "none",
   },
@@ -280,7 +284,7 @@ const styles: Record<string, React.CSSProperties> = {
   empty: {
     padding: "32px 16px",
     textAlign: "center",
-    color: "#64748b",
+    color: "var(--muted-foreground, #64748b)",
     fontSize: 13,
   },
   segment: {
@@ -288,8 +292,8 @@ const styles: Record<string, React.CSSProperties> = {
     transition: "background 120ms",
   },
   segmentActive: {
-    background: "#eff6ff",
-    borderLeft: "2px solid #2563eb",
+    background: "var(--accent, #eff6ff)",
+    borderLeft: "2px solid var(--primary, #2563eb)",
   },
   segmentMeta: {
     display: "flex",
@@ -298,7 +302,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 2,
   },
   speaker: { fontWeight: 600, fontSize: 13 },
-  time: { fontSize: 11, color: "#64748b" },
+  time: { fontSize: 11, color: "var(--muted-foreground, #64748b)" },
   text: { margin: 0, fontSize: 13, lineHeight: 1.4 },
-  textPending: { color: "#94a3b8", fontStyle: "italic" },
+  textPending: { color: "var(--muted-foreground, #94a3b8)", fontStyle: "italic" },
 };

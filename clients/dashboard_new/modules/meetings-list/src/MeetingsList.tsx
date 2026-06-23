@@ -60,7 +60,7 @@ function platformLabel(platform: string | null | undefined): string {
 }
 
 function statusConfig(status: string): { label: string; dot: string } {
-  return STATUS_CONFIG[status] ?? { label: status || "Unknown", dot: "#9ca3af" };
+  return STATUS_CONFIG[status] ?? { label: status || "Unknown", dot: "var(--muted-foreground, #9ca3af)" };
 }
 
 /** The human title for a meeting: data.name || data.title || the native id. */
@@ -100,8 +100,8 @@ function PlatformIcon({ platform }: { platform: string | null | undefined }) {
         width: 24,
         height: 24,
         borderRadius: 6,
-        background: "var(--muted, #1f2937)",
-        color: "var(--muted-foreground, #9ca3af)",
+        background: "var(--accent, #1f2937)",
+        color: "var(--accent-foreground, #9ca3af)",
         fontSize: 12,
         fontWeight: 600,
         flexShrink: 0,
@@ -184,7 +184,7 @@ function MeetingRow({
             data-testid="meeting-native-id"
             style={{
               display: "block",
-              fontFamily: "monospace",
+              fontFamily: "var(--font-mono, monospace)",
               fontSize: 12,
               color: "var(--muted-foreground, #9ca3af)",
               marginTop: 2,

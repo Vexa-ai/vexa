@@ -76,8 +76,12 @@ function ChatBubble({ message }: { message: ChatMessage }): React.ReactElement {
           fontSize: "14px",
           maxWidth: "85%",
           wordBreak: "break-word",
-          background: message.is_from_bot ? "#2563eb" : "#f1f5f9",
-          color: message.is_from_bot ? "#ffffff" : "#0f172a",
+          background: message.is_from_bot
+            ? "var(--primary, #2563eb)"
+            : "var(--muted, #f1f5f9)",
+          color: message.is_from_bot
+            ? "var(--primary-foreground, #ffffff)"
+            : "var(--foreground, #0f172a)",
         }}
       >
         {message.text}

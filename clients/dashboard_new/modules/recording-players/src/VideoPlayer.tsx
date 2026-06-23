@@ -37,6 +37,66 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// ── Inline SVG control glyphs (no icon dependency — the brick stays dependency-free). All draw in
+//    `currentColor` so they inherit the control bar's text color (white over the video gradient). ────
+function PlayIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M4 3.5v9l8-4.5-8-4.5z" fill="currentColor" />
+    </svg>
+  );
+}
+function PauseIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect x="4" y="3" width="3" height="10" rx="1" fill="currentColor" />
+      <rect x="9" y="3" width="3" height="10" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+function VolumeIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3 6h2.5L9 3v10L5.5 10H3V6z" fill="currentColor" />
+      <path
+        d="M11 5.5a3.5 3.5 0 0 1 0 5M12.5 4a5.5 5.5 0 0 1 0 8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function MuteIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3 6h2.5L9 3v10L5.5 10H3V6z" fill="currentColor" />
+      <path
+        d="M11 6l3 3M14 6l-3 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function FullscreenIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
   function VideoPlayer({ src, className, onTimeUpdate }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -129,7 +189,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           borderRadius: 8,
           overflow: "hidden",
           background: "#000",
-          font: "13px system-ui, sans-serif",
+          fontFamily: "var(--font-sans, system-ui, sans-serif)",
+          fontSize: 13,
         }}
       >
         {/* The element under test: a real <video> with the injected source. */}
@@ -161,7 +222,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
             step={0.1}
             onChange={handleSeek}
             disabled={!isLoaded}
-            style={{ width: "100%", cursor: "pointer", marginBottom: 8, display: "block" }}
+            style={{
+              width: "100%",
+              cursor: "pointer",
+              marginBottom: 8,
+              display: "block",
+              // filled portion → primary accent (theme token; white fallback reads on the dark gradient)
+              accentColor: "var(--primary, #ffffff)",
+            }}
           />
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff" }}>
@@ -171,9 +239,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               data-testid="play-toggle"
               onClick={togglePlay}
               disabled={!isLoaded}
-              style={{ width: 28, height: 28, border: "none", borderRadius: 6, background: "transparent", color: "#fff", cursor: "pointer" }}
+              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, border: "none", borderRadius: 6, background: "transparent", color: "#fff", cursor: "pointer" }}
             >
-              {isPlaying ? "❚❚" : "▶"}
+              {isPlaying ? <PauseIcon /> : <PlayIcon />}
             </button>
 
             <button
@@ -181,9 +249,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               aria-label={isMuted ? "Unmute" : "Mute"}
               data-testid="mute-toggle"
               onClick={toggleMute}
-              style={{ width: 28, height: 28, border: "none", borderRadius: 6, background: "transparent", color: "#fff", cursor: "pointer" }}
+              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, border: "none", borderRadius: 6, background: "transparent", color: "#fff", cursor: "pointer" }}
             >
-              {isMuted ? "🔇" : "🔊"}
+              {isMuted ? <MuteIcon /> : <VolumeIcon />}
             </button>
 
             <span data-testid="time-label" style={{ flex: "1 1 auto", fontVariantNumeric: "tabular-nums", opacity: 0.8 }}>
@@ -195,9 +263,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               aria-label="Fullscreen"
               data-testid="fullscreen"
               onClick={handleFullscreen}
-              style={{ width: 28, height: 28, border: "none", borderRadius: 6, background: "transparent", color: "#fff", cursor: "pointer" }}
+              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, border: "none", borderRadius: 6, background: "transparent", color: "#fff", cursor: "pointer" }}
             >
-              ⛶
+              <FullscreenIcon />
             </button>
           </div>
         </div>

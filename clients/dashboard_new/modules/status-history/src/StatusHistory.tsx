@@ -22,6 +22,7 @@
  *   </ol>
  * Empty / missing transitions → renders nothing (returns null), matching the reference behavior.
  */
+import type { CSSProperties } from "react";
 import type { MeetingStatus } from "@vexa/dash-contracts";
 
 /**
@@ -62,6 +63,65 @@ function statusLabel(status: string): string {
 }
 
 /**
+ * Semantic dot color per status — the timeline's only data-encoding color, so it stays a literal
+ * (a single token can't carry per-status meaning). completed→green, failed→red, active→blue (primary),
+ * everything else→muted. Each keeps a token where it has a natural role (the live/active = primary
+ * accent), with the literal as fallback for the bare fixture.
+ */
+const DOT_COLOR: Record<string, string> = {
+  completed: "#22c55e",
+  active: "var(--primary, #3b82f6)",
+  joining: "var(--primary, #3b82f6)",
+  awaiting_admission: "#fbbf24",
+  needs_help: "#fb923c",
+  needs_human_help: "#fb923c",
+  failed: "var(--destructive, #ef4444)",
+  stopping: "var(--muted-foreground, #94a3b8)",
+};
+
+function dotColor(status: string): string {
+  return DOT_COLOR[status] ?? "var(--muted-foreground, #94a3b8)";
+}
+
+// ── Inline styles: zero global-CSS dependency so the timeline paints identically in the bare L4
+//    fixture and on the real stack. Colors read the host's shadcn tokens with a FALLBACK to the
+//    original literal, so the brick themes (light/dark) in the app yet renders unchanged in a fixture
+//    where the vars are undefined. ─────────────────────────────────────────────────────────────────
+const styles: Record<string, CSSProperties> = {
+  list: {
+    listStyle: "none",
+    margin: 0,
+    padding: 0,
+    display: "flex",
+    flexDirection: "column",
+    fontFamily: "var(--font-sans, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif)",
+  },
+  row: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 8,
+    padding: "4px 0",
+    borderLeft: "2px solid var(--border, #e2e8f0)",
+    paddingLeft: 12,
+    position: "relative",
+  },
+  dot: {
+    position: "absolute",
+    left: -5,
+    top: 7,
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    flexShrink: 0,
+  },
+  status: { fontWeight: 600, fontSize: 13, color: "var(--foreground, #0f172a)" },
+  time: { fontSize: 11, color: "var(--muted-foreground, #64748b)", fontVariantNumeric: "tabular-nums" },
+  from: { fontSize: 11, color: "var(--muted-foreground, #64748b)" },
+  reason: { fontSize: 12, color: "var(--muted-foreground, #64748b)", fontStyle: "italic" },
+  source: { fontSize: 11, color: "var(--muted-foreground, #94a3b8)" },
+};
+
+/**
  * Format an ISO/UTC timestamp to HH:MM:SS for the row. Backend timestamps may omit the trailing `Z`;
  * we treat a bare `YYYY-MM-DDTHH:MM:SS` as UTC so the clock matches the server (same rule the
  * reference dashboard's parseUTCTimestamp applies). Unparseable input passes through unchanged.
@@ -98,6 +158,7 @@ export function StatusHistory({ transitions, className }: StatusHistoryProps) {
     <ol
       className={["status-history", className].filter(Boolean).join(" ")}
       data-count={sorted.length}
+      style={styles.list}
     >
       {sorted.map((transition, index) => {
         const isCurrent = index === sorted.length - 1;
@@ -109,18 +170,33 @@ export function StatusHistory({ transitions, className }: StatusHistoryProps) {
             data-status={transition.to}
             data-index={index}
             {...(isCurrent ? { "data-current": "" } : {})}
+            style={styles.row}
           >
-            <span className="status-history__dot" aria-hidden="true" />
-            <span className="status-history__status">{statusLabel(transition.to)}</span>
-            <time className="status-history__time" dateTime={transition.timestamp}>
+            <span
+              className="status-history__dot"
+              aria-hidden="true"
+              style={{ ...styles.dot, background: dotColor(transition.to) }}
+            />
+            <span className="status-history__status" style={styles.status}>
+              {statusLabel(transition.to)}
+            </span>
+            <time className="status-history__time" dateTime={transition.timestamp} style={styles.time}>
               {formatTime(transition.timestamp)}
             </time>
             {transition.from ? (
-              <span className="status-history__from">from {statusLabel(transition.from)}</span>
+              <span className="status-history__from" style={styles.from}>
+                from {statusLabel(transition.from)}
+              </span>
             ) : null}
-            {reason ? <span className="status-history__reason">{reason}</span> : null}
+            {reason ? (
+              <span className="status-history__reason" style={styles.reason}>
+                {reason}
+              </span>
+            ) : null}
             {transition.source ? (
-              <span className="status-history__source">{transition.source.replace(/_/g, " ")}</span>
+              <span className="status-history__source" style={styles.source}>
+                {transition.source.replace(/_/g, " ")}
+              </span>
             ) : null}
           </li>
         );

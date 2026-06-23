@@ -34,6 +34,11 @@ export function JoinForm({ onSubmit, defaultBotName = "Vexa" }: JoinFormProps) {
   const [meetingInput, setMeetingInput] = useState("");
   const [botName, setBotName] = useState(defaultBotName);
   const [error, setError] = useState<string | null>(null);
+  // DF1 — the per-meeting knobs the backend accepts (default-on for transcription + recording).
+  const [language, setLanguage] = useState("");
+  const [task, setTask] = useState("transcribe");
+  const [recordingEnabled, setRecordingEnabled] = useState(true);
+  const [transcribeEnabled, setTranscribeEnabled] = useState(true);
 
   const placeholder = useMemo(
     () => PLATFORMS.find((p) => p.value === platform)?.placeholder ?? "",
@@ -62,6 +67,12 @@ export function JoinForm({ onSubmit, defaultBotName = "Vexa" }: JoinFormProps) {
     if (result.originalUrl) request.meeting_url = result.originalUrl;
     const name = botName.trim();
     if (name) request.bot_name = name;
+    // DF1 — surface the optional knobs (omit language/task when left at the default; always send the
+    // explicit recording/transcription toggles so the request reflects what the user chose).
+    if (language.trim()) request.language = language.trim();
+    if (task && task !== "transcribe") request.task = task;
+    request.recording_enabled = recordingEnabled;
+    request.transcribe_enabled = transcribeEnabled;
 
     onSubmit(request);
   }
@@ -118,6 +129,56 @@ export function JoinForm({ onSubmit, defaultBotName = "Vexa" }: JoinFormProps) {
           onChange={(e) => setBotName(e.target.value)}
         />
       </div>
+
+      <details className="join-form__advanced">
+        <summary>Advanced options</summary>
+        <div className="join-form__row">
+          <label htmlFor="join-language">Language</label>
+          <select
+            id="join-language"
+            name="language"
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+          >
+            <option value="">Auto-detect</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="pt">Portuguese</option>
+            <option value="it">Italian</option>
+            <option value="nl">Dutch</option>
+            <option value="ru">Russian</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </div>
+        <div className="join-form__row">
+          <label htmlFor="join-task">Task</label>
+          <select id="join-task" name="task" value={task} onChange={(e) => setTask(e.target.value)}>
+            <option value="transcribe">Transcribe</option>
+            <option value="translate">Translate to English</option>
+          </select>
+        </div>
+        <label className="join-form__check">
+          <input
+            type="checkbox"
+            name="transcribe_enabled"
+            checked={transcribeEnabled}
+            onChange={(e) => setTranscribeEnabled(e.target.checked)}
+          />
+          Live transcription
+        </label>
+        <label className="join-form__check">
+          <input
+            type="checkbox"
+            name="recording_enabled"
+            checked={recordingEnabled}
+            onChange={(e) => setRecordingEnabled(e.target.checked)}
+          />
+          Record the meeting
+        </label>
+      </details>
 
       <button type="submit" className="join-form__submit">
         Start bot

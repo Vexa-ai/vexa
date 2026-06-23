@@ -9,19 +9,51 @@ import { StatusHistory, type StatusTransition } from "@vexa/dash-status-history"
 import { WsEventLog, type WsLogEvent } from "@vexa/dash-ws-event-log";
 import { ChatPanel, type ChatMessage } from "@vexa/dash-chat";
 import { VncView } from "@vexa/dash-vnc-view";
+import { Square, AlertTriangle } from "lucide-react";
 import { useVexa } from "../app/providers";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const LIVE_STATUSES = new Set(["requested", "joining", "awaiting_admission", "active", "needs_help", "needs_human_help"]);
 
-/**
- * The meeting-detail composite — the live happy-path screen.
- *
- * It is the ONLY place the bricks meet: `@vexa/dash-meeting-state` is the single source of truth (it
- * merges REST seed + the 0.10.6 WS stream behind the injected ports), and every view brick is a pure
- * projection of its snapshot — TranscriptViewer over `segments`, ChatPanel over `chat`, StatusHistory
- * + WsEventLog over the observed status/chat/segment deltas, AudioPlayer over the recording master,
- * VncView over the per-bot route. No brick fetches or sockets on its own; this composite wires them.
- */
+/** Color-code the status pill by lifecycle phase. */
+function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  if (status === "failed") return "destructive";
+  if (status === "completed") return "secondary";
+  if (LIVE_STATUSES.has(status)) return "default";
+  return "outline";
+}
+
+/** The truthful connection indicator — reflects the OBSERVED ws state, not intent. */
+function ConnectionDot({ connection }: { connection: string }) {
+  const map: Record<string, { color: string; label: string }> = {
+    live: { color: "var(--chart-2, #10b981)", label: "Live" },
+    connecting: { color: "var(--chart-4, #f59e0b)", label: "Connecting" },
+    error: { color: "var(--destructive, #ef4444)", label: "Connection error" },
+    closed: { color: "var(--muted-foreground)", label: "Closed" },
+    idle: { color: "var(--muted-foreground)", label: "Idle" },
+  };
+  const c = map[connection] ?? map.idle;
+  return (
+    <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: c.color }} />
+      {c.label}
+    </span>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
+  );
+}
+
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const { apiClient, wsClientFactory, ready } = useVexa();
 
@@ -30,6 +62,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [statusHistory, setStatusHistory] = useState<StatusTransition[]>([]);
   const [wsLog, setWsLog] = useState<WsLogEvent[]>([]);
   const [masterSrc, setMasterSrc] = useState<string | undefined>(undefined);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -46,7 +79,6 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const onSnapshot = useCallback(
     (s: MeetingState) => {
       setSnapshot(s);
-
       if (s.status !== lastStatus.current) {
         const from = lastStatus.current;
         lastStatus.current = s.status;
@@ -80,26 +112,34 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       lastStatus.current = m.status;
       setStatusHistory([{ to: m.status, timestamp: m.start_time || m.created_at }]);
 
-      // Resolve the playable recording URL: the meeting's first recording → GET /recordings/{id}/master
-      // returns a DESCRIPTOR whose `raw_url` is the actual audio-bytes path (proxied for auth + Range).
+      // Resolve the playable recording URL. DF4 — distinguish "no recording yet" (a genuine absence) from
+      // a real read FAILURE (auth/server/schema): the former is a normal empty state, the latter is loud.
       try {
         const tr = await apiClient.getTranscripts(m.platform || "", m.native_meeting_id || "");
         const rec = tr.recordings?.[0] as Record<string, unknown> | undefined;
-        const rid = (rec?.id as number) ?? (rec?.recording_id as number) ?? m.id;
-        const master = await apiClient.getRecordingMaster(rid);
-        if (master?.raw_url) setMasterSrc(`/api/vexa${master.raw_url}`);
-      } catch {
-        /* no recording yet — the player section shows "No recording yet." */
+        if (!rec) {
+          // no recording exists yet — leave masterSrc undefined (the empty state), not an error.
+        } else {
+          const rid = (rec.id as number) ?? (rec.recording_id as number) ?? m.id;
+          const master = await apiClient.getRecordingMaster(rid);
+          if (master?.raw_url) setMasterSrc(`/api/vexa${master.raw_url}`);
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // A not-found is "no recording yet"; anything else (401/403/500/schema) is a real, visible error.
+        if (/\b404\b|not found/i.test(msg)) {
+          /* genuine no-recording → empty state */
+        } else if (alive) {
+          setRecordingError(msg);
+        }
       }
 
-      if (!m.platform || !m.native_meeting_id) return; // can't open a live stream without the handle
+      if (!m.platform || !m.native_meeting_id) return;
 
       store = createMeetingState({
         apiClient,
         wsClientFactory,
         meeting: { platform: m.platform, native_id: m.native_meeting_id, id: m.id },
-        // seed the store with the REST status so a terminal/reopened meeting shows its real status
-        // immediately (live meeting.status frames still override it).
         initialStatus: m.status,
       });
       unsub = store.subscribe(onSnapshot);
@@ -130,18 +170,21 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
   }, [apiClient, meeting]);
 
-  if (error) return <div className="panel" style={{ color: "var(--bad)" }}>Error: {error}</div>;
-  if (!meeting) return <div className="panel muted">Loading meeting…</div>;
+  if (error)
+    return (
+      <Card className="border-destructive/50">
+        <CardContent className="text-destructive flex items-center gap-2 py-6 text-sm">
+          <AlertTriangle className="h-4 w-4" /> {error}
+        </CardContent>
+      </Card>
+    );
+  if (!meeting) return <div className="text-muted-foreground p-6 text-sm">Loading meeting…</div>;
 
   const status = snapshot?.status ?? meeting.status;
   const segments = snapshot?.segments ?? [];
   const chat: ChatMessage[] = (snapshot?.chat ?? []).map((c) => ({ sender: c.sender, text: c.text, is_from_bot: true }));
   const isLive = LIVE_STATUSES.has(status);
 
-  // Segment times can arrive as an ABSOLUTE unix epoch (the REST `start`), but the recording timeline
-  // is relative (0..duration). Map a clicked segment's start to a recording offset by anchoring on the
-  // EARLIEST segment (the recording's effective start) — robust even when meeting.start_time predates
-  // the audio. Already-relative values (< ~1e9) pass through unchanged.
   const segStarts = segments
     .map((s) => (typeof s.start_time === "number" ? s.start_time : parseFloat(String(s.start_time))))
     .filter((n) => Number.isFinite(n) && n > 0);
@@ -156,59 +199,65 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       : "";
 
   return (
-    <div>
-      <div className="panel" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <h2 style={{ margin: 0 }}>
-          {meeting.platform} · {meeting.native_meeting_id}
-        </h2>
-        <span className="status-pill" data-status={status}>{status}</span>
-        <span className="muted" style={{ marginLeft: "auto" }}>connection: {snapshot?.connection ?? "idle"}</span>
-        {isLive && (
-          <button className="btn danger" onClick={stopBot} disabled={stopping}>
-            {stopping ? "Stopping…" : "Stop bot"}
-          </button>
-        )}
-      </div>
-
-      <div className="detail-grid">
-        <div>
-          <div className="panel">
-            <h2>Transcript</h2>
-            <TranscriptViewer
-              segments={segments}
-              isLive={isLive}
-              playbackTime={playbackTime}
-              onSegmentClick={(startSeconds) => audioRef.current?.seekTo(toRecordingOffset(startSeconds))}
-            />
+    <div className="space-y-6">
+      <Card>
+        <CardContent className="flex flex-wrap items-center gap-3 py-4">
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight">{meeting.platform}</h1>
+            <p className="text-muted-foreground font-mono text-xs">{meeting.native_meeting_id}</p>
           </div>
-          <div className="panel">
-            <h2>Recording</h2>
-            {masterSrc ? (
-              <AudioPlayer ref={audioRef} src={masterSrc} onTimeUpdate={setPlaybackTime} />
-            ) : (
-              <p className="muted">No recording yet.</p>
+          <Badge variant={statusVariant(status)}>{status}</Badge>
+          <div className="ml-auto flex items-center gap-3">
+            <ConnectionDot connection={snapshot?.connection ?? "idle"} />
+            {isLive && (
+              <Button variant="destructive" size="sm" onClick={stopBot} disabled={stopping}>
+                <Square className="h-3.5 w-3.5" /> {stopping ? "Stopping…" : "Stop bot"}
+              </Button>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
+        <div className="space-y-6">
+          <Panel title="Transcript">
+            <div className="h-[28rem]">
+              <TranscriptViewer
+                segments={segments}
+                isLive={isLive}
+                playbackTime={playbackTime}
+                onSegmentClick={(startSeconds) => audioRef.current?.seekTo(toRecordingOffset(startSeconds))}
+              />
+            </div>
+          </Panel>
+          <Panel title="Recording">
+            {masterSrc ? (
+              <AudioPlayer ref={audioRef} src={masterSrc} onTimeUpdate={setPlaybackTime} />
+            ) : recordingError ? (
+              // DF4 — a recording-read failure is shown, not swallowed as "No recording yet".
+              <div className="text-destructive flex items-center gap-2 text-sm">
+                <AlertTriangle className="h-4 w-4" /> Couldn&apos;t load the recording: {recordingError}
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-sm">No recording yet.</p>
+            )}
+          </Panel>
         </div>
 
-        <div>
-          <div className="panel">
-            <h2>Status history</h2>
+        <div className="space-y-6">
+          <Panel title="Status history">
             <StatusHistory transitions={statusHistory} />
-          </div>
-          <div className="panel">
-            <h2>Live WS log</h2>
+          </Panel>
+          <Panel title="Live WS log">
             <WsEventLog events={wsLog} />
-          </div>
-          <div className="panel">
-            <h2>Chat</h2>
+          </Panel>
+          <Panel title="Chat">
             <ChatPanel messages={chat} isActive={isLive} />
-          </div>
+          </Panel>
           {isLive && (
-            <div className="panel">
-              <h2>Bot screen</h2>
+            <Panel title="Bot screen">
               <VncView vncUrl={vncUrl} title="Bot session" />
-            </div>
+            </Panel>
           )}
         </div>
       </div>

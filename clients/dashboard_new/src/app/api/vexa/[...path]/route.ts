@@ -54,6 +54,13 @@ async function proxyRequest(
   const { path } = await params;
   const pathString = path.join("/");
 
+  // DF3 — fail closed BEFORE any branch (esp. /meetings, which otherwise returns {meetings:[]} and makes
+  // an unauthenticated / misconfigured request indistinguishable from "no meetings"). No key at all
+  // (no cookie, no self-host key) → 401, not a misleading empty list.
+  if (!VEXA_API_KEY) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
   // /meetings list: primary source is GET /bots (DB — all statuses); fall back to running containers.
   if (pathString === "meetings" && method === "GET") {
     try {
@@ -104,9 +111,7 @@ async function proxyRequest(
     return NextResponse.json({ meetings });
   }
 
-  if (!VEXA_API_KEY) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-  }
+  // (auth already enforced above, before the /meetings branch — DF3)
 
   const searchParams = request.nextUrl.searchParams.toString();
   const url = `${VEXA_API_URL}/${pathString}${searchParams ? `?${searchParams}` : ""}`;

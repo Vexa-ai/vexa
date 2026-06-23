@@ -21,4 +21,8 @@ export const GOLDEN_REQUEST = {
   platform: "google_meet",
   native_meeting_id: "abc-defg-hij",
   bot_name: "Vexa",
+  // DF1 — the form now always sends the explicit recording/transcription toggles (default on), so the
+  // submitted request truthfully reflects what the bot will do.
+  recording_enabled: true,
+  transcribe_enabled: true,
 };

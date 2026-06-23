@@ -26,4 +26,14 @@ export interface CreateBotRequest {
   meeting_url?: string;
   /** The bot's display name in the participant list. */
   bot_name?: string;
+  /** DF1 — optional per-meeting knobs the api.v1 body + the api-client already accept (were
+   *  unreachable from the UI). Omitted from the request unless the user changes them from the default. */
+  /** STT language hint (e.g. "en", "es"); omit for auto-detect. */
+  language?: string;
+  /** "transcribe" (default) or "translate". */
+  task?: string;
+  /** Record the meeting to a playable master (default true on the backend). */
+  recording_enabled?: boolean;
+  /** Produce a live transcript (default true on the backend). */
+  transcribe_enabled?: boolean;
 }

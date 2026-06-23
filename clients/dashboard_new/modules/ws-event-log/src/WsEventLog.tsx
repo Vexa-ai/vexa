@@ -67,9 +67,9 @@ export function WsEventLog({ events, title = "WebSocket" }: WsEventLogProps): Re
         borderRadius: 12,
         overflow: "hidden",
         background: "#111111",
-        border: "1px solid #2a2a2a",
+        border: "1px solid var(--border, #2a2a2a)",
         fontFamily:
-          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace)",
         color: "#e5e7eb",
       }}
     >
