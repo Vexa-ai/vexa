@@ -82,6 +82,13 @@ async function main(): Promise<void> {
       !!seg && seg.start >= 0 && seg.end > seg.start && isFinite(seg.end), `${seg?.start}..${seg?.end}`);
     check('every published segment is transcript.v1-valid (ajv vs SSOT)',
       sink.published.length > 0 && sink.published.every((s) => !!validateSeg(s)), ajv.errorsText(validateSeg.errors));
+    // REGRESSION: the producer stamps a CANONICAL absolute_start_time (the wall clock) so no consumer
+    // re-derives it from `start` (a relative-offset assumption put timestamps ~56 years out — the 2082
+    // bug). It must be present AND equal the epoch `start`, not a meeting-start + start sum.
+    check('segment carries absolute_start_time == epoch(start) (no downstream re-derivation needed)',
+      !!seg?.absolute_start_time &&
+        Math.abs(new Date(seg.absolute_start_time).getTime() / 1000 - (seg.start ?? 0)) < 1,
+      `${seg?.absolute_start_time} vs start=${seg?.start}`);
   }
 
   // ── 2) two channels, overlapping turns: each transcribes independently, names stay bound ──

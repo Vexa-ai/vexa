@@ -51,6 +51,14 @@ export interface BotPipeline extends Pipeline {
 /** The lane segments are the SEALED transcript.v1 view — structurally identical to the bot's
  *  contracts.ts TranscriptSegment (same SSOT schema). Map defensively so a future drift in
  *  either view is a compile error here, not a silent wire mismatch. */
+/** The lanes time every segment on the WALL CLOCK: `start`/`end` are epoch seconds (windowStartMs/1000).
+ *  Stamp the canonical ISO `absolute_start_time` HERE, at the single producer chokepoint, so every
+ *  consumer (dashboard renderer, meeting-api transcript read) uses it DIRECTLY. Downstream must never
+ *  re-derive it from `start`: a relative-offset assumption (meeting_start + start) put timestamps ~56
+ *  years in the future. We own the producer, so we emit the truth once. */
+const isoFromEpochSeconds = (s: number | undefined): string | undefined =>
+  typeof s === "number" && Number.isFinite(s) && s > 0 ? new Date(s * 1000).toISOString() : undefined;
+
 function toBotSegment(seg: LaneSegment): TranscriptSegment {
   return {
     segment_id: seg.segment_id,
@@ -61,8 +69,8 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
     end: seg.end,
     language: seg.language ?? undefined,
     completed: seg.completed,
-    absolute_start_time: seg.absolute_start_time,
-    absolute_end_time: seg.absolute_end_time,
+    absolute_start_time: seg.absolute_start_time ?? isoFromEpochSeconds(seg.start),
+    absolute_end_time: seg.absolute_end_time ?? isoFromEpochSeconds(seg.end),
     source: seg.source,
     confidence: seg.confidence,
     words: seg.words,
