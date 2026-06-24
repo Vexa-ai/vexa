@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/unit.v1",
+  "title": "unit.v1",
+  "description": "The agent-runtime-unit invocation — the universal control-plane envelope that fires ANY unit (chat turn, scheduled routine, event worker, live in-meeting agent) as a runtime.v1 agent worker. Supersedes the meeting-shaped invoke.v1. It carries WHY the run fires (trigger), WHAT it is grounded in (context), WHO owns it (subject = the person = quota + cred-brokerage key), WHICH per-person workspace.v1 repo it commits to, the plan, the lifecycle, the output bus topic, and the scoped toolbelt — NEVER domain bytes (transcripts cross the meetings⊥agent seam as transcript.v1; emails/docs ride as an opaque context ref a tool resolves). The taxonomy (all four triggers + every optional field) is frozen so MVP stages only POPULATE it, never re-cut it. No tenancy beyond subject (ADR-0003).",
+  "$defs": {
+    "Trigger": {
+      "description": "Why the unit fires. message = a user turn (chat); scheduled = a runtime.v1/schedule.v1 cron fired (routine); event = an event-source published (e.g. email.received) (routine/worker); transcription = a live transcript stream beat (the in-meeting agent) or a session_end (post-meeting).",
+      "enum": ["message", "scheduled", "event", "transcription"]
+    },
+    "Lifecycle": {
+      "description": "oneshot = spawn → a turn or few → commit → stop (routines, event/post-meeting workers). warm = the container stays up across turns with --resume continuity (chat, the live in-meeting agent); runtime.v1 idleTimeoutSec reaps it when idle.",
+      "enum": ["oneshot", "warm"]
+    },
+    "OutputMode": {
+      "description": "How the unit emits on its output topic: sse = streamed chat deltas; card = a proactive-card.v1; notification = a lightweight nudge.",
+      "enum": ["sse", "card", "notification"]
+    },
+    "MeetingRef": {
+      "description": "Which meeting this unit is grounded in (context.kind=meeting) — referenced by id, never by importing meetings code (the meetings⊥agent boundary). The ids match transcript.v1.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "session_uid"],
+      "properties": {
+        "meeting_id": { "type": "string" },
+        "session_uid": { "type": "string" },
+        "platform": { "type": "string", "description": "e.g. google_meet | zoom | teams" }
+      }
+    },
+    "SourceRef": {
+      "description": "An OPAQUE reference to a non-meeting context source (an email, a doc, a generic uri) that a tool resolves — never the bytes. Keeps email/calendar/tasks as tools+event-sources, not platform domains.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri"],
+      "properties": {
+        "uri": { "type": "string", "description": "an opaque source uri, e.g. mailbox://user/INBOX/<id>" },
+        "etag": { "type": "string", "description": "optional version/etag for the source" }
+      }
+    },
+    "Context": {
+      "description": "What the unit is grounded in. `kind` is the discriminator; `none` is a bare chat with no external context.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["none", "meeting", "email", "generic"] },
+        "meeting": { "$ref": "#/$defs/MeetingRef" },
+        "ref": { "$ref": "#/$defs/SourceRef" }
+      }
+    },
+    "Plan": {
+      "description": "The unit's plan — a workspace path to a plan doc and/or an inline prompt. Chat carries a prompt; routines carry a plan ref.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string", "description": "a workspace path, e.g. plan/morning-brief.md" },
+        "prompt": { "type": ["string", "null"], "description": "free-text ask (chat) or inline plan" }
+      }
+    },
+    "Output": {
+      "description": "The unit's output bus binding — the ws.v1 per-unit topic the unit publishes on, and which modes it uses.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topic"],
+      "properties": {
+        "topic": { "type": "string", "description": "the ws.v1 per-unit topic, e.g. unit:<id>:out" },
+        "modes": { "type": "array", "items": { "$ref": "#/$defs/OutputMode" } }
+      }
+    },
+    "Invocation": {
+      "description": "One agent-runtime-unit invocation. The dispatcher emits it (from any trigger source) and agent-api turns it into a runtime.v1 agent worker.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger", "subject", "workspace_repo", "context"],
+      "properties": {
+        "trigger": { "$ref": "#/$defs/Trigger" },
+        "context": { "$ref": "#/$defs/Context" },
+        "subject": { "type": "string", "description": "identity.v1 subject = the PERSON = quota owner (VEXA_OWNER) + cred-brokerage key" },
+        "workspace_repo": { "type": "string", "description": "the per-person workspace.v1 git repo URL the unit commits to" },
+        "workspace_ref": { "type": "string", "default": "main", "description": "the branch the worker checks out" },
+        "plan": { "$ref": "#/$defs/Plan" },
+        "lifecycle": { "$ref": "#/$defs/Lifecycle", "default": "oneshot" },
+        "output": { "$ref": "#/$defs/Output" },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "the scoped toolbelt (tool.v1 names) granted to this invocation — the --allowedTools allow-set"
+        }
+      }
+    }
+  }
+}

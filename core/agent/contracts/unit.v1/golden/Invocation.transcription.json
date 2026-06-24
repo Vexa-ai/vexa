@@ -1,0 +1,11 @@
+{
+  "trigger": "transcription",
+  "subject": "u_jane",
+  "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
+  "context": {
+    "kind": "meeting",
+    "meeting": { "meeting_id": "abc-defg-hij", "session_uid": "sess-2026-06-24-1", "platform": "google_meet" }
+  },
+  "lifecycle": "warm",
+  "output": { "topic": "unit:meet-abc-defg-hij:out", "modes": ["card", "sse"] }
+}

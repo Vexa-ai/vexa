@@ -1,0 +1,10 @@
+{
+  "trigger": "event",
+  "subject": "u_jane",
+  "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
+  "context": { "kind": "email", "ref": { "uri": "mailbox://jane/INBOX/AAMkAGI2", "etag": "W/\"123\"" } },
+  "plan": { "ref": "plan/inbox-triage.md" },
+  "lifecycle": "oneshot",
+  "tools": ["gmail.read"],
+  "output": { "topic": "unit:u_jane-triage-9:out", "modes": ["card", "notification"] }
+}

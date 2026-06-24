@@ -1,0 +1,8 @@
+{
+  "trigger": "scheduled",
+  "subject": "u_jane",
+  "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
+  "context": { "kind": "none" },
+  "plan": { "ref": "plan/morning-brief.md" },
+  "lifecycle": "oneshot"
+}
