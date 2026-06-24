@@ -21,3 +21,12 @@ them unsealed (green-on-empty path), so the build stays green without a prematur
 *already-sealed* contracts (`ws.v1`, `api.v1` shapes, `identity.v1`) are **deferred to the MVP that
 needs them** and re-sealed then (`pnpm seal:contracts`, a `lane:contract` step). MVP0 chat streams SSE
 directly over the `/api/chat` HTTP response, so it needs no `ws.v1` change.
+
+## D3 — push past environmental pre-push gates with `--no-verify`
+The repo's pre-push hook runs the **full** `pnpm gates`, which includes heavy/environmental gates that
+can't pass on the Mac dev box and are unrelated to this work: `gate:compose` (needs the running stack —
+it's on bbb), `gate:licenses` (pre-existing `geist`/`lightningcss` classifications, shared with
+`dashboard_new`), and a few pre-existing `dashboard_new` `gate:readme` dirs. The correctness gates that
+matter here — `schema`, `contract-version`, `isolation`, `graph`, `python`, `node` — are green. I clean
+up the README dirs I introduce, then push with `git push --no-verify` (the bypass the hook itself
+documents) to sync the branch to bbb. The full stack-aware gate run happens on bbb.
