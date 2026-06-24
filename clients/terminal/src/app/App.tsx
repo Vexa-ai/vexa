@@ -14,7 +14,7 @@ import "../surfaces";
 const container = createContainer([
   reg(ContextKeyServiceId, () => createContextKeyService()),
   reg(CommandServiceId, (c) => createCommandService(c)),
-  reg(LayoutServiceId, () => createLayoutService("chat")),
+  reg(LayoutServiceId, () => createLayoutService()),
 ]);
 registry.commands().forEach((c) => container.get(CommandServiceId).register(c));
 

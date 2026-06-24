@@ -41,3 +41,26 @@ body {
   font-family: var(--sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/*
+ * dockview — map the docking engine's theme variables onto our palette so panels/tabs/sashes match
+ * the prototype. (theme={themeAbyss} applies .dockview-theme-abyss; we override its --dv-* vars.)
+ */
+.dockview-theme-abyss {
+  --dv-background-color: var(--bg);
+  --dv-group-view-background-color: var(--bg);
+  --dv-tabs-and-actions-container-background-color: var(--sidebar);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--t1);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--sidebar);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--t3);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--t3);
+  --dv-separator-border: var(--line);
+  --dv-tab-divider-color: var(--line);
+  --dv-active-sash-color: var(--accent);
+  --dv-icon-hover-background-color: var(--panel2);
+  --dv-context-menu-background-color: var(--panel);
+  --dv-floating-titlebar-background-color: var(--panel);
+  --dv-drag-over-background-color: var(--accentbg);
+  --dv-tabs-container-scrollbar-color: var(--line2);
+}

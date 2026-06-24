@@ -13,6 +13,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "dockview": "^7.0.2",
+    "dockview-react": "^7.0.2",
     "geist": "^1.3.1",
     "lucide-react": "^0.556.0",
     "next": "15.5.19",
