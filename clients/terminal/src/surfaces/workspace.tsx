@@ -25,7 +25,8 @@ async function selectFile(path: string) {
   ws.set((s) => ({ ...s, selected: path, content: null }));
   try {
     const r = await fetch(`/api/workspace/file?subject=${SUBJECT}&path=${encodeURIComponent(path)}`);
-    ws.set((s) => ({ ...s, content: r.ok ? (await r.json()).content : "(not found)" }));
+    const content = r.ok ? (await r.json()).content : "(not found)";
+    ws.set((s) => ({ ...s, content }));
   } catch {
     ws.set((s) => ({ ...s, content: "(error)" }));
   }
