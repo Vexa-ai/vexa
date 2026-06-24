@@ -1,0 +1,158 @@
+"""Foundation L2 tests — the unit dispatcher + the claude turn's post-write governance, over fakes.
+
+Proves the load-bearing guarantee offline: a tool-using model that writes a NON-conformant entity has
+its write rejected and reverted (the workspace.v1 gate can't be bypassed by the model), while a
+conformant write commits. Plus the unit.v1 seam validation and the stream-json normalization.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+
+from agent_api import contracts, dispatch
+from agent_api.config import load_settings
+from agent_api.decision_claude import parse_stream_json, run_unit_turn
+
+
+def _git(d: Path, *a: str) -> None:
+    subprocess.run(["git", *a], cwd=str(d), check=True, capture_output=True, text=True)
+
+
+def _init_repo(d: Path) -> None:
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    (d / "AGENT.md").write_text("seed\n")
+    _git(d, "add", "-A")
+    _git(d, "commit", "-q", "-m", "seed")
+
+
+def _entity(fm: dict, body: str = "body") -> str:
+    return "---\n" + yaml.safe_dump(fm, sort_keys=True).strip() + "\n---\n" + body
+
+
+GOOD = {"type": "person", "id": "jane-liu", "title": "Jane Liu"}
+BAD = {"title": "no type or id"}  # missing required type + id → workspace.v1 violation
+
+VALID_INV = {
+    "trigger": "message",
+    "subject": "u_jane",
+    "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
+    "context": {"kind": "none"},
+    "plan": {"prompt": "hi"},
+    "lifecycle": "warm",
+}
+
+
+# ── unit.v1 seam ─────────────────────────────────────────────────────────────
+
+def test_validate_unit_invocation_ok():
+    contracts.validate_unit_invocation(VALID_INV)  # must not raise
+
+
+def test_validate_unit_invocation_rejects_missing_subject():
+    bad = {k: v for k, v in VALID_INV.items() if k != "subject"}
+    with pytest.raises(Exception):
+        contracts.validate_unit_invocation(bad)
+
+
+# ── stream-json normalization ────────────────────────────────────────────────
+
+def test_parse_stream_json_normalizes():
+    lines = [
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hello"}]}}),
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Write", "input": {"path": "x"}, "id": "t1"}]}}),
+        json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}),
+        json.dumps({"type": "result", "subtype": "success", "result": "done", "session_id": "s1"}),
+        "not json — skipped",
+    ]
+    evs = list(parse_stream_json(lines))
+    assert [e["type"] for e in evs] == ["message-delta", "tool-call", "tool-result", "done"]
+    assert evs[0]["text"] == "hello"
+    assert evs[1]["tool"] == "Write" and evs[1]["callId"] == "t1"
+    assert evs[2]["ok"] is True
+    assert evs[3]["sessionId"] == "s1" and evs[3]["ok"] is True
+
+
+# ── the governance: conformant commits, non-conformant is reverted ───────────
+
+def test_run_unit_turn_commits_conformant(tmp_path: Path):
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _init_repo(repo)
+
+    def fake_exec(argv, cwd):  # the "model" writes a conformant entity via its tools, then finishes
+        f = Path(cwd) / "kg/entities/person/jane-liu.md"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(_entity(GOOD))
+        yield json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "wrote jane"}]}})
+        yield json.dumps({"type": "result", "subtype": "success", "result": "wrote jane", "session_id": "s1"})
+
+    evs = list(run_unit_turn(repo, "create jane", fake_exec))
+    assert any(e["type"] == "commit" for e in evs)
+    assert (repo / "kg/entities/person/jane-liu.md").exists()
+    log = subprocess.run(["git", "log", "--oneline"], cwd=str(repo), capture_output=True, text=True).stdout
+    assert "wrote jane" in log
+
+
+def test_run_unit_turn_rejects_and_reverts_nonconformant(tmp_path: Path):
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _init_repo(repo)
+    head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
+
+    def fake_exec(argv, cwd):  # the "model" writes a NON-conformant entity (missing type+id)
+        f = Path(cwd) / "kg/entities/person/bad.md"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(_entity(BAD))
+        yield json.dumps({"type": "result", "subtype": "success", "result": "x", "session_id": "s1"})
+
+    evs = list(run_unit_turn(repo, "create bad", fake_exec))
+    rejected = [e for e in evs if e["type"] == "rejected"]
+    assert rejected and rejected[0]["violations"], "non-conformant write must be rejected"
+    assert not any(e["type"] == "commit" for e in evs), "nothing may commit"
+    # the gate held: the bad file is gone and HEAD is unchanged
+    assert not (repo / "kg/entities/person/bad.md").exists()
+    head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
+    assert head_after == head_before
+
+
+# ── the dispatcher: unit.v1 → runtime.v1 spawn, quota keyed on the person ─────
+
+class _FakeRuntime:
+    def __init__(self):
+        self.spawned = []
+
+    def spawn(self, workload_id, profile, env):
+        self.spawned.append((workload_id, profile, env))
+        return workload_id
+
+    def await_done(self, workload_id, timeout_sec=0.0):
+        return "completed"
+
+
+def test_dispatcher_spawns_with_person_keyed_env():
+    settings = load_settings()
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(settings, rt)
+    wid = d.dispatch(VALID_INV)
+    assert wid and rt.spawned
+    _, profile, env = rt.spawned[0]
+    assert profile == settings.agent_profile
+    assert env["VEXA_OWNER"] == "u_jane"                       # quota axis = the person
+    assert env["VEXA_WORKSPACE_REPO"] == VALID_INV["workspace_repo"]
+    assert env["VEXA_UNIT_TRIGGER"] == "message"
+
+
+def test_dispatcher_rejects_nonconformant_invocation():
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(load_settings(), rt)
+    with pytest.raises(Exception):
+        d.dispatch({"trigger": "message"})  # missing required fields
+    assert not rt.spawned

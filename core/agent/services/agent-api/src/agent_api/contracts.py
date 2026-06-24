@@ -22,6 +22,7 @@ from referencing import Registry, Resource
 _TRANSCRIPT_SCHEMA = Path("meetings/contracts/transcript.v1/transcript.schema.json")
 _WORKSPACE_SCHEMA = Path("agent/contracts/workspace.v1/workspace.schema.json")
 _INVOKE_SCHEMA = Path("agent/contracts/invoke.v1/invoke.schema.json")
+_UNIT_SCHEMA = Path("agent/contracts/unit.v1/unit.schema.json")
 
 
 def _repo_root() -> Path:
@@ -84,3 +85,13 @@ def validate_entity_frontmatter(frontmatter: dict) -> None:
 def validate_invocation(payload: dict) -> None:
     """Validate an ``invoke.v1`` Invocation envelope (the trigger the bridge emits)."""
     _validator(_INVOKE_SCHEMA, "Invocation").validate(payload)
+
+
+# ── unit.v1 (PRODUCED — the universal unit-invocation envelope) ──────────────
+
+def validate_unit_invocation(payload: dict) -> None:
+    """Validate a ``unit.v1`` Invocation envelope (the universal trigger the dispatcher emits).
+
+    Supersedes ``invoke.v1`` for the unified unit: chat/routine/event/transcription all ride this.
+    """
+    _validator(_UNIT_SCHEMA, "Invocation").validate(payload)
