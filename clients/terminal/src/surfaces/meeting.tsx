@@ -95,9 +95,35 @@ function MeetingsList() {
       layout.openTab(meetingTab(live[0]));
     }
   }, [live, layout]);
+  // 'add bot from URL': send OUR bot into a meeting; the watcher attaches the copilot once it transcribes
+  const [url, setUrl] = useState("");
+  const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
+  const addBot = async () => {
+    const u = url.trim();
+    if (!u || sent === "sending") return;
+    setSent("sending");
+    try {
+      const r = await fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: u }) });
+      setSent(r.ok ? "ok" : "err");
+      if (r.ok) setUrl("");
+    } catch { setSent("err"); }
+    setTimeout(() => setSent(null), 4000);
+  };
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 6px" }}>meetings</div>
+      <div style={{ padding: "0 4px 10px" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addBot(); }}
+            placeholder="Paste a Google Meet link…" style={{ flex: 1, minWidth: 0, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 7, padding: "6px 8px", color: "var(--t1)", fontSize: 12, outline: "none" }} />
+          <button onClick={() => void addBot()} disabled={!url.trim() || sent === "sending"} title="Send the Vexa bot to this meeting"
+            style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent, #241008)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 10px", fontSize: 12, fontWeight: 600, cursor: url.trim() ? "pointer" : "default" }}>
+            {sent === "sending" ? "…" : "Add bot"}
+          </button>
+        </div>
+        {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
+        {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>Couldn&apos;t send — make sure it&apos;s a Google Meet link.</div>}
+      </div>
       {all.map((m) => (
         <div key={m.id} onClick={() => layout.openTab(meetingTab(m))} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>

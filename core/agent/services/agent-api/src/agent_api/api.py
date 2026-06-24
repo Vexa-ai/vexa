@@ -94,6 +94,16 @@ class MeetingStart(BaseModel):
     title: Optional[str] = None
 
 
+class MeetingBot(BaseModel):
+    """Send OUR self-hosted bot into a meeting from its URL — the terminal's 'add bot' box POSTs this;
+    agent-api forwards it to the gateway's POST /bots, and the transcription watcher then auto-attaches
+    the copilot once the bot starts transcribing (no per-meeting wiring)."""
+    model_config = {"extra": "forbid"}
+    url: str
+    bot_name: str = "Vexa EI"
+    language: str = "en"
+
+
 # The meeting copilot's start brief. The in-container worker drives per-beat extraction with its own
 # CARD_PROMPT; this is the envelope's entrypoint (continuity = the session file in the workspace).
 _MEETING_BRIEF = (
@@ -168,6 +178,37 @@ def create_app(
     def meetings_live():
         """The active meeting copilots — the terminal's live-meetings feed."""
         return {"meetings": live.list()}
+
+    @app.post("/api/meeting/bot", status_code=202)
+    def meeting_bot(body: MeetingBot):
+        """Send our self-hosted bot into the meeting at ``url`` (forwarded to the gateway's POST /bots).
+        The transcription watcher then sees the bot's transcript and attaches the copilot automatically."""
+        import os
+        import re
+        import urllib.error
+        import urllib.request
+
+        mt = re.search(r"meet\.google\.com/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})", body.url)
+        if not mt:
+            raise HTTPException(status_code=400, detail=f"not a Google Meet URL: {body.url!r}")
+        native_id = mt.group(1)
+        key = os.environ.get("VEXA_BOT_API_KEY", "")
+        if not key:
+            raise HTTPException(status_code=501, detail="bot launch not configured (VEXA_BOT_API_KEY unset)")
+        gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
+        req = urllib.request.Request(
+            gw + "/bots",
+            data=json.dumps({"platform": "google_meet", "native_meeting_id": native_id,
+                             "bot_name": body.bot_name, "language": body.language}).encode(),
+            method="POST", headers={"Content-Type": "application/json", "X-API-Key": key},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                res = json.loads(r.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            raise HTTPException(status_code=e.code, detail=f"bot launch failed: {e.read().decode()[:200]}")
+        return {"platform": "google_meet", "native_id": native_id,
+                "meeting_id": res.get("id"), "status": res.get("status")}
 
     @app.post("/api/chat")
     def chat(body: ChatBody):

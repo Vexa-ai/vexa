@@ -281,9 +281,13 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             card_turn=lambda segs: meeting_card_turn(work, segs, model=meeting_model), idle_ms=idle_ms,
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
+        # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are still governed
+        # (workspace.v1 revalidation + commit). Override with VEXA_CHAT_TOOLS (comma-separated).
+        chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
+                      or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch").split(",")
         serve(
             client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model),
+            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model, allowed_tools=chat_tools),
             start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
         )
 
