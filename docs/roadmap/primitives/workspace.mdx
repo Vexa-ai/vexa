@@ -1,0 +1,16 @@
+---
+title: "Workspace"
+description: "A git folder in a bucket, with an id and an access mode. Encrypted. Just files."
+---
+
+A **git folder stored in a bucket**, identified by `id`, mounted into a dispatch with an access **mode**
+(`ro`/`rw`). A dispatch mounts a **list** — typically `system` (ro) + `company` (ro) + `user` (rw).
+
+- **Just files.** Knowledge, plans, tasks, notes, and the agent's **session** are all files. We **do not
+  dictate structure** — not in code, not in a contract. git is the durable state *and* the undo.
+- **Encrypted at rest** — per-workspace **envelope encryption**; the data key is wrapped by a master key
+  the [Identity](/primitives/identity) layer brokers. Decrypted only inside the sandboxed container; keys
+  stay in-VPC for air-gap.
+- **Mounted, not cloned.** Running a dispatch mounts the folder at `/workspace`; the agent works in place.
+  `ro` is materialized read-only; `rw` syncs back.
+- The `mode` is the **source of truth for write access** — see [Governance](/architecture/governance).

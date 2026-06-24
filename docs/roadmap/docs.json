@@ -1,0 +1,50 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Vexa",
+  "theme": "mint",
+  "colors": { "primary": "#0d9488", "light": "#2dd4bf", "dark": "#0f766e" },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start here",
+        "pages": ["index"]
+      },
+      {
+        "group": "Core",
+        "pages": [
+          "core/meetings",
+          "core/agents",
+          "core/runtime"
+        ]
+      },
+      {
+        "group": "Concepts",
+        "pages": ["concepts"]
+      },
+      {
+        "group": "Capabilities",
+        "pages": [
+          "capabilities/knowledge-agent",
+          "capabilities/meeting-copilot",
+          "capabilities/ai-routines"
+        ]
+      },
+      {
+        "group": "API reference",
+        "pages": ["api/meetings", "api/agent"]
+      },
+      {
+        "group": "Deployment",
+        "pages": ["deployment"]
+      },
+      {
+        "group": "Roadmap",
+        "pages": [
+          "roadmap/approach",
+          "roadmap/stages",
+          "roadmap/status"
+        ]
+      }
+    ]
+  }
+}

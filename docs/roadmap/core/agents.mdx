@@ -1,0 +1,28 @@
+---
+title: "Agents"
+description: "A sandboxed CLI agent that works a person's knowledge like a developer works a codebase."
+---
+
+An **agent** is a CLI coding agent (Claude Code, Codex, …) given a [workspace](/concepts#workspace) and a
+job. It reads and writes Markdown files, runs tools, and commits — the same loop that disrupted software
+development, pointed at knowledge instead of code.
+
+## How an agent runs
+
+A trigger ([message, schedule, event, or a meeting](/concepts#scheduler)) dispatches an agent. The
+[runtime](/core/runtime) spawns it in an isolated [container](/concepts#container) with the workspace
+mounted; it works, commits, streams its output, and is reaped when idle. Continuity is a session **file**
+in the workspace, so a fresh container resumes instantly — nothing stays warm.
+
+The agent is **untrusted** by design (it is prompt-injectable). It carries a signed
+[identity](/concepts#identity) token that every boundary verifies; it never enforces anything itself, and
+never holds a raw credential.
+
+## Trusted vs untrusted input
+
+What an agent may do is set by where its input came from, enforced at the boundaries — never by the model:
+
+- **Trusted** (you, in chat) → the agent writes to the workspace directly; git is the undo.
+- **Untrusted** (an email, a web page) → the agent runs **propose-only**: it suggests actions
+  (record a task, draft a reply, send) as cards; a human approves, and trusted code applies them.
+  Irreversible effects (send, order) are always gated.

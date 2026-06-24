@@ -1,0 +1,58 @@
+---
+title: "Deployment"
+description: "Self-host Vexa with Docker Compose or Helm — air-gapped, with bring-your-own inference."
+---
+
+Vexa runs **in your own environment** — open-source, self-hostable, air-gappable. Data, recordings, and
+agent state stay on infrastructure you control.
+
+## Quick start (Docker Compose)
+
+Prerequisites: a Linux host (Ubuntu 24.04), Docker, `git`, `curl`.
+
+```bash
+curl -fsSL https://get.docker.com | sh
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+
+make lite     # single container, all services — quick evaluation / small teams
+# or
+make all      # full stack, each service in its own container — dev / production
+```
+
+Both prompt on first run for a **transcription (STT) token** — get one at `vexa.ai/account`, or self-host
+the transcription service on a GPU for a fully air-gapped install. The API is then at
+`http://localhost:8056` (the gateway); mint an API key via the admin API.
+
+## The stack
+
+| Service | Role |
+|---|---|
+| **gateway** (`:8056`) | the one front door — auth, scopes, routing |
+| **admin-api** | users + API keys |
+| **meeting-api** | bots, transcripts, **recordings** (to object storage) |
+| **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
+| **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
+| redis · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
+
+The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
+meeting (`BROWSER_IMAGE`) and an agent container per dispatch (`AGENT_IMAGE`), then reaps them.
+
+## Configuration
+
+- **Transcription (STT)** — `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Unset → bots
+  join and capture, but produce no transcript.
+- **Object storage** — MinIO (`MINIO_*`): meeting recordings and agent workspaces live in your bucket.
+- **Agent inference** — bring your own: point the agent at your endpoint so no inference leaves the
+  network (`VEXA_AGENT_MODEL` / mounted credentials).
+- **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB credentials. Set real values before exposing.
+
+## Air-gapped
+
+Everything runs in-VPC: gateway + services + redis/postgres/minio in your cluster, transcription on your
+own GPU, **BYO inference**, recordings in your object storage. **Zero egress** — the posture the regulated
+verticals require.
+
+## Kubernetes
+
+Production runs on **Helm** (`deploy/helm`) with built images and `global.imageTag`. The
+[runtime](/core/runtime) is orchestration-agnostic — the same container model, scheduled by Kubernetes.

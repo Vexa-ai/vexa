@@ -1,0 +1,42 @@
+---
+title: "Approach"
+description: "How we build — principles first, execution core before features, honest re-baselining."
+---
+
+The roadmap is **derived from the [principles](/foundations/principles)**, not bolted on. Three rules
+govern the order of work.
+
+## 1. The execution core comes before features
+Every feature is a [dispatch](/architecture/dispatch). If the dispatch model is wrong, every feature built
+on it is wrong. So the **isolated, runtime-spawned, generic-agent execution core** is built and proven
+*before* piling on capabilities.
+
+<Note>
+We learned this the hard way: early slices ran the agent **in the control plane** (no container) and
+baked domain objects (a mailbox) into the backend. Both violated the model. They were reverted and the
+core re-grounded — see [the model](/foundations/the-model) and the principle *isolation is the
+enforcement*.
+</Note>
+
+## 2. De-risk in dependency order
+Build the thing everything else depends on, prove it, then build on it:
+
+1. **Execution core** — [Runtime](/primitives/runtime) + generic [Agent](/primitives/agent) runner +
+   [Workspace](/primitives/workspace) mount + [Stream](/primitives/stream). *Prove: one dispatch = one
+   short-lived, isolated container, resuming from a session file.*
+2. **Trust** — [Identity](/architecture/identity-and-trust): SPIFFE workload identity + Keycloak token
+   exchange + the MCP Gateway. *Prove: every action is attributable + scoped.*
+3. **Triggers** — the [Scheduler](/primitives/scheduler) (time + event) and
+   [Integrations](/primitives/integration). *Prove: a non-human launcher dispatches under a signed grant.*
+4. **Capabilities** — chat, routines, integrations, [live meetings](/capabilities/live-meetings), org
+   knowledge — each a thin composition.
+5. **Enterprise** — SSO/SCIM, full air-gap, org-graph triage.
+
+## 3. Every stage is proven, not declared
+A stage is done only when it works **end-to-end** (backend + a real browser test against the live stack)
+*and* its claim is proven by a test at the altitude of the claim. "Done" is never a status we assign
+ourselves; it is a demo.
+
+<Card title="Where we are now" href="/roadmap/status">
+  Current state, honestly — what's built, what's mid-rebuild, what's next.
+</Card>

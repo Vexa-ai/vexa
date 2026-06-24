@@ -1,0 +1,9 @@
+---
+title: "Chat"
+description: "A now-dispatch over your workspace, streamed back."
+---
+
+Chat is a **`now` [dispatch](/architecture/dispatch)**: the message is the entry point, your
+[workspace](/primitives/workspace) is mounted `rw` (chat is **trusted** input), and the reply
+[streams](/primitives/stream) live. The same warm container serves the next turn (TTL keeps it until idle);
+continuity is the session file. No special path — chat is just the unit with a message trigger.

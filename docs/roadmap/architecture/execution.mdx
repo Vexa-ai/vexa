@@ -1,0 +1,14 @@
+---
+title: "Execution"
+description: "The agent runs in a runtime-spawned container, over a mounted workspace folder, resuming from a session file."
+---
+
+1. The [Scheduler](/primitives/scheduler) fires; agent-api asks the [Runtime](/primitives/runtime) to
+   spawn (it touches **no docker** itself).
+2. The container mounts the granted [workspaces](/primitives/workspace) at `/workspace` (no clone) + brokers
+   creds.
+3. The agent **resumes from the session file** in the rw folder (continuity is a file), runs the
+   [runner](/primitives/agent), and **commits freeform** changes.
+4. It emits events on its [Stream](/primitives/stream); the container is **reaped when idle**.
+
+The workspace folder (+ its session file) is the only durable state; the container is disposable.

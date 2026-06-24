@@ -1,0 +1,43 @@
+---
+title: "Meetings"
+description: "Attendance bots are browser containers on the same runtime — the existence proof for the whole model."
+---
+
+In Vexa, **a meeting is a first-class data source.** A bot joins the call, captures it natively in real
+time, and the transcript compiles into the [workspace](/primitives/workspace) alongside everything else —
+so the conversation becomes durable, queryable knowledge instead of vanishing.
+
+Mechanically, a meeting bot is a **browser container spawned by the [Runtime](/primitives/runtime)** — the
+same runtime an agent uses, which is why meetings are also the existence proof for the whole model.
+
+## Platforms
+
+Vexa joins natively, in real time:
+
+- [Google Meet](/capabilities/google-meet)
+- [Zoom](/capabilities/zoom)
+- [Microsoft Teams](/capabilities/teams)
+
+## How it works
+1. A bot is a `browser` [workload](/primitives/runtime) — a headless browser that **joins** the meeting
+   (Google Meet / Zoom / Teams).
+2. It captures audio; the **transcription workers** turn it into `transcript.v1` (streamed over a redis
+   Stream, `tc:meeting:{id}:mutable`).
+3. That transcript is the **meetings ⊥ agent seam**: agents consume `transcript.v1` *by schema*, never by
+   importing meeting code.
+
+## Why this matters for the model
+- **The runtime is proven in production.** Running agents as runtime-spawned containers is not a leap —
+  it is the same machinery the bots already use, with a different profile.
+- **Streaming is proven too.** The live transcript already flows over a redis Stream — exactly the
+  mechanism agent output uses (see [Streaming](/architecture/streaming)).
+- **Browser is a shared capability.** The same browser container that joins a meeting is available to an
+  agent as a normal [browser tool](/capabilities/browser) — "the agent browses the web" reuses the bot
+  stack.
+
+## What agents do with meetings
+- **Post-meeting**: a `transcript.completed` event fires a dispatch that writes notes/decisions/action
+  items as files in the [workspace](/primitives/workspace).
+- **Live in-meeting**: a dispatch the transcript stream keeps non-idle, emitting
+  [proactive cards](/architecture/governance) (new person, action item, decision) on its
+  [Stream](/primitives/stream). See [Live meetings](/capabilities/live-meetings).
