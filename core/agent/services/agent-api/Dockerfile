@@ -40,6 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY core/agent/services/agent-api/src ./src
 # The per-person workspace template (CLAUDE.md + conventions) the chat runner seeds new workspaces from.
 COPY core/agent/services/agent-api/workspace-seed ./workspace-seed
+# The unit toolbelt registry (tool.v1 + MCP launch specs) the ToolRegistry loads — the generic tool mechanism.
+COPY core/agent/services/agent-api/tools-seed ./tools-seed
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
 # walk-up (Path(__file__).resolve().parents → .../src/agent_api/... → /app) resolves
@@ -50,6 +52,7 @@ COPY core/agent/contracts/invoke.v1/invoke.schema.json             ./agent/contr
 COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json
 COPY core/agent/contracts/event.v1/event.schema.json               ./agent/contracts/event.v1/event.schema.json
+COPY core/agent/contracts/tool.v1/tool.schema.json                 ./agent/contracts/tool.v1/tool.schema.json
 
 EXPOSE 8100
 # uvicorn resolves the lazy PEP-562 `app` (agent_api.api:app), which wires the real RuntimeHttpClient

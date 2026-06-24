@@ -23,8 +23,8 @@ class _FakeRuntime:
 
 class _FakeRunner:
     def __init__(self): self.calls = []
-    def run(self, prompt, *, subject, session=None):
-        self.calls.append({"prompt": prompt, "subject": subject})
+    def run(self, prompt, *, subject, session=None, tools=()):
+        self.calls.append({"prompt": prompt, "subject": subject, "tools": list(tools)})
         yield {"type": "commit", "sha": "cafe"}
 
 

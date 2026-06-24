@@ -120,19 +120,23 @@ def build_argv(
     allowed_tools: Iterable[str] = (),
     session: Optional[str] = None,
     model: Optional[str] = None,
+    mcp_config: Optional[str] = None,
 ) -> list[str]:
     """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
 
     `--permission-mode acceptEdits` auto-accepts Read/Edit/Write so the turn runs fully headless; the
-    `--allowedTools` scope is the capability gate (no Bash — the model writes entities, the governance
-    layer in `run_unit_turn` does the git commit). The container sandbox + post-write re-validation are
-    the other two enforcement layers.
+    `--allowedTools` scope is the capability gate (the model writes entities, the governance layer in
+    `run_unit_turn` does the git commit). `--mcp-config <file>` + `--strict-mcp-config` attach EXACTLY
+    the unit's granted MCP tools (the toolbelt) and nothing else. The container sandbox + post-write
+    re-validation are the other two enforcement layers.
     """
     argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
             "--permission-mode", "acceptEdits"]
     tools = list(allowed_tools)
     if tools:
         argv += ["--allowedTools", ",".join(tools)]
+    if mcp_config:
+        argv += ["--mcp-config", mcp_config, "--strict-mcp-config"]
     if session:
         argv += ["--resume", session]
     if model:
@@ -148,6 +152,7 @@ def run_unit_turn(
     allowed_tools: Iterable[str] = ("Read", "Write", "Edit"),
     session: Optional[str] = None,
     model: Optional[str] = None,
+    mcp_config: Optional[str] = None,
     commit_message: Optional[str] = None,
 ) -> Iterator[dict]:
     """Run one claude turn over ``work_dir``, streaming normalized UnitEvents, then ENFORCE governance.
@@ -158,7 +163,7 @@ def run_unit_turn(
     never escape the contract gate.
     """
     work = Path(work_dir)
-    argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model)
+    argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model, mcp_config=mcp_config)
     done: Optional[dict] = None
     for ev in parse_stream_json(exec_claude(argv, str(work))):
         if ev.get("type") == "done":

@@ -29,8 +29,8 @@ class _FakeRunner:
     def __init__(self):
         self.calls = []
 
-    def run(self, prompt, *, subject, session=None):
-        self.calls.append({"prompt": prompt, "subject": subject})
+    def run(self, prompt, *, subject, session=None, tools=()):
+        self.calls.append({"prompt": prompt, "subject": subject, "tools": list(tools)})
         yield {"type": "message-delta", "text": "done"}
         yield {"type": "commit", "sha": "deadbeef"}
 
@@ -97,7 +97,7 @@ def test_firing_a_compiled_job_runs_the_unit_and_commits():
     uid = dispatcher.dispatch(job["request"]["body"])  # simulate the cron firing the request body
 
     assert uid.startswith("agent-")
-    assert runner.calls == [{"prompt": "do the brief", "subject": "u_jane"}]
+    assert runner.calls == [{"prompt": "do the brief", "subject": "u_jane", "tools": []}]
     assert dispatcher.dispatched and dispatcher.dispatched[0]["trigger"] == "scheduled"
 
 

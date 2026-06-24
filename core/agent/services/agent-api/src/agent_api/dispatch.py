@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
-from typing import Iterator, Optional, Protocol
+from typing import Iterable, Iterator, Optional, Protocol
 
 from . import contracts
 from .config import Settings
@@ -31,7 +31,9 @@ class UnitRunner(Protocol):
     runtime-spawned agent container — same as MVP0 chat. The runtime-workload spawn (per-person
     container isolation) stays the production target (see DECISIONS D5)."""
 
-    def run(self, prompt: str, *, subject: str, session: Optional[str] = None) -> Iterator[dict]: ...
+    def run(
+        self, prompt: str, *, subject: str, session: Optional[str] = None, tools: Iterable[str] = (),
+    ) -> Iterator[dict]: ...
 
 
 def build_unit_env(settings: Settings, invocation: dict) -> dict[str, str]:
@@ -112,11 +114,12 @@ class Dispatcher:
         uid = unit_id(invocation)
         subject = invocation["subject"]
         prompt = invocation["plan"]["prompt"]
+        tools = invocation.get("tools", [])
 
         def _drain() -> None:
             commit = None
             try:
-                for ev in self._local_runner.run(prompt, subject=subject):
+                for ev in self._local_runner.run(prompt, subject=subject, tools=tools):
                     if ev.get("type") == "commit":
                         commit = ev.get("sha")
             except Exception as e:  # noqa: BLE001 — a unit failure must not crash the dispatcher

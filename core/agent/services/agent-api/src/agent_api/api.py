@@ -15,7 +15,7 @@ so ``uvicorn agent_api.api:app`` wires the real adapters at startup.
 from __future__ import annotations
 
 import json
-from typing import Callable, Iterator, Optional, Protocol, runtime_checkable
+from typing import Callable, Iterable, Iterator, Optional, Protocol, runtime_checkable
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -41,6 +41,7 @@ class ChatRunner(Protocol):
         *,
         subject: str,
         session: Optional[str] = None,
+        tools: Iterable[str] = (),
     ) -> Iterator[dict]: ...
 
 
@@ -220,6 +221,7 @@ def _build_production_app() -> FastAPI:
     from .adapters import RuntimeHttpClient, SchedulerHttpClient
     from .chat_runner import SubprocessChatRunner
     from .config import load_settings
+    from .tools import ToolRegistry
 
     settings = load_settings()
     runtime = RuntimeHttpClient(settings.runtime_api_url)
@@ -228,6 +230,7 @@ def _build_production_app() -> FastAPI:
         settings.workspaces_dir,
         seed_dir=settings.workspace_seed_dir or None,
         model=settings.agent_model or None,
+        tool_registry=ToolRegistry.from_dir(settings.tools_seed_dir),
     )
     # Scheduled/event units with an inline prompt run in-container via the chat runner (the proven
     # MVP0/MVP1 path); the runtime-workload spawn stays the production isolation target (DECISIONS D5).

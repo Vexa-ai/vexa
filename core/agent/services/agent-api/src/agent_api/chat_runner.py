@@ -13,19 +13,29 @@ docker-exec'd) is the MVP1 hardening — see DECISIONS.md.
 from __future__ import annotations
 
 import itertools
+import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterable, Iterator, Optional
 
 from .decision_claude import run_unit_turn
+from .tools import ToolRegistry
 
 
 class SubprocessChatRunner:
-    def __init__(self, workspaces_dir: str, *, seed_dir: Optional[str] = None, model: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        workspaces_dir: str,
+        *,
+        seed_dir: Optional[str] = None,
+        model: Optional[str] = None,
+        tool_registry: Optional[ToolRegistry] = None,
+    ) -> None:
         self._root = Path(workspaces_dir)
         self._seed = Path(seed_dir) if seed_dir else None
         self._model = model
+        self._tools = tool_registry
 
     def _ensure_workspace(self, subject: str) -> Path:
         ws = self._root / subject
@@ -54,23 +64,45 @@ class SubprocessChatRunner:
         finally:
             proc.wait()
 
-    def _turn(self, ws: Path, prompt: str, session: Optional[str]) -> Iterator[dict]:
-        return run_unit_turn(str(ws), prompt, self._exec_claude, session=session, model=self._model)
+    def _turn(self, ws: Path, prompt: str, session: Optional[str], *, allowed_tools, mcp_config) -> Iterator[dict]:
+        return run_unit_turn(
+            str(ws), prompt, self._exec_claude,
+            allowed_tools=allowed_tools, session=session, model=self._model, mcp_config=mcp_config,
+        )
 
-    def run(self, prompt: str, *, subject: str, session: Optional[str] = None) -> Iterator[dict]:
+    def _grant(self, ws: Path, tools: Iterable[str]) -> tuple[list[str], Optional[str]]:
+        """Resolve the unit's toolbelt (unit.v1.tools) → (--allowedTools, an injected .mcp.json path).
+        The mcp config lives under .claude/ so it is never staged/committed by the governance layer."""
+        allowed = ["Read", "Write", "Edit"]
+        names = list(tools)
+        if self._tools is None or not names:
+            return allowed, None
+        grant = self._tools.resolve(names)
+        allowed += grant.allowed_tools
+        if not grant.has_mcp:
+            return allowed, None
+        (ws / ".claude").mkdir(parents=True, exist_ok=True)
+        mcp_path = ws / ".claude" / "mcp.json"
+        mcp_path.write_text(json.dumps(grant.mcp_config()))
+        return allowed, str(mcp_path)
+
+    def run(
+        self, prompt: str, *, subject: str, session: Optional[str] = None, tools: Iterable[str] = (),
+    ) -> Iterator[dict]:
         ws = self._ensure_workspace(subject)
         sess_file = ws / ".claude" / ".session"
         resume = session or (sess_file.read_text().strip() if sess_file.exists() else None)
+        allowed, mcp_config = self._grant(ws, tools)
         captured: Optional[str] = None
 
-        gen = self._turn(ws, prompt, resume)
+        gen = self._turn(ws, prompt, resume, allowed_tools=allowed, mcp_config=mcp_config)
         first = next(gen, None)
         # A stale --resume (e.g. the session store was lost on a container recreate) fails immediately:
         # the first event is a `done` with ok=false and no content. Drop the session and retry fresh.
         if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
             if sess_file.exists():
                 sess_file.unlink()
-            gen = self._turn(ws, prompt, None)
+            gen = self._turn(ws, prompt, None, allowed_tools=allowed, mcp_config=mcp_config)
             first = next(gen, None)
 
         stream = gen if first is None else itertools.chain([first], gen)

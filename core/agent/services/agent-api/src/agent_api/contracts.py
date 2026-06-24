@@ -25,6 +25,7 @@ _INVOKE_SCHEMA = Path("agent/contracts/invoke.v1/invoke.schema.json")
 _UNIT_SCHEMA = Path("agent/contracts/unit.v1/unit.schema.json")
 _ROUTINE_SCHEMA = Path("agent/contracts/routine.v1/routine.schema.json")
 _EVENT_SCHEMA = Path("agent/contracts/event.v1/event.schema.json")
+_TOOL_SCHEMA = Path("agent/contracts/tool.v1/tool.schema.json")
 
 
 def _repo_root() -> Path:
@@ -111,3 +112,10 @@ def validate_routine(payload: dict) -> None:
 def validate_event(payload: dict) -> None:
     """Validate an ``event.v1`` Event (the envelope the ingress maps to a unit.v1 Invocation)."""
     _validator(_EVENT_SCHEMA, "Event").validate(payload)
+
+
+# ── tool.v1 (the toolbelt/cred-governance descriptor) ────────────────────────
+
+def validate_tool(payload: dict) -> None:
+    """Validate a ``tool.v1`` Tool descriptor (name, grant auto|gate, transport, cred ref, barriers)."""
+    _validator(_TOOL_SCHEMA, "Tool").validate(payload)
