@@ -28,7 +28,18 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install "uvicorn[standard]==0.34.0"
 
+# Claude Code (the unit's model+tooling runtime) + git (the governance git ops). node 20 via nodesource
+# so claude-code resolves; the subscription credentials are bind-mounted read-only at runtime (compose),
+# never baked in (P15). MVP0 runs the turn in this container; per-person container isolation is MVP1.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    npm install -g @anthropic-ai/claude-code && \
+    apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY core/agent/services/agent-api/src ./src
+# The per-person workspace template (CLAUDE.md + conventions) the chat runner seeds new workspaces from.
+COPY core/agent/services/agent-api/workspace-seed ./workspace-seed
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
 # walk-up (Path(__file__).resolve().parents → .../src/agent_api/... → /app) resolves

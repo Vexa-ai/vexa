@@ -161,7 +161,14 @@ services:
       - VEXA_AGENT_API_PORT=8100
       - VEXA_RUNTIME_API_URL=http://runtime:8090
       - VEXA_AGENT_PROFILE=agent
+      - VEXA_WORKSPACES_DIR=/workspaces
+      - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      # The deployment's logged-in Claude subscription, bind-mounted READ-ONLY (never baked in — P15).
+      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
+      # Per-subject chat workspaces (MVP0: in the control-plane container; MVP1: per-person runtime units).
+      - agent-workspaces:/workspaces
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
       interval: 10s
@@ -261,6 +268,7 @@ volumes:
   redis-data:
   postgres-data:
   minio-data:
+  agent-workspaces:
 
 networks:
   vexa:

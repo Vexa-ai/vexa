@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     workspace_path: str = "/workspace"
     workspace_ref: str = "main"
 
+    # ── MVP0 chat runner — claude turn over a per-subject local git workspace ─
+    # The chat unit's per-person workspace dirs live here; seeded from the template (CLAUDE.md +
+    # conventions). The claude model alias/name (subscription default if empty).
+    workspaces_dir: str = "/workspaces"
+    workspace_seed_dir: str = "/app/workspace-seed"
+    agent_model: str = ""
+
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
     agent_identity_token: SecretStr = SecretStr("")

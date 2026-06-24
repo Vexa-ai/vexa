@@ -125,13 +125,18 @@ def create_app(
 # ── ASGI entrypoint (PEP 562) — `uvicorn agent_api.api:app` resolves this lazily ──────────────────
 def _build_production_app() -> FastAPI:
     from .adapters import RuntimeHttpClient
+    from .chat_runner import SubprocessChatRunner
     from .config import load_settings
 
     settings = load_settings()
     runtime = RuntimeHttpClient(settings.runtime_api_url)
     dispatcher = Dispatcher(settings, runtime)
-    # chat_runner stays None until MVP0 wires the docker-exec-into-the-warm-unit adapter (honest 501).
-    return create_app(dispatcher, chat_runner=None)
+    chat = SubprocessChatRunner(
+        settings.workspaces_dir,
+        seed_dir=settings.workspace_seed_dir or None,
+        model=settings.agent_model or None,
+    )
+    return create_app(dispatcher, chat_runner=chat)
 
 
 def __getattr__(name: str):

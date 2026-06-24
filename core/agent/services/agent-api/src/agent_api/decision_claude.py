@@ -121,8 +121,15 @@ def build_argv(
     session: Optional[str] = None,
     model: Optional[str] = None,
 ) -> list[str]:
-    """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`."""
-    argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"]
+    """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
+
+    `--permission-mode acceptEdits` auto-accepts Read/Edit/Write so the turn runs fully headless; the
+    `--allowedTools` scope is the capability gate (no Bash — the model writes entities, the governance
+    layer in `run_unit_turn` does the git commit). The container sandbox + post-write re-validation are
+    the other two enforcement layers.
+    """
+    argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+            "--permission-mode", "acceptEdits"]
     tools = list(allowed_tools)
     if tools:
         argv += ["--allowedTools", ",".join(tools)]
