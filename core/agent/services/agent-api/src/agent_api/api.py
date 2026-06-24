@@ -50,18 +50,26 @@ class _Sessions:
 
 
 class _LiveMeetings:
-    """In-memory registry of active meeting copilots — the terminal's 'live meetings' feed. The dev-tier
-    foundation; a real deployment derives liveness from the dispatcher / meeting-api. Keyed by session_uid;
-    the meeting-stream end (session_end) drops the entry."""
+    """In-memory registry of meeting copilots — the terminal's 'meetings' feed. Keyed by session_uid (the
+    native Meet code). A stopped/ended meeting is KEPT (``status='stopped'``) so the terminal can offer to
+    send the bot back; ``add`` (re)marks it live. The dev-tier foundation."""
 
     def __init__(self) -> None:
         self._by_uid: dict[str, dict] = {}
 
     def add(self, meeting: dict) -> None:
-        self._by_uid[meeting["session_uid"]] = meeting
+        m = dict(meeting)
+        m["status"] = "live"
+        self._by_uid[meeting["session_uid"]] = m
+
+    def stop(self, session_uid: str) -> None:
+        m = self._by_uid.get(session_uid)
+        if m:
+            m["status"] = "stopped"
 
     def drop(self, session_uid: str) -> None:
-        self._by_uid.pop(session_uid, None)
+        # the meeting ended — keep the row (stopped) so 'send the bot back' stays available
+        self.stop(session_uid)
 
     def list(self) -> list[dict]:
         return list(self._by_uid.values())
@@ -102,6 +110,13 @@ class MeetingBot(BaseModel):
     url: str
     bot_name: str = "Vexa EI"
     language: str = "en"
+
+
+class MeetingStop(BaseModel):
+    """Remove our bot from a meeting — forwarded to the gateway's DELETE /bots/{platform}/{native_id}."""
+    model_config = {"extra": "forbid"}
+    native_id: str
+    platform: str = "google_meet"
 
 
 # The meeting copilot's start brief. The in-container worker drives per-beat extraction with its own
@@ -209,6 +224,30 @@ def create_app(
             raise HTTPException(status_code=e.code, detail=f"bot launch failed: {e.read().decode()[:200]}")
         return {"platform": "google_meet", "native_id": native_id,
                 "meeting_id": res.get("id"), "status": res.get("status")}
+
+    @app.post("/api/meeting/stop", status_code=202)
+    def meeting_stop(body: MeetingStop):
+        """Remove our bot from the meeting (gateway DELETE /bots/{platform}/{native_id}) and mark the
+        meeting stopped in the feed so the terminal can offer to send the bot back."""
+        import os
+        import urllib.error
+        import urllib.request
+
+        key = os.environ.get("VEXA_BOT_API_KEY", "")
+        if not key:
+            raise HTTPException(status_code=501, detail="bot control not configured (VEXA_BOT_API_KEY unset)")
+        gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
+        req = urllib.request.Request(
+            f"{gw}/bots/{body.platform}/{body.native_id}", method="DELETE", headers={"X-API-Key": key},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20):
+                pass
+        except urllib.error.HTTPError as e:
+            if e.code != 404:  # 404 = already no active bot — still mark it stopped locally
+                raise HTTPException(status_code=e.code, detail=f"stop failed: {e.read().decode()[:200]}")
+        live.stop(body.native_id)
+        return {"native_id": body.native_id, "stopped": True}
 
     @app.post("/api/chat")
     def chat(body: ChatBody):

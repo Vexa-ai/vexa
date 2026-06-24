@@ -8,6 +8,7 @@ export interface TranscriptLine { t: string; speaker: string; text: string }
 export interface MeetingMock {
   id: string;
   session_uid?: string;       // set on a LIVE-backend meeting → the tab subscribes to the real Stream
+  native_id?: string;         // the native Meet code (real meetings) — used to stop / re-send the bot
   title: string;
   when: string;
   status: "live" | "past";

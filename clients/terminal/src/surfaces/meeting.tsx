@@ -109,6 +109,8 @@ function MeetingsList() {
     } catch { setSent("err"); }
     setTimeout(() => setSent(null), 4000);
   };
+  const stopBot = (m: MeetingMock) => void fetch("/api/meeting/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ native_id: m.native_id, platform: "google_meet" }) });
+  const sendBot = (m: MeetingMock) => void fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: `https://meet.google.com/${m.native_id}` }) });
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 6px" }}>meetings</div>
@@ -129,7 +131,10 @@ function MeetingsList() {
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
-            <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400 }}>{m.title}</span>
+            <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.title}</span>
+            {m.native_id && (m.status === "live"
+              ? <button title="Remove the bot from this meeting" onClick={(e) => { e.stopPropagation(); stopBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--live)", color: "var(--live)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Stop</button>
+              : <button title="Send the bot back to this meeting" onClick={(e) => { e.stopPropagation(); sendBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--accent)", color: "var(--accent)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Send</button>)}
           </div>
           <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
         </div>

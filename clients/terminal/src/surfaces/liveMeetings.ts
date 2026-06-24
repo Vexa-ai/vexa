@@ -6,19 +6,21 @@
 import { useSyncExternalStore } from "react";
 import type { MeetingMock } from "./mock";
 
-interface LiveMeetingDTO { meeting_id: string; session_uid: string; platform: string; title: string }
+interface LiveMeetingDTO { meeting_id: string; session_uid: string; platform: string; title: string; native_id?: string; status?: string }
 
 let meetings: MeetingMock[] = [];
 const subs = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
 function toMock(d: LiveMeetingDTO): MeetingMock {
+  const stopped = d.status === "stopped";
   return {
     id: d.meeting_id,
     session_uid: d.session_uid,
+    native_id: d.native_id ?? d.meeting_id,
     title: d.title || `${d.platform} · ${d.meeting_id}`,
-    when: "Now · live",
-    status: "live",
+    when: stopped ? "Stopped" : "Now · live",
+    status: stopped ? "past" : "live",
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     participants: [],
     mentioned: [],
@@ -34,7 +36,7 @@ async function poll() {
     const { meetings: list } = (await r.json()) as { meetings: LiveMeetingDTO[] };
     const next = (list || []).map(toMock);
     // only re-render when the set of live meetings actually changes (id+session_uid)
-    const key = (m: MeetingMock[]) => m.map((x) => `${x.id}|${x.session_uid}`).join(",");
+    const key = (m: MeetingMock[]) => m.map((x) => `${x.id}|${x.session_uid}|${x.status}`).join(",");
     if (key(next) !== key(meetings)) {
       meetings = next;
       subs.forEach((f) => f());
