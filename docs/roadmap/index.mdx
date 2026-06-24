@@ -1,36 +1,23 @@
 ---
-title: "Vexa"
-description: "An AI-first knowledge-worker terminal — Claude Code × Outlook, on meeting bots and an agentic runtime."
+title: "An open-source AI runtime that turns meetings and emails into executable knowledge via sandboxed agents."
+sidebarTitle: "Overview"
 ---
 
-Vexa is an **AI-first knowledge-worker terminal**: think *Claude Code × Outlook*, with a full backend
-of meeting bots and an agentic runtime. This site explains **what we are building and why** — from base
-principles, through the primitives, to how every feature is just those primitives composed.
-
-## The one idea
-
-There is exactly **one runtime object: a dispatch** — one run of an agent, in an isolated container,
-over a person's files. A chat turn, a scheduled routine, an email worker, and the live in-meeting agent
-are the *same* object, differing only in **what triggered it**, **which files it sees**, and **what it's
-allowed to do**. Everything else is a **file**, a **tool**, a **trigger**, or **plumbing**.
-
-<CardGroup cols={2}>
-  <Card title="Why we build it this way" href="/foundations/principles">
-    The tenets and the reasoning behind them.
+<CardGroup cols={1}>
+  <Card title="Meetings as the first-class source of knowledge" icon="video" horizontal>
+    [Meetings](/core/meetings) are the richest source of context for enterprise intelligence — and they
+    vanish if uncaptured. Vexa captures transcripts from [Google Meet](/core/meetings),
+    [Zoom](/core/meetings), and [Microsoft Teams](/core/meetings) in real time, natively.
   </Card>
-  <Card title="The model" href="/foundations/the-model">
-    One object; the rest is files / tools / triggers.
+  <Card title="Knowledge as code" icon="code" horizontal>
+    AI totally disrupted software development; knowledge work is next. To an LLM, any text is a token.
+    Vexa parses your meetings and emails into a living, Markdown-based
+    [workspace](/concepts#workspace). [Agents](/core/agents) treat this continuous wiki as their working
+    directory — reading from and writing to it natively, just like a developer navigating a codebase.
   </Card>
-  <Card title="The seven primitives" href="/primitives/overview">
-    Workspace · Agent · Runtime · Scheduler · Integration · Stream · Identity.
-  </Card>
-  <Card title="The roadmap" href="/roadmap/approach">
-    How we get there, derived from the principles.
+  <Card title="A CLI agent is all you need — sandboxed and scalable" icon="terminal" horizontal>
+    A CLI agent on a Linux machine is all you need to build software. Vexa scales that execution model to
+    enterprise infrastructure — safely — by sandboxing [agents](/core/agents) into
+    [containers](/concepts#container).
   </Card>
 </CardGroup>
-
-## It already half-exists
-
-The agentic runtime is **not a leap** — Vexa's **meeting bots are browser containers spawned by the
-exact runtime an agent uses**. Same machinery, different workload type. See
-[Meetings](/capabilities/meetings) and the [Runtime](/primitives/runtime).

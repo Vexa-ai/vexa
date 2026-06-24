@@ -8,15 +8,20 @@ description: "Where we are — honestly."
 **Proven in production (pre-existing Vexa):** the [Runtime](/primitives/runtime) (meeting bots are browser
 workloads), transcription → `transcript.v1`, redis [streaming](/architecture/streaming).
 
+**Built & proven live — the dispatch core (M1):** a [`unit.v1` dispatch](/primitives/overview) runs in a
+**runtime-spawned, isolated container** (the generic-agent worker), over a **bind-mounted
+[workspace](/primitives/workspace)**, carrying a **per-dispatch signed [identity](/primitives/identity)
+token**, streaming UnitEvents on `unit:<id>:out` → SSE. The **in-process path is retired** (agents never
+run in the control plane). **Chat memory is durable** — session + transcript are saved in the workspace,
+so a fresh container resumes the conversation. Verified end-to-end on docker and through the terminal
+chat. See [Execution](/architecture/execution).
+
 **Designed & frozen (this site):** the [seven primitives](/primitives/overview), the
 [identity layer](/architecture/identity-and-trust) (kagenti-aligned), the
 [governance model](/architecture/governance).
 
-**In rebuild:** the **execution core** — moving the agent OUT of the control plane into runtime-spawned,
-isolated, generic-agent containers (the earlier in-process slices were reverted; see
-[approach](/roadmap/approach)).
-
 **Sound and kept:** the terminal workbench + surfaces, the generic event ingress, the generic tool
 mechanism, the redis scheduler.
 
-**Next:** draw the contracts against the frozen primitives, then build the execution core (stage 1).
+**Next:** finish M1 — the bucket-backed (minio) [workspace](/primitives/workspace) store + warm-reuse
+(`touch` / idle-enforcer). Then M2 — the [live meeting](/capabilities/live-meetings) dispatch.

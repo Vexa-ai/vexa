@@ -45,3 +45,12 @@ The runtime maps a **profile → image**. Today that already includes more than 
 runtime-spawned containers" is the *same machinery*, a different profile. The same browser workload is also
 available to agents as a normal [browser tool](/capabilities/browser).
 </Note>
+
+## Implemented
+
+The `agent` profile runs the in-container worker (`python -m agent_api.worker`). On spawn the backend
+**bind-mounts** the granted workspace folder at `/workspace` and **brokers the model credential** (a
+Claude creds file mounted read-only — the [quorum] pattern — or an API key), both kept out of the
+dispatch envelope. The worker **self-reaps on idle** (its input-Stream read times out → the process
+exits → the container stops), with the kernel's idle-enforcer as the backstop. Code:
+`core/runtime/src/runtime_kernel/docker_backend.py` + `…/profiles.py`.

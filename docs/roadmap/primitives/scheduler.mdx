@@ -15,3 +15,11 @@ It fires on three kinds of trigger:
 The set of entries is the **user-manageable schedule** — what [routines](/capabilities/routines) edit. A
 dispatch entry carries `(subject, launcher, entry-point)`; on fire it asks the
 [Runtime](/primitives/runtime) to spawn.
+
+## Implemented
+
+Every trigger funnels through one fan-in — the agent-api `Dispatcher` — which validates the `unit.v1`
+envelope, mints the [identity](/primitives/identity) token, and spawns the container. The **in-process
+path is retired**: agents never run in the control plane, so even a chat turn is a real container
+[spawn](/architecture/execution). Code: `agent_api.dispatch.Dispatcher` + `agent_api.units` (the one
+envelope builder).

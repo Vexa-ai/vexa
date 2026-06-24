@@ -13,3 +13,11 @@ Stream** keyed `unit:<dispatch_id>:out`.
 - Used by [chat](/capabilities/chat) (live reply), [live meetings](/capabilities/live-meetings) (cards),
   and as the audit-grade record of any dispatch. Same mechanism Vexa already uses for
   [meeting transcripts](/capabilities/meetings).
+
+## Implemented
+
+The worker `XADD`s normalized UnitEvents — `message-delta` · `tool-call` · `tool-result` · `commit` ·
+`turn-complete` — to `unit:<id>:out`; agent-api's `RedisStreamReader` relays them as **SSE** today (the
+gateway exposes the same Stream over `ws.v1`). The Stream is **duplex**: interactive follow-up messages
+to a live dispatch ride a symmetric `unit:<id>:in`. Code: `agent_api.worker` (out) +
+`agent_api.adapters.RedisStreamReader` (relay).

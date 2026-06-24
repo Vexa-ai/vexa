@@ -30,6 +30,22 @@ dispatch = {
 // derived, not stored:  trust = (all workspaces ro && irreversible tools gated);  output = unit:<id>:out
 ```
 
+This is the **`unit.v1`** contract — the one envelope every trigger emits. A chat *now*-dispatch:
+
+```json
+{
+  "identity":   { "subject": "u_jane", "launcher": "user:u_jane" },
+  "runner":     "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "rw" } ],
+  "trigger":    "message",
+  "context":    { "kind": "none" },
+  "start":      { "entrypoint": { "inline": "summarize my open tasks" } }
+}
+```
+
+The Runtime injects the minted `identity.token` at spawn; `output` (`unit:<id>:out`) and `trust` are
+**derived, never stored**. Contract: `core/agent/contracts/unit.v1/`.
+
 ## Not primitives (they are *made of* these)
 
 - **Plan** = an entry point — a file path or inline task (a [Workspace](/primitives/workspace) concern).

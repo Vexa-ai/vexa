@@ -15,3 +15,18 @@ attributable and authorized. Full detail in [Identity & trust](/architecture/ide
 
 Adopts the **[kagenti](https://github.com/kagenti/kagenti)** stack: SPIFFE/SPIRE + Keycloak (RFC 8693
 token exchange) + an Envoy MCP Gateway.
+
+## Implemented — the per-dispatch token
+
+The dispatcher mints a signed token at dispatch time; the worker only **carries** it; every boundary
+re-derives authority from the **verified claims**, so a prompt-injected agent can't exceed its grant:
+
+```text
+claims = { sub, lch, ws:[{id, mode}], tools:[name], iat, exp }     # identity.v1 DispatchClaims
+  may_mount(id, "rw")  → true only where the token granted rw      # the workspace-store boundary
+  may_call(tool)       → true only where the token granted it      # the MCP-gateway boundary
+```
+
+Dev tier signs with a shared key (HS256) behind the same `mint`/`verify` interface k8s fills with
+**SPIRE + Keycloak**. Code: `core/identity/src/identity_core/dispatch_tokens.py` (+ the
+`DispatchClaims` shape in `core/identity/contracts/identity.v1/`).

@@ -1,0 +1,79 @@
+---
+title: "Agent API"
+description: "The control plane — dispatch a unit, stream a chat turn, manage routines, read the workspace."
+---
+
+The agent API is Vexa's **control plane**. It turns triggers into [dispatches](/core/agents) and streams
+their output; it does no execution itself — it validates and hands off to the [runtime](/core/runtime).
+Endpoints are fronted by the gateway, which carries authentication and per-route scopes; the service
+itself is internal.
+
+## Health
+
+```bash GET /health
+curl "$AGENT_API/health"   # → {"status":"ok","checks":{"dispatcher":true}}
+```
+
+## Dispatch a unit
+
+`POST /invocations` — the sink every trigger funnels through. Body is a `unit.v1` Invocation; it is
+validated and dispatched to the runtime. `400` if the envelope is non-conformant.
+
+```bash POST /invocations  → 202
+curl -X POST "$AGENT_API/invocations" -H "Content-Type: application/json" -d '{
+  "trigger":"scheduled","subject":"u_jane","workspace_repo":"local:u_jane",
+  "context":{"kind":"generic"},"plan":{"prompt":"Summarize overnight activity."}
+}'   # → {"workload_id":"agent-..."}
+```
+
+## Chat (streamed)
+
+`POST /api/chat` — body `{ prompt, subject, session? }`. Returns **Server-Sent Events**; each `data:`
+line is one frame:
+
+| frame | fields |
+|---|---|
+| `message-delta` | `text` |
+| `tool-call` | `tool`, `args`, `callId` |
+| `tool-result` | `callId`, `ok`, `summary` |
+| `commit` | `sha` |
+| `rejected` | `violations` |
+| `done` | `reply`, `sessionId`, `ok` |
+
+```bash POST /api/chat  (SSE)
+curl -N -X POST "$AGENT_API/api/chat" -H "Content-Type: application/json" \
+  -d '{"prompt":"Record that Acme renewed.","subject":"u_jane"}'
+```
+
+`POST /api/chat/reset` `{ subject, session }` → `{ "ok": true }` · `GET /api/sessions?subject=` →
+`{ "sessions": [...] }`.
+
+## Routines
+
+```bash POST /api/routines  → 201
+curl -X POST "$AGENT_API/api/routines" -H "Content-Type: application/json" -d '{
+  "subject":"u_jane","name":"Morning brief","cron":"0 8 * * 1-5",
+  "prompt":"Brief me from overnight activity.","run_now":true
+}'   # → {"routine":{...},"job_id":"job_...","ran_now":true}
+```
+
+`GET /api/routines?subject=` → `{ "routines": [...] }` ·
+`DELETE /api/routines/{routine_id}?subject=` → `{ "ok": true, "routine_id": "..." }`.
+
+## Events
+
+`POST /events` — body is an `event.v1` Event (an integration firing). It maps to a `unit.v1` Invocation
+and dispatches. `400` if non-conformant; `422` if the event carries no plan.
+
+```bash POST /events  → 202
+curl -X POST "$AGENT_API/events" -H "Content-Type: application/json" -d '{
+  "name":"email.received","subject":"u_jane",
+  "source":{"uri":"mailbox://u_jane/INBOX/AB12CD"},
+  "plan":{"prompt":"Triage this email into tasks."}
+}'   # → {"workload_id":"agent-...","trigger":"event"}
+```
+
+## Workspace (read)
+
+`GET /api/workspace/tree?subject=` → `{ "files": ["kg/entities/..."] }` ·
+`GET /api/workspace/file?subject=&path=` → `{ "path": "...", "content": "..." }` (`404` if absent).

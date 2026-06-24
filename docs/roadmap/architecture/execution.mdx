@@ -12,3 +12,28 @@ description: "The agent runs in a runtime-spawned container, over a mounted work
 4. It emits events on its [Stream](/primitives/stream); the container is **reaped when idle**.
 
 The workspace folder (+ its session file) is the only durable state; the container is disposable.
+
+## Implemented — the live path
+
+A dispatch **is** the in-container worker `agent_api.worker`. The Runtime injects everything it needs as
+env + a bind-mount, and the worker drives the [runner](/primitives/agent) over the mounted folder:
+
+```text
+trigger → Scheduler → Runtime spawns the `agent` container  (CMD: python -m agent_api.worker)
+  ├─ bind-mounts the workspace folder at /workspace          (ported in, not cloned)
+  ├─ injects the signed dispatch token + REDIS_URL + the unit:<id>:in / unit:<id>:out topics + `start`
+  └─ brokers the model credential                            (never in the dispatch envelope)
+worker → one governed turn:  runner → workspace.v1 re-validate → git commit
+  ├─ XADD each UnitEvent to unit:<id>:out                    (the Stream)
+  └─ block on unit:<id>:in for the next message; idle ⇒ exit ⇒ container reaped  (TTL-on-idle)
+```
+
+**Continuity is files in the workspace.** Both the session id (`.claude/.session`) **and the chat
+transcript** are saved in the folder — claude-code's transcript dir is symlinked into
+`<workspace>/.claude/projects` — so a fresh container [resumes](/primitives/workspace) the same
+conversation from the durable git folder, no warm container needed.
+
+<Note>Proven end-to-end on docker: a `unit.v1` dispatch → isolated `vexa-agent-<id>` container → a real
+claude turn → a `workspace.v1`-governed commit → events on `unit:<id>:out`. Code:
+`core/agent/services/agent-api/src/agent_api/worker.py` (the harness),
+`core/runtime/src/runtime_kernel/docker_backend.py` (mount + credential brokering).</Note>

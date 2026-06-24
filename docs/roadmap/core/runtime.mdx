@@ -1,0 +1,28 @@
+---
+title: "Runtime"
+description: "Isolated, ephemeral containers — the execution substrate, already proven by the meeting bots."
+---
+
+The **runtime** spawns, reuses, and reaps the [containers](/concepts#container) that agents (and meeting
+bots) run in. It is the only thing that touches the orchestrator; the control plane just asks it to run a
+dispatch.
+
+## Why it exists: safety
+
+An agent is an untrusted, tool-using process operating on sensitive data. So every dispatch runs
+**isolated** (its own container), **sandboxed** (no egress except through brokered tools), and scoped to
+**only the workspaces and tools it was granted**. Isolation is what makes the governance real rather than
+advisory — which is why agents never run in the control plane.
+
+## One lifecycle, one substrate
+
+- **TTL-on-idle** — a container lives while it works and is reaped when idle. No warm/oneshot
+  bookkeeping; continuity is the [session file in the workspace](/concepts#workspace).
+- **Orchestration-agnostic** — Docker for dev, Kubernetes for production, behind one interface.
+- **Sub-second, ephemeral, thousands in parallel** — the single-machine coding-agent model, made
+  multi-tenant and cheap.
+
+## Already in production
+
+Vexa's [meeting bots](/core/meetings) are browser containers spawned by this exact runtime. Running
+agents this way is the same machinery, a different workload type — not a new system to stand up.

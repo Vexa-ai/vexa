@@ -3,7 +3,6 @@
   "name": "Vexa",
   "theme": "mint",
   "colors": { "primary": "#0d9488", "light": "#2dd4bf", "dark": "#0f766e" },
-  "favicon": "/favicon.svg",
   "navigation": {
     "groups": [
       {
@@ -11,49 +10,32 @@
         "pages": ["index"]
       },
       {
-        "group": "Foundations",
+        "group": "Core",
         "pages": [
-          "foundations/vision",
-          "foundations/principles",
-          "foundations/the-model"
+          "core/meetings",
+          "core/agents",
+          "core/runtime"
         ]
       },
       {
-        "group": "Primitives",
-        "pages": [
-          "primitives/overview",
-          "primitives/workspace",
-          "primitives/agent",
-          "primitives/runtime",
-          "primitives/scheduler",
-          "primitives/integration",
-          "primitives/stream",
-          "primitives/identity"
-        ]
-      },
-      {
-        "group": "Architecture",
-        "pages": [
-          "architecture/dispatch",
-          "architecture/execution",
-          "architecture/identity-and-trust",
-          "architecture/governance",
-          "architecture/streaming"
-        ]
+        "group": "Concepts",
+        "pages": ["concepts"]
       },
       {
         "group": "Capabilities",
         "pages": [
-          "capabilities/overview",
-          "capabilities/chat",
-          "capabilities/routines",
-          "capabilities/knowledge",
-          "capabilities/integrations",
-          "capabilities/meetings",
-          "capabilities/browser",
-          "capabilities/live-meetings",
-          "capabilities/org-knowledge"
+          "capabilities/knowledge-agent",
+          "capabilities/meeting-copilot",
+          "capabilities/ai-routines"
         ]
+      },
+      {
+        "group": "API reference",
+        "pages": ["api/meetings", "api/agent"]
+      },
+      {
+        "group": "Deployment",
+        "pages": ["deployment"]
       },
       {
         "group": "Roadmap",

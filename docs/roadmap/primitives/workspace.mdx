@@ -14,3 +14,14 @@ A **git folder stored in a bucket**, identified by `id`, mounted into a dispatch
 - **Mounted, not cloned.** Running a dispatch mounts the folder at `/workspace`; the agent works in place.
   `ro` is materialized read-only; `rw` syncs back.
 - The `mode` is the **source of truth for write access** — see [Governance](/architecture/governance).
+
+## Implemented — chats live here too
+
+Continuity is a file. A chat dispatch saves both the **session id** (`.claude/.session`) and the full
+**conversation transcript** in the workspace — the runner's transcript dir is symlinked into
+`<workspace>/.claude/projects` — so a freshly-spawned container **resumes the conversation from the
+workspace**, no warm container needed. Anything the agent should remember (facts, notes, decisions) it
+writes as files here and they commit. Code: `agent_api.worker._link_chat_into_workspace`.
+
+<Note>Verified: "my name is jagujagu" → committed `notes/user.md`; a brand-new container then answered
+"what is my name?" with "Your name is jagujagu" — resumed purely from the workspace.</Note>

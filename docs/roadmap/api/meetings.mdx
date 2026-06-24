@@ -1,0 +1,117 @@
+---
+title: "Meetings API"
+description: "Send a bot to a meeting, get the real-time transcript, manage the bot, retrieve per-speaker audio."
+---
+
+The Meetings API sends a bot into a call and returns its transcript in real time. It is the public Vexa
+API — the same surface whether you use the hosted service or self-host.
+
+## Base URL & auth
+
+| | |
+|---|---|
+| Hosted | `https://api.cloud.vexa.ai` |
+| Self-hosted | `http://localhost:8056` (the gateway) |
+
+Every request carries your key:
+
+```bash
+-H "X-API-Key: <API_KEY>"
+```
+
+## Platforms
+
+Pass one of these as `platform`:
+
+| Platform | `platform` value |
+|---|---|
+| Google Meet | `google_meet` |
+| Zoom | `zoom` |
+| Microsoft Teams | `teams` |
+
+The bot joins like any participant — no plugins, no host configuration.
+
+## Send a bot to a meeting
+
+<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
+<ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
+<ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
+<ParamField body="language" type="string">ISO code (e.g. `en`); omit to auto-detect.</ParamField>
+<ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
+
+```bash POST /bots
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa","language":"en"}'
+```
+
+## Get the transcript
+
+```bash GET /transcripts/{platform}/{native_meeting_id}
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/transcripts/google_meet/abc-defg-hij"
+```
+
+```json Response
+{
+  "segments": [
+    {
+      "segment_id": "sess_9c2a:spk1:12400",
+      "speaker": "Jane Liu",
+      "text": "Let's lock the renewal pricing by July 1.",
+      "start": 12.4, "end": 15.1,
+      "language": "en",
+      "completed": true,
+      "confidence": 0.93,
+      "words": [{ "word": "Let's", "start": 12.4, "end": 12.6, "probability": 0.98 }]
+    }
+  ]
+}
+```
+
+Segments stream in while the meeting runs — poll this endpoint, or subscribe over **WebSocket** for live,
+per-segment updates. Live drafts arrive as `completed: false` and are replaced by `completed: true`
+confirmations.
+
+## Manage the bot
+
+```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"language":"es","task":"translate"}'
+```
+
+```bash Stop / leave — DELETE /bots/{platform}/{native_meeting_id}
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
+```
+
+```bash Running bots — GET /bots/status
+curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
+```
+
+```bash List meetings — GET /meetings
+curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
+```
+
+## Speaker-attributed transcripts
+
+Each segment is **diarized** — attributed to a speaker (a bound display name, or a provisional label
+until it binds) — with **word-level timestamps** (`words[]`) and a `confidence`. Speaker attribution is
+text-level (who said what), via speaker binding / clustering / captions — *not* separate audio tracks.
+Times are seconds from session start; `absolute_start_time` / `absolute_end_time` give wall-clock.
+
+The same segments arrive **live** (`completed: false`, a pending draft) and then **confirmed**
+(`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
+runs.
+
+## Recordings
+
+The meeting's **audio recording** is uploaded to object storage — on a self-host, your own MinIO bucket,
+so it never leaves your environment. This is the meeting audio, stored separately from the diarized
+transcript above (there is no "per-speaker audio" — speaker separation lives in the transcript as text).
+
+---
+
+In Vexa's [runtime](/core/runtime) terms, a bot is a browser [container](/concepts#container); the
+transcript it produces compiles into the [workspace](/concepts#workspace), where
+[agents](/core/agents) act on it. See [Meetings](/core/meetings).
