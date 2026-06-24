@@ -49,6 +49,30 @@
         }
       }
     },
+    "WorkspaceGrant": {
+      "description": "One workspace a dispatch may mount, at a mode (the write-access source of truth).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mode"],
+      "properties": {
+        "id": { "type": "string" },
+        "mode": { "enum": ["ro", "rw"] }
+      }
+    },
+    "DispatchClaims": {
+      "description": "The verified claims of a per-dispatch SIGNED token — the chain of custody. Minted per dispatch by the Identity service (subject + launcher + workspace/tool grants), attested by the Runtime, verified at every boundary — never by the agent. The wire form is an opaque signed compact token; this is its decoded payload. Authority is re-derived from these claims, not from the (tamperable) request.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sub", "lch", "ws", "iat", "exp"],
+      "properties": {
+        "sub": { "type": "string", "description": "subject — the principal acted on behalf of" },
+        "lch": { "type": "string", "description": "launcher — who/what triggered the dispatch (holds a delegation grant)" },
+        "ws": { "type": "array", "items": { "$ref": "#/$defs/WorkspaceGrant" }, "description": "workspace grants the workspace-store boundary enforces" },
+        "tools": { "type": "array", "items": { "type": "string" }, "description": "tool grants the MCP-gateway boundary enforces" },
+        "iat": { "type": "integer", "description": "issued-at (unix seconds)" },
+        "exp": { "type": "integer", "description": "expiry (unix seconds) — short-lived" }
+      }
+    },
     "AccessDecision": {
       "description": "The verdict canAccess(subject, resource, action) returns. Default-deny: `allow=false` unless a policy explicitly grants. `reason` is a stable machine code, not free text.",
       "type": "object",
