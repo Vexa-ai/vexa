@@ -77,7 +77,8 @@ def _qualified_table_name(table):
     table_name = table.name.replace('"', '""')
     schema = _table_schema(table)
     if schema:
-        return f'"{schema.replace("\"", "\"\"")}"."{table_name}"'
+        quoted_schema = schema.replace('"', '""')
+        return f'"{quoted_schema}"."{table_name}"'
     return f'"{table_name}"'
 
 
