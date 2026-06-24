@@ -1,8 +1,8 @@
 {
+  "identity": { "subject": "u_jane", "launcher": "schedule:morning-brief" },
+  "runner": "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "rw" } ],
   "trigger": "scheduled",
-  "subject": "u_jane",
-  "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
   "context": { "kind": "none" },
-  "plan": { "ref": "plan/morning-brief.md" },
-  "lifecycle": "oneshot"
+  "start": { "entrypoint": { "path": "plan/morning-brief.md" } }
 }

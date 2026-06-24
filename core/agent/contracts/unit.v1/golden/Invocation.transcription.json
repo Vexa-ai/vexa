@@ -1,11 +1,11 @@
 {
+  "identity": { "subject": "u_jane", "launcher": "integration:meetings" },
+  "runner": "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "rw" } ],
   "trigger": "transcription",
-  "subject": "u_jane",
-  "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
   "context": {
     "kind": "meeting",
     "meeting": { "meeting_id": "abc-defg-hij", "session_uid": "sess-2026-06-24-1", "platform": "google_meet" }
   },
-  "lifecycle": "warm",
-  "output": { "topic": "unit:meet-abc-defg-hij:out", "modes": ["card", "sse"] }
+  "start": { "entrypoint": { "inline": "Follow the meeting; surface salient people, topics, and action items as proactive cards." } }
 }

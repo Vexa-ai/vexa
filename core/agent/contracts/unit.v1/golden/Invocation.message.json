@@ -1,10 +1,8 @@
 {
+  "identity": { "subject": "u_jane", "launcher": "user:u_jane" },
+  "runner": "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "rw" } ],
   "trigger": "message",
-  "subject": "u_jane",
-  "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
-  "workspace_ref": "main",
   "context": { "kind": "none" },
-  "plan": { "prompt": "Summarize my open tasks and draft the Acme follow-up." },
-  "lifecycle": "warm",
-  "output": { "topic": "unit:u_jane-chat-1:out", "modes": ["sse"] }
+  "start": { "entrypoint": { "inline": "Summarize my open tasks and draft the Acme follow-up." } }
 }

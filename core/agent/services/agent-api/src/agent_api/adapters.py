@@ -23,7 +23,7 @@ from typing import Protocol
 import yaml
 
 from .models import WorkspaceWrite
-from .ports import RuntimePort, SchedulerPort, VcsPort, WorkspacePort
+from .ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
 
 logger = logging.getLogger("agent_api.adapters")
 
@@ -198,6 +198,58 @@ class RuntimeHttpClient(RuntimePort):
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             status = json.loads(r.read())
         return status.get("state", "unknown")
+
+
+class LocalIdentityMinter(IdentityPort):
+    """Dev-tier ``IdentityPort`` — signs a per-dispatch token with a shared key (HS256), behind the same
+    interface k8s fills with SPIRE/Keycloak (RFC 8693). ``identity_core`` is imported LAZILY so the unit
+    tests (which inject a fake minter) never need the cross-package dep."""
+
+    def __init__(self, signing_key: str, *, ttl_sec: int = 900) -> None:
+        self._key = signing_key
+        self._ttl = ttl_sec
+
+    def mint(self, subject: str, launcher: str, workspaces: list[dict], tools: list[str]) -> str:
+        from identity_core.dispatch_tokens import WorkspaceGrant, mint_dispatch_token
+
+        grants = [WorkspaceGrant(w["id"], w["mode"]) for w in workspaces]
+        return mint_dispatch_token(
+            subject, launcher, grants, list(tools or ()), key=self._key, ttl_sec=self._ttl,
+        )
+
+
+class RedisStreamReader(StreamReader):
+    """Dev-tier ``StreamReader`` — ``XREAD`` a dispatch's output Stream ``unit:<id>:out`` and yield each
+    UnitEvent until a terminal event (``done`` / ``turn-complete``) or an idle give-up. ``redis`` is
+    imported LAZILY (the unit tests inject a fake reader)."""
+
+    def __init__(self, redis_url: str, *, block_ms: int = 30000, idle_giveup_ms: int = 120000) -> None:
+        self._url = redis_url
+        self._block = block_ms
+        self._giveup = idle_giveup_ms
+
+    def read(self, unit_id: str):
+        import redis
+
+        client = redis.from_url(self._url, decode_responses=True)
+        topic = f"unit:{unit_id}:out"
+        last_id = "0"
+        waited = 0
+        while True:
+            resp = client.xread({topic: last_id}, count=50, block=self._block)
+            if not resp:
+                waited += self._block
+                if waited >= self._giveup:
+                    return
+                continue
+            waited = 0
+            for _stream, entries in resp:
+                for entry_id, fields in entries:
+                    last_id = entry_id
+                    ev = json.loads(fields.get("event", "{}"))
+                    yield ev
+                    if ev.get("type") in ("done", "turn-complete"):
+                        return
 
 
 class SchedulerHttpClient(SchedulerPort):

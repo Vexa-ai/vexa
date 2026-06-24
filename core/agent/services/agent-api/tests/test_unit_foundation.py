@@ -39,12 +39,12 @@ GOOD = {"type": "person", "id": "jane-liu", "title": "Jane Liu"}
 BAD = {"title": "no type or id"}  # missing required type + id → workspace.v1 violation
 
 VALID_INV = {
+    "identity": {"subject": "u_jane", "launcher": "user:u_jane"},
+    "runner": "claude-code",
+    "workspaces": [{"id": "u_jane", "mode": "rw"}],
     "trigger": "message",
-    "subject": "u_jane",
-    "workspace_repo": "https://git.example.com/acme/vexa-ws-jane.git",
     "context": {"kind": "none"},
-    "plan": {"prompt": "hi"},
-    "lifecycle": "warm",
+    "start": {"entrypoint": {"inline": "hi"}},
 }
 
 
@@ -54,8 +54,8 @@ def test_validate_unit_invocation_ok():
     contracts.validate_unit_invocation(VALID_INV)  # must not raise
 
 
-def test_validate_unit_invocation_rejects_missing_subject():
-    bad = {k: v for k, v in VALID_INV.items() if k != "subject"}
+def test_validate_unit_invocation_rejects_missing_identity():
+    bad = {k: v for k, v in VALID_INV.items() if k != "identity"}
     with pytest.raises(Exception):
         contracts.validate_unit_invocation(bad)
 
@@ -137,22 +137,30 @@ class _FakeRuntime:
         return "completed"
 
 
-def test_dispatcher_spawns_with_person_keyed_env():
+class _FakeIdentity:
+    def mint(self, subject, launcher, workspaces, tools):
+        return "tok"
+
+
+def test_dispatcher_spawns_isolated_container_with_minted_token():
     settings = load_settings()
     rt = _FakeRuntime()
-    d = dispatch.Dispatcher(settings, rt)
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
     wid = d.dispatch(VALID_INV)
     assert wid and rt.spawned
     _, profile, env = rt.spawned[0]
     assert profile == settings.agent_profile
     assert env["VEXA_OWNER"] == "u_jane"                       # quota axis = the person
-    assert env["VEXA_WORKSPACE_REPO"] == VALID_INV["workspace_repo"]
+    assert env["VEXA_LAUNCHER"] == "user:u_jane"
+    assert env["VEXA_AGENT_IDENTITY_TOKEN"] == "tok"           # the per-dispatch minted token, injected
     assert env["VEXA_UNIT_TRIGGER"] == "message"
+    assert '"id": "u_jane"' in env["VEXA_WORKSPACES"] and '"mode": "rw"' in env["VEXA_WORKSPACES"]
+    assert env["VEXA_UNIT_OUT_TOPIC"] == f"unit:{wid}:out"
 
 
 def test_dispatcher_rejects_nonconformant_invocation():
     rt = _FakeRuntime()
-    d = dispatch.Dispatcher(load_settings(), rt)
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
     with pytest.raises(Exception):
         d.dispatch({"trigger": "message"})  # missing required fields
     assert not rt.spawned

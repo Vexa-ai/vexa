@@ -1,21 +1,24 @@
 """api.py — the agent-api HTTP front door (the unit control plane's entrypoint).
 
 A thin FastAPI surface mirroring ``runtime_kernel/api.py``. Routes (the gateway api.v1 proxies these):
-  POST /invocations          — the dispatcher sink: a unit.v1 Invocation → a runtime.v1 agent spawn
-  POST /api/chat             — a warm chat unit turn, streamed as SSE (api.v1 declared)
+  POST /invocations          — the dispatcher sink: a unit.v1 dispatch → a runtime.v1 agent spawn
+  POST /api/chat             — a chat *now*-dispatch, streamed back as an SSE VIEW of its Stream
   POST /api/chat/reset       — drop a session
   GET  /api/sessions         — list a subject's sessions
+  GET  /api/routines …       — routines (compile to schedule.v1 cron jobs)
+  POST /events               — the generic event ingress (event.v1 → unit.v1)
+  GET  /api/workspace/…      — read the workspace tree/file
   GET  /health               — liveness
 
-The LIVE claude-in-container chat exec is INJECTED as a ``ChatRunner`` (the docker-exec-into-the-warm-
-unit adapter lands in MVP0); the front door + the dispatcher are the foundation. When no chat runner is
-wired, ``/api/chat`` answers ``501`` honestly (P18/P21 — never a fake stream). Built lazily (PEP 562)
-so ``uvicorn agent_api.api:app`` wires the real adapters at startup.
+Chat is **not** run in-process (agents never run in the control plane). ``/api/chat`` builds a now
+dispatch, asks the Dispatcher to spawn the isolated container, then RELAYS the dispatch's output Stream
+(``unit:<id>:out``) as SSE via the injected ``StreamReader``. When no reader is wired it answers ``501``
+honestly. Built lazily (PEP 562) so ``uvicorn agent_api.api:app`` wires the real adapters at startup.
 """
 from __future__ import annotations
 
 import json
-from typing import Callable, Iterable, Iterator, Optional, Protocol, runtime_checkable
+from typing import Iterator, Optional
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -23,26 +26,11 @@ from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
 from . import routines as routines_mod
+from . import units
 from .dispatch import Dispatcher
 from .events import event_to_invocation
-from .ports import SchedulerPort
+from .ports import SchedulerPort, StreamReader
 from .workspace_reader import WorkspaceReader
-
-
-@runtime_checkable
-class ChatRunner(Protocol):
-    """Runs one warm chat-unit turn for a subject over their workspace; yields normalized UnitEvents
-    (message-delta / tool-call / tool-result / commit / rejected / done). The real adapter docker-exec's
-    `claude -p --output-format stream-json --resume` into the subject's warm unit (MVP0)."""
-
-    def run(
-        self,
-        prompt: str,
-        *,
-        subject: str,
-        session: Optional[str] = None,
-        tools: Iterable[str] = (),
-    ) -> Iterator[dict]: ...
 
 
 class _Sessions:
@@ -86,16 +74,14 @@ def _sse(events: Iterator[dict]) -> Iterator[str]:
 def create_app(
     dispatcher: Dispatcher,
     *,
-    chat_runner: Optional[ChatRunner] = None,
+    stream_reader: Optional[StreamReader] = None,
     sessions: Optional[_Sessions] = None,
     reader: Optional[WorkspaceReader] = None,
     scheduler: Optional[SchedulerPort] = None,
     invocations_url: Optional[str] = None,
-    workspace_repo_for: Optional[Callable[[str], str]] = None,
 ) -> FastAPI:
     sess = sessions or _Sessions()
     wsr = reader or WorkspaceReader("/workspaces")
-    repo_for = workspace_repo_for or (lambda subject: f"local:{subject}")
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
@@ -111,22 +97,27 @@ def create_app(
 
     @app.post("/invocations", status_code=202)
     def invocations(invocation: dict = Body(...)):
-        """The dispatcher sink — any trigger source POSTs a unit.v1 Invocation here."""
+        """The dispatcher sink — any trigger source POSTs a unit.v1 dispatch here."""
         try:
             workload_id = dispatcher.dispatch(invocation)
         except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)
-            raise HTTPException(status_code=400, detail=f"invalid unit.v1 Invocation: {e.message}")
+            raise HTTPException(status_code=400, detail=f"invalid unit.v1 dispatch: {e.message}")
         return {"workload_id": workload_id}
 
     @app.post("/api/chat")
     def chat(body: ChatBody):
-        if chat_runner is None:
-            raise HTTPException(status_code=501, detail="chat runner not wired (lands in MVP0)")
+        """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE."""
+        if stream_reader is None:
+            raise HTTPException(status_code=501, detail="stream relay not wired")
         if body.session:
             sess.add(body.subject, body.session)
-        events = chat_runner.run(body.prompt, subject=body.subject, session=body.session)
+        inv = units.make_dispatch(
+            subject=body.subject, trigger="message",
+            start=units.entrypoint(inline=body.prompt), context={"kind": "none"},
+        )
+        unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the warm chat unit
         return StreamingResponse(
-            _sse(events),
+            _sse(stream_reader.read(unit_id)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -142,7 +133,7 @@ def create_app(
         return {"sessions": sess.list(subject)}
 
     # ── routines (MVP2) — a scheduled routine compiles to a schedule.v1 cron job whose body is a
-    #    unit.v1 Invocation POSTed back to /invocations when due (the runtime owns the durable cron) ──
+    #    unit.v1 dispatch POSTed back to /invocations when due (the runtime owns the durable cron) ──
     @app.post("/api/routines", status_code=201)
     def create_routine(body: RoutineCreate):
         if scheduler is None or not invocations_url:
@@ -151,9 +142,7 @@ def create_app(
             routine = routines_mod.make_routine(
                 subject=body.subject, name=body.name, cron=body.cron, prompt=body.prompt,
             )
-            job_spec = routines_mod.compile_to_job(
-                routine, invocations_url=invocations_url, workspace_repo=repo_for(body.subject),
-            )
+            job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url)
         except (ValueError, ValidationError) as e:  # bad cron form / non-conformant routine — fail loud
             raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
         job = scheduler.schedule(job_spec)
@@ -185,13 +174,13 @@ def create_app(
                 return {"ok": True, "routine_id": routine_id}
         raise HTTPException(status_code=404, detail="unknown routine")
 
-    # ── events (MVP3) — the GENERIC event-source ingress: any event.v1 Event → a unit.v1 Invocation →
-    #    the one Dispatcher. agent-api knows no tool/domain; the unit reaches email/calendar/etc via its
+    # ── events (MVP3) — the GENERIC event-source ingress: any event.v1 Event → a unit.v1 dispatch →
+    #    the one Dispatcher. agent-api knows no tool/domain; the unit reaches email/calendar via its
     #    toolbelt. Email-triage, post-meeting, news all POST here (one front door, P6) ──
     @app.post("/events", status_code=202)
     def events(event: dict = Body(...)):
         try:
-            invocation = event_to_invocation(event, workspace_repo_for=repo_for)
+            invocation = event_to_invocation(event)
         except ValidationError as e:
             raise HTTPException(status_code=400, detail=f"invalid event.v1: {e.message}")
         except ValueError as e:  # no plan carried — fail loud (P18)
@@ -218,27 +207,18 @@ def create_app(
 
 # ── ASGI entrypoint (PEP 562) — `uvicorn agent_api.api:app` resolves this lazily ──────────────────
 def _build_production_app() -> FastAPI:
-    from .adapters import RuntimeHttpClient, SchedulerHttpClient
-    from .chat_runner import SubprocessChatRunner
+    from .adapters import LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
     from .config import load_settings
-    from .tools import ToolRegistry
 
     settings = load_settings()
     runtime = RuntimeHttpClient(settings.runtime_api_url)
     scheduler = SchedulerHttpClient(settings.runtime_api_url)
-    chat = SubprocessChatRunner(
-        settings.workspaces_dir,
-        seed_dir=settings.workspace_seed_dir or None,
-        model=settings.agent_model or None,
-        tool_registry=ToolRegistry.from_dir(settings.tools_seed_dir),
-    )
-    # Scheduled/event units with an inline prompt run in-container via the chat runner (the proven
-    # MVP0/MVP1 path); the runtime-workload spawn stays the production isolation target (DECISIONS D5).
-    dispatcher = Dispatcher(settings, runtime, local_runner=chat)
+    identity = LocalIdentityMinter(settings.dispatch_signing_key.get_secret_value())
+    dispatcher = Dispatcher(settings, runtime, identity)
     invocations_url = settings.agent_api_self_url.rstrip("/") + "/invocations"
     return create_app(
         dispatcher,
-        chat_runner=chat,
+        stream_reader=RedisStreamReader(settings.redis_url),
         reader=WorkspaceReader(settings.workspaces_dir),
         scheduler=scheduler,
         invocations_url=invocations_url,

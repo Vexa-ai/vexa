@@ -1,10 +1,10 @@
-"""MVP2 routines eval — the authoring→cron→unit loop, proven in-process.
+"""MVP2 routines eval — the authoring→cron→unit loop, proven over fakes.
 
 The cron TIMING + the HTTP firing of a due job live in the runtime package's test_schedule_api.py
 (FakeClock + fakeredis advance past the cron → the request POSTs). HERE we prove the agent-api half:
-a routine compiles to a CONFORMANT schedule.v1 job whose body is a unit.v1 Invocation, and firing that
-body runs the unit over the subject's workspace and COMMITS (the governance path). Together they are the
-L4 claim: "advance past a cron → invoke emitted + commit landed."
+a routine compiles to a CONFORMANT schedule.v1 job whose body is a unit.v1 dispatch, and firing that
+body SPAWNS the unit (the container path). Together they are the L4 claim: "advance past a cron →
+dispatch emitted + container spawned."
 """
 from __future__ import annotations
 
@@ -17,22 +17,20 @@ from agent_api.dispatch import Dispatcher
 
 
 class _FakeRuntime:
+    def __init__(self):
+        self.spawned = []
+
     def spawn(self, workload_id, profile, env):
+        self.spawned.append((workload_id, profile, env))
         return workload_id
 
     def await_done(self, workload_id, timeout_sec=0.0):
         return "completed"
 
 
-class _FakeRunner:
-    """Stands in for the in-container claude turn: records the call and 'commits'."""
-    def __init__(self):
-        self.calls = []
-
-    def run(self, prompt, *, subject, session=None, tools=()):
-        self.calls.append({"prompt": prompt, "subject": subject, "tools": list(tools)})
-        yield {"type": "message-delta", "text": "done"}
-        yield {"type": "commit", "sha": "deadbeef"}
+class _FakeIdentity:
+    def mint(self, subject, launcher, workspaces, tools):
+        return "tok"
 
 
 class _FakeScheduler:
@@ -62,20 +60,20 @@ def test_compile_produces_conformant_job_and_invocation():
         prompt="Summarize my new emails and record follow-ups as tasks.",
     )
     contracts.validate_routine(routine)  # the authored routine is routine.v1-conformant
-    job = R.compile_to_job(routine, invocations_url="http://agent-api:8100/invocations", workspace_repo="local:u_jane")
+    job = R.compile_to_job(routine, invocations_url="http://agent-api:8100/invocations")
 
     assert job["cron"] == "0 8 * * *"
     assert job["request"]["url"].endswith("/invocations")
     assert job["idempotency_key"] == routine["id"]
-    # The job body is a unit.v1 Invocation (this is what fires at /invocations when due).
+    # The job body is a unit.v1 dispatch (this is what fires at /invocations when due).
     contracts.validate_unit_invocation(job["request"]["body"])
     assert job["request"]["body"]["trigger"] == "scheduled"
-    assert job["request"]["body"]["plan"]["prompt"].startswith("Summarize")
+    assert job["request"]["body"]["start"]["entrypoint"]["inline"].startswith("Summarize")
 
 
 def test_routine_card_round_trips_from_job():
     routine = R.make_routine(subject="u_jane", name="Inbox triage", cron="*/15 * * * *", prompt="triage")
-    job = R.compile_to_job(routine, invocations_url="http://x/invocations", workspace_repo="local:u_jane")
+    job = R.compile_to_job(routine, invocations_url="http://x/invocations")
     job = {**job, "job_id": "job_x", "execute_at": 123.0, "status": "pending"}
     card = R.routine_card_from_job(job)
     assert card["id"] == routine["id"]
@@ -85,24 +83,24 @@ def test_routine_card_round_trips_from_job():
     assert card["next_run"] == 123.0
 
 
-def test_firing_a_compiled_job_runs_the_unit_and_commits():
-    """The L4 commit-landed half: take the compiled job's body (what the cron POSTs) and dispatch it →
-    the unit runs in-container and commits."""
-    runner = _FakeRunner()
-    dispatcher = Dispatcher(load_settings(), _FakeRuntime(), local_runner=runner, local_sync=True)
+def test_firing_a_compiled_job_spawns_the_unit():
+    """The L4 spawn half: take the compiled job's body (what the cron POSTs) and dispatch it →
+    the unit spawns in an isolated container."""
+    rt = _FakeRuntime()
+    dispatcher = Dispatcher(load_settings(), rt, _FakeIdentity())
 
     routine = R.make_routine(subject="u_jane", name="Brief", cron="0 9 * * *", prompt="do the brief")
-    job = R.compile_to_job(routine, invocations_url="http://x/invocations", workspace_repo="local:u_jane")
+    job = R.compile_to_job(routine, invocations_url="http://x/invocations")
 
     uid = dispatcher.dispatch(job["request"]["body"])  # simulate the cron firing the request body
 
     assert uid.startswith("agent-")
-    assert runner.calls == [{"prompt": "do the brief", "subject": "u_jane", "tools": []}]
+    assert rt.spawned and rt.spawned[0][2]["VEXA_OWNER"] == "u_jane"
     assert dispatcher.dispatched and dispatcher.dispatched[0]["trigger"] == "scheduled"
 
 
-def _app(scheduler, runner):
-    dispatcher = Dispatcher(load_settings(), _FakeRuntime(), local_runner=runner, local_sync=True)
+def _app(scheduler):
+    dispatcher = Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity())
     return TestClient(create_app(
         dispatcher, scheduler=scheduler,
         invocations_url="http://agent-api:8100/invocations",
@@ -110,8 +108,8 @@ def _app(scheduler, runner):
 
 
 def test_create_and_list_routines_over_http():
-    scheduler, runner = _FakeScheduler(), _FakeRunner()
-    client, dispatcher = _app(scheduler, runner)
+    scheduler = _FakeScheduler()
+    client, dispatcher = _app(scheduler)
 
     r = client.post("/api/routines", json={
         "subject": "u_jane", "name": "Morning brief", "cron": "0 8 * * *",
@@ -120,8 +118,8 @@ def test_create_and_list_routines_over_http():
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["job_id"] == "job_0"
-    assert body["ran_now"] is True            # the immediate demo run fired the unit
-    assert runner.calls and runner.calls[0]["subject"] == "u_jane"
+    assert body["ran_now"] is True            # the immediate demo run dispatched the unit
+    assert dispatcher.dispatched and dispatcher.dispatched[0]["identity"]["subject"] == "u_jane"
     assert len(scheduler.jobs) == 1           # the cron job is registered
 
     listed = client.get("/api/routines", params={"subject": "u_jane"}).json()["routines"]
@@ -137,8 +135,7 @@ def test_create_and_list_routines_over_http():
 
 
 def test_routines_501_when_scheduler_not_wired():
-    runner = _FakeRunner()
-    dispatcher = Dispatcher(load_settings(), _FakeRuntime(), local_runner=runner, local_sync=True)
+    dispatcher = Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity())
     client = TestClient(create_app(dispatcher))  # no scheduler
     assert client.post("/api/routines", json={
         "subject": "u_jane", "name": "x", "cron": "* * * * *", "prompt": "y",

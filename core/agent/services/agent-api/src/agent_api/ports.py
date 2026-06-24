@@ -61,6 +61,35 @@ class RuntimePort(Protocol):
 
 
 @runtime_checkable
+class IdentityPort(Protocol):
+    """Mint the per-dispatch SIGNED token (the chain of custody) — identity.v1 DispatchClaims.
+
+    The dispatcher asks identity to mint a short-lived signed token carrying ``(subject, launcher,
+    workspace grants, tool grants)`` at dispatch time; the Runtime injects it; every boundary VERIFIES
+    it. The agent never mints. The dev adapter signs with a shared key (HS256); k8s uses SPIRE/Keycloak
+    behind this same hole.
+    """
+
+    def mint(self, subject: str, launcher: str, workspaces: list[dict], tools: list[str]) -> str:
+        """Return a signed dispatch token proving these grants; raises on a bad request."""
+        ...
+
+
+@runtime_checkable
+class StreamReader(Protocol):
+    """Read a dispatch's output Stream ``unit:<id>:out`` (the Stream primitive — a durable redis Stream).
+
+    A relay (agent-api SSE view / the gateway ws) ``XREAD``s the Stream and pushes each UnitEvent to the
+    user. Durable + replayable: a reader that reconnects mid-turn catches up. The dev adapter wraps redis
+    ``XREAD``; the eval fakes it with a list.
+    """
+
+    def read(self, unit_id: str) -> Iterable[dict]:
+        """Yield the UnitEvents on ``unit:<unit_id>:out`` as they arrive, until the turn completes."""
+        ...
+
+
+@runtime_checkable
 class SchedulerPort(Protocol):
     """Register / list / cancel ``schedule.v1`` jobs in the runtime's durable cron.
 

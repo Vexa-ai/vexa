@@ -27,10 +27,16 @@ class Settings(BaseSettings):
     # How the runtime's scheduler reaches THIS service's /invocations sink when a routine fires.
     agent_api_self_url: str = "http://agent-api:8100"
 
-    # ── workspace.v1 seam — the user git repo the worker mounts ──────────────
-    # These become the worker's `env` per runtime.v1 (see golden spec-agent.json).
+    # ── workspace.v1 seam — the bucket-backed git folders the dispatch mounts ─
+    # The dispatch carries a LIST of workspace ids+modes; the Runtime materializes them from the
+    # workspace store (bucket) into the container at `workspace_path` (mode is the write-access truth).
     workspace_path: str = "/workspace"
     workspace_ref: str = "main"
+    # The workspace store (object bucket) the Runtime syncs granted workspaces down from / rw back to.
+    workspace_store_url: str = "s3://vexa-workspaces"
+
+    # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─
+    redis_url: str = "redis://redis:6379/0"
 
     # ── MVP0 chat runner — claude turn over a per-subject local git workspace ─
     # The chat unit's per-person workspace dirs live here; seeded from the template (CLAUDE.md +
@@ -46,6 +52,9 @@ class Settings(BaseSettings):
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
     agent_identity_token: SecretStr = SecretStr("")
+    # The shared key the Identity service signs per-dispatch tokens with (dev tier); every boundary
+    # verifies with the same key. k8s replaces this with SPIRE-issued SVIDs behind the same interface.
+    dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""

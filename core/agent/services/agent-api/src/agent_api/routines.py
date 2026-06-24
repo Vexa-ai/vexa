@@ -17,6 +17,7 @@ import hashlib
 from typing import Optional
 
 from . import contracts
+from .units import entrypoint, make_dispatch
 
 
 def routine_id_for(subject: str, name: str, cron: str) -> str:
@@ -53,28 +54,24 @@ def make_routine(
     return routine
 
 
-def build_invocation(routine: dict, *, workspace_repo: str, workspace_ref: str = "main") -> dict:
-    """Compile a Routine into the ``unit.v1`` Invocation fired each time it runs (trigger=scheduled)."""
-    invocation = {
-        "trigger": "scheduled",
-        "subject": routine["owner"],
-        "workspace_repo": workspace_repo,
-        "workspace_ref": workspace_ref,
-        "context": {"kind": "generic"},
-        "plan": dict(routine["plan"]),
-        "lifecycle": routine.get("lifecycle", "oneshot"),
-        "output": {"topic": f"unit:{routine['id']}:out", "modes": ["sse"]},
-        "tools": [],
-    }
+def build_invocation(routine: dict, *, workspace_ref: str = "main") -> dict:
+    """Compile a Routine into the ``unit.v1`` dispatch fired each time it runs (trigger=scheduled). A
+    scheduled routine is the user's own intent ⇒ trusted ⇒ the workspace mounts ``rw`` (governance)."""
+    plan = routine["plan"]
+    start = entrypoint(inline=plan["prompt"]) if plan.get("prompt") else entrypoint(path=plan["ref"])
+    invocation = make_dispatch(
+        subject=routine["owner"], trigger="scheduled", start=start,
+        context={"kind": "generic"}, launcher=f"schedule:{routine['id']}",
+    )
     contracts.validate_unit_invocation(invocation)  # the body we POST is unit.v1-conformant
     return invocation
 
 
-def compile_to_job(routine: dict, *, invocations_url: str, workspace_repo: str) -> dict:
+def compile_to_job(routine: dict, *, invocations_url: str) -> dict:
     """Compile a Routine into a ``schedule.v1`` job: the cron, and the HTTP request that fires the
     Invocation at agent-api ``/invocations``. The job ``metadata`` carries the routine summary so the
     Routines surface can list it straight from the scheduler (no separate store)."""
-    invocation = build_invocation(routine, workspace_repo=workspace_repo)
+    invocation = build_invocation(routine)
     plan = routine["plan"]
     return {
         "cron": routine["trigger"]["cron"],
