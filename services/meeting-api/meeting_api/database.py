@@ -1,11 +1,12 @@
 import os
 import logging
+import ssl
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 
-from .models import Base
+from .models import Base, VEXA_SCHEMA
 
 logger = logging.getLogger("meeting_api.database")
 
@@ -36,8 +37,6 @@ DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT
 ssl_params = f"?sslmode={DB_SSL_MODE}" if DB_SSL_MODE else ""
 DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}{ssl_params}"
 
-import ssl
-
 asyncpg_ssl = None
 if DB_SSL_MODE and DB_SSL_MODE.lower() in ("require", "prefer"):
     ssl_context = ssl.create_default_context()
@@ -53,6 +52,7 @@ connect_args = {}
 if asyncpg_ssl is not None:
     connect_args["ssl"] = asyncpg_ssl
 connect_args["statement_cache_size"] = 0
+connect_args["server_settings"] = {"search_path": f"{VEXA_SCHEMA},public"}
 
 engine = create_async_engine(
     DATABASE_URL,
@@ -75,7 +75,10 @@ async_session_local = sessionmaker(
     expire_on_commit=False,
 )
 
-sync_engine = create_engine(DATABASE_URL_SYNC)
+sync_engine = create_engine(
+    DATABASE_URL_SYNC,
+    connect_args={"options": f"-c search_path={VEXA_SCHEMA},public"},
+)
 
 
 async def get_db() -> AsyncSession:
@@ -107,8 +110,8 @@ async def recreate_db():
     logger.warning(f"!!! DANGEROUS: Dropping and recreating all tables in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
     try:
         async with engine.begin() as conn:
-            await conn.execute(text("DROP SCHEMA public CASCADE;"))
-            await conn.execute(text("CREATE SCHEMA public;"))
+            await conn.execute(text(f"DROP SCHEMA IF EXISTS {VEXA_SCHEMA} CASCADE;"))
+            await conn.execute(text(f"CREATE SCHEMA {VEXA_SCHEMA};"))
             await conn.run_sync(Base.metadata.create_all)
         logger.warning(f"!!! DANGEROUS OPERATION COMPLETE for {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
     except Exception as e:

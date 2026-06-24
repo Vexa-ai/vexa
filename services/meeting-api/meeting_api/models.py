@@ -1,7 +1,6 @@
 import sqlalchemy
 from sqlalchemy import (
-    Column, String, Text, Integer, DateTime, Float,
-    ForeignKey, Index, UniqueConstraint,
+    Column, DateTime, Float, ForeignKey, Index, Integer, MetaData, String, Text, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func, text
@@ -11,7 +10,9 @@ from typing import Optional
 
 from .schemas import Platform
 
-Base = declarative_base()
+VEXA_SCHEMA = "vexa"
+
+Base = declarative_base(metadata=MetaData(schema=VEXA_SCHEMA))
 
 
 class Meeting(Base):

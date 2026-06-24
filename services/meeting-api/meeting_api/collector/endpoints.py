@@ -71,7 +71,7 @@ async def _purge_recordings_for_meeting(
         targets_by_backend.setdefault(backend, set()).add(path)
 
     # Collect normalized recording rows/media paths and mark rows for deletion.
-    table_exists_result = await db.execute(text("SELECT to_regclass('public.recordings') IS NOT NULL"))
+    table_exists_result = await db.execute(text("SELECT to_regclass('vexa.recordings') IS NOT NULL"))
     recordings_table_exists = bool(table_exists_result.scalar())
     if recordings_table_exists:
         stmt_recordings = select(Recording).where(

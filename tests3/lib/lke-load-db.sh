@@ -57,10 +57,10 @@ pass "dump loaded"
 # ── 4. Verify row counts ─────────────────────────
 info "verifying data..."
 COUNTS=$(kubectl exec "$PG_POD" -- psql -U "$PG_USER" -d "$PG_DB" -t -c "
-    SELECT 'users=' || count(*) FROM users
-    UNION ALL SELECT 'meetings=' || count(*) FROM meetings
-    UNION ALL SELECT 'transcriptions=' || count(*) FROM transcriptions
-    UNION ALL SELECT 'api_tokens=' || count(*) FROM api_tokens;
+    SELECT 'users=' || count(*) FROM vexa.users
+    UNION ALL SELECT 'meetings=' || count(*) FROM vexa.meetings
+    UNION ALL SELECT 'transcriptions=' || count(*) FROM vexa.transcriptions
+    UNION ALL SELECT 'api_tokens=' || count(*) FROM vexa.api_tokens;
 " 2>/dev/null | tr -d ' ' | grep -v '^$')
 echo "$COUNTS" | while read line; do
     info "$line"

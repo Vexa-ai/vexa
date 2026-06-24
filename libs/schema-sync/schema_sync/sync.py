@@ -67,6 +67,40 @@ def _col_default_sql(col):
     return ""
 
 
+def _table_schema(table):
+    """Return the declared schema for a table, if any."""
+    return table.schema or table.metadata.schema
+
+
+def _qualified_table_name(table):
+    """Return a SQL-quoted table name, including schema when present."""
+    table_name = table.name.replace('"', '""')
+    schema = _table_schema(table)
+    if schema:
+        return f'"{schema.replace("\"", "\"\"")}"."{table_name}"'
+    return f'"{table_name}"'
+
+
+def _declared_schemas(*bases) -> set[str]:
+    """Collect non-default schemas declared across the provided bases."""
+    schemas = set()
+    for base in bases:
+        if base is None:
+            continue
+        for table in base.metadata.tables.values():
+            schema = _table_schema(table)
+            if schema:
+                schemas.add(schema)
+    return schemas
+
+
+def _ensure_schemas(conn: Connection, *bases):
+    """Create any explicitly declared schemas before table sync begins."""
+    for schema in sorted(_declared_schemas(*bases)):
+        quoted_schema = schema.replace('"', '""')
+        conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{quoted_schema}"'))
+
+
 def _sync_tables(conn: Connection, base):
     """Create missing tables via create_all(checkfirst=True)."""
     base.metadata.create_all(conn, checkfirst=True)
@@ -75,13 +109,19 @@ def _sync_tables(conn: Connection, base):
 def _sync_columns(conn: Connection, base):
     """Add missing columns to existing tables."""
     inspector = inspect(conn)
-    existing_tables = set(inspector.get_table_names())
+    existing_tables_by_schema = {}
 
     for table in base.metadata.sorted_tables:
-        if table.name not in existing_tables:
+        schema = _table_schema(table)
+        if schema not in existing_tables_by_schema:
+            existing_tables_by_schema[schema] = set(inspector.get_table_names(schema=schema))
+        if table.name not in existing_tables_by_schema[schema]:
             continue
 
-        existing_cols = {c["name"] for c in inspector.get_columns(table.name)}
+        existing_cols = {
+            c["name"]
+            for c in inspector.get_columns(table.name, schema=schema)
+        }
         for col in table.columns:
             if col.name in existing_cols:
                 continue
@@ -103,7 +143,7 @@ def _sync_columns(conn: Connection, base):
                 elif pg_type == "JSONB" or pg_type == "JSON":
                     default = " DEFAULT '{}'"
 
-            stmt = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {pg_type}{nullable}{default}'
+            stmt = f'ALTER TABLE {_qualified_table_name(table)} ADD COLUMN "{col.name}" {pg_type}{nullable}{default}'
             logger.info(f"Adding column: {stmt}")
             conn.execute(text(stmt))
 
@@ -111,13 +151,20 @@ def _sync_columns(conn: Connection, base):
 def _sync_indexes(conn: Connection, base):
     """Add missing indexes (skips existing ones by name)."""
     inspector = inspect(conn)
-    existing_tables = set(inspector.get_table_names())
+    existing_tables_by_schema = {}
 
     for table in base.metadata.sorted_tables:
-        if table.name not in existing_tables:
+        schema = _table_schema(table)
+        if schema not in existing_tables_by_schema:
+            existing_tables_by_schema[schema] = set(inspector.get_table_names(schema=schema))
+        if table.name not in existing_tables_by_schema[schema]:
             continue
 
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes(table.name) if idx["name"]}
+        existing_indexes = {
+            idx["name"]
+            for idx in inspector.get_indexes(table.name, schema=schema)
+            if idx["name"]
+        }
 
         for index in table.indexes:
             if index.name and index.name in existing_indexes:
@@ -132,6 +179,8 @@ def _sync_indexes(conn: Connection, base):
 
 def _ensure_schema_sync(conn: Connection, base, prerequisites=None):
     """Synchronous implementation called inside run_sync."""
+    _ensure_schemas(conn, prerequisites, base)
+
     if prerequisites is not None:
         logger.info("Creating prerequisite tables...")
         prerequisites.metadata.create_all(conn, checkfirst=True)

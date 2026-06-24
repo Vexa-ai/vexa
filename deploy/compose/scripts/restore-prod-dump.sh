@@ -66,10 +66,10 @@ echo "  [+] dump loaded"
 # 5. Verify row counts
 echo "  [~] verifying data..."
 COUNTS=$($COMPOSE_CMD exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "
-    SELECT 'users=' || count(*) FROM users
-    UNION ALL SELECT 'meetings=' || count(*) FROM meetings
-    UNION ALL SELECT 'transcriptions=' || count(*) FROM transcriptions
-    UNION ALL SELECT 'api_tokens=' || count(*) FROM api_tokens;
+    SELECT 'users=' || count(*) FROM vexa.users
+    UNION ALL SELECT 'meetings=' || count(*) FROM vexa.meetings
+    UNION ALL SELECT 'transcriptions=' || count(*) FROM vexa.transcriptions
+    UNION ALL SELECT 'api_tokens=' || count(*) FROM vexa.api_tokens;
 " 2>/dev/null | tr -d ' ' | grep -v '^$')
 echo "$COUNTS" | while read line; do
     echo "      $line"

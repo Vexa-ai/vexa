@@ -1,9 +1,11 @@
-from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, ARRAY
+from sqlalchemy import ARRAY, Column, DateTime, ForeignKey, Integer, MetaData, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import declarative_base, relationship
 
-Base = declarative_base()
+VEXA_SCHEMA = "vexa"
+
+Base = declarative_base(metadata=MetaData(schema=VEXA_SCHEMA))
 
 
 class User(Base):

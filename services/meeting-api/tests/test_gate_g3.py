@@ -33,6 +33,7 @@ def _psql(query: str) -> str:
     """Run a psql query and return stdout. Raises SkipTest on failure."""
     env = os.environ.copy()
     env["PGPASSWORD"] = PG_PASS
+    env["PGOPTIONS"] = "-c search_path=vexa,public"
     try:
         result = subprocess.run(
             ["psql", "-h", PG_HOST, "-p", PG_PORT, "-U", PG_USER,

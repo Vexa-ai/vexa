@@ -1,5 +1,6 @@
 import os
 import logging
+import ssl
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy import create_engine # For sync engine if needed for migrations later
@@ -7,7 +8,7 @@ from sqlalchemy.sql import text
 
 # Import Base from models within the same package
 # Ensure models are imported somewhere before init_db is called so Base is populated.
-from .models import Base
+from .models import Base, VEXA_SCHEMA
 
 logger = logging.getLogger("admin_models.database")
 
@@ -47,7 +48,6 @@ DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{
 # asyncpg uses ssl parameter (True/False/ssl.SSLContext)
 # For Supabase Session Pooler, we need SSL but may need to disable certificate verification
 # Map sslmode values to asyncpg ssl parameter
-import ssl
 
 asyncpg_ssl = None
 if DB_SSL_MODE and DB_SSL_MODE.lower() in ("require", "prefer"):
@@ -66,6 +66,8 @@ elif DB_SSL_MODE and DB_SSL_MODE.lower() == "disable":
 
 # --- SQLAlchemy Async Engine & Session ---
 # Use pool settings appropriate for async connections
+VEXA_SEARCH_PATH = f"{VEXA_SCHEMA},public"
+
 connect_args = {}
 if asyncpg_ssl is not None:
     connect_args["ssl"] = asyncpg_ssl
@@ -73,6 +75,7 @@ if asyncpg_ssl is not None:
 # Disable prepared statement caching for pgbouncer compatibility
 # This is required when using pgbouncer in transaction or statement pooling mode
 connect_args["statement_cache_size"] = 0
+connect_args["server_settings"] = {"search_path": VEXA_SEARCH_PATH}
 
 engine = create_async_engine(
     DATABASE_URL,
@@ -91,7 +94,10 @@ async_session_local = sessionmaker(
 )
 
 # --- Sync Engine (For Alembic migrations) ---
-sync_engine = create_engine(DATABASE_URL_SYNC)
+sync_engine = create_engine(
+    DATABASE_URL_SYNC,
+    connect_args={"options": f"-c search_path={VEXA_SEARCH_PATH}"},
+)
 
 # --- FastAPI Dependency ---
 async def get_db() -> AsyncSession:
@@ -124,16 +130,12 @@ async def recreate_db():
     logger.warning(f"!!! DANGEROUS OPERATION: Dropping and recreating all tables in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
     try:
         async with engine.begin() as conn:
-            # Instead of drop_all, use raw SQL to drop the schema with cascade
-            logger.warning("Dropping public schema with CASCADE...")
-            await conn.execute(text("DROP SCHEMA public CASCADE;"))
-            logger.warning("Public schema dropped.")
-            logger.info("Recreating public schema...")
-            await conn.execute(text("CREATE SCHEMA public;"))
-            # Optional: Grant permissions if needed (often handled by default roles)
-            # await conn.execute(text("GRANT ALL ON SCHEMA public TO public;"))
-            # await conn.execute(text("GRANT ALL ON SCHEMA public TO postgres;"))
-            logger.info("Public schema recreated.")
+            logger.warning(f"Dropping {VEXA_SCHEMA} schema with CASCADE...")
+            await conn.execute(text(f"DROP SCHEMA IF EXISTS {VEXA_SCHEMA} CASCADE;"))
+            logger.warning(f"{VEXA_SCHEMA} schema dropped.")
+            logger.info(f"Recreating {VEXA_SCHEMA} schema...")
+            await conn.execute(text(f"CREATE SCHEMA {VEXA_SCHEMA};"))
+            logger.info(f"{VEXA_SCHEMA} schema recreated.")
 
             logger.info("Recreating all tables based on models...")
             await conn.run_sync(Base.metadata.create_all)
