@@ -12,6 +12,7 @@ docker-exec'd) is the MVP1 hardening — see DECISIONS.md.
 """
 from __future__ import annotations
 
+import itertools
 import shutil
 import subprocess
 from pathlib import Path
@@ -53,12 +54,27 @@ class SubprocessChatRunner:
         finally:
             proc.wait()
 
+    def _turn(self, ws: Path, prompt: str, session: Optional[str]) -> Iterator[dict]:
+        return run_unit_turn(str(ws), prompt, self._exec_claude, session=session, model=self._model)
+
     def run(self, prompt: str, *, subject: str, session: Optional[str] = None) -> Iterator[dict]:
         ws = self._ensure_workspace(subject)
         sess_file = ws / ".claude" / ".session"
         resume = session or (sess_file.read_text().strip() if sess_file.exists() else None)
         captured: Optional[str] = None
-        for ev in run_unit_turn(str(ws), prompt, self._exec_claude, session=resume, model=self._model):
+
+        gen = self._turn(ws, prompt, resume)
+        first = next(gen, None)
+        # A stale --resume (e.g. the session store was lost on a container recreate) fails immediately:
+        # the first event is a `done` with ok=false and no content. Drop the session and retry fresh.
+        if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
+            if sess_file.exists():
+                sess_file.unlink()
+            gen = self._turn(ws, prompt, None)
+            first = next(gen, None)
+
+        stream = gen if first is None else itertools.chain([first], gen)
+        for ev in stream:
             if ev.get("type") == "done" and ev.get("sessionId"):
                 captured = ev["sessionId"]
             yield ev

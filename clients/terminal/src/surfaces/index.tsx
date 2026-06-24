@@ -9,6 +9,7 @@ import type { CSSProperties } from "react";
 import { registerSurface, type SurfaceId } from "../contributions";
 import "./chat";
 import "./workspace";
+import "./tasks";
 
 const wrap: CSSProperties = { maxWidth: 760, margin: "0 auto", padding: "40px 24px" };
 
@@ -25,7 +26,6 @@ const PLACEHOLDERS: { id: SurfaceId; label: string; icon: string; order: number;
   { id: "live", label: "Live meeting", icon: "radio", order: 10, live: true, note: "Real-time proactive cards + entity cockpit — MVP4 (the live-stream unit)." },
   { id: "inbox", label: "Inbox", icon: "mail", order: 40, note: "Email + the Inbox-triage routine's proposed actions — MVP3." },
   { id: "calendar", label: "Calendar", icon: "cal", order: 50, note: "Calendar = meetings; past events are recorded meeting notes — MVP3." },
-  { id: "tasks", label: "Tasks", icon: "tasks", order: 60, note: "Action items from meetings, email & routines — MVP2." },
   { id: "routines", label: "Routines", icon: "zap", order: 70, note: "Trigger → plan; create from chat with /routine — MVP2." },
 ];
 for (const p of PLACEHOLDERS) {
