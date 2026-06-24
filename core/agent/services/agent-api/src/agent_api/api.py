@@ -23,6 +23,7 @@ from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
 from .dispatch import Dispatcher
+from .workspace_reader import WorkspaceReader
 
 
 @runtime_checkable
@@ -73,8 +74,10 @@ def create_app(
     *,
     chat_runner: Optional[ChatRunner] = None,
     sessions: Optional[_Sessions] = None,
+    reader: Optional[WorkspaceReader] = None,
 ) -> FastAPI:
     sess = sessions or _Sessions()
+    wsr = reader or WorkspaceReader("/workspaces")
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
@@ -119,6 +122,20 @@ def create_app(
     def list_sessions(subject: str):
         return {"sessions": sess.list(subject)}
 
+    @app.get("/api/workspace/tree")
+    def ws_tree(subject: str):
+        return {"files": wsr.tree(subject)}
+
+    @app.get("/api/workspace/file")
+    def ws_file(subject: str, path: str):
+        try:
+            content = wsr.read(subject, path)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid path")
+        if content is None:
+            raise HTTPException(status_code=404, detail="not found")
+        return {"path": path, "content": content}
+
     return app
 
 
@@ -136,7 +153,7 @@ def _build_production_app() -> FastAPI:
         seed_dir=settings.workspace_seed_dir or None,
         model=settings.agent_model or None,
     )
-    return create_app(dispatcher, chat_runner=chat)
+    return create_app(dispatcher, chat_runner=chat, reader=WorkspaceReader(settings.workspaces_dir))
 
 
 def __getattr__(name: str):

@@ -70,3 +70,17 @@ def test_chat_streams_sse_and_records_session():
     assert "data: " in body and '"message-delta"' in body and '"commit"' in body
     sessions = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
     assert "s1" in sessions
+
+
+def test_workspace_read_and_traversal_guard(tmp_path):
+    from agent_api.workspace_reader import WorkspaceReader
+    p = tmp_path / "u_jane" / "kg" / "entities" / "person"
+    p.mkdir(parents=True)
+    (p / "jane.md").write_text("---\ntype: person\nid: jane\ntitle: Jane\n---\nbody\n")
+    c = TestClient(create_app(Dispatcher(load_settings(), _FakeRuntime()), reader=WorkspaceReader(str(tmp_path))))
+    files = c.get("/api/workspace/tree", params={"subject": "u_jane"}).json()["files"]
+    assert "kg/entities/person/jane.md" in files
+    got = c.get("/api/workspace/file", params={"subject": "u_jane", "path": "kg/entities/person/jane.md"})
+    assert got.status_code == 200 and "title: Jane" in got.json()["content"]
+    assert c.get("/api/workspace/file", params={"subject": "u_jane", "path": "../../etc/passwd"}).status_code == 400
+    assert c.get("/api/workspace/file", params={"subject": "u_jane", "path": "nope.md"}).status_code == 404
