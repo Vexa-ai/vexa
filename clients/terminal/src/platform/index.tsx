@@ -19,6 +19,8 @@ export function createServiceId<T>(id: string): ServiceId<T> { return { id }; }
 export interface ServiceContainer {
   get<T>(id: ServiceId<T>): T;
   tryGet<T>(id: ServiceId<T>): T | undefined;
+  /** Dispose every instantiated service that exposes a `dispose()` (lifecycle/leak-safety). */
+  dispose(): void;
 }
 export interface ServiceRegistration<T> { id: ServiceId<T>; factory: (c: ServiceContainer) => T; }
 export function reg<T>(id: ServiceId<T>, factory: (c: ServiceContainer) => T): ServiceRegistration<T> {
@@ -40,6 +42,15 @@ export function createContainer(regs: ServiceRegistration<unknown>[]): ServiceCo
     },
     tryGet<T>(id: ServiceId<T>): T | undefined {
       try { return container.get(id); } catch { return undefined; }
+    },
+    dispose() {
+      for (const inst of instances.values()) {
+        const d = inst as { dispose?: () => void };
+        if (d && typeof d.dispose === "function") {
+          try { d.dispose(); } catch { /* a failed dispose must not block the rest */ }
+        }
+      }
+      instances.clear();
     },
   };
   return container;
@@ -94,14 +105,24 @@ export function createContextKeyService(): ContextKeyService {
     set(key, value) { store.set((s) => ({ ...s, [key]: value })); },
     evaluate(when) {
       if (!when) return true;
-      // minimal evaluator: `a && b && !c` over truthy context keys (VSCode-style, kept small)
-      return when.split("&&").every((part) => {
-        const t = part.trim();
-        const neg = t.startsWith("!");
-        const key = neg ? t.slice(1).trim() : t;
-        const v = !!store.getState()[key];
-        return neg ? !v : v;
-      });
+      // VSCode-style when-clause: OR of AND-groups, each atom a key, `!key`, or `key ==|!= value`.
+      const s = store.getState();
+      return when.split("||").some((orPart) =>
+        orPart.split("&&").every((part) => {
+          const t = part.trim();
+          const eq = t.match(/^(\S+)\s*(==|!=)\s*(.+)$/);
+          if (eq) {
+            const [, k, op, raw] = eq;
+            const want = raw.trim().replace(/^["']|["']$/g, "");
+            const cur = String(s[k.trim()] ?? "");
+            return op === "==" ? cur === want : cur !== want;
+          }
+          const neg = t.startsWith("!");
+          const key = neg ? t.slice(1).trim() : t;
+          const v = !!s[key];
+          return neg ? !v : v;
+        }),
+      );
     },
   };
 }
@@ -134,3 +155,10 @@ export function createCommandService(container: ServiceContainer): CommandServic
     async execute(id, args) { const c = cmds.get(id); if (c && visible(c)) await c.run({ container, args }); },
   };
 }
+
+// ── kernel barrel — disposables, signals, keybindings, lifecycle ────────────────
+// (one-way: these import the hoisted `createServiceId` from here; safe to re-export.)
+export * from "./disposable";
+export * from "./signal";
+export * from "./keybindings";
+export * from "./lifecycle";
