@@ -22,6 +22,18 @@ them unsealed (green-on-empty path), so the build stays green without a prematur
 needs them** and re-sealed then (`pnpm seal:contracts`, a `lane:contract` step). MVP0 chat streams SSE
 directly over the `/api/chat` HTTP response, so it needs no `ws.v1` change.
 
+## D4 — MVP0 complete (live, browser-verified) + the tunnel-keepalive learning
+The full loop works on bbb: browser Chat → `/api/chat` proxy → agent-api → claude-in-container (the
+subscription) → conformant entity write/edit → `workspace.v1` governance → commit → SSE → rendered
+(bubbles, tool chips, commit badge). A per-person knowledge graph (jane-liu, acme-corp, raj-patel) was
+built through chat, each governed + committed, with session memory across turns.
+- **Tunnel learning:** the Mac↔bbb SSH tunnel for the long SSE **must** use keepalive
+  (`-o ServerAliveInterval=20 -o ServerAliveCountMax=5 -o ExitOnForwardFailure=yes`); a plain
+  `ssh -fNL` drops mid-stream (`ECONNRESET`).
+- **MVP0 simplifications (→ MVP1 hardening):** the claude turn runs in the control-plane container
+  with per-subject workspace dirs and a hardcoded subject (`u_jane`); per-person runtime-unit
+  isolation, real auth/subject, and remote (`workspace_repo`) push are MVP1.
+
 ## D3 — push past environmental pre-push gates with `--no-verify`
 The repo's pre-push hook runs the **full** `pnpm gates`, which includes heavy/environmental gates that
 can't pass on the Mac dev box and are unrelated to this work: `gate:compose` (needs the running stack —
