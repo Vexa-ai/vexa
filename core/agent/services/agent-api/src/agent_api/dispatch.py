@@ -26,8 +26,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
+    subject = identity["subject"]
+    # The dispatch's personal (rw) workspace folder is mounted at <root>/<subject>; the Runtime binds the
+    # backing store (a host path / named volume) at <root>, and the worker works in the subject subdir.
+    root = settings.workspaces_dir
     return {
-        "VEXA_OWNER": identity["subject"],                       # quota + cred-brokerage axis = the person
+        "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
         "VEXA_AGENT_IDENTITY_TOKEN": token,                      # the per-dispatch SIGNED token (verified at boundaries)
         "VEXA_RUNNER": invocation.get("runner", "claude-code"),
@@ -37,7 +41,9 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_UNIT_IN_TOPIC": input_topic(unit_id),
         "VEXA_WORKSPACES": json.dumps(invocation["workspaces"]),  # the granted [{id,mode}] list to mount
         "VEXA_START": json.dumps(invocation["start"]),            # entrypoint(inline|path) | session(ref)
-        "VEXA_WORKSPACE_PATH": settings.workspace_path,
+        "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
+        "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
+        "VEXA_WORKSPACE_PATH": f"{root}/{subject}",               # the worker's cwd (the subject's rw folder)
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }

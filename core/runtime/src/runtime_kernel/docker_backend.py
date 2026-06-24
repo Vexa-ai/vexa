@@ -69,9 +69,34 @@ class DockerBackend:
         if shm:
             host_config["ShmSize"] = shm
 
+        # Workspace mount (Workspace primitive): the dispatch's granted git folder is PORTED IN, not
+        # cloned — a bind of a host path / named volume the workload env names. Generic: the backend
+        # just forwards source→target; the control plane decides what to mount (mode is enforced by the
+        # token at the boundary above this).
+        binds: list[str] = []
+        mount_src = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
+        mount_tgt = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
+        if mount_src and mount_tgt:
+            binds.append(f"{mount_src}:{mount_tgt}")
+
+        # The Runtime BROKERS the model credential. Two ways, both kept OUT of the dispatch envelope (the
+        # agent only ever holds creds the trusted runtime injects): a Claude subscription credentials
+        # file bind-mounted read-only (HOST_CLAUDE_CREDENTIALS — the quorum pattern), and/or an
+        # ANTHROPIC_API_KEY forwarded from the spawner's env.
+        creds = os.getenv("HOST_CLAUDE_CREDENTIALS")
+        if creds:
+            binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
+        if binds:
+            host_config["Binds"] = binds
+
+        spawn_env = dict(env)
+        anthropic = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic and "ANTHROPIC_API_KEY" not in spawn_env:
+            spawn_env["ANTHROPIC_API_KEY"] = anthropic
+
         payload: dict[str, Any] = {
             "Image": runnable.image,
-            "Env": [f"{k}={v}" for k, v in env.items()],
+            "Env": [f"{k}={v}" for k, v in spawn_env.items()],
             "Labels": {MANAGED_LABEL: "true", "runtime.workload_id": workload_id},
             "HostConfig": host_config,
         }

@@ -24,9 +24,10 @@ COPY core/agent/services/agent-api/pyproject.toml core/agent/services/agent-api/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
 
-# Production ASGI server (fastapi is already pinned in pyproject).
+# Production ASGI server (fastapi is already pinned in pyproject) + redis (the per-dispatch Stream
+# primitive: the control plane relays unit:<id>:out as SSE; the in-container worker XADDs to it).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install "uvicorn[standard]==0.34.0"
+    uv pip install "uvicorn[standard]==0.34.0" "redis>=5,<6"
 
 # Claude Code (the unit's model+tooling runtime) + git (the governance git ops). node 20 via nodesource
 # so claude-code resolves; the subscription credentials are bind-mounted read-only at runtime (compose),
@@ -38,6 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY core/agent/services/agent-api/src ./src
+# identity_core — vendored so the control plane mints per-dispatch signed tokens (LocalIdentityMinter)
+# and boundaries can verify them. Dependency-light (stdlib only); placed on PYTHONPATH (/app/src).
+COPY core/identity/src/identity_core ./src/identity_core
 # The per-person workspace template (CLAUDE.md + conventions) the chat runner seeds new workspaces from.
 COPY core/agent/services/agent-api/workspace-seed ./workspace-seed
 # The unit toolbelt registry (tool.v1 + MCP launch specs) the ToolRegistry loads — the generic tool mechanism.

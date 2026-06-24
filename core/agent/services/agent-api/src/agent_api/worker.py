@@ -44,10 +44,30 @@ def _exec_claude(argv: list[str], cwd: str) -> Iterator[str]:
         proc.wait()
 
 
+def _ensure_repo(work: Path) -> None:
+    """The mounted workspace folder is a git repo (continuity + the governance undo). If the bind is
+    empty (first dispatch for this subject), initialize it with a seed commit so ``run_unit_turn`` has a
+    HEAD to commit onto. Idempotent."""
+    work.mkdir(parents=True, exist_ok=True)
+    if (work / ".git").exists():
+        return
+    for args in (
+        ("init", "-q"),
+        ("config", "user.email", "agent@vexa"),
+        ("config", "user.name", "vexa-agent"),
+    ):
+        subprocess.run(["git", *args], cwd=str(work), check=True, capture_output=True, text=True)
+    if not (work / "CLAUDE.md").exists():
+        (work / "CLAUDE.md").write_text("# Workspace\n\nThe agent's durable memory — knowledge, tasks, notes as files.\n")
+    subprocess.run(["git", "add", "-A"], cwd=str(work), check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed", "--allow-empty"], cwd=str(work), check=True, capture_output=True, text=True)
+
+
 def run_turn_over_workspace(work: Path, prompt: str, *, model: str | None = None) -> Iterator[dict]:
     """One governed claude turn over the mounted workspace: resume from the session file, run
     ``run_unit_turn`` (which revalidates entity writes vs workspace.v1 and commits), and persist the
     captured session id. A stale ``--resume`` (the server session expired) retries fresh once."""
+    _ensure_repo(work)
     sess_file = work / ".claude" / ".session"
     resume = sess_file.read_text().strip() if sess_file.exists() else None
     allowed = ["Read", "Write", "Edit"]

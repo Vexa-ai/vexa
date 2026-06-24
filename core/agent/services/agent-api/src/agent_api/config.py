@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     workspace_ref: str = "main"
     # The workspace store (object bucket) the Runtime syncs granted workspaces down from / rw back to.
     workspace_store_url: str = "s3://vexa-workspaces"
+    # The Runtime binds THIS (a host path or a docker named volume) at `workspaces_dir` in the worker —
+    # the dev backing for the Workspace store (prod = a bucket-materialized path). The worker works in
+    # the subject's subdir of it.
+    workspace_mount_source: str = "agent-workspaces"
 
     # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─
     redis_url: str = "redis://redis:6379/0"

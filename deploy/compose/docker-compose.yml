@@ -127,6 +127,12 @@ services:
       - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:dev}
       - REDIS_URL=redis://redis:6379/0
+      # The Runtime brokers the model credential — bind-mounted into each spawned agent (never in the
+      # dispatch envelope; the agent only holds creds the trusted runtime injects). HOST_CLAUDE_CREDENTIALS
+      # is the HOST path to the Claude subscription creds file (quorum pattern); ANTHROPIC_API_KEY is the
+      # alternative. The host path must be visible to the Docker daemon.
+      - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
@@ -166,10 +172,14 @@ services:
       - VEXA_WORKSPACES_DIR=/workspaces
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
+      # Stream primitive — the per-dispatch redis Streams the control plane relays (unit:<id>:out → SSE).
+      - VEXA_REDIS_URL=redis://redis:6379/0
+      # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
+      - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
+      # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
+      - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
     volumes:
-      # The deployment's logged-in Claude subscription, bind-mounted READ-ONLY (never baked in — P15).
-      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
-      # Per-subject chat workspaces (MVP0: in the control-plane container; MVP1: per-person runtime units).
+      # The Workspace store backing (dev): the worker mounts the subject's subdir; agent-api reads the tree.
       - agent-workspaces:/workspaces
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
