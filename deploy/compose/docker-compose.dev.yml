@@ -26,6 +26,10 @@ services:
   runtime:
     volumes:
       - ../../core/runtime/src:/app/src
+    # the HOST path of the agent_api source → dev-mounted into SPAWNED workers so worker.py hot-reloads
+    # too (no image rebuild). Per-host: set VEXA_AGENT_SRC_MOUNT in deploy/compose/.env to the checkout.
+    environment:
+      - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
     command: ["python", "-m", "watchfiles", "python -m runtime_kernel", "/app/src"]
 
   meeting-api:

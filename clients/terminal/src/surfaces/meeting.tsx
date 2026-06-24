@@ -13,11 +13,11 @@ import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbe
 import { registerList, registerTab, registerContext, registerCommand, type TabProps, type ContextProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { EntityList, onResearchRequest } from "./entities";
-import { MEETINGS, meetingById, liveMeeting, meetingEntities, entityFor, type MeetingMock, type Entity } from "./mock";
+import { MEETINGS, meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
 import { useLiveMeetings, liveMeetingsNow } from "./liveMeetings";
 
-// ── live copilot cards (streamed from the real dispatch) ─────────────────────────
+// ── live entities (streamed from the real dispatch) — compact, clickable to research ──────────────
 const KIND: Record<string, { icon: string; color: string; bg: string }> = {
   person: { icon: "user", color: "var(--blue)", bg: "var(--bluebg)" },
   company: { icon: "building", color: "var(--accent)", bg: "var(--accentbg)" },
@@ -25,30 +25,41 @@ const KIND: Record<string, { icon: string; color: string; bg: string }> = {
   action: { icon: "zap", color: "var(--green)", bg: "var(--greenbg)" },
 };
 
-function LiveCards({ cards, note, connected }: { cards: LiveCard[]; note: string; connected: boolean }) {
+/** classify a tool name into one of the op icons so the operation line reads at a glance */
+function toolOp(tool: string): Op {
+  const t = tool.toLowerCase();
+  const icon = /read|cat|open/.test(t) ? opIcon.read : /search|grep|find/.test(t) ? opIcon.search
+    : /edit|write|append/.test(t) ? opIcon.edit : /git|commit/.test(t) ? opIcon.git
+    : /web|fetch|http/.test(t) ? opIcon.web : opIcon.tool;
+  return { icon, label: tool, status: "done" };
+}
+
+function LiveCards({ cards, connected, onResearch }: { cards: LiveCard[]; connected: boolean; onResearch: (c: LiveCard) => void }) {
+  // the feed re-surfaces the same entity across beats — dedupe by title (first kind/body wins)
+  const seen = new Set<string>();
+  const uniq = cards.filter((c) => c.title && !seen.has(c.title.toLowerCase()) && seen.add(c.title.toLowerCase()));
   return (
     <div style={{ marginTop: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 9px" }}>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Surfaced live</span>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{cards.length}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
+        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Entities</span>
+        <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{uniq.length}</span>
         <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
         <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: connected ? "var(--green)" : "var(--t3)" }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--green)" : "var(--t3)" }} />{connected ? "listening" : "…"}
         </span>
       </div>
-      {note && <div style={{ fontSize: 12, color: "var(--t2)", fontStyle: "italic", margin: "0 2px 10px", lineHeight: 1.5 }}>{note}</div>}
-      {cards.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "6px 2px" }}>Listening — the copilot will surface people, topics, and action items as the meeting unfolds.</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {cards.map((c, i) => {
+      {uniq.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 2px" }}>Listening — people, companies, and topics will appear here to click and research.</div>}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {uniq.map((c) => {
           const k = KIND[c.kind] ?? KIND.topic;
           return (
-            <div key={i} className="vx-fade-up" style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "9px 11px", borderRadius: 10, background: "var(--panel)", border: "1px solid var(--line)" }}>
-              <span style={{ width: 26, height: 26, flex: "none", borderRadius: 7, background: k.bg, color: k.color, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name={k.icon} size={14} /></span>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, color: "var(--t1)", fontWeight: 550 }}>{c.title}</div>
-                {c.body && <div style={{ fontSize: 12, color: "var(--t3)", marginTop: 2, lineHeight: 1.45 }}>{c.body}</div>}
-              </div>
-            </div>
+            <button key={c.title} className="vx-fade-up" title={c.body || `Research ${c.title}`} onClick={() => onResearch(c)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px 5px 6px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
+              <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, background: k.bg, color: k.color, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name={k.icon} size={11} /></span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</span>
+            </button>
           );
         })}
       </div>
@@ -114,34 +125,47 @@ function MeetingTab({ params }: TabProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [feed]);
 
-  // a turn whose operations resolve over ~2s, then the reply lands (mock)
-  const stream = (label: string, ops: Op[], reply: string) => {
+  // a REAL agent turn over /api/chat (the same engine as the chat surface): tool-calls stream as ops,
+  // then the reply + commit land. One session per meeting so research accumulates context.
+  const [busy, setBusy] = useState(false);
+  const patchAgent = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
+    setFeed((ts) => ts.map((t, i) => (i === ts.length - 1 && t.role === "agent" ? fn(t) : t)));
+
+  const send = async (label: string, prompt: string) => {
+    if (busy) return;
     const n = idRef.current++;
-    const aid = `a-${n}`;
-    setFeed((f) => [...f, { id: `u-${n}`, role: "user", text: label }, { id: aid, role: "agent", text: "", ops }]);
-    const patch = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
-      setFeed((f) => f.map((t) => (t.id === aid && t.role === "agent" ? fn(t) : t)));
-    ops.forEach((_, k) => setTimeout(() => patch((t) => ({ ...t, ops: t.ops.map((o, j) => (j <= k ? { ...o, status: "done" } : o)) })), 450 * (k + 1)));
-    setTimeout(() => patch((t) => ({ ...t, text: reply, commit: "a1b2c3d4" })), 450 * (ops.length + 1));
+    setFeed((f) => [...f, { id: `u-${n}`, role: "user", text: label }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
+    setBusy(true);
+    try {
+      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, subject: "u_live", session: `meeting-${m?.id ?? "live"}` }) });
+      const reader = r.body?.getReader(); const dec = new TextDecoder(); let buf = "";
+      while (reader) {
+        const { value: chunk, done } = await reader.read(); if (done) break;
+        buf += dec.decode(chunk, { stream: true });
+        const ls = buf.split("\n"); buf = ls.pop() ?? "";
+        for (const line of ls) {
+          if (!line.startsWith("data: ")) continue;
+          let ev: { type: string; text?: string; tool?: string; sha?: string };
+          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+          if (ev.type === "message-delta") patchAgent((t) => ({ ...t, text: t.text ? `${t.text}\n\n${ev.text}` : ev.text ?? "" }));
+          else if (ev.type === "tool-call") patchAgent((t) => ({ ...t, ops: [...t.ops, toolOp(ev.tool ?? "tool")] }));
+          else if (ev.type === "commit") patchAgent((t) => ({ ...t, commit: ev.sha }));
+          else if (ev.type === "rejected") patchAgent((t) => ({ ...t, rejected: "workspace.v1 violation — reverted" }));
+        }
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      }
+    } finally { setBusy(false); }
   };
 
-  const research = (e: Entity) => stream(`Research ${e.title}`, [
-    { icon: opIcon.web, label: `web · "${e.title} — latest"`, status: "running" },
-    { icon: opIcon.read, label: `read ${e.path}`, status: "running" },
-    { icon: opIcon.edit, label: `update ${e.path}`, status: "running" },
-  ], `Researched ${e.title} — pulled the latest and appended findings to [[${e.title}]]; committed to the workspace.`);
-
-  const ask = (text: string) => stream(text, [
-    { icon: opIcon.read, label: "read kg/entities/company/acme-corp.md", status: "running" },
-    { icon: opIcon.search, label: 'search transcript · "renewal", "SSO"', status: "running" },
-    { icon: opIcon.edit, label: "edit drafts/acme-renewal.md", status: "running" },
-  ], "Done — committed the change to the workspace; it's ready to send on your approval.");
+  const research = (title: string, kind?: string) =>
+    send(`Research ${title}`, `In the live meeting "${m?.title ?? "this meeting"}", the ${kind ?? "entity"} "${title}" came up. Research it (web + the workspace knowledge graph), append a concise note to its entity file, and commit. Keep it tight.`);
+  const ask = (text: string) => send(text, text);
 
   // open an entity card in the right sidebar (the card creates it first if missing)
   const openEntity = (e: Entity) => layout.setContext({ kind: "entity", params: { title: e.title, from: m?.id } });
 
-  // the active meeting chat is where Research-from-card lands (stream() closes over stable setters)
-  useEffect(() => onResearchRequest((title) => research(entityFor(title))), [m?.id]);
+  // research-from-entity-card requests land in this meeting's chat
+  useEffect(() => onResearchRequest((title) => research(title)), [m?.id]);
 
   // a live-backed meeting subscribes to the REAL dispatch Stream (transcript + copilot cards)
   const liveData = useMeetingLive(m?.id ?? "", (m?.session_uid as string) ?? "");
@@ -187,11 +211,11 @@ function MeetingTab({ params }: TabProps) {
           </div>
           <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or research it — I'll work in the chat below.</p>
         </header>
-        <EntityList present={present} detected={isLive ? [] : detected} onOpen={openEntity} onResearch={research} />
-        {isLive && <LiveCards cards={liveData.cards} note={liveData.note} connected={liveData.connected} />}
+        {!isLive && <EntityList present={present} detected={detected} onOpen={openEntity} onResearch={(e) => research(e.title, e.type)} />}
+        {isLive && <LiveCards cards={liveData.cards} connected={liveData.connected} onResearch={(c) => research(c.title, c.kind)} />}
         {feed.length > 0 && (
           <div className="vx-fade-up" style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 20 }}>
-            <Conversation turns={feed} />
+            <Conversation turns={feed} busy={busy} />
           </div>
         )}
       </div>

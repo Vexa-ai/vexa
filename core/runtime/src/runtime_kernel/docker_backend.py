@@ -86,6 +86,12 @@ class DockerBackend:
         creds = os.getenv("HOST_CLAUDE_CREDENTIALS")
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
+        # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
+        # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
+        # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
+        dev_src = os.getenv("VEXA_AGENT_SRC_MOUNT")
+        if dev_src:
+            binds.append(f"{dev_src}:/app/src/agent_api:ro")
         if binds:
             host_config["Binds"] = binds
 

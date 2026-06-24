@@ -206,9 +206,9 @@ def meeting_card_turn(work: Path, segments: list[dict], *, model: str | None = N
     card per salient finding. Reuses the governed turn (with session continuity across beats)."""
     lines = "\n".join(f"[{s.get('speaker', '?')}] {s.get('text', '')}" for s in segments)
     reply: str | None = None
-    # propose-only: a read-only turn (no Write/Edit) — the agent emits cards, it doesn't auto-commit
+    # propose-only: a read-only turn (no Write/Edit). We DON'T forward the streaming turn events — the
+    # raw JSON reply would leak into the UI as a "note"; the meeting feed wants only the parsed cards.
     for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model, allowed_tools=["Read"]):
-        yield ev
         if ev.get("type") == "done":
             reply = ev.get("reply")
     for card in parse_cards(reply):
@@ -267,6 +267,9 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
 
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
+    # The live-meeting WATCHER runs a cheap, high-frequency card-extraction beat — pin it to Haiku 4.5
+    # (override with VEXA_MEETING_MODEL). Chat/routine turns keep the default (VEXA_AGENT_MODEL).
+    meeting_model = os.environ.get("VEXA_MEETING_MODEL") or "claude-haiku-4-5-20251001"
     client = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     out_topic = os.environ["VEXA_UNIT_OUT_TOPIC"]
     idle_ms = int(os.environ.get("VEXA_IDLE_TIMEOUT_SEC", "120")) * 1000
@@ -275,7 +278,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     if transcript_stream:  # a live meeting dispatch — consume the transcript, emit cards
         serve_meeting(
             client, transcript_stream=transcript_stream, out_topic=out_topic,
-            card_turn=lambda segs: meeting_card_turn(work, segs, model=model), idle_ms=idle_ms,
+            card_turn=lambda segs: meeting_card_turn(work, segs, model=meeting_model), idle_ms=idle_ms,
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
         serve(
