@@ -16,6 +16,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
@@ -58,9 +59,43 @@ def _ensure_repo(work: Path) -> None:
     ):
         subprocess.run(["git", *args], cwd=str(work), check=True, capture_output=True, text=True)
     if not (work / "CLAUDE.md").exists():
-        (work / "CLAUDE.md").write_text("# Workspace\n\nThe agent's durable memory — knowledge, tasks, notes as files.\n")
+        (work / "CLAUDE.md").write_text(
+            "# Workspace — your durable memory\n\n"
+            "This directory (your current working directory) is your ONLY durable memory, and it is a\n"
+            "git repo that is committed automatically after every turn. Anything you should remember —\n"
+            "facts about the user, knowledge, tasks, notes, decisions — MUST be saved as files here,\n"
+            "under this workspace.\n\n"
+            "- Save knowledge/notes as markdown files in this workspace (e.g. `notes/`, `kg/entities/`).\n"
+            "- To recall something, READ the files in this workspace.\n"
+            "- NEVER write memory to `~/.claude` or any path outside this workspace — that is ephemeral\n"
+            "  and will be lost. Always use paths relative to this workspace directory.\n"
+        )
     subprocess.run(["git", "add", "-A"], cwd=str(work), check=True, capture_output=True, text=True)
     subprocess.run(["git", "commit", "-q", "-m", "seed", "--allow-empty"], cwd=str(work), check=True, capture_output=True, text=True)
+
+
+def _link_chat_into_workspace(work: Path) -> None:
+    """Save + resume chats FROM THE WORKSPACE. claude-code stores a conversation's transcript at
+    ``~/.claude/projects/<cwd-slug>/<session>.jsonl`` — inside the container, so it is wiped when the
+    per-turn container is recreated (no memory). Symlink that dir into the workspace's ``.claude/projects``
+    so the chat is written to the durable git folder and ``--resume`` reads it back across turns. We keep
+    it under ``.claude`` (excluded from the governance ``git clean``) so a rejected turn never wipes the
+    history; it persists on the workspace volume."""
+    ws_projects = work / ".claude" / "projects"
+    ws_projects.mkdir(parents=True, exist_ok=True)
+    home_claude = Path(os.environ.get("HOME", "/root")) / ".claude"
+    home_claude.mkdir(parents=True, exist_ok=True)
+    link = home_claude / "projects"
+    try:
+        if link.is_symlink():
+            if os.readlink(link) == str(ws_projects):
+                return
+            link.unlink()
+        elif link.exists():
+            shutil.rmtree(link, ignore_errors=True)
+        link.symlink_to(ws_projects, target_is_directory=True)
+    except OSError:
+        pass  # best-effort; a fresh turn still works, just without cross-turn resume
 
 
 def run_turn_over_workspace(work: Path, prompt: str, *, model: str | None = None) -> Iterator[dict]:
@@ -68,6 +103,7 @@ def run_turn_over_workspace(work: Path, prompt: str, *, model: str | None = None
     ``run_unit_turn`` (which revalidates entity writes vs workspace.v1 and commits), and persist the
     captured session id. A stale ``--resume`` (the server session expired) retries fresh once."""
     _ensure_repo(work)
+    _link_chat_into_workspace(work)  # chats are saved to / resumed from the workspace, not ~/.claude
     sess_file = work / ".claude" / ".session"
     resume = sess_file.read_text().strip() if sess_file.exists() else None
     allowed = ["Read", "Write", "Edit"]
