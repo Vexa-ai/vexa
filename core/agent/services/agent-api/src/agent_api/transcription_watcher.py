@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
+import urllib.error
+import urllib.request
 
 from . import units
 
@@ -33,10 +36,37 @@ _BRIEF = (
     "people, companies, topics, decisions, and action items worth acting on."
 )
 _PLATFORM = {"google_meet": "Google Meet", "teams": "Microsoft Teams", "zoom": "Zoom"}
+_native: dict[str, tuple[str, str]] = {}  # numeric meeting_id → (native_meeting_id, platform), cached
 
 
-def _title(platform: str) -> str:
-    return f"{_PLATFORM.get(platform, platform)} — live"
+def _title(platform: str, native: str) -> str:
+    return f"{_PLATFORM.get(platform, platform)} · {native}"
+
+
+def _resolve_native(meeting_id: str) -> "tuple[str, str] | None":
+    """Map the bot's NUMERIC meeting_id → its native Meet code (e.g. nba-agyz-gbe) via the gateway, so
+    the wire/dispatch/feed key on ONE id per physical meeting (re-launches dedupe to one entry) — and the
+    terminal can stop the bot by its native id. Cached; a miss re-fetches the whole meetings list."""
+    if meeting_id in _native:
+        return _native[meeting_id]
+    key = os.environ.get("VEXA_BOT_API_KEY", "")
+    if not key:
+        return None
+    gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
+    try:
+        req = urllib.request.Request(gw + "/meetings", headers={"X-API-Key": key})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode() or "{}")
+        items = data if isinstance(data, list) else (data.get("meetings") or data.get("items") or [])
+        for mt in items:
+            mid = str(mt.get("id") or mt.get("meeting_id") or "")
+            nat = mt.get("native_meeting_id") or mt.get("native_id") or mt.get("platform_specific_id")
+            if mid and nat:
+                _native[mid] = (nat, mt.get("platform") or "google_meet")
+    except Exception:  # noqa: BLE001 — resolution is best-effort; caller falls back to the numeric id
+        logger.exception("native-id resolve failed")
+        return None
+    return _native.get(meeting_id)
 
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
@@ -84,11 +114,15 @@ def _run(redis_url: str, dispatcher, live, subject: str) -> None:
 
 
 def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_text) -> None:
-    # Key on the meeting id the bot stamps on every segment (uid is not always present); the wire,
-    # dispatch, and terminal all agree on this one id.
-    key = str(p.get("meeting_id") or p.get("uid") or "")
-    if not key:
+    # The bot stamps a NUMERIC meeting_id on every segment — but each re-launch of the SAME Meet gets a
+    # fresh numeric id. Resolve it to the native Meet code so the wire/dispatch/feed key on ONE id per
+    # physical meeting (re-launches dedupe to a single entry). Fall back to numeric if resolution fails.
+    mid = str(p.get("meeting_id") or p.get("uid") or "")
+    if not mid:
         return
+    resolved = _resolve_native(mid)
+    native, platform = resolved if resolved else (mid, p.get("platform") or "google_meet")
+    key = native
     kind = p.get("type")
     out_stream = f"tc:meeting:{key}"
     if kind == "session_end":
@@ -103,10 +137,9 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
 
     # Keep the terminal's live feed fresh on EVERY batch (a cheap dict write) so an agent-api restart
     # can't drop the meeting from the list — it reappears on the first segment. Throttle only the spawn.
-    platform = p.get("platform") or "google_meet"
     live.add({
-        "meeting_id": key, "session_uid": key, "platform": platform,
-        "title": _title(platform), "unit_id": f"agent-meet-{key}",
+        "meeting_id": key, "session_uid": key, "native_id": native, "platform": platform,
+        "title": _title(platform, native), "unit_id": f"agent-meet-{key}",
     })
     now = time.monotonic()
     if now - last_arm.get(key, 0.0) > REARM_SEC:
