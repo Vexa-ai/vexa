@@ -24,6 +24,7 @@ _WORKSPACE_SCHEMA = Path("agent/contracts/workspace.v1/workspace.schema.json")
 _INVOKE_SCHEMA = Path("agent/contracts/invoke.v1/invoke.schema.json")
 _UNIT_SCHEMA = Path("agent/contracts/unit.v1/unit.schema.json")
 _ROUTINE_SCHEMA = Path("agent/contracts/routine.v1/routine.schema.json")
+_EVENT_SCHEMA = Path("agent/contracts/event.v1/event.schema.json")
 
 
 def _repo_root() -> Path:
@@ -103,3 +104,10 @@ def validate_unit_invocation(payload: dict) -> None:
 def validate_routine(payload: dict) -> None:
     """Validate a ``routine.v1`` Routine (the authoring entity that compiles to a schedule.v1 job)."""
     _validator(_ROUTINE_SCHEMA, "Routine").validate(payload)
+
+
+# ── event.v1 (CONSUMED — the event-source → agent-api ingress) ───────────────
+
+def validate_event(payload: dict) -> None:
+    """Validate an ``event.v1`` Event (the envelope the ingress maps to a unit.v1 Invocation)."""
+    _validator(_EVENT_SCHEMA, "Event").validate(payload)

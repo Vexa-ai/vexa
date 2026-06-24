@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from . import routines as routines_mod
 from .dispatch import Dispatcher
+from .events import event_to_invocation
 from .ports import SchedulerPort
 from .workspace_reader import WorkspaceReader
 
@@ -182,6 +183,20 @@ def create_app(
                 scheduler.cancel_job(job["job_id"])
                 return {"ok": True, "routine_id": routine_id}
         raise HTTPException(status_code=404, detail="unknown routine")
+
+    # ── events (MVP3) — the GENERIC event-source ingress: any event.v1 Event → a unit.v1 Invocation →
+    #    the one Dispatcher. agent-api knows no tool/domain; the unit reaches email/calendar/etc via its
+    #    toolbelt. Email-triage, post-meeting, news all POST here (one front door, P6) ──
+    @app.post("/events", status_code=202)
+    def events(event: dict = Body(...)):
+        try:
+            invocation = event_to_invocation(event, workspace_repo_for=repo_for)
+        except ValidationError as e:
+            raise HTTPException(status_code=400, detail=f"invalid event.v1: {e.message}")
+        except ValueError as e:  # no plan carried — fail loud (P18)
+            raise HTTPException(status_code=422, detail=str(e))
+        workload_id = dispatcher.dispatch(invocation)
+        return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
     @app.get("/api/workspace/tree")
     def ws_tree(subject: str):

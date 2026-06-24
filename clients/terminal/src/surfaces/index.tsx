@@ -26,7 +26,7 @@ function Placeholder({ title, note }: { title: string; note: string }) {
 
 const PLACEHOLDERS: { id: SurfaceId; label: string; icon: string; order: number; live?: boolean; note: string }[] = [
   { id: "live", label: "Live meeting", icon: "radio", order: 10, live: true, note: "Real-time proactive cards + entity cockpit — MVP4 (the live-stream unit)." },
-  { id: "inbox", label: "Inbox", icon: "mail", order: 40, note: "Email + the Inbox-triage routine's proposed actions — MVP3." },
+  { id: "inbox", label: "Inbox", icon: "mail", order: 40, note: "Email as a first-class terminal tool (reads the email tool/service, not a backend primitive) — MVP3." },
   { id: "calendar", label: "Calendar", icon: "cal", order: 50, note: "Calendar = meetings; past events are recorded meeting notes — MVP3." },
 ];
 for (const p of PLACEHOLDERS) {

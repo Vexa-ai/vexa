@@ -49,6 +49,7 @@ COPY core/agent/contracts/workspace.v1/workspace.schema.json       ./agent/contr
 COPY core/agent/contracts/invoke.v1/invoke.schema.json             ./agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json
+COPY core/agent/contracts/event.v1/event.schema.json               ./agent/contracts/event.v1/event.schema.json
 
 EXPOSE 8100
 # uvicorn resolves the lazy PEP-562 `app` (agent_api.api:app), which wires the real RuntimeHttpClient
