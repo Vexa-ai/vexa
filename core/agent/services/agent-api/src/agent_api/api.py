@@ -311,7 +311,9 @@ def create_app(
                                 break
                             for seg in payload.get("segments", []):
                                 yield {"type": "transcript", "speaker": seg.get("speaker"),
-                                       "text": seg.get("text"), "t": seg.get("start")}
+                                       "text": seg.get("text"), "t": seg.get("start"),
+                                       "completed": seg.get("completed", True),
+                                       "id": seg.get("segment_id")}
                         else:
                             yield json.loads(fields.get("event", "{}"))
 

@@ -212,8 +212,8 @@ function TranscriptContext({ params }: ContextProps) {
   if (!m) return <div style={{ padding: 16, color: "var(--t3)" }}>No transcript.</div>;
   const fmt = (t?: number) => (t == null ? "" : `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`);
   const lines = isLive
-    ? liveData.transcript.map((s) => ({ t: fmt(s.t), speaker: s.speaker, text: s.text }))
-    : m.transcript.slice(0, shown);
+    ? liveData.transcript.map((s) => ({ t: fmt(s.t), speaker: s.speaker, text: s.text, pending: s.completed === false, id: s.id }))
+    : m.transcript.slice(0, shown).map((l) => ({ t: l.t, speaker: l.speaker, text: l.text, pending: false, id: undefined as string | undefined }));
   const streaming = isLive ? (liveData.connected && !liveData.ended) : (m.status === "live" && shown < m.transcript.length);
   const liveDot = isLive ? (liveData.connected && !liveData.ended) : m.status === "live";
   return (
@@ -222,9 +222,9 @@ function TranscriptContext({ params }: ContextProps) {
         {liveDot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--live)" }} />}transcript
       </div>
       {lines.map((l, i) => (
-        <div key={i} style={{ marginBottom: 11 }}>
-          <div style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--t3)", marginBottom: 2 }}><span style={{ fontFamily: "var(--mono)" }}>{l.t}</span><span style={{ color: "var(--t2)", fontWeight: 500 }}>{l.speaker}</span></div>
-          <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}>{l.text}</div>
+        <div key={l.id ?? i} style={{ marginBottom: 11, opacity: l.pending ? 0.5 : 1, transition: "opacity .18s ease" }}>
+          <div style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--t3)", marginBottom: 2 }}><span style={{ fontFamily: "var(--mono)" }}>{l.t}</span><span style={{ color: "var(--t2)", fontWeight: 500 }}>{l.speaker}</span>{l.pending && <span style={{ color: "var(--live)", fontFamily: "var(--mono)", fontSize: 9.5, letterSpacing: ".04em" }}>● live</span>}</div>
+          <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5, fontStyle: l.pending ? "italic" : "normal" }}>{l.text}</div>
         </div>
       ))}
       {isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Waiting for the transcript…</div>}

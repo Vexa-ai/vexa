@@ -101,7 +101,8 @@ def main() -> None:
             raise
     print(f"[bridge] consuming {SRC} (group={group}) for meeting_id={meeting_id or '*'} → {out_stream}", flush=True)
 
-    seen: set[str] = set()
+    final_done: set[str] = set()    # segment_ids already finalized → never re-emit
+    last_text: dict[str, str] = {}  # segment_id → last draft text (skip identical re-emits)
     base: list[float] = []  # first segment's start → normalize to meeting-relative seconds (the bot emits absolute)
     last_seg = time.monotonic()
     while True:
@@ -128,14 +129,23 @@ def main() -> None:
                     return
                 if t != "transcription":
                     continue
+                # Fan BOTH drafts and finals: the agent (serve_meeting) drops completed:false, the
+                # terminal shows them live (dimmed) and upserts on segment_id. We only skip identical
+                # draft re-emits and anything after a segment is finalized.
                 for seg in (p.get("segments") or []):
-                    if not seg.get("completed"):
-                        continue  # skip live drafts — fan only finalized segments
                     text = (seg.get("text") or "").strip()
-                    sid = str(seg.get("segment_id") or f"{seg.get('start')}:{text[:16]}")
-                    if not text or sid in seen:
+                    if not text:
                         continue
-                    seen.add(sid)
+                    completed = bool(seg.get("completed"))
+                    sid = str(seg.get("segment_id") or f"{seg.get('start')}:{text[:16]}")
+                    if sid in final_done:
+                        continue                       # already locked in — ignore stragglers
+                    if not completed and last_text.get(sid) == text:
+                        continue                       # identical draft — don't spam the wire
+                    last_text[sid] = text
+                    if completed:
+                        final_done.add(sid)
+                        last_text.pop(sid, None)
                     raw = float(seg.get("start") or 0.0)
                     if not base:
                         base.append(raw)
@@ -146,12 +156,12 @@ def main() -> None:
                         "segments": [{
                             "speaker": seg.get("speaker") or "Speaker", "text": text,
                             "start": round(start_rel, 1), "end": round(end_rel, 1),
-                            "completed": True, "language": seg.get("language", "en"), "segment_id": sid,
+                            "completed": completed, "language": seg.get("language", "en"), "segment_id": sid,
                         }],
                     }
                     r.xadd(out_stream, {"payload": json.dumps(out)})
                     last_seg = time.monotonic()
-                    print(f"[seg {start_rel:6.1f}] {out['segments'][0]['speaker']}: {text[:60]}", flush=True)
+                    print(f"[seg {start_rel:6.1f}{'' if completed else '~'}] {out['segments'][0]['speaker']}: {text[:56]}", flush=True)
 
 
 if __name__ == "__main__":
