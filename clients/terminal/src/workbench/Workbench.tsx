@@ -13,7 +13,7 @@ import "dockview/dist/styles/dockview.css";
 const PANES_KEY = "vexa.terminal.panes.v1";
 const savedSizes = (): number[] | undefined => { try { const s = localStorage.getItem(PANES_KEY); const a = s ? JSON.parse(s) : null; return Array.isArray(a) && a.length === 3 ? a : undefined; } catch { return undefined; } };
 const persistSizes = (s: number[]) => { try { localStorage.setItem(PANES_KEY, JSON.stringify(s)); } catch { /* noop */ } };
-import { useService, useStore, KeybindingServiceId } from "../platform";
+import { useService, useStore, KeybindingServiceId, CommandServiceId } from "../platform";
 import { LayoutServiceId, type TabDescriptor, type RightContext } from "./layout";
 import { CommandPalette } from "./CommandPalette";
 import { registry } from "../contributions";
@@ -91,11 +91,15 @@ export function Workbench() {
   const layout = useService(LayoutServiceId);
   const keybindings = useService(KeybindingServiceId);
   const { leftCollapsed, rightCollapsed } = useStore(layout.store);
+  const commands = useService(CommandServiceId);
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
   const onReady = (e: DockviewReadyEvent) => {
     layout.attach(e.api);
-    if (e.api.panels.length === 0) layout.openTab(DEFAULT_TAB);
+    if (e.api.panels.length === 0) {
+      layout.openTab(DEFAULT_TAB);
+      void commands.execute("meeting.openLive"); // mock: the scheduled live meeting auto-opens as a tab
+    }
   };
 
   return (

@@ -8,6 +8,7 @@
  */
 import "./chat";       // tab-kind "chat" + /-skills
 import "./sessions";   // list "sessions" (→ opens chat tabs)
-import "./workspace";  // list "files" + tab-kind "doc" + context "doc-context"
-import "./routines";   // list "routines"
-import "./tasks";      // list "tasks" (→ opens doc tabs)
+import "./meeting";    // list "calendar" + tab-kind "meeting" + context "transcript"
+import "./workspace";  // list "files" (+ git) + tab-kind "doc" + context "doc-context"
+import "./routines";   // list "routines" + tab-kind "routines" (the board)
+// tasks deferred — surfaces as quick-action cards in chat later (see roadmap)

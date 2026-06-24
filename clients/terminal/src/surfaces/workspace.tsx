@@ -6,6 +6,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, registerContext, type TabProps, type ContextProps } from "../contributions";
+import { Icon } from "../ui-kit";
+import { GIT } from "./mock";
 
 const SUBJECT = "u_jane";
 const base = (p: string) => p.split("/").pop() ?? p;
@@ -38,6 +40,35 @@ function FilesList() {
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>{f}</div>
       ))}
       {tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+      <GitSection />
+    </div>
+  );
+}
+
+// ── Source control (git) — the agent's commits + working changes (mock until the git API lands) ──
+function GitSection() {
+  const layout = useService(LayoutServiceId);
+  return (
+    <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6 }}>
+        <Icon name="zap" size={12} />source control
+        <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", color: "var(--t2)", textTransform: "none" }}>{GIT.branch}</span>
+      </div>
+      {GIT.changes.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "2px 9px" }}>CHANGES</div>}
+      {GIT.changes.map((c) => (
+        <div key={c.path} onClick={() => layout.openTab(docTab(c.path))} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+          <span style={{ width: 14, fontFamily: "var(--mono)", color: c.kind === "A" ? "var(--green)" : "var(--accent)", flex: "none" }}>{c.kind}</span>
+          <span style={{ color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{base(c.path)}</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "8px 9px 2px" }}>RECENT COMMITS</div>
+      {GIT.commits.map((c) => (
+        <div key={c.sha} style={{ padding: "4px 9px", fontSize: 12 }}>
+          <div style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
+          <div style={{ fontSize: 11, color: "var(--t3)", display: "flex", gap: 8 }}><span style={{ fontFamily: "var(--mono)", color: "var(--green)" }}>{c.sha}</span><span>{c.when}</span></div>
+        </div>
+      ))}
     </div>
   );
 }
