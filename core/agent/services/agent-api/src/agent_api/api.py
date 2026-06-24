@@ -336,7 +336,7 @@ def _build_production_app() -> FastAPI:
     identity = LocalIdentityMinter(settings.dispatch_signing_key.get_secret_value())
     dispatcher = Dispatcher(settings, runtime, identity)
     invocations_url = settings.agent_api_self_url.rstrip("/") + "/invocations"
-    return create_app(
+    app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),
         reader=WorkspaceReader(settings.workspaces_dir),
@@ -344,6 +344,11 @@ def _build_production_app() -> FastAPI:
         invocations_url=invocations_url,
         redis_url=settings.redis_url,
     )
+    # The in-process meetings Integration (replaces the standalone bridge container): a daemon thread
+    # tails transcription_segments → fans tc:meeting:{uid} + arms the copilot dispatch on activity.
+    from . import transcription_watcher
+    transcription_watcher.start(settings.redis_url, dispatcher, app.state.live_meetings)
+    return app
 
 
 def __getattr__(name: str):
