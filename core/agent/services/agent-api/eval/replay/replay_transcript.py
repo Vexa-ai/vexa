@@ -32,14 +32,26 @@ def main() -> None:
     ap.add_argument("--session-uid", default="sess-acme-1")
     ap.add_argument("--redis", default="redis://localhost:6379/0")
     ap.add_argument("--gap-ms", type=int, default=1200)
+    ap.add_argument("--fixture", default="", help="JSONL of {speaker, text} segments; else the built-in Acme transcript")
     args = ap.parse_args()
 
     import redis
 
+    if args.fixture:
+        segments = []
+        with open(args.fixture, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    d = json.loads(line)
+                    segments.append((d["speaker"], d["text"]))
+    else:
+        segments = TRANSCRIPT
+
     r = redis.from_url(args.redis, decode_responses=True)
     stream = f"tc:meeting:{args.meeting_id}"
     t = 0.0
-    for i, (speaker, text) in enumerate(TRANSCRIPT):
+    for i, (speaker, text) in enumerate(segments):
         seg = {
             "segment_id": f"{args.session_uid}:{i}", "speaker": speaker, "text": text,
             "start": t, "end": t + 5, "completed": True, "language": "en",

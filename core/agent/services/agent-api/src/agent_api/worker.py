@@ -98,15 +98,18 @@ def _link_chat_into_workspace(work: Path) -> None:
         pass  # best-effort; a fresh turn still works, just without cross-turn resume
 
 
-def run_turn_over_workspace(work: Path, prompt: str, *, model: str | None = None) -> Iterator[dict]:
+def run_turn_over_workspace(
+    work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
+) -> Iterator[dict]:
     """One governed claude turn over the mounted workspace: resume from the session file, run
     ``run_unit_turn`` (which revalidates entity writes vs workspace.v1 and commits), and persist the
-    captured session id. A stale ``--resume`` (the server session expired) retries fresh once."""
+    captured session id. A stale ``--resume`` (the server session expired) retries fresh once.
+    ``allowed_tools`` defaults to Read/Write/Edit; pass ``["Read"]`` for a propose-only (no-write) turn."""
     _ensure_repo(work)
     _link_chat_into_workspace(work)  # chats are saved to / resumed from the workspace, not ~/.claude
     sess_file = work / ".claude" / ".session"
     resume = sess_file.read_text().strip() if sess_file.exists() else None
-    allowed = ["Read", "Write", "Edit"]
+    allowed = allowed_tools or ["Read", "Write", "Edit"]
     gen = run_unit_turn(str(work), prompt, _exec_claude, allowed_tools=allowed, session=resume, model=model)
     first = next(gen, None)
     if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
@@ -171,12 +174,14 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
 # ── meeting mode: consume the transcript Stream, gate, emit proactive cards ───────────────────────
 
 CARD_PROMPT = (
-    "You are a live meeting copilot. Below are NEW transcript lines from the meeting in progress.\n\n"
-    "{lines}\n\n"
-    "Surface only what is genuinely salient and NEW: a new PERSON, a TOPIC or decision, or an ACTION "
-    "item. Respond with ONLY a JSON array (no prose, no code fence), each element:\n"
+    "You are a live meeting copilot watching a conversation in real time. Here are the NEWEST "
+    "transcript lines:\n\n{lines}\n\n"
+    "Surface what a participant would want tracked from THESE lines: PEOPLE or companies introduced, "
+    "TOPICS / decisions / notable claims discussed, and ACTION items or commitments. Be useful and "
+    "reasonably generous — this is a live feed, not a summary. Respond with ONLY a JSON array (no prose, "
+    "no markdown fence, and do NOT write any files), each element:\n"
     '  {{"kind": "person"|"topic"|"action", "title": "<short>", "body": "<one line>"}}\n'
-    "Return an empty array [] if nothing new is worth surfacing."
+    "Use [] only if these specific lines genuinely add nothing worth surfacing."
 )
 
 
@@ -201,7 +206,8 @@ def meeting_card_turn(work: Path, segments: list[dict], *, model: str | None = N
     card per salient finding. Reuses the governed turn (with session continuity across beats)."""
     lines = "\n".join(f"[{s.get('speaker', '?')}] {s.get('text', '')}" for s in segments)
     reply: str | None = None
-    for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model):
+    # propose-only: a read-only turn (no Write/Edit) — the agent emits cards, it doesn't auto-commit
+    for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model, allowed_tools=["Read"]):
         yield ev
         if ev.get("type") == "done":
             reply = ev.get("reply")
