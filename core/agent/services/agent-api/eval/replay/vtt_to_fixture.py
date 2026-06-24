@@ -12,7 +12,7 @@ import sys
 
 VTT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/ytcap.en.vtt"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "/tmp/gamestop-allin.jsonl"
-MAX_TURNS = int(sys.argv[3]) if len(sys.argv) > 3 else 22
+MAX_SECONDS = float(sys.argv[3]) if len(sys.argv) > 3 else 600.0  # cap by transcript time (for real-time replay)
 SENTS_PER_TURN = 2
 
 # Best-effort speaker pool (All-In hosts + the guest). Rotated on turn boundaries — heuristic only.
@@ -52,7 +52,7 @@ starts = [flowing[min(int(i / max(1, len(sentences)) * len(flowing)), len(flowin
 segments = []
 turn = 0
 for i in range(0, len(sentences), SENTS_PER_TURN):
-    if turn >= MAX_TURNS:
+    if starts[i] > MAX_SECONDS:
         break
     chunk = " ".join(sentences[i:i + SENTS_PER_TURN]).strip()
     if len(chunk) < 8:
