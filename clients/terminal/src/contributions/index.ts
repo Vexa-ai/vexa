@@ -6,7 +6,7 @@
  * `registerSurface(...)` call, never a shell edit. (docs/ARCHITECTURE.md)
  */
 import type { ComponentType } from "react";
-import type { CommandContribution } from "../platform";
+import type { CommandContribution, ServiceContainer } from "../platform";
 
 export type SurfaceId = string;
 export type Slot = "main" | "primarySidebar" | "auxiliaryBar" | "panel";
@@ -27,6 +27,8 @@ export interface SurfaceContribution {
   composer?: ComposerSpec;
   commands?: CommandContribution[];
   contextKeys?: string[];
+  /** the shell composer calls this on a non-slash submit while this surface is active. */
+  onSubmit?: (text: string, container: ServiceContainer) => void;
 }
 
 export interface ContributionRegistry {

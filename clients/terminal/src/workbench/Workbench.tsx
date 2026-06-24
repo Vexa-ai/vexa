@@ -2,7 +2,7 @@
 /** term-workbench — the shell. Renders parts (activity bar · sidebar · main · composer · aux · status)
  *  entirely from the contribution registry + the LayoutService. Knows nothing about any surface. */
 import { useState, type CSSProperties } from "react";
-import { useService, useStore, CommandServiceId } from "../platform";
+import { useService, useStore, useContainer, CommandServiceId } from "../platform";
 import { LayoutServiceId } from "./layout";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
@@ -30,9 +30,17 @@ const S = {
 
 function Composer({ surfaceId, placeholder, quickChips }: { surfaceId: string; placeholder?: string; quickChips?: string[] }) {
   const commands = useService(CommandServiceId);
+  const container = useContainer();
   const [value, setValue] = useState("");
   const slash = value.startsWith("/");
   const skills = slash ? commands.querySkills(value) : [];
+  const onSend = () => {
+    const v = value.trim();
+    if (!v) return;
+    if (v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) void commands.execute(sk.id, v); }
+    else { registry.get(surfaceId)?.onSubmit?.(v, container); }
+    setValue("");
+  };
   return (
     <div style={S.composer}>
       <div style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -55,9 +63,9 @@ function Composer({ surfaceId, placeholder, quickChips }: { surfaceId: string; p
         )}
         <div style={S.cbox}>
           <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13 }}>/</span>
-          <input value={value} onChange={(e) => setValue(e.target.value)} placeholder={placeholder ?? "Type / for skills, or ask the agent…"}
+          <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onSend(); }} placeholder={placeholder ?? "Type / for skills, or ask the agent…"}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14 }} />
-          <button aria-label="Send" onClick={() => { if (value.startsWith("/")) commands.execute(commands.querySkills(value)[0]?.id ?? "", value); setValue(""); }}
+          <button aria-label="Send" onClick={onSend}
             style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
             <Icon name="send" size={16} />
           </button>
