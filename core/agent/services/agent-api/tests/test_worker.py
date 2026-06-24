@@ -68,3 +68,68 @@ def test_stop_message_exits_immediately():
     s = FakeStream(inbox=[("1-0", {"turn": json.dumps({"type": "stop"})}), _msg("2-0", "never")])
     serve(s, out_topic="o", in_topic="i", turn=_turn, start={}, idle_ms=10)
     assert s.out == []  # stop before any turn ran
+
+
+# ── meeting mode: consume transcript Stream → gate → emit cards ───────────────────────────────────
+
+from agent_api.worker import parse_cards, serve_meeting  # noqa: E402
+
+
+class MeetingStream:
+    def __init__(self, inbox):
+        self.out = []
+        self._inbox = list(inbox)
+
+    def xadd(self, name, fields):
+        self.out.append((name, fields))
+        return str(len(self.out))
+
+    def xread(self, streams, count=1, block=None):
+        tname = next(iter(streams))
+        if not self._inbox:
+            return []
+        batch, self._inbox = self._inbox, []
+        return [(tname, list(batch))]
+
+    def events(self):
+        return [json.loads(f["event"]) for _t, f in self.out]
+
+
+def _seg(speaker, text, completed=True):
+    return {"speaker": speaker, "text": text, "completed": completed}
+
+
+def _transcript(eid, *segs):
+    return (eid, {"payload": json.dumps({"type": "transcription", "segments": list(segs)})})
+
+
+def _card_turn(segments):
+    yield {"type": "message-delta", "text": f"saw {len(segments)} lines"}
+    yield {"type": "card", "card": {"kind": "person", "title": "Priya", "body": "new attendee"}}
+
+
+def test_serve_meeting_emits_card_on_new_speaker_gate():
+    s = MeetingStream(inbox=[_transcript("1-0", _seg("Jane", "hi"), _seg("Raj", "hello"))])
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="unit:u:out", card_turn=_card_turn, idle_ms=10)
+    evs = s.events()
+    assert any(e["type"] == "card" and e["card"]["title"] == "Priya" for e in evs)
+    assert any(e["type"] == "turn-complete" for e in evs)
+    assert all(t == "unit:u:out" for t, _ in s.out)
+
+
+def test_serve_meeting_reaps_on_session_end():
+    s = MeetingStream(inbox=[
+        _transcript("1-0", _seg("Jane", "a"), _seg("Jane", "b")),
+        ("2-0", {"payload": json.dumps({"type": "session_end"})}),
+    ])
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn, idle_ms=10)
+    # the session_end flush emitted the buffered beat, then returned
+    assert any(e["type"] == "card" for e in s.events())
+
+
+def test_parse_cards_tolerant():
+    assert parse_cards('[{"kind":"person","title":"Priya","body":"x"}]')[0]["title"] == "Priya"
+    assert parse_cards('Here are the cards:\n[{"kind":"action","title":"Send quote","body":"by Fri"}] done')[0]["kind"] == "action"
+    assert parse_cards("nothing salient") == []
+    assert parse_cards("[]") == []
+    assert parse_cards(None) == []

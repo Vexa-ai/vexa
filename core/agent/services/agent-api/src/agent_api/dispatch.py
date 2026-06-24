@@ -30,7 +30,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The dispatch's personal (rw) workspace folder is mounted at <root>/<subject>; the Runtime binds the
     # backing store (a host path / named volume) at <root>, and the worker works in the subject subdir.
     root = settings.workspaces_dir
-    return {
+    env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
         "VEXA_AGENT_IDENTITY_TOKEN": token,                      # the per-dispatch SIGNED token (verified at boundaries)
@@ -47,6 +47,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }
+    # A live meeting dispatch consumes the meeting's transcript.v1 Stream (the meetings⊥agent seam).
+    ctx = invocation.get("context") or {}
+    meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
+    if meeting and meeting.get("meeting_id"):
+        env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{meeting['meeting_id']}"
+    return env
 
 
 class Dispatcher:

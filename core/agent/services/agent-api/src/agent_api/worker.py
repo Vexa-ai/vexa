@@ -168,20 +168,115 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 run_message(msg.get("prompt", ""), f"t{n}")
 
 
+# ── meeting mode: consume the transcript Stream, gate, emit proactive cards ───────────────────────
+
+CARD_PROMPT = (
+    "You are a live meeting copilot. Below are NEW transcript lines from the meeting in progress.\n\n"
+    "{lines}\n\n"
+    "Surface only what is genuinely salient and NEW: a new PERSON, a TOPIC or decision, or an ACTION "
+    "item. Respond with ONLY a JSON array (no prose, no code fence), each element:\n"
+    '  {{"kind": "person"|"topic"|"action", "title": "<short>", "body": "<one line>"}}\n'
+    "Return an empty array [] if nothing new is worth surfacing."
+)
+
+
+def parse_cards(reply: str | None) -> list[dict]:
+    """Tolerantly pull the JSON card array out of the agent's reply (it may wrap it in prose/fences)."""
+    if not reply:
+        return []
+    import re
+
+    m = re.search(r"\[.*\]", reply, re.DOTALL)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return []
+    return [c for c in arr if isinstance(c, dict) and c.get("title") and c.get("kind")]
+
+
+def meeting_card_turn(work: Path, segments: list[dict], *, model: str | None = None) -> Iterator[dict]:
+    """One copilot beat: read the recent transcript, stream the agent working, then emit a proactive
+    card per salient finding. Reuses the governed turn (with session continuity across beats)."""
+    lines = "\n".join(f"[{s.get('speaker', '?')}] {s.get('text', '')}" for s in segments)
+    reply: str | None = None
+    for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model):
+        yield ev
+        if ev.get("type") == "done":
+            reply = ev.get("reply")
+    for card in parse_cards(reply):
+        yield {"type": "card", "card": card}
+
+
+def serve_meeting(
+    stream: _Stream, *, transcript_stream: str, out_topic: str,
+    card_turn: Callable[[list[dict]], Iterator[dict]], idle_ms: int,
+    beat_segments: int = 4,
+) -> None:
+    """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
+    cheaply (a NEW speaker, or ``beat_segments`` completed segments), and run a copilot beat that XADDs
+    proactive cards to ``out_topic``. The transcript keeps it non-idle; ``session_end`` (or an idle gap)
+    reaps it."""
+    seen_speakers: set[str] = set()
+    buffer: list[dict] = []
+    last = "0"  # read the whole transcript from the start (never miss early segments)
+    n = 0
+    while True:
+        resp = stream.xread({transcript_stream: last}, count=50, block=idle_ms)
+        if not resp:
+            return  # transcript idle/ended → reap
+        new_speaker = False
+        for _name, entries in resp:
+            for entry_id, fields in entries:
+                last = entry_id
+                payload = json.loads(fields.get("payload", "{}"))
+                if payload.get("type") == "session_end":
+                    if buffer:
+                        _emit_beat(stream, out_topic, card_turn, list(buffer), n + 1)
+                    return  # meeting ended → reap
+                for seg in payload.get("segments", []):
+                    if not seg.get("completed", True):
+                        continue  # skip live drafts
+                    buffer.append(seg)
+                    sp = seg.get("speaker")
+                    if sp and sp not in seen_speakers:
+                        seen_speakers.add(sp)
+                        new_speaker = True
+        if buffer and (new_speaker or len(buffer) >= beat_segments):
+            n += 1
+            _emit_beat(stream, out_topic, card_turn, list(buffer), n)
+            buffer = []
+
+
+def _emit_beat(stream: _Stream, out_topic: str, card_turn, segments: list[dict], n: int) -> None:
+    tid = f"beat{n}"
+    for ev in card_turn(segments):
+        stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": tid})})
+    stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": tid})})
+
+
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())
     import redis
 
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
     client = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
-    serve(
-        client,
-        out_topic=os.environ["VEXA_UNIT_OUT_TOPIC"],
-        in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-        turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model),
-        start=json.loads(os.environ.get("VEXA_START", "{}")),
-        idle_ms=int(os.environ.get("VEXA_IDLE_TIMEOUT_SEC", "120")) * 1000,
-    )
+    out_topic = os.environ["VEXA_UNIT_OUT_TOPIC"]
+    idle_ms = int(os.environ.get("VEXA_IDLE_TIMEOUT_SEC", "120")) * 1000
+
+    transcript_stream = os.environ.get("VEXA_TRANSCRIPT_STREAM")
+    if transcript_stream:  # a live meeting dispatch — consume the transcript, emit cards
+        serve_meeting(
+            client, transcript_stream=transcript_stream, out_topic=out_topic,
+            card_turn=lambda segs: meeting_card_turn(work, segs, model=model), idle_ms=idle_ms,
+        )
+    else:  # chat / routine / event — run the entrypoint, then serve interactive messages
+        serve(
+            client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
+            turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model),
+            start=json.loads(os.environ.get("VEXA_START", "{}")), idle_ms=idle_ms,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
