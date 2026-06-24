@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vexa EI — knowledge-worker terminal</title>
+<style>
+  :root{
+    --bg:#0d0d0f; --sidebar:#141417; --panel:#191a1e; --panel2:#1f2025; --rail:#141417;
+    --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
+    --t1:#ededf0; --t2:#9a9aa4; --t3:#65656f;
+    --accent:#d8855c; --accentbg:rgba(216,133,92,.14);
+    --live:#ef5b56; --livebg:rgba(239,91,86,.14);
+    --green:#48b787; --greenbg:rgba(72,183,135,.14);
+    --blue:#6ea8fe; --bluebg:rgba(110,168,254,.14);
+    --violet:#b08cf0; --violetbg:rgba(176,140,240,.14);
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--t1);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow:hidden}
+  svg{width:18px;height:18px;stroke:currentColor;stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  .ic14 svg{width:14px;height:14px} .ic16 svg{width:16px;height:16px} .ic20 svg{width:20px;height:20px}
+  button{font-family:inherit;color:inherit}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.16)}
+
+  .topbar{height:38px;display:flex;align-items:center;gap:14px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--sidebar);position:relative;z-index:5}
+  .dots{display:flex;gap:8px} .dots i{width:12px;height:12px;border-radius:50%;display:block}
+  .dots i:nth-child(1){background:#ec6a5e}.dots i:nth-child(2){background:#f4bf4f}.dots i:nth-child(3){background:#61c554}
+  .topbar .title{font-size:13px;color:var(--t2);display:flex;align-items:center;gap:8px} .topbar .title b{color:var(--t1);font-weight:500}
+  .topbar .badge{font-size:11px;color:var(--t3);border:1px solid var(--line2);padding:1px 7px;border-radius:20px}
+  .topbar .spacer{flex:1} .topbar .tools{display:flex;gap:6px;color:var(--t3)}
+  .topbar .tools button{background:none;border:none;padding:5px;border-radius:6px;cursor:pointer} .topbar .tools button:hover{background:var(--panel2);color:var(--t1)}
+
+  .screen{height:calc(100% - 38px);overflow-y:auto;background:var(--bg)}
+  .screenwrap{max-width:900px;margin:0 auto;padding:46px 24px 60px}
+  .eyebrow{font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+  .h1{font-size:26px;font-weight:500;margin:0 0 6px} .lead{font-size:14px;color:var(--t2);max-width:580px}
+  .ocards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-top:28px}
+  .ocard{border:1px solid var(--line2);border-radius:14px;background:var(--panel);padding:18px;cursor:pointer;transition:.12s}
+  .ocard:hover{background:var(--panel2);transform:translateY(-1px)}
+  .ocard .oi{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;margin-bottom:13px}
+  .ocard h3{font-size:16px;font-weight:500;margin:0 0 4px} .ocard p{font-size:12.5px;color:var(--t2);margin:0;line-height:1.5}
+  .ocard .arr{margin-top:13px;color:var(--accent);font-size:12.5px;display:flex;align-items:center;gap:6px}
+  .ocard .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px} .ocard .tg{font-size:11px;color:var(--t2);background:var(--panel2);border-radius:6px;padding:2px 8px}
+  .back{display:inline-flex;align-items:center;gap:7px;color:var(--t2);font-size:13px;cursor:pointer;margin-bottom:20px} .back:hover{color:var(--t1)}
+
+  .setupgrid{display:grid;grid-template-columns:236px 1fr;gap:34px;margin-top:26px}
+  .steps{display:flex;flex-direction:column;gap:2px}
+  .stepi{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;color:var(--t3);font-size:13.5px;cursor:pointer} .stepi:hover{color:var(--t2)}
+  .stepi .n{width:22px;height:22px;border-radius:50%;border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;font-size:11px;flex:none}
+  .stepi.active{background:var(--panel2);color:var(--t1)} .stepi.done{color:var(--t2)}
+  .stepi.active .n{background:var(--accent);color:#241008;border-color:transparent} .stepi.done .n{background:var(--green);color:#08110c;border-color:transparent}
+  .stepbody h2{font-size:20px;font-weight:500;margin:0 0 4px} .stepbody .sub{font-size:13.5px;color:var(--t2);margin-bottom:20px;max-width:560px}
+  .togrow{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;background:var(--panel)}
+  .togrow .ti{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex:none;background:var(--panel2);color:var(--t2)}
+  .togrow .tc{flex:1;min-width:0} .togrow .tc b{font-size:13.5px;font-weight:500;display:block} .togrow .tc span{font-size:12px;color:var(--t2)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:7px;background:var(--panel2);color:var(--t1)}
+  .pill.time{background:var(--bluebg);color:var(--blue)} .pill.event{background:var(--violetbg);color:var(--violet)} .pill.plan{background:var(--greenbg);color:var(--green)}
+  .etags{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px}
+  .etag{font-size:12.5px;border:1px solid var(--line2);border-radius:8px;padding:7px 12px;color:var(--t1);background:var(--panel);display:inline-flex;align-items:center;gap:7px}
+  .req{font-size:10.5px;color:var(--accent);border:1px solid rgba(216,133,92,.4);border-radius:5px;padding:1px 6px;margin-left:auto}
+  .note{font-size:12.5px;color:var(--t3);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-top:6px;display:flex;gap:9px}
+  .selrow{cursor:pointer} .selrow.sel{border-color:rgba(216,133,92,.55);background:var(--accentbg)}
+  .deprow{padding:9px 14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--t2);display:flex;align-items:center;gap:8px} .deprow .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .setupfoot{display:flex;align-items:center;gap:10px;margin-top:26px}
+  .btn{font-size:13.5px;border-radius:9px;padding:9px 18px;cursor:pointer;border:1px solid var(--line2);background:var(--panel);color:var(--t1)} .btn:hover{background:var(--panel2)}
+  .btn.primary{background:var(--accent);color:#241008;border-color:transparent;font-weight:500} .btn.ghost{background:none;border-color:transparent;color:var(--t2)}
+  .revrow{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13.5px} .revrow:last-child{border-bottom:none} .revrow .rl{color:var(--t2);width:140px;flex:none} .revrow .rv{color:var(--t1)}
+
+  .app{display:grid;height:calc(100% - 38px);transition:grid-template-columns .15s ease}
+  .app[data-rail="on"]{grid-template-columns:268px 1fr 332px} .app[data-rail="off"]{grid-template-columns:268px 1fr}
+  aside.left{background:var(--sidebar);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+  .ws{display:flex;align-items:center;gap:9px;padding:12px 14px 10px;cursor:pointer} .ws:hover{background:var(--panel)}
+  .ws .logo{width:26px;height:26px;border-radius:7px;background:var(--accent);color:#241008;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px}
+  .ws .meta{min-width:0} .ws .meta b{font-size:13px;font-weight:500;display:block;line-height:1.2} .ws .meta span{font-size:11px;color:var(--t3)} .ws .chev{margin-left:auto;color:var(--t3)}
+  nav.primary{padding:4px 8px;display:flex;flex-direction:column;gap:1px}
+  .nav{display:flex;align-items:center;gap:11px;padding:7px 9px;border-radius:7px;color:var(--t2);cursor:pointer;border:none;background:none;width:100%;text-align:left;font-size:13.5px}
+  .nav:hover{background:var(--panel)} .nav.active{background:var(--panel2);color:var(--t1)}
+  .nav .k{margin-left:auto;font-size:11px;color:var(--t3)} .nav .ct{margin-left:auto;font-size:11px;color:var(--t3)}
+  .nav .pulse{width:8px;height:8px;border-radius:50%;background:var(--live);margin-left:auto;animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(239,91,86,.5)}70%{box-shadow:0 0 0 7px rgba(239,91,86,0)}100%{box-shadow:0 0 0 0 rgba(239,91,86,0)}}
+  .navsep{height:1px;background:var(--line);margin:8px 12px}
+  .ctx{flex:1;overflow-y:auto;min-height:0;padding:4px 8px 10px}
+  .ctxlabel{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;padding:12px 8px 5px}
+  .item{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px;color:var(--t2);cursor:pointer;font-size:13px} .item:hover{background:var(--panel)} .item.active{background:var(--panel2);color:var(--t1)}
+  .item .dot{width:6px;height:6px;border-radius:50%;background:var(--t3);flex:none} .item small{margin-left:auto;color:var(--t3);font-size:11px}
+  .tree .l2{padding-left:24px} .tree .l3{padding-left:38px}
+  .user{border-top:1px solid var(--line);padding:9px 12px;display:flex;align-items:center;gap:9px;color:var(--t2)}
+  .user .av{width:24px;height:24px;border-radius:50%;background:var(--violetbg);color:var(--violet);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
+
+  main{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+  .vhead{height:46px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 18px;flex:none}
+  .vhead h1{font-size:15px;font-weight:500;margin:0;display:flex;align-items:center;gap:9px} .vhead .sub{font-size:12px;color:var(--t3)}
+  .vhead .right{margin-left:auto;display:flex;gap:7px;align-items:center}
+  .chip{font-size:11.5px;color:var(--t2);border:1px solid var(--line2);padding:3px 10px;border-radius:20px;cursor:pointer;background:none;display:inline-flex;align-items:center;gap:5px} .chip:hover{background:var(--panel);color:var(--t1)}
+  .chip.live{color:var(--live);border-color:transparent;background:var(--livebg)} .chip.on{color:var(--green);border-color:transparent;background:var(--greenbg)}
+  .seg{display:inline-flex;gap:3px;background:var(--panel2);border-radius:8px;padding:3px}
+  .seg button{border:none;background:none;padding:4px 12px;border-radius:6px;font-size:12px;color:var(--t2);cursor:pointer} .seg button.sel{background:var(--bg);color:var(--t1)}
+  .body{flex:1;overflow-y:auto;min-height:0} .wrap{max-width:760px;margin:0 auto;padding:22px 24px 30px}
+
+  .msg{display:flex;gap:11px;margin-bottom:18px} .msg .av{width:26px;height:26px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px}
+  .av.bot{background:var(--accentbg);color:var(--accent)} .av.me{background:var(--bluebg);color:var(--blue)} .msg.me{justify-content:flex-end}
+  .bubble{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 13px;max-width:80%} .msg.me .bubble{background:var(--panel2);border-color:transparent}
+  .bubble p{margin:0 0 6px} .bubble p:last-child{margin:0}
+  .tools{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px} .tool{font-size:11px;color:var(--t3);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 7px;display:inline-flex;gap:5px;align-items:center}
+  .commit{font-size:11.5px;color:var(--green);display:inline-flex;gap:6px;align-items:center;margin-top:8px}
+  .wl{color:var(--blue);cursor:pointer;border-bottom:1px dotted rgba(110,168,254,.5)} .wl:hover{border-bottom-style:solid}
+
+  .pcard{border:1px solid var(--line2);border-radius:12px;padding:11px 13px;margin-bottom:14px;max-width:88%}
+  .pcard.green{background:var(--greenbg);border-color:rgba(72,183,135,.35)} .pcard.blue{background:var(--bluebg);border-color:rgba(110,168,254,.35)} .pcard.violet{background:var(--violetbg);border-color:rgba(176,140,240,.35)}
+  .pcard .ph{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:500}
+  .pcard.green .ph{color:var(--green)} .pcard.blue .ph{color:var(--blue)} .pcard.violet .ph{color:var(--violet)}
+  .pcard .pb{font-size:13.5px;color:var(--t1);margin:6px 0 0}
+  .pacts{display:flex;gap:7px;margin-top:10px;flex-wrap:wrap}
+  .pbtn{font-size:12px;border-radius:7px;padding:5px 11px;cursor:pointer;border:1px solid var(--line2);background:var(--panel);color:var(--t1)} .pbtn:hover{background:var(--panel2)}
+  .pbtn.primary{background:#fff;color:#111;border-color:#fff} .pbtn.ghost{background:none;border-color:transparent;color:var(--t3)}
+
+  .composer{flex:none;border-top:1px solid var(--line);padding:12px 24px 16px} .composer .inner{max-width:760px;margin:0 auto;position:relative}
+  .qchips{display:flex;gap:7px;margin-bottom:9px;flex-wrap:wrap}
+  .cmds{border:1px solid var(--line2);border-radius:11px;background:var(--panel);margin-bottom:9px;overflow:hidden}
+  .cmd{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)} .cmd:last-child{border-bottom:none} .cmd:hover{background:var(--panel2)}
+  .cmd code{font-family:var(--mono);color:var(--accent);font-size:12.5px;min-width:88px} .cmd span{color:var(--t3);font-size:12px}
+  .cbox{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:11px 12px;display:flex;align-items:center;gap:11px}
+  .cbox .slash{font-family:var(--mono);color:var(--t3);font-size:13px}
+  .cbox input{flex:1;background:none;border:none;outline:none;color:var(--t1);font-size:14px} .cbox input::placeholder{color:var(--t3)}
+  .cbox .cic{color:var(--t3);cursor:pointer;display:flex}
+  .cbox .send{background:var(--accent);color:#241008;border:none;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+
+  aside.right{background:var(--rail);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;min-width:0}
+  .rhead{height:46px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 14px;font-size:12.5px;color:var(--t2);flex:none} .rhead .x{margin-left:auto;color:var(--t3);cursor:pointer;display:flex}
+  .rbody{flex:1;overflow-y:auto;padding:14px;min-height:0}
+  .tx{margin-bottom:13px;font-size:12.5px} .tx .who{font-weight:500} .tx .who.a{color:var(--blue)} .tx .who.b{color:var(--green)} .tx .ti{color:var(--t3);font-size:11px;margin-left:6px} .tx .tt{color:var(--t2);margin-top:2px}
+  .doc h3{font-size:15px;margin:0 0 4px;font-weight:500} .doc .kv{font-size:12px;color:var(--t3);margin-bottom:2px}
+  .doc h4{font-size:12px;color:var(--t2);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 5px} .doc p{margin:0 0 5px;font-size:13px;color:var(--t1)}
+  .doc .restricted{font-size:11.5px;color:var(--violet);background:var(--violetbg);border-radius:7px;padding:6px 9px;display:flex;gap:7px;align-items:center;margin-bottom:10px}
+  .doc .append{font-size:12px;color:var(--t3);border-top:1px solid var(--line);padding-top:9px;margin-top:12px;font-family:var(--mono)}
+
+  .list{display:flex;flex-direction:column}
+  .mail{display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer;align-items:flex-start} .mail:hover{background:var(--panel)} .mail.active{background:var(--panel2)}
+  .mail .un{width:7px;height:7px;border-radius:50%;background:var(--blue);margin-top:6px;flex:none} .mail.read .un{background:transparent}
+  .mail .av{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
+  .mail .mc{min-width:0;flex:1} .mail .mr{display:flex;gap:8px;align-items:baseline}
+  .mail .from{font-weight:500;font-size:13.5px} .mail .time{margin-left:auto;color:var(--t3);font-size:11.5px;flex:none}
+  .mail .subj{font-size:13px;margin-top:1px} .mail .prev{font-size:12.5px;color:var(--t3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mtag{font-size:10.5px;border-radius:5px;padding:1px 6px;margin-top:5px;display:inline-flex;align-items:center;gap:4px} .mtag.imp{color:var(--accent);background:var(--accentbg)} .mtag.low{color:var(--t3);background:var(--panel2)}
+
+  .cal{padding:14px 18px} .slot{display:grid;grid-template-columns:54px 1fr;gap:10px;min-height:44px} .slot .tm{font-size:11px;color:var(--t3);text-align:right;padding-top:2px} .slot .ln{border-top:1px solid var(--line)}
+  .ev{border-radius:8px;padding:7px 10px;margin:3px 0;cursor:pointer;border-left:3px solid var(--blue);background:var(--bluebg)} .ev:hover{filter:brightness(1.15)}
+  .ev.live{border-left-color:var(--live);background:var(--livebg)} .ev.recorded{border-left-color:var(--green);background:var(--greenbg)}
+  .ev b{font-size:13px;font-weight:500;display:block} .ev span{font-size:11.5px;color:var(--t2)}
+  .daygrp{padding:14px 18px 5px;font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em}
+  .lrow{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);cursor:pointer} .lrow:hover{background:var(--panel)} .lrow.active{background:var(--panel2)}
+  .lrow .lt{font-size:11.5px;color:var(--t3);width:64px;flex:none} .lrow .lm{min-width:0;flex:1} .lrow .lm b{font-size:13.5px;font-weight:500;display:block} .lrow .lm span{font-size:12px;color:var(--t3)}
+  .lb{font-size:10.5px;border-radius:5px;padding:2px 7px;flex:none} .lb.rec{color:var(--green);background:var(--greenbg)} .lb.live{color:var(--live);background:var(--livebg)} .lb.up{color:var(--blue);background:var(--bluebg)}
+
+  .task{display:flex;align-items:flex-start;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line)}
+  .task .cb{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line2);flex:none;cursor:pointer;margin-top:1px;display:flex;align-items:center;justify-content:center;color:transparent} .task .cb svg{width:12px;height:12px}
+  .task.done .cb{background:var(--green);border-color:transparent;color:#08110c} .task.done .tt{color:var(--t3);text-decoration:line-through}
+  .tt{font-size:13.5px} .task .tm{font-size:12px;color:var(--t3);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .prio{font-size:10.5px;border-radius:5px;padding:1px 6px} .prio.high{color:var(--live);background:var(--livebg)} .prio.med{color:var(--accent);background:var(--accentbg)} .prio.low{color:var(--t2);background:var(--panel2)}
+
+  .grid{padding:18px 22px;display:flex;flex-direction:column;gap:12px;max-width:860px}
+  .card{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px}
+  .card .ch{display:flex;align-items:center;gap:11px} .card h3{font-size:14px;font-weight:500;margin:0}
+  .card .cmeta{display:flex;gap:16px;margin-top:11px;font-size:12px;color:var(--t3);flex-wrap:wrap} .card .cmeta b{color:var(--t2);font-weight:400}
+  .sw{margin-left:auto;width:38px;height:22px;border-radius:20px;background:var(--panel2);position:relative;cursor:pointer;border:1px solid var(--line2);flex:none}
+  .sw::after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:var(--t2);top:2px;left:2px;transition:.15s} .sw.on{background:var(--green);border-color:transparent} .sw.on::after{left:18px;background:#08110c}
+  .secttl{font-size:12px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;padding:18px 22px 2px;max-width:860px}
+  .toast{position:fixed;bottom:20px;right:20px;background:var(--panel2);border:1px solid var(--line2);color:var(--t1);padding:11px 14px;border-radius:10px;font-size:13px;display:flex;gap:9px;align-items:center;opacity:0;transform:translateY(8px);transition:.2s;z-index:50}
+  .toast.show{opacity:1;transform:none} .toast .ok{color:var(--green);display:flex}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="title"><b id="tbTitle">Set up your workspace</b><span class="badge" id="tbBadge">Vexa EI</span></div>
+    <div class="spacer"></div>
+    <div class="tools"><button id="railToggle"><span class="ic16" data-i="panel"></span></button><button><span class="ic16" data-i="sliders"></span></button></div>
+  </div>
+
+  <div id="screen" class="screen"></div>
+
+  <div class="app" id="app" data-rail="on" style="display:none">
+    <aside class="left">
+      <div class="ws" id="brand"></div>
+      <nav class="primary" id="nav"></nav>
+      <div class="navsep"></div>
+      <div class="ctx" id="ctx"></div>
+      <div class="deprow" id="deprow"></div>
+      <div class="user"><div class="av">DG</div><div style="font-size:13px">Dmitry</div><span style="margin-left:auto;color:var(--t3)" class="ic16" data-i="chev"></span></div>
+    </aside>
+    <main>
+      <div class="vhead" id="vhead"></div>
+      <div class="body" id="main"></div>
+      <div class="composer" id="composer" style="display:none">
+        <div class="inner">
+          <div id="cmdmenu"></div>
+          <div class="qchips" id="qchips"></div>
+          <div class="cbox"><span class="slash">/</span><input id="cinput" placeholder="Type / for skills, or ask the agent…" /><span class="cic ic20" data-i="clip"></span><button class="send ic16" data-i="send" id="sendBtn" aria-label="Send"></button></div>
+        </div>
+      </div>
+    </main>
+    <aside class="right" id="right"></aside>
+  </div>
+
+  <div class="toast" id="toast"><span class="ok ic16" data-i="check"></span><span id="toastMsg"></span></div>
+
+<script>
+const ICONS={
+  radio:'<path d="M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2M7.8 16.2a6 6 0 0 1 0-8.4M4.9 19.1a10 10 0 0 1 0-14.2"/><circle cx="12" cy="12" r="2"/>',
+  msg:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>', panel:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  mail:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>', cal:'<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  zap:'<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>', plus:'<path d="M5 12h14M12 5v14"/>', search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  user:'<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>', userplus:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/>',
+  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>', folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>', checkbox:'<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>', tasks:'<path d="M11 3 8 6 6.5 4.5M11 9 8 12l-1.5-1.5M11 15l-3 3-1.5-1.5M14 5h7M14 11h7M14 17h7"/>',
+  x:'<path d="M18 6 6 18M6 6l12 12"/>', send:'<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>', clip:'<path d="m21.4 11-9.2 9.2a6 6 0 0 1-8.5-8.5l8.6-8.6A4 4 0 1 1 18 8.8l-8.6 8.6a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
+  building:'<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/>', clock:'<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  arrow:'<path d="M5 12h14M12 5l7 7-7 7"/>', commit:'<circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/>', sliders:'<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  chev:'<path d="m6 9 6 6 6-6"/>', tool:'<path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4z"/>', doc:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
+  news:'<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9h4"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>', spark:'<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/>', play:'<path d="M5 3l14 9-14 9z"/>',
+  lock:'<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>', shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', scale:'<path d="M12 3v18M5 7h14M7 7l-3 7a3 3 0 0 0 6 0zM17 7l-3 7a3 3 0 0 0 6 0z"/>',
+  plug:'<path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0zM12 16v6"/>', database:'<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14a8 3 0 0 0 16 0V5M4 12a8 3 0 0 0 16 0"/>', briefcase:'<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2M2 13h20"/>',
+  bank:'<path d="M3 21h18M4 10h16M5 21V10M19 21V10M9 21V10M15 21V10M12 3 4 7h16z"/>', bolt:'<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>'
+};
+const ic=(n)=>`<svg viewBox="0 0 24 24">${ICONS[n]||''}</svg>`;
+function paintIcons(root=document){root.querySelectorAll('[data-i]').forEach(e=>{e.innerHTML=ic(e.dataset.i);e.removeAttribute('data-i')});}
+const av=(t,c)=>`<div class="av" style="background:var(--${c}bg);color:var(--${c})">${t}</div>`;
+
+const NAV=[{id:'live',label:'Live meeting',icon:'radio',live:true},{id:'chat',label:'Chat',icon:'msg',k:'⌘K'},{id:'workspace',label:'Workspace',icon:'panel'},{id:'inbox',label:'Inbox',icon:'mail'},{id:'calendar',label:'Calendar',icon:'cal'},{id:'tasks',label:'Tasks',icon:'tasks'},{id:'routines',label:'Routines',icon:'zap'}];
+const SKILLS=[{c:'/routine',d:'Save what you just did as a routine'},{c:'/draft',d:'Draft an email or document'},{c:'/research',d:'Research a topic and file it to the workspace'},{c:'/task',d:'Create a task'},{c:'/prep',d:'Prep a brief for an upcoming meeting'},{c:'/summarize',d:'Summarize a meeting or thread'}];
+const STEPS=['Connect','Knowledge graph','Routines','Governance','Deployment','Launch'];
+
+const VERTICALS={
+ sales:{brand:{org:'Acme org',letter:'V',sub:'Revenue terminal'},badge:'workspace: acme',
+  live:{title:'Acme × Vexa — weekly sync',time:'live · 14:32',intro:'Tracking the call. Raj joined as Acme’s CTO — I’ll keep his profile and the meeting note updated as you go.',
+   cards:[{cls:'blue',icon:'userplus',head:'New person detected',body:'Raj Patel · CTO · <span class="wl">[[Acme Corp]]</span>',acts:[{l:'Create entity',c:'primary',a:'Created [[Raj Patel]]'},{l:'Link existing'},{l:'Dismiss',c:'ghost'}]},
+    {cls:'green',icon:'checkbox',head:'Action item detected',body:'Send annual pricing — <span class="wl">[[Jane Liu]]</span>, due Fri',acts:[{l:'Create task',c:'primary',a:'Task created · Send annual pricing'},{l:'Edit'}]},
+    {cls:'violet',icon:'spark',head:'Decision captured',body:'Acme will go with annual billing',acts:[{l:'Record decision',c:'primary',a:'Recorded decision'},{l:'Dismiss',c:'ghost'}]}],carried:'2 open tasks from your last Acme sync'},
+  tx:[{s:'a',w:'Jane',t:'14:31',x:'…can you send the annual pricing by Friday?'},{s:'b',w:'Raj',t:'14:31',x:'Yes — and we’ll need SSO, SAML plus SCIM, before rollout.'},{s:'a',w:'Jane',t:'14:32',x:'Let’s go annual on billing then.'}],
+  entities:[{n:'Jane Liu',s:'Acme',c:'blue'},{n:'Raj Patel',s:'new',c:'green'},{n:'Acme Corp',s:'',c:'building'}],
+  openItems:[{n:'Send deck',a:'2d'},{n:'Confirm legal',a:'5d'}], quick:['Summarize so far','Draft follow-up','/routine'],
+  mails:[{id:1,from:'Jane Liu',co:'Acme',av:'JL',avc:'blue',time:'14:02',unread:true,subj:'Re: pricing for annual plan',prev:'Could you send the annual pricing breakdown and the SSO timeline?',imp:true,proposed:[{l:'Create task · Send pricing',a:'Task created · Send pricing'},{l:'Update [[Acme Corp]]',a:'Updated [[Acme Corp]]'},{l:'Draft reply',a:'Drafted reply'}]},
+   {id:2,from:'Raj Patel',co:'Acme',av:'RP',avc:'green',time:'12:40',unread:true,subj:'SSO requirements doc',prev:'We need SAML + SCIM before rollout.',imp:true,proposed:[{l:'Create [[Raj Patel]]',a:'Created [[Raj Patel]]'},{l:'Create task · SSO scope',a:'Task created · SSO scope'}]},
+   {id:3,from:'AWS',co:'',av:'AW',avc:'violet',time:'Yest',unread:false,subj:'Your monthly invoice',prev:'Invoice for May is available.',imp:false,proposed:[]}],
+  events:[{t:'9:00',title:'Inbox triage',sub:'routine · 6 messages',cls:'recorded',day:'today',status:'recorded',art:{summary:'Triaged 6 messages; 2 important, 3 proposed actions.',decisions:[],actions:['Send pricing → task']}},
+   {t:'11:00',title:'Northwind intro call',sub:'Maria Gomez · Meet',cls:'',day:'today',status:'upcoming'},
+   {t:'14:00',title:'Acme × Vexa — weekly sync',sub:'14:30 · live now · bot recording',cls:'live',day:'today',status:'live'},
+   {t:'16:00',title:'Pipeline review',sub:'Internal · 4 attendees',cls:'',day:'today',status:'upcoming'},
+   {t:'14:00',title:'Acme discovery call',sub:'Jane Liu · recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Discovery with Acme. Mid-market AE team; evaluating Vexa for meeting intelligence.',decisions:['Pilot scoped to 10 seats'],actions:['Send deck — done','Confirm legal — open']}},
+   {t:'10:00',title:'Weekly pipeline',sub:'Internal · recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Pipeline review; 3 deals advanced, 1 slipped.',decisions:['Deprioritize stalled deal'],actions:['Nudge stalled deal — task']}}],
+  routines:[{id:'r1',name:'Morning brief',tk:'time',trig:'Daily · 8:00',plan:'Summarize overnight email, news, and today’s meetings into a daily note.',last:'today 8:00',next:'tomorrow 8:00',runs:212,on:true},
+   {id:'r2',name:'Inbox triage',tk:'event',trig:'On new email',plan:'Check if important; if so, propose actions on the message and update the contact.',last:'14:02',next:'on next email',runs:412,on:true},
+   {id:'r3',name:'After meeting',tk:'event',trig:'On meeting end',plan:'Create the meeting note, update accounts & contacts, file decisions and tasks.',last:'14:38',next:'on next meeting',runs:128,on:true},
+   {id:'r4',name:'Competitor news scan',tk:'time',trig:'Daily · 7:30',plan:'Scan tracked companies; append funding & product news to their profiles.',last:'today 7:30',next:'tomorrow',runs:67,on:true},
+   {id:'r5',name:'Stale deal nudge',tk:'time',trig:'Daily · 17:00',plan:'Find deals idle 7+ days; draft a follow-up and create a task.',last:'yesterday',next:'today 17:00',runs:40,on:false}],
+  tasks:[{id:'t1',t:'Send annual pricing to Jane Liu',src:'Acme sync',due:'Fri',prio:'high',done:false},{id:'t2',t:'Refresh Acme deal stage in Salesforce',src:'Inbox triage',due:'today',prio:'med',done:false},{id:'t3',t:'Confirm legal review',src:'Discovery call',due:'Mon',prio:'low',done:false},{id:'t4',t:'Send Acme deck',src:'Discovery call',due:'—',prio:'med',done:true}],
+  tree:[{l:'graph / kg',lvl:0,f:1},{l:'people',lvl:2,f:1},{l:'companies',lvl:2,f:1},{l:'acme-corp.md',lvl:3,active:1},{l:'meetings',lvl:2,f:1},{l:'docs',lvl:0,f:1}],
+  doc:{title:'Acme Corp',kv:'relationship: prospect · first seen 2026-05-12',secs:[{h:'People',b:'<span class="wl">[[Jane Liu]]</span> · <span class="wl">[[Raj Patel]]</span>'},{h:'Funding',b:'Series B · $40M · 2025 (lead: Lightspeed)'},{h:'Open tasks',b:'· Send annual pricing — <span class="wl">[[Jane Liu]]</span>, due Fri'}],appends:['2026-06-23 [conf:0.9] added Series B funding (source: [[news]])']},
+  setup:{tagline:'CRM-connected revenue intelligence',integrations:[{n:'Google Calendar',i:'cal',d:'Meetings & availability',on:true},{n:'Gmail',i:'mail',d:'Inbox triage & follow-ups',on:true},{n:'Meeting bot',i:'radio',d:'Join, record, transcribe',on:true,req:1},{n:'Salesforce',i:'database',d:'Sync accounts, contacts, opps',on:true},{n:'Slack',i:'msg',d:'Notifications',on:false}],entities:['People','Companies','Meetings','Deals'],compliance:[{n:'Data retention',i:'clock',d:'Keep meeting notes 24 months',on:true},{n:'PII handling',i:'lock',d:'Mask emails/phones in shared notes',on:true}]}},
+
+ hr:{brand:{org:'Northwind People',letter:'N',sub:'Talent terminal'},badge:'workspace: talent',
+  live:{title:'Final round — Sr. Backend Engineer',time:'live · 11:18',intro:'Interviewing Priya Nair (final round). I’ll keep her scorecard and the role pipeline updated — protected attributes excluded.',
+   cards:[{cls:'blue',icon:'userplus',head:'Candidate signal',body:'Strong system-design depth — <span class="wl">[[Priya Nair]]</span>',acts:[{l:'Add to scorecard',c:'primary',a:'Added signal to [[Priya Nair]]'},{l:'Edit'},{l:'Dismiss',c:'ghost'}]},
+    {cls:'green',icon:'checkbox',head:'Action item detected',body:'Schedule system-design round — <span class="wl">[[Recruiting]]</span>, due Wed',acts:[{l:'Create task',c:'primary',a:'Task created · system-design round'},{l:'Edit'}]},
+    {cls:'violet',icon:'spark',head:'Flag for debrief',body:'Comp expectation above band (~$30k gap)',acts:[{l:'Note for debrief',c:'primary',a:'Noted for debrief'},{l:'Dismiss',c:'ghost'}]}],carried:'2 open tasks from the hiring-panel sync'},
+  tx:[{s:'a',w:'Panel',t:'11:14',x:'Walk us through how you’d shard the write path.'},{s:'b',w:'Priya',t:'11:15',x:'I’d start with a consistent-hash ring and isolate the hot tenant…'},{s:'a',w:'Panel',t:'11:17',x:'Good. What’s your current comp expectation?'}],
+  entities:[{n:'Priya Nair',s:'candidate',c:'blue'},{n:'Sr. Backend Eng',s:'role',c:'green'},{n:'Platform team',s:'',c:'building'}],
+  openItems:[{n:'Send take-home',a:'1d'},{n:'Reference check',a:'3d'}], quick:['Summarize interview','Draft debrief','/routine'],
+  mails:[{id:1,from:'Priya Nair',co:'candidate',av:'PN',avc:'blue',time:'10:30',unread:true,subj:'Re: final round scheduling',prev:'Thursday at 11 works — looking forward to the system-design round.',imp:true,proposed:[{l:'Update [[Priya Nair]] · stage',a:'Updated [[Priya Nair]]'},{l:'Create task · confirm panel',a:'Task created · confirm panel'}]},
+   {id:2,from:'Hatch Talent',co:'agency',av:'HT',avc:'green',time:'09:10',unread:true,subj:'2 candidates — Staff SRE',prev:'Sharing two strong profiles for the Staff SRE req.',imp:true,proposed:[{l:'Create candidates',a:'Created 2 candidates'},{l:'Add to pipeline',a:'Added to pipeline'}]},
+   {id:3,from:'Workday',co:'',av:'W',avc:'violet',time:'Yest',unread:false,subj:'System maintenance window',prev:'Scheduled maintenance this weekend.',imp:false,proposed:[]}],
+  events:[{t:'9:00',title:'Pipeline brief',sub:'routine · 14 candidates',cls:'recorded',day:'today',status:'recorded',art:{summary:'14 candidates in flight; 2 stalled reqs flagged.',decisions:[],actions:['Nudge stalled reqs']}},
+   {t:'11:00',title:'Final round — Priya Nair',sub:'11:18 · live now · panel of 3',cls:'live',day:'today',status:'live'},
+   {t:'14:00',title:'Panel debrief',sub:'Sr. Backend Eng · 3 interviewers',cls:'',day:'today',status:'upcoming'},
+   {t:'16:00',title:'Onboarding kickoff',sub:'New hire · Platform',cls:'',day:'today',status:'upcoming'},
+   {t:'11:00',title:'Phone screen — Priya Nair',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Strong first impression; advanced to final round.',decisions:['Advance to final'],actions:['Schedule final — done']}},
+   {t:'15:00',title:'Req review — Backend',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Reviewed open backend reqs and panel coverage.',decisions:['Add a second system-design interviewer'],actions:['Update rubric — task']}}],
+  routines:[{id:'r1',name:'Hiring pipeline brief',tk:'time',trig:'Daily · 8:00',plan:'Overnight candidate movements, interviews today, stalled reqs.',last:'today 8:00',next:'tomorrow',runs:140,on:true},
+   {id:'r2',name:'Inbox triage',tk:'event',trig:'On new email',plan:'Check if important; if so, propose actions on the message (update candidate, schedule).',last:'10:30',next:'on next email',runs:240,on:true},
+   {id:'r3',name:'After interview',tk:'event',trig:'On meeting end',plan:'Update the scorecard, move pipeline stage (no protected attributes), create follow-up tasks.',last:'11:18',next:'on next interview',runs:96,on:true},
+   {id:'r4',name:'Interview prep packs',tk:'event',trig:'Before each interview',plan:'Assemble résumé, role rubric, and prior notes before the panel joins.',last:'11:00',next:'14:00',runs:88,on:true},
+   {id:'r5',name:'Candidate follow-ups',tk:'time',trig:'Daily · 17:00',plan:'Draft status updates to candidates waiting > 3 days; create tasks.',last:'yesterday',next:'today 17:00',runs:54,on:true}],
+  tasks:[{id:'t1',t:'Send take-home to Priya Nair',src:'Final round',due:'tomorrow',prio:'high',done:false},{id:'t2',t:'Schedule system-design round',src:'Final round',due:'Wed',prio:'med',done:false},{id:'t3',t:'Reference check — Priya',src:'Routine',due:'Thu',prio:'low',done:false},{id:'t4',t:'Update interview rubric',src:'Req review',due:'—',prio:'med',done:true}],
+  tree:[{l:'graph / kg',lvl:0,f:1},{l:'candidates',lvl:2,f:1},{l:'priya-nair.md',lvl:3,active:1},{l:'roles',lvl:2,f:1},{l:'employees',lvl:2,f:1},{l:'interviews',lvl:0,f:1}],
+  doc:{title:'Priya Nair',kv:'role: Sr. Backend Engineer · stage: final round',secs:[{h:'Summary',b:'Senior backend engineer, 8 yrs, distributed systems.'},{h:'Scores',b:'Coding 4/5 · System design 5/5 · Comms 4/5'},{h:'Open tasks',b:'· Send take-home — Recruiting, due tomorrow'}],appends:['2026-06-23 [conf:0.9] strong sharding/consistency depth (source: [[final round]])','2026-06-23 [conf:0.7] comp expectation above band (source: [[final round]])']},
+  setup:{tagline:'ATS-connected talent intelligence',integrations:[{n:'Google Calendar',i:'cal',d:'Interviews & panels',on:true},{n:'Gmail / Outlook',i:'mail',d:'Candidate & recruiter mail',on:true},{n:'Meeting bot',i:'radio',d:'Record & transcribe interviews',on:true,req:1},{n:'Greenhouse (ATS)',i:'database',d:'Sync candidates, stages, scorecards',on:true,req:1},{n:'Workday (HRIS)',i:'building',d:'Roles, offers, onboarding',on:true},{n:'Slack',i:'msg',d:'Panel digests',on:false}],entities:['Candidates','Employees','Roles','Teams','Interviews'],compliance:[{n:'EEO-safe extraction',i:'shield',d:'Never extract protected attributes (race, age, gender, etc.)',on:true},{n:'Candidate consent',i:'check',d:'Capture recording consent before the bot joins',on:true},{n:'PII handling & retention',i:'lock',d:'Encrypt résumés/notes; auto-purge rejected after 12 months',on:true},{n:'Scorecard audit trail',i:'scale',d:'Every scorecard edit is logged and attributable',on:true}]}},
+
+ dtcc:{brand:{org:'DTCC',letter:'D',sub:'Post-trade terminal'},badge:'workspace: dtcc',
+  live:{title:'T+1 readiness — member risk review',time:'live · 09:42',intro:'Tracking the risk review. I’ll update the member exposure note and the settlement-fails log as you go.',
+   cards:[{cls:'blue',icon:'building',head:'Counterparty flagged',body:'Elevated fails — <span class="wl">[[Morgan Stanley]]</span> (DTC participant)',acts:[{l:'Add to risk note',c:'primary',a:'Added to [[Morgan Stanley]] risk note'},{l:'Open exposure'},{l:'Dismiss',c:'ghost'}]},
+    {cls:'green',icon:'checkbox',head:'Action item detected',body:'Confirm CCP margin add-on — <span class="wl">[[Risk]]</span>, due EOD',acts:[{l:'Create task',c:'primary',a:'Task created · margin add-on'},{l:'Edit'}]},
+    {cls:'violet',icon:'scale',head:'Regulatory signal',body:'SEC T+1 bulletin referenced — link to <span class="wl">[[Settlement policy]]</span>',acts:[{l:'Cite in memo',c:'primary',a:'Cited SEC bulletin'},{l:'Dismiss',c:'ghost'}]}],carried:'3 open tasks from the clearing risk committee'},
+  tx:[{s:'a',w:'Risk',t:'09:39',x:'Fails on the participant ticked up 40bps post T+1 cutover.'},{s:'b',w:'Ops',t:'09:40',x:'Concentrated in two CUSIPs — we proposed a margin add-on.'},{s:'a',w:'Risk',t:'09:41',x:'Confirm the add-on with NSCC by end of day.'}],
+  entities:[{n:'Morgan Stanley',s:'member',c:'blue'},{n:'Citi',s:'member',c:'green'},{n:'NSCC',s:'CCP',c:'building'}],
+  openItems:[{n:'Update fails dashboard',a:'1d'},{n:'Member attestation',a:'4d'}], quick:['Summarize review','Draft risk memo','/routine'],
+  mails:[{id:1,from:'Member Ops',co:'DTC',av:'MO',avc:'blue',time:'09:05',unread:true,subj:'Settlement fail notice — 2 CUSIPs',prev:'Two participants show fails above threshold for the T+1 window.',imp:true,proposed:[{l:'Update member files',a:'Updated member files'},{l:'Create task · review fails',a:'Task created · review fails'}]},
+   {id:2,from:'SEC Digest',co:'regulatory',av:'SE',avc:'violet',time:'08:30',unread:true,subj:'Rule 15c6-1 — T+1 guidance update',prev:'Updated guidance on affirmation cutoffs and exception handling.',imp:true,proposed:[{l:'Append → [[Settlement policy]]',a:'Appended to [[Settlement policy]]'},{l:'Create task · circulate',a:'Task created · circulate'}]},
+   {id:3,from:'Citi Clearing',co:'member',av:'CC',avc:'green',time:'Yest',unread:false,subj:'Quarterly risk attestation',prev:'Submitting our attestation for review.',imp:false,proposed:[]}],
+  events:[{t:'9:00',title:'Member risk review',sub:'09:42 · live now · risk + ops',cls:'live',day:'today',status:'live'},
+   {t:'11:00',title:'T+1 working group',sub:'Cross-member · 12 attendees',cls:'',day:'today',status:'upcoming'},
+   {t:'14:00',title:'Clearing risk committee',sub:'Internal · weekly',cls:'',day:'today',status:'upcoming'},
+   {t:'14:00',title:'Fails review',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Reviewed fails across participants; 2 breaches logged.',decisions:['Propose margin add-on'],actions:['Confirm with NSCC — task']}},
+   {t:'10:00',title:'Member onboarding — Citi',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Citi attestation reviewed; minor follow-ups.',decisions:[],actions:['Request updated docs — task']}}],
+  routines:[{id:'r1',name:'Settlement-fails brief',tk:'time',trig:'Daily · 6:30',plan:'Fails by participant & CUSIP, threshold breaches, trends.',last:'today 6:30',next:'tomorrow',runs:96,on:true},
+   {id:'r2',name:'Inbox triage',tk:'event',trig:'On new email',plan:'Check if important; if so, propose actions on the message (update member file, open task).',last:'09:05',next:'on next email',runs:180,on:true},
+   {id:'r3',name:'After risk committee',tk:'event',trig:'On meeting end',plan:'Write the risk memo, update member notes and the fails log.',last:'09:42',next:'on next meeting',runs:54,on:true},
+   {id:'r4',name:'Member exposure scan',tk:'time',trig:'Every 2h',plan:'Recompute exposure & concentration; flag outliers; create tasks.',last:'09:00',next:'11:00',runs:320,on:true},
+   {id:'r5',name:'Regulatory bulletin watch',tk:'event',trig:'On SEC / FINRA bulletin',plan:'Append regulatory changes to the relevant policy node with citation.',last:'08:30',next:'on next bulletin',runs:38,on:true}],
+  tasks:[{id:'t1',t:'Confirm CCP margin add-on with NSCC',src:'Risk review',due:'EOD',prio:'high',done:false},{id:'t2',t:'Update fails dashboard',src:'Routine',due:'today',prio:'med',done:false},{id:'t3',t:'Review Citi attestation',src:'Member onboarding',due:'4d',prio:'low',done:false},{id:'t4',t:'Circulate T+1 guidance',src:'SEC digest',due:'—',prio:'med',done:true}],
+  tree:[{l:'graph / kg',lvl:0,f:1},{l:'members',lvl:2,f:1},{l:'morgan-stanley.md',lvl:3,active:1},{l:'ccp',lvl:2,f:1},{l:'policies',lvl:2,f:1},{l:'committees',lvl:0,f:1}],
+  doc:{title:'Morgan Stanley — DTC participant',kv:'participant id: 0050 · status: active',secs:[{h:'Exposure',b:'Net debit cap 78% · concentration in 2 CUSIPs'},{h:'Fails (T+1)',b:'+40bps vs 30-day avg; margin add-on proposed'},{h:'Open tasks',b:'· Confirm CCP margin add-on — Risk, due EOD'}],appends:['2026-06-23 [conf:0.95] elevated fails post T+1 cutover (source: [[member risk review]])']},
+  setup:{tagline:'Post-trade risk & member intelligence',integrations:[{n:'Calendar',i:'cal',d:'Committees & member calls',on:true},{n:'Email',i:'mail',d:'Member ops & regulatory mail',on:true},{n:'Meeting bot',i:'radio',d:'Record & transcribe committees',on:true,req:1},{n:'DTCC member feeds',i:'database',d:'Fails, exposure, participant data',on:true,req:1},{n:'SEC / FINRA bulletins',i:'scale',d:'Regulatory watch',on:true},{n:'Compliance archive (WORM)',i:'lock',d:'Immutable retention',on:true,req:1}],entities:['Members / Participants','CCPs','Instruments','Regulatory','Committees'],compliance:[{n:'Data residency (US)',i:'shield',d:'All data stays in US regions; no cross-border transfer',on:true},{n:'WORM retention (SEC 17a-4)',i:'lock',d:'Write-once, 6-year non-rewriteable retention',on:true},{n:'Immutable audit log',i:'scale',d:'Every read/write is logged and tamper-evident',on:true},{n:'Least-privilege access',i:'check',d:'Member data visible only to assigned risk staff',on:true},{n:'Surveillance export',i:'database',d:'Stream e-comms & notes to supervision',on:true}]}},
+
+ ms:{brand:{org:'Morgan Stanley',letter:'M',sub:'Institutional securities terminal'},badge:'workspace: ms-isg',
+  live:{title:'Project Atlas — deal team sync',time:'live · 15:05',intro:'Tracking the deal-team sync for Project Atlas. I’ll keep the deal note and client file current — information barriers enforced.',
+   cards:[{cls:'blue',icon:'building',head:'Party mentioned',body:'Potential acquirer — <span class="wl">[[Citi]]</span> (buy-side interest)',acts:[{l:'Add to deal note',c:'primary',a:'Added [[Citi]] to Project Atlas'},{l:'Open client'},{l:'Dismiss',c:'ghost'}]},
+    {cls:'green',icon:'checkbox',head:'Action item detected',body:'Refresh fairness model — <span class="wl">[[Coverage]]</span>, due Thu',acts:[{l:'Create task',c:'primary',a:'Task created · fairness model'},{l:'Edit'}]},
+    {cls:'violet',icon:'lock',head:'MNPI guard',body:'Material non-public information — restricted to the deal team',acts:[{l:'Acknowledge',c:'primary',a:'MNPI acknowledged — access restricted'},{l:'Why?'}]}],carried:'2 open tasks from the last deal-team sync'},
+  tx:[{s:'a',w:'Banker',t:'15:02',x:'Comps imply a 9–11x range; we should refresh before the CIM goes out.'},{s:'b',w:'MD',t:'15:03',x:'Keep this tight — deal team only. Any sign of other bidders?'},{s:'a',w:'Banker',t:'15:04',x:'Heard Citi may be circling on the buy-side.'}],
+  entities:[{n:'Project Atlas',s:'deal',c:'blue'},{n:'Citi',s:'acquirer?',c:'green'},{n:'Coverage',s:'',c:'building'}],
+  openItems:[{n:'Refresh comps',a:'1d'},{n:'Send CIM',a:'2d'}], quick:['Summarize sync','Draft deal memo','/routine'],
+  mails:[{id:1,from:'Client RM',co:'Project Atlas',av:'RM',avc:'blue',time:'14:20',unread:true,subj:'Diligence data room access',prev:'Granting the deal team access to the VDR for the next phase.',imp:true,proposed:[{l:'Update [[Project Atlas]]',a:'Updated [[Project Atlas]]'},{l:'Create task · review VDR',a:'Task created · review VDR'}]},
+   {id:2,from:'Control Room',co:'compliance',av:'CR',avc:'violet',time:'12:00',unread:true,subj:'Restricted list update',prev:'Two names added to the restricted list effective today.',imp:true,proposed:[{l:'Enforce info barriers',a:'Info barriers enforced'},{l:'Create task · check exposure',a:'Task created · check exposure'}]},
+   {id:3,from:'Research',co:'internal',av:'RS',avc:'green',time:'Yest',unread:false,subj:'Sector note — software',prev:'Updated multiples for mid-market vertical SaaS.',imp:false,proposed:[]}],
+  events:[{t:'9:00',title:'Research morning call',sub:'routine brief · 8:00',cls:'recorded',day:'today',status:'recorded',art:{summary:'Overnight moves + covered-name news compiled.',decisions:[],actions:[]}},
+   {t:'11:00',title:'Client portfolio review',sub:'Wealth · 2 clients',cls:'',day:'today',status:'upcoming'},
+   {t:'15:00',title:'Project Atlas — deal sync',sub:'15:05 · live now · deal team',cls:'live',day:'today',status:'live'},
+   {t:'16:00',title:'Pipeline review',sub:'Coverage · weekly',cls:'',day:'today',status:'upcoming'},
+   {t:'14:00',title:'Project Atlas kickoff',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Deal team formed; scope and timeline set. MNPI restrictions applied.',decisions:['Target first-round bids in 4 weeks'],actions:['Build model — task','Draft CIM — task']}},
+   {t:'10:00',title:'Client portfolio review',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Reviewed two wealth portfolios; rebalancing discussed.',decisions:['Rebalance one account'],actions:['Send proposal — task']}}],
+  routines:[{id:'r1',name:'Morning market brief',tk:'time',trig:'Daily · 6:00',plan:'Overnight moves, covered-name news, today’s client meetings.',last:'today 6:00',next:'tomorrow',runs:300,on:true},
+   {id:'r2',name:'Inbox triage',tk:'event',trig:'On new email',plan:'Check if important; if so, propose actions on the message (info-barrier aware).',last:'14:20',next:'on next email',runs:208,on:true},
+   {id:'r3',name:'After client call',tk:'event',trig:'On meeting end',plan:'Write the call memo, update the relationship & CRM; create tasks.',last:'15:05',next:'on next call',runs:73,on:true},
+   {id:'r4',name:'Covered-name news scan',tk:'event',trig:'On news',plan:'Tag relevant deals & covered names with market-moving news.',last:'13:00',next:'on next item',runs:44,on:true},
+   {id:'r5',name:'Deal status roll-up',tk:'time',trig:'Daily · 18:00',plan:'Status, next steps, open items across active deals.',last:'yesterday',next:'today 18:00',runs:60,on:true}],
+  tasks:[{id:'t1',t:'Refresh fairness model (Project Atlas)',src:'Deal sync',due:'Thu',prio:'high',done:false},{id:'t2',t:'Review restricted-list exposure',src:'Control Room',due:'today',prio:'high',done:false},{id:'t3',t:'Send CIM',src:'Project Atlas',due:'2d',prio:'med',done:false},{id:'t4',t:'Build deal model',src:'Kickoff',due:'—',prio:'med',done:true}],
+  tree:[{l:'graph / kg',lvl:0,f:1},{l:'deals',lvl:2,f:1},{l:'project-atlas.md',lvl:3,active:1},{l:'clients',lvl:2,f:1},{l:'research',lvl:2,f:1},{l:'coverage',lvl:0,f:1}],
+  doc:{title:'Project Atlas',kv:'type: M&A sell-side · stage: diligence',restricted:'Restricted — deal team only · MNPI',secs:[{h:'Parties',b:'Target: Atlas · Advisor: ISG · Possible acquirer: <span class="wl">[[Citi]]</span>'},{h:'Valuation',b:'9–11x EV/EBITDA (refresh pending)'},{h:'Open tasks',b:'· Refresh comps — Coverage, due Thu'}],appends:['2026-06-23 [conf:0.6] buy-side interest from Citi (source: [[deal sync]])']},
+  setup:{tagline:'Banking & markets intelligence with info barriers',integrations:[{n:'Calendar',i:'cal',d:'Client & deal meetings',on:true},{n:'Email',i:'mail',d:'Client & internal mail',on:true},{n:'Meeting bot',i:'radio',d:'Record & transcribe (where permitted)',on:true,req:1},{n:'Salesforce',i:'database',d:'Client relationships & CRM',on:true},{n:'Bloomberg / market data',i:'news',d:'Prices, news, comps',on:true},{n:'Compliance archive (Global Relay)',i:'lock',d:'e-comms supervision & retention',on:true,req:1}],entities:['Clients','Deals','Coverage names','Research','Bankers'],compliance:[{n:'Information barriers',i:'shield',d:'Control-room enforced walls between advisory & public side',on:true},{n:'MNPI handling',i:'lock',d:'Material non-public info restricted to the deal team; restricted-list aware',on:true},{n:'Supervision & e-comms surveillance',i:'scale',d:'All chat & notes streamed to supervision',on:true},{n:'WORM retention (SEC 17a-4)',i:'database',d:'Non-rewriteable 6-year records',on:true},{n:'Need-to-know access',i:'check',d:'Deal files visible only to the named deal team',on:true}]}},
+
+ citi:{brand:{org:'Citi',letter:'C',sub:'Banking · TTS terminal'},badge:'workspace: citi-tts',
+  live:{title:'TTS client review — Northwind Industries',time:'live · 13:20',intro:'Tracking the Treasury & Trade Solutions review for Northwind. I’ll update the client file and product opportunities live.',
+   cards:[{cls:'blue',icon:'building',head:'Opportunity detected',body:'Cross-border cash pooling — <span class="wl">[[Northwind Industries]]</span>',acts:[{l:'Add to client note',c:'primary',a:'Added opportunity to [[Northwind Industries]]'},{l:'Open client'},{l:'Dismiss',c:'ghost'}]},
+    {cls:'green',icon:'checkbox',head:'Action item detected',body:'Send FX hedging proposal — <span class="wl">[[Coverage]]</span>, due Fri',acts:[{l:'Create task',c:'primary',a:'Task created · FX proposal'},{l:'Edit'}]},
+    {cls:'violet',icon:'lock',head:'KYC flag',body:'New entity in scope — refresh KYC / AML',acts:[{l:'Open KYC',c:'primary',a:'Triggered KYC refresh'},{l:'Dismiss',c:'ghost'}]}],carried:'2 open tasks from the last client review'},
+  tx:[{s:'a',w:'Treasurer',t:'13:17',x:'We’re consolidating EMEA cash — want a single pooling structure.'},{s:'b',w:'RM',t:'13:18',x:'We can set up notional pooling plus an FX overlay.'},{s:'a',w:'Treasurer',t:'13:19',x:'Send the hedging proposal by Friday.'}],
+  entities:[{n:'Northwind Industries',s:'client',c:'blue'},{n:'TTS',s:'product',c:'green'},{n:'Coverage',s:'',c:'building'}],
+  openItems:[{n:'Update pricing grid',a:'1d'},{n:'Compliance review',a:'3d'}], quick:['Summarize review','Draft proposal','/routine'],
+  mails:[{id:1,from:'Northwind Treasury',co:'client',av:'NT',avc:'blue',time:'12:50',unread:true,subj:'EMEA cash pooling — next steps',prev:'Following up on the pooling structure and FX overlay we discussed.',imp:true,proposed:[{l:'Update [[Northwind Industries]]',a:'Updated [[Northwind Industries]]'},{l:'Create task · pricing',a:'Task created · pricing'}]},
+   {id:2,from:'KYC / AML Ops',co:'compliance',av:'KY',avc:'violet',time:'11:30',unread:true,subj:'Refresh required — new in-scope entity',prev:'A subsidiary was added to the relationship; KYC refresh required.',imp:true,proposed:[{l:'Trigger KYC refresh',a:'KYC refresh triggered'},{l:'Create task · KYC',a:'Task created · KYC'}]},
+   {id:3,from:'FX Desk',co:'internal',av:'FX',avc:'green',time:'Yest',unread:false,subj:'Indicative levels',prev:'Indicative levels for the EUR/USD overlay.',imp:false,proposed:[]}],
+  events:[{t:'9:00',title:'Overnight FX & rates brief',sub:'routine · 7:00',cls:'recorded',day:'today',status:'recorded',art:{summary:'Cross-asset moves + client exposures compiled.',decisions:[],actions:[]}},
+   {t:'11:00',title:'FX desk client call',sub:'Markets · 1 client',cls:'',day:'today',status:'upcoming'},
+   {t:'13:00',title:'TTS client review — Northwind',sub:'13:20 · live now · RM + product',cls:'live',day:'today',status:'live'},
+   {t:'16:00',title:'Credit committee',sub:'Internal · weekly',cls:'',day:'today',status:'upcoming'},
+   {t:'14:00',title:'FX desk client call',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Discussed EUR/USD hedging for a corporate client.',decisions:['Provide indicative levels'],actions:['Send levels — done']}},
+   {t:'10:00',title:'Credit committee',sub:'recorded',cls:'recorded',day:'yesterday',status:'recorded',art:{summary:'Reviewed exposures; one limit increase approved.',decisions:['Approve limit increase'],actions:['Update limits — task']}}],
+  routines:[{id:'r1',name:'Overnight FX & rates brief',tk:'time',trig:'Daily · 6:30',plan:'Cross-asset moves, client exposures, today’s reviews.',last:'today 6:30',next:'tomorrow',runs:280,on:true},
+   {id:'r2',name:'Inbox triage',tk:'event',trig:'On new email',plan:'Check if important; if so, propose actions on the message (update relationship, KYC).',last:'12:50',next:'on next email',runs:190,on:true},
+   {id:'r3',name:'After client call',tk:'event',trig:'On meeting end',plan:'Write the call memo, update relationship & CRM; create tasks.',last:'13:20',next:'on next call',runs:88,on:true},
+   {id:'r4',name:'Covered-corporate news scan',tk:'event',trig:'On news',plan:'Append market & treasury news to client files.',last:'13:00',next:'on next item',runs:64,on:true},
+   {id:'r5',name:'KYC refresh watch',tk:'event',trig:'On new entity in scope',plan:'Open a KYC/AML refresh task and link it to the relationship.',last:'11:30',next:'on next entity',runs:19,on:true}],
+  tasks:[{id:'t1',t:'Send FX hedging proposal to Northwind',src:'TTS review',due:'Fri',prio:'high',done:false},{id:'t2',t:'KYC refresh — Northwind subsidiary',src:'KYC Ops',due:'3d',prio:'high',done:false},{id:'t3',t:'Update pricing grid',src:'Routine',due:'today',prio:'med',done:false},{id:'t4',t:'Update credit limits',src:'Credit committee',due:'—',prio:'med',done:true}],
+  tree:[{l:'graph / kg',lvl:0,f:1},{l:'clients',lvl:2,f:1},{l:'northwind-industries.md',lvl:3,active:1},{l:'products',lvl:2,f:1},{l:'coverage',lvl:2,f:1},{l:'kyc',lvl:0,f:1}],
+  doc:{title:'Northwind Industries',kv:'segment: corporate · region: EMEA',secs:[{h:'Products',b:'Cash management · FX · (opp) cross-border pooling'},{h:'Opportunity',b:'Notional pooling + EUR/USD hedging overlay'},{h:'Open tasks',b:'· Send FX hedging proposal — Coverage, due Fri'}],appends:['2026-06-23 [conf:0.85] wants single EMEA pooling structure (source: [[TTS review]])']},
+  setup:{tagline:'Corporate banking intelligence with KYC & barriers',integrations:[{n:'Calendar',i:'cal',d:'Client reviews & desk calls',on:true},{n:'Email',i:'mail',d:'Client & internal mail',on:true},{n:'Meeting bot',i:'radio',d:'Record & transcribe (where permitted)',on:true,req:1},{n:'Salesforce / CRM',i:'database',d:'Client relationships',on:true,req:1},{n:'Market data',i:'news',d:'FX, rates, ratings, news',on:true},{n:'KYC / AML system',i:'shield',d:'Onboarding & periodic refresh',on:true,req:1},{n:'Compliance archive',i:'lock',d:'Supervision & retention',on:true}],entities:['Clients','Products','Coverage','Counterparties','Regulatory'],compliance:[{n:'Cross-border data residency',i:'shield',d:'Honor regional data-localization (EMEA/US/APAC)',on:true},{n:'KYC / AML linkage',i:'lock',d:'New in-scope entities trigger a KYC refresh',on:true},{n:'Information barriers',i:'scale',d:'Public vs private side separation enforced',on:true},{n:'Supervision & surveillance',i:'check',d:'e-comms & notes streamed to supervision',on:true},{n:'WORM retention',i:'database',d:'Non-rewriteable record retention',on:true}]}}
+};
+
+const INDUSTRIES=[{key:'sales',name:'Revenue / Sales',icon:'spark',c:'accent',desc:'CRM-connected meeting & account intelligence for revenue teams.',tags:['Salesforce','Meetings','Deals']},{key:'hr',name:'People / Talent (HR)',icon:'user',c:'blue',desc:'ATS-connected hiring intelligence — interviews, scorecards, pipeline.',tags:['Greenhouse','Workday','EEO-safe']},{key:'finance',name:'Financial markets',icon:'bank',c:'green',desc:'Front-to-back intelligence with information barriers, MNPI & WORM retention.',tags:['DTCC','Morgan Stanley','Citi']}];
+const FIRMS=[{key:'dtcc',name:'DTCC',sub:'Post-trade · clearing & settlement',icon:'building',c:'blue'},{key:'ms',name:'Morgan Stanley',sub:'Institutional securities · wealth',icon:'briefcase',c:'green'},{key:'citi',name:'Citi',sub:'Banking · markets · TTS',icon:'bank',c:'violet'}];
+
+const DEPLOY_MODELS=[{key:'cloud',name:'Vexa Cloud',sub:'Managed by Vexa · fastest to start',icon:'database'},{key:'vpc',name:'Your cloud (VPC)',sub:'Runs in your AWS / GCP / Azure account',icon:'shield'},{key:'airgap',name:'On-prem / air-gapped',sub:'Fully isolated · no network egress',icon:'lock'}];
+const DEPLOY_COMP=[{n:'Meeting bots',d:'Join, record, transcribe — in your cluster',i:'radio'},{n:'Agentic runtime',d:'Per-org agent containers in your infra',i:'tool'},{n:'LLM inference (BYO)',d:'Your endpoint — vLLM, Azure OpenAI in-tenant, Bedrock, on-prem GPU',i:'spark'},{n:'Object storage',d:'Your S3 / MinIO',i:'database'},{n:'Database',d:'Your Postgres',i:'database'},{n:'Identity (SSO / SCIM)',d:'Okta · Entra ID · Ping',i:'user'}];
+const egressLine={cloud:'Hosted by Vexa · standard cloud',vpc:'Runs in your VPC · data stays in your cloud account',airgap:'No data leaves your network · no egress'};
+let V=null;
+let state={screen:'landing',industry:null,vertical:null,step:0,view:'live',mail:1,calMode:'cal',meeting:null,deployModel:'vpc'};
+
+function renderLanding(){
+  const scr=document.getElementById('screen');
+  if(state.industry==='finance'){
+    scr.innerHTML=`<div class="screenwrap"><div class="back" data-backind><span class="ic16" style="display:flex">${ic('arrow')}</span>Back to templates</div>
+      <div class="eyebrow">Financial markets</div><div class="h1">Choose your institution</div>
+      <div class="lead">Each comes preconfigured with the right entity model, data feeds, and a governance profile — information barriers, MNPI, KYC, and WORM retention.</div>
+      <div class="ocards">${FIRMS.map(f=>`<div class="ocard" data-firm="${f.key}"><div class="oi" style="background:var(--${f.c}bg);color:var(--${f.c})"><span class="ic20" style="display:flex">${ic(f.icon)}</span></div><h3>${f.name}</h3><p>${f.sub}</p><div class="arr">Set up <span class="ic14" style="display:flex">${ic('arrow')}</span></div></div>`).join('')}</div></div>`;
+  } else {
+    scr.innerHTML=`<div class="screenwrap"><div class="eyebrow">AI-first knowledge-worker terminal</div><div class="h1">Set up your Vexa workspace</div>
+      <div class="lead">Claude Code × Outlook on a backend of meeting bots and an agentic runtime — deployable fully self-hosted in your own VPC or air-gapped, with BYO inference. Pick a template; we’ll preconfigure integrations, your knowledge graph, routines, governance, and deployment.</div>
+      <div class="ocards">${INDUSTRIES.map(v=>`<div class="ocard" data-ind="${v.key}"><div class="oi" style="background:var(--${v.c}bg);color:var(--${v.c})"><span class="ic20" style="display:flex">${ic(v.icon)}</span></div><h3>${v.name}</h3><p>${v.desc}</p><div class="tags">${v.tags.map(t=>`<span class="tg">${t}</span>`).join('')}</div><div class="arr">${v.key==='finance'?'Choose institution':'Set up'} <span class="ic14" style="display:flex">${ic('arrow')}</span></div></div>`).join('')}</div></div>`;
+  }
+  paintIcons(scr);
+}
+
+function routineTog(r){return `<div class="togrow"><div class="ti" style="color:var(--${r.tk==='time'?'blue':'violet'})">${ic(r.tk==='time'?'clock':'bolt')}</div><div class="tc"><b>${r.name}</b><div class="flow" style="margin:3px 0"><span class="pill ${r.tk}">${r.trig}</span><span class="ic14" style="display:flex;color:var(--t3)">${ic('arrow')}</span><span class="pill plan">plan</span></div><span>${r.plan}</span></div><div class="sw ${r.on?'on':''}" data-toggle="routine" data-id="${r.id}"></div></div>`;}
+function stepContent(){
+  const s=V.setup;
+  if(state.step===0) return {h:'Connect your tools',sub:`The terminal works over what you already use. ${s.tagline}.`,body:s.integrations.map((x,i)=>`<div class="togrow"><div class="ti">${ic(x.i)}</div><div class="tc"><b>${x.n}</b><span>${x.d}</span></div>${x.req?'<span class="req">required</span>':''}<div class="sw ${x.on?'on':''}" data-toggle="int" data-id="${i}"></div></div>`).join('')};
+  if(state.step===1) return {h:'Your knowledge graph',sub:'Entity types wired with templates and wikilinks. The agent grows them from meetings, email, and news.',body:`<div class="etags">${s.entities.map(e=>`<span class="etag"><span class="ic14" style="display:flex;color:var(--t2)">${ic('file')}</span>${e}</span>`).join('')}</div><div class="note"><span class="ic16" style="display:flex;color:var(--t3)">${ic('database')}</span>Git-backed markdown. Every fact is dated, confidence-scored, and cites its source.</div>`};
+  if(state.step===2) return {h:'Routines',sub:'Each routine is a trigger → plan. Time-triggered or event-triggered. Create more later from chat with /routine.',body:V.routines.map(routineTog).join('')};
+  if(state.step===3) return {h:'Governance & compliance',sub:'The controls this template enforces — on by default for your industry.',body:s.compliance.map((c,i)=>`<div class="togrow"><div class="ti" style="color:var(--${c.on?'green':'t2'})">${ic(c.i)}</div><div class="tc"><b>${c.n}</b><span>${c.d}</span></div><div class="sw ${c.on?'on':''}" data-toggle="comp" data-id="${i}"></div></div>`).join('')};
+  if(state.step===4){const selfhost=state.deployModel!=='cloud';return {h:'Deployment',sub:'Where the terminal runs. For full self-hosting, everything — meeting bots, agentic runtime, inference, storage, identity — lives in your infrastructure.',body:`${DEPLOY_MODELS.map(m=>`<div class="togrow selrow ${state.deployModel===m.key?'sel':''}" data-deploy="${m.key}"><div class="ti">${ic(m.icon)}</div><div class="tc"><b>${m.name}</b><span>${m.sub}</span></div>${state.deployModel===m.key?`<span class="ic16" style="display:flex;color:var(--accent)">${ic('check')}</span>`:''}</div>`).join('')}<div class="note" style="margin:6px 0 16px"><span class="ic16" style="display:flex;color:var(--${selfhost?'green':'t3'})">${ic(selfhost?'shield':'database')}</span>${egressLine[state.deployModel]}</div><div class="sub" style="margin:0 0 10px">${selfhost?'Runs in your infrastructure':'Managed by Vexa'}</div>${DEPLOY_COMP.map(c=>`<div class="togrow"><div class="ti" style="color:var(--${selfhost?'green':'t2'})">${ic(c.i)}</div><div class="tc"><b>${c.n}</b><span>${c.d}</span></div><span class="ic16" style="display:flex;color:var(--${selfhost?'green':'t3'})">${ic(selfhost?'check':'database')}</span></div>`).join('')}`};}
+  const on=a=>a.filter(x=>x.on).length;
+  return {h:'Review & launch',sub:'You can change any of this later.',body:`<div><div class="revrow"><div class="rl">Workspace</div><div class="rv">${V.brand.org} · ${V.brand.sub}</div></div><div class="revrow"><div class="rl">Deployment</div><div class="rv">${DEPLOY_MODELS.find(m=>m.key===state.deployModel).name} · ${state.deployModel!=='cloud'?'self-hosted':'managed'}</div></div><div class="revrow"><div class="rl">Integrations</div><div class="rv">${on(s.integrations)} connected</div></div><div class="revrow"><div class="rl">Knowledge graph</div><div class="rv">${s.entities.join(' · ')}</div></div><div class="revrow"><div class="rl">Routines</div><div class="rv">${on(V.routines)} active (trigger → plan)</div></div><div class="revrow"><div class="rl">Governance</div><div class="rv">${on(s.compliance)} controls enforced</div></div></div>`};
+}
+function renderSetup(){
+  const scr=document.getElementById('screen');const c=stepContent();const last=state.step===STEPS.length-1;
+  scr.innerHTML=`<div class="screenwrap"><div class="back" data-backsetup><span class="ic16" style="display:flex">${ic('arrow')}</span>${['dtcc','ms','citi'].includes(state.vertical)?'Institutions':'Templates'}</div>
+    <div class="eyebrow">${V.setup.tagline}</div><div class="h1">Set up ${V.brand.org}</div>
+    <div class="setupgrid"><div class="steps">${STEPS.map((s,i)=>`<div class="stepi ${i===state.step?'active':''} ${i<state.step?'done':''}" data-step="${i}"><span class="n">${i<state.step?ic('check'):(i+1)}</span>${s}</div>`).join('')}</div>
+    <div class="stepbody"><h2>${c.h}</h2><div class="sub">${c.sub}</div>${c.body}
+      <div class="setupfoot">${state.step>0?`<button class="btn ghost" data-back>Back</button>`:''}<div style="flex:1"></div>${last?`<button class="btn primary" data-launch>Launch terminal</button>`:`<button class="btn primary" data-continue>Continue</button>`}</div>
+    </div></div></div>`;
+  paintIcons(scr);
+}
+
+function brandHtml(){return `<div class="logo">${V.brand.letter}</div><div class="meta"><b>${V.brand.org}</b><span>switch workspace</span></div><span class="chev ic16">${ic('chev')}</span>`;}
+function renderNav(){document.getElementById('nav').innerHTML=NAV.map(n=>{let r='';if(n.live)r='<span class="pulse"></span>';else if(n.id==='tasks')r=`<span class="ct">${V.tasks.filter(t=>!t.done).length}</span>`;else if(n.id==='inbox')r=`<span class="ct">${V.mails.filter(m=>m.unread).length}</span>`;else if(n.k)r=`<span class="k">${n.k}</span>`;return `<button class="nav ${state.view===n.id?'active':''}" data-nav="${n.id}"><span class="ic16" style="display:flex">${ic(n.icon)}</span>${n.label}${r}</button>`;}).join('');}
+
+function ctxFor(view){
+  if(view==='live') return `<div class="ctxlabel">In this call</div>${V.entities.map((e,i)=>`<div class="item ${i===0?'active':''}">${e.c==='building'?`<span class="ic14" style="display:flex;color:var(--t3)">${ic('building')}</span>`:`<span class="dot" style="background:var(--${e.c})"></span>`}${e.n}${e.s?`<small>${e.s}</small>`:''}</div>`).join('')}<div class="ctxlabel">Open tasks carried in</div>${V.openItems.map(o=>`<div class="item"><span class="dot"></span>${o.n}<small>${o.a}</small></div>`).join('')}<div class="ctxlabel">Skills</div>${V.quick.map(q=>`<div class="item" data-q="${q}">${q.startsWith('/')?`<span style="font-family:var(--mono);color:var(--accent)">${q}</span>`:q}</div>`).join('')}`;
+  if(view==='chat') return `<div class="item" style="color:var(--accent)"><span class="ic14" style="display:flex">${ic('plus')}</span>New chat</div><div class="ctxlabel">Recent</div><div class="item active"><span class="dot"></span>${V.doc.title} research</div><div class="item"><span class="dot"></span>Weekly digest draft</div><div class="item"><span class="dot"></span>Meeting prep</div>`;
+  if(view==='workspace') return `<div class="tree"><div class="ctxlabel">${V.badge.replace('workspace: ','')} · git main</div>${V.tree.map(t=>`<div class="item ${t.lvl===2?'l2':t.lvl===3?'l3':''} ${t.active?'active':''}"><span class="ic14" style="display:flex;color:var(--${t.active?'blue':'t3'})">${ic(t.f?'folder':'file')}</span>${t.l}</div>`).join('')}</div>`;
+  if(view==='inbox') return `<div class="ctxlabel">Mailboxes</div><div class="item active"><span class="ic14" style="display:flex">${ic('mail')}</span>Inbox <small>${V.mails.filter(m=>m.unread).length}</small></div><div class="item"><span class="ic14" style="display:flex">${ic('checkbox')}</span>Needs action</div><div class="item"><span class="ic14" style="display:flex">${ic('check')}</span>Done</div><div class="ctxlabel">Routine</div><div class="item"><span class="dot" style="background:var(--green)"></span>Inbox triage · on</div>`;
+  if(view==='calendar') return `<div class="ctxlabel">Calendars</div><div class="item"><span class="dot" style="background:var(--blue)"></span>Work</div><div class="item"><span class="dot" style="background:var(--green)"></span>Meetings (recorded)</div><div class="item"><span class="dot" style="background:var(--violet)"></span>Routines</div>`;
+  if(view==='tasks') return `<div class="item" style="color:var(--accent)"><span class="ic14" style="display:flex">${ic('plus')}</span>New task</div><div class="ctxlabel">Filter</div><div class="item active"><span class="dot" style="background:var(--accent)"></span>Open <small>${V.tasks.filter(t=>!t.done).length}</small></div><div class="item"><span class="dot" style="background:var(--green)"></span>Done <small>${V.tasks.filter(t=>t.done).length}</small></div><div class="ctxlabel">By source</div><div class="item"><span class="ic14" style="display:flex">${ic('radio')}</span>Meetings</div><div class="item"><span class="ic14" style="display:flex">${ic('mail')}</span>Email</div><div class="item"><span class="ic14" style="display:flex">${ic('zap')}</span>Routines</div>`;
+  if(view==='routines') return `<div class="item" style="color:var(--accent)"><span class="ic14" style="display:flex">${ic('plus')}</span>New routine</div><div class="ctxlabel">Trigger</div><div class="item"><span class="ic14" style="display:flex;color:var(--blue)">${ic('clock')}</span>Time <small>${V.routines.filter(r=>r.tk==='time').length}</small></div><div class="item"><span class="ic14" style="display:flex;color:var(--violet)">${ic('bolt')}</span>Event <small>${V.routines.filter(r=>r.tk==='event').length}</small></div><div class="note" style="margin:10px 6px 0">Create from chat with <span style="font-family:var(--mono);color:var(--accent)">/routine</span></div>`;
+  return '';
+}
+function docHtml(){const d=V.doc;return `<div class="doc"><h3>${d.title}</h3><div class="kv">${d.kv}</div>${d.restricted?`<div class="restricted"><span class="ic14" style="display:flex">${ic('lock')}</span>${d.restricted}</div>`:''}${d.secs.map(s=>`<h4>${s.h}</h4><p>${s.b}</p>`).join('')}<div class="append">${d.appends.join('<br>')}</div></div>`;}
+
+const RAILS={
+  transcript:()=>({head:`<span class="ic16" style="display:flex;color:var(--live)">${ic('radio')}</span> Live transcript`,body:V.tx.map(x=>`<div class="tx"><span class="who ${x.s}">${x.w}</span><span class="ti">${x.t}</span><div class="tt">${x.x}</div></div>`).join('')}),
+  doc:()=>({head:`<span class="ic16" style="display:flex">${ic('file')}</span> ${V.doc.title}`,body:docHtml()}),
+  backlinks:()=>({head:`<span class="ic16" style="display:flex">${ic('panel')}</span> Backlinks & meetings`,body:`<div class="ctxlabel" style="padding-left:0">Linked from</div><div class="item"><span class="ic14" style="display:flex;color:var(--blue)">${ic('file')}</span>${V.live.title}</div><div class="ctxlabel" style="padding-left:0">Meetings</div><div class="item"><span class="dot" style="background:var(--live)"></span>${V.live.title}<small>live</small></div>`}),
+  mail:()=>{const m=V.mails.find(x=>x.id===state.mail)||V.mails[0];return{head:`${av(m.av,m.avc)} <span style="color:var(--t1)">${m.from}</span>`,body:`<div style="font-size:15px;font-weight:500;margin-bottom:4px">${m.subj}</div><div style="font-size:12px;color:var(--t3);margin-bottom:14px">to me · ${m.time}</div><p style="font-size:13.5px;color:var(--t1);line-height:1.6">${m.prev} Let me know what works — happy to jump on a call this week.</p><p style="font-size:13.5px;color:var(--t2);margin-top:10px">Best,<br>${m.from}</p>
+    <div style="margin-top:18px;border:1px solid var(--line2);border-radius:10px;padding:11px;background:${m.imp?'var(--accentbg)':'var(--panel)'}">
+      <div style="font-size:11.5px;color:${m.imp?'var(--accent)':'var(--t3)'};display:flex;gap:6px;align-items:center"><span class="ic14" style="display:flex">${ic('zap')}</span>Routine · Inbox triage — ${m.imp?'marked important':'low priority'}</div>
+      ${m.imp?`<div style="font-size:12.5px;color:var(--t2);margin:6px 0 2px">Proposed actions:</div><div class="pacts">${m.proposed.map(p=>`<button class="pbtn ${p===m.proposed[0]?'primary':''}" data-act="${p.a}">${p.l}</button>`).join('')}</div>`:`<div style="font-size:12.5px;color:var(--t3);margin-top:5px">No action proposed.</div>`}
+    </div>
+    <div class="pacts" style="margin-top:14px"><button class="pbtn">Reply</button><button class="pbtn">Draft with agent</button></div>`}},
+  event:()=>({head:`<span class="ic16" style="display:flex;color:var(--live)">${ic('cal')}</span> ${V.live.title}`,body:`<div style="font-size:15px;font-weight:500">${V.live.title}</div><div style="font-size:12px;color:var(--t3);margin:4px 0 14px">Today · live now</div><div class="chip live" style="cursor:default">live now · bot recording</div><h4 style="font-size:12px;color:var(--t2);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 6px">Attendees</h4>${V.entities.map(e=>`<div class="item" style="padding-left:0">${e.c==='building'?`<span class="ic14" style="display:flex;color:var(--t3)">${ic('building')}</span>`:`<span class="dot" style="background:var(--${e.c})"></span>`}${e.n}${e.s?` · <span style="color:var(--t3)">${e.s}</span>`:''}</div>`).join('')}<div class="pacts" style="margin-top:16px"><button class="pbtn primary" data-nav="live">Open live view</button><button class="pbtn" data-act="Prep brief drafted">Draft prep brief</button></div>`}),
+  meeting:()=>{const m=(V.events.find(e=>e.title===state.meeting&&e.art))||{title:state.meeting,art:{summary:'',decisions:[],actions:[]}};const a=m.art;return{head:`<span class="ic16" style="display:flex;color:var(--green)">${ic('file')}</span> Meeting note`,body:`<div style="font-size:15px;font-weight:500">${m.title}</div><div style="font-size:12px;color:var(--t3);margin:4px 0 12px">recorded · ${m.day||'yesterday'}</div><h4 style="font-size:12px;color:var(--t2);text-transform:uppercase;letter-spacing:.04em;margin:0 0 5px">Summary</h4><p style="font-size:13px">${a.summary}</p>${a.decisions.length?`<h4 style="font-size:12px;color:var(--t2);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 5px">Decisions</h4>${a.decisions.map(d=>`<p style="font-size:13px">· ${d}</p>`).join('')}`:''}${a.actions.length?`<h4 style="font-size:12px;color:var(--t2);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 5px">Action items</h4>${a.actions.map(x=>`<p style="font-size:13px">· ${x}</p>`).join('')}`:''}<div class="pacts" style="margin-top:16px"><button class="pbtn primary" data-act="Opened transcript">Open transcript</button><button class="pbtn" data-act="Played recording">Play recording</button></div>`}},
+};
+
+function viewLive(){const L=V.live;return{title:`<h1><span class="ic20" style="color:var(--live);display:flex">${ic('radio')}</span> ${L.title}</h1><span class="sub">${L.time}</span>`,right:'transcript',rail:true,composer:true,qchips:V.quick,main:`<div class="wrap"><div class="msg"><div class="av bot">${V.brand.letter}</div><div class="bubble"><p>${L.intro}</p></div></div>${L.cards.map(c=>`<div class="pcard ${c.cls}"><div class="ph"><span class="ic14" style="display:flex">${ic(c.icon)}</span>${c.head}</div><p class="pb">${c.body}</p><div class="pacts">${c.acts.map(a=>`<button class="pbtn ${a.c||''}" ${a.a?`data-act="${a.a}"`:''}>${a.l}</button>`).join('')}</div></div>`).join('')}<div class="msg"><div class="av bot">${V.brand.letter}</div><div class="bubble"><p>Heads up — there are <span class="wl">${L.carried}</span>. Want me to bring them up?</p><div class="pacts" style="margin-top:8px"><button class="pbtn" data-nav="tasks">Show tasks</button></div></div></div></div>`};}
+function viewChat(){return{title:`<h1><span class="ic20" style="display:flex">${ic('msg')}</span> ${V.doc.title} research</h1><span class="sub">Workspace agent · agentic runtime</span>`,right:'doc',rail:true,composer:true,qchips:['/research','/draft','/routine'],main:`<div class="wrap"><div class="msg me"><div class="bubble"><p>Update ${V.doc.title} with what we learned, and draft the follow-up.</p></div><div class="av me">DG</div></div>
+   <div class="msg"><div class="av bot">${V.brand.letter}</div><div><div class="bubble"><p>Done. Updated <span class="wl">[[${V.doc.title}]]</span> with the new facts and dated the append with its source.</p><div class="commit"><span class="ic14" style="display:flex">${ic('commit')}</span>1 file changed · a1b2c3d</div></div><div class="tools"><span class="tool"><span class="ic14" style="display:flex">${ic('tool')}</span>read</span><span class="tool"><span class="ic14" style="display:flex">${ic('search')}</span>research</span><span class="tool"><span class="ic14" style="display:flex">${ic('file')}</span>write</span></div></div></div>
+   <div class="pcard violet" style="margin-left:37px"><div class="ph"><span class="ic14" style="display:flex">${ic('zap')}</span>Make this a routine? <span style="font-family:var(--mono);color:var(--violet)">/routine</span></div><p class="pb">Repeat “update the client file and draft the follow-up” automatically.</p><div class="pacts"><button class="pbtn primary" data-saveroutine="event" data-name="After call → update & draft">On meeting end</button><button class="pbtn" data-saveroutine="time" data-name="Daily recap → update & draft">Every evening</button><button class="pbtn ghost">Dismiss</button></div></div></div>`};}
+function viewWorkspace(){return{title:`<h1><span class="ic20" style="display:flex">${ic('file')}</span> ${V.doc.title}</h1><span class="sub">${V.badge.replace('workspace: ','')} knowledge graph · git</span>`,headRight:`<button class="chip"><span class="ic14" style="display:flex">${ic('commit')}</span>history</button><button class="chip">Edit</button>`,right:'backlinks',rail:true,composer:true,composerPlaceholder:'Ask about this document…  / for skills',qchips:['Summarize','Find open tasks','What changed this week?'],main:`<div class="wrap">${docHtml()}</div>`};}
+function viewInbox(){return{title:`<h1><span class="ic20" style="display:flex">${ic('mail')}</span> Inbox</h1><span class="sub">${V.mails.filter(m=>m.unread).length} unread · routine triaging to workspace</span>`,headRight:`<button class="chip on"><span class="ic14" style="display:flex">${ic('zap')}</span>Inbox triage on</button>`,right:'mail',rail:true,composer:false,main:`<div class="list">${V.mails.map(m=>`<div class="mail ${m.unread?'':'read'} ${state.mail===m.id?'active':''}" data-mail="${m.id}"><span class="un"></span>${av(m.av,m.avc)}<div class="mc"><div class="mr"><span class="from">${m.from}</span>${m.co?`<span style="color:var(--t3);font-size:12px">${m.co}</span>`:''}<span class="time">${m.time}</span></div><div class="subj">${m.subj}</div><div class="prev">${m.prev}</div>${m.imp?`<div class="mtag imp"><span class="ic14" style="display:flex">${ic('zap')}</span>important · ${m.proposed.length} proposed actions</div>`:`<div class="mtag low">low priority</div>`}</div></div>`).join('')}</div>`};}
+function viewCalendar(){const list=state.calMode==='list';const by=d=>V.events.filter(e=>e.day===d);const grid=`<div class="cal">${['9:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'].map(t=>{const evs=by('today').filter(e=>e.t===t);return `<div class="slot"><div class="tm">${t}</div><div class="ln">${evs.map(e=>`<div class="ev ${e.cls}" data-ev="${e.title}"><b>${e.title}</b><span>${e.sub}</span></div>`).join('')}</div></div>`;}).join('')}</div>`;
+  const row=e=>`<div class="lrow ${state.meeting===e.title?'active':''}" data-ev="${e.title}"><span class="lt">${e.t}</span><div class="lm"><b>${e.title}</b><span>${e.sub}</span></div><span class="lb ${e.status==='recorded'?'rec':e.status==='live'?'live':'up'}">${e.status}</span></div>`;
+  const listHtml=`<div class="daygrp">Today</div>${by('today').map(row).join('')}<div class="daygrp">Yesterday · meetings</div>${by('yesterday').map(row).join('')}`;
+  return{title:`<h1><span class="ic20" style="display:flex">${ic('cal')}</span> Calendar &amp; meetings</h1><span class="sub">Tue, Jun 23 · past events are recorded meetings</span>`,headRight:`<div class="seg"><button class="${!list?'sel':''}" data-calmode="cal">Day</button><button class="${list?'sel':''}" data-calmode="list">List</button></div>`,right:state.meeting?'meeting':'event',rail:true,composer:false,main:list?`<div class="list">${listHtml}</div>`:grid};}
+function viewTasks(){const open=V.tasks.filter(t=>!t.done),done=V.tasks.filter(t=>t.done);const row=t=>`<div class="task ${t.done?'done':''}"><div class="cb" data-task="${t.id}">${ic('check')}</div><div style="flex:1"><div class="tt">${t.t}</div><div class="tm"><span class="prio ${t.prio}">${t.prio}</span><span><span class="ic14" style="display:inline-flex;vertical-align:-2px;color:var(--t3)">${ic('clock')}</span> due ${t.due}</span><span>from ${t.src}</span></div></div></div>`;return{title:`<h1><span class="ic20" style="display:flex">${ic('tasks')}</span> Tasks</h1><span class="sub">${open.length} open · from meetings, email & routines</span>`,headRight:`<button class="chip"><span class="ic14" style="display:flex">${ic('plus')}</span>New task</button>`,right:null,rail:false,composer:false,main:`<div class="secttl">Open</div><div class="list">${open.map(row).join('')}</div><div class="secttl">Done</div><div class="list">${done.map(row).join('')}</div>`};}
+function viewRoutines(){const row=r=>`<div class="card"><div class="ch"><div class="ti" style="width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:var(--panel2);color:var(--${r.tk==='time'?'blue':'violet'})">${ic(r.tk==='time'?'clock':'bolt')}</div><div style="flex:1"><h3>${r.name}</h3><div class="flow" style="margin-top:5px"><span class="pill ${r.tk}"><span class="ic14" style="display:flex">${ic(r.tk==='time'?'clock':'bolt')}</span>${r.trig}</span><span class="ic14" style="display:flex;color:var(--t3)">${ic('arrow')}</span><span class="pill plan">${r.plan}</span></div></div><div class="sw ${r.on?'on':''}" data-toggle="routine" data-id="${r.id}"></div></div><div class="cmeta"><span>last: <b>${r.last}</b></span><span>next: <b>${r.next}</b></span><span>runs: <b>${r.runs}</b></span><span style="color:var(--accent);cursor:pointer" data-act="Running ${r.name} now…"><span class="ic14" style="display:inline-flex;vertical-align:-2px">${ic('play')}</span> run now</span></div></div>`;return{title:`<h1><span class="ic20" style="display:flex">${ic('zap')}</span> Routines</h1><span class="sub">trigger → plan · ${V.routines.filter(r=>r.on).length} active</span>`,headRight:`<button class="chip"><span class="ic14" style="display:flex">${ic('plus')}</span>New routine</button>`,right:null,rail:false,composer:false,main:`<div class="secttl">Keep ${V.brand.org}’s workspace current</div><div class="grid" style="padding-top:8px">${V.routines.map(row).join('')}</div>`};}
+const VIEW_FN={live:viewLive,chat:viewChat,workspace:viewWorkspace,inbox:viewInbox,calendar:viewCalendar,tasks:viewTasks,routines:viewRoutines};
+
+let railOpen=true;
+function renderApp(){
+  document.getElementById('brand').innerHTML=brandHtml();renderNav();
+  document.getElementById('ctx').innerHTML=ctxFor(state.view);
+  document.getElementById('deprow').innerHTML=state.deployModel==='cloud'?`<span class="dot" style="background:var(--t3)"></span>Vexa Cloud`:`<span class="dot" style="background:var(--green)"></span>Self-hosted · ${state.deployModel==='airgap'?'air-gapped':'your VPC'}`;
+  const v=VIEW_FN[state.view]();
+  document.getElementById('vhead').innerHTML=`${v.title}<div class="right">${v.headRight||''}</div>`;
+  document.getElementById('main').innerHTML=v.main;
+  document.getElementById('tbTitle').textContent=NAV.find(n=>n.id===state.view).label;
+  document.getElementById('tbBadge').textContent=V.badge;
+  const comp=document.getElementById('composer');
+  if(v.composer){comp.style.display='block';currentQuick=(v.qchips||[]);document.getElementById('cmdmenu').innerHTML='';renderChips(document.getElementById('cinput').value||'');document.getElementById('cinput').placeholder=v.composerPlaceholder||'Type / for skills, or ask the agent…';}else{comp.style.display='none';}
+  const app=document.getElementById('app'),right=document.getElementById('right');
+  if(v.rail&&railOpen){app.dataset.rail='on';const r=RAILS[v.right]();right.innerHTML=`<div class="rhead">${r.head}<span class="x ic16" id="railX">${ic('x')}</span></div><div class="rbody">${r.body}</div>`;}else{app.dataset.rail='off';right.innerHTML='';}
+  paintIcons(document.getElementById('app'));
+}
+let currentQuick=[];
+function renderChips(val){
+  const menu=document.getElementById('cmdmenu'),chips=document.getElementById('qchips');
+  if(val.startsWith('/')){chips.innerHTML='';const q=val.slice(1).toLowerCase();const matches=SKILLS.filter(s=>s.c.slice(1).startsWith(q));menu.innerHTML=`<div class="cmds">${matches.map(s=>`<div class="cmd" data-cmd="${s.c}"><code>${s.c}</code><span>${s.d}</span></div>`).join('')||'<div class="cmd"><span>No matching skill</span></div>'}</div>`;}
+  else{menu.innerHTML='';chips.innerHTML=currentQuick.map(q=>`<button class="chip" data-q="${q}">${q.startsWith('/')?`<span style="font-family:var(--mono);color:var(--accent)">${q}</span>`:q}</button>`).join('');}
+}
+function render(){
+  const onApp=state.screen==='app';
+  document.getElementById('app').style.display=onApp?'grid':'none';
+  document.getElementById('screen').style.display=onApp?'none':'block';
+  if(onApp){renderApp();return;}
+  if(state.screen==='landing'){document.getElementById('tbTitle').textContent='Set up your workspace';document.getElementById('tbBadge').textContent='Vexa EI';renderLanding();}
+  else{document.getElementById('tbTitle').textContent='Workspace setup';document.getElementById('tbBadge').textContent=V?V.badge:'Vexa EI';renderSetup();}
+}
+function startSetup(key){V=VERTICALS[key];state.vertical=key;state.mail=V.mails[0].id;state.step=0;state.deployModel=['dtcc','ms','citi'].includes(key)?'airgap':'vpc';state.screen='setup';render();}
+function saveRoutine(tk,name){V.routines.unshift({id:'rx'+V.routines.length,name,tk,trig:tk==='time'?'Daily · 18:00':'On meeting end',plan:'Created from chat — update the file and draft the follow-up.',last:'—',next:tk==='time'?'today 18:00':'on next trigger',runs:0,on:true});state.view='routines';toast('Routine created · '+name);render();}
+
+document.addEventListener('click',e=>{
+  const ind=e.target.closest('[data-ind]');if(ind){const k=ind.dataset.ind;if(k==='finance'){state.industry='finance';render();}else{startSetup(k);}return;}
+  const firm=e.target.closest('[data-firm]');if(firm){startSetup(firm.dataset.firm);return;}
+  if(e.target.closest('[data-backind]')){state.industry=null;render();return;}
+  if(e.target.closest('[data-backsetup]')){state.screen='landing';state.industry=['dtcc','ms','citi'].includes(state.vertical)?'finance':null;render();return;}
+  const sp=e.target.closest('[data-step]');if(sp){const i=+sp.dataset.step;if(i<=state.step){state.step=i;render();}return;}
+  if(e.target.closest('[data-continue]')){state.step=Math.min(STEPS.length-1,state.step+1);render();return;}
+  if(e.target.closest('[data-back]')){state.step=Math.max(0,state.step-1);render();return;}
+  if(e.target.closest('[data-launch]')){state.screen='app';state.view='live';toast('Terminal ready · '+V.brand.org);render();return;}
+
+  const tog=e.target.closest('[data-toggle]');if(tog){const ty=tog.dataset.toggle,id=tog.dataset.id;if(ty==='int')V.setup.integrations[+id].on=!V.setup.integrations[+id].on;else if(ty==='comp')V.setup.compliance[+id].on=!V.setup.compliance[+id].on;else if(ty==='routine'){const o=V.routines.find(x=>x.id===id);o.on=!o.on;toast((o.on?'Enabled':'Paused')+' · '+o.name);}render();return;}
+  const dep=e.target.closest('[data-deploy]');if(dep){state.deployModel=dep.dataset.deploy;render();return;}
+
+  if(state.screen!=='app')return;
+  const sr=e.target.closest('[data-saveroutine]');if(sr){saveRoutine(sr.dataset.saveroutine,sr.dataset.name);return;}
+  const cmd=e.target.closest('[data-cmd]');if(cmd){const i=document.getElementById('cinput');i.value=cmd.dataset.cmd+' ';renderChips(i.value);i.focus();return;}
+  const nav=e.target.closest('[data-nav]');if(nav){state.view=nav.dataset.nav;if(state.view==='calendar')state.meeting=null;render();return;}
+  if(e.target.closest('#brand')){state.screen='landing';state.industry=['dtcc','ms','citi'].includes(state.vertical)?'finance':null;render();return;}
+  const cm=e.target.closest('[data-calmode]');if(cm){state.calMode=cm.dataset.calmode;state.meeting=null;render();return;}
+  const mail=e.target.closest('[data-mail]');if(mail){state.mail=+mail.dataset.mail;V.mails.find(m=>m.id===state.mail).unread=false;render();return;}
+  const tk=e.target.closest('[data-task]');if(tk){const t=V.tasks.find(x=>x.id===tk.dataset.task);t.done=!t.done;toast(t.done?'Task done · '+t.t:'Reopened');render();return;}
+  const q=e.target.closest('[data-q]');if(q){const i=document.getElementById('cinput');i.value=q.dataset.q;renderChips(i.value);i.focus();return;}
+  const ev=e.target.closest('[data-ev]');if(ev){const t=ev.dataset.ev;const found=V.events.find(x=>x.title===t);if(found&&found.status==='live'){state.view='live';state.meeting=null;render();}else if(found&&found.status==='recorded'){state.meeting=t;render();}else{toast('Upcoming: '+t);}return;}
+  const act=e.target.closest('[data-act]');if(act){toast(act.dataset.act);return;}
+  if(e.target.closest('#railX')){railOpen=false;render();return;}
+  if(e.target.closest('#railToggle')){if(state.screen==='app'){railOpen=!railOpen;render();}return;}
+});
+document.getElementById('sendBtn').addEventListener('click',()=>{const i=document.getElementById('cinput');const val=i.value.trim();if(!val)return;if(val.startsWith('/routine')){saveRoutine('event','Custom routine from chat');i.value='';return;}toast('Sent to agent: '+val.slice(0,40));i.value='';renderChips('');});
+document.getElementById('cinput').addEventListener('input',e=>renderChips(e.target.value));
+document.getElementById('cinput').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('sendBtn').click();});
+let toastT;function toast(msg){const t=document.getElementById('toast');document.getElementById('toastMsg').textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2400);}
+paintIcons(document);render();
+</script>
+</body>
+</html>

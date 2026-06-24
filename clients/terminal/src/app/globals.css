@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+/*
+ * Terminal design tokens — ported verbatim from public/prototype.html so the React shell and the
+ * prototype stay pixel-identical as views are extracted. Dark is the primary theme.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #0d0d0f;
+  --sidebar: #141417;
+  --panel: #191a1e;
+  --panel2: #1f2025;
+  --rail: #141417;
+  --line: rgba(255, 255, 255, 0.07);
+  --line2: rgba(255, 255, 255, 0.12);
+  --t1: #ededf0;
+  --t2: #9a9aa4;
+  --t3: #65656f;
+  --accent: #d8855c;
+  --accentbg: rgba(216, 133, 92, 0.14);
+  --live: #ef5b56;
+  --livebg: rgba(239, 91, 86, 0.14);
+  --green: #48b787;
+  --greenbg: rgba(72, 183, 135, 0.14);
+  --blue: #6ea8fe;
+  --bluebg: rgba(110, 168, 254, 0.14);
+  --violet: #b08cf0;
+  --violetbg: rgba(176, 140, 240, 0.14);
+  --r: 8px;
+  --r2: 12px;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--t1);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@vexa/terminal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vexa Terminal — an AI-first knowledge-worker terminal (Claude Code × Outlook) on the Vexa meeting-bot + agentic-runtime backend. Self-hostable (VPC / air-gapped) with BYO inference. Scaffolded from public/prototype.html.",
+  "scripts": {
+    "dev": "next dev -p 3003",
+    "build": "next build",
+    "start": "next start -p 3003",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "geist": "^1.3.1",
+    "lucide-react": "^0.556.0",
+    "next": "15.5.19",
+    "next-themes": "^0.4.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tailwindcss": "^4",
+    "typescript": "^5.6.0"
+  }
+}
