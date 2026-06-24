@@ -9,7 +9,7 @@
 import "./chat";       // tab-kind "chat" + /-skills
 import "./sessions";   // list "sessions" (→ opens chat tabs)
 import "./entities";   // context "entity" (the KG entity card) + EntityList
-import "./meeting";    // list "calendar" + tab-kind "meeting" + context "transcript"
+import "./meeting";    // list "meetings" + tab-kind "meeting" + context "transcript"
 import "./workspace";  // list "files" (+ git) + tab-kind "doc" + context "doc-context"
 import "./routines";   // list "routines" + tab-kind "routines" (the board)
 // tasks deferred — surfaces as quick-action cards in chat later (see roadmap)

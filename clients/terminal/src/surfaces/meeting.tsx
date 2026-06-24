@@ -1,6 +1,6 @@
 "use client";
 /** Meetings (mocked backend) — the differentiator flow, rendered through the shared agent-window.
- *  • "calendar" LIST (left): meetings; the live one auto-opens; click any to (re)open its copilot.
+ *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its copilot.
  *  • "meeting" TAB (center): ONE stacked agent window — a centered list of the meeting's entities
  *    ("in the room" + "detected"); click one to open its entity card in the right sidebar (the agent
  *    creates it first if missing); Research runs in the chat below. The composer + suggested actions
@@ -30,8 +30,8 @@ function useReveal(n: number, live: boolean, stepMs = 3000): number {
   return k;
 }
 
-// ── Calendar LIST (left) ─────────────────────────────────────────────────────────
-function CalendarList() {
+// ── Meetings LIST (left) ─────────────────────────────────────────────────────────
+function MeetingsList() {
   const layout = useService(LayoutServiceId);
   return (
     <div style={{ padding: "8px" }}>
@@ -164,7 +164,7 @@ function TranscriptContext({ params }: ContextProps) {
   );
 }
 
-registerList({ id: "calendar", label: "Calendar", icon: "cal", order: 20, component: CalendarList });
+registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList });
 registerTab("meeting", MeetingTab);
 registerContext("transcript", TranscriptContext);
 registerCommand({ id: "meeting.openLive", title: "Open live meeting", run: ({ container }) => { const m = liveMeeting(); if (m) container.get(LayoutServiceId).openTab(meetingTab(m)); } });
