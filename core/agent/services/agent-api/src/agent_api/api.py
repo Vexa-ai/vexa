@@ -219,9 +219,16 @@ def create_app(
             okey = f"unit:agent-meet-{session_uid}:out"
             last = {tkey: "0", okey: "0"}
             idle = 0
+            ending = False  # transcript hit session_end — drain trailing cards before meeting-end
             while True:
-                resp = r.xread(last, count=50, block=15000)
+                # once the transcript ends, poll ONLY the out-stream (briefly) to flush trailing cards.
+                # on a reconnect both streams carry a full backlog at once: end the transcript LAST so
+                # session_end can't terminate the generator before the card Stream is replayed.
+                resp = r.xread(last, count=500, block=1500 if ending else 15000)
                 if not resp:
+                    if ending:               # out-stream drained → now it's safe to end
+                        yield {"type": "meeting-end"}
+                        return
                     idle += 15000
                     if idle >= 600000:
                         return
@@ -234,8 +241,9 @@ def create_app(
                         if stream == tkey:
                             payload = json.loads(fields.get("payload", "{}"))
                             if payload.get("type") == "session_end":
-                                yield {"type": "meeting-end"}
-                                return
+                                ending = True            # don't end yet — finish draining the out-stream
+                                last.pop(tkey, None)     # session_end is the last transcript entry
+                                break
                             for seg in payload.get("segments", []):
                                 yield {"type": "transcript", "speaker": seg.get("speaker"),
                                        "text": seg.get("text"), "t": seg.get("start")}
