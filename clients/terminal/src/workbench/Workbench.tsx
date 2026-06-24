@@ -4,7 +4,7 @@
  *  CENTER: dockview TABS — a "tab" host resolves each panel by params.kind via the tab registry.
  *  RIGHT (resizable/collapsible): a single contextual panel driven by the active tab.
  *  Reuses the Phase-C ⌘K palette + keybindings; the kernel's services do the rest. */
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { DockviewReact, type DockviewReadyEvent, type IDockviewPanelProps, themeAbyss } from "dockview-react";
@@ -94,6 +94,17 @@ export function Workbench() {
   const commands = useService(CommandServiceId);
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
+  // right context pane is capped at ≤ 1/5 of the shell width (responsive)
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [shellW, setShellW] = useState(0);
+  useEffect(() => {
+    const el = shellRef.current; if (!el) return;
+    const ro = new ResizeObserver(() => setShellW(el.clientWidth));
+    ro.observe(el); setShellW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const rightFifth = shellW ? Math.max(220, Math.round(shellW / 5)) : 320;
+
   const onReady = (e: DockviewReadyEvent) => {
     layout.attach(e.api);
     if (e.api.panels.length === 0) {
@@ -116,7 +127,7 @@ export function Workbench() {
         <button aria-label="Toggle right" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div ref={shellRef} style={{ flex: 1, minHeight: 0 }}>
         <Allotment proportionalLayout={false} onChange={persistSizes} defaultSizes={savedSizes()}>
           <Allotment.Pane visible={!leftCollapsed} minSize={180} preferredSize={262}>
             <LeftPane />
@@ -128,7 +139,7 @@ export function Workbench() {
               </div>
             </div>
           </Allotment.Pane>
-          <Allotment.Pane visible={!rightCollapsed} minSize={220} preferredSize={342}>
+          <Allotment.Pane visible={!rightCollapsed} minSize={200} maxSize={rightFifth} preferredSize={rightFifth}>
             <RightPane />
           </Allotment.Pane>
         </Allotment>

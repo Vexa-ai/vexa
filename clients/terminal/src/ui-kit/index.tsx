@@ -12,6 +12,12 @@ const PATHS: Record<string, string> = {
   send: "M22 2 11 13M22 2l-7 20-4-9-9-4z",
   plus: "M5 12h14M12 5v14",
   x: "M18 6 6 18M6 6l12 12",
+  file: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6",
+  search: "M21 21l-4.3-4.3M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z",
+  edit: "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z",
+  git: "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6M18 9a9 9 0 0 1-9 9",
+  web: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z",
+  check: "M20 6 9 17l-5-5",
 };
 
 export function Icon({ name, size = 18, style }: { name: string; size?: number; style?: CSSProperties }) {

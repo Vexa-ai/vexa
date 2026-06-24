@@ -1,13 +1,14 @@
 "use client";
-/** Meetings (mocked backend) — the differentiator flow.
+/** Meetings (mocked backend) — the differentiator flow, rendered through the shared agent-window.
  *  • "calendar" LIST (left): meetings; the live one auto-opens; click any to (re)open its copilot.
- *  • "meeting" TAB (center): the copilot — an in-tab entity rail (participants · mentioned entities ·
- *    proposed actions) + a live insight feed + ask box. Pinned while live.
- *  • "transcript" CONTEXT (right): the real-time transcript.
- *  Reopening a past meeting from the calendar restores the same copilot + transcript. */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+ *  • "meeting" TAB (center): ONE stacked agent window — entities strip on top · the copilot
+ *    conversation (live insights + your turns, with the agent's operations visible) · ask input ·
+ *    proposed actions directly under the input. No horizontal split.
+ *  • "transcript" CONTEXT (right): the real-time transcript. */
+import { useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
+import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { registerList, registerTab, registerContext, registerCommand, type TabProps, type ContextProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { MEETINGS, meetingById, liveMeeting, type MeetingMock } from "./mock";
@@ -47,60 +48,83 @@ function CalendarList() {
   );
 }
 
-// ── Meeting COPILOT tab (center) ──────────────────────────────────────────────────
-function MeetingTab({ params }: TabProps) {
+// ── entity strip (top of the agent window) ────────────────────────────────────────
+function EntitiesBar({ m }: { m: MeetingMock }) {
   const layout = useService(LayoutServiceId);
+  const live = m.status === "live";
+  const avatar = { width: 22, height: 22, borderRadius: "50%", background: "var(--panel2)", color: "var(--t1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, flex: "none" } as const;
+  return (
+    <div style={{ flex: "none", borderBottom: "1px solid var(--line)", padding: "9px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      {live && <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--live)", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)" }} />LIVE · {m.platform}</span>}
+      {m.participants.map((p) => (
+        <span key={p.name} style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={p.role}><span style={avatar}>{p.initials}</span><span style={{ fontSize: 12.5, color: "var(--t1)" }}>{p.name}</span></span>
+      ))}
+      <span style={{ width: 1, height: 16, background: "var(--line)", flex: "none" }} />
+      {m.mentioned.map((e) => (
+        <span key={e} onClick={() => layout.openTab({ id: `entity:${e}`, title: e, kind: "chat", params: { subject: "u_jane", session: null }, context: null })}
+          style={{ fontSize: 11.5, color: "var(--blue)", border: "1px solid var(--line2)", borderRadius: 20, padding: "2px 9px", cursor: "pointer", flex: "none" }}>{e}</span>
+      ))}
+    </div>
+  );
+}
+
+// ── Meeting COPILOT tab (center) — the stacked agent window ────────────────────────
+function MeetingTab({ params }: TabProps) {
   const m = meetingById(params.meetingId as string);
-  const [feed, setFeed] = useState<{ kind: "insight" | "you" | "agent"; text: string }[]>([]);
   const live = m?.status === "live";
   const shown = useReveal(m?.insights.length ?? 0, !!live);
-  const insights = (m?.insights ?? []).slice(0, shown);
+  const [feed, setFeed] = useState<Turn[]>([]);
+  const [value, setValue] = useState("");
+  const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [shown, feed]);
   if (!m) return <div style={{ padding: 24, color: "var(--t3)" }}>Meeting not found.</div>;
 
-  const runAction = (label: string) => setFeed((f) => [...f, { kind: "you", text: label }, { kind: "agent", text: `On it — ${label.toLowerCase()}. (mock) I'll surface the result here and commit anything durable to the workspace.` }]);
-  const sec: CSSProperties = { fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", margin: "14px 0 7px" };
-  const avatar: CSSProperties = { width: 26, height: 26, borderRadius: "50%", background: "var(--panel2)", color: "var(--t1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, flex: "none" };
+  // insights stream as `insight` turns; the user's actions append `user` + `agent` turns below them
+  const insightTurns: Turn[] = m.insights.slice(0, shown).map((i, idx) => ({ id: `ins-${idx}`, role: "insight", t: i.t, text: i.text }));
+  const turns: Turn[] = [...insightTurns, ...feed];
+
+  // run an action / ask: append a user turn + an agent turn whose operations resolve over ~2s (mock)
+  const run = (label: string) => {
+    const n = idRef.current++;
+    const aid = `a-${n}`;
+    const ops: Op[] = [
+      { icon: opIcon.read, label: "read kg/entities/company/acme-corp.md", status: "running" },
+      { icon: opIcon.search, label: 'search transcript · "renewal", "SSO"', status: "running" },
+      { icon: opIcon.edit, label: "edit drafts/acme-renewal.md", status: "running" },
+    ];
+    setFeed((f) => [...f, { id: `u-${n}`, role: "user", text: label }, { id: aid, role: "agent", text: "", ops }]);
+    const patch = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
+      setFeed((f) => f.map((t) => (t.id === aid && t.role === "agent" ? fn(t) : t)));
+    ops.forEach((_, k) => setTimeout(() => patch((t) => ({ ...t, ops: t.ops.map((o, j) => (j <= k ? { ...o, status: "done" } : o)) })), 450 * (k + 1)));
+    setTimeout(() => patch((t) => ({ ...t, text: `Done — ${label.toLowerCase()}. I committed the change to the workspace; it's ready to send on your approval.`, commit: "a1b2c3d4" })), 450 * (ops.length + 1));
+  };
+
+  const top = <EntitiesBar m={m} />;
+  const composer = (
+    <div style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "10px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+      <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) { run(value.trim()); setValue(""); } }}
+        placeholder="Ask the agent about this meeting…" style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14 }} />
+      <button aria-label="Send" onClick={() => { if (value.trim()) { run(value.trim()); setValue(""); } }} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Icon name="send" size={16} /></button>
+    </div>
+  );
+  const actions = (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11, color: "var(--t3)", flex: "none" }}>proposed</span>
+      {m.actions.map((a) => (
+        <button key={a.id} onClick={() => run(a.label)} title={a.detail}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid var(--line2)", borderRadius: 20, background: "var(--panel)", color: "var(--t1)", padding: "5px 12px", fontSize: 12.5, cursor: "pointer" }}>
+          <Icon name="zap" size={12} style={{ color: "var(--accent)" }} />{a.label}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
-    <div style={{ height: "100%", display: "flex", minHeight: 0, background: "var(--bg)" }}>
-      {/* in-tab entity rail */}
-      <div style={{ width: 248, flex: "none", borderRight: "1px solid var(--line)", overflowY: "auto", padding: "14px 14px 20px" }}>
-        {live && <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--live)", marginBottom: 10 }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)" }} />LIVE · {m.platform}</div>}
-        <div style={sec}>participants</div>
-        {m.participants.map((p) => <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 8 }}><div style={avatar}>{p.initials}</div><div><div style={{ fontSize: 12.5, color: "var(--t1)" }}>{p.name}</div>{p.role && <div style={{ fontSize: 11, color: "var(--t3)" }}>{p.role}</div>}</div></div>)}
-        <div style={sec}>mentioned</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {m.mentioned.map((e) => <span key={e} onClick={() => layout.openTab({ id: `entity:${e}`, title: e, kind: "chat", params: { subject: "u_jane", session: null }, context: null })} style={{ fontSize: 11.5, color: "var(--blue)", border: "1px solid var(--line2)", borderRadius: 20, padding: "2px 9px", cursor: "pointer" }}>{e}</span>)}
-        </div>
-        <div style={sec}>proposed actions</div>
-        {m.actions.map((a) => (
-          <button key={a.id} onClick={() => runAction(a.label)} style={{ display: "block", width: "100%", textAlign: "left", border: "1px solid var(--line2)", borderRadius: 9, background: "var(--panel)", padding: "8px 10px", marginBottom: 7, cursor: "pointer", color: "var(--t1)" }}>
-            <div style={{ fontSize: 12.5 }}>{a.label}</div>
-            <div style={{ fontSize: 11, color: "var(--t3)", marginTop: 2 }}>{a.detail}</div>
-          </button>
-        ))}
-      </div>
-      {/* copilot feed */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "18px 22px" }}>
-          <div style={{ fontSize: 12, color: "var(--t3)", marginBottom: 14 }}>Meeting copilot — I follow the conversation and surface what helps. {live ? "Listening…" : "Recording from this meeting."}</div>
-          {insights.map((i, idx) => (
-            <div key={idx} style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-              <Icon name="zap" size={15} /><div><span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--mono)" }}>{i.t}</span><div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.55, marginTop: 2 }}>{i.text.split(/(\[\[[^\]]+\]\])/).map((p, j) => p.startsWith("[[") ? <span key={j} style={{ color: "var(--blue)" }}>{p}</span> : <span key={j}>{p}</span>)}</div></div>
-            </div>
-          ))}
-          {feed.map((f, idx) => <div key={`f${idx}`} style={{ maxWidth: 620, margin: f.kind === "you" ? "0 0 10px auto" : "0 0 10px", background: f.kind === "you" ? "var(--panel2)" : "var(--panel)", border: "1px solid var(--line)", borderRadius: 11, padding: "9px 13px", fontSize: 13.5, color: "var(--t1)", lineHeight: 1.55 }}>{f.text}</div>)}
-        </div>
-        <div style={{ borderTop: "1px solid var(--line)", padding: "12px 22px 16px", flex: "none" }}>
-          <div style={{ maxWidth: 720, margin: "0 auto", border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "10px 12px", display: "flex", alignItems: "center", gap: 10 }}>
-            <input placeholder="Ask the copilot about this meeting…" onKeyDown={(e) => { if (e.key === "Enter" && e.currentTarget.value.trim()) { runAction(e.currentTarget.value.trim()); e.currentTarget.value = ""; } }} style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14 }} />
-            <Icon name="send" size={16} />
-          </div>
-        </div>
-      </div>
-    </div>
+    <AgentWindow top={top} scrollRef={scrollRef} composer={composer} actions={actions}>
+      <div style={{ fontSize: 12, color: "var(--t3)", marginBottom: 14 }}>Meeting copilot — I follow the conversation and surface what helps. {live ? "Listening…" : "Recording from this meeting."}</div>
+      <Conversation turns={turns} />
+    </AgentWindow>
   );
 }
 

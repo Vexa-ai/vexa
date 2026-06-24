@@ -106,3 +106,7 @@ body {
   --separator-border: var(--line);
   --focus-border: var(--accent);
 }
+
+/* agent-window — operation step spinner (a tool call "in works") */
+@keyframes vx-op-spin { to { transform: rotate(360deg); } }
+.vx-op-spin { animation: vx-op-spin 0.7s linear infinite; }
