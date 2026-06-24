@@ -19,7 +19,7 @@ function toolOp(tool: string): Op {
 }
 
 function ChatTab({ params }: TabProps) {
-  const subject = (params.subject as string) ?? "u_jane";
+  const subject = (params.subject as string) ?? "u_live";  // one workspace shared with meeting research
   const session = (params.session as string | null) ?? null;
   const commands = useService(CommandServiceId);
   const [turns, setTurns] = useState<Turn[]>([]);

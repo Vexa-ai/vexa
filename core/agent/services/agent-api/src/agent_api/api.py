@@ -348,6 +348,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="not found")
         return {"path": path, "content": content}
 
+    @app.get("/api/workspace/git")
+    def ws_git(subject: str):
+        """Real source-control state (branch · working changes · recent commits) of the workspace."""
+        try:
+            return wsr.git_state(subject)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+
     @app.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str):
         """SSE feed for a LIVE meeting — merges the transcript Stream (`tc:meeting:{id}`) and the

@@ -42,3 +42,29 @@ class WorkspaceReader:
         if ws not in f.parents:  # the resolved path must stay inside the workspace
             raise ValueError("invalid path")
         return f.read_text() if f.exists() and f.is_file() else None
+
+    def git_state(self, subject: str) -> dict:
+        """Real source-control state of the subject's workspace: branch, working changes, recent commits
+        (the governed git knowledge graph the agent commits to). Empty shape if not yet a repo."""
+        import subprocess
+
+        ws = self._ws(subject)
+        if not (ws / ".git").exists():
+            return {"branch": "", "changes": [], "commits": []}
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(ws), *args], capture_output=True, text=True
+            ).stdout.strip()
+
+        changes = []
+        for line in git("status", "--porcelain").splitlines():
+            if len(line) > 3:
+                flag = line[:2].strip()[:1] or "M"
+                changes.append({"path": line[3:].strip(), "kind": "A" if flag in ("A", "?") else flag})
+        commits = []
+        for line in git("log", "-8", "--pretty=%h\x1f%s\x1f%cr").splitlines():
+            parts = line.split("\x1f")
+            if len(parts) == 3:
+                commits.append({"sha": parts[0], "msg": parts[1], "when": parts[2]})
+        return {"branch": git("rev-parse", "--abbrev-ref", "HEAD") or "main", "changes": changes, "commits": commits}
