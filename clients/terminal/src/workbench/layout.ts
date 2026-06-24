@@ -1,101 +1,88 @@
-/** term-workbench/layout — the LayoutService over dockview. Owns the DockviewApi: opens/focuses a
- *  surface's panels (main + sidebar + aux + bottom), tracks the active surface, and persists/restores
- *  the whole arrangement to localStorage. The shell just hosts <DockviewReact> and hands us the api. */
+/** term-workbench/layout (v2) — the structured-shell LayoutService.
+ *  Left = which LIST is active (top bar). Center = dockview TABS (openTab by kind; params serializable so
+ *  the arrangement persists). Right = the CONTEXT carried by the active tab. Plus left/right collapse. */
 import { createServiceId, createStore, type ObservableStore } from "../platform";
-import { registry, type Slot, type SurfaceId } from "../contributions";
 import type { DockviewApi } from "dockview-react";
 
-const LS_KEY = "vexa.terminal.layout.v1";
+const LS_DOCK = "vexa.terminal.dock.v2";
+const LS_LIST = "vexa.terminal.activeList.v1";
+
+export interface RightContext { kind: string; params?: Record<string, unknown>; }
+
+export interface TabDescriptor {
+  id: string;
+  title: string;
+  kind: string;
+  params?: Record<string, unknown>;
+  /** what the right pane shows while this tab is active */
+  context?: RightContext | null;
+}
 
 export interface LayoutState {
-  activeSurface: SurfaceId | null;
+  activeList: string;
+  leftCollapsed: boolean;
+  rightCollapsed: boolean;
+  context: RightContext | null;
 }
 
 export interface LayoutService {
   store: ObservableStore<LayoutState>;
-  /** Wire the dockview api once the shell is ready; restores the saved layout or opens `fallback`. */
-  attach(api: DockviewApi, fallback: SurfaceId): void;
-  /** Open (or focus, if already open) a surface's panels. */
-  openSurface(id: SurfaceId): void;
-  /** Toggle the active surface's primary sidebar panel. */
-  toggleSidebar(): void;
-  /** Clear the saved layout + re-open the active surface fresh. */
+  attach(api: DockviewApi): void;
+  openTab(d: TabDescriptor): void;
+  closeTab(id: string): void;
+  /** the active tab pushes its right-pane context here */
+  setContext(ctx: RightContext | null): void;
+  setActiveList(id: string): void;
+  toggleLeft(): void;
+  toggleRight(): void;
   resetLayout(): void;
 }
 
 export const LayoutServiceId = createServiceId<LayoutService>("layout");
 
-const surfaceOf = (panelId: string): SurfaceId => panelId.split(":")[0];
+const readLS = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
+const writeLS = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* noop */ } };
 
-export function createLayoutService(): LayoutService {
-  const store = createStore<LayoutState>({ activeSurface: null });
+export function createLayoutService(defaultList: string): LayoutService {
+  const store = createStore<LayoutState>({
+    activeList: readLS(LS_LIST) || defaultList,
+    leftCollapsed: false,
+    rightCollapsed: false,
+    context: null,
+  });
   let api: DockviewApi | null = null;
 
-  const persist = () => {
-    if (!api) return;
-    try { localStorage.setItem(LS_KEY, JSON.stringify(api.toJSON())); } catch { /* storage may be unavailable */ }
-  };
-
-  const addSlot = (id: SurfaceId, slot: Slot, position?: object) => {
-    if (!api) return;
-    if (slot !== "main" && registry.views(slot, id).length === 0) return;
-    const pid = `${id}:${slot}`;
-    if (api.getPanel(pid)) return;
-    const label = registry.get(id)?.activity?.label ?? id;
-    api.addPanel({
-      id: pid,
-      component: "viewport",
-      title: slot === "main" ? label : `${label} ${slot === "primarySidebar" ? "·" : slot === "auxiliaryBar" ? "›" : "▾"}`,
-      params: { surfaceId: id, slot },
-      ...(position ? { position } : {}),
-    } as Parameters<DockviewApi["addPanel"]>[0]);
-  };
-
-  const open = (id: SurfaceId) => {
-    if (!api) return;
-    const mainId = `${id}:main`;
-    const existing = api.getPanel(mainId);
-    if (existing) { existing.api.setActive(); return; }
-    addSlot(id, "main");
-    addSlot(id, "primarySidebar", { direction: "left", referencePanel: mainId });
-    addSlot(id, "auxiliaryBar", { direction: "right", referencePanel: mainId });
-    addSlot(id, "panel", { direction: "below", referencePanel: mainId });
-    api.getPanel(mainId)?.api.setActive();
-  };
+  const persist = () => { if (api) writeLS(LS_DOCK, JSON.stringify(api.toJSON())); };
 
   return {
     store,
-    attach(dvApi, fallback) {
+    attach(dvApi) {
       api = dvApi;
-      let restored = false;
-      try {
-        const saved = localStorage.getItem(LS_KEY);
-        if (saved) { api.fromJSON(JSON.parse(saved)); restored = api.panels.length > 0; }
-      } catch { restored = false; }
-      if (!restored) open(fallback);
-
-      const sync = () => {
-        const a = api?.activePanel;
-        store.set({ activeSurface: a ? surfaceOf(a.id) : null });
-      };
-      api.onDidActivePanelChange(sync);
+      try { const s = readLS(LS_DOCK); if (s) api.fromJSON(JSON.parse(s)); } catch { /* stale layout — start empty */ }
+      // the active tab pushes its context via setContext; here we only clear it when nothing is active.
+      api.onDidActivePanelChange((p) => { if (!p) store.set((st) => ({ ...st, context: null })); });
       api.onDidLayoutChange(persist);
-      sync();
     },
-    openSurface: open,
-    toggleSidebar() {
-      const a = store.getState().activeSurface;
-      if (!a || !api) return;
-      const p = api.getPanel(`${a}:primarySidebar`);
-      if (p) p.api.close();
-      else addSlot(a, "primarySidebar", { direction: "left", referencePanel: `${a}:main` });
-    },
-    resetLayout() {
-      try { localStorage.removeItem(LS_KEY); } catch { /* noop */ }
+    setContext(ctx) { store.set((st) => ({ ...st, context: ctx })); },
+    openTab(d) {
       if (!api) return;
-      const a = store.getState().activeSurface ?? "chat";
-      api.clear();
-      open(a);
+      const existing = api.getPanel(d.id);
+      if (existing) { existing.api.setActive(); return; }
+      api.addPanel({
+        id: d.id,
+        component: "tab",
+        title: d.title,
+        params: { kind: d.kind, p: d.params ?? {}, ctx: d.context ?? null },
+      });
+    },
+    closeTab(id) { api?.getPanel(id)?.api.close(); },
+    setActiveList(id) { store.set((s) => ({ ...s, activeList: id })); writeLS(LS_LIST, id); },
+    toggleLeft() { store.set((s) => ({ ...s, leftCollapsed: !s.leftCollapsed })); },
+    toggleRight() { store.set((s) => ({ ...s, rightCollapsed: !s.rightCollapsed })); },
+    resetLayout() {
+      try { localStorage.removeItem(LS_DOCK); } catch { /* noop */ }
+      api?.clear();
+      store.set((s) => ({ ...s, context: null }));
     },
   };
 }

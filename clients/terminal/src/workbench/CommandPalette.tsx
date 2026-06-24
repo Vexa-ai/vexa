@@ -19,8 +19,8 @@ export function CommandPalette() {
   const layout = useService(LayoutServiceId);
   if (!open) return null;
 
-  const surfaces = registry.activityItems();
-  const cmds = commands.all().filter((c) => !c.id.startsWith("surface.open."));
+  const lists = registry.lists();
+  const cmds = commands.all().filter((c) => !c.id.startsWith("list."));
   const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") palette.close(); };
 
   return (
@@ -30,10 +30,10 @@ export function CommandPalette() {
           <Command.Input autoFocus placeholder="Search commands, or go to a surface…" />
           <Command.List>
             <Command.Empty>No matches.</Command.Empty>
-            <Command.Group heading="Go to">
-              {surfaces.map((s) => (
-                <Command.Item key={s.id} value={`go ${s.label}`} onSelect={() => { layout.openSurface(s.id); palette.close(); }}>
-                  {s.label}
+            <Command.Group heading="Lists">
+              {lists.map((l) => (
+                <Command.Item key={l.id} value={`list ${l.label}`} onSelect={() => { layout.setActiveList(l.id); palette.close(); }}>
+                  {l.label}
                 </Command.Item>
               ))}
             </Command.Group>

@@ -1,60 +1,64 @@
 /**
- * term-contributions — the Surface contribution API + registry.
+ * term-contributions — the registries the structured shell renders from (layout v2).
  *
- * A surface is a self-contained module that REGISTERS its activity item, views (per slot), composer,
- * and commands at load time. The shell renders entirely off this registry — adding a surface is a
- * `registerSurface(...)` call, never a shell edit. (docs/ARCHITECTURE.md)
+ * Three decoupled zones, three registries:
+ *  • LISTS    (left)  — `registerList` → the segmented top-bar items + their list component.
+ *  • TABS     (center)— `registerTab(kind, comp)` → a tab-type the dockview center can open by kind
+ *                        (params are serializable so the layout persists).
+ *  • CONTEXTS (right) — `registerContext(kind, comp)` → the single contextual panel, by kind.
+ *  • COMMANDS         — `registerCommand` → /-skills + palette entries (unchanged concept).
+ *
+ * A list opens center tabs (via LayoutService.openTab) and the active tab carries the right context;
+ * the shell wires them. Adding a surface = a few registrations, never a shell edit.
  */
 import type { ComponentType } from "react";
-import type { CommandContribution, ServiceContainer } from "../platform";
+import type { CommandContribution } from "../platform";
 
 export type SurfaceId = string;
-export type Slot = "main" | "primarySidebar" | "auxiliaryBar" | "panel";
 
-export interface ViewContribution {
+export interface ListContribution {
   id: string;
-  slot: Slot;
-  component: ComponentType<{ surfaceId: SurfaceId }>;
-  when?: string;
-}
-export interface ActivityItem { id: SurfaceId; label: string; icon: string; order: number; live?: boolean; }
-export interface ComposerSpec { enabled: boolean; placeholder?: string; quickChips?: string[]; }
-
-export interface SurfaceContribution {
-  id: SurfaceId;
-  activity?: ActivityItem;
-  views?: ViewContribution[];
-  composer?: ComposerSpec;
-  commands?: CommandContribution[];
-  contextKeys?: string[];
-  /** the shell composer calls this on a non-slash submit while this surface is active. */
-  onSubmit?: (text: string, container: ServiceContainer) => void;
+  label: string;
+  icon: string;
+  order: number;
+  component: ComponentType;
 }
 
-export interface ContributionRegistry {
-  registerSurface(s: SurfaceContribution): void;
-  surfaces(): SurfaceContribution[];
-  activityItems(): ActivityItem[];
-  views(slot: Slot, surfaceId: SurfaceId): ViewContribution[];
-  commands(): CommandContribution[];
-  get(id: SurfaceId): SurfaceContribution | undefined;
+export interface TabProps {
+  /** the dockview panel id (stable per tab) */
+  id: string;
+  params: Record<string, unknown>;
+  /** true while this tab is the active center panel (drives the right context) */
+  active: boolean;
 }
+export type TabComponent = ComponentType<TabProps>;
 
-const _surfaces = new Map<SurfaceId, SurfaceContribution>();
+export interface ContextProps {
+  params: Record<string, unknown>;
+}
+export type ContextComponent = ComponentType<ContextProps>;
 
-export const registry: ContributionRegistry = {
-  registerSurface(s) { _surfaces.set(s.id, s); },
-  surfaces() { return [..._surfaces.values()]; },
-  activityItems() {
-    return this.surfaces().map((s) => s.activity).filter(Boolean as unknown as (a: ActivityItem | undefined) => a is ActivityItem)
-      .sort((a, b) => a.order - b.order);
-  },
-  views(slot, surfaceId) {
-    const s = _surfaces.get(surfaceId);
-    return (s?.views ?? []).filter((v) => v.slot === slot);
-  },
-  commands() { return this.surfaces().flatMap((s) => s.commands ?? []); },
-  get(id) { return _surfaces.get(id); },
+const _lists = new Map<string, ListContribution>();
+const _tabs = new Map<string, TabComponent>();
+const _contexts = new Map<string, ContextComponent>();
+const _commands: CommandContribution[] = [];
+
+export const registry = {
+  registerList(l: ListContribution) { _lists.set(l.id, l); },
+  lists(): ListContribution[] { return [..._lists.values()].sort((a, b) => a.order - b.order); },
+  list(id: string): ListContribution | undefined { return _lists.get(id); },
+
+  registerTab(kind: string, c: TabComponent) { _tabs.set(kind, c); },
+  tabComponent(kind: string): TabComponent | undefined { return _tabs.get(kind); },
+
+  registerContext(kind: string, c: ContextComponent) { _contexts.set(kind, c); },
+  contextComponent(kind: string): ContextComponent | undefined { return _contexts.get(kind); },
+
+  registerCommand(c: CommandContribution) { _commands.push(c); },
+  commands(): CommandContribution[] { return [..._commands]; },
 };
 
-export function registerSurface(s: SurfaceContribution): void { registry.registerSurface(s); }
+export const registerList = (l: ListContribution): void => registry.registerList(l);
+export const registerTab = (kind: string, c: TabComponent): void => registry.registerTab(kind, c);
+export const registerContext = (kind: string, c: ContextComponent): void => registry.registerContext(kind, c);
+export const registerCommand = (c: CommandContribution): void => registry.registerCommand(c);

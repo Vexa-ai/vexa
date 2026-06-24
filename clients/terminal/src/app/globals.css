@@ -100,3 +100,9 @@ body {
 [cmdk-item][data-selected="true"] { background: var(--panel2); }
 [cmdk-empty] { padding: 18px; color: var(--t3); font-size: 13px; text-align: center; }
 .pal-skill { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
+
+/* allotment — match the split sash to our palette */
+:root {
+  --separator-border: var(--line);
+  --focus-border: var(--accent);
+}
