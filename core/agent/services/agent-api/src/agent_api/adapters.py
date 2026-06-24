@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Protocol
@@ -22,7 +23,7 @@ from typing import Protocol
 import yaml
 
 from .models import WorkspaceWrite
-from .ports import RuntimePort, VcsPort, WorkspacePort
+from .ports import RuntimePort, SchedulerPort, VcsPort, WorkspacePort
 
 logger = logging.getLogger("agent_api.adapters")
 
@@ -197,3 +198,37 @@ class RuntimeHttpClient(RuntimePort):
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             status = json.loads(r.read())
         return status.get("state", "unknown")
+
+
+class SchedulerHttpClient(SchedulerPort):
+    """A ``SchedulerPort`` over the runtime's ``/schedule`` surface (schedule.v1) — the control-plane→cron
+    edge. agent-api authors routine jobs here; the runtime owns the durable cron. Stdlib urllib, no dep."""
+
+    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+        self._base = base_url.rstrip("/")
+        self._timeout = timeout
+
+    def schedule(self, job: dict) -> dict:
+        body = json.dumps(job).encode()
+        req = urllib.request.Request(
+            f"{self._base}/schedule", data=body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            return json.loads(r.read())
+
+    def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
+        q = f"?limit={limit}" + (f"&status={status}" if status else "")
+        req = urllib.request.Request(f"{self._base}/schedule{q}", method="GET")
+        with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            return json.loads(r.read())
+
+    def cancel_job(self, job_id: str) -> dict | None:
+        req = urllib.request.Request(f"{self._base}/schedule/{job_id}", method="DELETE")
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise

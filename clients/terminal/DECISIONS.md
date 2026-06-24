@@ -22,6 +22,29 @@ them unsealed (green-on-empty path), so the build stays green without a prematur
 needs them** and re-sealed then (`pnpm seal:contracts`, a `lane:contract` step). MVP0 chat streams SSE
 directly over the `/api/chat` HTTP response, so it needs no `ws.v1` change.
 
+## D5 — MVP2 Routines: the cron loop + where a scheduled unit actually runs
+A **routine** (`routine.v1`, evolved to carry an inline plan `prompt`) COMPILES to a `schedule.v1`
+cron job in the **runtime** scheduler — now exposed over HTTP (`POST/GET/DELETE /schedule`, a background
+tick thread, real redis, a urllib HTTP dispatch). When due, the scheduler POSTs a `unit.v1` Invocation
+to agent-api `/invocations`; the dispatcher runs it. The runtime owns the durable cron (re-arm / retry /
+idempotency); agent-api only authors jobs (P7 — no in-process timer). The scheduler IS the registry of
+record for scheduled routines (the job `metadata` renders the Routines card), so MVP2 needs **no separate
+routine store** — routine-as-git-entity (triaged like the rest of the graph) is the MVP5 enhancement.
+- **Execution (the load-bearing choice):** a non-meeting unit with an inline prompt runs **in-container
+  via the chat runner** — the same proven MVP0/MVP1 claude path — backgrounded so `/invocations` returns
+  202 fast for the scheduler. The runtime-workload **spawn** (`Dispatcher._spawn` → `AGENT_IMAGE`, a
+  per-person agent container) stays wired as the **production isolation target**, deferred exactly as
+  MVP0 deferred per-person container isolation. One execution path is proven end-to-end and demoable.
+- **Proven on bbb:** a routine authored in the Routines surface registers a cron job in the runtime;
+  `run_now` + the cron fires POST `/invocations` → claude → a conformant `task` entity →
+  `workspace.v1` governance → commit (`scheduler:history` records the fires; the job re-arms; the
+  resulting "Prepare standup notes · from routine" task renders in the Tasks surface). Delete cancels
+  the job. L4 eval: `test_routines.py` (compile is unit.v1-conformant + firing the body commits) +
+  runtime `test_schedule_api.py` (FakeClock advance past the cron → the request fires).
+- **Resilient sessions:** a stale `--resume` (the claude session store lost on an agent-api container
+  recreate while the `.session` pointer survives on the workspace volume) fails instantly; the chat
+  runner detects that and retries fresh (`test_chat_runner_recovers_from_stale_resume`).
+
 ## D4 — MVP0 complete (live, browser-verified) + the tunnel-keepalive learning
 The full loop works on bbb: browser Chat → `/api/chat` proxy → agent-api → claude-in-container (the
 subscription) → conformant entity write/edit → `workspace.v1` governance → commit → SSE → rendered

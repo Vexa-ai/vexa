@@ -19,10 +19,13 @@ class Settings(BaseSettings):
     agent_api_port: int = Field(default=8100, ge=1, le=65535)
     log_level: str = "INFO"
 
-    # ── runtime.v1 seam — how we spawn the worker ────────────────────────────
-    # The agent worker is spawned via runtime.v1 under this opaque profile (P11).
+    # ── runtime.v1 seam — how we spawn the worker + register cron jobs ───────
+    # The agent worker is spawned via runtime.v1 under this opaque profile (P11); routine jobs are
+    # registered on the same runtime's schedule.v1 surface.
     runtime_api_url: str = "http://runtime-api:8090"
     agent_profile: str = "agent"
+    # How the runtime's scheduler reaches THIS service's /invocations sink when a routine fires.
+    agent_api_self_url: str = "http://agent-api:8100"
 
     # ── workspace.v1 seam — the user git repo the worker mounts ──────────────
     # These become the worker's `env` per runtime.v1 (see golden spec-agent.json).

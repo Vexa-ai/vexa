@@ -25,9 +25,13 @@
         "trigger": { "$ref": "#/$defs/RoutineTrigger" },
         "plan": {
           "type": "object",
+          "description": "WHAT the unit does each fire — either a workspace plan doc (ref) or an inline prompt. Compiles to the unit.v1 Invocation's plan.",
           "additionalProperties": false,
-          "required": ["ref"],
-          "properties": { "ref": { "type": "string", "description": "workspace plan doc path" } }
+          "anyOf": [ { "required": ["ref"] }, { "required": ["prompt"] } ],
+          "properties": {
+            "ref": { "type": "string", "description": "workspace plan doc path" },
+            "prompt": { "type": "string", "description": "inline plan prompt (when no plan doc is authored)" }
+          }
         },
         "lifecycle": { "enum": ["oneshot", "warm"], "default": "oneshot" },
         "enabled": { "type": "boolean", "default": true }

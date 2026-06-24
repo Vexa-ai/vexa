@@ -18,6 +18,7 @@ from .callbacks import CallbackQueue
 from .kernel import QuotaExceeded, Runtime
 from .models import RuntimeEvent, StopReason, WorkloadSpec
 from .obs import TraceMiddleware, log_event
+from .scheduler import Scheduler
 
 # A health probe returns True when its dependency is reachable. Probes must never raise.
 HealthCheck = Callable[[], bool]
@@ -58,6 +59,7 @@ def create_app(
     deliver: Optional[Callable[[RuntimeEvent], None]] = None,
     callback_queue: Optional[CallbackQueue] = None,
     health_checks: Optional[dict[str, HealthCheck]] = None,
+    scheduler: Optional[Scheduler] = None,
 ) -> FastAPI:
     rt = runtime or Runtime()
     queue = callback_queue or CallbackQueue()
@@ -66,12 +68,16 @@ def create_app(
     rt.on_event = lambda ev: (prior(ev), sink(ev))  # chain: preserve any existing handler, then deliver
 
     checks: dict[str, HealthCheck] = dict(_default_health_checks(rt))
+    if scheduler is not None:
+        # The durable cron is live: probe by listing pending jobs (touches redis without firing).
+        checks["scheduler"] = lambda: (scheduler.list(limit=1) is not None)
     if health_checks:
         checks.update(health_checks)
 
     app = FastAPI(title="vexa-runtime", version="0.12.0")
     app.state.runtime = rt
     app.state.callback_queue = queue
+    app.state.scheduler = scheduler
     # Reuse the control-plane caller's X-Trace-Id so workload-spawn logs (logevent.v1) join
     # the same trace as the meeting-api/agent-api request that asked for the workload.
     app.add_middleware(TraceMiddleware)
@@ -137,6 +143,34 @@ def create_app(
             return dump(rt.destroy(workload_id))
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workload")
+
+    # ── schedule.v1 — the durable cron over HTTP (the control plane registers routine jobs here) ──
+    def _require_scheduler() -> Scheduler:
+        if scheduler is None:
+            raise HTTPException(status_code=503, detail="scheduler not wired")
+        return scheduler
+
+    @app.post("/schedule", status_code=201)
+    def schedule_job(spec: dict):
+        """Register a schedule.v1 job (one-shot ``execute_at`` or re-arming ``cron``). The job's
+        ``request`` is the HTTP call fired when due — for a routine, a unit.v1 Invocation POSTed to
+        agent-api ``/invocations``. The runtime knows nothing about units (clean isolation)."""
+        sched = _require_scheduler()
+        try:
+            return sched.schedule(spec)
+        except ValueError as e:  # missing request.url / execute_at|cron — fail loud (P18)
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/schedule")
+    def list_jobs(status: Optional[str] = None, limit: int = 50):
+        return _require_scheduler().list(status=status, limit=limit)
+
+    @app.delete("/schedule/{job_id}")
+    def cancel_job(job_id: str):
+        cancelled = _require_scheduler().cancel(job_id)
+        if cancelled is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        return cancelled
 
     return app
 

@@ -61,6 +61,28 @@ class RuntimePort(Protocol):
 
 
 @runtime_checkable
+class SchedulerPort(Protocol):
+    """Register / list / cancel ``schedule.v1`` jobs in the runtime's durable cron.
+
+    A scheduled routine COMPILES to a schedule.v1 job whose ``request`` POSTs a ``unit.v1`` Invocation
+    back to agent-api ``/invocations`` when due. The runtime owns the cron (re-arm, retry, idempotency);
+    agent-api only authors jobs — it never runs a timer in-process (P7). The same HTTP edge as RuntimePort.
+    """
+
+    def schedule(self, job: dict) -> dict:
+        """Register a schedule.v1 job (one-shot ``execute_at`` or re-arming ``cron``); return the job."""
+        ...
+
+    def list_jobs(self, *, status: Optional[str] = None, limit: int = 50) -> list[dict]:
+        """List scheduled jobs (pending/executing)."""
+        ...
+
+    def cancel_job(self, job_id: str) -> Optional[dict]:
+        """Cancel a pending job by id; return it, or None if unknown."""
+        ...
+
+
+@runtime_checkable
 class AgentDecisionPort(Protocol):
     """Decide WHAT a run does from a (validated) transcript — the LLM seam.
 

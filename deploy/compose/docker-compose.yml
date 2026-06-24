@@ -160,6 +160,8 @@ services:
     environment:
       - VEXA_AGENT_API_PORT=8100
       - VEXA_RUNTIME_API_URL=http://runtime:8090
+      # How the runtime's scheduler reaches this service's /invocations sink when a routine fires (MVP2).
+      - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
       - VEXA_AGENT_PROFILE=agent
       - VEXA_WORKSPACES_DIR=/workspaces
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}

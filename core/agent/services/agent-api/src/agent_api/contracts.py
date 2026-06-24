@@ -23,6 +23,7 @@ _TRANSCRIPT_SCHEMA = Path("meetings/contracts/transcript.v1/transcript.schema.js
 _WORKSPACE_SCHEMA = Path("agent/contracts/workspace.v1/workspace.schema.json")
 _INVOKE_SCHEMA = Path("agent/contracts/invoke.v1/invoke.schema.json")
 _UNIT_SCHEMA = Path("agent/contracts/unit.v1/unit.schema.json")
+_ROUTINE_SCHEMA = Path("agent/contracts/routine.v1/routine.schema.json")
 
 
 def _repo_root() -> Path:
@@ -95,3 +96,10 @@ def validate_unit_invocation(payload: dict) -> None:
     Supersedes ``invoke.v1`` for the unified unit: chat/routine/event/transcription all ride this.
     """
     _validator(_UNIT_SCHEMA, "Invocation").validate(payload)
+
+
+# ── routine.v1 (PRODUCED — the saved recurring/event unit the user authors) ──
+
+def validate_routine(payload: dict) -> None:
+    """Validate a ``routine.v1`` Routine (the authoring entity that compiles to a schedule.v1 job)."""
+    _validator(_ROUTINE_SCHEMA, "Routine").validate(payload)

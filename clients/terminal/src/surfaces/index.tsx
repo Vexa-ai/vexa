@@ -1,15 +1,17 @@
 /**
  * Surfaces barrel — importing this registers every surface (a load-time side effect).
  *
- * Chat is the first real contribution (./chat, MVP0). The rest register as placeholders so the
- * activity bar is complete and additivity is visible; each graduates to its own module + real views
- * in its MVP (Workspace MVP1 · Routines/Tasks MVP2 · Inbox/Calendar MVP3 · Live MVP4 · …).
+ * A surface is a self-contained module that `registerSurface`s its activity item + view(s); the
+ * workbench shell never hardcodes screens (P2/P6 on the client). Real surfaces register first; the rest
+ * are placeholders so the activity bar is complete and additivity is visible — each graduates in its MVP
+ * (Chat MVP0 · Workspace MVP1 · Tasks/Routines MVP2 · Inbox/Calendar MVP3 · Live MVP4).
  */
 import type { CSSProperties } from "react";
 import { registerSurface, type SurfaceId } from "../contributions";
 import "./chat";
 import "./workspace";
 import "./tasks";
+import "./routines";
 
 const wrap: CSSProperties = { maxWidth: 760, margin: "0 auto", padding: "40px 24px" };
 
@@ -26,7 +28,6 @@ const PLACEHOLDERS: { id: SurfaceId; label: string; icon: string; order: number;
   { id: "live", label: "Live meeting", icon: "radio", order: 10, live: true, note: "Real-time proactive cards + entity cockpit — MVP4 (the live-stream unit)." },
   { id: "inbox", label: "Inbox", icon: "mail", order: 40, note: "Email + the Inbox-triage routine's proposed actions — MVP3." },
   { id: "calendar", label: "Calendar", icon: "cal", order: 50, note: "Calendar = meetings; past events are recorded meeting notes — MVP3." },
-  { id: "routines", label: "Routines", icon: "zap", order: 70, note: "Trigger → plan; create from chat with /routine — MVP2." },
 ];
 for (const p of PLACEHOLDERS) {
   registerSurface({
