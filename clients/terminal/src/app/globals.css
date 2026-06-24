@@ -110,3 +110,19 @@ body {
 /* agent-window — operation step spinner (a tool call "in works") */
 @keyframes vx-op-spin { to { transform: rotate(360deg); } }
 .vx-op-spin { animation: vx-op-spin 0.7s linear infinite; }
+
+/* entity list — a quiet row: hover-only secondary action, type-color rail revealed on hover */
+.vx-row { position: relative; }
+.vx-row .vx-row-act { opacity: 0; transform: translateX(2px); transition: opacity .12s ease, transform .12s ease; }
+.vx-row:hover .vx-row-act,
+.vx-row:focus-within .vx-row-act { opacity: 1; transform: none; }
+.vx-row .vx-row-rail { opacity: 0; transition: opacity .12s ease; }
+.vx-row:hover .vx-row-rail { opacity: 1; }
+
+/* a clean, single-line scroller for the suggested-actions row (no visible scrollbar) */
+.vx-hscroll { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.vx-hscroll::-webkit-scrollbar { display: none; }
+
+/* a soft entrance for the conversation as it first appears */
+@keyframes vx-fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.vx-fade-up { animation: vx-fade-up .22s ease both; }

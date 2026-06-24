@@ -24,13 +24,16 @@ function linkify(text: string): ReactNode[] {
 
 // ── one operation step (the "what's in works" line) ──────────────────────────────
 function OpRow({ op }: { op: Op }) {
+  const running = op.status === "running";
   const color = op.status === "error" ? "var(--live)" : op.status === "done" ? "var(--green)" : "var(--accent)";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--t2)" }}>
-      {op.status === "done" ? <Icon name="check" size={13} style={{ color }} />
-        : op.status === "error" ? <Icon name="x" size={13} style={{ color }} />
-        : <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />}
-      <Icon name={op.icon} size={12} style={{ color: "var(--t3)" }} />
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: running ? "var(--t1)" : "var(--t2)" }}>
+      <span style={{ width: 13, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+        {op.status === "done" ? <Icon name="check" size={13} style={{ color }} />
+          : op.status === "error" ? <Icon name="x" size={13} style={{ color }} />
+          : <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />}
+      </span>
+      <Icon name={op.icon} size={12} style={{ color: "var(--t3)", flex: "none" }} />
       <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{op.label}</span>
     </div>
   );
@@ -38,30 +41,38 @@ function OpRow({ op }: { op: Op }) {
 
 // ── the conversation: a timeline of user bubbles · agent turns (ops + text) · insights ──
 export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
-  const bubble: CSSProperties = { maxWidth: 640, margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, padding: "10px 13px", fontSize: 13.5, color: "var(--t1)", lineHeight: 1.55, whiteSpace: "pre-wrap" };
+  const bubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
   if (turns.length === 0 && empty) return <>{empty}</>;
   return (
     <>
       {turns.map((t, i) => {
-        if (t.role === "user") return <div key={t.id} style={{ marginBottom: 14 }}><div style={bubble}>{t.text}</div></div>;
+        if (t.role === "user") return <div key={t.id} style={{ marginBottom: 16 }}><div style={bubble}>{t.text}</div></div>;
         if (t.role === "insight") return (
-          <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 13 }}>
-            <Icon name="zap" size={15} style={{ color: "var(--accent)", marginTop: 1 }} />
+          <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+            <Icon name="spark" size={15} style={{ color: "var(--accent)", marginTop: 1, flex: "none" }} />
             <div>{t.t && <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--mono)" }}>{t.t}</span>}
               <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.55, marginTop: 2 }}>{linkify(t.text)}</div></div>
           </div>
         );
         const last = i === turns.length - 1;
         return (
-          <div key={t.id} style={{ marginBottom: 16 }}>
+          <div key={t.id} style={{ marginBottom: 18 }}>
             {t.ops.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 5, borderLeft: "2px solid var(--line2)", paddingLeft: 11, margin: "0 0 8px 2px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, borderLeft: "1.5px solid var(--line2)", paddingLeft: 12, margin: "0 0 10px 5px" }}>
                 {t.ops.map((op, j) => <OpRow key={j} op={op} />)}
               </div>
             )}
-            {(t.text || (busy && last)) && <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>{t.text ? linkify(t.text) : "…"}</div>}
-            {t.commit && <div style={{ marginTop: 7, fontSize: 11.5, color: "var(--green)", display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="git" size={12} />committed · {t.commit.slice(0, 7)}</div>}
-            {t.rejected && <div style={{ marginTop: 7, fontSize: 11.5, color: "var(--live)" }}>✗ {t.rejected}</div>}
+            {(t.text || (busy && last)) && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>{t.text ? linkify(t.text) : <span style={{ color: "var(--t3)" }}>…</span>}</div>}
+            {t.commit && (
+              <div style={{ marginTop: 9, fontSize: 11, color: "var(--green)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--greenbg)", borderRadius: 6, padding: "3px 8px", fontFamily: "var(--mono)" }}>
+                <Icon name="git" size={12} />committed · {t.commit.slice(0, 7)}
+              </div>
+            )}
+            {t.rejected && (
+              <div style={{ marginTop: 9, fontSize: 11, color: "var(--live)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--livebg)", borderRadius: 6, padding: "3px 8px" }}>
+                <Icon name="x" size={12} />{t.rejected}
+              </div>
+            )}
           </div>
         );
       })}

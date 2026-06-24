@@ -24,6 +24,8 @@ const PATHS: Record<string, string> = {
   chevR: "M9 6l6 6-6 6",
   spark: "M12 3l1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6z",
   openIn: "M7 17 17 7M9 7h8v8",
+  link: "M9 12a3 3 0 0 1 3-3h4a3 3 0 1 1 0 6h-2M15 12a3 3 0 0 1-3 3H8a3 3 0 1 1 0-6h2",
+  arrowR: "M5 12h14M13 6l6 6-6 6",
 };
 
 export function Icon({ name, size = 18, style }: { name: string; size?: number; style?: CSSProperties }) {

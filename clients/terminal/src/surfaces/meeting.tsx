@@ -57,6 +57,7 @@ function MeetingTab({ params }: TabProps) {
   const live = m?.status === "live";
   const [feed, setFeed] = useState<Turn[]>([]);
   const [value, setValue] = useState("");
+  const [composerFocus, setComposerFocus] = useState(false);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [feed]);
@@ -94,19 +95,23 @@ function MeetingTab({ params }: TabProps) {
   const { present, detected } = meetingEntities(m);
 
   const composer = (
-    <div style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "10px 12px", display: "flex", alignItems: "center", gap: 10 }}>
-      <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) { ask(value.trim()); setValue(""); } }}
-        placeholder="Ask the copilot, or research an entity…" style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14 }} />
-      <button aria-label="Send" onClick={() => { if (value.trim()) { ask(value.trim()); setValue(""); } }} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Icon name="send" size={16} /></button>
+    <div style={{ border: `1px solid ${composerFocus ? "var(--accent)" : "var(--line2)"}`, borderRadius: 11, background: "var(--panel)", padding: "9px 9px 9px 13px", display: "flex", alignItems: "center", gap: 10, transition: "border-color .12s ease" }}>
+      <input value={value} onChange={(e) => setValue(e.target.value)} onFocus={() => setComposerFocus(true)} onBlur={() => setComposerFocus(false)}
+        onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) { ask(value.trim()); setValue(""); } }}
+        placeholder="Ask the copilot, or research an entity…" style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 13.5 }} />
+      <button aria-label="Send" onClick={() => { if (value.trim()) { ask(value.trim()); setValue(""); } }} disabled={!value.trim()}
+        style={{ background: value.trim() ? "var(--accent)" : "var(--panel2)", color: value.trim() ? "#241008" : "var(--t3)", border: "none", width: 30, height: 30, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center", cursor: value.trim() ? "pointer" : "default", transition: "background .12s ease, color .12s ease", flex: "none" }}><Icon name="send" size={15} /></button>
     </div>
   );
   const actions = (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 11, color: "var(--t3)", flex: "none" }}>suggested</span>
+    <div className="vx-hscroll" style={{ display: "flex", alignItems: "center", gap: 6, padding: "1px 0" }}>
+      <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 600, flex: "none", paddingRight: 2 }}>Suggested</span>
       {m.actions.map((a) => (
         <button key={a.id} onClick={() => ask(a.label)} title={a.detail}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid var(--line2)", borderRadius: 20, background: "var(--panel)", color: "var(--t1)", padding: "5px 12px", fontSize: 12.5, cursor: "pointer" }}>
-          <Icon name="zap" size={12} style={{ color: "var(--accent)" }} />{a.label}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid var(--line2)", borderRadius: 8, background: "var(--panel)", color: "var(--t2)", padding: "5px 10px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", flex: "none" }}
+          onMouseEnter={(ev) => { ev.currentTarget.style.color = "var(--t1)"; ev.currentTarget.style.background = "var(--panel2)"; }}
+          onMouseLeave={(ev) => { ev.currentTarget.style.color = "var(--t2)"; ev.currentTarget.style.background = "var(--panel)"; }}>
+          <Icon name="spark" size={12} style={{ color: "var(--accent)" }} />{a.label}
         </button>
       ))}
     </div>
@@ -114,15 +119,21 @@ function MeetingTab({ params }: TabProps) {
 
   return (
     <AgentWindow scrollRef={scrollRef} composer={composer} actions={actions}>
-      <div style={{ maxWidth: 680, margin: "0 auto" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 4 }}>
-          {live && <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--live)" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)" }} />LIVE</span>}
-          <span style={{ color: "var(--t3)" }}>{m.platform} · {m.participants.length} in the room</span>
-        </div>
-        <div style={{ fontSize: 13, color: "var(--t3)", marginBottom: 18 }}>People and topics from this meeting. Open one to see its card, or research it — I'll work in the chat below.</div>
+      <div style={{ maxWidth: 560, margin: "0 auto" }}>
+        <header style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13 }}>
+            {live
+              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--live)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", boxShadow: "0 0 0 3px var(--livebg)" }} />Live</span>
+              : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>Ended</span>}
+            <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)" }} />
+            <span style={{ color: "var(--t1)", fontWeight: 550 }}>{m.platform}</span>
+            <span style={{ color: "var(--t3)" }}>{m.participants.length} in the room</span>
+          </div>
+          <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or research it — I'll work in the chat below.</p>
+        </header>
         <EntityList present={present} detected={detected} onOpen={openEntity} onResearch={research} />
         {feed.length > 0 && (
-          <div style={{ borderTop: "1px solid var(--line)", marginTop: 6, paddingTop: 18 }}>
+          <div className="vx-fade-up" style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 20 }}>
             <Conversation turns={feed} />
           </div>
         )}
