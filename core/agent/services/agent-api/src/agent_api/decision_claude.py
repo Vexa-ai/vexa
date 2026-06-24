@@ -154,6 +154,7 @@ def run_unit_turn(
     model: Optional[str] = None,
     mcp_config: Optional[str] = None,
     commit_message: Optional[str] = None,
+    commit: bool = True,
 ) -> Iterator[dict]:
     """Run one claude turn over ``work_dir``, streaming normalized UnitEvents, then ENFORCE governance.
 
@@ -169,6 +170,11 @@ def run_unit_turn(
         if ev.get("type") == "done":
             done = ev
         yield ev
+
+    if not commit:
+        # propose-only / read-only turn (e.g. the meeting copilot): it writes nothing, so do NO git —
+        # never touch a workspace another agent may be committing to (the index.lock collision).
+        return
 
     violations = revalidate_entities(work)
     if violations:

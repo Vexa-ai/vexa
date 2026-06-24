@@ -100,6 +100,7 @@ def _link_chat_into_workspace(work: Path) -> None:
 
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
+    commit: bool = True,
 ) -> Iterator[dict]:
     """One governed claude turn over the mounted workspace: resume from the session file, run
     ``run_unit_turn`` (which revalidates entity writes vs workspace.v1 and commits), and persist the
@@ -110,12 +111,12 @@ def run_turn_over_workspace(
     sess_file = work / ".claude" / ".session"
     resume = sess_file.read_text().strip() if sess_file.exists() else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
-    gen = run_unit_turn(str(work), prompt, _exec_claude, allowed_tools=allowed, session=resume, model=model)
+    gen = run_unit_turn(str(work), prompt, _exec_claude, allowed_tools=allowed, session=resume, model=model, commit=commit)
     first = next(gen, None)
     if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
         if sess_file.exists():
             sess_file.unlink()
-        gen = run_unit_turn(str(work), prompt, _exec_claude, allowed_tools=allowed, session=None, model=model)
+        gen = run_unit_turn(str(work), prompt, _exec_claude, allowed_tools=allowed, session=None, model=model, commit=commit)
         first = next(gen, None)
     captured: str | None = None
     for ev in (gen if first is None else itertools.chain([first], gen)):
@@ -208,7 +209,7 @@ def meeting_card_turn(work: Path, segments: list[dict], *, model: str | None = N
     reply: str | None = None
     # propose-only: a read-only turn (no Write/Edit). We DON'T forward the streaming turn events — the
     # raw JSON reply would leak into the UI as a "note"; the meeting feed wants only the parsed cards.
-    for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model, allowed_tools=["Read"]):
+    for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model, allowed_tools=["Read"], commit=False):
         if ev.get("type") == "done":
             reply = ev.get("reply")
     for card in parse_cards(reply):
