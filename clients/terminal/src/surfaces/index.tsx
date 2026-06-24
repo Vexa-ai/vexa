@@ -8,6 +8,7 @@
  */
 import "./chat";       // tab-kind "chat" + /-skills
 import "./sessions";   // list "sessions" (→ opens chat tabs)
+import "./entities";   // context "entity" (the KG entity card) + EntityList
 import "./meeting";    // list "calendar" + tab-kind "meeting" + context "transcript"
 import "./workspace";  // list "files" (+ git) + tab-kind "doc" + context "doc-context"
 import "./routines";   // list "routines" + tab-kind "routines" (the board)

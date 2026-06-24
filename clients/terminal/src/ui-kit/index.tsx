@@ -18,6 +18,12 @@ const PATHS: Record<string, string> = {
   git: "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6M18 9a9 9 0 0 1-9 9",
   web: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z",
   check: "M20 6 9 17l-5-5",
+  user: "M20 21a8 8 0 1 0-16 0M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
+  building: "M3 21h18M6 21V4a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v17M19 21V9l-4-2M9 7h2M9 11h2M9 15h2",
+  tag: "M3 3h7l11 11-7 7L3 10zM7 7h.01",
+  chevR: "M9 6l6 6-6 6",
+  spark: "M12 3l1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6z",
+  openIn: "M7 17 17 7M9 7h8v8",
 };
 
 export function Icon({ name, size = 18, style }: { name: string; size?: number; style?: CSSProperties }) {

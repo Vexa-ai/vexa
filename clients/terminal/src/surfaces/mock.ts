@@ -67,6 +67,49 @@ export const MEETINGS: MeetingMock[] = [
 export const liveMeeting = () => MEETINGS.find((m) => m.status === "live");
 export const meetingById = (id: string) => MEETINGS.find((m) => m.id === id);
 
+// ── Knowledge-graph entities (mock until the workspace KG API lands) ─────────────────
+export type EntityType = "person" | "company" | "topic" | "task";
+export interface Entity {
+  title: string;
+  type: EntityType;
+  path: string;            // workspace path
+  exists: boolean;         // already a file in the workspace?
+  subtitle: string;        // role / one-liner
+  facts?: [string, string][];
+  summary?: string;
+  related?: string[];      // [[linked]] entity titles
+}
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+export const ENTITIES: Record<string, Entity> = {
+  "Jane Liu": { title: "Jane Liu", type: "person", path: "kg/entities/person/jane-liu.md", exists: true, subtitle: "VP Sales · Acme",
+    facts: [["company", "[[Acme Corp]]"], ["role", "VP Sales"], ["email", "jane@acme.com"]],
+    summary: "Primary commercial contact for the Acme renewal — owns the buying decision.", related: ["Acme Corp", "Raj Patel", "Contract renewal"] },
+  "Raj Patel": { title: "Raj Patel", type: "person", path: "kg/entities/person/raj-patel.md", exists: true, subtitle: "CTO · Acme",
+    facts: [["company", "[[Acme Corp]]"], ["role", "CTO"], ["leads", "onboarding"]],
+    summary: "Technical decision-maker at Acme; will lead the post-sale onboarding.", related: ["Acme Corp", "SSO / SCIM"] },
+  "You": { title: "You", type: "person", path: "kg/entities/person/you.md", exists: true, subtitle: "Account lead",
+    facts: [["role", "Account lead"]], summary: "That's you — the account lead on this deal.", related: ["Acme Corp"] },
+  "Acme Corp": { title: "Acme Corp", type: "company", path: "kg/entities/company/acme-corp.md", exists: true, subtitle: "Company · in renewal",
+    facts: [["stage", "Renewal"], ["seats", "250"], ["owner", "[[You]]"], ["onboarding", "[[Raj Patel]]"]],
+    summary: "Enterprise account up for renewal this quarter. Needs SSO/SCIM before signing.", related: ["Jane Liu", "Raj Patel", "Contract renewal", "SSO / SCIM"] },
+  "Contract renewal": { title: "Contract renewal", type: "topic", path: "kg/entities/topic/contract-renewal.md", exists: false, subtitle: "Topic", related: ["Acme Corp"] },
+  "SSO / SCIM": { title: "SSO / SCIM", type: "topic", path: "kg/entities/topic/sso-scim.md", exists: false, subtitle: "Topic", related: ["Acme Corp", "Raj Patel"] },
+};
+
+export function entityFor(title: string): Entity {
+  return ENTITIES[title] ?? { title, type: "topic", path: `kg/entities/topic/${slug(title)}.md`, exists: false, subtitle: "Topic" };
+}
+
+/** split a meeting's people + mentioned entities into "in the room" vs "detected" (deduped). */
+export function meetingEntities(m: MeetingMock): { present: Entity[]; detected: Entity[] } {
+  const present = m.participants.map((p) => entityFor(p.name));
+  const seen = new Set(present.map((e) => e.title));
+  const detected = m.mentioned.filter((t) => !seen.has(t)).map(entityFor);
+  return { present, detected };
+}
+
 /** Mock git state for the Files source-control section (until the workspace git API is exposed). */
 export const GIT = {
   branch: "user/u_jane",
