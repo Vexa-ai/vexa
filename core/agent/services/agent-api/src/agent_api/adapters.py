@@ -11,16 +11,18 @@ logged, never written into the repo's persisted remote (we strip it afterward, a
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import subprocess
+import urllib.request
 from pathlib import Path
 from typing import Protocol
 
 import yaml
 
 from .models import WorkspaceWrite
-from .ports import VcsPort, WorkspacePort
+from .ports import RuntimePort, VcsPort, WorkspacePort
 
 logger = logging.getLogger("agent_api.adapters")
 
@@ -168,3 +170,30 @@ class GitHubVcs(VcsPort):
         finally:
             # Strip the token from the persisted remote so it can't leak to the repo/object store.
             _git(work, "remote", "set-url", _PUSH_REMOTE, remote_url)
+
+
+class RuntimeHttpClient(RuntimePort):
+    """A ``RuntimePort`` over runtime.v1's HTTP surface (``POST /workloads``) — the control-plane→kernel
+    edge. agent-api never runs a worker in-process (P7); it asks the runtime kernel to spawn the
+    ``agent`` workload. Uses stdlib urllib (no extra dep); the spec body is the runtime.v1 WorkloadSpec.
+    """
+
+    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+        self._base = base_url.rstrip("/")
+        self._timeout = timeout
+
+    def spawn(self, workload_id: str, profile: str, env: dict[str, str]) -> str:
+        body = json.dumps({"workloadId": workload_id, "profile": profile, "env": env}).encode()
+        req = urllib.request.Request(
+            f"{self._base}/workloads", data=body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            status = json.loads(r.read())
+        return status.get("workloadId", workload_id)
+
+    def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
+        req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", method="GET")
+        with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            status = json.loads(r.read())
+        return status.get("state", "unknown")

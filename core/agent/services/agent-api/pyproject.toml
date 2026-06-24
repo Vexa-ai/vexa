@@ -9,11 +9,13 @@ dependencies = [
     "jsonschema>=4,<5",
     "referencing>=0.30,<0.40",
     "PyYAML>=6,<7",
+    "fastapi>=0.110,<1",
+    "uvicorn>=0.29,<1",
     "pytest>=8,<9",
 ]
 
 [dependency-groups]
-dev = ["fakeredis>=2.20,<3"]
+dev = ["fakeredis>=2.20,<3", "httpx>=0.27,<1"]
 
 [tool.uv]
 package = false
