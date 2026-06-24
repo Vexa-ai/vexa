@@ -64,3 +64,39 @@ body {
   --dv-drag-over-background-color: var(--accentbg);
   --dv-tabs-container-scrollbar-color: var(--line2);
 }
+
+/* cmdk command palette (headless — we style its data-attributes) */
+[cmdk-input] {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--t1);
+  font-size: 15px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+[cmdk-input]::placeholder { color: var(--t3); }
+[cmdk-list] { max-height: 360px; overflow: auto; padding: 6px; }
+[cmdk-group-heading] {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--t3);
+  padding: 10px 10px 4px;
+}
+[cmdk-item] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  color: var(--t1);
+  font-size: 13.5px;
+  cursor: pointer;
+  user-select: none;
+}
+[cmdk-item][data-selected="true"] { background: var(--panel2); }
+[cmdk-empty] { padding: 18px; color: var(--t3); font-size: 13px; text-align: center; }
+.pal-skill { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--accent); }

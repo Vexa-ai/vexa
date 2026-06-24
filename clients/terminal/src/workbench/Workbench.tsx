@@ -3,11 +3,12 @@
  *  body. Every surface view is a dockview panel (tabbed/splittable/resizable/persisted via the
  *  LayoutService). The shell knows no surface — it renders the activity bar from the registry and hands
  *  dockview a single "viewport" panel component that resolves views by (surfaceId, slot). */
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { DockviewReact, type DockviewReadyEvent, type IDockviewPanelProps, themeAbyss } from "dockview-react";
 import "dockview/dist/styles/dockview.css";
-import { useService, useStore, useContainer, CommandServiceId } from "../platform";
+import { useService, useStore, useContainer, CommandServiceId, KeybindingServiceId } from "../platform";
 import { LayoutServiceId } from "./layout";
+import { CommandPalette } from "./CommandPalette";
 import { registry, type Slot, type SurfaceId } from "../contributions";
 import { Icon } from "../ui-kit";
 
@@ -125,9 +126,15 @@ function StatusBar() {
 // ── the shell ───────────────────────────────────────────────────────────────────
 export function Workbench() {
   const layout = useService(LayoutServiceId);
+  const keybindings = useService(KeybindingServiceId);
+  useEffect(() => {
+    const d = keybindings.attach(window);
+    return () => d.dispose();
+  }, [keybindings]);
   const onReady = (e: DockviewReadyEvent) => layout.attach(e.api, "chat");
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)" }}>
+      <CommandPalette />
       <div style={{ height: 38, display: "flex", alignItems: "center", gap: 14, padding: "0 14px", borderBottom: "1px solid var(--line)", background: "var(--sidebar)", flex: "none" }}>
         <div style={{ display: "flex", gap: 8 }}>
           <i style={{ width: 12, height: 12, borderRadius: "50%", background: "#ec6a5e", display: "block" }} />
