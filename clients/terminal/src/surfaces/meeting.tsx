@@ -162,13 +162,19 @@ function MeetingTab({ params }: TabProps) {
   const patchAgent = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
     setFeed((ts) => ts.map((t, i) => (i === ts.length - 1 && t.role === "agent" ? fn(t) : t)));
 
+  // the meeting copilot's chat is separate from the meeting transcript (it's a chat agent) — so inject
+  // the live transcript as context on EVERY call, grounding research/questions in what was actually said.
+  const meetingContext = () => {
+    const t = liveData.transcript.filter((s) => s.completed !== false).slice(-120).map((s) => `[${s.speaker}] ${s.text}`).join("\n");
+    return t ? `You are the copilot for a live meeting ("${m?.title ?? ""}"). The meeting transcript so far:\n${t}\n\n---\n` : "";
+  };
   const send = async (label: string, prompt: string) => {
     if (busy) return;
     const n = idRef.current++;
     setFeed((f) => [...f, { id: `u-${n}`, role: "user", text: label }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
     setBusy(true);
     try {
-      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, subject: "u_live", session: `meeting-${m?.id ?? "live"}` }) });
+      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: meetingContext() + prompt, subject: "u_live", session: `meeting-${m?.id ?? "live"}` }) });
       const reader = r.body?.getReader(); const dec = new TextDecoder(); let buf = "";
       while (reader) {
         const { value: chunk, done } = await reader.read(); if (done) break;

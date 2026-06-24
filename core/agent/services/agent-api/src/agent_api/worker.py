@@ -100,7 +100,7 @@ def _link_chat_into_workspace(work: Path) -> None:
 
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
-    commit: bool = True,
+    commit: bool = True, session_continuity: bool = True,
 ) -> Iterator[dict]:
     """One governed claude turn over the mounted workspace: resume from the session file, run
     ``run_unit_turn`` (which revalidates entity writes vs workspace.v1 and commits), and persist the
@@ -109,7 +109,9 @@ def run_turn_over_workspace(
     _ensure_repo(work)
     _link_chat_into_workspace(work)  # chats are saved to / resumed from the workspace, not ~/.claude
     sess_file = work / ".claude" / ".session"
-    resume = sess_file.read_text().strip() if sess_file.exists() else None
+    # session_continuity=False (the meeting copilot): never read/write the shared chat session — its
+    # card-extraction beats must NOT pollute the user's chat conversation memory.
+    resume = (sess_file.read_text().strip() if sess_file.exists() else None) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
     gen = run_unit_turn(str(work), prompt, _exec_claude, allowed_tools=allowed, session=resume, model=model, commit=commit)
     first = next(gen, None)
@@ -123,7 +125,7 @@ def run_turn_over_workspace(
         if ev.get("type") == "done" and ev.get("sessionId"):
             captured = ev["sessionId"]
         yield ev
-    if captured:
+    if captured and session_continuity:
         (work / ".claude").mkdir(parents=True, exist_ok=True)
         sess_file.write_text(captured)
 
@@ -209,7 +211,7 @@ def meeting_card_turn(work: Path, segments: list[dict], *, model: str | None = N
     reply: str | None = None
     # propose-only: a read-only turn (no Write/Edit). We DON'T forward the streaming turn events — the
     # raw JSON reply would leak into the UI as a "note"; the meeting feed wants only the parsed cards.
-    for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model, allowed_tools=["Read"], commit=False):
+    for ev in run_turn_over_workspace(work, CARD_PROMPT.format(lines=lines), model=model, allowed_tools=["Read"], commit=False, session_continuity=False):
         if ev.get("type") == "done":
             reply = ev.get("reply")
     for card in parse_cards(reply):
