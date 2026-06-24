@@ -5,6 +5,7 @@ import signal
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 
+import httpx
 import pytest
 
 from runtime_api.backends import Backend, ContainerInfo, ContainerSpec
@@ -72,6 +73,31 @@ class FakeRedis:
         for key in list(self._store.keys()):
             if key.startswith(prefix):
                 yield key
+
+
+class FakeResponse:
+    """Minimal httpx.Response stand-in for RunPod backend tests."""
+
+    def __init__(self, status_code: int, payload: dict | list | None = None, text: str = ""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json payload")
+        return self._payload
+
+    def raise_for_status(self):
+        if self.is_success:
+            return
+        request = httpx.Request("POST", "https://rest.runpod.io/v1/pods")
+        response = httpx.Response(self.status_code, request=request, json=self._payload)
+        raise httpx.HTTPStatusError("runpod error", request=request, response=response)
 
 
 @pytest.mark.asyncio
@@ -262,6 +288,106 @@ def test_k8s_pod_spec_gpu():
     )
     assert spec.gpu is True
     assert spec.gpu_type == "nvidia"
+
+
+def test_runpod_backend_create_falls_back_to_next_gpu():
+    """RunPod backend retries another GPU SKU when capacity is unavailable."""
+    from runtime_api.backends.runpod import RunPodBackend
+
+    redis = FakeRedis()
+    backend = RunPodBackend(redis=redis)
+    backend._client = MagicMock()
+    backend._client.post = AsyncMock(
+        side_effect=[
+            FakeResponse(500, payload={"message": "There are no instances currently available"}),
+            FakeResponse(201, payload={"id": "pod-123"}),
+        ]
+    )
+
+    spec = ContainerSpec(
+        name="meeting-123",
+        image="kyomoto/kioku-stateless:latest",
+        env={"A": "1"},
+        labels={"runtime.profile": "meeting"},
+        gpu=True,
+    )
+
+    with patch("runtime_api.backends.runpod.config") as mock_config:
+        mock_config.RUNPOD_CONTAINER_DISK_GB = 40
+        mock_config.RUNPOD_CLOUD_TYPE = "COMMUNITY"
+        mock_config.RUNPOD_GPU_TYPE = "NVIDIA GeForce RTX 3090"
+        mock_config.RUNPOD_GPU_TYPES = [
+            "NVIDIA GeForce RTX 3090",
+            "NVIDIA RTX A5000",
+        ]
+
+        pod_id = asyncio.run(backend.create(spec))
+
+    assert pod_id == "pod-123"
+    assert backend._client.post.await_count == 2
+    first_payload = backend._client.post.await_args_list[0].kwargs["json"]
+    second_payload = backend._client.post.await_args_list[1].kwargs["json"]
+    assert first_payload["gpuTypeIds"] == ["NVIDIA GeForce RTX 3090"]
+    assert second_payload["gpuTypeIds"] == ["NVIDIA RTX A5000"]
+
+    stored = asyncio.run(redis.get("runtime:runpod:meeting-123"))
+    assert stored is not None
+    assert '"gpu_type": "NVIDIA RTX A5000"' in stored
+
+
+def test_runpod_backend_create_reports_capacity_exhaustion():
+    """RunPod backend surfaces a clear error after exhausting configured GPUs."""
+    from runtime_api.backends.runpod import RunPodBackend
+
+    backend = RunPodBackend(redis=FakeRedis())
+    backend._client = MagicMock()
+    backend._client.post = AsyncMock(
+        side_effect=[
+            FakeResponse(500, payload={"message": "There are no instances currently available"}),
+            FakeResponse(500, payload={"message": "There are no instances currently available"}),
+        ]
+    )
+
+    spec = ContainerSpec(
+        name="meeting-456",
+        image="kyomoto/kioku-stateless:latest",
+        env={},
+        labels={},
+        gpu=True,
+    )
+
+    with patch("runtime_api.backends.runpod.config") as mock_config:
+        mock_config.RUNPOD_CONTAINER_DISK_GB = 40
+        mock_config.RUNPOD_CLOUD_TYPE = "COMMUNITY"
+        mock_config.RUNPOD_GPU_TYPE = "NVIDIA GeForce RTX 3090"
+        mock_config.RUNPOD_GPU_TYPES = [
+            "NVIDIA GeForce RTX 3090",
+            "NVIDIA RTX A5000",
+        ]
+
+        with pytest.raises(RuntimeError, match="RunPod GPU capacity unavailable"):
+            asyncio.run(backend.create(spec))
+
+
+def test_runpod_backend_startup_tolerates_forbidden_preflight():
+    """RunPod backend should not fail startup when pod listing is forbidden."""
+    from runtime_api.backends.runpod import RunPodBackend
+
+    backend = RunPodBackend(redis=FakeRedis())
+    response = httpx.Response(
+        403,
+        request=httpx.Request("GET", "https://rest.runpod.io/v1/pods?computeType=GPU"),
+        json={"message": "forbidden"},
+    )
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=httpx.HTTPStatusError("forbidden", request=response.request, response=response))
+
+    with patch("runtime_api.backends.runpod.config") as mock_config:
+        mock_config.RUNPOD_API_KEY = "rpa_test"
+        with patch("runtime_api.backends.runpod.httpx.AsyncClient", return_value=client):
+            asyncio.run(backend.startup())
+
+    assert backend._client is client
 
 
 def test_k8s_pod_spec_shm():

@@ -12,6 +12,7 @@ profiles:
     image: "${BROWSER_IMAGE}"
     command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
+    gpu: true
     resources:
       # 2026-04-26: Zoom Web bot was demanding ~3.2 cores due to a
       # software gpu-process (357% of one bot's 440% total CPU) running

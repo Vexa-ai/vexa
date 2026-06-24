@@ -29,6 +29,11 @@ _STATUS_MAP = {
     "TERMINATED": "exited",
 }
 
+_CAPACITY_ERROR_MARKERS = (
+    "there are no instances currently available",
+    "insufficient capacity",
+)
+
 
 class RunPodBackend(Backend):
     def __init__(self, redis=None):
@@ -56,8 +61,18 @@ class RunPodBackend(Backend):
             headers={"Authorization": f"Bearer {config.RUNPOD_API_KEY}"},
             timeout=30.0,
         )
-        resp = await self._client.get("/pods", params={"computeType": "GPU"})
-        resp.raise_for_status()
+        try:
+            resp = await self._client.get("/pods", params={"computeType": "GPU"})
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (401, 403, 404):
+                logger.warning(
+                    "RunPod API preflight skipped: pod listing returned HTTP %s",
+                    exc.response.status_code,
+                )
+                return
+            raise
+
         logger.info(f"RunPod API connected ({len(resp.json())} GPU pods)")
 
     async def shutdown(self) -> None:
@@ -73,7 +88,7 @@ class RunPodBackend(Backend):
         env = dict(spec.env)
         env["RUNPOD_POD_NAME"] = spec.name
 
-        payload: dict = {
+        base_payload: dict = {
             "name": spec.name,
             "imageName": spec.image,
             "containerDiskInGb": config.RUNPOD_CONTAINER_DISK_GB,
@@ -83,22 +98,68 @@ class RunPodBackend(Backend):
         }
 
         if spec.gpu:
-            payload["computeType"] = "GPU"
-            payload["gpuCount"] = 1
-            payload["gpuTypeIds"] = [config.RUNPOD_GPU_TYPE]
-            payload["cloudType"] = config.RUNPOD_CLOUD_TYPE
-            payload["volumeInGb"] = 0
+            gpu_types = list(config.RUNPOD_GPU_TYPES) or [config.RUNPOD_GPU_TYPE]
+            last_capacity_error = ""
+            attempted_gpu_types: list[str] = []
+
+            for gpu_type in gpu_types:
+                attempted_gpu_types.append(gpu_type)
+                payload = {
+                    **base_payload,
+                    "computeType": "GPU",
+                    "gpuCount": 1,
+                    "gpuTypeIds": [gpu_type],
+                    "cloudType": config.RUNPOD_CLOUD_TYPE,
+                    "volumeInGb": 0,
+                }
+
+                resp = await client.post("/pods", json=payload)
+                if resp.is_success:
+                    pod = resp.json()
+                    pod_id = pod["id"]
+                    logger.info(f"Created RunPod pod {spec.name} ({pod_id}) using GPU {gpu_type}")
+                    return await self._record_created_pod(spec, pod_id, gpu_type)
+
+                error_text = self._extract_error_text(resp)
+                if self._is_capacity_error(error_text):
+                    last_capacity_error = error_text
+                    logger.warning(
+                        "RunPod GPU %s unavailable for %s: %s",
+                        gpu_type,
+                        spec.name,
+                        error_text,
+                    )
+                    continue
+
+                resp.raise_for_status()
+
+            attempted = ", ".join(attempted_gpu_types)
+            detail = last_capacity_error or "RunPod returned no usable capacity error details"
+            raise RuntimeError(
+                f"RunPod GPU capacity unavailable for {spec.name}. Tried: {attempted}. "
+                f"Last error: {detail}"
+            )
         else:
-            payload["computeType"] = "CPU"
-            payload["vcpuCount"] = 4
+            payload = {
+                **base_payload,
+                "computeType": "CPU",
+                "vcpuCount": 4,
+            }
 
-        resp = await client.post("/pods", json=payload)
-        resp.raise_for_status()
-        pod = resp.json()
-        pod_id = pod["id"]
+            resp = await client.post("/pods", json=payload)
+            resp.raise_for_status()
+            pod = resp.json()
+            pod_id = pod["id"]
 
-        logger.info(f"Created RunPod pod {spec.name} ({pod_id})")
+            logger.info(f"Created RunPod pod {spec.name} ({pod_id})")
+            return await self._record_created_pod(spec, pod_id, None)
 
+    async def _record_created_pod(
+        self,
+        spec: ContainerSpec,
+        pod_id: str,
+        gpu_type: str | None,
+    ) -> str:
         pod_data = {
             "pod_id": pod_id,
             "name": spec.name,
@@ -108,6 +169,8 @@ class RunPodBackend(Backend):
             "created_at": time.time(),
             "status": "pending",
         }
+        if gpu_type:
+            pod_data["gpu_type"] = gpu_type
         if self._redis:
             await self._redis.set(
                 f"{RUNPOD_PREFIX}{spec.name}",
@@ -115,6 +178,34 @@ class RunPodBackend(Backend):
             )
 
         return pod_id
+
+    @staticmethod
+    def _extract_error_text(resp: httpx.Response) -> str:
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            for key in ("message", "error", "detail"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            errors = payload.get("errors")
+            if isinstance(errors, list):
+                parts = [str(item).strip() for item in errors if str(item).strip()]
+                if parts:
+                    return "; ".join(parts)
+
+        text = resp.text.strip()
+        if text:
+            return text
+        return f"HTTP {resp.status_code}"
+
+    @staticmethod
+    def _is_capacity_error(error_text: str) -> bool:
+        text = error_text.lower()
+        return any(marker in text for marker in _CAPACITY_ERROR_MARKERS)
 
     async def stop(self, name: str, timeout: int = 10) -> bool:
         data = await self._get_pod_data(name)

@@ -195,6 +195,17 @@ def test_profiles_example_yaml_parses():
         assert isinstance(p["idle_timeout"], (int, float))
 
 
+def test_bundled_profiles_runpod_meeting_is_gpu(monkeypatch):
+    """The real meeting profile must request GPU for RunPod-backed stateless bots."""
+    monkeypatch.setenv("BROWSER_IMAGE", "kyomoto/kioku-stateless:latest")
+    profile_path = Path(__file__).parent.parent / "profiles.yaml"
+    profiles = load_profiles(str(profile_path))
+    meeting = profiles["meeting"]
+
+    assert meeting["image"] == "kyomoto/kioku-stateless:latest"
+    assert meeting["gpu"] is True
+
+
 def test_malformed_yaml_returns_previous(tmp_path):
     """Malformed YAML returns previously loaded profiles instead of crashing."""
     # First load valid profiles

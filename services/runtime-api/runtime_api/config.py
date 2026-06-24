@@ -23,8 +23,19 @@ PROCESS_LOGS_DIR = os.getenv("PROCESS_LOGS_DIR", "/var/log/containers")
 PROCESS_REAPER_INTERVAL = int(os.getenv("PROCESS_REAPER_INTERVAL", "30"))
 
 # RunPod backend
-RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
+# On RunPod pods, RUNPOD_API_KEY is reserved for the pod-scoped key injected
+# by the platform. Prefer a distinct account-level variable for orchestrator
+# operations and only fall back to RUNPOD_API_KEY outside that environment.
+RUNPOD_API_KEY = os.getenv("RUNPOD_ACCOUNT_API_KEY", "") or os.getenv("RUNPOD_API_KEY", "")
 RUNPOD_GPU_TYPE = os.getenv("RUNPOD_GPU_TYPE", "NVIDIA GeForce RTX 3090")
+RUNPOD_GPU_TYPES = [
+    gpu.strip()
+    for gpu in os.getenv(
+        "RUNPOD_GPU_TYPES",
+        "NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 5090,NVIDIA RTX A5000,NVIDIA RTX A4000",
+    ).split(",")
+    if gpu.strip()
+]
 RUNPOD_CLOUD_TYPE = os.getenv("RUNPOD_CLOUD_TYPE", "COMMUNITY")
 RUNPOD_CONTAINER_DISK_GB = int(os.getenv("RUNPOD_CONTAINER_DISK_GB", "40"))
 RUNPOD_POLL_INTERVAL = int(os.getenv("RUNPOD_POLL_INTERVAL", "15"))
