@@ -79,26 +79,28 @@ def _run(redis_url: str, dispatcher, live, subject: str) -> None:
 
 
 def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_text) -> None:
-    uid = p.get("uid")
-    if not uid:
+    # Key on the meeting id the bot stamps on every segment (uid is not always present); the wire,
+    # dispatch, and terminal all agree on this one id.
+    key = str(p.get("meeting_id") or p.get("uid") or "")
+    if not key:
         return
     kind = p.get("type")
-    out_stream = f"tc:meeting:{uid}"
+    out_stream = f"tc:meeting:{key}"
     if kind == "session_end":
-        r.xadd(out_stream, {"payload": json.dumps({"type": "session_end", "uid": uid})})
-        live.drop(uid)
-        base.pop(uid, None)
-        last_arm.pop(uid, None)
-        logger.info("meeting %s ended → reaping copilot", uid)
+        r.xadd(out_stream, {"payload": json.dumps({"type": "session_end", "uid": key})})
+        live.drop(key)
+        base.pop(key, None)
+        last_arm.pop(key, None)
+        logger.info("meeting %s ended → reaping copilot", key)
         return
     if kind != "transcription":
         return
 
     # (a) re-arm the dispatch on activity (idempotent spawn-or-touch keeps the worker alive)
     now = time.monotonic()
-    if now - last_arm.get(uid, 0.0) > REARM_SEC:
-        last_arm[uid] = now
-        _arm(dispatcher, live, subject, uid, p.get("platform") or "meeting")
+    if now - last_arm.get(key, 0.0) > REARM_SEC:
+        last_arm[key] = now
+        _arm(dispatcher, live, subject, key, p.get("platform") or "google_meet")
 
     # (b) fan segments (drafts + finals) onto the per-meeting wire
     for seg in p.get("segments") or []:
@@ -106,7 +108,7 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
         if not text:
             continue
         completed = bool(seg.get("completed"))
-        sid = str(seg.get("segment_id") or f"{uid}:{seg.get('start')}:{text[:16]}")
+        sid = str(seg.get("segment_id") or f"{key}:{seg.get('start')}:{text[:16]}")
         if sid in final_done:
             continue
         if not completed and last_text.get(sid) == text:
@@ -116,10 +118,10 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
             final_done.add(sid)
             last_text.pop(sid, None)
         raw = float(seg.get("start") or 0.0)
-        b = base.setdefault(uid, raw)
+        b = base.setdefault(key, raw)
         start_rel = max(0.0, raw - b)
         out = {
-            "type": "transcription", "session_uid": uid, "meeting_id": uid,
+            "type": "transcription", "session_uid": key, "meeting_id": key,
             "segments": [{
                 "speaker": seg.get("speaker") or "Speaker", "text": text,
                 "start": round(start_rel, 1), "end": round(max(start_rel, float(seg.get("end") or raw) - b), 1),
