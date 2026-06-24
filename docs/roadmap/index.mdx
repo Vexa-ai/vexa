@@ -1,0 +1,36 @@
+---
+title: "Vexa"
+description: "An AI-first knowledge-worker terminal — Claude Code × Outlook, on meeting bots and an agentic runtime."
+---
+
+Vexa is an **AI-first knowledge-worker terminal**: think *Claude Code × Outlook*, with a full backend
+of meeting bots and an agentic runtime. This site explains **what we are building and why** — from base
+principles, through the primitives, to how every feature is just those primitives composed.
+
+## The one idea
+
+There is exactly **one runtime object: a dispatch** — one run of an agent, in an isolated container,
+over a person's files. A chat turn, a scheduled routine, an email worker, and the live in-meeting agent
+are the *same* object, differing only in **what triggered it**, **which files it sees**, and **what it's
+allowed to do**. Everything else is a **file**, a **tool**, a **trigger**, or **plumbing**.
+
+<CardGroup cols={2}>
+  <Card title="Why we build it this way" href="/foundations/principles">
+    The tenets and the reasoning behind them.
+  </Card>
+  <Card title="The model" href="/foundations/the-model">
+    One object; the rest is files / tools / triggers.
+  </Card>
+  <Card title="The seven primitives" href="/primitives/overview">
+    Workspace · Agent · Runtime · Scheduler · Integration · Stream · Identity.
+  </Card>
+  <Card title="The roadmap" href="/roadmap/approach">
+    How we get there, derived from the principles.
+  </Card>
+</CardGroup>
+
+## It already half-exists
+
+The agentic runtime is **not a leap** — Vexa's **meeting bots are browser containers spawned by the
+exact runtime an agent uses**. Same machinery, different workload type. See
+[Meetings](/capabilities/meetings) and the [Runtime](/primitives/runtime).

@@ -1,0 +1,47 @@
+---
+title: "Runtime"
+description: "Isolated, sandboxed container execution — orchestration-agnostic, TTL-reaped. Already proven by the meeting bots."
+---
+
+The **Runtime** spawns, reuses, and reaps the containers that agents (and bots) run in. It is the **only**
+thing that touches the orchestrator — agent-api is oblivious to whether a container was created fresh or
+reused hot.
+
+## Why it exists: safety
+An agent is an **untrusted, prompt-injectable, tool-using process operating on sensitive data**. A
+malicious email or web page it reads can try to exfiltrate the workspace, call tools it shouldn't, or
+reach the network. So every dispatch runs:
+
+- in **its own container** (isolation between people and between dispatches),
+- with **no egress except through brokered tools** (the sandbox),
+- mounting **only the workspaces it was granted**, `rw` only where allowed.
+
+Isolation is the *enforcement* of the [governance](/architecture/governance) — without it, the cred/tool
+gate is advisory. **That is why the runtime owns execution**, and why agents never run in the control plane.
+
+## One lifecycle: TTL-on-idle
+There is no oneshot-vs-warm bookkeeping. A dispatch spawns a container; the runtime **reaps it when
+idle** (idle = nothing computing inside). Chat "touches" it (next message resets the TTL); a live meeting's
+transcript stream keeps it non-idle; a background routine runs and goes idle. Continuity does not need a
+warm container — it comes from the **session file in the [workspace](/primitives/workspace)**, so a fresh
+container [resumes](/architecture/execution) instantly.
+
+## Orchestration-agnostic
+**Docker is the dev backend; Kubernetes is prod.** The kernel abstracts both behind one interface; the
+primitive is "container orchestration," never "docker." In k8s, workload identity is issued by
+[SPIRE](/architecture/identity-and-trust).
+
+## One runtime, many workload types
+The runtime maps a **profile → image**. Today that already includes more than agents:
+
+| workload | image | what it is |
+|---|---|---|
+| `agent` | the agent image | runs a [dispatch](/architecture/dispatch) (claude-code + toolbelt) |
+| `browser` / `bot` | the browser image | a headless browser — **joins meetings** *and* is a web tool for agents |
+
+<Note>
+**The runtime is not theoretical — it runs in production today.** Vexa's
+[meeting bots](/capabilities/meetings) are `browser` workloads spawned by this exact runtime. "Agents in
+runtime-spawned containers" is the *same machinery*, a different profile. The same browser workload is also
+available to agents as a normal [browser tool](/capabilities/browser).
+</Note>

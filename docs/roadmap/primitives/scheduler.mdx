@@ -1,0 +1,17 @@
+---
+title: "Scheduler"
+description: "Redis. Dispatches agents on a schedule entry, an integration event, or now. The heartbeat."
+---
+
+The **Scheduler** is the one mechanism that **dispatches agents**. It is **redis** — a sorted-set engine,
+not cron files.
+
+It fires on three kinds of trigger:
+- **schedule entry** — a time, one-shot or recurring (a "cron" expression is just a recurring entry);
+- **integration event** — an [Integration](/primitives/integration) fired it (e.g. new email), *if* a
+  subscription is bound;
+- **now** — an interactive message ([chat](/capabilities/chat)).
+
+The set of entries is the **user-manageable schedule** — what [routines](/capabilities/routines) edit. A
+dispatch entry carries `(subject, launcher, entry-point)`; on fire it asks the
+[Runtime](/primitives/runtime) to spawn.

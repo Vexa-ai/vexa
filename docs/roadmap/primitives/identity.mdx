@@ -1,0 +1,17 @@
+---
+title: "Identity"
+description: "The trust spine: authenticate, mint a signed dispatch token, attest the workload, verify at every boundary."
+---
+
+**Identity** is not just "the subject" — it is the **chain of custody** that makes every dispatch
+attributable and authorized. Full detail in [Identity & trust](/architecture/identity-and-trust).
+
+- **subject** = the principal the agent acts **on behalf of** (data + quota owner, e.g. `u_jane`).
+- **launcher** = **what triggered** this dispatch (the user, a schedule entry, or an Integration) — it must
+  hold a **signed delegation grant** to act as the subject.
+- The identity service **mints a short-lived signed dispatch token** (subject + launcher + scope); the
+  [Runtime](/primitives/runtime) **attests the workload** (SPIFFE/SPIRE); every **boundary verifies** the
+  token — never the agent.
+
+Adopts the **[kagenti](https://github.com/kagenti/kagenti)** stack: SPIFFE/SPIRE + Keycloak (RFC 8693
+token exchange) + an Envoy MCP Gateway.

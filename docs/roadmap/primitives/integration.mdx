@@ -1,0 +1,16 @@
+---
+title: "Integration"
+description: "A persistent, per-identity connector. Two faces: inbound (watch → fire) and outbound (MCP tool)."
+---
+
+An **Integration** (Gmail, Calendar, browser, web…) is a **long-lived, per-identity** connector that lives
+**outside** any agent. It has two faces and holds the user's **brokered creds**.
+
+- **Inbound (the watcher).** A persistent, multi-tenant service that watches the external source — Gmail
+  **pushes** new-mail (Google Pub/Sub) or it polls — and, if the user has a subscription bound to that
+  event, **fires the [Scheduler](/primitives/scheduler)**. No subscription → nothing fires.
+- **Outbound (the tool).** An **MCP server behind the [MCP Gateway](/architecture/identity-and-trust)**;
+  the dispatched agent calls it, the gateway does the RFC 8693 token exchange, the integration acts with
+  the brokered creds. The agent never holds the token.
+
+Email and calendar are Integrations — **never backend primitives**. Thousands can exist; all are uniform.

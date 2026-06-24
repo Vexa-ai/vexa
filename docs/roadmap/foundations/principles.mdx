@@ -1,0 +1,44 @@
+---
+title: "Principles"
+description: "The design tenets — and the why behind each."
+---
+
+These are load-bearing. Every architecture decision traces back to one of them.
+
+## One primitive
+There is one runtime object — a [dispatch](/architecture/dispatch). Chat, routines, workers, and the live
+in-meeting agent are the same thing. **Why:** one path to secure, test, and reason about; new features are
+*compositions*, not new subsystems.
+
+## Everything is files
+A [Workspace](/primitives/workspace) is just a git folder. We **do not dictate its structure** — not in
+code, not in a contract. Tasks, notes, plans, and the agent's session are all files. **Why:** the moment
+you impose a schema you are building a CMS, not a knowledge substrate; git gives durability + undo for free.
+
+## The agent is untrusted
+The agent (the LLM) is **outside the trust boundary** — it is prompt-injectable. It gets **zero**
+enforcement power; it only carries a signed token that the *boundaries* verify. **Why:** a malicious email
+or web page must not be able to make the agent exceed its grant.
+
+## Isolation is the enforcement
+Every dispatch runs **sandboxed and isolated** — its own container, **no egress except through brokered
+tools**, only the workspaces and tools it was granted. **Why:** governance that isn't enforced by
+isolation is advisory. This is why the [Runtime](/primitives/runtime) owns execution.
+
+## Generic over agents and tools
+The agent CLI is swappable ([Agent](/primitives/agent) runner; claude-code is one). Tools are uniform
+([Integration](/primitives/integration)); email is just the first of thousands. **Why:** we are building a
+platform, not an email client — and BYO-inference / air-gap demand the agent be swappable.
+
+## Identity is a chain of custody
+Every dispatch is **verifiably attributable** (who launched it, on whose behalf) and **authorized**
+(scope), with the proof surviving every hop. **Why:** launchers are often non-human (a cron, a webhook);
+trust must be proven, not assumed. See [Identity & trust](/architecture/identity-and-trust).
+
+## Contracts are the seams
+Components couple **only** through sealed, versioned schemas. **Why:** isolated, independently-evolvable
+parts; the goldens are the spec.
+
+## Self-host & air-gap by default
+The whole stack runs in a customer VPC with **BYO inference** and **zero egress**. **Why:** the target
+verticals (finance) cannot send data out; air-gap is the default, not an enterprise add-on.

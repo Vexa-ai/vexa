@@ -1,0 +1,68 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Vexa",
+  "theme": "mint",
+  "colors": { "primary": "#0d9488", "light": "#2dd4bf", "dark": "#0f766e" },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start here",
+        "pages": ["index"]
+      },
+      {
+        "group": "Foundations",
+        "pages": [
+          "foundations/vision",
+          "foundations/principles",
+          "foundations/the-model"
+        ]
+      },
+      {
+        "group": "Primitives",
+        "pages": [
+          "primitives/overview",
+          "primitives/workspace",
+          "primitives/agent",
+          "primitives/runtime",
+          "primitives/scheduler",
+          "primitives/integration",
+          "primitives/stream",
+          "primitives/identity"
+        ]
+      },
+      {
+        "group": "Architecture",
+        "pages": [
+          "architecture/dispatch",
+          "architecture/execution",
+          "architecture/identity-and-trust",
+          "architecture/governance",
+          "architecture/streaming"
+        ]
+      },
+      {
+        "group": "Capabilities",
+        "pages": [
+          "capabilities/overview",
+          "capabilities/chat",
+          "capabilities/routines",
+          "capabilities/knowledge",
+          "capabilities/integrations",
+          "capabilities/meetings",
+          "capabilities/browser",
+          "capabilities/live-meetings",
+          "capabilities/org-knowledge"
+        ]
+      },
+      {
+        "group": "Roadmap",
+        "pages": [
+          "roadmap/approach",
+          "roadmap/stages",
+          "roadmap/status"
+        ]
+      }
+    ]
+  }
+}
