@@ -37,3 +37,10 @@ services:
     volumes:
       - ../../core/gateway/services/gateway/src:/app/src
     command: ["python", "-m", "watchfiles", "python -m gateway", "/app/src"]
+
+  # agent-api vendors identity_core INTO /app/src/identity_core at build, so mount only the agent_api
+  # PACKAGE (not all of /app/src) — overlaying the whole src dir would hide the vendored identity_core.
+  agent-api:
+    volumes:
+      - ../../core/agent/services/agent-api/src/agent_api:/app/src/agent_api
+    command: ["python", "-m", "watchfiles", "uvicorn agent_api.api:app --host 0.0.0.0 --port 8100", "/app/src/agent_api"]
