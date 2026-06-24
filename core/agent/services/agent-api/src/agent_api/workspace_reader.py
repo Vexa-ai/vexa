@@ -60,8 +60,11 @@ class WorkspaceReader:
         changes = []
         for line in git("status", "--porcelain").splitlines():
             if len(line) > 3:
+                path = line[3:].strip()
+                if path.split("/", 1)[0].lstrip(".") in ("git", "claude"):
+                    continue  # hide the agent's internal .git/.claude session plumbing
                 flag = line[:2].strip()[:1] or "M"
-                changes.append({"path": line[3:].strip(), "kind": "A" if flag in ("A", "?") else flag})
+                changes.append({"path": path, "kind": "A" if flag in ("A", "?") else flag})
         commits = []
         for line in git("log", "-8", "--pretty=%h\x1f%s\x1f%cr").splitlines():
             parts = line.split("\x1f")
