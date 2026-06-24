@@ -15,6 +15,7 @@ import { Icon } from "../ui-kit";
 import { EntityList, onResearchRequest } from "./entities";
 import { MEETINGS, meetingById, liveMeeting, meetingEntities, entityFor, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
+import { useLiveMeetings, liveMeetingsNow } from "./liveMeetings";
 
 // ── live copilot cards (streamed from the real dispatch) ─────────────────────────
 const KIND: Record<string, { icon: string; color: string; bg: string }> = {
@@ -73,10 +74,20 @@ function useReveal(n: number, live: boolean, stepMs = 3000): number {
 // ── Meetings LIST (left) ─────────────────────────────────────────────────────────
 function MeetingsList() {
   const layout = useService(LayoutServiceId);
+  const live = useLiveMeetings();                                  // real active copilots (agent-api)
+  const liveIds = new Set(live.map((m) => m.id));
+  const all = [...live, ...MEETINGS.filter((m) => !liveIds.has(m.id))];  // real live ones on top
+  const autoOpened = useRef(false);
+  useEffect(() => {                                                // a real live meeting opens itself, once
+    if (!autoOpened.current && live.length > 0) {
+      autoOpened.current = true;
+      layout.openTab(meetingTab(live[0]));
+    }
+  }, [live, layout]);
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 6px" }}>meetings</div>
-      {MEETINGS.map((m) => (
+      {all.map((m) => (
         <div key={m.id} onClick={() => layout.openTab(meetingTab(m))} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -93,7 +104,8 @@ function MeetingsList() {
 // ── Meeting COPILOT tab (center) — entity list + research chat ─────────────────────
 function MeetingTab({ params }: TabProps) {
   const layout = useService(LayoutServiceId);
-  const m = meetingById(params.meetingId as string);
+  const liveList = useLiveMeetings();
+  const m = meetingById(params.meetingId as string) ?? liveList.find((x) => x.id === params.meetingId);
   const live = m?.status === "live";
   const [feed, setFeed] = useState<Turn[]>([]);
   const [value, setValue] = useState("");
@@ -189,7 +201,8 @@ function MeetingTab({ params }: TabProps) {
 
 // ── Transcript CONTEXT (right) ────────────────────────────────────────────────────
 function TranscriptContext({ params }: ContextProps) {
-  const m = meetingById(params.meetingId as string);
+  const liveList = useLiveMeetings();
+  const m = meetingById(params.meetingId as string) ?? liveList.find((x) => x.id === params.meetingId);
   const isLive = !!m?.session_uid;
   const liveData = useMeetingLive(m?.id ?? "", (m?.session_uid as string) ?? "");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -223,4 +236,4 @@ function TranscriptContext({ params }: ContextProps) {
 registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList });
 registerTab("meeting", MeetingTab);
 registerContext("transcript", TranscriptContext);
-registerCommand({ id: "meeting.openLive", title: "Open live meeting", run: ({ container }) => { const m = liveMeeting(); if (m) container.get(LayoutServiceId).openTab(meetingTab(m)); } });
+registerCommand({ id: "meeting.openLive", title: "Open live meeting", run: ({ container }) => { const m = liveMeetingsNow()[0] ?? liveMeeting(); if (m) container.get(LayoutServiceId).openTab(meetingTab(m)); } });

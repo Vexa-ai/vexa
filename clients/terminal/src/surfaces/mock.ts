@@ -21,25 +21,6 @@ export interface MeetingMock {
 
 export const MEETINGS: MeetingMock[] = [
   {
-    id: "gamestop",
-    session_uid: "sess-gs-live",        // LIVE backend — transcript + cards stream from the dispatch
-    title: "All-In — Ryan Cohen interview",
-    when: "Now · live",
-    status: "live",
-    platform: "YouTube",
-    participants: [
-      { name: "Ryan Cohen", role: "Guest · GameStop / Chewy", initials: "RC" },
-      { name: "Jason Calacanis", role: "Host", initials: "JC" },
-      { name: "Chamath Palihapitiya", role: "Host", initials: "CP" },
-      { name: "David Sacks", role: "Host", initials: "DS" },
-      { name: "David Friedberg", role: "Host", initials: "DF" },
-    ],
-    mentioned: [],
-    actions: [],
-    transcript: [],     // streamed live
-    insights: [],
-  },
-  {
     id: "mtg-acme-renewal",
     title: "Acme Corp — Renewal sync",
     when: "Now · live",

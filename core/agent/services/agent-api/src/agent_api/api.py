@@ -49,6 +49,24 @@ class _Sessions:
         self._by_subject.get(subject, set()).discard(session)
 
 
+class _LiveMeetings:
+    """In-memory registry of active meeting copilots — the terminal's 'live meetings' feed. The dev-tier
+    foundation; a real deployment derives liveness from the dispatcher / meeting-api. Keyed by session_uid;
+    the meeting-stream end (session_end) drops the entry."""
+
+    def __init__(self) -> None:
+        self._by_uid: dict[str, dict] = {}
+
+    def add(self, meeting: dict) -> None:
+        self._by_uid[meeting["session_uid"]] = meeting
+
+    def drop(self, session_uid: str) -> None:
+        self._by_uid.pop(session_uid, None)
+
+    def list(self) -> list[dict]:
+        return list(self._by_uid.values())
+
+
 class ChatBody(BaseModel):
     model_config = {"extra": "forbid"}
     prompt: str
@@ -64,6 +82,24 @@ class RoutineCreate(BaseModel):
     cron: str
     prompt: str
     run_now: bool = True  # fire one immediate run so the author sees a result without waiting for cron
+
+
+class MeetingStart(BaseModel):
+    """Launch a live-meeting copilot for a REAL meeting. The vexa-cloud bridge POSTs this once it has a
+    bot in the meeting; the dispatch then tails ``tc:meeting:{native_id}`` (the stream the bridge feeds)."""
+    model_config = {"extra": "forbid"}
+    platform: str               # google_meet | teams | zoom
+    native_id: str              # the platform meeting id (e.g. a Google Meet code abc-defg-hij)
+    subject: str = "u_live"
+    title: Optional[str] = None
+
+
+# The meeting copilot's start brief. The in-container worker drives per-beat extraction with its own
+# CARD_PROMPT; this is the envelope's entrypoint (continuity = the session file in the workspace).
+_MEETING_BRIEF = (
+    "You are the live meeting copilot. Watch the meeting transcript as it streams in and surface the "
+    "people, companies, topics, decisions, and action items worth acting on."
+)
 
 
 def _sse(events: Iterator[dict]) -> Iterator[str]:
@@ -82,10 +118,12 @@ def create_app(
     redis_url: Optional[str] = None,
 ) -> FastAPI:
     sess = sessions or _Sessions()
+    live = _LiveMeetings()
     wsr = reader or WorkspaceReader("/workspaces")
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
+    app.state.live_meetings = live
     app.state.scheduler = scheduler
 
     @app.get("/health")
@@ -104,6 +142,32 @@ def create_app(
         except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)
             raise HTTPException(status_code=400, detail=f"invalid unit.v1 dispatch: {e.message}")
         return {"workload_id": workload_id}
+
+    @app.post("/api/meeting/start", status_code=202)
+    def meeting_start(body: MeetingStart):
+        """Launch (or touch) a live-meeting copilot for a real meeting — built through the ONE
+        ``make_dispatch`` like every other trigger. ``meeting_id == session_uid == native_id`` so the
+        transcript wire (``tc:meeting:{id}``), the dispatch (``agent-meet-{id}``), and the terminal all
+        key on the same id. The bridge feeds ``tc:meeting:{native_id}``; the worker tails it."""
+        inv = units.make_dispatch(
+            subject=body.subject, trigger="transcription",
+            start=units.entrypoint(inline=_MEETING_BRIEF),
+            context={"kind": "meeting", "meeting": {
+                "meeting_id": body.native_id, "session_uid": body.native_id, "platform": body.platform,
+            }},
+        )
+        unit_id = dispatcher.dispatch(inv)
+        meeting = {
+            "meeting_id": body.native_id, "session_uid": body.native_id, "platform": body.platform,
+            "title": body.title or f"{body.platform} · {body.native_id}", "unit_id": unit_id,
+        }
+        live.add(meeting)
+        return meeting
+
+    @app.get("/api/meetings/live")
+    def meetings_live():
+        """The active meeting copilots — the terminal's live-meetings feed."""
+        return {"meetings": live.list()}
 
     @app.post("/api/chat")
     def chat(body: ChatBody):
@@ -227,6 +291,7 @@ def create_app(
                 resp = r.xread(last, count=500, block=1500 if ending else 15000)
                 if not resp:
                     if ending:               # out-stream drained → now it's safe to end
+                        live.drop(session_uid)  # leaves the terminal's live-meetings feed
                         yield {"type": "meeting-end"}
                         return
                     idle += 15000
