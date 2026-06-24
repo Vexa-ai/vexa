@@ -147,6 +147,34 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  agent-api:
+    # The unit control plane — POST /invocations (dispatch → runtime.v1 agent spawn), /api/chat (SSE),
+    # /api/sessions, /health. Wider build context (the carve root) to vendor the sealed schemas it
+    # validates by path. The unit WORKER is a separate runtime.v1 `agent` workload (claude-in-container).
+    build:
+      context: ../..
+      dockerfile: core/agent/services/agent-api/Dockerfile
+    image: vexaai/v012-agent-api:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${AGENT_API_PORT:-18100}:8100"
+    environment:
+      - VEXA_AGENT_API_PORT=8100
+      - VEXA_RUNTIME_API_URL=http://runtime:8090
+      - VEXA_AGENT_PROFILE=agent
+      - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      runtime:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
   meeting-api:
     build:
       # Wider context (the v0.12 carve root) than the other services: meeting_api validates at the
