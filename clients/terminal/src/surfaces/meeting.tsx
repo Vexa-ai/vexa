@@ -14,6 +14,46 @@ import { registerList, registerTab, registerContext, registerCommand, type TabPr
 import { Icon } from "../ui-kit";
 import { EntityList, onResearchRequest } from "./entities";
 import { MEETINGS, meetingById, liveMeeting, meetingEntities, entityFor, type MeetingMock, type Entity } from "./mock";
+import { useMeetingLive, type LiveCard } from "./meetingLive";
+
+// ── live copilot cards (streamed from the real dispatch) ─────────────────────────
+const KIND: Record<string, { icon: string; color: string; bg: string }> = {
+  person: { icon: "user", color: "var(--blue)", bg: "var(--bluebg)" },
+  company: { icon: "building", color: "var(--accent)", bg: "var(--accentbg)" },
+  topic: { icon: "tag", color: "var(--violet)", bg: "var(--violetbg)" },
+  action: { icon: "zap", color: "var(--green)", bg: "var(--greenbg)" },
+};
+
+function LiveCards({ cards, note, connected }: { cards: LiveCard[]; note: string; connected: boolean }) {
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 9px" }}>
+        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Surfaced live</span>
+        <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{cards.length}</span>
+        <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: connected ? "var(--green)" : "var(--t3)" }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--green)" : "var(--t3)" }} />{connected ? "listening" : "…"}
+        </span>
+      </div>
+      {note && <div style={{ fontSize: 12, color: "var(--t2)", fontStyle: "italic", margin: "0 2px 10px", lineHeight: 1.5 }}>{note}</div>}
+      {cards.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "6px 2px" }}>Listening — the copilot will surface people, topics, and action items as the meeting unfolds.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {cards.map((c, i) => {
+          const k = KIND[c.kind] ?? KIND.topic;
+          return (
+            <div key={i} className="vx-fade-up" style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "9px 11px", borderRadius: 10, background: "var(--panel)", border: "1px solid var(--line)" }}>
+              <span style={{ width: 26, height: 26, flex: "none", borderRadius: 7, background: k.bg, color: k.color, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name={k.icon} size={14} /></span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, color: "var(--t1)", fontWeight: 550 }}>{c.title}</div>
+                {c.body && <div style={{ fontSize: 12, color: "var(--t3)", marginTop: 2, lineHeight: 1.45 }}>{c.body}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function meetingTab(m: MeetingMock): TabDescriptor {
   return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id }, context: { kind: "transcript", params: { meetingId: m.id } } };
@@ -91,7 +131,11 @@ function MeetingTab({ params }: TabProps) {
   // the active meeting chat is where Research-from-card lands (stream() closes over stable setters)
   useEffect(() => onResearchRequest((title) => research(entityFor(title))), [m?.id]);
 
+  // a live-backed meeting subscribes to the REAL dispatch Stream (transcript + copilot cards)
+  const liveData = useMeetingLive(m?.id ?? "", (m?.session_uid as string) ?? "");
+
   if (!m) return <div style={{ padding: 24, color: "var(--t3)" }}>Meeting not found.</div>;
+  const isLive = !!m.session_uid;
   const { present, detected } = meetingEntities(m);
 
   const composer = (
@@ -131,7 +175,8 @@ function MeetingTab({ params }: TabProps) {
           </div>
           <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or research it — I'll work in the chat below.</p>
         </header>
-        <EntityList present={present} detected={detected} onOpen={openEntity} onResearch={research} />
+        <EntityList present={present} detected={isLive ? [] : detected} onOpen={openEntity} onResearch={research} />
+        {isLive && <LiveCards cards={liveData.cards} note={liveData.note} connected={liveData.connected} />}
         {feed.length > 0 && (
           <div className="vx-fade-up" style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 20 }}>
             <Conversation turns={feed} />
@@ -145,21 +190,32 @@ function MeetingTab({ params }: TabProps) {
 // ── Transcript CONTEXT (right) ────────────────────────────────────────────────────
 function TranscriptContext({ params }: ContextProps) {
   const m = meetingById(params.meetingId as string);
-  const live = m?.status === "live";
-  const shown = useReveal(m?.transcript.length ?? 0, !!live, 3000);
+  const isLive = !!m?.session_uid;
+  const liveData = useMeetingLive(m?.id ?? "", (m?.session_uid as string) ?? "");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const mockLive = m?.status === "live" && !isLive;
+  const shown = useReveal(m?.transcript.length ?? 0, mockLive, 3000);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [liveData.transcript.length, shown]);
   if (!m) return <div style={{ padding: 16, color: "var(--t3)" }}>No transcript.</div>;
+  const fmt = (t?: number) => (t == null ? "" : `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`);
+  const lines = isLive
+    ? liveData.transcript.map((s) => ({ t: fmt(s.t), speaker: s.speaker, text: s.text }))
+    : m.transcript.slice(0, shown);
+  const streaming = isLive ? (liveData.connected && !liveData.ended) : (m.status === "live" && shown < m.transcript.length);
+  const liveDot = isLive ? (liveData.connected && !liveData.ended) : m.status === "live";
   return (
-    <div style={{ padding: "14px 16px" }}>
+    <div ref={scrollRef} style={{ padding: "14px 16px", height: "100%", overflowY: "auto" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 10, display: "flex", alignItems: "center", gap: 7 }}>
-        {live && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--live)" }} />}transcript
+        {liveDot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--live)" }} />}transcript
       </div>
-      {m.transcript.slice(0, shown).map((l, i) => (
+      {lines.map((l, i) => (
         <div key={i} style={{ marginBottom: 11 }}>
           <div style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--t3)", marginBottom: 2 }}><span style={{ fontFamily: "var(--mono)" }}>{l.t}</span><span style={{ color: "var(--t2)", fontWeight: 500 }}>{l.speaker}</span></div>
           <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}>{l.text}</div>
         </div>
       ))}
-      {live && shown < m.transcript.length && <div style={{ fontSize: 12, color: "var(--t3)" }}>…</div>}
+      {isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Waiting for the transcript…</div>}
+      {streaming && <div style={{ fontSize: 12, color: "var(--t3)" }}>…</div>}
     </div>
   );
 }

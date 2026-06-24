@@ -79,6 +79,7 @@ def create_app(
     reader: Optional[WorkspaceReader] = None,
     scheduler: Optional[SchedulerPort] = None,
     invocations_url: Optional[str] = None,
+    redis_url: Optional[str] = None,
 ) -> FastAPI:
     sess = sessions or _Sessions()
     wsr = reader or WorkspaceReader("/workspaces")
@@ -202,6 +203,50 @@ def create_app(
             raise HTTPException(status_code=404, detail="not found")
         return {"path": path, "content": content}
 
+    @app.get("/api/meeting/stream")
+    def meeting_stream(meeting_id: str, session_uid: str):
+        """SSE feed for a LIVE meeting — merges the transcript Stream (`tc:meeting:{id}`) and the
+        copilot's output Stream (`unit:agent-meet-{sid}:out`) into one feed the terminal renders:
+        transcript lines + proactive `card`s + the agent working (`message-delta`/`tool-call`)."""
+        if not redis_url:
+            raise HTTPException(status_code=501, detail="redis not wired")
+
+        def gen():
+            import redis
+
+            r = redis.from_url(redis_url, decode_responses=True)
+            tkey = f"tc:meeting:{meeting_id}"
+            okey = f"unit:agent-meet-{session_uid}:out"
+            last = {tkey: "0", okey: "0"}
+            idle = 0
+            while True:
+                resp = r.xread(last, count=50, block=15000)
+                if not resp:
+                    idle += 15000
+                    if idle >= 600000:
+                        return
+                    yield {"type": "ping"}
+                    continue
+                idle = 0
+                for stream, entries in resp:
+                    for entry_id, fields in entries:
+                        last[stream] = entry_id
+                        if stream == tkey:
+                            payload = json.loads(fields.get("payload", "{}"))
+                            if payload.get("type") == "session_end":
+                                yield {"type": "meeting-end"}
+                                return
+                            for seg in payload.get("segments", []):
+                                yield {"type": "transcript", "speaker": seg.get("speaker"),
+                                       "text": seg.get("text"), "t": seg.get("start")}
+                        else:
+                            yield json.loads(fields.get("event", "{}"))
+
+        return StreamingResponse(
+            _sse(gen()), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     return app
 
 
@@ -222,6 +267,7 @@ def _build_production_app() -> FastAPI:
         reader=WorkspaceReader(settings.workspaces_dir),
         scheduler=scheduler,
         invocations_url=invocations_url,
+        redis_url=settings.redis_url,
     )
 
 
