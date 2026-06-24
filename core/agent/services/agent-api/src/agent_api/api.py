@@ -183,8 +183,9 @@ def create_app(
         )
         unit_id = dispatcher.dispatch(inv)
         meeting = {
-            "meeting_id": body.native_id, "session_uid": body.native_id, "platform": body.platform,
-            "title": body.title or f"{body.platform} · {body.native_id}", "unit_id": unit_id,
+            "meeting_id": body.native_id, "session_uid": body.native_id, "native_id": body.native_id,
+            "platform": body.platform, "title": body.title or f"{body.platform} · {body.native_id}",
+            "unit_id": unit_id,
         }
         live.add(meeting)
         return meeting
