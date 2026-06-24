@@ -32,6 +32,11 @@ _BRIEF = (
     "You are the live meeting copilot. Watch the meeting transcript as it streams in and surface the "
     "people, companies, topics, decisions, and action items worth acting on."
 )
+_PLATFORM = {"google_meet": "Google Meet", "teams": "Microsoft Teams", "zoom": "Zoom"}
+
+
+def _title(platform: str) -> str:
+    return f"{_PLATFORM.get(platform, platform)} — live"
 
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
@@ -96,11 +101,17 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
     if kind != "transcription":
         return
 
-    # (a) re-arm the dispatch on activity (idempotent spawn-or-touch keeps the worker alive)
+    # Keep the terminal's live feed fresh on EVERY batch (a cheap dict write) so an agent-api restart
+    # can't drop the meeting from the list — it reappears on the first segment. Throttle only the spawn.
+    platform = p.get("platform") or "google_meet"
+    live.add({
+        "meeting_id": key, "session_uid": key, "platform": platform,
+        "title": _title(platform), "unit_id": f"agent-meet-{key}",
+    })
     now = time.monotonic()
     if now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
-        _arm(dispatcher, live, subject, key, p.get("platform") or "google_meet")
+        _arm(dispatcher, subject, key, platform)
 
     # (b) fan segments (drafts + finals) onto the per-meeting wire
     for seg in p.get("segments") or []:
@@ -131,21 +142,17 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
         r.xadd(out_stream, {"payload": json.dumps(out)})
 
 
-def _arm(dispatcher, live, subject: str, uid: str, platform: str) -> None:
-    """Spawn-or-touch the meeting's copilot (keyed agent-meet-{uid}) and register it as live."""
+def _arm(dispatcher, subject: str, key: str, platform: str) -> None:
+    """Spawn-or-touch the meeting's copilot (keyed agent-meet-{key}). Idempotent: spawns if reaped,
+    touches (keep-alive) if already running. The live-feed registration happens in _handle every batch."""
     inv = units.make_dispatch(
         subject=subject, trigger="transcription",
         start=units.entrypoint(inline=_BRIEF),
         context={"kind": "meeting", "meeting": {
-            "meeting_id": uid, "session_uid": uid, "platform": platform,
+            "meeting_id": key, "session_uid": key, "platform": platform,
         }},
     )
     try:
-        unit_id = dispatcher.dispatch(inv)  # idempotent: spawns if reaped, touches if running
+        dispatcher.dispatch(inv)  # idempotent: spawns if reaped, touches if running
     except Exception:  # noqa: BLE001
-        logger.exception("dispatch failed for meeting %s", uid)
-        return
-    live.add({
-        "meeting_id": uid, "session_uid": uid, "platform": platform,
-        "title": f"{platform} meeting", "unit_id": unit_id,
-    })
+        logger.exception("dispatch failed for meeting %s", key)
