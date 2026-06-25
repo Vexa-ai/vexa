@@ -75,15 +75,17 @@ vexa/
 │   │               reads itself: the runnable platform is `core/`, everything else (clients, sdks,
 │   │               integrations, deploy, tools) consumes it across a contract seam.
 │   ├── runtime/    ① KERNEL — spawn/execute workloads · Docker·K8s·process · domain-agnostic
-│   │   └── contracts/  runtime.v1
+│   │   └── contracts/  runtime.v1 · schedule.v1 (one-shot/cron job spec for the Scheduler)
 │   ├── meetings/   ② CAPTURE — meeting-api · bot · transcription · tts · eval/ → transcript + events
-│   │   └── contracts/  transcript.v1 · lifecycle.v1 · acts.v1 · invocation.v1
-│   ├── agent/      ③ EXECUTION — agent-api · sandboxed worker (scoped identity + a mounted workspace)
-│   │   └── contracts/  workspace.v1
+│   │   └── contracts/  transcript.v1 · lifecycle.v1 · acts.v1 · invocation.v1 · captured-signal.v1 · flagged-issue.v1 · webhook.v1
+│   ├── agent/      ③ EXECUTION — agent-api (one Dispatcher: trigger → unit.v1 → claude-turn over a mounted
+│   │   │           workspace, spawned via runtime.v1) · routines (cron) · generic event ingress · tool mechanism
+│   │   └── contracts/  unit.v1 (universal invocation envelope) · workspace.v1 · routine.v1 · task.v1 ·
+│   │       │           tool.v1 · event.v1 · proactive-card.v1 · invoke.v1 (sealed; meetings→agent, retiring)
 │   ├── identity/   access · accounts · tokens · audit — authN/authZ   (+ rest-api · webhook contracts when built)
 │   └── gateway/    the edge — auth · routing · WS fan-out
 ├── integrations/   out/ (FINOS adapters, on the agent emit port) · in/ (calendar → scheduler)   [email/github deferred]
-├── clients/        dashboard · extension · desktop · telegram · mcp
+├── clients/        terminal (AI-first workbench: Chat·Workspace·Tasks·Routines surfaces) · dashboard · extension · desktop · telegram · mcp
 ├── sdks/           vexa-client · vexa-cli · transcript-rendering
 ├── tools/ · deploy/ · docs/
 ├── package.json · pnpm-workspace.yaml · turbo.json    ← workspace root
@@ -102,19 +104,22 @@ vexa/
 A domain's INTERNALS (services/, modules/) may import: its own code · another domain's contracts/
 (the published seam) · core/runtime/contracts. They may NOT import another domain's internals.
 
-runtime internals  → (nothing above; owns runtime.v1)
+runtime internals  → (nothing above; owns runtime.v1 · schedule.v1)
 meetings internals → core/runtime/contracts · its own contracts
-agent internals    → core/runtime/contracts · core/meetings/contracts (consumes transcript.v1) · its own
+agent internals    → core/runtime/contracts (spawns workers + schedules via runtime.v1 · schedule.v1) ·
+                     core/meetings/contracts (consumes transcript.v1 / invoke.v1) · its own contracts
 identity · gateway → contracts only (gateway routes over HTTP, imports no internals)
-clients · sdks     → contracts (+ sdks)
+clients · sdks     → contracts (+ sdks); clients/terminal consumes core/agent/contracts (unit.v1 et al.)
 
 ★ meetings ⊥ agent at the INTERNALS level. agent MAY reference core/meetings/contracts/transcript.v1
   (that IS the seam); it may never import core/meetings/services or core/meetings/modules.
 ```
 
 **Contract placement** (P4 applied): a contract **nests with its owner domain** in `<domain>/contracts/`
-as JSON Schema — `runtime.v1`→runtime, `transcript/lifecycle/acts/invocation.v1`→meetings,
-`workspace.v1`→agent. Cross-language is satisfied by the *format* (JSON Schema, read by path), **not** a
+as JSON Schema — `runtime.v1`·`schedule.v1`→runtime, `transcript/lifecycle/acts/invocation.v1`→meetings,
+`unit.v1`·`workspace.v1`·`routine.v1`·`task.v1`·`tool.v1`·`event.v1`·`proactive-card.v1`·`invoke.v1`→agent.
+The agent set is **unsealed** (in development) except `invoke.v1` (sealed; the meetings→agent seam, retiring as
+callers move to `unit.v1`); seal them via `pnpm seal:contracts` as each freezes. Cross-language is satisfied by the *format* (JSON Schema, read by path), **not** a
 shared location — so domains stay self-contained and liftable. Purely in-process, TS-to-TS brick contracts
 (e.g. `capture.v1`) still nest as `.ts` inside the owning module's `src/contracts/`.
 
@@ -143,7 +148,7 @@ runs them). ("ADD" = gap still open; "retire" = scheduled for removal.)
 | `gate:node` | build + unit-test every workspace TS package (the L1–L2 TS pyramid; carries `gate:fault-surfacing` + `gate:client-liveness` proofs) | P8 | `turbo run build test` | **have** |
 | `gate:stack` | the Group-1 backing-stack evals (postgres·redis·admin-api) pass on ephemeral testcontainers | P5, P8 | `test_stack_*.py` (testcontainers) | **have** (green-or-skip without docker) |
 | `gate:fault-surfacing` | a forced dependency fault (e.g. STT `402`) is surfaced + attributed via `onError`, never swallowed | P18 | failure-injection tests (under `gate:node`) | **have** (rides `gate:node`) |
-| `gate:health` | each long-running HTTP service exposes a conforming `/health` (status·service) | P18 | per-service `tests/test_health.py` (gateway · conformance · runtime · meeting-api · admin-api) | **have** |
+| `gate:health` | each long-running HTTP service exposes a conforming `/health` (status·service) | P18 | per-service `tests/test_health.py` (gateway · conformance · runtime · meeting-api · admin-api · agent-api) | **have** |
 | `gate:eval-baseline` | the worker-L4 eval oracle self-test passes offline + the recorded L4 ground truth exists (a reusable, calibrated instrument) | P19 | `core/meetings/services/bot/eval/verify.sh` + `core/meetings/eval/BASELINE.md` | **have** (instrument ready; live L4 score is B:V1) |
 | `gate:eval` | every essential path (Groups 2–8) ships an offline eval harness — the completeness/presence umbrella | P19 | filename discovery of per-path harnesses | **have** |
 | `gate:access` | each read path (API · WS subscribe · agent) denies an unauthorized `canAccess` request | P20 | `core/identity/tests/test_access.py` (deny test) | **have** |

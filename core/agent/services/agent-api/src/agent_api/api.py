@@ -155,7 +155,7 @@ def create_app(
     def health():
         ok = dispatcher is not None
         return JSONResponse(
-            {"status": "ok" if ok else "degraded", "checks": {"dispatcher": ok}},
+            {"status": "ok" if ok else "degraded", "service": "agent-api", "checks": {"dispatcher": ok}},
             status_code=200 if ok else 503,
         )
 
