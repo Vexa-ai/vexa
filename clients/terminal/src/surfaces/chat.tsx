@@ -257,6 +257,10 @@ export function Chat({ params = {} }: ChatProps) {
   // the rail follows the store's active session (switched from the Sessions list / New chat); params override if ever passed.
   const session = typeof params.session === "string" && params.session.trim() ? params.session : activeSession;
   const activeRef = activeReference(activeTab);
+  // the user can clear focus with the chip's ×; a newly-focused tab re-shows it.
+  const [focusCleared, setFocusCleared] = useState(false);
+  useEffect(() => { setFocusCleared(false); }, [activeRef?.raw]);
+  const focusRef = focusCleared ? null : activeRef;
   const meetings = useLiveMeetings();
   const activeMeeting = activeRef?.kind === "meeting"
     ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value) ?? meetingById(activeRef.value)
@@ -314,8 +318,8 @@ export function Chat({ params = {} }: ChatProps) {
     setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: v }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
     setBusy(true);
     try {
-      const p = await promptWithActiveContext(basePrompt, activeRef, activeMeeting, liveData.transcript);
-      const active = activeRef ? { kind: activeRef.kind, ref: activeRef.raw } : undefined;
+      const p = await promptWithActiveContext(basePrompt, focusRef, activeMeeting, liveData.transcript);
+      const active = focusRef ? { kind: focusRef.kind, ref: focusRef.raw } : undefined;
       const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session, active }) });
       const reader = r.body?.getReader();
       const dec = new TextDecoder();
@@ -360,10 +364,11 @@ export function Chat({ params = {} }: ChatProps) {
         </div>
       )}
       <div style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
-        {activeRef && (
+        {focusRef && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
-            <ReferenceChip refToken={activeRef} />
+            <ReferenceChip refToken={focusRef} />
+            <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
           </div>
         )}
         <ComposerReferences text={value} />
