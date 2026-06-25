@@ -60,14 +60,13 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile, openMenu }:
 }) {
   const pad = 9 + depth * 13;
   const hover = { onMouseEnter: (e: MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "var(--panel2)"), onMouseLeave: (e: MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "transparent") };
-  // single-click → preview (debounced so a double-click doesn't also leave a stray preview);
-  // double-click → pinned tab.
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // single-click → preview (immediate — openPreview/openTab reconcile by id, so a
+  // double-click harmlessly previews then pins); double-click → pinned tab.
   if (!node.isDir) {
     return (
       <div
-        onClick={() => { if (clickTimer.current) clearTimeout(clickTimer.current); clickTimer.current = setTimeout(() => { clickTimer.current = null; openFile(node.path); }, 220); }}
-        onDoubleClick={() => { if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; } pinFile(node.path); }}
+        onClick={() => openFile(node.path)}
+        onDoubleClick={() => pinFile(node.path)}
         onContextMenu={(e) => openMenu(e, node.path)}
         {...hover}
         style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", paddingLeft: pad + 14, borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>

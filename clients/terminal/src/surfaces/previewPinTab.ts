@@ -1,36 +1,28 @@
 "use client";
 
-import { useEffect, useRef, type MouseEventHandler } from "react";
+import { type MouseEventHandler } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 
-const PREVIEW_CLICK_DELAY_MS = 220;
-
+/**
+ * VS Code preview/pin click behavior: single-click opens (or reuses) the shared
+ * preview slot; double-click pins it as a persistent tab.
+ *
+ * We act IMMEDIATELY on each event — no setTimeout disambiguation. A deferred
+ * single-click was vulnerable to unmount: if the click triggered a list
+ * re-render that remounted the row, the cleanup cleared the pending timer and
+ * the tab never opened ("I click and nothing happens"). openPreview/openTab
+ * reconcile by tab id, so a double-click (which fires onClick → onClick →
+ * onDoubleClick) harmlessly opens the preview, then promotes the same id to a
+ * pinned tab.
+ */
 export function usePreviewPinTab<T extends HTMLElement>(tab: TabDescriptor): {
   onClick: MouseEventHandler<T>;
   onDoubleClick: MouseEventHandler<T>;
 } {
   const layout = useService(LayoutServiceId);
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-  }, []);
-
   return {
-    onClick: () => {
-      if (clickTimer.current) clearTimeout(clickTimer.current);
-      clickTimer.current = setTimeout(() => {
-        clickTimer.current = null;
-        layout.openPreview(tab);
-      }, PREVIEW_CLICK_DELAY_MS);
-    },
-    onDoubleClick: () => {
-      if (clickTimer.current) {
-        clearTimeout(clickTimer.current);
-        clickTimer.current = null;
-      }
-      layout.openTab(tab);
-    },
+    onClick: () => layout.openPreview(tab),
+    onDoubleClick: () => layout.openTab(tab),
   };
 }

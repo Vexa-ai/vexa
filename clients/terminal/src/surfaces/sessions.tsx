@@ -48,11 +48,10 @@ function SessionsList() {
 }
 
 function SessionRow({ session, onPreview, onPin }: { session: SessionSummary; onPreview: () => void; onPin: () => void }) {
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
     <div
-      onClick={() => { if (clickTimer.current) clearTimeout(clickTimer.current); clickTimer.current = setTimeout(() => { clickTimer.current = null; onPreview(); }, 220); }}
-      onDoubleClick={() => { if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; } onPin(); }}
+      onClick={() => onPreview()}
+      onDoubleClick={() => onPin()}
       style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)" }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
       <Icon name="msg" size={13} />{sessionTitle(session)}
