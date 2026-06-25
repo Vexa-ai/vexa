@@ -18,6 +18,17 @@ import { useMeetingLive, type LiveCard } from "./meetingLive";
 import { useLiveMeetings, liveMeetingsNow, fetchTranscript, refreshMeetings } from "./liveMeetings";
 import type { TranscriptLine } from "./mock";
 
+function formatTranscriptTime(start?: number | null, firstStart?: number | null): string {
+  if (start == null || firstStart == null) return "";
+  const offset = Math.max(0, Math.floor(start - firstStart));
+  if (!Number.isFinite(offset)) return "";
+  const hours = Math.floor(offset / 3600);
+  const minutes = Math.floor((offset % 3600) / 60);
+  const seconds = offset % 60;
+  const mmss = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return hours > 0 ? `${String(hours).padStart(2, "0")}:${mmss}` : mmss;
+}
+
 // ── live entities (streamed from the real dispatch) — compact, clickable to research ──────────────
 const KIND: Record<string, { icon: string; color: string; bg: string }> = {
   person: { icon: "user", color: "var(--blue)", bg: "var(--bluebg)" },
@@ -519,9 +530,9 @@ function TranscriptContext({ params }: ContextProps) {
   }, [m?.id, m?.platform, m?.native_id, isLive]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [liveData.transcript.length, recorded.length]);
   if (!m) return <div style={{ padding: 16, color: "var(--t3)" }}>No transcript.</div>;
-  const fmt = (t?: number) => (t == null ? "" : `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`);
+  const firstLiveStart = liveData.transcript.find((s) => s.t != null)?.t ?? null;
   const lines = isLive
-    ? liveData.transcript.map((s) => ({ t: fmt(s.t), speaker: s.speaker, text: s.text, pending: s.completed === false, id: s.id }))
+    ? liveData.transcript.map((s) => ({ t: formatTranscriptTime(s.t, firstLiveStart), speaker: s.speaker, text: s.text, pending: s.completed === false, id: s.id }))
     : recorded.map((l) => ({ t: l.t, speaker: l.speaker, text: l.text, pending: false, id: undefined as string | undefined }));
   const streaming = isLive && liveData.connected && !liveData.ended;
   const liveDot = isLive ? (liveData.connected && !liveData.ended) : m.status === "live";

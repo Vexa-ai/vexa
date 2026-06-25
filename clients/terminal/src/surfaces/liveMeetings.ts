@@ -33,6 +33,17 @@ interface SegmentDTO {
   text?: string | null;
 }
 
+function formatTranscriptTime(start?: number | null, firstStart?: number | null): string {
+  if (start == null || firstStart == null) return "";
+  const offset = Math.max(0, Math.floor(start - firstStart));
+  if (!Number.isFinite(offset)) return "";
+  const hours = Math.floor(offset / 3600);
+  const minutes = Math.floor((offset % 3600) / 60);
+  const seconds = offset % 60;
+  const mmss = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return hours > 0 ? `${String(hours).padStart(2, "0")}:${mmss}` : mmss;
+}
+
 // Statuses where the bot is in/heading-to the room — these map to the list's "live" bucket and carry a
 // session_uid so the tab subscribes to the copilot stream. awaiting_admission/needs_help are live too.
 const LIVE_STATUSES = new Set(["active", "joining", "requested", "awaiting_admission", "needs_help", "stopping"]);
@@ -126,15 +137,15 @@ function ensureStarted() {
 export async function fetchTranscript(platform: string, nativeId: string): Promise<TranscriptLine[]> {
   // the platform on the mock is display-cased ("Google Meet") — normalise back to the API slug
   const slug = platform === "Google Meet" ? "google_meet" : platform.toLowerCase().replace(/\s+/g, "_");
-  const fmt = (t?: number | null) =>
-    t == null ? "" : `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
   try {
     const r = await fetch(`/api/transcripts/${slug}/${encodeURIComponent(nativeId)}`, { cache: "no-store" });
     if (!r.ok) return [];
     const { segments } = (await r.json()) as { segments?: SegmentDTO[] };
-    return (segments || [])
+    const list = segments || [];
+    const firstStart = list.find((s) => s.start != null)?.start ?? null;
+    return list
       .filter((s) => (s.text ?? "").trim())
-      .map((s) => ({ t: fmt(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
+      .map((s) => ({ t: formatTranscriptTime(s.start, firstStart), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
   } catch {
     return [];
   }
