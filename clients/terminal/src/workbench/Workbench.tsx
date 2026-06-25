@@ -29,8 +29,7 @@ function TabHost(props: IDockviewPanelProps) {
   // different meeting/file in the preview slot actually re-binds the content to the new params.
   const [params, setParams] = useState(props.params as { kind?: string; p?: Record<string, unknown> });
   useEffect(() => {
-    setParams(props.api.getParameters() as { kind?: string; p?: Record<string, unknown> });
-    const d = props.api.onDidParametersChange(() => setParams(props.api.getParameters() as { kind?: string; p?: Record<string, unknown> }));
+    const d = props.api.onDidParametersChange((next) => { if (next && Object.keys(next).length) setParams(next as { kind?: string; p?: Record<string, unknown> }); });
     return () => d.dispose();
   }, [props.api]);
   const kind = params.kind ?? "";
