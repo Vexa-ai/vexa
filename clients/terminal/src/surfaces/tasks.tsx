@@ -10,7 +10,7 @@ const SUBJECT = "u_live";  // the terminal's single subject (until §0 auth) —
 interface Task { path: string; title: string; state: string; priority?: string; due?: string }
 const PRIO: Record<string, string> = { high: "var(--live)", med: "var(--accent)", medium: "var(--accent)", low: "var(--t2)" };
 
-const taskDocTab = (path: string): TabDescriptor => ({ id: `doc:${path}`, title: path.split("/").pop() ?? path, kind: "doc", params: { path }, context: { kind: "doc-context", params: { path } } });
+const taskDocTab = (path: string): TabDescriptor => ({ id: `doc:${path}`, title: path.split("/").pop() ?? path, kind: "doc", params: { path } });
 const cb = (done: boolean): CSSProperties => ({ width: 16, height: 16, borderRadius: 4, border: "1.5px solid var(--line2)", flex: "none", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, background: done ? "var(--green)" : "transparent", color: done ? "#08110c" : "transparent" });
 
 function frontmatter(text: string): Record<string, string> {

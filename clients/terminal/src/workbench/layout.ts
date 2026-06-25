@@ -1,6 +1,5 @@
 /** term-workbench/layout (v2) — the structured-shell LayoutService.
- *  Left = which LIST is active (top bar). Center = dockview TABS (openTab by kind; params serializable so
- *  the arrangement persists). Right = the CONTEXT carried by the active tab. Plus left/right collapse. */
+ *  Left = which LIST is active. Center = dockview TABS. Right = persistent chat, grounded by activeTab. */
 import { createServiceId, createStore, type ObservableStore } from "../platform";
 import type { DockviewApi } from "dockview-react";
 
@@ -8,13 +7,14 @@ const LS_DOCK = "vexa.terminal.dock.v3";
 const LS_LIST = "vexa.terminal.activeList.v1";
 
 export interface RightContext { kind: string; params?: Record<string, unknown>; }
+export interface ActiveTab { kind: string; params: Record<string, unknown>; }
 
 export interface TabDescriptor {
   id: string;
   title: string;
   kind: string;
   params?: Record<string, unknown>;
-  /** what the right pane shows while this tab is active */
+  /** optional contextual metadata carried with persisted descriptors */
   context?: RightContext | null;
 }
 
@@ -23,6 +23,7 @@ export interface LayoutState {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   context: RightContext | null;
+  activeTab: ActiveTab | null;
 }
 
 export interface LayoutService {
@@ -33,11 +34,13 @@ export interface LayoutService {
   /** open the tab in the single shared PREVIEW slot (reused on the next single-click) */
   openPreview(d: TabDescriptor): void;
   closeTab(id: string): void;
-  /** the active tab pushes its right-pane context here */
+  /** optional contextual metadata for legacy descriptors */
   setContext(ctx: RightContext | null): void;
+  setActiveTab(tab: ActiveTab | null): void;
   setActiveList(id: string): void;
   toggleLeft(): void;
   toggleRight(): void;
+  showRight(): void;
   resetLayout(): void;
 }
 
@@ -52,6 +55,7 @@ export function createLayoutService(defaultList: string): LayoutService {
     leftCollapsed: false,
     rightCollapsed: false,
     context: null,
+    activeTab: null,
   });
   let api: DockviewApi | null = null;
   // the single shared preview slot. We keep one dockview panel (fixed id) and swap its
@@ -85,8 +89,8 @@ export function createLayoutService(defaultList: string): LayoutService {
     attach(dvApi) {
       api = dvApi;
       try { const s = readLS(LS_DOCK); if (s) api.fromJSON(JSON.parse(s)); } catch { /* stale layout — start empty */ }
-      // the active tab pushes its context via setContext; here we only clear it when nothing is active.
-      api.onDidActivePanelChange((p) => { if (!p) store.set((st) => ({ ...st, context: null })); });
+      // TabHost publishes the active panel's params. Clear when the grid has no active panel.
+      api.onDidActivePanelChange((p) => { if (!p) store.set((st) => ({ ...st, context: null, activeTab: null })); });
       // if the preview panel goes away (closed/reset), forget the slot.
       api.onDidRemovePanel((p) => { if (p.id === PREVIEW_PANEL) forgetPreview(); });
       api.onDidLayoutChange(persist);
@@ -97,6 +101,7 @@ export function createLayoutService(defaultList: string): LayoutService {
     // already attached before the old one's cleanup runs.
     detach(dvApi) { if (api === dvApi) { api = null; forgetPreview(); } },
     setContext(ctx) { store.set((st) => ({ ...st, context: ctx })); },
+    setActiveTab(tab) { store.set((st) => ({ ...st, activeTab: tab })); },
     openTab(d) {
       if (!api) return;
       // pinning the thing currently in preview → promote it: drop the preview slot so the
@@ -137,11 +142,12 @@ export function createLayoutService(defaultList: string): LayoutService {
     setActiveList(id) { store.set((s) => ({ ...s, activeList: id })); writeLS(LS_LIST, id); },
     toggleLeft() { store.set((s) => ({ ...s, leftCollapsed: !s.leftCollapsed })); },
     toggleRight() { store.set((s) => ({ ...s, rightCollapsed: !s.rightCollapsed })); },
+    showRight() { store.set((s) => ({ ...s, rightCollapsed: false })); },
     resetLayout() {
       try { localStorage.removeItem(LS_DOCK); } catch { /* noop */ }
       forgetPreview();
       api?.clear();
-      store.set((s) => ({ ...s, context: null }));
+      store.set((s) => ({ ...s, context: null, activeTab: null }));
     },
   };
 }

@@ -2,18 +2,18 @@
 /** Meetings (mocked backend) — the differentiator flow, rendered through the shared agent-window.
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its copilot.
  *  • "meeting" TAB (center): ONE stacked agent window — a centered list of the meeting's entities
- *    ("in the room" + "detected"); click one to open its entity card in the right sidebar (the agent
+ *    ("in the room" + "detected"); click one to open its entity doc in the center tabs (the agent
  *    creates it first if missing); Research runs in the chat below. The composer + suggested actions
  *    sit under the conversation. No horizontal split, no insight feed.
- *  • "transcript" CONTEXT (right): the real-time transcript (until you open an entity card). */
+ *  • transcript: rendered inline on the meeting page. */
 import { useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
-import { registerList, registerTab, registerContext, registerCommand, type TabProps, type ContextProps } from "../contributions";
+import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
-import { EntityList, onResearchRequest } from "./entities";
+import { EntityList, entityDocTab, onResearchRequest } from "./entities";
 import { meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
 import { useLiveMeetings, liveMeetingsNow, fetchTranscript, refreshMeetings } from "./liveMeetings";
@@ -58,7 +58,7 @@ const SUBJECT_DOCS = "u_live";
 const docSlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const baseName = (p: string) => p.split("/").pop() ?? p;
 const docTabFor = (path: string, title: string): TabDescriptor =>
-  ({ id: `doc:${path}`, title, kind: "doc", params: { path }, context: { kind: "doc-context", params: { path } } });
+  ({ id: `doc:${path}`, title, kind: "doc", params: { path } });
 
 type ConnectedDoc = { workspace: string; path: string; title?: string; kind?: string };
 
@@ -338,7 +338,7 @@ function RowActions({ m }: { m: MeetingMock }) {
 }
 
 export function meetingTab(m: MeetingMock): TabDescriptor {
-  return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id }, context: { kind: "transcript", params: { meetingId: m.id } } };
+  return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id } };
 }
 
 function MeetingRow({ m }: { m: MeetingMock }) {
@@ -474,8 +474,8 @@ function MeetingTab({ params }: TabProps) {
     send(`Research ${title}`, `In the live meeting "${m?.title ?? "this meeting"}", the ${kind ?? "entity"} "${title}" came up. Research it (web + the workspace knowledge graph), append a concise note to its entity file, and commit. Keep it tight.`);
   const ask = (text: string) => send(text, text);
 
-  // open an entity card in the right sidebar (the card creates it first if missing)
-  const openEntity = (e: Entity) => layout.setContext({ kind: "entity", params: { title: e.title, from: m?.id } });
+  // open the entity's workspace doc in the center; the chat rail carries that file as active context.
+  const openEntity = (e: Entity) => layout.openTab(entityDocTab(e));
 
   // research-from-entity-card requests land in this meeting's chat
   useEffect(() => onResearchRequest((title) => research(title)), [m?.id]);
@@ -527,6 +527,7 @@ function MeetingTab({ params }: TabProps) {
         {!isLive && <EntityList present={present} detected={detected} onOpen={openEntity} onResearch={(e) => research(e.title, e.type)} />}
         {isLive && <LiveCards cards={liveData.cards} connected={liveData.connected} onResearch={(c) => research(c.title, c.kind)} />}
         {m.native_id && <ConnectedPanel native={m.native_id} docs={m.docs} />}
+        <MeetingTranscript meetingId={m.id} />
         {feed.length > 0 && (
           <div className="vx-fade-up" style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 20 }}>
             <Conversation turns={feed} busy={busy} />
@@ -537,10 +538,10 @@ function MeetingTab({ params }: TabProps) {
   );
 }
 
-// ── Transcript CONTEXT (right) ────────────────────────────────────────────────────
-function TranscriptContext({ params }: ContextProps) {
+// ── Transcript section ───────────────────────────────────────────────────────────
+function MeetingTranscript({ meetingId }: { meetingId: string }) {
   const liveList = useLiveMeetings();
-  const m = meetingById(params.meetingId as string) ?? liveList.find((x) => x.id === params.meetingId);
+  const m = meetingById(meetingId) ?? liveList.find((x) => x.id === meetingId);
   const isLive = !!m?.session_uid;
   const liveData = useMeetingLive(m?.id ?? "", (m?.session_uid as string) ?? "");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -556,28 +557,29 @@ function TranscriptContext({ params }: ContextProps) {
   if (!m) return <div style={{ padding: 16, color: "var(--t3)" }}>No transcript.</div>;
   const lines = isLive
     ? liveData.transcript.map((s) => ({ t: formatTranscriptTime(s.t), speaker: s.speaker, text: s.text, pending: s.completed === false, id: s.id }))
-    : recorded.map((l) => ({ t: l.t, speaker: l.speaker, text: l.text, pending: false, id: undefined as string | undefined }));
+    : (recorded.length > 0 ? recorded : m.transcript).map((l) => ({ t: l.t, speaker: l.speaker, text: l.text, pending: false, id: undefined as string | undefined }));
   const streaming = isLive && liveData.connected && !liveData.ended;
   const liveDot = isLive ? (liveData.connected && !liveData.ended) : m.status === "live";
   return (
-    <div ref={scrollRef} style={{ padding: "14px 16px", height: "100%", overflowY: "auto" }}>
+    <div style={{ borderTop: "1px solid var(--line)", marginTop: 22, paddingTop: 18 }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 10, display: "flex", alignItems: "center", gap: 7 }}>
         {liveDot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--live)" }} />}transcript
       </div>
-      {lines.map((l, i) => (
-        <div key={l.id ?? i} style={{ marginBottom: 11, opacity: l.pending ? 0.5 : 1, transition: "opacity .18s ease" }}>
-          <div style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--t3)", marginBottom: 2 }}><span style={{ fontFamily: "var(--mono)" }}>{l.t}</span><span style={{ color: "var(--t2)", fontWeight: 500 }}>{l.speaker}</span>{l.pending && <span style={{ color: "var(--live)", fontFamily: "var(--mono)", fontSize: 9.5, letterSpacing: ".04em" }}>● live</span>}</div>
-          <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5, fontStyle: l.pending ? "italic" : "normal" }}>{l.text}</div>
-        </div>
-      ))}
-      {isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Waiting for the transcript…</div>}
-      {!isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No transcript recorded for this meeting.</div>}
-      {streaming && <div style={{ fontSize: 12, color: "var(--t3)" }}>…</div>}
+      <div ref={scrollRef} style={{ maxHeight: 360, overflowY: "auto", paddingRight: 4 }}>
+        {lines.map((l, i) => (
+          <div key={l.id ?? i} style={{ marginBottom: 11, opacity: l.pending ? 0.5 : 1, transition: "opacity .18s ease" }}>
+            <div style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--t3)", marginBottom: 2 }}><span style={{ fontFamily: "var(--mono)" }}>{l.t}</span><span style={{ color: "var(--t2)", fontWeight: 500 }}>{l.speaker}</span>{l.pending && <span style={{ color: "var(--live)", fontFamily: "var(--mono)", fontSize: 9.5, letterSpacing: ".04em" }}>● live</span>}</div>
+            <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5, fontStyle: l.pending ? "italic" : "normal" }}>{l.text}</div>
+          </div>
+        ))}
+        {isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Waiting for the transcript…</div>}
+        {!isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No transcript recorded for this meeting.</div>}
+        {streaming && <div style={{ fontSize: 12, color: "var(--t3)" }}>…</div>}
+      </div>
     </div>
   );
 }
 
 registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList });
 registerTab("meeting", MeetingTab);
-registerContext("transcript", TranscriptContext);
 registerCommand({ id: "meeting.openLive", title: "Open live meeting", run: ({ container }) => { const m = liveMeetingsNow()[0] ?? liveMeeting(); if (m) container.get(LayoutServiceId).openTab(meetingTab(m)); } });

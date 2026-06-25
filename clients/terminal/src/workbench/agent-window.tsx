@@ -1,8 +1,8 @@
 "use client";
-/** agent-window — the shared center chat engine. One vertically-stacked window (NO horizontal split):
+/** agent-window — the shared agent chat engine. One vertically-stacked window (NO horizontal split):
  *  optional entity strip on top · the conversation (a turn timeline that makes the agent's operations
  *  visible — read/search/edit/git/web steps with live status, not just final text) · the composer ·
- *  proposed actions directly under the input. Both the `chat` tab and the `meeting` copilot render
+ *  proposed actions directly under the input. The right-rail chat and the `meeting` copilot render
  *  through this, so they look and behave like one product. */
 import { type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Icon } from "../ui-kit";

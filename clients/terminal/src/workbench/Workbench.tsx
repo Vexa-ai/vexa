@@ -2,7 +2,7 @@
 /** term-workbench (v2) — the structured 3-pane shell.
  *  LEFT (resizable/collapsible): segmented list switcher + the active list.
  *  CENTER: dockview TABS — a "tab" host resolves each panel by params.kind via the tab registry.
- *  RIGHT (resizable/collapsible): a single contextual panel driven by the active tab.
+ *  RIGHT (resizable/collapsible): the persistent workspace chat, grounded by the active center tab.
  *  Reuses the Phase-C ⌘K palette + keybindings; the kernel's services do the rest. */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Allotment } from "allotment";
@@ -10,22 +10,21 @@ import "allotment/dist/style.css";
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
 import "dockview/dist/styles/dockview.css";
 
-const PANES_KEY = "vexa.terminal.panes.v1";
+const PANES_KEY = "vexa.terminal.panes.v2";
 const savedSizes = (): number[] | undefined => { try { const s = localStorage.getItem(PANES_KEY); const a = s ? JSON.parse(s) : null; return Array.isArray(a) && a.length === 3 ? a : undefined; } catch { return undefined; } };
 const persistSizes = (s: number[]) => { try { localStorage.setItem(PANES_KEY, JSON.stringify(s)); } catch { /* noop */ } };
 import { useService, useStore, KeybindingServiceId, CommandServiceId } from "../platform";
-import { LayoutServiceId, type TabDescriptor, type RightContext } from "./layout";
+import { LayoutServiceId } from "./layout";
 import { CommandPalette } from "./CommandPalette";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
-
-const DEFAULT_TAB: TabDescriptor = { id: "chat:default", title: "Chat", kind: "chat", params: { subject: "u_live", session: null }, context: null };
+import { Chat } from "../surfaces/chat";
 
 // ── the dockview panel host: render a tab by its kind, tracking active state ─────
 function TabHost(props: IDockviewPanelProps) {
   const layout = useService(LayoutServiceId);
-  const params = props.params as { kind?: string; p?: Record<string, unknown>; ctx?: RightContext | null };
+  const params = props.params as { kind?: string; p?: Record<string, unknown> };
   const kind = params.kind ?? "";
   const Comp = registry.tabComponent(kind);
   const [active, setActive] = useState<boolean>(props.api.isActive);
@@ -33,7 +32,7 @@ function TabHost(props: IDockviewPanelProps) {
     const d = props.api.onDidActiveChange((e: { isActive: boolean }) => setActive(e.isActive));
     return () => d.dispose();
   }, [props.api]);
-  useEffect(() => { if (active) layout.setContext(params.ctx ?? null); }, [active, layout, params.ctx]);
+  useEffect(() => { if (active) layout.setActiveTab(kind ? { kind, params: params.p ?? {} } : null); }, [active, kind, layout, params.p]);
   if (!Comp) return <div style={{ padding: 24, color: "var(--t3)", fontSize: 13 }}>Unknown tab kind: {kind}</div>;
   return <Comp id={props.api.id} params={params.p ?? {}} active={active} />;
 }
@@ -127,20 +126,18 @@ function LeftPane() {
   );
 }
 
-// ── RIGHT pane: single contextual panel from the active tab ──────────────────────
+// ── RIGHT pane: persistent chat singleton ────────────────────────────────────────
 function RightPane() {
   const layout = useService(LayoutServiceId);
-  const { context } = useStore(layout.store);
-  const Comp = context ? registry.contextComponent(context.kind) : undefined;
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--rail)", borderLeft: "1px solid var(--line)", minHeight: 0 }}>
       <div style={{ height: 38, flex: "none", display: "flex", alignItems: "center", padding: "0 12px 0 16px", borderBottom: "1px solid var(--line)", fontSize: 12, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
-        context
+        chat
         <div style={{ flex: 1 }} />
-        <button aria-label="Close context" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="x" size={14} /></button>
+        <button aria-label="Close chat" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="x" size={14} /></button>
       </div>
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-        {Comp && context ? <Comp params={context.params ?? {}} /> : <div style={{ padding: "24px 18px", color: "var(--t3)", fontSize: 13 }}>No context yet — open a document or a chat.</div>}
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Chat />
       </div>
     </div>
   );
@@ -154,17 +151,6 @@ export function Workbench() {
   const commands = useService(CommandServiceId);
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
-  // right context pane is capped at ≤ 1/5 of the shell width (responsive)
-  const shellRef = useRef<HTMLDivElement>(null);
-  const [shellW, setShellW] = useState(0);
-  useEffect(() => {
-    const el = shellRef.current; if (!el) return;
-    const ro = new ResizeObserver(() => setShellW(el.clientWidth));
-    ro.observe(el); setShellW(el.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-  const rightFifth = shellW ? Math.max(220, Math.round(shellW / 5)) : 320;
-
   // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
   // service never operates on a disposed grid.
   const apiRef = useRef<DockviewApi | null>(null);
@@ -174,7 +160,6 @@ export function Workbench() {
     apiRef.current = e.api;
     layout.attach(e.api);
     if (e.api.panels.length === 0) {
-      layout.openTab(DEFAULT_TAB);
       void commands.execute("meeting.openLive"); // mock: the scheduled live meeting auto-opens as a tab
     }
   };
@@ -193,19 +178,19 @@ export function Workbench() {
         <button aria-label="Toggle right" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
       </div>
 
-      <div ref={shellRef} style={{ flex: 1, minHeight: 0 }}>
-        <Allotment proportionalLayout={false} onChange={persistSizes} defaultSizes={savedSizes()}>
-          <Allotment.Pane visible={!leftCollapsed} minSize={180} preferredSize={262}>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Allotment onChange={persistSizes} defaultSizes={savedSizes() ?? [15, 55, 30]}>
+          <Allotment.Pane visible={!leftCollapsed} minSize={180} preferredSize="15%">
             <LeftPane />
           </Allotment.Pane>
-          <Allotment.Pane minSize={360}>
+          <Allotment.Pane minSize={360} preferredSize="55%">
             <div style={{ height: "100%", position: "relative" }}>
               <div style={{ position: "absolute", inset: 0 }}>
                 <DockviewReact onReady={onReady} components={dvComponents} tabComponents={dvTabComponents} defaultTabComponent={TabHeader} theme={themeAbyss} />
               </div>
             </div>
           </Allotment.Pane>
-          <Allotment.Pane visible={!rightCollapsed} minSize={200} maxSize={rightFifth} preferredSize={rightFifth}>
+          <Allotment.Pane visible={!rightCollapsed} minSize={260} preferredSize="30%">
             <RightPane />
           </Allotment.Pane>
         </Allotment>

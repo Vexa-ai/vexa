@@ -1,5 +1,5 @@
 /** Engine commands + default keybindings — registered by the workbench at boot (not a surface).
- *  Everything the palette + keyboard drive (palette, list switch, new session, toggle/reset panes) is a
+ *  Everything the palette + keyboard drive (palette, list switch, chat focus, toggle/reset panes) is a
  *  command in the one registry; keybindings point at command ids. */
 import { CommandServiceId, KeybindingServiceId, type ServiceContainer } from "../platform";
 import { registry } from "../contributions";
@@ -8,12 +8,16 @@ import { PaletteServiceId } from "./palette";
 
 export function registerEngineCommands(container: ServiceContainer): void {
   const cmd = container.get(CommandServiceId);
+  const focusChat = (c: ServiceContainer) => {
+    c.get(LayoutServiceId).showRight();
+    window.setTimeout(() => window.dispatchEvent(new Event("vexa:terminal:focus-chat")), 0);
+  };
 
   cmd.register({ id: "palette.toggle", title: "Command Palette", run: ({ container: c }) => c.get(PaletteServiceId).toggle() });
   cmd.register({ id: "workbench.toggleLeft", title: "Toggle Left Sidebar", run: ({ container: c }) => c.get(LayoutServiceId).toggleLeft() });
   cmd.register({ id: "workbench.toggleRight", title: "Toggle Right Sidebar", run: ({ container: c }) => c.get(LayoutServiceId).toggleRight() });
   cmd.register({ id: "workbench.resetLayout", title: "Reset Layout", run: ({ container: c }) => c.get(LayoutServiceId).resetLayout() });
-  cmd.register({ id: "chat.new", title: "New Session", run: ({ container: c }) => c.get(LayoutServiceId).openTab({ id: `chat:${Date.now().toString(36)}`, title: "New chat", kind: "chat", params: { subject: "u_live", session: null }, context: null }) });
+  cmd.register({ id: "chat.focus", title: "Focus Chat", run: ({ container: c }) => focusChat(c) });
 
   // one "show list" command per registered left list (generated from the registry).
   for (const l of registry.lists()) {

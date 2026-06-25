@@ -1,13 +1,16 @@
 "use client";
-/** Chat — the center tab-kind "chat" (one session per tab), rendered through the shared agent-window so
- *  it's the same engine as the meeting copilot. Streams a real agent turn over /api/chat (SSE) into the
+/** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
- *  then the message + commit / rejection badge. Composer (with /-skill autocomplete) sits under it. */
+ *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { useService, CommandServiceId } from "../platform";
-import { registerTab, registerCommand, type TabProps } from "../contributions";
+import { useService, useStore, CommandServiceId } from "../platform";
+import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
+import { registerCommand, type TabProps } from "../contributions";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
+import { fetchTranscript, useLiveMeetings } from "./liveMeetings";
+import { useMeetingLive, type LiveSegment } from "./meetingLive";
+import { meetingById, type MeetingMock, type TranscriptLine } from "./mock";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string): Op {
@@ -30,6 +33,7 @@ function historyOp(op: { label: string }): Op {
 
 type ReferenceToken = { kind: "file" | "meeting"; value: string; raw: string };
 type ReferenceSegment = { kind: "text"; text: string } | { kind: "reference"; ref: ReferenceToken };
+type ActiveReference = ReferenceToken;
 const REFERENCE_RE = /@(file|meeting):([A-Za-z0-9._~%+@:/=-]+)/g;
 
 function tokenizeReferences(text: string): ReferenceSegment[] {
@@ -138,6 +142,57 @@ function promptWithReferences(prompt: string, userText: string): string {
   return context ? `${prompt.trim()}\n\n---\n${context}` : prompt.trim();
 }
 
+function activeReference(tab: ActiveTab | null): ActiveReference | null {
+  if (!tab) return null;
+  const path = typeof tab.params.path === "string" ? tab.params.path : null;
+  if ((tab.kind === "doc" || tab.kind === "file") && path) return { kind: "file", value: path, raw: `@file:${path}` };
+  const meetingId = typeof tab.params.meetingId === "string" ? tab.params.meetingId : null;
+  if (tab.kind === "meeting" && meetingId) return { kind: "meeting", value: meetingId, raw: `@meeting:${meetingId}` };
+  return null;
+}
+
+function transcriptText(lines: TranscriptLine[]): string {
+  return lines
+    .filter((s) => s.text.trim())
+    .slice(-40)
+    .map((s) => `${s.t ? `[${s.t}] ` : ""}[${s.speaker || "Speaker"}] ${s.text.trim()}`)
+    .join("\n");
+}
+
+function liveTranscriptText(lines: LiveSegment[]): string {
+  return lines
+    .filter((s) => s.text.trim())
+    .slice(-40)
+    .map((s) => {
+      const t = s.t ? `[${new Date(s.t * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}] ` : "";
+      return `${t}[${s.speaker || "Speaker"}] ${s.text.trim()}`;
+    })
+    .join("\n");
+}
+
+async function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined, liveTranscript: LiveSegment[]): Promise<string> {
+  if (!ref) return "";
+  if (ref.kind === "file") {
+    return `Active context: the user is viewing the workspace file ${ref.value}. Read it with your Read tool if relevant.`;
+  }
+
+  let recent = meeting?.session_uid ? liveTranscriptText(liveTranscript) : "";
+  if (!recent) {
+    const platform = meeting?.platform ?? "Google Meet";
+    const native = meeting?.native_id ?? meeting?.id ?? ref.value;
+    const recorded = await fetchTranscript(platform, native);
+    recent = transcriptText(recorded.length > 0 ? recorded : (meeting?.transcript ?? []));
+  }
+  return recent
+    ? `Active meeting ${ref.value}. Recent transcript follows so you have full meeting context:\n${recent}`
+    : `Active meeting ${ref.value}. No transcript segments are available yet.`;
+}
+
+async function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined, liveTranscript: LiveSegment[]): Promise<string> {
+  const context = await activeContextPrompt(ref, meeting, liveTranscript);
+  return context ? `${context}\n\n---\n${prompt.trim()}` : prompt.trim();
+}
+
 const ROUTINE_COMMAND = "/routine";
 const ROUTINE_NAME_STOP_WORDS = new Set([
   "a", "an", "and", "as", "at", "by", "create", "each", "every", "for", "from", "in", "into",
@@ -192,22 +247,38 @@ function routineCreationPrompt(commandText: string): string {
   ].join("\n");
 }
 
-function ChatTab({ params }: TabProps) {
-  const subject = (params.subject as string) ?? "u_live";  // one workspace shared with meeting research
-  const session = (params.session as string | null) ?? null;
+type ChatProps = Partial<TabProps>;
+
+export function Chat({ params = {} }: ChatProps) {
+  const subject = typeof params.subject === "string" ? params.subject : "u_live";  // one workspace shared with meeting research
+  const session = typeof params.session === "string" && params.session.trim() ? params.session : "main";
   const commands = useService(CommandServiceId);
+  const layout = useService(LayoutServiceId);
+  const { activeTab } = useStore(layout.store);
+  const activeRef = activeReference(activeTab);
+  const meetings = useLiveMeetings();
+  const activeMeeting = activeRef?.kind === "meeting"
+    ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value) ?? meetingById(activeRef.value)
+    : undefined;
+  const liveData = useMeetingLive(activeMeeting?.id ?? (activeRef?.kind === "meeting" ? activeRef.value : ""), activeMeeting?.session_uid ?? "");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [value, setValue] = useState("");
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const focus = () => inputRef.current?.focus();
+    window.addEventListener("vexa:terminal:focus-chat", focus);
+    return () => window.removeEventListener("vexa:terminal:focus-chat", focus);
+  }, []);
 
   // Load the session's prior conversation on mount AND whenever `session` changes — the layout may REUSE
   // one ChatTab instance and just swap the session param, so reset+reload is keyed on `session`. New sends
   // still append to the loaded turns; `idRef` is bumped past the loaded ids so live ids never collide.
   useEffect(() => {
-    if (session == null) { setTurns([]); return; }
     let cancelled = false;
     setLoading(true);
     setTurns([]);
@@ -236,13 +307,15 @@ function ChatTab({ params }: TabProps) {
 
   const send = async (text: string, prompt = text) => {
     const v = text.trim();
-    const p = promptWithReferences(prompt, v);
-    if (!v || !p || busy) return;
+    const basePrompt = promptWithReferences(prompt, v);
+    if (!v || !basePrompt || busy) return;
     const n = idRef.current++;
     setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: v }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
     setBusy(true);
     try {
-      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session }) });
+      const p = await promptWithActiveContext(basePrompt, activeRef, activeMeeting, liveData.transcript);
+      const active = activeRef ? { kind: activeRef.kind, ref: activeRef.raw } : undefined;
+      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session, active }) });
       const reader = r.body?.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -286,10 +359,16 @@ function ChatTab({ params }: TabProps) {
         </div>
       )}
       <div style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
+        {activeRef && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
+            <ReferenceChip refToken={activeRef} />
+          </div>
+        )}
         <ComposerReferences text={value} />
         <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
           <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13 }}>/</span>
-          <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); }} placeholder="Type / for skills, or ask the agent…" disabled={busy}
+          <input ref={inputRef} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); }} placeholder="Type / for skills, or ask the agent…" disabled={busy}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, minWidth: 0 }} />
           <button aria-label="Send" onClick={onSubmit} disabled={busy} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, flex: "none" }}><Icon name="send" size={16} /></button>
         </div>
@@ -304,7 +383,6 @@ function ChatTab({ params }: TabProps) {
   );
 }
 
-registerTab("chat", ChatTab);
 registerCommand({ id: "skill.research", title: "Research and file to the workspace", skill: "/research", run: () => {} });
 registerCommand({ id: "skill.draft", title: "Draft an email or doc", skill: "/draft", run: () => {} });
 registerCommand({ id: "skill.routine", title: "Create a scheduled routine", skill: ROUTINE_COMMAND, run: () => {} });

@@ -1,11 +1,11 @@
 "use client";
 /** Workspace — the git knowledge graph as: a "Files" LIST (left), a "doc" center TAB-kind (renders an
- *  entity: frontmatter + wikilinked body), and a "doc-context" RIGHT context (frontmatter + related
- *  [[links]]). Clicking a file opens a Doc tab that carries its own context. Reuses /api/workspace/*. */
+ *  entity: frontmatter + wikilinked body). Clicking a file opens a Doc tab; the chat rail references the
+ *  active file from the center tab. Reuses /api/workspace/*. */
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
-import { registerList, registerTab, registerContext, type TabProps, type ContextProps } from "../contributions";
+import { registerList, registerTab, type TabProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Markdown } from "../ui-kit/Markdown";
@@ -14,7 +14,7 @@ const SUBJECT = "u_live";  // the one workspace all the user's agents (chat + me
 
 interface GitState { branch: string; changes: { path: string; kind: string }[]; commits: { sha: string; msg: string; when: string }[] }
 const base = (p: string) => p.split("/").pop() ?? p;
-const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path }, context: { kind: "doc-context", params: { path } } });
+const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path } });
 
 function parseEntity(text: string): { fm: [string, string][]; body: string } {
   const m = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
@@ -208,25 +208,5 @@ function DocTab({ params }: TabProps) {
   );
 }
 
-// ── Doc CONTEXT (right, kind "doc-context") ──────────────────────────────────────
-function DocContext({ params }: ContextProps) {
-  const path = params.path as string;
-  const [content, setContent] = useState<string | null>(null);
-  useEffect(() => { void readFile(path).then(setContent); }, [path]);
-  const { fm, body } = parseEntity(content ?? "");
-  const links = [...(body.matchAll(/\[\[([^\]]+)\]\]/g))].map((m) => m[1]);
-  return (
-    <div style={{ padding: "14px 16px" }}>
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>{base(path)}</div>
-      {fm.map(([k, v]) => <div key={k} style={{ display: "flex", gap: 8, fontSize: 12.5, marginBottom: 4 }}><span style={{ color: "var(--t3)", width: 70 }}>{k}</span><span style={{ color: "var(--t1)" }}>{v}</span></div>)}
-      {links.length > 0 && <>
-        <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", margin: "14px 0 6px" }}>related</div>
-        {links.map((l, i) => <div key={i} style={{ fontSize: 12.5, color: "var(--blue)", marginBottom: 3 }}>[[{l}]]</div>)}
-      </>}
-    </div>
-  );
-}
-
 registerList({ id: "files", label: "Files", icon: "panel", order: 30, component: FilesList });
 registerTab("doc", DocTab);
-registerContext("doc-context", DocContext);
