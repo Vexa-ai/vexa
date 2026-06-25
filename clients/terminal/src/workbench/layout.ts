@@ -28,6 +28,7 @@ export interface LayoutState {
 export interface LayoutService {
   store: ObservableStore<LayoutState>;
   attach(api: DockviewApi): void;
+  detach(api: DockviewApi): void;
   openTab(d: TabDescriptor): void;
   /** open the tab in the single shared PREVIEW slot (reused on the next single-click) */
   openPreview(d: TabDescriptor): void;
@@ -73,8 +74,10 @@ export function createLayoutService(defaultList: string): LayoutService {
    *  click/navigation always opens its tab instead of crashing the surface. */
   const addPanelSafe = (opts: Parameters<DockviewApi["addPanel"]>[0]) => {
     if (!api) return;
-    try { api.addPanel(opts); }
-    catch { api.clear(); forgetPreview(); api.addPanel(opts); }
+    try { api.addPanel(opts); return; }
+    catch { /* grid in a bad state — try resetting it below */ }
+    try { api.clear(); forgetPreview(); api.addPanel(opts); }
+    catch { api = null; }  // api is disposed (unmount/HMR) — drop the dead ref; the next onReady re-attaches.
   };
 
   return {
@@ -88,6 +91,11 @@ export function createLayoutService(defaultList: string): LayoutService {
       api.onDidRemovePanel((p) => { if (p.id === PREVIEW_PANEL) forgetPreview(); });
       api.onDidLayoutChange(persist);
     },
+    // DockviewReact disposes its api on unmount (navigation/HMR). Drop our cached
+    // ref so openTab/openPreview don't operate on a disposed grid; the remount's
+    // onReady re-attaches a fresh one. Guard the identity in case a new api
+    // already attached before the old one's cleanup runs.
+    detach(dvApi) { if (api === dvApi) { api = null; forgetPreview(); } },
     setContext(ctx) { store.set((st) => ({ ...st, context: ctx })); },
     openTab(d) {
       if (!api) return;

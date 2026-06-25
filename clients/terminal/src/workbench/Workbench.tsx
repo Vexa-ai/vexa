@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { DockviewReact, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
+import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
 import "dockview/dist/styles/dockview.css";
 
 const PANES_KEY = "vexa.terminal.panes.v1";
@@ -128,7 +128,13 @@ export function Workbench() {
   }, []);
   const rightFifth = shellW ? Math.max(220, Math.round(shellW / 5)) : 320;
 
+  // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
+  // service never operates on a disposed grid.
+  const apiRef = useRef<DockviewApi | null>(null);
+  useEffect(() => () => { if (apiRef.current) layout.detach(apiRef.current); }, [layout]);
+
   const onReady = (e: DockviewReadyEvent) => {
+    apiRef.current = e.api;
     layout.attach(e.api);
     if (e.api.panels.length === 0) {
       layout.openTab(DEFAULT_TAB);
