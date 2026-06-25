@@ -20,7 +20,7 @@ import {
   type MockScenarioId,
   type MockSourceState,
 } from "./mockSource";
-import type { CanvasEntity, EntityKind, MeetingState, SpeakerSummary, TranscriptSegment } from "./types";
+import type { EntityItem, EntityKind, MeetingDocLink, MeetingState, SpeakerSummary, TranscriptSegment } from "./types";
 
 export type { MeetingSourceMode, MockInjectKind, MockScenarioId } from "./mockSource";
 
@@ -111,6 +111,15 @@ function extractNumbers(texts: string[]): { text: string; value?: number }[] {
   return out.slice(-24);
 }
 
+function cardKindFromText(text: string, fallback = "insight"): string {
+  const lower = text.toLowerCase();
+  if (lower.includes("objection") || lower.includes("concern") || lower.includes("risk")) return "objection";
+  if (lower.includes("commitment") || lower.includes("committed") || lower.includes("will ")) return "commitment";
+  if (lower.includes("next step") || lower.includes("follow-up") || lower.includes("follow up")) return "next-step";
+  if (lower.includes("action") || lower.includes("task")) return "action";
+  return fallback;
+}
+
 function lineTs(line: TranscriptLine): string | undefined {
   return line.t || undefined;
 }
@@ -132,6 +141,10 @@ function numberOf(value: unknown): number | undefined {
 
 function field(source: unknown, key: string): unknown {
   return source && typeof source === "object" ? (source as Record<string, unknown>)[key] : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseTimestampMs(value: number | string | undefined): number | undefined {
@@ -167,13 +180,126 @@ function entityTitle(item: unknown, fallback: string): string {
   return textOf(field(item, "title") ?? field(item, "name") ?? field(item, "text") ?? field(item, "value"), fallback);
 }
 
-function normalizeEntity(kind: EntityKind, item: unknown, index: number): CanvasEntity {
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unknown";
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9$€£%]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function oneWord(value: unknown, fallback: string): string {
+  const raw = textOf(value).replace(/[\[\](){}]/g, " ").split(/[·:|,\s/]+/).filter(Boolean)[0];
+  return raw || fallback;
+}
+
+function numberContext(name: string): string {
+  const lower = name.toLowerCase();
+  if (/[$€£]/.test(name) || /\bk\b/.test(lower)) return "Budget";
+  if (/\bq[1-4]\b|quarter|timeline|july|august|september|october|november|december/.test(lower)) return "Timeline";
+  if (/seat|user|license/.test(lower)) return "Seats";
+  if (/%/.test(name)) return "Rate";
+  return "Number";
+}
+
+function entityName(kind: EntityKind, item: unknown, index: number): string {
+  if (kind === "number" && isRecord(item)) return textOf(field(item, "text") ?? field(item, "name") ?? field(item, "title") ?? field(item, "value"), `number ${index + 1}`);
+  return entityTitle(item, `${kind} ${index + 1}`);
+}
+
+function entitySummary(item: unknown): string {
+  return textOf(field(item, "summary") ?? field(item, "body") ?? field(item, "detail"));
+}
+
+function directDocPath(item: unknown): string {
+  return textOf(field(item, "docPath") ?? field(item, "path"));
+}
+
+function firstQuoteFor(name: string, segments: TranscriptSegment[]): string | undefined {
+  const needle = normalizeSearchText(name);
+  if (!needle) return undefined;
+  const compactNeedle = needle.replace(/\s+/g, "");
+  for (const segment of segments) {
+    const text = textOf(segment.text);
+    const speaker = textOf(segment.speaker);
+    const haystack = normalizeSearchText(`${speaker} ${text}`);
+    if (haystack.includes(needle) || haystack.replace(/\s+/g, "").includes(compactNeedle)) return text;
+  }
+  return undefined;
+}
+
+function contextForEntity(kind: EntityKind, item: unknown, name: string): string {
+  if (kind === "number") return oneWord(field(item, "context"), numberContext(name));
+  if (kind === "signal") return oneWord(field(item, "context") ?? field(item, "kind"), "Signal");
+  return oneWord(field(item, "context") ?? field(item, "subtitle") ?? field(item, "role") ?? field(item, "type"), kind[0].toUpperCase() + kind.slice(1));
+}
+
+function enrichEntity(kind: EntityKind, item: unknown, index: number, segments: TranscriptSegment[]): EntityItem {
+  const name = entityName(kind, item, index);
+  const summary = entitySummary(item);
+  const directPath = directDocPath(item);
+  const docPath = directPath || `kg/entities/${kind}/${slug(name)}.md`;
+  const exists = field(item, "exists");
+  const researched = typeof exists === "boolean" ? exists : Boolean(directPath || summary);
+  const quote = textOf(field(item, "quote")) || firstQuoteFor(name, segments);
   return {
+    id: `${kind}:${slug(name)}:${index}`,
     kind,
-    title: entityTitle(item, `${kind} ${index + 1}`),
+    name,
+    context: contextForEntity(kind, item, name),
+    summary: summary || textOf(field(item, "subtitle") ?? field(item, "role")),
+    quote,
+    docPath,
+    researched,
+    title: name,
     subtitle: textOf(field(item, "subtitle") ?? field(item, "role"), undefined),
-    body: textOf(field(item, "summary") ?? field(item, "body"), undefined),
+    body: summary,
     value: numberOf(field(item, "value")) ?? textOf(field(item, "value"), undefined),
+  };
+}
+
+function mergeEntityItems(items: EntityItem[]): EntityItem[] {
+  const merged = new Map<string, EntityItem>();
+  for (const item of items) {
+    const key = `${item.kind}:${slug(item.name)}`;
+    const prev = merged.get(key);
+    if (!prev) {
+      merged.set(key, item);
+      continue;
+    }
+    merged.set(key, {
+      ...prev,
+      ...item,
+      context: item.context || prev.context,
+      summary: item.summary && item.summary.length > (prev.summary?.length ?? 0) ? item.summary : prev.summary || item.summary,
+      quote: item.quote && item.quote.length > (prev.quote?.length ?? 0) ? item.quote : prev.quote || item.quote,
+      docPath: item.docPath || prev.docPath,
+      researched: Boolean(prev.researched || item.researched),
+      title: item.title || prev.title,
+      subtitle: item.subtitle || prev.subtitle,
+      body: item.body || prev.body,
+      value: item.value ?? prev.value,
+    });
+  }
+  return [...merged.values()];
+}
+
+function docsFromSections(value: unknown): { path?: string; title?: string; kind?: string; present?: boolean }[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((item) => ({
+    path: textOf(item.path),
+    title: textOf(item.title, undefined),
+    kind: textOf(item.kind, undefined),
+    present: typeof item.present === "boolean" ? item.present : undefined,
+  })).filter((item) => item.path || item.kind);
+}
+
+function knownDoc(docs: { path?: string; title?: string; kind?: string; present?: boolean }[], path: string, kinds: string[]): MeetingDocLink {
+  const match = docs.find((doc) => doc.path === path || (doc.kind ? kinds.includes(doc.kind.toLowerCase()) : false));
+  return {
+    path: match?.path || path,
+    title: match?.title,
+    present: Boolean(match && match.present !== false),
   };
 }
 
@@ -210,6 +336,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       actions: safeArray(selected.actions),
       transcript: safeArray(selected.transcript),
       insights: safeArray(selected.insights),
+      docs: safeArray(selected.docs),
     };
     const liveSegments = safeArray(live.transcript).map((s) => ({ speaker: s.speaker, text: s.text, ts: s.t }));
     const recordedSegments = safeArray(recorded).map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
@@ -217,7 +344,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const cards: MeetingState["cards"] = [
       ...safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: c.title, body: c.body })),
-      ...normalizedSelected.insights.map((c, i) => ({ id: `insight-${i}`, kind: "insight", title: c.text, ts: c.t })),
+      ...normalizedSelected.insights.map((c, i) => ({ id: `insight-${i}`, kind: cardKindFromText(c.text), title: c.text, ts: c.t })),
       ...normalizedSelected.actions.map((a) => ({ id: a.id, kind: "action", title: a.label, body: a.detail })),
     ];
     const { present, detected } = meetingEntities(normalizedSelected);
@@ -232,9 +359,17 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     return {
       meeting: {
         id: selected.id,
+        nativeId: selected.native_id,
         title: selected.title,
+        status: selected.live_status ?? selected.status,
         startedAt: selected.scheduled_at,
         participants: participants.map((p) => p.name),
+        docs: normalizedSelected.docs.map((doc) => ({
+          path: doc.path,
+          title: doc.title,
+          kind: doc.kind,
+          present: true,
+        })),
       },
       transcript: {
         segments,
@@ -356,15 +491,52 @@ export function useSpeakers(): SpeakerSummary[] {
   }, [segments]);
 }
 
-export function useEntities(opts?: { kind?: EntityKind }): CanvasEntity[] {
+export function useEntities(opts?: { kind?: EntityKind }): EntityItem[] {
+  const meeting = useMeeting();
+  const { segments } = useTranscript({ by: "time" });
+  return useMemo(() => {
+    const all = mergeEntityItems([
+      ...safeArray(meeting.entities.people).map((item, index) => enrichEntity("person", item, index, segments)),
+      ...safeArray(meeting.entities.companies).map((item, index) => enrichEntity("company", item, index, segments)),
+      ...safeArray(meeting.entities.products).map((item, index) => enrichEntity("product", item, index, segments)),
+      ...safeArray(meeting.entities.numbers).map((item, index) => enrichEntity("number", item, index, segments)),
+    ]);
+    return opts?.kind ? all.filter((entity) => entity.kind === opts.kind) : all;
+  }, [meeting.entities.companies, meeting.entities.numbers, meeting.entities.people, meeting.entities.products, opts?.kind, segments]);
+}
+
+export function useSignals(): EntityItem[] {
+  const meeting = useMeeting();
+  return useMemo(() => safeArray(meeting.cards).map((card, index) => {
+    const title = textOf(card.title, `Signal ${index + 1}`);
+    const body = textOf(card.body);
+    return {
+      id: card.id || `signal:${index}`,
+      kind: "signal" as const,
+      name: title,
+      context: oneWord(card.kind, "Signal"),
+      summary: body || title,
+      quote: body || undefined,
+      researched: false,
+      title,
+      body,
+    };
+  }), [meeting.cards]);
+}
+
+export function useMeetingDocs(): { brief: MeetingDocLink; report: MeetingDocLink } {
   const meeting = useMeeting();
   return useMemo(() => {
-    const all: CanvasEntity[] = [
-      ...safeArray(meeting.entities.people).map((item, index) => normalizeEntity("person", item, index)),
-      ...safeArray(meeting.entities.companies).map((item, index) => normalizeEntity("company", item, index)),
-      ...safeArray(meeting.entities.products).map((item, index) => normalizeEntity("product", item, index)),
-      ...safeArray(meeting.entities.numbers).map((item, index) => normalizeEntity("number", item, index)),
+    const key = slug(meeting.meeting.nativeId || meeting.meeting.id || meeting.meeting.title || "meeting");
+    const briefPath = `kg/entities/meeting/${key}.md`;
+    const reportPath = `kg/entities/meeting/${key}-report.md`;
+    const docs = [
+      ...safeArray(meeting.meeting.docs),
+      ...docsFromSections(meeting.sections.docs),
     ];
-    return opts?.kind ? all.filter((entity) => entity.kind === opts.kind) : all;
-  }, [meeting.entities.companies, meeting.entities.numbers, meeting.entities.people, meeting.entities.products, opts?.kind]);
+    return {
+      brief: knownDoc(docs, briefPath, ["brief", "prep", "meeting"]),
+      report: knownDoc(docs, reportPath, ["report", "post-meeting-report"]),
+    };
+  }, [meeting.meeting.docs, meeting.meeting.id, meeting.meeting.nativeId, meeting.meeting.title, meeting.sections.docs]);
 }

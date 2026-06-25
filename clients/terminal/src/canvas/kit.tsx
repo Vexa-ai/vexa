@@ -1,7 +1,8 @@
 "use client";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { Markdown as MarkdownView } from "../ui-kit/Markdown";
-import type { TranscriptSegment } from "./types";
+import { useActions } from "./actions";
+import type { EntityItem, TranscriptSegment } from "./types";
 
 type Tone = "default" | "accent" | "green" | "warn";
 type Size = "sm" | "md" | "lg";
@@ -281,6 +282,118 @@ function List({ items, empty = "No items", loading = false }: { items?: ListItem
   );
 }
 
+const entityDotColor: Record<EntityItem["kind"], string> = {
+  person: "var(--blue)",
+  company: "var(--coral, var(--accent))",
+  product: "var(--purple, #a78bfa)",
+  number: "var(--amber, #f6c453)",
+  signal: "var(--live)",
+};
+
+function entityRef(item: EntityItem): string {
+  return `[[${toText(item.name, item.title ?? "Entity")}]]`;
+}
+
+function entityKey(item: EntityItem, index: number): string {
+  return toText(item.id, `${item.kind}:${item.name}:${index}`);
+}
+
+function EntityActionButton({ children, onClick }: { children?: ReactNode; onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{ border: "1px solid var(--line2)", borderRadius: 6, background: "var(--panel2)", color: "var(--t2)", padding: "3px 7px", fontSize: 11.5, fontWeight: 650, cursor: "pointer", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function EntityList({ items, empty = "No entities", loading = false }: { items?: EntityItem[]; empty?: string } & Loadable) {
+  const actions = useActions();
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const safeItems = safeArray(items);
+  if (loading) return <Panel><Skeleton lines={5} compact /></Panel>;
+  if (!safeItems.length) return <Empty title={empty} body="Surfaced entities will appear as the meeting unfolds." />;
+
+  return (
+    <div style={{ ...frameStyle, display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 7, width: "100%", overflow: "visible" }}>
+      {safeItems.map((rawItem, index) => {
+        const key = entityKey(rawItem, index);
+        const name = toText(rawItem.name, rawItem.title ?? `Entity ${index + 1}`);
+        const context = toText(rawItem.context);
+        const summary = toText(rawItem.summary ?? rawItem.body);
+        const quote = toText(rawItem.quote);
+        const docPath = toText(rawItem.docPath);
+        const isMenuOpen = menuOpen === key;
+        const isHovered = hovered === key;
+        const canOpen = Boolean(docPath);
+        const research = () => actions.research({ name, kind: rawItem.kind });
+        const openDoc = () => { if (docPath) actions.openDoc(docPath); };
+        const copyRef = () => actions.copyRef(entityRef({ ...rawItem, name }));
+        return (
+          <div
+            key={key}
+            onMouseEnter={() => setHovered(key)}
+            onMouseLeave={() => { setHovered((current) => current === key ? null : current); setMenuOpen((current) => current === key ? null : current); }}
+            style={{ ...frameStyle, position: "relative", display: "inline-flex", flexDirection: "column", alignItems: "flex-start", maxWidth: "100%", overflow: "visible" }}
+          >
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: "100%", minHeight: 28, border: "1px solid var(--line2)", borderRadius: 7, background: "var(--panel)", padding: "3px 5px 3px 7px", boxShadow: isHovered ? "0 0 0 1px var(--line2)" : "none" }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: entityDotColor[rawItem.kind] ?? "var(--t3)", flex: "none" }} />
+              <button
+                type="button"
+                title={canOpen ? docPath : name}
+                onClick={canOpen ? openDoc : undefined}
+                style={{ minWidth: 0, maxWidth: 168, border: "none", background: "transparent", color: canOpen ? "var(--t1)" : "var(--t2)", padding: 0, fontSize: 12.5, fontWeight: 700, cursor: canOpen ? "pointer" : "default", textAlign: "left", ...ellipsisLine() }}
+              >
+                {name}
+              </button>
+              {context && <span title={context} style={{ color: "var(--t3)", fontSize: 11, maxWidth: 74, ...ellipsisLine() }}>{context}</span>}
+              {rawItem.researched === false ? (
+                <button type="button" onClick={research} style={{ border: "none", background: "transparent", color: "var(--accent)", padding: "0 1px", fontSize: 11.5, fontWeight: 750, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  + research
+                </button>
+              ) : docPath ? (
+                <button type="button" onClick={openDoc} style={{ border: "none", background: "transparent", color: "var(--blue)", padding: "0 1px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  doc
+                </button>
+              ) : null}
+              <button
+                type="button"
+                aria-label={`Options for ${name}`}
+                onClick={() => setMenuOpen((current) => current === key ? null : key)}
+                style={{ border: "none", background: "transparent", color: "var(--t3)", padding: "0 2px", fontSize: 13, lineHeight: 1, cursor: "pointer", flex: "none" }}
+              >
+                ▾
+              </button>
+            </div>
+            {isMenuOpen && (
+              <div style={{ position: "absolute", top: 31, right: 0, zIndex: 5, minWidth: 130, border: "1px solid var(--line)", borderRadius: 7, background: "var(--panel)", boxShadow: "0 12px 32px rgba(0,0,0,.28)", padding: 4 }}>
+                {docPath && <button type="button" onClick={openDoc} style={{ width: "100%", border: "none", borderRadius: 5, background: "transparent", color: "var(--t2)", textAlign: "left", padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Open doc</button>}
+                <button type="button" onClick={research} style={{ width: "100%", border: "none", borderRadius: 5, background: "transparent", color: "var(--t2)", textAlign: "left", padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Research</button>
+                <button type="button" onClick={copyRef} style={{ width: "100%", border: "none", borderRadius: 5, background: "transparent", color: "var(--t2)", textAlign: "left", padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Copy ref</button>
+              </div>
+            )}
+            {isHovered && (summary || quote) && (
+              <div style={{ ...frameStyle, width: "min(280px, calc(100vw - 48px))", marginTop: 6, border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", boxShadow: "0 12px 32px rgba(0,0,0,.24)", padding: 9, zIndex: 4 }}>
+                {summary && <div title={summary} style={{ color: "var(--t2)", fontSize: 12, lineHeight: 1.4, ...lineClamp(3) }}>{summary}</div>}
+                {quote && <div title={quote} style={{ color: "var(--t3)", fontSize: 11.5, fontStyle: "italic", lineHeight: 1.4, marginTop: summary ? 6 : 0, ...lineClamp(3) }}>{quote}</div>}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                  {docPath && <EntityActionButton onClick={openDoc}>Open doc</EntityActionButton>}
+                  <EntityActionButton onClick={research}>Research</EntityActionButton>
+                  <EntityActionButton onClick={copyRef}>Copy ref</EntityActionButton>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Timeline({ items, empty = "No events", loading = false }: { items?: { id?: string; title?: string; body?: string; ts?: string | number; kind?: string }[]; empty?: string } & Loadable) {
   const safeItems = safeArray(items);
   if (loading) return <Panel><Skeleton lines={5} /></Panel>;
@@ -456,6 +569,7 @@ export const ui = {
   Stat,
   Table,
   List,
+  EntityList,
   Timeline,
   Transcript,
   Chart,

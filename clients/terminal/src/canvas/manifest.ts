@@ -10,20 +10,35 @@ Use these declarative hooks only. They are scoped to the current meeting automat
 const { segments, liveCaption } = useTranscript({ by?: "time" | "speaker", window?: number })
 // segments: { speaker?: string; text: string; ts?: number | string }[]
 
+const meeting = useMeeting()
+// { meeting: { id, nativeId?, title, status?, startedAt?, participants?, docs? }, transcript, entities, cards, metrics, sections }
+
 const speakers = useSpeakers()
 // { name: string; segments: number; talkMs: number; talkPct: number }[]
 
 const entities = useEntities({ kind?: "person" | "company" | "product" | "number" })
-// { kind, title, subtitle?, body?, value? }[]
+// EntityItem[]: { id, kind, name, context?, summary?, quote?, docPath?, researched? }
+
+const signals = useSignals()
+// EntityItem[] with kind: "signal", derived from meeting cards and action items.
+
+const docs = useMeetingDocs()
+// { brief: { path, present, title? }, report: { path, present, title? } }
 \`\`\`
 
-Do not call \`useMeeting\` from generated views. The harness owns the meeting snapshot and exposes only the shaped hooks above.
+\`useMeetingDocs()\` uses deterministic workspace paths for the active meeting: brief
+\`kg/entities/meeting/<meeting-native-or-id>.md\`; report
+\`kg/entities/meeting/<meeting-native-or-id>-report.md\`. \`present\` is best-effort and false unless
+the meeting snapshot or local canvas state already knows the document exists.
 
 ## Actions
 
 \`\`\`ts
 const actions = useActions()
 actions.ask(prompt: string): void
+actions.research(entity: { name: string; kind: string }): void
+actions.openDoc(path: string): void
+actions.copyRef(token: string): void
 actions.note(text: string): void
 actions.pin(id: string): void
 actions.dismiss(id: string): void
@@ -32,7 +47,7 @@ actions.tag(speaker: string, label: string): void
 actions.export(): void
 \`\`\`
 
-\`ask\` posts to the meeting chat session. The rest are sanctioned harness effects and update the local canvas state safely.
+\`ask\` posts to the meeting chat session. \`research\` posts a fire-and-forget meeting/research turn that asks the agent to research the entity with web + workspace KG, update the entity doc, and commit. \`openDoc\` opens a workspace doc tab. \`copyRef\` writes to the clipboard. The rest are sanctioned harness effects and update the local canvas state safely.
 
 ## UI Kit
 
@@ -57,6 +72,7 @@ The kit is hardened for non-technical authors:
 - \`ui.Stat({ label?, value?, delta?, tone?, size?, loading? })\`
 - \`ui.Table({ columns?, rows?, empty?, loading? })\`
 - \`ui.List({ items?, empty?, loading? })\`
+- \`ui.EntityList({ items?: EntityItem[], empty?, loading? })\`
 - \`ui.Timeline({ items?, empty?, loading? })\`
 - \`ui.Transcript({ segments?, liveCaption?, empty?, loading? })\`
 - \`ui.Chart({ kind?: "bar"|"line", data?, tone?, loading? })\`
@@ -77,9 +93,9 @@ Hot reload never swaps blindly. New \`views/meeting.tsx\` source must pass valid
 ## Rules
 
 - Default-export one React component. It receives no props.
-- You may use \`React\`, \`ui\`, \`useTranscript\`, \`useSpeakers\`, \`useEntities\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
+- You may use \`React\`, \`ui\`, \`useMeeting\`, \`useTranscript\`, \`useSpeakers\`, \`useEntities\`, \`useSignals\`, \`useMeetingDocs\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
 - Imports are unnecessary. If present, imports may only reference React or the harness modules.
-- No \`useMeeting\`, \`fetch\`, \`XMLHttpRequest\`, \`WebSocket\`, \`eval\`, \`Function\`, dynamic \`import()\`, \`document\`, \`window\`, \`globalThis\`, \`localStorage\`, or \`dangerouslySetInnerHTML\`.
+- No \`fetch\`, \`XMLHttpRequest\`, \`WebSocket\`, \`eval\`, \`Function\`, dynamic \`import()\`, \`document\`, \`window\`, \`globalThis\`, \`localStorage\`, or \`dangerouslySetInnerHTML\`.
 - No arbitrary DOM styling. The kit is theme-locked to terminal CSS variables.
 - All side effects go through \`useActions()\`.
 `;

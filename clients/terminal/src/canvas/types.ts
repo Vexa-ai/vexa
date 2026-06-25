@@ -6,11 +6,26 @@ export interface TranscriptSegment {
   ts?: number | string;
 }
 
-export type EntityKind = "person" | "company" | "product" | "number";
+export type EntityKind = "person" | "company" | "product" | "number" | "signal";
 
 export interface CanvasEntity {
   kind: EntityKind;
   title: string;
+  subtitle?: string;
+  body?: string;
+  value?: number | string;
+}
+
+export interface EntityItem {
+  id: string;
+  kind: EntityKind;
+  name: string;
+  context?: string;
+  summary?: string;
+  quote?: string;
+  docPath?: string;
+  researched?: boolean;
+  title?: string;
   subtitle?: string;
   body?: string;
   value?: number | string;
@@ -23,12 +38,21 @@ export interface SpeakerSummary {
   talkPct: number;
 }
 
+export interface MeetingDocLink {
+  path: string;
+  present: boolean;
+  title?: string;
+}
+
 export interface MeetingState {
   meeting: {
     id: string;
+    nativeId?: string;
     title: string;
+    status?: string;
     startedAt?: string;
     participants?: string[];
+    docs?: { path: string; title?: string; kind?: string; present?: boolean }[];
   };
   transcript: {
     segments: TranscriptSegment[];
@@ -47,6 +71,9 @@ export interface MeetingState {
 
 export interface HarnessActions {
   ask(prompt: string): void;
+  research(entity: { name: string; kind: string }): void;
+  openDoc(path: string): void;
+  copyRef(token: string): void;
   note(text: string): void;
   pin(id: string): void;
   dismiss(id: string): void;

@@ -31,6 +31,69 @@ export interface MockSourceState {
 const salesFixture = MEETINGS.find((meeting) => meeting.id === "mtg-acme-renewal") ?? MEETINGS[0];
 const standupFixture = MEETINGS.find((meeting) => meeting.id === "mtg-standup") ?? MEETINGS[0];
 
+const salesMeeting: MeetingMock = {
+  ...salesFixture,
+  id: "mock-sales",
+  native_id: "acme-discovery-call",
+  title: "Acme · discovery call",
+  when: "Now · synthetic",
+  status: "live",
+  live_status: "active",
+  scheduled_at: "2026-06-25T13:05:00Z",
+  platform: "Google Meet",
+  participants: [
+    { name: "Jane Liu", role: "CRO · Acme", initials: "JL" },
+    { name: "Raj Patel", role: "CTO · Acme", initials: "RP" },
+    { name: "Mara Gomez", role: "RevOps · Acme", initials: "MG" },
+    { name: "You", role: "Account lead", initials: "Y" },
+  ],
+  mentioned: ["Acme Corp", "Snowflake", "Vexa", "Q3 rollout", "$50k pilot", "200 seats"],
+  actions: [
+    { id: "sales-a1", label: "Send mutual action plan", detail: "next step · due Friday" },
+    { id: "sales-a2", label: "Research Snowflake comparison", detail: "workspace KG + web" },
+    { id: "sales-a3", label: "Draft Q3 pilot proposal", detail: "$50k · 200 seats" },
+  ],
+  transcript: [
+    { t: "00:03", speaker: "You", text: "Thanks for joining. I saw Acme is standardizing revenue workflows ahead of the Q3 rollout." },
+    { t: "00:18", speaker: "Jane Liu", text: "Exactly. If this helps reps prepare faster, we can start with a $50k pilot and expand after Q3." },
+    { t: "00:34", speaker: "Raj Patel", text: "The blocker is security. Snowflake already has our warehouse data, so we need a clear answer on what Vexa stores." },
+    { t: "00:52", speaker: "Mara Gomez", text: "For the pilot, assume 200 seats across enterprise sales and customer success." },
+    { t: "01:07", speaker: "You", text: "I will send a mutual action plan with security notes, the Snowflake comparison, and a 200-seat rollout model." },
+    { t: "01:24", speaker: "Jane Liu", text: "Good. If Raj is comfortable by next Friday, I can sponsor the Q3 pilot in our operating review." },
+    { t: "01:42", speaker: "Raj Patel", text: "Add data retention and SSO to that plan. If those are clean, I will unblock procurement." },
+    { t: "01:58", speaker: "Mara Gomez", text: "And please include rep onboarding. The team needs this live before the July pipeline review." },
+  ],
+  insights: [
+    { t: "00:35", text: "Objection — Raj compared Vexa to Snowflake and needs a data-storage answer before procurement." },
+    { t: "01:08", text: "Commitment — send the mutual action plan with security notes, Snowflake comparison, and rollout model." },
+    { t: "01:25", text: "Next step — Jane will sponsor the Q3 pilot if Raj is comfortable by next Friday." },
+  ],
+  docs: [
+    { workspace: "u_live", path: "kg/entities/meeting/acme-discovery-call.md", title: "Acme discovery brief", kind: "brief" },
+  ],
+};
+
+const salesPeople = [
+  { kind: "person", title: "Jane Liu", name: "Jane Liu", context: "Buyer", subtitle: "CRO · Acme", body: "Economic buyer for the Q3 pilot; can sponsor the operating-review ask.", quote: "I can sponsor the Q3 pilot in our operating review." },
+  { kind: "person", title: "Raj Patel", name: "Raj Patel", context: "Security", subtitle: "CTO · Acme", body: "Technical approver; focused on storage, retention, SSO, and procurement unblock.", quote: "If those are clean, I will unblock procurement." },
+  { kind: "person", title: "Mara Gomez", name: "Mara Gomez", context: "Ops", subtitle: "RevOps · Acme", body: "Owns rollout logistics and seat planning for the pilot group.", quote: "Assume 200 seats across enterprise sales and customer success." },
+];
+
+const salesCompanies = [
+  { kind: "company", title: "Acme Corp", name: "Acme Corp", context: "Buyer", path: "kg/entities/company/acme-corp.md", exists: true, summary: "Enterprise account evaluating Vexa for a Q3 revenue-workflow pilot.", quote: "Acme is standardizing revenue workflows ahead of the Q3 rollout." },
+  { kind: "company", title: "Snowflake", name: "Snowflake", context: "Competitor", path: "kg/entities/company/snowflake.md", exists: true, summary: "Existing warehouse vendor and comparison anchor for Acme's security review.", quote: "Snowflake already has our warehouse data, so we need a clear answer on what Vexa stores." },
+];
+
+const salesProducts = [
+  { kind: "product", title: "Vexa", name: "Vexa", context: "Platform", summary: "Meeting intelligence and workspace KG surface under evaluation for the Q3 pilot.", quote: "We need a clear answer on what Vexa stores." },
+];
+
+const salesNumbers = [
+  { kind: "number", title: "$50k", text: "$50k", name: "$50k", context: "Budget", quote: "We can start with a $50k pilot and expand after Q3." },
+  { kind: "number", title: "Q3", text: "Q3", name: "Q3", context: "Timeline", quote: "I can sponsor the Q3 pilot in our operating review." },
+  { kind: "number", title: "200 seats", text: "200 seats", name: "200 seats", context: "Seats", quote: "Assume 200 seats across enterprise sales and customer success." },
+];
+
 const standupMeeting: MeetingMock = {
   ...standupFixture,
   id: "mock-standup",
@@ -99,7 +162,7 @@ const interviewMeeting: MeetingMock = {
 };
 
 export const MOCK_SCENARIOS: MockScenario[] = [
-  { id: "sales", label: "Sales call", meeting: { ...salesFixture, id: "mock-sales", when: "Now · synthetic", status: "live" } },
+  { id: "sales", label: "Acme discovery", meeting: salesMeeting },
   { id: "standup", label: "Standup", meeting: standupMeeting },
   { id: "interview", label: "Interview", meeting: interviewMeeting },
 ];
@@ -162,6 +225,15 @@ function extractNumbers(texts: string[]): { text: string; value?: number }[] {
     }
   }
   return out.slice(-16);
+}
+
+function cardKindFromText(text: string, fallback = "insight"): string {
+  const lower = text.toLowerCase();
+  if (lower.includes("objection") || lower.includes("concern") || lower.includes("risk")) return "objection";
+  if (lower.includes("commitment") || lower.includes("committed") || lower.includes("will ")) return "commitment";
+  if (lower.includes("next step") || lower.includes("follow-up") || lower.includes("follow up")) return "next-step";
+  if (lower.includes("action") || lower.includes("task")) return "action";
+  return fallback;
 }
 
 function splitInjectedEntities(items: CanvasEntity[]): Pick<MeetingState["entities"], "people" | "companies" | "products"> {
@@ -257,38 +329,52 @@ export function buildMockMeetingState(state: MockSourceState): MeetingState {
   const segments = [...transcriptSegments, ...state.injected.segments];
   const revealedCards = Math.max(1, Math.floor((state.cursor + 1) / 2));
   const cards: MeetingState["cards"] = [
-    ...meeting.insights.slice(0, revealedCards).map((card, index) => ({ id: `mock-insight-${index}`, kind: "insight", title: card.text, ts: card.t })),
+    ...meeting.insights.slice(0, revealedCards).map((card, index) => ({ id: `mock-insight-${index}`, kind: cardKindFromText(card.text), title: card.text, ts: card.t })),
     ...meeting.actions.slice(0, Math.max(0, state.cursor - 2)).map((action) => ({ id: action.id, kind: "action", title: action.label, body: action.detail })),
     ...state.injected.cards,
   ];
   const { present, detected } = meetingEntities({ ...meeting, participants: [...meeting.participants, ...state.injected.speakers] });
-  const revealedEntities = Math.max(1, Math.ceil(state.cursor / 2));
+  const revealedEntities = state.scenarioId === "sales" ? 99 : Math.max(1, Math.ceil(state.cursor / 2));
   const injected = splitInjectedEntities(state.injected.entities);
+  const seededPeople = state.scenarioId === "sales" ? salesPeople : [];
+  const seededCompanies = state.scenarioId === "sales" ? salesCompanies : [];
+  const seededProducts = state.scenarioId === "sales" ? salesProducts : [];
+  const seededNumbers = state.scenarioId === "sales" ? salesNumbers : [];
   const companies = [
+    ...seededCompanies,
     ...detected.filter((entity) => entity.type === "company").slice(0, revealedEntities),
     ...injected.companies,
   ];
   const products = [
+    ...seededProducts,
     ...detected.filter((entity) => entity.type === "topic" || entity.type === "task").slice(0, revealedEntities + 1),
     ...injected.products,
   ];
   const textCorpus = [...segments.map((segment) => segment.text), ...cards.flatMap((card) => [card.title, card.body ?? ""])];
-  const numbers = [...extractNumbers(textCorpus), ...state.injected.numbers];
+  const numbers = [...seededNumbers, ...extractNumbers(textCorpus), ...state.injected.numbers];
   const lastSegment = segments[segments.length - 1];
 
   return {
     meeting: {
       id: meeting.id,
+      nativeId: meeting.native_id,
       title: meeting.title,
+      status: meeting.live_status ?? meeting.status,
       startedAt: meeting.scheduled_at,
       participants: [...meeting.participants, ...state.injected.speakers].map((participant) => participant.name),
+      docs: (meeting.docs ?? []).map((doc) => ({
+        path: doc.path,
+        title: doc.title,
+        kind: doc.kind,
+        present: true,
+      })),
     },
     transcript: {
       segments,
       liveCaption: state.playing ? lastSegment?.text : undefined,
     },
     entities: {
-      people: [...present, ...injected.people],
+      people: [...present, ...seededPeople, ...injected.people],
       companies,
       products,
       numbers,

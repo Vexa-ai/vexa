@@ -1,3 +1,3 @@
-export { useEntities, useSpeakers, useTranscript } from "./useMeeting";
+export { useEntities, useMeeting, useMeetingDocs, useSignals, useSpeakers, useTranscript } from "./useMeeting";
 export { useActions } from "./actions";
-export type { CanvasEntity, EntityKind, MeetingState, SpeakerSummary, TranscriptSegment } from "./types";
+export type { CanvasEntity, EntityItem, EntityKind, MeetingDocLink, MeetingState, SpeakerSummary, TranscriptSegment } from "./types";

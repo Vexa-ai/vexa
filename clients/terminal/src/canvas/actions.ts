@@ -1,5 +1,7 @@
 "use client";
 import { createContext, createElement, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { useService } from "../platform";
+import { LayoutServiceId, type LayoutService } from "../workbench/layout";
 import type { HarnessActions } from "./types";
 
 interface CanvasActionState {
@@ -31,13 +33,57 @@ function updateSections(patch: Record<string, unknown>): void {
   emit({ ...state, sections: { ...state.sections, ...patch } });
 }
 
-function makeActions(): HarnessActions {
+function baseName(path: string): string {
+  return path.split("/").filter(Boolean).pop() || path || "Document";
+}
+
+function researchPrompt(entity: { name: string; kind: string }): string {
+  const name = String(entity?.name ?? "").trim() || "this surfaced entity";
+  const kind = String(entity?.kind ?? "").trim() || "entity";
+  return [
+    `Meeting Canvas research request: ${kind} "${name}".`,
+    "Research it using the web and the workspace knowledge graph.",
+    "Write or append the canonical entity doc under kg/entities/<kind>/<slug>.md with a concise summary, source notes, and meeting relevance.",
+    "Commit the workspace update when finished.",
+  ].join("\n");
+}
+
+function postMeetingTurn(prompt: string, session: string): void {
+  const body = JSON.stringify({ prompt, subject: "u_live", session });
+  void fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch((err) => {
+    console.warn("meeting canvas chat turn failed", err);
+  });
+}
+
+function makeActions(layout?: LayoutService): HarnessActions {
   return {
     ask(prompt) {
-      const body = JSON.stringify({ prompt, subject: "u_live", session: "meeting-canvas" });
-      void fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch((err) => {
-        console.warn("meeting canvas ask failed", err);
+      postMeetingTurn(prompt, "meeting-canvas");
+    },
+    research(entity) {
+      postMeetingTurn(researchPrompt(entity), "meeting/research");
+    },
+    openDoc(path) {
+      const safePath = String(path ?? "").trim();
+      if (!safePath) return;
+      layout?.openTab({
+        id: `doc:${safePath}`,
+        title: baseName(safePath),
+        kind: "doc",
+        params: { path: safePath },
+        context: null,
       });
+    },
+    copyRef(token) {
+      const text = String(token ?? "").trim();
+      if (!text) return;
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(text).catch((err) => {
+          console.warn("meeting canvas copy failed", err);
+        });
+        return;
+      }
+      console.info("meeting canvas copy ref", text);
     },
     note(text) {
       const notes = readSection<{ text: string; ts: string }[]>("notes", []);
@@ -69,7 +115,8 @@ function makeActions(): HarnessActions {
 const ActionsContext = createContext<HarnessActions | null>(null);
 
 export function CanvasActionsProvider({ children }: { children: ReactNode }) {
-  const actions = useMemo(() => makeActions(), []);
+  const layout = useService(LayoutServiceId);
+  const actions = useMemo(() => makeActions(layout), [layout]);
   return createElement(ActionsContext.Provider, { value: actions }, children);
 }
 

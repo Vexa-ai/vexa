@@ -79,7 +79,7 @@ export function validateViewSource(source: string): ValidationResult {
   walk.ancestor(ast as never, {
     ImportDeclaration(node: AnyNode) {
       const src = typeof node.source?.value === "string" ? node.source.value : "";
-      if (!ALLOWED_IMPORTS.has(src)) add(errors, node, `Import from "${src}" is not allowed. Use only the harness globals: React, ui, useTranscript, useSpeakers, useEntities, useActions, actions, useState, useMemo, useEffect.`);
+      if (!ALLOWED_IMPORTS.has(src)) add(errors, node, `Import from "${src}" is not allowed. Use only the harness globals: React, ui, useMeeting, useTranscript, useSpeakers, useEntities, useSignals, useMeetingDocs, useActions, actions, useState, useMemo, useEffect.`);
     },
     ExportNamedDeclaration(node: AnyNode) {
       add(errors, node, "Named exports are not allowed. Export one default React component.");
@@ -118,10 +118,6 @@ export function validateViewSource(source: string): ValidationResult {
       const parent = ancestors[ancestors.length - 2];
       if (node.name === "dangerouslySetInnerHTML") {
         add(errors, node, "dangerouslySetInnerHTML is not allowed.");
-        return;
-      }
-      if (node.name === "useMeeting" && !isNonComputedPropertyKey(node, parent)) {
-        add(errors, node, "useMeeting is not available in Meeting Canvas views. Use useTranscript, useSpeakers, and useEntities for data.");
         return;
       }
       if (isNonComputedPropertyKey(node, parent)) return;
