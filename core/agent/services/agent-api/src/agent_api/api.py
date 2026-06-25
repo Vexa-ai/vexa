@@ -474,8 +474,8 @@ def create_app(
         return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
     @app.get("/api/workspace/tree")
-    def ws_tree(subject: str):
-        return {"files": wsr.tree(subject)}
+    def ws_tree(subject: str, hidden: bool = False):
+        return {"files": wsr.tree(subject, hidden=hidden)}
 
     @app.get("/api/workspace/file")
     def ws_file(subject: str, path: str):

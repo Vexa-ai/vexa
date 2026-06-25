@@ -8,7 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-_HIDDEN = {".git", ".claude"}
+# `.git` is pure plumbing — huge/noisy, never useful in the Files tree — so it's hidden
+# unconditionally. Everything else dot-prefixed (`.claude` + any dotfile/dotdir) is hidden by
+# default but surfaced when the caller opts in via ``hidden=True``.
+_ALWAYS_HIDDEN = {".git"}
 
 
 class WorkspaceReader:
@@ -22,14 +25,22 @@ class WorkspaceReader:
             raise ValueError("invalid subject")
         return ws
 
-    def tree(self, subject: str) -> list[str]:
-        """Sorted relative paths of the subject's files (excluding .git/.claude internals)."""
+    def tree(self, subject: str, hidden: bool = False) -> list[str]:
+        """Sorted relative paths of the subject's files.
+
+        Always excludes ``.git`` internals. By default also excludes ``.claude`` and any other
+        dotfile/dotdir; pass ``hidden=True`` to include those (e.g. so the Files panel can show
+        ``.claude/`` sessions + config). ``.git`` stays hidden either way.
+        """
         ws = self._ws(subject)
         if not ws.exists():
             return []
         out: list[str] = []
         for p in sorted(ws.rglob("*")):
-            if any(part in _HIDDEN for part in p.relative_to(ws).parts):
+            parts = p.relative_to(ws).parts
+            if any(part in _ALWAYS_HIDDEN for part in parts):
+                continue
+            if not hidden and any(part.startswith(".") for part in parts):
                 continue
             if p.is_file():
                 out.append(str(p.relative_to(ws)))

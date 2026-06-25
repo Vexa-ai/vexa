@@ -26,6 +26,9 @@ const PATHS: Record<string, string> = {
   openIn: "M7 17 17 7M9 7h8v8",
   link: "M9 12a3 3 0 0 1 3-3h4a3 3 0 1 1 0 6h-2M15 12a3 3 0 0 1-3 3H8a3 3 0 1 1 0-6h2",
   arrowR: "M5 12h14M13 6l6 6-6 6",
+  folder: "M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6",
+  eyeOff: "M2 12s3.5-7 10-7a11 11 0 0 1 4 .7M22 12s-3.5 7-10 7a11 11 0 0 1-4-.7M3 3l18 18",
 };
 
 export function Icon({ name, size = 18, style }: { name: string; size?: number; style?: CSSProperties }) {

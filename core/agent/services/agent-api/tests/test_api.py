@@ -127,3 +127,40 @@ def test_workspace_read_and_traversal_guard(tmp_path):
     assert got.status_code == 200 and "title: Jane" in got.json()["content"]
     assert c.get("/api/workspace/file", params={"subject": "u_jane", "path": "../../etc/passwd"}).status_code == 400
     assert c.get("/api/workspace/file", params={"subject": "u_jane", "path": "nope.md"}).status_code == 404
+
+
+def test_workspace_tree_hidden_mode(tmp_path):
+    from agent_api.workspace_reader import WorkspaceReader
+    ws = tmp_path / "u_jane"
+    (ws / "kg").mkdir(parents=True)
+    (ws / "kg" / "note.md").write_text("body\n")
+    (ws / ".claude" / "sessions").mkdir(parents=True)
+    (ws / ".claude" / "sessions" / "main.session").write_text("sess\n")
+    (ws / ".git").mkdir()
+    (ws / ".git" / "HEAD").write_text("ref\n")
+    (ws / ".env").write_text("SECRET=1\n")
+
+    reader = WorkspaceReader(str(tmp_path))
+
+    # default: no dotfiles/dotdirs at all
+    default = reader.tree("u_jane")
+    assert default == ["kg/note.md"]
+
+    # hidden=True: surfaces .claude + other dotfiles, but never .git internals
+    shown = reader.tree("u_jane", hidden=True)
+    assert ".claude/sessions/main.session" in shown
+    assert ".env" in shown
+    assert "kg/note.md" in shown
+    assert not any(f.startswith(".git/") or f == ".git" for f in shown)
+
+    # read() can open a hidden file (traversal-guard still applies)
+    assert reader.read("u_jane", ".claude/sessions/main.session") == "sess\n"
+
+    # endpoint passes the param through
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), reader=reader,
+    ))
+    plain = c.get("/api/workspace/tree", params={"subject": "u_jane"}).json()["files"]
+    assert plain == ["kg/note.md"]
+    with_hidden = c.get("/api/workspace/tree", params={"subject": "u_jane", "hidden": 1}).json()["files"]
+    assert ".claude/sessions/main.session" in with_hidden
