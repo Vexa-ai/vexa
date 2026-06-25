@@ -8,7 +8,7 @@ import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
 
-const SUBJECT = "u_jane";
+const SUBJECT = "u_live";
 interface Routine { id: string; name: string; cron: string; plan_summary?: string; enabled?: boolean }
 const BOARD = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
 
