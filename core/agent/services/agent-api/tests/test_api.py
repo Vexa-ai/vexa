@@ -78,7 +78,39 @@ def test_chat_streams_sse_and_records_session():
     body = r.text
     assert "data: " in body and '"message-delta"' in body and '"commit"' in body
     sessions = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
-    assert "s1" in sessions
+    assert any(s["session"] == "s1" for s in sessions)
+    assert r.headers["X-Unit-Id"] == "agent-u_jane-chat-s1"  # the per-thread warm unit id
+
+
+def test_chat_reset_drops_session_and_continuity_file(tmp_path):
+    from agent_api.workspace_reader import WorkspaceReader
+
+    # plant a thread's continuity file in the subject's workspace
+    sess_dir = tmp_path / "u_jane" / ".claude" / "sessions"
+    sess_dir.mkdir(parents=True)
+    (sess_dir / "s1.session").write_text("SID")
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        stream_reader=_FakeReader(), reader=WorkspaceReader(str(tmp_path)),
+    ))
+    c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert any(s["session"] == "s1" for s in c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"])
+
+    r = c.post("/api/chat/reset", json={"prompt": "", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    assert not (sess_dir / "s1.session").exists()  # continuity file deleted
+    assert not any(s["session"] == "s1" for s in c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"])
+
+
+def test_chat_defaults_session_to_main(tmp_path):
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), stream_reader=_FakeReader(),
+    ))
+    r = c.post("/api/chat", json={"prompt": "no session given", "subject": "u_jane"})
+    assert r.headers["X-Chat-Session"] == "main"
+    assert r.headers["X-Unit-Id"] == "agent-u_jane-chat-main"
+    rows = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
+    assert rows[0]["session"] == "main" and rows[0]["title"] == "no session given"
 
 
 def test_workspace_read_and_traversal_guard(tmp_path):

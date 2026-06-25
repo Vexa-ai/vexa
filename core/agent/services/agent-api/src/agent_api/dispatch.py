@@ -17,7 +17,7 @@ import logging
 from . import contracts
 from .config import Settings
 from .ports import IdentityPort, RuntimePort
-from .units import dispatch_id, input_topic, output_topic
+from .units import chat_session, dispatch_id, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
 
@@ -47,6 +47,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }
+    # The chat conversation thread (default "main") — the worker namespaces its continuity session file
+    # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
+    if invocation["trigger"] == "message":
+        env["VEXA_CHAT_SESSION"] = chat_session(invocation)
     # A live meeting dispatch consumes the meeting's transcript.v1 Stream (the meetings⊥agent seam).
     ctx = invocation.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
@@ -61,6 +65,17 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     return env
 
 
+def _without_chat_session(invocation: dict) -> dict:
+    """A shallow copy with ``context.session`` removed — for the unit.v1 contract check (the published
+    Context has no ``session`` field; the thread id is an internal routing hint, see ``dispatch``)."""
+    ctx = invocation.get("context")
+    if not isinstance(ctx, dict) or "session" not in ctx:
+        return invocation
+    clean = dict(invocation)
+    clean["context"] = {k: v for k, v in ctx.items() if k != "session"}
+    return clean
+
+
 class Dispatcher:
     """Turns a ``unit.v1`` dispatch into a runtime.v1 agent workload — the one path every trigger funnels
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
@@ -72,8 +87,12 @@ class Dispatcher:
         self.dispatched: list[dict] = []  # observability — the dispatches that fired
 
     def dispatch(self, invocation: dict) -> str:
-        """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18)."""
-        contracts.validate_unit_invocation(invocation)  # fail loud at the seam
+        """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
+
+        ``context.session`` (the chat conversation thread) is an agent-api routing hint, not part of the
+        published unit.v1 wire contract — it is stripped before the schema check so the envelope stays
+        conformant, while ``dispatch_id`` / ``build_unit_env`` still read it off the in-memory dispatch."""
+        contracts.validate_unit_invocation(_without_chat_session(invocation))  # fail loud at the seam
         self.dispatched.append(invocation)
         identity = invocation["identity"]
         uid = dispatch_id(invocation)

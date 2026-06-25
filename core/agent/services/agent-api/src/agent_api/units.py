@@ -79,17 +79,30 @@ def make_dispatch(
     return inv
 
 
+DEFAULT_CHAT_SESSION = "main"
+
+
+def chat_session(inv: dict) -> str:
+    """The chat conversation thread this dispatch belongs to. Threads are multiple conversations within
+    the ONE user workspace (continuity = a per-session file, not a per-session workspace). Carried on the
+    dispatch ``context.session``; defaults to ``"main"`` (back-compat — the original single thread)."""
+    ctx = inv.get("context") or {}
+    return ctx.get("session") or DEFAULT_CHAT_SESSION
+
+
 def dispatch_id(inv: dict) -> str:
     """A stable workload id for the dispatch. A live meeting keys on its ``session_uid`` (one dispatch
-    per meeting); chat on (subject) so every turn touches the one warm chat unit; others on a digest of
-    (subject, trigger, start)."""
+    per meeting); chat on (subject, session) so every turn of a conversation thread touches its own warm
+    unit while distinct threads stay isolated; others on a digest of (subject, trigger, start)."""
     ctx = inv.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
     if meeting and meeting.get("session_uid"):
         return f"agent-meet-{meeting['session_uid']}"
     subject = inv["identity"]["subject"]
     if inv["trigger"] == "message":
-        return f"agent-{subject}-chat"  # one warm chat unit per person (TTL-reaped); continuity = session file
+        # One warm chat unit per (person, conversation thread), TTL-reaped; continuity = the per-session
+        # file. ``session`` defaults to ``"main"`` so a dispatch with no session keeps the legacy id.
+        return f"agent-{subject}-chat-{chat_session(inv)}"
     digest = hashlib.sha1(
         f"{subject}|{inv['trigger']}|{json.dumps(inv['start'], sort_keys=True)}".encode()
     ).hexdigest()[:10]

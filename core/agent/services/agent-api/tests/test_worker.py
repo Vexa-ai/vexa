@@ -155,6 +155,24 @@ def test_session_end_runs_write_turn_with_deduped_cards():
     assert any(e.get("turn_id") == "meeting-doc" and e.get("type") == "done" for e in s.events())
 
 
+def test_run_turn_persists_namespaced_session_file(tmp_path):
+    """A chat turn on thread `work` captures the claude session id into its OWN namespaced continuity
+    file (`.claude/sessions/work.session`) — distinct threads don't collide on `.claude/.session`."""
+    import unittest.mock as mock
+
+    from agent_api import worker
+
+    def fake_exec(argv, cwd):
+        yield json.dumps({"type": "result", "subtype": "success", "result": "ok", "session_id": "WORK_SID"})
+
+    with mock.patch.object(worker, "_exec_claude", fake_exec):
+        list(worker.run_turn_over_workspace(tmp_path, "hello", session="work"))
+
+    f = tmp_path / ".claude" / "sessions" / "work.session"
+    assert f.read_text() == "WORK_SID"
+    assert not (tmp_path / ".claude" / ".session").exists()  # never touched the legacy single-thread file
+
+
 def test_meeting_doc_turn_authors_entity_with_frontmatter_and_links(tmp_path):
     """The real post-meeting WRITE turn: a fake `claude` writes the entity; assert run_unit_turn drove a
     write to kg/entities/meeting/<native>.md with the meeting frontmatter + grouped wikilinks, and the
@@ -223,3 +241,74 @@ def test_parse_cards_tolerant():
     assert parse_cards("nothing salient") == []
     assert parse_cards("[]") == []
     assert parse_cards(None) == []
+
+
+# ── workspace-driven config knobs wired through serve_meeting / the prompt ─────────────────────────
+
+from agent_api.worker import build_card_prompt  # noqa: E402
+
+
+def test_parse_cards_filters_to_allowed_kinds():
+    reply = '[{"kind":"person","title":"P","body":""},{"kind":"topic","title":"T","body":""}]'
+    out = parse_cards(reply, card_kinds=["person"])
+    assert [c["title"] for c in out] == ["P"]  # topic filtered out
+
+
+def test_build_card_prompt_includes_steering_only_when_present():
+    base = build_card_prompt("[Jane] hi", ["person", "action"], steering="")
+    assert "Standing instructions from this workspace" not in base
+    assert "person, action" in base  # wanted kinds named in the prompt
+    steered = build_card_prompt("[Jane] hi", ["person"], steering="Ignore small talk.")
+    assert "## Standing instructions from this workspace" in steered
+    assert "Ignore small talk." in steered
+
+
+def test_serve_meeting_cadence_segments_gates_beats():
+    """With cadence_segments=2, two completed segments from the SAME speaker trigger a beat (no
+    new-speaker gate)."""
+    beats = []
+
+    def card_turn(segs):
+        beats.append(len(segs))
+        return iter(())
+
+    s = MeetingStream(inbox=[_transcript("1-0", _seg("Jane", "a"), _seg("Jane", "b"))])
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=card_turn,
+                  idle_ms=10, beat_segments=2)
+    assert beats == [2]  # the 2-segment buffer fired exactly one beat
+
+
+def test_serve_meeting_disabled_runs_no_beats_but_still_writes_doc():
+    """enabled=false skips all live card beats, but write_meeting_doc (doc_turn) is still honored on
+    session_end — the two are independent gates."""
+    beats = []
+    doc_ran = []
+
+    def card_turn(segs):
+        beats.append(segs)
+        return iter(())
+
+    def doc_turn(cards):
+        doc_ran.append(cards)
+        yield {"type": "done", "ok": True}
+
+    s = MeetingStream(inbox=[
+        _transcript("1-0", _seg("Jane", "a"), _seg("Raj", "b")),  # would gate on new speaker
+        ("2-0", {"payload": json.dumps({"type": "session_end"})}),
+    ])
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=card_turn,
+                  idle_ms=10, doc_turn=doc_turn, enabled=False)
+    assert beats == []          # no live beats ran
+    assert doc_ran == [[]]      # doc turn still ran (with no accumulated cards)
+
+
+def test_serve_meeting_doc_gating_off_skips_doc_turn():
+    """When write_meeting_doc=false, main passes doc_turn=None — session_end reaps with no write."""
+    s = MeetingStream(inbox=[
+        _transcript("1-0", _seg("Jane", "a"), _seg("Raj", "b")),
+        ("2-0", {"payload": json.dumps({"type": "session_end"})}),
+    ])
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn,
+                  idle_ms=10, doc_turn=None)
+    # cards still emitted live, but no meeting-doc turn events
+    assert not any(e.get("turn_id") == "meeting-doc" for e in s.events())

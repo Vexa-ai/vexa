@@ -55,7 +55,19 @@ uv run pytest -q        # uv manages this package's own venv/deps
 - ✅ delivered — `transcription_watcher`: fan `transcription_segments` → `tc:meeting:{uid}` + spawn copilot
 - ✅ delivered — `/api/workspace/{tree,file,git}` reads
 - ✅ delivered — in-container worker (`serve` / `serve_meeting`)
-- 🟡 partial — in-memory session + live-meeting registries (redis-backed adapter pending)
+- ✅ delivered — multi-session chat: real conversation threads keyed `agent-{subject}-chat-{session}`
+  (default `main`, back-compat), per-thread continuity file (`.claude/sessions/{session}.session`,
+  `main` migrates from the legacy `.claude/.session`), and a durable redis-backed session index
+  (`/api/sessions` newest-first, `/api/chat` upserts, `/api/chat/reset` drops thread + continuity).
+  All threads live in the ONE user workspace (conceptually `type: user`).
+- ✅ delivered — workspace-driven meeting-copilot config: `agents/meeting.md` (the per-agent config
+  home — a VISIBLE, git-governed file, seeded from the workspace template) steers the live copilot —
+  `enabled`, `model` (allowlisted), `cadence_segments`, `card_kinds`, `write_meeting_doc`, plus a
+  natural-language steering body merged into the prompt. Parsed by `agent_config.load_meeting_config`
+  with per-key fallback to code defaults (absent file ⇒ all defaults). `agents/` is extensible to
+  chat/routines configs ⬜ planned.
+- ⬜ planned — multi-workspace (company/service tiers — a FUTURE axis beyond the single user workspace)
+- 🟡 partial — in-memory live-meeting registry (redis-backed adapter pending)
 - ⬜ planned — GET /api/meetings (proxy meeting-api + merge live registry)
 - ⬜ planned — a session_end doc-binding write turn
 - ⬜ planned — WS publishers (u:{user_id}:meetings on registry add/stop/drop, u:{user_id}:workspace on commit)

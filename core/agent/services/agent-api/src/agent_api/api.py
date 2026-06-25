@@ -36,20 +36,89 @@ from .workspace_reader import WorkspaceReader
 logger = logging.getLogger("agent_api.api")
 
 
+def _truncate_title(text: str, *, limit: int = 60) -> str:
+    """A session's default title — the first prompt, single-lined + truncated."""
+    title = " ".join((text or "").split())
+    return title[: limit - 1] + "…" if len(title) > limit else title
+
+
 class _Sessions:
-    """In-memory session index (the foundation; a redis-backed adapter lands with persistence)."""
+    """Durable, per-subject chat-session index. Each session carries a created + last-active stamp and an
+    optional title (default the first prompt, truncated). ``list`` returns them most-recent first.
 
-    def __init__(self) -> None:
-        self._by_subject: dict[str, set[str]] = {}
+    Backed by redis when a client is wired (one hash per session under ``agent:sessions:<subject>`` +
+    the per-subject id set), with an in-memory fallback so the unit tests need no redis. Multiple
+    conversation threads live in the ONE user workspace — this indexes the threads, not workspaces."""
 
-    def list(self, subject: str) -> list[str]:
-        return sorted(self._by_subject.get(subject, set()))
+    def __init__(self, redis_client=None) -> None:
+        self._redis = redis_client
+        self._mem: dict[str, dict[str, dict]] = {}  # subject → {session → {created,last_active,title}}
 
-    def add(self, subject: str, session: str) -> None:
-        self._by_subject.setdefault(subject, set()).add(session)
+    # ── redis key helpers ──
+    @staticmethod
+    def _ids_key(subject: str) -> str:
+        return f"agent:sessions:{subject}"
+
+    @staticmethod
+    def _meta_key(subject: str, session: str) -> str:
+        return f"agent:session:{subject}:{session}"
+
+    def _now(self) -> float:
+        import time
+
+        return time.time()
+
+    def upsert(self, subject: str, session: str, *, title: str | None = None) -> None:
+        """Record the session on use: create it (stamping ``created`` + a default ``title``) or touch its
+        ``last_active``. An explicit ``title`` overrides; otherwise the first prompt seeds it once."""
+        now = self._now()
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            existing = self._redis.hgetall(mkey) or {}
+            fields = {"last_active": str(now)}
+            if not existing:
+                fields["created"] = str(now)
+                fields["title"] = title or session
+            elif title is not None:
+                fields["title"] = title
+            self._redis.hset(mkey, mapping=fields)
+            self._redis.sadd(self._ids_key(subject), session)
+            return
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is None:
+            self._mem[subject][session] = {"created": now, "last_active": now, "title": title or session}
+        else:
+            rec["last_active"] = now
+            if title is not None:
+                rec["title"] = title
+
+    def list(self, subject: str) -> list[dict]:
+        """The subject's sessions, most-recently-active first."""
+        rows: list[dict] = []
+        if self._redis is not None:
+            for session in self._redis.smembers(self._ids_key(subject)) or set():
+                meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+                rows.append({
+                    "session": session,
+                    "title": meta.get("title") or session,
+                    "created": float(meta.get("created", 0) or 0),
+                    "last_active": float(meta.get("last_active", 0) or 0),
+                })
+        else:
+            for session, meta in self._mem.get(subject, {}).items():
+                rows.append({
+                    "session": session, "title": meta.get("title") or session,
+                    "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
+                })
+        rows.sort(key=lambda r: r["last_active"], reverse=True)
+        return rows
 
     def drop(self, subject: str, session: str) -> None:
-        self._by_subject.get(subject, set()).discard(session)
+        if self._redis is not None:
+            self._redis.srem(self._ids_key(subject), session)
+            self._redis.delete(self._meta_key(subject, session))
+            return
+        self._mem.get(subject, {}).pop(session, None)
 
 
 class _LiveMeetings:
@@ -145,7 +214,14 @@ def create_app(
     invocations_url: Optional[str] = None,
     redis_url: Optional[str] = None,
 ) -> FastAPI:
-    sess = sessions or _Sessions()
+    if sessions is not None:
+        sess = sessions
+    elif redis_url:
+        import redis as _redis
+
+        sess = _Sessions(_redis.from_url(redis_url, decode_responses=True))
+    else:
+        sess = _Sessions()
     live = _LiveMeetings()
     wsr = reader or WorkspaceReader("/workspaces")
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
@@ -307,23 +383,34 @@ def create_app(
         """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE."""
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
-        if body.session:
-            sess.add(body.subject, body.session)
+        session = body.session or units.DEFAULT_CHAT_SESSION
+        # Upsert the durable index on use: a new thread is titled by its first prompt; an existing one
+        # just bumps last_active (title preserved).
+        is_new = not any(r["session"] == session for r in sess.list(body.subject))
+        sess.upsert(body.subject, session,
+                    title=_truncate_title(body.prompt) if is_new else None)
         inv = units.make_dispatch(
             subject=body.subject, trigger="message",
-            start=units.entrypoint(inline=body.prompt), context={"kind": "none"},
+            start=units.entrypoint(inline=body.prompt), context={"kind": "none", "session": session},
         )
-        unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the warm chat unit
+        unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
         return StreamingResponse(
             _sse(stream_reader.read(unit_id)),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                     "X-Unit-Id": unit_id, "X-Chat-Session": session},
         )
 
     @app.post("/api/chat/reset")
     def chat_reset(body: ChatBody):
-        if body.session:
-            sess.drop(body.subject, body.session)
+        """Drop a conversation thread: remove it from the index AND delete its continuity file so a
+        future turn on the same name starts a fresh conversation (not a resume of the old one)."""
+        session = body.session or units.DEFAULT_CHAT_SESSION
+        sess.drop(body.subject, session)
+        try:
+            wsr.drop_session(body.subject, session)
+        except Exception:  # noqa: BLE001 — index drop is the contract; the file delete is best-effort
+            logger.exception("dropping continuity file failed subject=%s session=%s", body.subject, session)
         return {"ok": True}
 
     @app.get("/api/sessions")

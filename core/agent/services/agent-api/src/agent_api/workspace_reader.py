@@ -43,6 +43,24 @@ class WorkspaceReader:
             raise ValueError("invalid path")
         return f.read_text() if f.exists() and f.is_file() else None
 
+    def drop_session(self, subject: str, session: str) -> bool:
+        """Delete a chat thread's continuity file (``.claude/sessions/<session>.session``) so a future
+        turn on the same name starts a fresh conversation. The ``"main"`` thread also clears the legacy
+        single-thread file (``.claude/.session``). Returns whether anything was removed. Traversal-safe:
+        ``session`` is a bare name (no path separators)."""
+        if "/" in session or "\\" in session or session in ("", ".", ".."):
+            raise ValueError("invalid session")
+        ws = self._ws(subject)
+        removed = False
+        targets = [ws / ".claude" / "sessions" / f"{session}.session"]
+        if session == "main":
+            targets.append(ws / ".claude" / ".session")
+        for f in targets:
+            if f.exists() and f.is_file():
+                f.unlink()
+                removed = True
+        return removed
+
     def git_state(self, subject: str) -> dict:
         """Real source-control state of the subject's workspace: branch, working changes, recent commits
         (the governed git knowledge graph the agent commits to). Empty shape if not yet a repo."""
