@@ -1,15 +1,17 @@
 "use client";
-import React, { Component, useCallback, useMemo, useRef, type ComponentType, type ErrorInfo, type ReactNode } from "react";
+import React, { Component, useCallback, useEffect, useMemo, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import { parse } from "acorn";
 import { transform } from "sucrase";
 import { ui } from "./kit";
-import { useMeeting } from "./useMeeting";
+import { useEntities, useSpeakers, useTranscript } from "./useMeeting";
 import { useActions } from "./actions";
 import { validateViewSource } from "./validator";
 
 type AnyNode = { type: string; start: number; end: number; id?: { name?: string } | null; declaration?: AnyNode; [key: string]: unknown };
 type Edit = { start: number; end: number; text: string };
 type CompileResult = { ok: true; component: ComponentType; code: string } | { ok: false; errors: string[] };
+type ActiveView = { source: string; component: ComponentType };
+type CanvasFailure = { source: string; errors: string[] };
 
 const cache = new Map<string, CompileResult>();
 
@@ -61,14 +63,16 @@ function compile(source: string): CompileResult {
     const fn = new Function(
       "React",
       "ui",
-      "useMeeting",
+      "useTranscript",
+      "useSpeakers",
+      "useEntities",
       "useActions",
       "useState",
       "useMemo",
       "useEffect",
       `"use strict";\nconst exports = {}; let actions;\n${moduleCode}\nconst ViewComponent = (typeof exports !== "undefined" && exports.default) || (typeof Component !== "undefined" && Component);\nif (typeof ViewComponent !== "function") throw new Error("Meeting Canvas source must default-export a React component.");\nreturn function CanvasCompiledView(){ actions = useActions(); return React.createElement(ViewComponent); };`,
     );
-    const component = fn(React, ui, useMeeting, useActions, React.useState, React.useMemo, React.useEffect) as ComponentType;
+    const component = fn(React, ui, useTranscript, useSpeakers, useEntities, useActions, React.useState, React.useMemo, React.useEffect) as ComponentType;
     const result: CompileResult = { ok: true, component, code: moduleCode };
     cache.set(source, result);
     return result;
@@ -80,25 +84,40 @@ function compile(source: string): CompileResult {
   }
 }
 
-function FaultCard({ title, errors }: { title: string; errors: string[] }) {
+function failureText(errors: string[]): string {
+  return errors.filter(Boolean).join("\n");
+}
+
+function FailureNotice({ failure, onDismiss }: { failure: CanvasFailure; onDismiss: () => void }) {
+  const [open, setOpen] = useState(false);
+  const detail = failureText(failure.errors);
   return (
-    <div style={{ padding: 14 }}>
-      <ui.Panel title={title} tone="warn">
-        <ui.List items={errors.map((error) => ({ title: error, tone: "warn" as const }))} />
-      </ui.Panel>
+    <div
+      data-canvas-view-status="failed"
+      data-canvas-view-error={detail}
+      style={{ border: "1px solid var(--line2)", background: "var(--panel)", borderRadius: 8, padding: "8px 10px", marginBottom: 10, color: "var(--t2)", fontSize: 12, minWidth: 0 }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>View update failed; keeping previous</span>
+        <button type="button" onClick={() => setOpen((next) => !next)} style={{ border: "none", background: "transparent", color: "var(--accent)", fontSize: 12, cursor: "pointer", padding: 0 }}>{open ? "Hide" : "Details"}</button>
+        <button type="button" onClick={onDismiss} style={{ border: "none", background: "transparent", color: "var(--t3)", fontSize: 12, cursor: "pointer", padding: 0 }}>Dismiss</button>
+      </div>
+      {open && <pre style={{ margin: "8px 0 0", maxHeight: 150, overflow: "auto", whiteSpace: "pre-wrap", color: "var(--t3)", fontSize: 11, lineHeight: 1.45 }}>{detail}</pre>}
     </div>
   );
 }
 
-class RenderBoundary extends Component<{ resetKey: string; fallback: (error: Error) => ReactNode; children: ReactNode }, { error: Error | null; resetKey: string }> {
+class RenderBoundary extends Component<{ resetKey: string; fallback: (error: Error) => ReactNode; onError?: (error: Error) => void; children: ReactNode }, { error: Error | null; resetKey: string }> {
   state = { error: null, resetKey: this.props.resetKey };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
 
-  componentDidCatch(_error: Error, _info: ErrorInfo): void {
+  componentDidCatch(error: Error, _info: ErrorInfo): void {
     // React still logs the component stack in dev; the user-facing surface is below.
+    this.props.onError?.(error);
   }
 
   componentDidUpdate(): void {
@@ -113,41 +132,78 @@ class RenderBoundary extends Component<{ resetKey: string; fallback: (error: Err
   }
 }
 
-function RenderCandidate({ component: View, onSuccess }: { component: ComponentType; onSuccess: () => void }) {
-  React.useEffect(onSuccess, [onSuccess]);
+function RenderCandidate({ candidate, onSuccess }: { candidate: ActiveView; onSuccess: (candidate: ActiveView) => void }) {
+  const View = candidate.component;
+  React.useEffect(() => onSuccess(candidate), [candidate, onSuccess]);
   return <View />;
 }
 
-function LastGood({ component: View }: { component: ComponentType }) {
+function HiddenTrial({ candidate, onSuccess, onError }: { candidate: ActiveView; onSuccess: (candidate: ActiveView) => void; onError: (candidate: ActiveView, error: Error) => void }) {
   return (
-    <div style={{ opacity: 0.72, pointerEvents: "none", marginTop: 12 }}>
-      <View />
+    <div aria-hidden="true" style={{ position: "fixed", left: -10000, top: -10000, width: 1, height: 1, overflow: "hidden", opacity: 0, pointerEvents: "none" }}>
+      <RenderBoundary resetKey={`trial:${candidate.source}`} fallback={() => null} onError={(error) => onError(candidate, error)}>
+        <RenderCandidate candidate={candidate} onSuccess={onSuccess} />
+      </RenderBoundary>
     </div>
   );
 }
 
 export function CanvasRuntime({ source }: { source: string }) {
   const compiled = useMemo(() => compile(source), [source]);
-  const lastGood = useRef<ComponentType | null>(null);
-  const markSuccess = useCallback(() => {
-    if (compiled.ok) lastGood.current = compiled.component;
-  }, [compiled]);
+  const [active, setActive] = useState<ActiveView | null>(null);
+  const [pending, setPending] = useState<ActiveView | null>(null);
+  const [failure, setFailure] = useState<CanvasFailure | null>(null);
+  const [dismissedFailureSource, setDismissedFailureSource] = useState("");
 
-  if (!compiled.ok) return <FaultCard title={compiled.errors.some((e) => e.startsWith("line ")) ? "Canvas blocked" : "Canvas error"} errors={compiled.errors} />;
+  useEffect(() => {
+    if (!compiled.ok) {
+      setPending(null);
+      setFailure({ source, errors: compiled.errors });
+      console.warn("meeting canvas update failed", compiled.errors);
+      return;
+    }
+    if (active?.source === source || pending?.source === source) return;
+    setPending({ source, component: compiled.component });
+  }, [active?.source, compiled, pending?.source, source]);
+
+  const promote = useCallback((candidate: ActiveView) => {
+    setActive(candidate);
+    setPending((current) => current?.source === candidate.source ? null : current);
+    setFailure((current) => current?.source === candidate.source ? null : current);
+    setDismissedFailureSource("");
+  }, []);
+
+  const failTrial = useCallback((candidate: ActiveView, error: Error) => {
+    const message = error.message || String(error);
+    setPending((current) => current?.source === candidate.source ? null : current);
+    setFailure({ source: candidate.source, errors: [`Canvas render failed: ${message}`] });
+    console.warn("meeting canvas trial render failed", message);
+  }, []);
+
+  const activeError = useCallback((candidate: ActiveView, error: Error) => {
+    const message = error.message || String(error);
+    setFailure({ source: candidate.source, errors: [`Canvas render failed after promotion: ${message}`] });
+    console.warn("meeting canvas visible render failed", message);
+  }, []);
+
+  const showFailure = failure && dismissedFailureSource !== failure.source;
+  const Active = active?.component;
 
   return (
-    <RenderBoundary
-      resetKey={source}
-      fallback={(error) => (
-        <div style={{ padding: 14 }}>
-          <ui.Panel title="Canvas render error" tone="warn">
-            <ui.List items={[{ title: error.message || String(error), tone: "warn" }]} />
-          </ui.Panel>
-          {lastGood.current && lastGood.current !== compiled.component && <LastGood component={lastGood.current} />}
-        </div>
+    <div style={{ minWidth: 0, maxWidth: "100%" }}>
+      {showFailure && <FailureNotice failure={failure} onDismiss={() => setDismissedFailureSource(failure.source)} />}
+      {Active ? (
+        <RenderBoundary
+          resetKey={`active:${active.source}`}
+          onError={(error) => activeError(active, error)}
+          fallback={() => <ui.Empty title="Canvas view paused" body="The last promoted view hit a render issue. The agent can inspect the update note." />}
+        >
+          <Active />
+        </RenderBoundary>
+      ) : (
+        <ui.Empty title="Loading canvas view" body="The harness is checking the view before showing it." />
       )}
-    >
-      <RenderCandidate component={compiled.component} onSuccess={markSuccess} />
-    </RenderBoundary>
+      {pending && <HiddenTrial candidate={pending} onSuccess={promote} onError={failTrial} />}
+    </div>
   );
 }

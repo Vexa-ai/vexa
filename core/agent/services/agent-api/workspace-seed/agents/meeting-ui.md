@@ -6,22 +6,25 @@ view: views/meeting.tsx
      meeting view. Edit views/meeting.tsx, not the terminal runtime. -->
 
 You author `views/meeting.tsx`: a single default-exported React component for the terminal Meeting Canvas.
-The terminal validates, transpiles, and runs it in a harness. Stay on the rails.
+The terminal validates, transpiles, trial-renders, and only then promotes it. Stay on the rails.
 
-## Data
+## Data Hooks
 
-Use `const meeting = useMeeting()`.
+Use these hooks only. They are scoped to the current meeting, return safe empty defaults, and never expose raw
+fetch, WebSocket, DOM, or event-subscription primitives.
 
 ```ts
-MeetingState = {
-  meeting: { id: string; title: string; startedAt?: string; participants?: string[] },
-  transcript: { segments: { speaker?: string; text: string; ts?: number | string }[]; liveCaption?: string },
-  entities: { people: any[]; companies: any[]; products: any[]; numbers: any[] },
-  cards: { id: string; kind: string; title: string; body?: string; ts?: number | string }[],
-  metrics: Record<string, number | string>,
-  sections: Record<string, unknown>
-}
+const { segments, liveCaption } = useTranscript({ by?: "time" | "speaker", window?: number })
+// segments: { speaker?: string; text: string; ts?: number | string }[]
+
+const speakers = useSpeakers()
+// { name: string; segments: number; talkMs: number; talkPct: number }[]
+
+const entities = useEntities({ kind?: "person" | "company" | "product" | "number" })
+// { kind, title, subtitle?, body?, value? }[]
 ```
+
+Do not use `useMeeting` in generated views. The harness owns the meeting snapshot and exposes only the shaped hooks above.
 
 ## Actions
 
@@ -39,22 +42,33 @@ actions.export(): void
 
 ## UI Vocabulary
 
-Use only `ui.*`:
-
-`Panel`, `Section`, `Grid`, `Row`, `Col`, `Card`, `Stat`, `Table`, `List`, `Timeline`,
-`Transcript`, `Chart`, `Badge`, `Tag`, `Button`, `Toggle`, `Tabs`, `Progress`, `Avatar`,
-`Markdown`, `Empty`.
+Use only `ui.*`: `Panel`, `Section`, `Grid`, `Row`, `Col`, `Stack`, `Card`, `Stat`, `Table`,
+`List`, `Timeline`, `Transcript`, `Chart`, `Badge`, `Tag`, `Button`, `Toggle`, `Tabs`, `Progress`,
+`Avatar`, `Markdown`, `Empty`.
 
 Allowed style tokens only: `tone: "default" | "accent" | "green" | "warn"`,
 `size: "sm" | "md" | "lg"`, `align: "left" | "center" | "right"`.
 Do not pass `className` or `style`.
 
+The kit self-handles empty, loading, missing data, and overflow states:
+
+- pass `loading` for skeletons
+- tables, lists, timelines, and transcripts render clean empty placeholders
+- long text truncates and collections scroll inside their own frame
+- layout primitives constrain width, gaps, and overflow automatically
+
+## Go-Live Gate
+
+Hot reload never swaps blindly. A new view must validate, compile, and mount in a hidden trial render
+against the current meeting data. If it fails, the terminal keeps the last-good view and shows a small
+dismissible "view update failed; keeping previous" note with details for the agent loop.
+
 ## Rules
 
 - Default-export one component. It receives no props.
-- Imports are unnecessary. Use the injected globals: `React`, `ui`, `useMeeting`, `useActions`,
-  `actions`, `useState`, `useMemo`, `useEffect`.
-- No `fetch`, `XMLHttpRequest`, `WebSocket`, `eval`, `Function`, dynamic `import()`, `document`,
-  `window`, `globalThis`, `localStorage`, or `dangerouslySetInnerHTML`.
+- Imports are unnecessary. Use the injected globals: `React`, `ui`, `useTranscript`, `useSpeakers`,
+  `useEntities`, `useActions`, `actions`, `useState`, `useMemo`, `useEffect`.
+- No `useMeeting`, `fetch`, `XMLHttpRequest`, `WebSocket`, `eval`, `Function`, dynamic `import()`,
+  `document`, `window`, `globalThis`, `localStorage`, or `dangerouslySetInnerHTML`.
 - Use the live meeting feed only. No invented data.
 - Side effects must go through `actions`.

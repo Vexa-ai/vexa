@@ -1,5 +1,28 @@
 import type { ComponentType } from "react";
 
+export interface TranscriptSegment {
+  speaker?: string;
+  text: string;
+  ts?: number | string;
+}
+
+export type EntityKind = "person" | "company" | "product" | "number";
+
+export interface CanvasEntity {
+  kind: EntityKind;
+  title: string;
+  subtitle?: string;
+  body?: string;
+  value?: number | string;
+}
+
+export interface SpeakerSummary {
+  name: string;
+  segments: number;
+  talkMs: number;
+  talkPct: number;
+}
+
 export interface MeetingState {
   meeting: {
     id: string;
@@ -8,7 +31,7 @@ export interface MeetingState {
     participants?: string[];
   };
   transcript: {
-    segments: { speaker?: string; text: string; ts?: number | string }[];
+    segments: TranscriptSegment[];
     liveCaption?: string;
   };
   entities: {

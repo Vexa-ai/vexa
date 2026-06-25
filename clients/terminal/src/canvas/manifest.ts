@@ -1,21 +1,23 @@
 export const MANIFEST = `# Meeting Canvas v1
 
-Meeting Canvas is a harness-governed React view. The agent writes \`views/meeting.tsx\`; the terminal validates, transpiles, and runs it in-browser.
+Meeting Canvas is a harness-governed React view. The agent writes \`views/meeting.tsx\`; the terminal validates, transpiles, trial-renders, and only then promotes it in-browser.
 
-## Data
+## Data Hooks
+
+Use these declarative hooks only. They are scoped to the current meeting automatically, return safe empty defaults, and never expose fetch, WebSocket, DOM, or event-subscription primitives.
 
 \`\`\`ts
-MeetingState = {
-  meeting: { id: string; title: string; startedAt?: string; participants?: string[] },
-  transcript: { segments: { speaker?: string; text: string; ts?: number | string }[]; liveCaption?: string },
-  entities: { people: any[]; companies: any[]; products: any[]; numbers: any[] },
-  cards: { id: string; kind: string; title: string; body?: string; ts?: number | string }[],
-  metrics: Record<string, number | string>,
-  sections: Record<string, unknown>
-}
+const { segments, liveCaption } = useTranscript({ by?: "time" | "speaker", window?: number })
+// segments: { speaker?: string; text: string; ts?: number | string }[]
+
+const speakers = useSpeakers()
+// { name: string; segments: number; talkMs: number; talkPct: number }[]
+
+const entities = useEntities({ kind?: "person" | "company" | "product" | "number" })
+// { kind, title, subtitle?, body?, value? }[]
 \`\`\`
 
-Use \`const meeting = useMeeting()\`. It is live and re-renders as transcript, cards, metrics, tags, pins, and dismissals change.
+Do not call \`useMeeting\` from generated views. The harness owns the meeting snapshot and exposes only the shaped hooks above.
 
 ## Actions
 
@@ -36,34 +38,48 @@ actions.export(): void
 
 Only \`ui.*\` components are allowed. They accept data props plus token props only: \`tone: "default" | "accent" | "green" | "warn"\`, \`size: "sm" | "md" | "lg"\`, and \`align: "left" | "center" | "right"\` where listed. No \`className\`, no \`style\`.
 
-- \`ui.Panel({ title?, subtitle?, tone?, children })\`
-- \`ui.Section({ title?, children })\`
-- \`ui.Grid({ columns?: 1|2|3|4|"auto", size?, children })\`
-- \`ui.Row({ align?, size?, children })\`
-- \`ui.Col({ size?, children })\`
-- \`ui.Card({ title?, body?, ts?, tone?, children })\`
-- \`ui.Stat({ label, value, delta?, tone?, size? })\`
-- \`ui.Table({ columns?, rows, empty? })\`
-- \`ui.List({ items, empty? })\`
-- \`ui.Timeline({ items, empty? })\`
-- \`ui.Transcript({ segments, liveCaption?, empty? })\`
-- \`ui.Chart({ kind?: "bar"|"line", data, tone? })\`
-- \`ui.Badge({ tone?, children })\`
-- \`ui.Tag({ tone?, children })\`
-- \`ui.Button({ tone?, size?, disabled?, onClick?, children })\`
-- \`ui.Toggle({ checked, label?, onChange? })\`
-- \`ui.Tabs({ tabs, value?, onChange? })\`
-- \`ui.Progress({ value, max?, tone?, label? })\`
-- \`ui.Avatar({ name, tone?, size? })\`
-- \`ui.Markdown({ children: string })\`
+The kit is hardened for non-technical authors:
+
+- empty collections render themed placeholders automatically
+- every component accepts \`loading?: boolean\` for a subtle skeleton state
+- missing or undefined data props default safely
+- long text is constrained with ellipsis
+- tables, lists, timelines, and transcripts scroll inside their own frame
+- layout primitives constrain width, spacing, and overflow
+
+- \`ui.Panel({ title?, subtitle?, tone?, loading?, children })\`
+- \`ui.Section({ title?, loading?, children })\`
+- \`ui.Grid({ columns?: 1|2|3|4|"auto", size?, loading?, children })\`
+- \`ui.Row({ align?, size?, loading?, children })\`
+- \`ui.Col({ size?, loading?, children })\`
+- \`ui.Stack({ size?, loading?, children })\`
+- \`ui.Card({ title?, body?, ts?, tone?, loading?, children })\`
+- \`ui.Stat({ label?, value?, delta?, tone?, size?, loading? })\`
+- \`ui.Table({ columns?, rows?, empty?, loading? })\`
+- \`ui.List({ items?, empty?, loading? })\`
+- \`ui.Timeline({ items?, empty?, loading? })\`
+- \`ui.Transcript({ segments?, liveCaption?, empty?, loading? })\`
+- \`ui.Chart({ kind?: "bar"|"line", data?, tone?, loading? })\`
+- \`ui.Badge({ tone?, loading?, children? })\`
+- \`ui.Tag({ tone?, loading?, children? })\`
+- \`ui.Button({ tone?, size?, disabled?, loading?, onClick?, children? })\`
+- \`ui.Toggle({ checked?, label?, loading?, onChange? })\`
+- \`ui.Tabs({ tabs?, value?, loading?, onChange? })\`
+- \`ui.Progress({ value?, max?, tone?, label?, loading? })\`
+- \`ui.Avatar({ name?, tone?, size?, loading? })\`
+- \`ui.Markdown({ children?: string, loading? })\`
 - \`ui.Empty({ title?, body? })\`
+
+## Go-Live Gate
+
+Hot reload never swaps blindly. New \`views/meeting.tsx\` source must pass validator, compile, and mount in a hidden trial render against the current meeting data. Only a successful trial render is promoted to the visible canvas. If validation, compile, or render fails, the terminal keeps the last-good view and shows a small dismissible "view update failed; keeping previous" note with details for the agent loop.
 
 ## Rules
 
 - Default-export one React component. It receives no props.
-- You may use \`React\`, \`ui\`, \`useMeeting\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
+- You may use \`React\`, \`ui\`, \`useTranscript\`, \`useSpeakers\`, \`useEntities\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
 - Imports are unnecessary. If present, imports may only reference React or the harness modules.
-- No \`fetch\`, \`XMLHttpRequest\`, \`WebSocket\`, \`eval\`, \`Function\`, dynamic \`import()\`, \`document\`, \`window\`, \`globalThis\`, \`localStorage\`, or \`dangerouslySetInnerHTML\`.
+- No \`useMeeting\`, \`fetch\`, \`XMLHttpRequest\`, \`WebSocket\`, \`eval\`, \`Function\`, dynamic \`import()\`, \`document\`, \`window\`, \`globalThis\`, \`localStorage\`, or \`dangerouslySetInnerHTML\`.
 - No arbitrary DOM styling. The kit is theme-locked to terminal CSS variables.
 - All side effects go through \`useActions()\`.
 `;
