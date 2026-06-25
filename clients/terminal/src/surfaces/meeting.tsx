@@ -13,7 +13,7 @@ import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbe
 import { registerList, registerTab, registerContext, registerCommand, type TabProps, type ContextProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { EntityList, onResearchRequest } from "./entities";
-import { MEETINGS, meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
+import { meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
 import { useLiveMeetings, liveMeetingsNow } from "./liveMeetings";
 
@@ -85,16 +85,17 @@ function useReveal(n: number, live: boolean, stepMs = 3000): number {
 // ── Meetings LIST (left) ─────────────────────────────────────────────────────────
 function MeetingsList() {
   const layout = useService(LayoutServiceId);
-  const live = useLiveMeetings();                                  // real active copilots (agent-api)
-  const liveIds = new Set(live.map((m) => m.id));
-  const all = [...live, ...MEETINGS.filter((m) => !liveIds.has(m.id))];  // real live ones on top
+  const all = useLiveMeetings();                                   // real meetings (live + past) from agent-api
+  const liveOnes = all.filter((m) => m.status === "live");
+  const pastOnes = all.filter((m) => m.status !== "live");
   const autoOpened = useRef(false);
-  useEffect(() => {                                                // a real live meeting opens itself, once
-    if (!autoOpened.current && live.length > 0) {
+  useEffect(() => {                                                // a live meeting opens itself, once
+    const firstLive = all.find((m) => m.status === "live");
+    if (!autoOpened.current && firstLive) {
       autoOpened.current = true;
-      layout.openTab(meetingTab(live[0]));
+      layout.openTab(meetingTab(firstLive));
     }
-  }, [live, layout]);
+  }, [all, layout]);
   // 'add bot from URL': send OUR bot into a meeting; the watcher attaches the copilot once it transcribes
   const [url, setUrl] = useState("");
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
@@ -111,6 +112,19 @@ function MeetingsList() {
   };
   const stopBot = (m: MeetingMock) => void fetch("/api/meeting/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ native_id: m.native_id, platform: "google_meet" }) });
   const sendBot = (m: MeetingMock) => void fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: `https://meet.google.com/${m.native_id}` }) });
+  const row = (m: MeetingMock) => (
+    <div key={m.id} onClick={() => layout.openTab(meetingTab(m))} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
+        <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.title}</span>
+        {m.native_id && (m.status === "live"
+          ? <button title="Remove the bot from this meeting" onClick={(e) => { e.stopPropagation(); stopBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--live)", color: "var(--live)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Stop</button>
+          : <button title="Send the bot back to this meeting" onClick={(e) => { e.stopPropagation(); sendBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--accent)", color: "var(--accent)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Send</button>)}
+      </div>
+      <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
+    </div>
+  );
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 6px" }}>meetings</div>
@@ -126,19 +140,10 @@ function MeetingsList() {
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
         {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>Couldn&apos;t send — make sure it&apos;s a Google Meet link.</div>}
       </div>
-      {all.map((m) => (
-        <div key={m.id} onClick={() => layout.openTab(meetingTab(m))} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
-            <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.title}</span>
-            {m.native_id && (m.status === "live"
-              ? <button title="Remove the bot from this meeting" onClick={(e) => { e.stopPropagation(); stopBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--live)", color: "var(--live)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Stop</button>
-              : <button title="Send the bot back to this meeting" onClick={(e) => { e.stopPropagation(); sendBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--accent)", color: "var(--accent)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Send</button>)}
-          </div>
-          <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
-        </div>
-      ))}
+      {all.length === 0 && <div style={{ padding: "8px 9px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>No meetings yet — paste a Meet link above and I&apos;ll send the bot.</div>}
+      {liveOnes.map(row)}
+      {pastOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Recorded</div>}
+      {pastOnes.map(row)}
     </div>
   );
 }

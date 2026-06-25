@@ -1,27 +1,37 @@
 "use client";
-/** liveMeetings — the terminal's feed of REAL active meeting copilots (agent-api's live registry).
- *  Polls `/api/meetings/live` and maps each to a MeetingMock so the existing meeting tab + transcript
- *  pane render it via `useMeetingLive(meeting_id, session_uid)` — a real Vexa Cloud bot's transcript +
- *  the copilot's cards stream in over `/api/meeting/stream`, no mock involved. */
+/** meetings feed — the terminal's REAL meetings list (live AND past), from `agent-api GET /api/meetings`
+ *  (which proxies meeting-api + merges the live copilot registry). Live meetings carry a `session_uid` so
+ *  the tab subscribes to the copilot stream; past meetings open a recorded view (transcript + recording). */
 import { useSyncExternalStore } from "react";
 import type { MeetingMock } from "./mock";
 
-interface LiveMeetingDTO { meeting_id: string; session_uid: string; platform: string; title: string; native_id?: string; status?: string }
+interface MeetingRowDTO {
+  native_id: string; platform: string; title: string; status: string;
+  start?: string | null; end?: string | null; has_recording?: boolean; unit_id?: string | null;
+}
 
 let meetings: MeetingMock[] = [];
 const subs = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
-function toMock(d: LiveMeetingDTO): MeetingMock {
-  const stopped = d.status === "stopped";
+function whenLabel(d: MeetingRowDTO, live: boolean): string {
+  if (live) return "Now · live";
+  if (!d.start) return "Recorded";
+  try { return new Date(d.start).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+  catch { return "Recorded"; }
+}
+
+function toMock(d: MeetingRowDTO): MeetingMock {
+  const live = d.status === "live";
   return {
-    id: d.meeting_id,
-    session_uid: d.session_uid,
-    native_id: d.native_id ?? d.meeting_id,
-    title: d.title || `${d.platform} · ${d.meeting_id}`,
-    when: stopped ? "Stopped" : "Now · live",
-    status: stopped ? "past" : "live",
+    id: d.native_id,
+    native_id: d.native_id,
+    session_uid: live ? d.native_id : undefined,  // only live meetings subscribe to the copilot stream
+    title: d.title || `${d.platform} · ${d.native_id}`,
+    when: whenLabel(d, live),
+    status: live ? "live" : "past",
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
+    has_recording: !!d.has_recording,
     participants: [],
     mentioned: [],
     actions: [],
@@ -32,11 +42,10 @@ function toMock(d: LiveMeetingDTO): MeetingMock {
 
 async function poll() {
   try {
-    const r = await fetch("/api/meetings/live", { cache: "no-store" });
-    const { meetings: list } = (await r.json()) as { meetings: LiveMeetingDTO[] };
+    const r = await fetch("/api/meetings", { cache: "no-store" });
+    const { meetings: list } = (await r.json()) as { meetings: MeetingRowDTO[] };
     const next = (list || []).map(toMock);
-    // only re-render when the set of live meetings actually changes (id+session_uid)
-    const key = (m: MeetingMock[]) => m.map((x) => `${x.id}|${x.session_uid}|${x.status}`).join(",");
+    const key = (m: MeetingMock[]) => m.map((x) => `${x.id}|${x.status}|${x.has_recording}`).join(",");
     if (key(next) !== key(meetings)) {
       meetings = next;
       subs.forEach((f) => f());
@@ -52,17 +61,17 @@ function ensurePolling() {
   timer = setInterval(poll, 4000);
 }
 
-/** Last-known live meetings (sync) — lets non-hook lookups resolve a real meeting by id. */
+/** Last-known meeting by id (sync) — lets non-hook lookups resolve a real meeting. */
 export function getLiveMeeting(id: string): MeetingMock | undefined {
   return meetings.find((m) => m.id === id);
 }
 
-/** All last-known real live meetings (sync) — used by the auto-open command. */
+/** All last-known real meetings (sync) — used by the auto-open command (prefers a live one). */
 export function liveMeetingsNow(): MeetingMock[] {
   return meetings;
 }
 
-/** Subscribe a component to the live-meetings feed. */
+/** Subscribe a component to the meetings feed (live + past). */
 export function useLiveMeetings(): MeetingMock[] {
   ensurePolling();
   return useSyncExternalStore(
