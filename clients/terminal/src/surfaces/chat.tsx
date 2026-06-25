@@ -3,7 +3,7 @@
  *  it's the same engine as the meeting copilot. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. Composer (with /-skill autocomplete) sits under it. */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useService, CommandServiceId } from "../platform";
 import { registerTab, registerCommand, type TabProps } from "../contributions";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
@@ -18,15 +18,54 @@ function toolOp(tool: string): Op {
   return { icon, label: tool, status: "done" };
 }
 
+/** the backend history turn shape (GET /api/sessions/:session/history) */
+type HistoryTurn =
+  | { role: "user"; text: string }
+  | { role: "agent"; text: string; ops?: { label: string }[]; commit?: string };
+
+/** map a backend op label (read/search/edit/git/web/tool) to a frontend Op (icon from opIcon) */
+function historyOp(op: { label: string }): Op {
+  return { icon: opIcon[op.label] ?? opIcon.tool, label: op.label, status: "done" };
+}
+
 function ChatTab({ params }: TabProps) {
   const subject = (params.subject as string) ?? "u_live";  // one workspace shared with meeting research
   const session = (params.session as string | null) ?? null;
   const commands = useService(CommandServiceId);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [value, setValue] = useState("");
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load the session's prior conversation on mount AND whenever `session` changes — the layout may REUSE
+  // one ChatTab instance and just swap the session param, so reset+reload is keyed on `session`. New sends
+  // still append to the loaded turns; `idRef` is bumped past the loaded ids so live ids never collide.
+  useEffect(() => {
+    if (session == null) { setTurns([]); return; }
+    let cancelled = false;
+    setLoading(true);
+    setTurns([]);
+    (async () => {
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history?subject=${encodeURIComponent(subject)}`);
+        const data: { turns?: HistoryTurn[] } = await r.json();
+        if (cancelled) return;
+        const loaded: Turn[] = (data.turns ?? []).map((t, i) =>
+          t.role === "user"
+            ? { id: `h-u-${i}`, role: "user", text: t.text }
+            : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
+        idRef.current = loaded.length;  // keep live `u-<n>`/`a-<n>` ids clear of the `h-*` loaded ids
+        setTurns(loaded);
+      } catch {
+        if (!cancelled) setTurns([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session, subject]);
 
   const patchAgent = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
     setTurns((ts) => ts.map((t, i) => (i === ts.length - 1 && t.role === "agent" ? fn(t) : t)));
@@ -91,7 +130,7 @@ function ChatTab({ params }: TabProps) {
 
   return (
     <AgentWindow scrollRef={scrollRef} composer={composer}>
-      <Conversation turns={turns} busy={busy} empty={<div style={{ color: "var(--t3)", fontSize: 13, textAlign: "center", marginTop: 40 }}>Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.</div>} />
+      <Conversation turns={turns} busy={busy || loading} empty={<div style={{ color: "var(--t3)", fontSize: 13, textAlign: "center", marginTop: 40 }}>{loading ? "Loading conversation…" : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits."}</div>} />
     </AgentWindow>
   );
 }

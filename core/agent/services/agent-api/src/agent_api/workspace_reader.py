@@ -5,8 +5,40 @@ internals and guards against path traversal (a read path can never escape the su
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
+
+
+def _tool_op(name: str) -> dict:
+    """Classify a claude tool name into one of the terminal's op labels (read/search/edit/git/web/tool).
+    Mirrors the frontend ``toolOp`` so the loaded history reads the same as a live turn."""
+    t = (name or "").lower()
+    if any(k in t for k in ("read", "cat", "open")) and "edit" not in t:
+        label = "read"
+    elif any(k in t for k in ("search", "grep", "find", "glob")):
+        label = "search"
+    elif any(k in t for k in ("edit", "write", "append")):
+        label = "edit"
+    elif any(k in t for k in ("git", "commit")):
+        label = "git"
+    elif any(k in t for k in ("web", "fetch", "http")):
+        label = "web"
+    else:
+        label = "tool"
+    return {"label": label}
+
+
+def _block_text(content) -> str:
+    """Concatenate the ``text`` of an assistant message's content (string, or list of blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
 
 # `.git` is pure plumbing — huge/noisy, never useful in the Files tree — so it's hidden
 # unconditionally. Everything else dot-prefixed (`.claude` + any dotfile/dotdir) is hidden by
@@ -53,6 +85,102 @@ class WorkspaceReader:
         if ws not in f.parents:  # the resolved path must stay inside the workspace
             raise ValueError("invalid path")
         return f.read_text() if f.exists() and f.is_file() else None
+
+    def _session_id(self, ws: Path, session: str) -> Optional[str]:
+        """The claude sessionId for a thread, read from its continuity pointer
+        (``.claude/sessions/<session>.session``; the legacy ``main`` falls back to ``.claude/.session``)."""
+        candidates = [ws / ".claude" / "sessions" / f"{session}.session"]
+        if session == "main":
+            candidates.append(ws / ".claude" / ".session")
+        for f in candidates:
+            try:
+                if f.exists() and f.is_file():
+                    sid = f.read_text().strip()
+                    if sid:
+                        return sid
+            except OSError:
+                continue
+        return None
+
+    def history(self, subject: str, session: str) -> list[dict]:
+        """The session's prior conversation as ordered, terminal-renderable turns.
+
+        Resolves the thread's claude sessionId from its continuity pointer, finds the transcript JSONL
+        under ``<ws>/.claude/projects/<cwd-slug>/<sessionId>.jsonl``, and parses it into ``Turn``-shaped
+        dicts: user turns ``{role:"user", text}``; agent turns ``{role:"agent", text, ops, commit?}``.
+        Tolerant by design — a missing pointer/file or unparseable lines yield ``[]`` (never raises),
+        so the surface degrades to "no history yet" rather than erroring."""
+        if "/" in session or "\\" in session or session in ("", ".", ".."):
+            return []
+        ws = self._ws(subject)
+        sid = self._session_id(ws, session)
+        if not sid:
+            return []
+        projects = ws / ".claude" / "projects"
+        if not projects.exists():
+            return []
+        # The cwd-slug dir is claude's encoding of the workspace path; there is normally one, but match by
+        # the sessionId filename to be safe. ``rglob`` also catches subagent transcripts — we want the top.
+        path: Optional[Path] = None
+        for cand in projects.glob(f"*/{sid}.jsonl"):
+            path = cand
+            break
+        if path is None:
+            return []
+        try:
+            raw = path.read_text()
+        except OSError:
+            return []
+
+        turns: list[dict] = []
+        cur_agent: Optional[dict] = None  # the open agent turn we accumulate text/ops onto
+
+        def flush_agent() -> None:
+            nonlocal cur_agent
+            if cur_agent is not None:
+                turns.append(cur_agent)
+                cur_agent = None
+
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(obj, dict):
+                continue
+            kind = obj.get("type")
+            msg = obj.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+
+            if kind == "user":
+                # A real user prompt is a plain string or a content list with text blocks. A list that is
+                # ONLY tool_results belongs to the preceding agent turn (a tool round-trip) — skip it.
+                is_tool_result = (
+                    isinstance(content, list)
+                    and content
+                    and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+                )
+                if is_tool_result:
+                    continue
+                text = _block_text(content)
+                if text.strip():
+                    flush_agent()
+                    turns.append({"role": "user", "text": text})
+            elif kind == "assistant":
+                if not isinstance(content, list):
+                    continue
+                if cur_agent is None:
+                    cur_agent = {"role": "agent", "text": "", "ops": []}
+                cur_agent["text"] += _block_text(content)
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "tool_use":
+                        cur_agent["ops"].append(_tool_op(b.get("name", "")))
+            # all other line kinds (queue-operation/last-prompt/custom-title/mode/attachment/system …) are meta — skip
+        flush_agent()
+        return turns
 
     def drop_session(self, subject: str, session: str) -> bool:
         """Delete a chat thread's continuity file (``.claude/sessions/<session>.session``) so a future

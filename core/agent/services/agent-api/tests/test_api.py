@@ -164,3 +164,63 @@ def test_workspace_tree_hidden_mode(tmp_path):
     assert plain == ["kg/note.md"]
     with_hidden = c.get("/api/workspace/tree", params={"subject": "u_jane", "hidden": 1}).json()["files"]
     assert ".claude/sessions/main.session" in with_hidden
+
+
+def _write_transcript(ws, sid: str, lines: list[dict]) -> None:
+    import json
+    proj = ws / ".claude" / "projects" / "-some-cwd-slug"
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / f"{sid}.jsonl").write_text("".join(json.dumps(o) + "\n" for o in lines))
+
+
+def test_session_history_parses_turns(tmp_path):
+    from agent_api.workspace_reader import WorkspaceReader
+
+    ws = tmp_path / "u_jane"
+    (ws / ".claude" / "sessions").mkdir(parents=True)
+    (ws / ".claude" / "sessions" / "main.session").write_text("sid-1\n")
+    _write_transcript(ws, "sid-1", [
+        {"type": "mode", "mode": "default"},                                # meta — skip
+        {"type": "user", "message": {"role": "user", "content": "research DTCC"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "hmm"},                        # ignored
+            {"type": "text", "text": "Looking it up. "},
+            {"type": "tool_use", "name": "Read", "input": {}},
+        ]}},
+        {"type": "user", "message": {"role": "user", "content": [          # tool round-trip — same agent turn
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+        ]}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Done."},
+            {"type": "tool_use", "name": "Grep", "input": {}},
+        ]}},
+        {"type": "user", "message": {"role": "user", "content": "thanks"}},
+        "{ this is not valid json",                                          # tolerant — skipped
+    ])
+
+    reader = WorkspaceReader(str(tmp_path))
+    turns = reader.history("u_jane", "main")
+
+    assert [t["role"] for t in turns] == ["user", "agent", "user"]
+    assert turns[0] == {"role": "user", "text": "research DTCC"}
+    # the two assistant lines (split by a tool_result round-trip) fold into ONE agent turn
+    assert turns[1]["text"] == "Looking it up. Done."
+    assert [o["label"] for o in turns[1]["ops"]] == ["read", "search"]
+    assert turns[2]["text"] == "thanks"
+
+
+def test_session_history_tolerant_of_missing(tmp_path):
+    from agent_api.workspace_reader import WorkspaceReader
+
+    reader = WorkspaceReader(str(tmp_path))
+    # no workspace / no pointer / no transcript → empty, never raises
+    assert reader.history("u_ghost", "main") == []
+    assert reader.history("u_jane", "../escape") == []
+
+    # endpoint never 500s and returns {turns: []}
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), reader=reader,
+    ))
+    r = c.get("/api/sessions/main/history", params={"subject": "u_ghost"})
+    assert r.status_code == 200
+    assert r.json() == {"turns": []}

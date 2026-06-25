@@ -417,6 +417,18 @@ def create_app(
     def list_sessions(subject: str):
         return {"sessions": sess.list(subject)}
 
+    @app.get("/api/sessions/{session}/history")
+    def session_history(session: str, subject: str):
+        """The session's prior conversation, as simplified turns the terminal can render (so clicking a
+        saved chat re-opens its history). Tolerant: a missing/empty transcript returns ``{turns: []}``;
+        an invalid subject/session never 500s."""
+        try:
+            turns = wsr.history(subject, session)
+        except Exception:  # noqa: BLE001 — history is best-effort; a bad path → empty, never an error
+            logger.exception("loading session history failed subject=%s session=%s", subject, session)
+            turns = []
+        return {"turns": turns}
+
     # ── routines (MVP2) — a scheduled routine compiles to a schedule.v1 cron job whose body is a
     #    unit.v1 dispatch POSTed back to /invocations when due (the runtime owns the durable cron) ──
     @app.post("/api/routines", status_code=201)
