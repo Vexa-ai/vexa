@@ -15,7 +15,8 @@ import { Icon } from "../ui-kit";
 import { EntityList, onResearchRequest } from "./entities";
 import { meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
-import { useLiveMeetings, liveMeetingsNow } from "./liveMeetings";
+import { useLiveMeetings, liveMeetingsNow, fetchTranscript } from "./liveMeetings";
+import type { TranscriptLine } from "./mock";
 
 // ── live entities (streamed from the real dispatch) — compact, clickable to research ──────────────
 const KIND: Record<string, { icon: string; color: string; bg: string }> = {
@@ -69,17 +70,6 @@ function LiveCards({ cards, connected, onResearch }: { cards: LiveCard[]; connec
 
 export function meetingTab(m: MeetingMock): TabDescriptor {
   return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id }, context: { kind: "transcript", params: { meetingId: m.id } } };
-}
-
-/** progressive reveal of the transcript (live = stream; past = all at once) */
-function useReveal(n: number, live: boolean, stepMs = 3000): number {
-  const [k, setK] = useState(live ? Math.min(3, n) : n);
-  useEffect(() => {
-    if (!live) { setK(n); return; }
-    const id = setInterval(() => setK((c) => (c >= n ? c : c + 1)), stepMs);
-    return () => clearInterval(id);
-  }, [n, live, stepMs]);
-  return k;
 }
 
 // ── Meetings LIST (left) ─────────────────────────────────────────────────────────
@@ -272,15 +262,21 @@ function TranscriptContext({ params }: ContextProps) {
   const isLive = !!m?.session_uid;
   const liveData = useMeetingLive(m?.id ?? "", (m?.session_uid as string) ?? "");
   const scrollRef = useRef<HTMLDivElement>(null);
-  const mockLive = m?.status === "live" && !isLive;
-  const shown = useReveal(m?.transcript.length ?? 0, mockLive, 3000);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [liveData.transcript.length, shown]);
+  // a PAST (recorded) meeting fetches its transcript over REST (gateway → meeting-api) when opened
+  const [recorded, setRecorded] = useState<TranscriptLine[]>([]);
+  useEffect(() => {
+    if (!m || isLive) return;
+    let live = true;
+    void fetchTranscript(m.platform, m.native_id ?? m.id).then((segs) => { if (live) setRecorded(segs); });
+    return () => { live = false; };
+  }, [m?.id, m?.platform, m?.native_id, isLive]);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [liveData.transcript.length, recorded.length]);
   if (!m) return <div style={{ padding: 16, color: "var(--t3)" }}>No transcript.</div>;
   const fmt = (t?: number) => (t == null ? "" : `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`);
   const lines = isLive
     ? liveData.transcript.map((s) => ({ t: fmt(s.t), speaker: s.speaker, text: s.text, pending: s.completed === false, id: s.id }))
-    : m.transcript.slice(0, shown).map((l) => ({ t: l.t, speaker: l.speaker, text: l.text, pending: false, id: undefined as string | undefined }));
-  const streaming = isLive ? (liveData.connected && !liveData.ended) : (m.status === "live" && shown < m.transcript.length);
+    : recorded.map((l) => ({ t: l.t, speaker: l.speaker, text: l.text, pending: false, id: undefined as string | undefined }));
+  const streaming = isLive && liveData.connected && !liveData.ended;
   const liveDot = isLive ? (liveData.connected && !liveData.ended) : m.status === "live";
   return (
     <div ref={scrollRef} style={{ padding: "14px 16px", height: "100%", overflowY: "auto" }}>
@@ -294,6 +290,7 @@ function TranscriptContext({ params }: ContextProps) {
         </div>
       ))}
       {isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Waiting for the transcript…</div>}
+      {!isLive && lines.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No transcript recorded for this meeting.</div>}
       {streaming && <div style={{ fontSize: 12, color: "var(--t3)" }}>…</div>}
     </div>
   );

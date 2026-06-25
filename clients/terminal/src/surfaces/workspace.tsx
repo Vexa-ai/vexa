@@ -7,6 +7,7 @@ import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, registerContext, type TabProps, type ContextProps } from "../contributions";
 import { Icon } from "../ui-kit";
+import { Markdown } from "../ui-kit/Markdown";
 
 const SUBJECT = "u_live";  // the one workspace all the user's agents (chat + meeting research) write to
 
@@ -97,7 +98,7 @@ function DocTab({ params }: TabProps) {
             {fm.map(([k, v]) => <div key={k} style={{ display: "flex", gap: 10 }}><span style={{ color: "var(--t3)", width: 96 }}>{k}</span><span style={{ color: "var(--t1)" }}>{wikilinks(v)}</span></div>)}
           </div>
         )}
-        <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{content === null ? "loading…" : wikilinks(body)}</div>
+        <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <Markdown>{body}</Markdown>}</div>
       </div>
     </div>
   );

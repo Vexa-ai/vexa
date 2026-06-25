@@ -6,6 +6,7 @@
  *  through this, so they look and behave like one product. */
 import { type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Icon } from "../ui-kit";
+import { Markdown } from "../ui-kit/Markdown";
 
 // ── the turn model ────────────────────────────────────────────────────────────────
 export type OpStatus = "running" | "done" | "error";
@@ -62,7 +63,7 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
                 {t.ops.map((op, j) => <OpRow key={j} op={op} />)}
               </div>
             )}
-            {(t.text || (busy && last)) && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>{t.text ? linkify(t.text) : <span style={{ color: "var(--t3)" }}>…</span>}</div>}
+            {(t.text || (busy && last)) && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>{t.text ? <Markdown>{t.text}</Markdown> : <span style={{ color: "var(--t3)" }}>…</span>}</div>}
             {t.commit && (
               <div style={{ marginTop: 9, fontSize: 11, color: "var(--green)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--greenbg)", borderRadius: 6, padding: "3px 8px", fontFamily: "var(--mono)" }}>
                 <Icon name="git" size={12} />committed · {t.commit.slice(0, 7)}

@@ -37,6 +37,11 @@ _BRIEF = (
 )
 _PLATFORM = {"google_meet": "Google Meet", "teams": "Microsoft Teams", "zoom": "Zoom"}
 _native: dict[str, tuple[str, str]] = {}  # numeric meeting_id → (native_meeting_id, platform), cached
+# Only the meeting_id whose row we actually matched is cached above. A MISS is NOT cached (so it is
+# retried on the next segment — the new meeting's row may not be visible in the gateway list yet),
+# but we throttle the refetch per meeting_id so a quiet miss doesn't hammer the gateway every segment.
+_resolve_miss_at: dict[str, float] = {}  # numeric meeting_id → last failed-resolve (monotonic)
+RESOLVE_RETRY_SEC = 3.0
 
 
 def _title(platform: str, native: str) -> str:
@@ -46,15 +51,24 @@ def _title(platform: str, native: str) -> str:
 def _resolve_native(meeting_id: str) -> "tuple[str, str] | None":
     """Map the bot's NUMERIC meeting_id → its native Meet code (e.g. nba-agyz-gbe) via the gateway, so
     the wire/dispatch/feed key on ONE id per physical meeting (re-launches dedupe to one entry) — and the
-    terminal can stop the bot by its native id. Cached; a miss re-fetches the whole meetings list."""
+    terminal can stop the bot by its native id.
+
+    Cache discipline (the multi-meeting-collapse fix): we cache ONLY the exact meeting_id→native pair we
+    matched, and we ONLY return the native for THIS meeting_id (never the first/any row in the list). A
+    miss is left UNCACHED so it retries (the just-launched meeting's row can lag the gateway list by a
+    beat), but throttled so a genuinely-unknown id doesn't refetch on every segment."""
     if meeting_id in _native:
         return _native[meeting_id]
+    now = time.monotonic()
+    if now - _resolve_miss_at.get(meeting_id, 0.0) < RESOLVE_RETRY_SEC:
+        return None  # recently failed — don't refetch yet (caller keys on numeric id meanwhile)
     key = os.environ.get("VEXA_BOT_API_KEY", "")
     if not key:
+        _resolve_miss_at[meeting_id] = now
         return None
     gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
     try:
-        req = urllib.request.Request(gw + "/meetings", headers={"X-API-Key": key})
+        req = urllib.request.Request(gw + "/meetings?limit=200", headers={"X-API-Key": key})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode() or "{}")
         items = data if isinstance(data, list) else (data.get("meetings") or data.get("items") or [])
@@ -65,8 +79,12 @@ def _resolve_native(meeting_id: str) -> "tuple[str, str] | None":
                 _native[mid] = (nat, mt.get("platform") or "google_meet")
     except Exception:  # noqa: BLE001 — resolution is best-effort; caller falls back to the numeric id
         logger.exception("native-id resolve failed")
+        _resolve_miss_at[meeting_id] = now
         return None
-    return _native.get(meeting_id)
+    hit = _native.get(meeting_id)
+    if hit is None:
+        _resolve_miss_at[meeting_id] = now  # our id wasn't in the list yet — retry shortly
+    return hit
 
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
@@ -92,6 +110,8 @@ def _run(redis_url: str, dispatcher, live, subject: str) -> None:
     base: dict[str, float] = {}         # uid → first segment start (normalize to meeting-relative)
     final_done: set[str] = set()        # segment_ids finalized → never re-emit
     last_text: dict[str, str] = {}      # segment_id → last draft text (skip identical re-emits)
+    keymap: dict[str, str] = {}         # numeric meeting_id → the routing key chosen on first sight
+    first_seen: dict[str, float] = {}   # numeric meeting_id → first segment time (resolve-grace window)
     logger.info("transcription watcher up — consuming %s (group=%s)", SRC, GROUP)
 
     while True:
@@ -108,21 +128,40 @@ def _run(redis_url: str, dispatcher, live, subject: str) -> None:
                 try:
                     r.xack(SRC, GROUP, msg_id)
                     _handle(r, dispatcher, live, subject, json.loads(fields.get("payload") or "{}"),
-                            last_arm, base, final_done, last_text)
+                            last_arm, base, final_done, last_text, keymap, first_seen)
                 except Exception:  # noqa: BLE001
                     logger.exception("bad transcription frame; skipping")
 
 
-def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_text) -> None:
+RESOLVE_GRACE_SEC = 6.0  # how long to wait for a native id before falling back to the numeric key
+
+
+def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_text, keymap, first_seen) -> None:
     # The bot stamps a NUMERIC meeting_id on every segment — but each re-launch of the SAME Meet gets a
     # fresh numeric id. Resolve it to the native Meet code so the wire/dispatch/feed key on ONE id per
     # physical meeting (re-launches dedupe to a single entry). Fall back to numeric if resolution fails.
+    #
+    # CRITICAL (multi-meeting fix): the routing key is decided ONCE per numeric meeting_id and frozen in
+    # `keymap`. Without this, a meeting whose native resolves only on a LATER segment (the gateway row
+    # lags the first segments) would flip from the numeric key to the native key mid-stream — forking it
+    # into two streams/copilots, or, if a stale/shared fallback was used, fanning several meetings onto
+    # one key. Freezing the first stable key keeps every distinct meeting a SEPARATE stream/copilot/entry.
     mid = str(p.get("meeting_id") or p.get("uid") or "")
     if not mid:
         return
     resolved = _resolve_native(mid)
     native, platform = resolved if resolved else (mid, p.get("platform") or "google_meet")
-    key = native
+    key = keymap.get(mid)
+    if key is None:
+        if resolved is None and p.get("type") != "session_end":
+            # Not yet resolved AND not the end — wait (briefly) for the native id rather than committing
+            # this meeting to its numeric key for life (which would diverge from the terminal's native
+            # key). Bounded by RESOLVE_GRACE_SEC so a gateway that never resolves still surfaces the
+            # meeting under its numeric id instead of swallowing it forever.
+            seen = first_seen.setdefault(mid, time.monotonic())
+            if time.monotonic() - seen < RESOLVE_GRACE_SEC:
+                return
+        key = keymap[mid] = native
     kind = p.get("type")
     out_stream = f"tc:meeting:{key}"
     if kind == "session_end":
@@ -130,6 +169,8 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
         live.drop(key)
         base.pop(key, None)
         last_arm.pop(key, None)
+        keymap.pop(mid, None)
+        first_seen.pop(mid, None)
         logger.info("meeting %s ended → reaping copilot", key)
         return
     if kind != "transcription":
@@ -152,7 +193,11 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
         if not text:
             continue
         completed = bool(seg.get("completed"))
-        sid = str(seg.get("segment_id") or f"{key}:{seg.get('start')}:{text[:16]}")
+        # Scope the dedup id by the meeting key: each bot numbers its OWN segments (0,1,2…), so a bare
+        # segment_id collides ACROSS meetings — without the key prefix, meeting B's "seg-3" would be
+        # dropped as a duplicate of meeting A's "seg-3" (another facet of the multi-meeting collapse).
+        raw_sid = seg.get("segment_id") or f"{seg.get('start')}:{text[:16]}"
+        sid = f"{key}:{raw_sid}"
         if sid in final_done:
             continue
         if not completed and last_text.get(sid) == text:
