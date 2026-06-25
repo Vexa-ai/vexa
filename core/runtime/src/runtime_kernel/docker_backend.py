@@ -11,6 +11,7 @@ bot can't reach the stack), and `DOCKER_SHM_SIZE` gives chromium a real `/dev/sh
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
 
@@ -20,6 +21,8 @@ from .backend import WorkloadHandle
 from .profiles import Runnable
 
 MANAGED_LABEL = "runtime.managed"
+
+logger = logging.getLogger("runtime_kernel.docker_backend")
 
 
 def _worker_naming(workload_id: str) -> tuple[str, dict[str, str]]:
@@ -78,6 +81,42 @@ class DockerBackend:
 
     def _req(self, method: str, path: str, *, timeout: int = 30, **kw):
         return self._session.request(method, f"{self._url}{path}", timeout=timeout, **kw)
+
+    def _image_exists(self, ref: str) -> bool:
+        r = self._req("GET", f"/images/{ref}/json")
+        return r.status_code == 200
+
+    def ensure_image_alias(self, target: str, source: str) -> str:
+        """Ensure ``target`` names a LOCAL image, creating it as a TAG ALIAS of ``source`` if absent —
+        rebuild-free, no pull (the source is the locally-built agent-api image). Used so spawned workers
+        run the agent-api BYTES under a distinct image NAME (see ``profiles.worker_image_for``).
+
+        Idempotent: a no-op when ``target`` already exists, or when target == source (nothing to alias).
+        FAIL-SAFE: any tag failure (source missing, daemon error, malformed ref) is logged and the
+        caller-supplied ``source`` is returned, so dispatch keeps working on the agent-api image. Returns
+        the image name dispatch should use — ``target`` on success, ``source`` on fallback."""
+        if not target or not source or target == source:
+            return source or target
+        try:
+            if self._image_exists(target):
+                return target  # alias already in place — no-op
+            if not self._image_exists(source):
+                logger.warning(
+                    "worker image alias: source %r missing; falling back to it for dispatch", source
+                )
+                return source
+            repo, _, tag = target.partition(":")
+            r = self._req("POST", f"/images/{source}/tag?repo={repo}&tag={tag or 'latest'}")
+            if r.status_code in (200, 201):
+                logger.info("worker image alias created: %s -> %s", source, target)
+                return target
+            logger.warning(
+                "worker image alias: tag %s -> %s failed (%s): %s; falling back to source",
+                source, target, r.status_code, r.text.strip(),
+            )
+        except Exception as e:  # noqa: BLE001 — alias must NEVER break dispatch
+            logger.warning("worker image alias: tag %s -> %s errored: %s; falling back", source, target, e)
+        return source
 
     def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
         if not runnable.image:

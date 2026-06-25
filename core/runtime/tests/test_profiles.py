@@ -15,7 +15,7 @@ import jsonschema
 from referencing import Registry, Resource
 
 from runtime_kernel import default_registry
-from runtime_kernel.profiles import Runnable
+from runtime_kernel.profiles import Runnable, worker_image_for
 
 V012 = Path(__file__).resolve().parents[2]  # …/v0.12
 INVOCATION_SCHEMA = json.loads(
@@ -86,9 +86,11 @@ def test_agent_env_matches_spec_agent_golden(monkeypatch):
     keys are exactly the identity+workspace contract the agent expects, and that an env built from
     that golden carries only string values (runtime.v1 env is map<string,string>)."""
     monkeypatch.setenv("AGENT_IMAGE", "registry.example.com/agent:0.12")
+    monkeypatch.delenv("AGENT_WORKER_IMAGE", raising=False)
     reg = default_registry()
     agent = reg.get("agent")
-    assert agent.runnable.image == "registry.example.com/agent:0.12"
+    # Workers run a DISTINCT image name (the agent-api bytes aliased), not the agent-api name itself.
+    assert agent.runnable.image == "registry.example.com/agent:0.12"  # repo has no agent-api suffix → kept
     assert agent.idle_timeout_sec == 300
     assert agent.max_lifetime_sec == 3600
 
@@ -101,3 +103,42 @@ def test_agent_env_matches_spec_agent_golden(monkeypatch):
     }
     # runtime.v1 env is map<string,string> — every value must already be a string.
     assert all(isinstance(v, str) for v in golden_env.values())
+
+
+# ── worker image name (distinct from the agent-api service image) ───────────────────────────────
+
+def test_worker_image_derives_distinct_name_from_agent_api(monkeypatch):
+    monkeypatch.delenv("AGENT_WORKER_IMAGE", raising=False)
+    assert worker_image_for("vexaai/v012-agent-api:dev") == "vexaai/v012-agent-worker:dev"
+    # tag is preserved through the swap
+    assert worker_image_for("vexaai/v012-agent-api:0.12-rc1") == "vexaai/v012-agent-worker:0.12-rc1"
+    # bare 'agent-api' repo (no -api dash prefix) still rewrites
+    assert worker_image_for("agent-api:dev") == "agent-worker:dev"
+
+
+def test_worker_image_override_env_wins(monkeypatch):
+    monkeypatch.setenv("AGENT_WORKER_IMAGE", "registry.example.com/custom-worker:x")
+    assert worker_image_for("vexaai/v012-agent-api:dev") == "registry.example.com/custom-worker:x"
+
+
+def test_worker_image_falls_back_when_not_derivable(monkeypatch):
+    monkeypatch.delenv("AGENT_WORKER_IMAGE", raising=False)
+    # repo with no agent-api substring → keep the agent image (fail-safe, distinct name impossible)
+    assert worker_image_for("registry.example.com/something:1") == "registry.example.com/something:1"
+    assert worker_image_for("") == ""
+
+
+def test_agent_profile_uses_distinct_worker_image(monkeypatch):
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:dev")
+    monkeypatch.delenv("AGENT_WORKER_IMAGE", raising=False)
+    reg = default_registry()
+    assert reg.get("agent").runnable.image == "vexaai/v012-agent-worker:dev"
+
+
+def test_agent_profile_honors_worker_image_override(monkeypatch):
+    """build_production_app pins AGENT_WORKER_IMAGE to the alias's resolved name (or the agent-api
+    fallback); the registry must honor it so a tag-failure fallback reaches dispatch."""
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:dev")
+    monkeypatch.setenv("AGENT_WORKER_IMAGE", "vexaai/v012-agent-api:dev")  # simulated fallback
+    reg = default_registry()
+    assert reg.get("agent").runnable.image == "vexaai/v012-agent-api:dev"

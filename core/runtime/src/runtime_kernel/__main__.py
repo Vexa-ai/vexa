@@ -90,13 +90,28 @@ def build_production_app():
     from .api import create_app
     from .docker_backend import DockerBackend
     from .kernel import Runtime
-    from .profiles import default_registry
+    from .profiles import default_registry, worker_image_for
+
+    backend = DockerBackend()
+    # Workers run the agent-api BYTES under a distinct image NAME. Ensure that name exists as a local
+    # TAG ALIAS of AGENT_IMAGE up front (rebuild-free, no pull). On any failure ensure_image_alias
+    # returns AGENT_IMAGE, which we then pin as AGENT_WORKER_IMAGE so the registry resolves to it —
+    # dispatch falls back to the agent-api image and never breaks.
+    agent_image = os.getenv("AGENT_IMAGE", "")
+    if agent_image:
+        try:
+            target = worker_image_for(agent_image)
+            resolved = backend.ensure_image_alias(target, agent_image)
+            os.environ["AGENT_WORKER_IMAGE"] = resolved
+        except Exception as e:  # noqa: BLE001 — startup aliasing must never crash the boot
+            logger.warning("worker image alias setup failed: %s; using AGENT_IMAGE", e)
+            os.environ["AGENT_WORKER_IMAGE"] = agent_image
 
     scheduler = _build_scheduler()
     if scheduler is not None:
         _start_ticker(scheduler)
     return create_app(
-        Runtime(backend=DockerBackend(), profiles=default_registry()),
+        Runtime(backend=backend, profiles=default_registry()),
         scheduler=scheduler,
     )
 
