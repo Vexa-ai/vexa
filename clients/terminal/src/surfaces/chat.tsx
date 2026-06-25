@@ -28,6 +28,60 @@ function historyOp(op: { label: string }): Op {
   return { icon: opIcon[op.label] ?? opIcon.tool, label: op.label, status: "done" };
 }
 
+const ROUTINE_COMMAND = "/routine";
+const ROUTINE_NAME_STOP_WORDS = new Set([
+  "a", "an", "and", "as", "at", "by", "create", "each", "every", "for", "from", "in", "into",
+  "me", "my", "of", "on", "our", "please", "routine", "scheduled", "the", "to", "with",
+  "hour", "hours", "day", "days", "week", "weeks", "month", "months", "am", "pm",
+]);
+
+function isRoutineCommand(text: string): boolean {
+  return /^\/routine(?:\s|$)/i.test(text);
+}
+
+function routineDescription(text: string): string {
+  return text.replace(/^\/routine(?:\s+|$)/i, "").trim();
+}
+
+function routineFileStem(description: string): string {
+  const words = description.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const stem = words
+    .filter((word) => !ROUTINE_NAME_STOP_WORDS.has(word) && !/^\d+(?:am|pm)?$/.test(word))
+    .slice(0, 6)
+    .join("-");
+  return stem || "scheduled-routine";
+}
+
+function routineCreationPrompt(commandText: string): string {
+  const description = routineDescription(commandText);
+  if (!description) {
+    return [
+      "The user invoked /routine without a routine description.",
+      "Ask one concise follow-up for the task to run and the cadence. Do not create a routine file until the user gives enough detail, or explicitly accepts a default daily 9 AM schedule.",
+    ].join("\n\n");
+  }
+
+  const fileStem = routineFileStem(description);
+  return [
+    `Create a scheduled routine from this user request: ${JSON.stringify(description)}.`,
+    "",
+    "You must write the routine into the user's workspace as a markdown file. Do not only explain the routine.",
+    `Use this path unless a clearly better concise kebab-case name fits the request: routines/${fileStem}.md`,
+    "",
+    "The file must have YAML frontmatter in exactly this shape:",
+    "---",
+    "enabled: true",
+    'cron: "<valid 5-field cron expression>"',
+    "prompt: |",
+    "  <the task prompt the scheduled agent should run>",
+    "---",
+    "",
+    "Derive the cron from the user's schedule words. Examples: \"every 2 hours\" => \"0 */2 * * *\"; \"at 9am\" => \"0 9 * * *\". If no schedule is explicit, use daily at 9 AM local scheduler time: \"0 9 * * *\".",
+    "Make the prompt the actual recurring task, with schedule wording removed unless it is necessary context.",
+    "After writing the file, briefly confirm the path and cron.",
+  ].join("\n");
+}
+
 function ChatTab({ params }: TabProps) {
   const subject = (params.subject as string) ?? "u_live";  // one workspace shared with meeting research
   const session = (params.session as string | null) ?? null;
@@ -70,14 +124,15 @@ function ChatTab({ params }: TabProps) {
   const patchAgent = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
     setTurns((ts) => ts.map((t, i) => (i === ts.length - 1 && t.role === "agent" ? fn(t) : t)));
 
-  const send = async (text: string) => {
+  const send = async (text: string, prompt = text) => {
     const v = text.trim();
-    if (!v || busy) return;
+    const p = prompt.trim();
+    if (!v || !p || busy) return;
     const n = idRef.current++;
     setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: v }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
     setBusy(true);
     try {
-      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: v, subject, session }) });
+      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session }) });
       const reader = r.body?.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -104,6 +159,7 @@ function ChatTab({ params }: TabProps) {
   const onSubmit = () => {
     const v = value.trim();
     if (!v) return;
+    if (isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }
     if (v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); setValue(""); return; } }
     void send(v);
     setValue("");
@@ -138,4 +194,4 @@ function ChatTab({ params }: TabProps) {
 registerTab("chat", ChatTab);
 registerCommand({ id: "skill.research", title: "Research and file to the workspace", skill: "/research", run: () => {} });
 registerCommand({ id: "skill.draft", title: "Draft an email or doc", skill: "/draft", run: () => {} });
-registerCommand({ id: "skill.routine", title: "Save what you did as a routine", skill: "/routine", run: () => {} });
+registerCommand({ id: "skill.routine", title: "Create a scheduled routine", skill: ROUTINE_COMMAND, run: () => {} });
