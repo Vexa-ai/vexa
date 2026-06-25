@@ -35,6 +35,103 @@ function toolOp(tool: string): Op {
   return { icon, label: tool, status: "done" };
 }
 
+// ── Connected docs — the meeting's knowledge-graph entity + the [[entities]] it links ─────────────
+//  The meeting doc lives at a deterministic path: kg/entities/meeting/<native>.md. When present we show
+//  its title + the [[wikilinks]] parsed from the body as chips that open that entity's doc. A wikilink
+//  [[Title]] is resolved to a real doc by matching its slug against the workspace tree (so we open the
+//  entity under its true type folder, whatever that is). 404 → a quiet "no notes yet" state.
+const SUBJECT_DOCS = "u_live";
+const docSlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+const baseName = (p: string) => p.split("/").pop() ?? p;
+const docTabFor = (path: string, title: string): TabDescriptor =>
+  ({ id: `doc:${path}`, title, kind: "doc", params: { path }, context: { kind: "doc-context", params: { path } } });
+
+function ConnectedPanel({ native }: { native: string }) {
+  const layout = useService(LayoutServiceId);
+  const [state, setState] = useState<{ status: "loading" | "absent" | "present"; title: string; links: string[] }>({ status: "loading", title: "", links: [] });
+  // slug → real entity doc path, built from the workspace tree (so a [[Title]] resolves to its true type)
+  const [slugMap, setSlugMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let alive = true;
+    const path = `kg/entities/meeting/${native}.md`;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/workspace/file?subject=${SUBJECT_DOCS}&path=${encodeURIComponent(path)}`);
+        if (!alive) return;
+        if (!r.ok) { setState({ status: "absent", title: "", links: [] }); return; }
+        const content: string = (await r.json()).content ?? "";
+        const fmTitle = content.match(/^---\n([\s\S]*?)\n---/)?.[1]?.split("\n").find((l) => l.startsWith("title:"))?.slice(6).trim();
+        const h1 = content.match(/^#\s+(.+)$/m)?.[1]?.trim();
+        const title = (fmTitle || h1 || native).replace(/^["']|["']$/g, "");
+        const links = [...new Set([...content.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1].trim()).filter(Boolean))];
+        setState({ status: "present", title, links });
+      } catch { if (alive) setState({ status: "absent", title: "", links: [] }); }
+    })();
+    return () => { alive = false; };
+  }, [native]);
+
+  // load the tree once so wikilink slugs resolve to their real entity doc paths
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const files: string[] = (await (await fetch(`/api/workspace/tree?subject=${SUBJECT_DOCS}`)).json()).files ?? [];
+        if (!alive) return;
+        const map: Record<string, string> = {};
+        for (const f of files) if (f.startsWith("kg/entities/") && f.endsWith(".md")) map[baseName(f).replace(/\.md$/, "")] = f;
+        setSlugMap(map);
+      } catch { /* offline — fall back to topic/<slug> */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const openLink = (title: string) => {
+    const slug = docSlug(title);
+    const path = slugMap[slug] ?? `kg/entities/topic/${slug}.md`;  // resolved type, else default to topic
+    layout.openTab(docTabFor(path, title));
+  };
+
+  if (state.status === "loading") return null;
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
+        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Connected</span>
+        {state.status === "present" && state.links.length > 0 && <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{state.links.length}</span>}
+        <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
+      </div>
+      {state.status === "absent" && (
+        <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 2px", lineHeight: 1.5 }}>No notes yet — they&apos;re written when the meeting ends (or a prep routine runs).</div>
+      )}
+      {state.status === "present" && (
+        <>
+          <button onClick={() => layout.openTab(docTabFor(`kg/entities/meeting/${native}.md`, state.title))} title="Open this meeting's notes"
+            style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px 5px 6px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 360, marginBottom: state.links.length ? 8 : 0 }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
+            <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, background: "var(--accentbg)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="panel" size={11} /></span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{state.title}</span>
+          </button>
+          {state.links.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {state.links.map((l) => (
+                <button key={l} onClick={() => openLink(l)} title={`Open ${l}`}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {state.links.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 2px" }}>Notes recorded — no linked entities yet.</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function LiveCards({ cards, connected, onResearch }: { cards: LiveCard[]; connected: boolean; onResearch: (c: LiveCard) => void }) {
   // the feed re-surfaces the same entity across beats — dedupe by title (first kind/body wins)
   const seen = new Set<string>();
@@ -245,6 +342,7 @@ function MeetingTab({ params }: TabProps) {
         </header>
         {!isLive && <EntityList present={present} detected={detected} onOpen={openEntity} onResearch={(e) => research(e.title, e.type)} />}
         {isLive && <LiveCards cards={liveData.cards} connected={liveData.connected} onResearch={(c) => research(c.title, c.kind)} />}
+        {m.native_id && <ConnectedPanel native={m.native_id} />}
         {feed.length > 0 && (
           <div className="vx-fade-up" style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 20 }}>
             <Conversation turns={feed} busy={busy} />

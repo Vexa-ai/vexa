@@ -222,15 +222,31 @@ def serve_meeting(
     stream: _Stream, *, transcript_stream: str, out_topic: str,
     card_turn: Callable[[list[dict]], Iterator[dict]], idle_ms: int,
     beat_segments: int = 4,
+    doc_turn: Callable[[list[dict]], Iterator[dict]] | None = None,
 ) -> None:
     """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
     cheaply (a NEW speaker, or ``beat_segments`` completed segments), and run a copilot beat that XADDs
     proactive cards to ``out_topic``. The transcript keeps it non-idle; ``session_end`` (or an idle gap)
-    reaps it."""
+    reaps it.
+
+    Cards surfaced across the meeting are accumulated (de-duped by title) and, on ``session_end``,
+    handed to ``doc_turn`` — the post-meeting WRITE turn that authors/updates the kg meeting entity.
+    """
     seen_speakers: set[str] = set()
     buffer: list[dict] = []
+    cards: list[dict] = []          # running, de-duped (by title) list of every surfaced card
+    seen_titles: set[str] = set()
     last = "0"  # read the whole transcript from the start (never miss early segments)
     n = 0
+
+    def _run_beat(segs: list[dict], idx: int) -> None:
+        tid = f"beat{idx}"
+        for ev in card_turn(segs):
+            if ev.get("type") == "card":
+                _accumulate_card(cards, seen_titles, ev.get("card") or {})
+            stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": tid})})
+        stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": tid})})
+
     while True:
         resp = stream.xread({transcript_stream: last}, count=50, block=idle_ms)
         if not resp:
@@ -242,7 +258,10 @@ def serve_meeting(
                 payload = json.loads(fields.get("payload", "{}"))
                 if payload.get("type") == "session_end":
                     if buffer:
-                        _emit_beat(stream, out_topic, card_turn, list(buffer), n + 1)
+                        n += 1
+                        _run_beat(list(buffer), n)
+                    if doc_turn is not None:  # post-meeting WRITE: author/update the kg meeting entity
+                        _emit_turn(stream, out_topic, lambda: doc_turn(cards), "meeting-doc")
                     return  # meeting ended → reap
                 for seg in payload.get("segments", []):
                     if not seg.get("completed", True):
@@ -254,15 +273,79 @@ def serve_meeting(
                         new_speaker = True
         if buffer and (new_speaker or len(buffer) >= beat_segments):
             n += 1
-            _emit_beat(stream, out_topic, card_turn, list(buffer), n)
+            _run_beat(list(buffer), n)
             buffer = []
 
 
-def _emit_beat(stream: _Stream, out_topic: str, card_turn, segments: list[dict], n: int) -> None:
-    tid = f"beat{n}"
-    for ev in card_turn(segments):
+def _accumulate_card(cards: list[dict], seen_titles: set[str], card: dict) -> None:
+    """Retain a surfaced card, de-duped by (case-folded) title so re-surfacing across beats doesn't
+    duplicate it in the final meeting doc."""
+    title = (card.get("title") or "").strip()
+    if not title:
+        return
+    key = title.casefold()
+    if key in seen_titles:
+        return
+    seen_titles.add(key)
+    cards.append(card)
+
+
+def _emit_turn(stream: _Stream, out_topic: str, turn: Callable[[], Iterator[dict]], tid: str) -> None:
+    for ev in turn():
         stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": tid})})
     stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": tid})})
+
+
+def _emit_beat(stream: _Stream, out_topic: str, card_turn, segments: list[dict], n: int) -> None:
+    _emit_turn(stream, out_topic, lambda: card_turn(segments), f"beat{n}")
+
+
+# ── post-meeting WRITE turn: distill the surfaced cards into the kg meeting entity ────────────────
+
+_CARD_GROUP = {  # card kind → the section it lands under in the doc
+    "person": "Attendees", "company": "Companies", "topic": "Topics",
+    "action": "Actions",
+}
+
+MEETING_DOC_PROMPT = (
+    "The meeting has ENDED. Author or update the knowledge-graph entity for it as a SINGLE markdown "
+    "file at the EXACT path `kg/entities/meeting/{native}.md` in this workspace (create parent dirs if "
+    "needed). This must be IDEMPOTENT — if the file already exists, UPDATE it in place (do not create a "
+    "duplicate or a new path).\n\n"
+    "The file MUST have this exact YAML frontmatter (between `---` fences) as the very first lines:\n"
+    "---\n"
+    "type: meeting\n"
+    "id: {native}\n"
+    "title: {title}\n"
+    "meeting_id: {meeting_id}\n"
+    "session_uid: {session_uid}\n"
+    "platform: {platform}\n"
+    "date: {date}\n"
+    "---\n\n"
+    "After the frontmatter, write a 2-4 line plain-English SUMMARY of the meeting (no transcript — a "
+    "distilled summary), then the surfaced entities grouped under `## Attendees`, `## Companies`, "
+    "`## Topics`, `## Decisions`, `## Actions` headings, each entry a `[[wikilink]]` (omit a heading if "
+    "it has no entries). Here are the entities surfaced during the meeting (JSON):\n\n{cards}\n\n"
+    "Do NOT copy the raw transcript. When done, write/edit ONLY that one file."
+)
+
+
+def meeting_doc_turn(
+    work: Path, cards: list[dict], *, native: str, meeting_id: str, session_uid: str,
+    platform: str, date: str, title: str, model: str | None = None,
+) -> Iterator[dict]:
+    """The post-meeting WRITE turn: ONE governed turn (commit=True, Write/Edit allowed,
+    session_continuity=False so it never touches the chat session) that authors/updates the meeting
+    entity at ``kg/entities/meeting/<native>.md`` — a distilled summary + the surfaced cards as grouped
+    wikilinks. Idempotent (re-running updates rather than duplicates)."""
+    prompt = MEETING_DOC_PROMPT.format(
+        native=native, title=title, meeting_id=meeting_id, session_uid=session_uid,
+        platform=platform, date=date, cards=json.dumps(cards, ensure_ascii=False),
+    )
+    yield from run_turn_over_workspace(
+        work, prompt, model=model, allowed_tools=["Read", "Write", "Edit"],
+        commit=True, session_continuity=False,
+    )
 
 
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())
@@ -279,9 +362,20 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
 
     transcript_stream = os.environ.get("VEXA_TRANSCRIPT_STREAM")
     if transcript_stream:  # a live meeting dispatch — consume the transcript, emit cards
+        # native id == the tail of the transcript stream (tc:meeting:<native>); meeting facts are in env.
+        native = os.environ.get("VEXA_MEETING_ID") or transcript_stream.rsplit(":", 1)[-1]
+        session_uid = os.environ.get("VEXA_MEETING_SESSION_UID") or native
+        platform = os.environ.get("VEXA_MEETING_PLATFORM") or "google_meet"
+        import datetime as _dt
+        date = _dt.date.today().isoformat()
+        title = f"Meeting {native}"
         serve_meeting(
             client, transcript_stream=transcript_stream, out_topic=out_topic,
             card_turn=lambda segs: meeting_card_turn(work, segs, model=meeting_model), idle_ms=idle_ms,
+            doc_turn=lambda cards: meeting_doc_turn(
+                work, cards, native=native, meeting_id=native, session_uid=session_uid,
+                platform=platform, date=date, title=title, model=model,
+            ),
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
         # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are still governed

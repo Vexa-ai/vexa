@@ -52,6 +52,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
     if meeting and meeting.get("meeting_id"):
         env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{meeting['meeting_id']}"
+        # Carry the meeting facts the post-meeting WRITE turn stamps into the kg entity frontmatter.
+        env["VEXA_MEETING_ID"] = str(meeting["meeting_id"])
+        if meeting.get("session_uid"):
+            env["VEXA_MEETING_SESSION_UID"] = str(meeting["session_uid"])
+        if meeting.get("platform"):
+            env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
     return env
 
 

@@ -7,6 +7,7 @@ message exits, and an idle read reaps the harness (returns).
 from __future__ import annotations
 
 import json
+import pathlib
 
 from agent_api.worker import serve
 
@@ -125,6 +126,95 @@ def test_serve_meeting_reaps_on_session_end():
     serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn, idle_ms=10)
     # the session_end flush emitted the buffered beat, then returned
     assert any(e["type"] == "card" for e in s.events())
+
+
+def test_session_end_runs_write_turn_with_deduped_cards():
+    """On session_end, serve_meeting hands the running, de-duped card list to doc_turn (the post-meeting
+    WRITE turn) and emits its events tagged `meeting-doc`."""
+    captured: dict = {}
+
+    def card_turn(segments):
+        # surface the SAME person twice across beats — the doc turn must see it once
+        yield {"type": "card", "card": {"kind": "person", "title": "Priya", "body": "lead"}}
+        yield {"type": "card", "card": {"kind": "action", "title": "Send quote", "body": "by Fri"}}
+
+    def doc_turn(cards):
+        captured["cards"] = cards
+        yield {"type": "done", "ok": True, "reply": "wrote kg/entities/meeting/abc.md"}
+
+    s = MeetingStream(inbox=[
+        _transcript("1-0", _seg("Jane", "a"), _seg("Raj", "b")),  # new-speaker gate → beat1
+        _transcript("2-0", _seg("Jane", "c"), _seg("Jane", "d")),  # buffered, flushed on end
+        ("3-0", {"payload": json.dumps({"type": "session_end"})}),
+    ])
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=card_turn,
+                  idle_ms=10, doc_turn=doc_turn)
+
+    titles = sorted(c["title"] for c in captured["cards"])
+    assert titles == ["Priya", "Send quote"]  # de-duped across beats
+    assert any(e.get("turn_id") == "meeting-doc" and e.get("type") == "done" for e in s.events())
+
+
+def test_meeting_doc_turn_authors_entity_with_frontmatter_and_links(tmp_path):
+    """The real post-meeting WRITE turn: a fake `claude` writes the entity; assert run_unit_turn drove a
+    write to kg/entities/meeting/<native>.md with the meeting frontmatter + grouped wikilinks, and the
+    prompt carried the surfaced cards."""
+    from agent_api import worker
+
+    native = "nba-agyz-gbe"
+    seen_prompt: dict = {}
+
+    def fake_exec(argv, cwd):
+        # argv is `claude -p <prompt> --output-format ...` — the prompt follows the `-p` flag.
+        seen_prompt["prompt"] = argv[argv.index("-p") + 1]
+        seen_prompt["tools"] = argv
+        # Author the entity exactly where the prompt demands (idempotent target path).
+        doc = pathlib.Path(cwd) / "kg" / "entities" / "meeting" / f"{native}.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(
+            "---\n"
+            "type: meeting\n"
+            f"id: {native}\n"
+            "title: Meeting nba-agyz-gbe\n"
+            f"meeting_id: {native}\n"
+            f"session_uid: {native}\n"
+            "platform: google_meet\n"
+            "date: 2026-06-25\n"
+            "---\n\n"
+            "Priya joined and committed to sending a quote.\n\n"
+            "## Attendees\n- [[Priya]]\n\n## Actions\n- [[Send quote]]\n"
+        )
+        # minimal claude --output-format stream-json line so run_unit_turn yields a `done`.
+        yield json.dumps({"type": "result", "subtype": "success", "result": "wrote", "session_id": "s1"})
+
+    cards = [
+        {"kind": "person", "title": "Priya", "body": "lead"},
+        {"kind": "action", "title": "Send quote", "body": "by Fri"},
+    ]
+    # meeting_doc_turn drives the module-level _exec_claude via run_turn_over_workspace; patch it.
+    import unittest.mock as mock
+    with mock.patch.object(worker, "_exec_claude", fake_exec):
+        evs = list(worker.meeting_doc_turn(
+            tmp_path, cards, native=native, meeting_id=native, session_uid=native,
+            platform="google_meet", date="2026-06-25", title="Meeting nba-agyz-gbe",
+        ))
+
+    assert any(e.get("type") == "commit" for e in evs)  # the entity write was committed (governance passed)
+    assert "kg/entities/meeting/{}.md".format(native) in seen_prompt["prompt"]
+    assert '"Priya"' in seen_prompt["prompt"] and '"Send quote"' in seen_prompt["prompt"]
+
+    doc = (tmp_path / "kg" / "entities" / "meeting" / f"{native}.md").read_text()
+    assert "type: meeting" in doc and f"id: {native}" in doc
+    assert "session_uid:" in doc and "platform: google_meet" in doc and "date: 2026-06-25" in doc
+    assert "[[Priya]]" in doc and "[[Send quote]]" in doc
+    # idempotent: a second run updates the same path, not a duplicate
+    with mock.patch.object(worker, "_exec_claude", fake_exec):
+        list(worker.meeting_doc_turn(
+            tmp_path, cards, native=native, meeting_id=native, session_uid=native,
+            platform="google_meet", date="2026-06-25", title="Meeting nba-agyz-gbe",
+        ))
+    found = list((tmp_path / "kg" / "entities" / "meeting").glob("*.md"))
+    assert [p.name for p in found] == [f"{native}.md"]
 
 
 def test_parse_cards_tolerant():
