@@ -10,6 +10,7 @@ dependencies = [
     "referencing>=0.30,<0.40",
     "PyYAML>=6,<7",
     "fastapi>=0.110,<1",
+    "python-multipart>=0.0.31,<1",
     "uvicorn>=0.29,<1",
     "pytest>=8,<9",
 ]

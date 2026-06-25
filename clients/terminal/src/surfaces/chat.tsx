@@ -2,7 +2,7 @@
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { useService, useStore, CommandServiceId } from "../platform";
 import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
@@ -36,6 +36,27 @@ type ReferenceToken = { kind: "file" | "meeting"; value: string; raw: string };
 type ReferenceSegment = { kind: "text"; text: string } | { kind: "reference"; ref: ReferenceToken };
 type ActiveReference = ReferenceToken;
 const REFERENCE_RE = /@(file|meeting):([A-Za-z0-9._~%+@:/=-]+)/g;
+const MAX_TEXTAREA_HEIGHT = 156;
+const ATTACHMENT_ACCEPT = [
+  "image/*", ".pdf", ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".log",
+  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
+].join(",");
+
+type ComposerAttachment = { id: string; file: File; isImage: boolean; previewUrl?: string };
+type UploadedWorkspaceFile = { name: string; path: string };
+
+function resizeComposerTextarea(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  const height = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
+  el.style.height = `${height}px`;
+  el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
+}
+
+function attachmentPrompt(prompt: string, files: UploadedWorkspaceFile[]): string {
+  if (files.length === 0) return prompt.trim();
+  const attached = ["Attached files:", ...files.map((f) => `- @file:${f.path}`)].join("\n");
+  return prompt.trim() ? `${prompt.trim()}\n\n${attached}` : attached;
+}
 
 function tokenizeReferences(text: string): ReferenceSegment[] {
   const parts: ReferenceSegment[] = [];
@@ -208,6 +229,27 @@ function ComposerReferences({ text }: { text: string }) {
   );
 }
 
+function AttachmentChips({ attachments, onRemove }: { attachments: ComposerAttachment[]; onRemove: (id: string) => void }) {
+  if (attachments.length === 0) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0 }}>
+      {attachments.map((a) => (
+        <span key={a.id} title={a.file.name}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 210, minWidth: 0, border: "1px solid var(--line2)", borderRadius: 7, background: "var(--panel2)", color: "var(--t2)", padding: "3px 5px", fontSize: 12, lineHeight: 1.2 }}>
+          {a.previewUrl
+            ? <img src={a.previewUrl} alt="" style={{ width: 24, height: 24, borderRadius: 4, objectFit: "cover", flex: "none", background: "var(--bg)" }} />
+            : <span style={{ width: 24, height: 24, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", flex: "none", background: "var(--bg)", color: "var(--t3)" }}><Icon name="file" size={13} /></span>}
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file.name || "upload"}</span>
+          <button aria-label={`Remove ${a.file.name || "attachment"}`} title="Remove" type="button" onClick={() => onRemove(a.id)}
+            style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 1, flex: "none" }}>
+            <Icon name="x" size={12} />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function referenceContext(text: string): string {
   const refs = referenceTokens(text);
   if (refs.length === 0) return "";
@@ -371,16 +413,30 @@ export function Chat({ params = {} }: ChatProps) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [value, setValue] = useState("");
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const idRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentSeqRef = useRef(0);
+  const attachmentsRef = useRef<ComposerAttachment[]>([]);
 
   useEffect(() => {
     const focus = () => inputRef.current?.focus();
     window.addEventListener("vexa:terminal:focus-chat", focus);
     return () => window.removeEventListener("vexa:terminal:focus-chat", focus);
+  }, []);
+
+  useEffect(() => { if (inputRef.current) resizeComposerTextarea(inputRef.current); }, [value]);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  useEffect(() => () => {
+    for (const a of attachmentsRef.current) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    }
   }, []);
 
   // Load the session's prior conversation on mount AND whenever `session` changes — the layout may REUSE
@@ -413,9 +469,62 @@ export function Chat({ params = {} }: ChatProps) {
   const patchAgent = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
     setTurns((ts) => ts.map((t, i) => (i === ts.length - 1 && t.role === "agent" ? fn(t) : t)));
 
-  const send = async (text: string, prompt = text) => {
+  const addFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    setUploadError(null);
+    setAttachments((current) => [
+      ...current,
+      ...files.map((file) => {
+        const isImage = file.type.startsWith("image/");
+        return {
+          id: `att-${attachmentSeqRef.current++}`,
+          file,
+          isImage,
+          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+        };
+      }),
+    ]);
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((current) => current.filter((a) => {
+      if (a.id !== id) return true;
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      return false;
+    }));
+  };
+
+  const clearAttachments = () => {
+    setAttachments((current) => {
+      for (const a of current) {
+        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      }
+      return [];
+    });
+  };
+
+  const uploadAttachments = async (): Promise<UploadedWorkspaceFile[]> => {
+    const form = new FormData();
+    form.append("subject", subject);
+    for (const a of attachments) form.append("files", a.file, a.file.name || "upload");
+    const r = await fetch("/api/workspace/upload", { method: "POST", body: form });
+    if (!r.ok) {
+      let detail = `Upload failed (${r.status})`;
+      try {
+        const data = await r.json() as { detail?: string };
+        if (data.detail) detail = data.detail;
+      } catch {
+        // keep the status-derived message
+      }
+      throw new Error(detail);
+    }
+    const data = await r.json() as { files?: UploadedWorkspaceFile[] };
+    return data.files ?? [];
+  };
+
+  const send = async (text: string, prompt = text, referenceSource = text) => {
     const v = text.trim();
-    const basePrompt = promptWithReferences(prompt, v);
+    const basePrompt = promptWithReferences(prompt, referenceSource.trim());
     if (!v || !basePrompt || busy) return;
     const n = idRef.current++;
     setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: v }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
@@ -456,13 +565,49 @@ export function Chat({ params = {} }: ChatProps) {
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
   const newChat = () => selectSession(`chat-${Date.now().toString(36)}`);
 
-  const onSubmit = () => {
+  const onSubmit = async () => {
     const v = value.trim();
-    if (!v) return;
-    if (isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }
-    if (v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); setValue(""); return; } }
-    void send(v);
+    const hasAttachments = attachments.length > 0;
+    if ((!v && !hasAttachments) || busy || uploading) return;
+    if (!hasAttachments && isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }
+    if (!hasAttachments && v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); setValue(""); return; } }
+    let prompt = isRoutineCommand(v) ? routineCreationPrompt(v) : v;
+    let displayText = v;
+    let referenceSource = v;
+    if (hasAttachments) {
+      setUploading(true);
+      setUploadError(null);
+      let uploaded: UploadedWorkspaceFile[];
+      try {
+        uploaded = await uploadAttachments();
+      } catch (e) {
+        setUploadError((e as Error)?.message || "Upload failed");
+        setUploading(false);
+        return;
+      }
+      setUploading(false);
+      prompt = attachmentPrompt(prompt, uploaded);
+      referenceSource = [v, uploaded.map((f) => `@file:${f.path}`).join("\n")].filter(Boolean).join("\n");
+      displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
+      clearAttachments();
+    }
+    void send(displayText, prompt, referenceSource);
     setValue("");
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+    if (files.length === 0) return;
+    e.preventDefault();
+    addFiles(files);
+  };
+
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    addFiles(Array.from(e.dataTransfer.files));
   };
 
   const slash = value.startsWith("/");
@@ -475,7 +620,11 @@ export function Chat({ params = {} }: ChatProps) {
           {skills.map((c) => <div key={c.id} onMouseDown={() => setValue(c.skill! + " ")} style={{ display: "flex", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13 }}><code style={{ fontFamily: "var(--mono)", color: "var(--accent)", minWidth: 88 }}>{c.skill}</code><span style={{ color: "var(--t3)", fontSize: 12 }}>{c.title}</span></div>)}
         </div>
       )}
-      <div style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
+      <div
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={onDrop}
+        style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
+      >
         {focusRef && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
@@ -484,13 +633,41 @@ export function Chat({ params = {} }: ChatProps) {
           </div>
         )}
         <ComposerReferences text={value} />
-        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-          <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13 }}>/</span>
-          <input ref={inputRef} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); }} placeholder="Type / for skills, or ask the agent…" disabled={busy}
-            style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, minWidth: 0 }} />
+        <AttachmentChips attachments={attachments} onRemove={removeAttachment} />
+        {uploadError && <div style={{ color: "var(--danger, #ff8b8b)", fontSize: 12, lineHeight: 1.35 }}>{uploadError}</div>}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept={ATTACHMENT_ACCEPT}
+          onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.currentTarget.value = ""; }}
+          style={{ display: "none" }}
+        />
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 9 }}>
+          <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13, height: 30, display: "flex", alignItems: "center", flex: "none" }}>/</span>
+          <textarea
+            ref={inputRef}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onInput={(e) => resizeComposerTextarea(e.currentTarget)}
+            onPaste={onPaste}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.shiftKey) return;
+              e.preventDefault();
+              void onSubmit();
+            }}
+            placeholder="Type / for skills, or ask the agent…"
+            disabled={busy || uploading}
+            rows={1}
+            style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 28, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "4px 0", margin: 0, fontFamily: "inherit" }}
+          />
+          <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
+            style={{ background: "transparent", color: "var(--t3)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
+            <Icon name="paperclip" size={15} />
+          </button>
           {busy
             ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
-            : <button aria-label="Send" onClick={onSubmit} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><Icon name="send" size={16} /></button>}
+            : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
         </div>
       </div>
     </>

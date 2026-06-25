@@ -13,3 +13,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ seg: string
     headers: { "Content-Type": "application/json" },
   });
 }
+
+export async function POST(req: NextRequest, ctx: { params: Promise<{ seg: string[] }> }) {
+  const { seg } = await ctx.params;
+  const upstream = await fetch(`${AGENT_API}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
+    method: "POST",
+    body: req.body,
+    headers: { "Content-Type": req.headers.get("Content-Type") ?? "" },
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  return new Response(await upstream.text(), {
+    status: upstream.status,
+    headers: { "Content-Type": upstream.headers.get("Content-Type") || "application/json" },
+  });
+}

@@ -129,6 +129,39 @@ def test_workspace_read_and_traversal_guard(tmp_path):
     assert c.get("/api/workspace/file", params={"subject": "u_jane", "path": "nope.md"}).status_code == 404
 
 
+def test_workspace_upload_saves_hash_prefixed_files_under_subject(tmp_path):
+    import hashlib
+
+    from agent_api.workspace_reader import WorkspaceReader
+
+    reader = WorkspaceReader(str(tmp_path))
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), reader=reader,
+    ))
+    first = b"one"
+    second = b"two"
+    r = c.post(
+        "/api/workspace/upload",
+        data={"subject": "u_jane"},
+        files=[
+            ("files", ("../../same.txt", first, "text/plain")),
+            ("files", ("same.txt", second, "text/plain")),
+        ],
+    )
+
+    assert r.status_code == 200
+    first_name = f"{hashlib.sha256(first).hexdigest()[:16]}-same.txt"
+    second_name = f"{hashlib.sha256(second).hexdigest()[:16]}-same.txt"
+    files = r.json()["files"]
+    assert files == [
+        {"name": first_name, "path": f"uploads/{first_name}"},
+        {"name": second_name, "path": f"uploads/{second_name}"},
+    ]
+    assert (tmp_path / "u_jane" / files[0]["path"]).read_bytes() == first
+    assert (tmp_path / "u_jane" / files[1]["path"]).read_bytes() == second
+    assert not (tmp_path / "same.txt").exists()
+
+
 def test_workspace_tree_hidden_mode(tmp_path):
     from agent_api.workspace_reader import WorkspaceReader
     ws = tmp_path / "u_jane"

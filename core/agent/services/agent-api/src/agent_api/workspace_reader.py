@@ -61,6 +61,9 @@ class WorkspaceReader:
             raise ValueError("invalid subject")
         return ws
 
+    def workspace_dir(self, subject: str) -> Path:
+        return self._ws(subject)
+
     def tree(self, subject: str, hidden: bool = False) -> list[str]:
         """Sorted relative paths of the subject's files.
 

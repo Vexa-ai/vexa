@@ -17,11 +17,14 @@ honestly. Built lazily (PEP 562) so ``uvicorn agent_api.api:app`` wires the real
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
+from pathlib import Path
 from typing import Iterator, Optional
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
@@ -35,6 +38,14 @@ from .ports import SchedulerPort, StreamReader
 from .workspace_reader import WorkspaceReader
 
 logger = logging.getLogger("agent_api.api")
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
+def _upload_filename(name: str | None) -> str:
+    base = (name or "upload").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    base = re.sub(r"\s+", "_", base)
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", base).strip("._-")
+    return base[:160] or "upload"
 
 
 def _truncate_title(text: str, *, limit: int = 60) -> str:
@@ -529,6 +540,37 @@ def create_app(
     @app.get("/api/workspace/tree")
     def ws_tree(subject: str, hidden: bool = False):
         return {"files": wsr.tree(subject, hidden=hidden)}
+
+    @app.post("/api/workspace/upload")
+    async def ws_upload(subject: str = Form(...), files: list[UploadFile] = File(...)):
+        if not files:
+            raise HTTPException(status_code=400, detail="no files uploaded")
+        try:
+            ws = wsr.workspace_dir(subject)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        uploads = ws / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        pending: list[tuple[Path, bytes, str, str]] = []
+        for file in files:
+            try:
+                content = await file.read()
+            finally:
+                await file.close()
+            if len(content) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail=f"{file.filename or 'upload'} exceeds 25MB")
+            safe_name = _upload_filename(file.filename)
+            digest = hashlib.sha256(content).hexdigest()
+            stored_name = f"{digest[:16]}-{safe_name}"
+            target = (uploads / stored_name).resolve()
+            if uploads.resolve() not in target.parents:
+                raise HTTPException(status_code=400, detail="invalid filename")
+            pending.append((target, content, stored_name, f"uploads/{stored_name}"))
+        uploaded: list[dict[str, str]] = []
+        for target, content, stored_name, path in pending:
+            target.write_bytes(content)
+            uploaded.append({"name": stored_name, "path": path})
+        return {"files": uploaded}
 
     @app.get("/api/workspace/file")
     def ws_file(subject: str, path: str):
