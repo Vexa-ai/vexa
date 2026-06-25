@@ -13,7 +13,7 @@ export function registerEngineCommands(container: ServiceContainer): void {
   cmd.register({ id: "workbench.toggleLeft", title: "Toggle Left Sidebar", run: ({ container: c }) => c.get(LayoutServiceId).toggleLeft() });
   cmd.register({ id: "workbench.toggleRight", title: "Toggle Right Sidebar", run: ({ container: c }) => c.get(LayoutServiceId).toggleRight() });
   cmd.register({ id: "workbench.resetLayout", title: "Reset Layout", run: ({ container: c }) => c.get(LayoutServiceId).resetLayout() });
-  cmd.register({ id: "chat.new", title: "New Session", run: ({ container: c }) => c.get(LayoutServiceId).openTab({ id: `chat:${Date.now().toString(36)}`, title: "New chat", kind: "chat", params: { subject: "u_jane", session: null }, context: null }) });
+  cmd.register({ id: "chat.new", title: "New Session", run: ({ container: c }) => c.get(LayoutServiceId).openTab({ id: `chat:${Date.now().toString(36)}`, title: "New chat", kind: "chat", params: { subject: "u_live", session: null }, context: null }) });
 
   // one "show list" command per registered left list (generated from the registry).
   for (const l of registry.lists()) {

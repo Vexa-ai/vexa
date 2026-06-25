@@ -6,7 +6,7 @@ import type { TabDescriptor } from "../workbench/layout";
 import { registerList } from "../contributions";
 import { usePreviewPinTab } from "./previewPinTab";
 
-const SUBJECT = "u_jane";
+const SUBJECT = "u_live";  // the terminal's single subject (until §0 auth) — must match every other surface
 interface Task { path: string; title: string; state: string; priority?: string; due?: string }
 const PRIO: Record<string, string> = { high: "var(--live)", med: "var(--accent)", medium: "var(--accent)", low: "var(--t2)" };
 

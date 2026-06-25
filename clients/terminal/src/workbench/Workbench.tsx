@@ -19,7 +19,7 @@ import { CommandPalette } from "./CommandPalette";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
 
-const DEFAULT_TAB: TabDescriptor = { id: "chat:default", title: "Chat", kind: "chat", params: { subject: "u_jane", session: null }, context: null };
+const DEFAULT_TAB: TabDescriptor = { id: "chat:default", title: "Chat", kind: "chat", params: { subject: "u_live", session: null }, context: null };
 
 // ── the dockview panel host: render a tab by its kind, tracking active state ─────
 function TabHost(props: IDockviewPanelProps) {
