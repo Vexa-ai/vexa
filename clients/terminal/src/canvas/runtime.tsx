@@ -4,6 +4,7 @@ import { parse } from "acorn";
 import { transform } from "sucrase";
 import { ui } from "./kit";
 import { useEntities, useMeeting, useMeetingDocs, useSignals, useSpeakers, useTranscript } from "./useMeeting";
+import { useMeetingNotes } from "./notes";
 import { useActions } from "./actions";
 import { validateViewSource } from "./validator";
 
@@ -69,13 +70,14 @@ function compile(source: string): CompileResult {
       "useEntities",
       "useSignals",
       "useMeetingDocs",
+      "useMeetingNotes",
       "useActions",
       "useState",
       "useMemo",
       "useEffect",
       `"use strict";\nconst exports = {}; let actions;\n${moduleCode}\nconst ViewComponent = (typeof exports !== "undefined" && exports.default) || (typeof Component !== "undefined" && Component);\nif (typeof ViewComponent !== "function") throw new Error("Meeting Canvas source must default-export a React component.");\nreturn function CanvasCompiledView(){ actions = useActions(); return React.createElement(ViewComponent); };`,
     );
-    const component = fn(React, ui, useMeeting, useTranscript, useSpeakers, useEntities, useSignals, useMeetingDocs, useActions, React.useState, React.useMemo, React.useEffect) as ComponentType;
+    const component = fn(React, ui, useMeeting, useTranscript, useSpeakers, useEntities, useSignals, useMeetingDocs, useMeetingNotes, useActions, React.useState, React.useMemo, React.useEffect) as ComponentType;
     const result: CompileResult = { ok: true, component, code: moduleCode };
     cache.set(source, result);
     return result;

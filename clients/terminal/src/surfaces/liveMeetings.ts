@@ -6,7 +6,7 @@
  *  recorded view whose transcript is fetched on demand from `GET /api/transcripts/{platform}/{native}`. */
 import { useSyncExternalStore } from "react";
 import type { MeetingMock, TranscriptLine } from "./mock";
-import { onMeetingStatus } from "./gatewayWS";
+import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
 
 /** A row from meeting-api GET /meetings (live AND past). */
 interface MeetingRowDTO {
@@ -53,6 +53,8 @@ let meetings: MeetingMock[] = [];
 const subs = new Set<() => void>();
 let started = false;
 let wsUnsub: (() => void) | null = null;
+let connUnsub: (() => void) | null = null;
+let storeRevision = 0;
 
 function whenLabel(d: MeetingRowDTO, live: boolean): string {
   if (live) return "Now · live";
@@ -88,9 +90,11 @@ function toMock(d: MeetingRowDTO): MeetingMock {
 /** ONE snapshot fetch of the real meetings list (gateway → meeting-api). Seeds / re-seeds the store; the
  *  live deltas thereafter arrive over the WebSocket. Called once on mount and on each (re)connect. */
 async function snapshot() {
+  const revision = ++storeRevision;
   try {
     const r = await fetch("/api/meetings", { cache: "no-store" });
     const { meetings: list } = (await r.json()) as { meetings: MeetingRowDTO[] };
+    if (revision !== storeRevision) return;
     // meeting-api returns one row per bot-launch; the same Meet relaunched yields several rows with the
     // same native code. Dedupe to ONE row per native (newest wins — the list is newest-first).
     const seen = new Set<string>();
@@ -109,6 +113,7 @@ async function snapshot() {
  *  already seeded the row metadata). Match by native, falling back to meeting_id. Unknown rows trigger a
  *  re-snapshot so a freshly-created (scheduled/idle) meeting surfaces. */
 function applyFrame(f: { meeting_id?: number | string; native?: string; status: string; when?: string }) {
+  storeRevision += 1;
   const i = meetings.findIndex(
     (m) => (f.native && m.native_id === f.native) || (f.meeting_id != null && m.id === String(f.meeting_id)),
   );
@@ -131,6 +136,9 @@ function ensureStarted() {
   started = true;
   void snapshot();                          // initial snapshot on mount
   wsUnsub = onMeetingStatus(applyFrame);    // then live status deltas over the gateway WS
+  connUnsub = onGatewayWSConnected((ok) => {
+    if (ok) void snapshot();
+  });
 }
 
 /** Fetch a PAST meeting's recorded transcript over REST (gateway → meeting-api). Maps each segment to a

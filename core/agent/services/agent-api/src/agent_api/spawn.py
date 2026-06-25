@@ -15,9 +15,12 @@ from .config import Settings
 
 def build_worker_env(settings: Settings, workspace_repo: str) -> dict[str, str]:
     """Map config + a target workspace to the worker's runtime.v1 env (12-factor, P7)."""
-    return {
+    env = {
         "VEXA_AGENT_IDENTITY_TOKEN": settings.agent_identity_token.get_secret_value(),
         "VEXA_WORKSPACE_REPO": workspace_repo,
         "VEXA_WORKSPACE_REF": settings.workspace_ref,
         "VEXA_WORKSPACE_PATH": settings.workspace_path,
     }
+    if settings.agent_model:
+        env["VEXA_AGENT_MODEL"] = settings.agent_model
+    return env

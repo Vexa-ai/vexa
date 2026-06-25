@@ -9,9 +9,9 @@ import { registerCommand, type TabProps } from "../contributions";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
 import { sessionTitle, type SessionSummary } from "./sessions";
-import { fetchTranscript, useLiveMeetings } from "./liveMeetings";
-import { useMeetingLive, type LiveSegment } from "./meetingLive";
-import { meetingById, type MeetingMock, type TranscriptLine } from "./mock";
+import { useLiveMeetings } from "./liveMeetings";
+import { meetingById, type MeetingMock } from "./mock";
+import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string): Op {
@@ -103,6 +103,38 @@ function ReferenceText({ text }: { text: string }) {
   return <>{tokenizeReferences(text).map((part, i) => part.kind === "text"
     ? <span key={i}>{part.text}</span>
     : <ReferenceChip key={i} refToken={part.ref} />)}</>;
+}
+
+function appendReferenceToken(text: string, refToken: ReferenceToken | null): string {
+  const body = text.trim();
+  if (!refToken || body.includes(refToken.raw)) return body;
+  return body ? `${body}\n\n${refToken.raw}` : refToken.raw;
+}
+
+function meetingTokenFromTitle(title: string): ReferenceToken {
+  const value = (title.split("·").pop()?.trim() || title.trim() || "meeting").replace(/^["'\\]+|["'\\.)]+$/g, "");
+  return { kind: "meeting", value, raw: `@meeting:${value}` };
+}
+
+function compactStoredUserText(text: string): string {
+  const raw = text.trim();
+  const legacyCopilot = raw.match(/^You are the copilot for a live meeting \("([^"]+)"\)\. The meeting transcript so far:[\s\S]*?\n?---\s*([\s\S]*)$/);
+  if (legacyCopilot) {
+    return appendReferenceToken(legacyCopilot[2], meetingTokenFromTitle(legacyCopilot[1]));
+  }
+  const activeMeeting = raw.match(/^Active meeting reference:\s*(@meeting:([A-Za-z0-9._~%+@:/=-]+))[\s\S]*?\n\n---\n([\s\S]*)$/);
+  if (activeMeeting) {
+    return appendReferenceToken(activeMeeting[3], { kind: "meeting", value: activeMeeting[2], raw: activeMeeting[1] });
+  }
+  const legacyMeeting = raw.match(/^Active meeting ([A-Za-z0-9._~%+@:/=-]+)\.[\s\S]*?\n\n---\n([\s\S]*)$/);
+  if (legacyMeeting) {
+    return appendReferenceToken(legacyMeeting[2], { kind: "meeting", value: legacyMeeting[1], raw: `@meeting:${legacyMeeting[1]}` });
+  }
+  const activeFile = raw.match(/^Active context: the user is viewing the workspace file ([^\n]+?)\. Read it[\s\S]*?\n\n---\n([\s\S]*)$/);
+  if (activeFile) {
+    return appendReferenceToken(activeFile[2], { kind: "file", value: activeFile[1], raw: `@file:${activeFile[1]}` });
+  }
+  return text;
 }
 
 const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
@@ -274,7 +306,7 @@ function referenceContext(text: string): string {
         "  platform: google_meet",
         `  notes_workspace_path: ${notesPath}`,
         `  transcript_api_path: /api/transcripts/google_meet/${ref.value}`,
-        "  instruction: Use notes_workspace_path for the meeting notes if present; use platform + native_id to fetch or identify the transcript when needed.",
+        "  instruction: Use notes_workspace_path first; fetch or identify the transcript only when needed. Keep the visible chat compact: refer to the token instead of pasting the transcript.",
       );
     }
   }
@@ -295,45 +327,27 @@ function activeReference(tab: ActiveTab | null): ActiveReference | null {
   return null;
 }
 
-function transcriptText(lines: TranscriptLine[]): string {
-  return lines
-    .filter((s) => s.text.trim())
-    .slice(-40)
-    .map((s) => `${s.t ? `[${s.t}] ` : ""}[${s.speaker || "Speaker"}] ${s.text.trim()}`)
-    .join("\n");
-}
-
-function liveTranscriptText(lines: LiveSegment[]): string {
-  return lines
-    .filter((s) => s.text.trim())
-    .slice(-40)
-    .map((s) => {
-      const t = s.t ? `[${new Date(s.t * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}] ` : "";
-      return `${t}[${s.speaker || "Speaker"}] ${s.text.trim()}`;
-    })
-    .join("\n");
-}
-
-async function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined, liveTranscript: LiveSegment[]): Promise<string> {
+function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   if (!ref) return "";
   if (ref.kind === "file") {
     return `Active context: the user is viewing the workspace file ${ref.value}. Read it with your Read tool if relevant.`;
   }
 
-  let recent = meeting?.session_uid ? liveTranscriptText(liveTranscript) : "";
-  if (!recent) {
-    const platform = meeting?.platform ?? "Google Meet";
-    const native = meeting?.native_id ?? meeting?.id ?? ref.value;
-    const recorded = await fetchTranscript(platform, native);
-    recent = transcriptText(recorded.length > 0 ? recorded : (meeting?.transcript ?? []));
-  }
-  return recent
-    ? `Active meeting ${ref.value}. Recent transcript follows so you have full meeting context:\n${recent}`
-    : `Active meeting ${ref.value}. No transcript segments are available yet.`;
+  const native = meeting?.native_id ?? meeting?.id ?? ref.value;
+  const platform = meeting?.platform === "Google Meet" || meeting?.platform === "google_meet" ? "google_meet" : (meeting?.platform ?? "google_meet");
+  const notesPath = `kg/entities/meeting/${native}.md`;
+  return [
+    `Active meeting reference: @meeting:${native}`,
+    `Platform: ${platform}`,
+    `Native id: ${native}`,
+    `Notes workspace path: ${notesPath}`,
+    `Transcript API path: /api/transcripts/${platform}/${native}`,
+    "Instruction: use the notes path first; fetch the transcript only if the answer needs exact meeting evidence. Do not paste the full transcript into the chat.",
+  ].join("\n");
 }
 
-async function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined, liveTranscript: LiveSegment[]): Promise<string> {
-  const context = await activeContextPrompt(ref, meeting, liveTranscript);
+function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
+  const context = activeContextPrompt(ref, meeting);
   return context ? `${context}\n\n---\n${prompt.trim()}` : prompt.trim();
 }
 
@@ -409,7 +423,9 @@ export function Chat({ params = {} }: ChatProps) {
   const activeMeeting = activeRef?.kind === "meeting"
     ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value) ?? meetingById(activeRef.value)
     : undefined;
-  const liveData = useMeetingLive(activeMeeting?.id ?? (activeRef?.kind === "meeting" ? activeRef.value : ""), activeMeeting?.session_uid ?? "");
+  const contextRef: ActiveReference | null = focusRef?.kind === "meeting"
+    ? { kind: "meeting", value: activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value, raw: `@meeting:${activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value}` }
+    : focusRef;
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -453,7 +469,7 @@ export function Chat({ params = {} }: ChatProps) {
         if (cancelled) return;
         const loaded: Turn[] = (data.turns ?? []).map((t, i) =>
           t.role === "user"
-            ? { id: `h-u-${i}`, role: "user", text: t.text }
+            ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
             : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
         idRef.current = loaded.length;  // keep live `u-<n>`/`a-<n>` ids clear of the `h-*` loaded ids
         setTurns(loaded);
@@ -527,13 +543,14 @@ export function Chat({ params = {} }: ChatProps) {
     const basePrompt = promptWithReferences(prompt, referenceSource.trim());
     if (!v || !basePrompt || busy) return;
     const n = idRef.current++;
-    setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: v }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
+    const displayText = appendReferenceToken(v, contextRef);
+    setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: displayText }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
     setBusy(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      const p = await promptWithActiveContext(basePrompt, focusRef, activeMeeting, liveData.transcript);
-      const active = focusRef ? { kind: focusRef.kind, ref: focusRef.raw } : undefined;
+      const p = promptWithActiveContext(basePrompt, contextRef, activeMeeting);
+      const active = contextRef ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
       const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session, active }), signal: ctrl.signal });
       const reader = r.body?.getReader();
       const dec = new TextDecoder();
@@ -561,6 +578,22 @@ export function Chat({ params = {} }: ChatProps) {
   };
 
   const stop = () => { abortRef.current?.abort(); setBusy(false); };
+
+  // A canvas keyword chip (or any harness `actions.ask`) asks the visible chat a question: reveal the rail
+  // and stream the answer here. sendRef keeps the latest `send` closure so the listener stays stable.
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const prompt = (e as CustomEvent<{ prompt?: string }>).detail?.prompt;
+      if (!prompt) return;
+      if (layout.store.getState().rightCollapsed) layout.toggleRight();
+      void sendRef.current(prompt);
+    };
+    window.addEventListener(ASK_CHAT_EVENT, onAsk);
+    return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
+  }, [layout]);
+
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
   const newChat = () => selectSession(`chat-${Date.now().toString(36)}`);
@@ -625,10 +658,10 @@ export function Chat({ params = {} }: ChatProps) {
         onDrop={onDrop}
         style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
       >
-        {focusRef && (
+        {contextRef && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
-            <ReferenceChip refToken={focusRef} />
+            <ReferenceChip refToken={contextRef} />
             <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
           </div>
         )}

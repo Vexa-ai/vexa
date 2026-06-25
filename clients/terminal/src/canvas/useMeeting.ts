@@ -20,6 +20,7 @@ import {
   type MockScenarioId,
   type MockSourceState,
 } from "./mockSource";
+import { cleanTranscriptText, extractNotableNumbers } from "./textSignals";
 import type { EntityItem, EntityKind, MeetingDocLink, MeetingState, SpeakerSummary, TranscriptSegment } from "./types";
 
 export type { MeetingSourceMode, MockInjectKind, MockScenarioId } from "./mockSource";
@@ -90,27 +91,14 @@ function resolveMeeting(meetings: MeetingMock[], meetingId: string): MeetingMock
 function latestCaption(segments: { text: string; completed?: boolean }[], note: string): string | undefined {
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
-    if (seg.text.trim() && seg.completed === false) return seg.text;
+    if (seg.text.trim() && seg.completed === false) return cleanTranscriptText(seg.text);
   }
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
-    if (seg.text.trim()) return seg.text;
+    if (seg.text.trim()) return cleanTranscriptText(seg.text);
   }
-  return note.trim() || undefined;
-}
-
-function extractNumbers(texts: string[]): { text: string; value?: number }[] {
-  const out: { text: string; value?: number }[] = [];
-  const re = /(?:[$€£]\s*)?\b\d[\d,]*(?:\.\d+)?%?\b/g;
-  for (const text of texts) {
-    const matches = text.match(re) ?? [];
-    for (const raw of matches) {
-      const cleaned = raw.replace(/[^0-9.-]/g, "");
-      const value = cleaned ? Number(cleaned) : undefined;
-      out.push({ text: raw, value: Number.isFinite(value) ? value : undefined });
-    }
-  }
-  return out.slice(-24);
+  const cleanNote = cleanTranscriptText(note);
+  return cleanNote || undefined;
 }
 
 function cardKindFromText(text: string, fallback = "insight"): string {
@@ -171,15 +159,15 @@ function normalizeSegments(segments: TranscriptSegment[] | null | undefined): Tr
   return safeArray(segments)
     .map((segment) => ({
       speaker: textOf(segment.speaker, "Speaker"),
-      text: textOf(segment.text),
+      text: cleanTranscriptText(textOf(segment.text)),
       ts: segment.ts,
     }))
     .filter((segment) => segment.text.trim());
 }
 
 function entityTitle(item: unknown, fallback: string): string {
-  if (typeof item === "string") return item;
-  return textOf(field(item, "title") ?? field(item, "name") ?? field(item, "text") ?? field(item, "value"), fallback);
+  if (typeof item === "string") return cleanTranscriptText(item);
+  return cleanTranscriptText(textOf(field(item, "title") ?? field(item, "name") ?? field(item, "text") ?? field(item, "value"), fallback));
 }
 
 function slug(value: string): string {
@@ -210,7 +198,7 @@ function entityName(kind: EntityKind, item: unknown, index: number): string {
 }
 
 function entitySummary(item: unknown): string {
-  return textOf(field(item, "summary") ?? field(item, "body") ?? field(item, "detail"));
+  return cleanTranscriptText(textOf(field(item, "summary") ?? field(item, "body") ?? field(item, "detail")));
 }
 
 function directDocPath(item: unknown): string {
@@ -225,7 +213,7 @@ function firstQuoteFor(name: string, segments: TranscriptSegment[]): string | un
     const text = textOf(segment.text);
     const speaker = textOf(segment.speaker);
     const haystack = normalizeSearchText(`${speaker} ${text}`);
-    if (haystack.includes(needle) || haystack.replace(/\s+/g, "").includes(compactNeedle)) return text;
+    if (haystack.includes(needle) || haystack.replace(/\s+/g, "").includes(compactNeedle)) return cleanTranscriptText(text);
   }
   return undefined;
 }
@@ -340,11 +328,11 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       insights: safeArray(selected.insights),
       docs: safeArray(selected.docs),
     };
-    const liveSegments = safeArray(live.transcript).map((s) => ({ speaker: s.speaker, text: s.text, ts: s.t }));
-    const recordedSegments = safeArray(recorded).map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
-    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
+    const liveSegments = safeArray(live.transcript).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t }));
+    const recordedSegments = safeArray(recorded).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
+    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
-    const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: c.title, body: c.body }));
+    const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
     // The copilot surfaces ENTITY mentions (people/companies/products/numbers) as cards too. Route
     // those into the entity groups (they dedup downstream via mergeEntityItems) and keep only real
     // SIGNAL cards as `cards`, so a person mentioned 4 times doesn't pile up 4× in the Signals column.
@@ -369,7 +357,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       ...copilotCards.filter((c) => /product/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
     ];
     const textCorpus = [...segments.map((s) => s.text), ...copilotCards.flatMap((c) => [c.title, c.body ?? ""])];
-    const numbers = extractNumbers(textCorpus);
+    const numbers = extractNotableNumbers(textCorpus);
     return {
       meeting: {
         id: selected.id,
@@ -388,6 +376,15 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       transcript: {
         segments,
         liveCaption: selected.session_uid ? latestCaption(live.transcript, live.note) : undefined,
+        notes: safeArray(live.notes).map((note) => ({
+          id: note.id,
+          speaker: note.speaker,
+          chapter: note.chapter,
+          text: cleanTranscriptText(note.text),
+          ts: note.t,
+          pass: note.pass,
+          frozen: note.frozen,
+        })),
       },
       entities: { people, companies, products, numbers },
       cards,
@@ -399,7 +396,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       },
       sections: actions.sections,
     };
-  }, [actions.metrics, actions.sections, live.cards, live.note, live.transcript, recorded, selected]);
+  }, [actions.metrics, actions.sections, live.cards, live.note, live.notes, live.transcript, recorded, selected]);
 }
 
 function playbackIntervalMs(speed: number): number {

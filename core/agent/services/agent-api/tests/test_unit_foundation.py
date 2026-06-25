@@ -183,6 +183,15 @@ def test_dispatcher_spawns_isolated_container_with_minted_token():
     assert env["VEXA_UNIT_OUT_TOPIC"] == f"unit:{wid}:out"
 
 
+def test_dispatcher_worker_env_carries_configured_model():
+    settings = load_settings(agent_model="deepseek/deepseek-v4-pro")
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_AGENT_MODEL"] == "deepseek/deepseek-v4-pro"
+
+
 def test_dispatcher_rejects_nonconformant_invocation():
     rt = _FakeRuntime()
     d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())

@@ -134,3 +134,34 @@ def test_worker_create_spec_uses_worker_image():
     assert captured["Labels"]["vexa.kind"] == "chat"
     assert captured["Labels"]["runtime.workload_id"] == "agent-foo-chat"  # workload id unchanged
     assert h._impl == "vexa-worker-foo-chat"  # cosmetic container name preserved
+
+
+def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
+    routes = {
+        ("POST", "/containers/create"): FakeResp(201, body={"Id": "cid123"}),
+        ("POST", "/containers/cid123/start"): FakeResp(204),
+    }
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://openrouter.ai/api")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "deepseek/deepseek-v4-pro")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "deepseek/deepseek-v4-flash")
+    b, sess = _backend(routes)
+    captured = {}
+    orig = sess.request
+
+    def spy(method, url, **kw):
+        if method == "POST" and "/containers/create" in url:
+            captured.update(kw.get("json", {}))
+        return orig(method, url, **kw)
+
+    sess.request = spy
+    b.start(
+        "agent-foo-chat",
+        Runnable(image=TARGET, command=["python", "-m", "agent_api.worker"]),
+        {"ANTHROPIC_AUTH_TOKEN": "dispatch-wins"},
+    )
+    env = dict(item.split("=", 1) for item in captured["Env"])
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "dispatch-wins"
+    assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+    assert env["ANTHROPIC_MODEL"] == "deepseek/deepseek-v4-pro"
+    assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek/deepseek-v4-flash"

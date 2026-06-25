@@ -55,10 +55,20 @@ function postMeetingTurn(prompt: string, session: string): void {
   });
 }
 
+export const ASK_CHAT_EVENT = "vexa:terminal:ask-chat";
+
 function makeActions(layout?: LayoutService): HarnessActions {
   return {
     ask(prompt) {
-      postMeetingTurn(prompt, "meeting-canvas");
+      const text = String(prompt ?? "").trim();
+      if (!text) return;
+      // Drive the VISIBLE right-rail chat so the user sees the question + streamed answer (the rail's send
+      // pipeline grounds it in the active meeting). Fall back to a direct turn if no chat is listening.
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { prompt: text } }));
+        return;
+      }
+      postMeetingTurn(text, "meeting-canvas");
     },
     research(entity) {
       postMeetingTurn(researchPrompt(entity), "meeting/research");

@@ -2,9 +2,10 @@
  *    GET /api/meetings (mocked fetch) seeds the rows, then meeting.status frames arrive over the gateway
  *    WS (mocked WebSocket) and patch the store. Pins the WS frame to the ws.v1 golden fixture.
  *
- *  (a) a golden frame patches the matching row by `native` (status flips, no re-snapshot);
+ *  (a) a golden frame patches the matching row by `native` (status flips, no re-snapshot from the frame);
  *  (b) an UNKNOWN-row frame triggers a re-snapshot (extra GET /api/meetings) so a freshly-created
  *      scheduled/idle meeting surfaces.
+ *  (c) a WS connect re-snapshots so a missed status frame is repaired by the backend state.
  *
  *  The store is a module singleton, so each test re-imports it fresh (vi.resetModules) and installs its
  *  own fetch + WebSocket fakes BEFORE importing.
@@ -89,6 +90,7 @@ describe("liveMeetings store", () => {
   it("(a) patches the matching row by `native` from a golden frame", async () => {
     const { hook } = await startStore();
     expect(hook.result.current[0].live_status).toBe("idle");
+    const before = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings")).length;
 
     await act(async () => {
       FakeWebSocket.last!.push(golden); // status: "scheduled", native: NATIVE
@@ -98,9 +100,9 @@ describe("liveMeetings store", () => {
     const row = hook.result.current[0];
     expect(row.native_id).toBe(NATIVE);
     expect(row.scheduled_at).toBe(golden.when); // when carried into scheduled_at
-    // patched IN PLACE — no extra snapshot fetch beyond the initial one.
-    const snapshotCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings"));
-    expect(snapshotCalls.length).toBe(1);
+    // patched IN PLACE — the frame itself did not trigger a snapshot fetch.
+    const after = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings")).length;
+    expect(after).toBe(before);
   });
 
   it("(b) re-snapshots when the frame targets an UNKNOWN row", async () => {
@@ -118,5 +120,23 @@ describe("liveMeetings store", () => {
     });
     // the unknown native did NOT create a phantom row
     expect(hook.result.current.every((m) => m.native_id !== "zzz-unknown-row")).toBe(true);
+  });
+
+  it("(c) re-snapshots on WS connect so a missed status advance is repaired", async () => {
+    let meetingSnapshots = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.includes("/api/meetings")) {
+        meetingSnapshots += 1;
+        return jsonResp(meetingsPayload(meetingSnapshots === 1 ? "requested" : "active"));
+      }
+      return jsonResp({});
+    });
+
+    const { hook } = await startStore();
+
+    await waitFor(() => expect(hook.result.current[0].live_status).toBe("active"));
+    const snapshotCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings"));
+    expect(snapshotCalls.length).toBeGreaterThanOrEqual(2);
   });
 });

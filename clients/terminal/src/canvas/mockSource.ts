@@ -1,4 +1,5 @@
 import { MEETINGS, meetingEntities, type MeetingMock, type Participant } from "../surfaces/mock";
+import { cleanTranscriptText, extractNotableNumbers } from "./textSignals";
 import type { CanvasEntity, MeetingState, TranscriptSegment } from "./types";
 
 export type MeetingSourceMode = "live" | "mock";
@@ -210,21 +211,7 @@ function initialCursor(meeting: MeetingMock): number {
 }
 
 function toSegment(line: { t?: string; speaker?: string; text: string }): TranscriptSegment {
-  return { speaker: line.speaker ?? "Speaker", text: line.text, ts: line.t };
-}
-
-function extractNumbers(texts: string[]): { text: string; value?: number }[] {
-  const out: { text: string; value?: number }[] = [];
-  const re = /(?:[$€£]\s*)?\b\d[\d,]*(?:\.\d+)?(?:\s?ms|%)?\b/g;
-  for (const text of texts) {
-    const matches = text.match(re) ?? [];
-    for (const raw of matches) {
-      const cleaned = raw.replace(/[^0-9.-]/g, "");
-      const value = cleaned ? Number(cleaned) : undefined;
-      out.push({ text: raw, value: Number.isFinite(value) ? value : undefined });
-    }
-  }
-  return out.slice(-16);
+  return { speaker: line.speaker ?? "Speaker", text: cleanTranscriptText(line.text), ts: line.t };
 }
 
 function cardKindFromText(text: string, fallback = "insight"): string {
@@ -316,7 +303,7 @@ export function injectMockItem(state: MockSourceState, kind: MockInjectKind): Mo
       speakers: [...state.injected.speakers, speaker],
       segments: [
         ...state.injected.segments,
-        { speaker: speaker.name, text: injectedSpeakerLines[index], ts: `+${injectSeq}` },
+        { speaker: speaker.name, text: cleanTranscriptText(injectedSpeakerLines[index]), ts: `+${injectSeq}` },
       ],
     },
   };
@@ -351,7 +338,7 @@ export function buildMockMeetingState(state: MockSourceState): MeetingState {
     ...injected.products,
   ];
   const textCorpus = [...segments.map((segment) => segment.text), ...cards.flatMap((card) => [card.title, card.body ?? ""])];
-  const numbers = [...seededNumbers, ...extractNumbers(textCorpus), ...state.injected.numbers];
+  const numbers = [...seededNumbers, ...extractNotableNumbers(textCorpus, 16), ...state.injected.numbers];
   const lastSegment = segments[segments.length - 1];
 
   return {
@@ -371,7 +358,7 @@ export function buildMockMeetingState(state: MockSourceState): MeetingState {
     },
     transcript: {
       segments,
-      liveCaption: state.playing ? lastSegment?.text : undefined,
+      liveCaption: state.playing && lastSegment ? cleanTranscriptText(lastSegment.text) : undefined,
     },
     entities: {
       people: [...present, ...seededPeople, ...injected.people],

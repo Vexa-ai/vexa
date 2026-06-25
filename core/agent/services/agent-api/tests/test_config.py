@@ -48,3 +48,9 @@ def test_worker_env_matches_runtime_v1_agent_spec():
     }
     assert env["VEXA_WORKSPACE_REPO"] == "https://git.example.com/acme/company-memory.git"
     assert env["VEXA_AGENT_IDENTITY_TOKEN"] == "scoped-jwt-token"
+
+
+def test_worker_env_carries_configured_model():
+    s = load_settings(agent_model="deepseek/deepseek-v4-pro")
+    env = build_worker_env(s, "https://git.example.com/acme/company-memory.git")
+    assert env["VEXA_AGENT_MODEL"] == "deepseek/deepseek-v4-pro"

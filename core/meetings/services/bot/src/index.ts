@@ -77,17 +77,21 @@ function meetingChannelId(inv: Invocation): string | number {
  *  `orchestrator.run({ maxActiveMs })` is a HARD ceiling on the active phase that resolves to
  *  `completed(max_bot_time_exceeded)` — a backstop so a bot can never live forever (the granular
  *  empty-room / waiting-room timeouts that map to left_alone/startup_alone are driven by the
- *  Pipeline/JoinDriver in 2b). We size the ceiling off the configured timeouts, taking the
- *  LARGEST so it never fires before a normal everyone-left / no-one-joined exit would:
- *    max(everyoneLeftTimeout=120s, noOneJoinedTimeout=600s, waitingRoomTimeout=300s) + a margin.
- *  Defaults (per the invocation.v1 schema) → 600s + 60s margin = 660s when automaticLeave is unset. */
-function deriveMaxActiveMs(inv: Invocation): number {
+ *  Pipeline/JoinDriver in 2b). This is a GENEROUS backstop (default 4h, override with
+ *  BOT_MAX_ACTIVE_MS in ms) — the granular empty-room / waiting-room timeouts drive every NORMAL exit
+ *  well before this fires. We floor it at max(everyoneLeft, noOneJoined, waitingRoom) + 60s margin so
+ *  the backstop can never undercut those granular timeouts. */
+const DEFAULT_MAX_ACTIVE_MS = 4 * 60 * 60 * 1000; // 4 hours
+function deriveMaxActiveMs(inv: Invocation, env: NodeJS.ProcessEnv = process.env): number {
   const al = inv.automaticLeave ?? {};
   const everyoneLeft = al.everyoneLeftTimeout ?? 120_000;
   const noOneJoined = al.noOneJoinedTimeout ?? 600_000;
   const waitingRoom = al.waitingRoomTimeout ?? 300_000;
   const MARGIN_MS = 60_000; // give the granular timeouts room to fire first
-  return Math.max(everyoneLeft, noOneJoined, waitingRoom) + MARGIN_MS;
+  const floor = Math.max(everyoneLeft, noOneJoined, waitingRoom) + MARGIN_MS;
+  const override = Number(env.BOT_MAX_ACTIVE_MS);
+  const cap = Number.isFinite(override) && override > 0 ? override : DEFAULT_MAX_ACTIVE_MS;
+  return Math.max(cap, floor);
 }
 
 /**

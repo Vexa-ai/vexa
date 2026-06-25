@@ -73,7 +73,7 @@ def test_stop_message_exits_immediately():
 
 # ── meeting mode: consume transcript Stream → gate → emit cards ───────────────────────────────────
 
-from agent_api.worker import parse_cards, serve_meeting  # noqa: E402
+from agent_api.worker import parse_cards, parse_notes, serve_meeting  # noqa: E402
 
 
 class MeetingStream:
@@ -94,6 +94,15 @@ class MeetingStream:
 
     def events(self):
         return [json.loads(f["event"]) for _t, f in self.out]
+
+
+class StepMeetingStream(MeetingStream):
+    def xread(self, streams, count=1, block=None):
+        tname = next(iter(streams))
+        if not self._inbox:
+            return []
+        entry = self._inbox.pop(0)
+        return [(tname, [entry])]
 
 
 def _seg(speaker, text, completed=True):
@@ -153,6 +162,30 @@ def test_session_end_runs_write_turn_with_deduped_cards():
     titles = sorted(c["title"] for c in captured["cards"])
     assert titles == ["Priya", "Send quote"]  # de-duped across beats
     assert any(e.get("turn_id") == "meeting-doc" and e.get("type") == "done" for e in s.events())
+
+
+def test_serve_meeting_reprocesses_transcript_window_three_passes():
+    observed = []
+
+    def card_turn(segs):
+        observed.append([(s["segment_id"], s["rewrite_pass"]) for s in segs])
+        return iter(())
+
+    s = StepMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "first"), "segment_id": "a"}),
+        _transcript("2-0", {**_seg("Jane", "second"), "segment_id": "b"}),
+        _transcript("3-0", {**_seg("Jane", "third"), "segment_id": "c"}),
+        _transcript("4-0", {**_seg("Jane", "fourth"), "segment_id": "d"}),
+    ])
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=card_turn,
+                  idle_ms=10, beat_segments=1)
+
+    assert observed == [
+        [("a", 1)],
+        [("a", 2), ("b", 1)],
+        [("a", 3), ("b", 2), ("c", 1)],
+        [("b", 3), ("c", 2), ("d", 1)],
+    ]
 
 
 def test_run_turn_persists_namespaced_session_file(tmp_path):
@@ -237,10 +270,24 @@ def test_meeting_doc_turn_authors_entity_with_frontmatter_and_links(tmp_path):
 
 def test_parse_cards_tolerant():
     assert parse_cards('[{"kind":"person","title":"Priya","body":"x"}]')[0]["title"] == "Priya"
+    assert parse_cards('{"notes":[],"cards":[{"kind":"topic","title":"Launch","body":"x"}]}')[0]["title"] == "Launch"
     assert parse_cards('Here are the cards:\n[{"kind":"action","title":"Send quote","body":"by Fri"}] done')[0]["kind"] == "action"
     assert parse_cards("nothing salient") == []
     assert parse_cards("[]") == []
     assert parse_cards(None) == []
+
+
+def test_parse_notes_from_processed_transcript_reply():
+    reply = '{"notes":[{"id":"a","speaker":"Jane","chapter":"Live Digest","text":"I want a cleaner digest."}],"cards":[]}'
+    notes = parse_notes(reply, {"a": 3})
+    assert notes == [{
+        "id": "a",
+        "speaker": "Jane",
+        "chapter": "Live Digest",
+        "text": "I want a cleaner digest.",
+        "pass": 3,
+        "frozen": True,
+    }]
 
 
 # ── workspace-driven config knobs wired through serve_meeting / the prompt ─────────────────────────

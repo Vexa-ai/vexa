@@ -222,15 +222,26 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
 # ── meeting mode: consume the transcript Stream, gate, emit proactive cards ───────────────────────
 
 CARD_PROMPT = (
-    "You are a live meeting copilot watching a conversation in real time. Here are the NEWEST "
-    "transcript lines:\n\n{lines}\n\n"
-    "Surface what a participant would want tracked from THESE lines, but ONLY these kinds: {kinds}. "
-    "(person = PEOPLE or companies introduced; topic = TOPICS / decisions / notable claims discussed; "
-    "action = ACTION items or commitments.) Be useful and reasonably generous — this is a live feed, "
-    "not a summary. Respond with ONLY a JSON array (no prose, no markdown fence, and do NOT write any "
-    "files), each element:\n"
-    '  {{"kind": "<one of {kinds}>", "title": "<short>", "body": "<one line>"}}\n'
-    "Use [] only if these specific lines genuinely add nothing worth surfacing.{steering}"
+    "You are a live meeting copilot watching a conversation in real time. Here is the mutable transcript "
+    "processing window. Each line is sent through at most three passes; pass 1 is fresh, pass 2 should "
+    "repair obvious ASR/name/entity errors, and pass 3 should be the final clean version before the line "
+    "freezes and leaves this window.\n\n{lines}\n\n"
+    "Return a concise, book-readable processed transcript plus tracking cards. For each input line, emit "
+    "one note with the SAME id and speaker. Keep it first-person and attributed to the speaker's meaning; "
+    "remove filler, false starts, duplicated fragments, prompt leakage, and obvious transcript/model "
+    "artifacts. Preserve facts, uncertainty, and tone. Do not invent missing content.\n\n"
+    "Assign each note a short chapter title (2-5 words) for the current theme. Reuse the same chapter "
+    "title while the theme continues; change it only when the conversation has genuinely moved to a new "
+    "topic, decision, story, or workstream.\n\n"
+    "Also surface what a participant would want tracked from THESE lines, but ONLY these card kinds: "
+    "{kinds}. (person = PEOPLE or companies introduced; topic = TOPICS / decisions / notable claims "
+    "discussed; action = ACTION items or commitments.) Be useful and reasonably generous — this is a live "
+    "feed, not a final summary.\n\n"
+    "Respond with ONLY this JSON object (no prose, no markdown fence, and do NOT write any files):\n"
+    "{{\"notes\":[{{\"id\":\"<input id>\",\"speaker\":\"<speaker>\",\"chapter\":\"<short theme title>\",\"text\":\"<clean one-line note>\"}}],"
+    "\"cards\":[{{\"kind\":\"<one of {kinds}>\",\"title\":\"<short>\",\"body\":\"<one line>\"}}]}}\n"
+    "Use an empty cards array only if these specific lines add no trackable people, topics, decisions, "
+    "or actions.{steering}"
 )
 
 # Appended to CARD_PROMPT only when the workspace config carries non-empty steering.
@@ -247,19 +258,38 @@ def build_card_prompt(lines: str, card_kinds: list[str], steering: str = "") -> 
     return CARD_PROMPT.format(lines=lines, kinds=", ".join(card_kinds), steering=section)
 
 
+def _extract_json_value(reply: str | None):
+    if not reply:
+        return None
+    text = reply.strip()
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    import re
+
+    matches = []
+    for pattern in (r"\{.*\}", r"\[.*\]"):
+        m = re.search(pattern, reply, re.DOTALL)
+        if m:
+            matches.append((m.start(), m.group(0)))
+    for _start, raw in sorted(matches, key=lambda item: item[0]):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+
 def parse_cards(reply: str | None, card_kinds: list[str] | None = None) -> list[dict]:
     """Tolerantly pull the JSON card array out of the agent's reply (it may wrap it in prose/fences).
     When ``card_kinds`` is given, only cards of those kinds are kept."""
-    if not reply:
-        return []
-    import re
-
-    m = re.search(r"\[.*\]", reply, re.DOTALL)
-    if not m:
-        return []
-    try:
-        arr = json.loads(m.group(0))
-    except (json.JSONDecodeError, ValueError):
+    value = _extract_json_value(reply)
+    if isinstance(value, dict):
+        arr = value.get("cards") or []
+    elif isinstance(value, list):
+        arr = value
+    else:
         return []
     allowed = {k.lower() for k in card_kinds} if card_kinds else None
     out = []
@@ -269,6 +299,35 @@ def parse_cards(reply: str | None, card_kinds: list[str] | None = None) -> list[
         if allowed is not None and str(c.get("kind")).lower() not in allowed:
             continue
         out.append(c)
+    return out
+
+
+def parse_notes(reply: str | None, stage_by_id: dict[str, int] | None = None) -> list[dict]:
+    """Pull processed transcript notes from the copilot JSON object."""
+    value = _extract_json_value(reply)
+    if not isinstance(value, dict):
+        return []
+    arr = value.get("notes") or []
+    if not isinstance(arr, list):
+        return []
+    stages = stage_by_id or {}
+    out = []
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        note_id = str(item.get("id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if not note_id or not text:
+            continue
+        stage = int(item.get("pass") or stages.get(note_id) or 1)
+        out.append({
+            "id": note_id,
+            "speaker": str(item.get("speaker") or "").strip() or "Speaker",
+            "chapter": str(item.get("chapter") or item.get("chapter_title") or "").strip(),
+            "text": text,
+            "pass": max(1, min(3, stage)),
+            "frozen": stage >= 3,
+        })
     return out
 
 
@@ -288,7 +347,12 @@ def meeting_card_turn(
     # copilot steering (seed guard) instead of stripping it: CLAUDE.md must carry file conventions only,
     # and all watch/ignore/tone steering lives in agents/meeting.md's body.
     kinds = card_kinds or list(DEFAULT_CARD_KINDS)
-    lines = "\n".join(f"[{s.get('speaker', '?')}] {s.get('text', '')}" for s in segments)
+    stage_by_id = {str(s.get("segment_id") or s.get("id") or ""): int(s.get("rewrite_pass") or 1) for s in segments}
+    lines = "\n".join(
+        f"[pass {int(s.get('rewrite_pass') or 1)}/3 id={s.get('segment_id') or s.get('id') or '?'} "
+        f"speaker={s.get('speaker', '?')}] {s.get('text', '')}"
+        for s in segments
+    )
     reply: str | None = None
     prompt = build_card_prompt(lines, kinds, steering)
     # propose-only: a read-only turn (no Write/Edit). We DON'T forward the streaming turn events — the
@@ -296,6 +360,8 @@ def meeting_card_turn(
     for ev in run_turn_over_workspace(work, prompt, model=model, allowed_tools=["Read"], commit=False, session_continuity=False):
         if ev.get("type") == "done":
             reply = ev.get("reply")
+    for note in parse_notes(reply, stage_by_id):
+        yield {"type": "note", "note": note}
     for card in parse_cards(reply, kinds):
         yield {"type": "card", "card": card}
 
@@ -317,6 +383,7 @@ def serve_meeting(
     """
     seen_speakers: set[str] = set()
     buffer: list[dict] = []
+    processing_window: list[dict] = []
     cards: list[dict] = []          # running, de-duped (by title) list of every surfaced card
     seen_titles: set[str] = set()
     last = "0"  # read the whole transcript from the start (never miss early segments)
@@ -324,11 +391,16 @@ def serve_meeting(
 
     def _run_beat(segs: list[dict], idx: int) -> None:
         tid = f"beat{idx}"
-        for ev in card_turn(segs):
+        staged = [{**seg, "rewrite_pass": int(seg.get("_rewrite_passes", 0)) + 1} for seg in segs]
+        for ev in card_turn(staged):
             if ev.get("type") == "card":
                 _accumulate_card(cards, seen_titles, ev.get("card") or {})
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": tid})})
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": tid})})
+        sent_ids = {id(seg) for seg in segs}
+        for seg in processing_window:
+            if id(seg) in sent_ids:
+                seg["_rewrite_passes"] = int(seg.get("_rewrite_passes", 0)) + 1
 
     while True:
         resp = stream.xread({transcript_stream: last}, count=50, block=idle_ms)
@@ -340,23 +412,31 @@ def serve_meeting(
                 last = entry_id
                 payload = json.loads(fields.get("payload", "{}"))
                 if payload.get("type") == "session_end":
-                    if buffer and enabled:
+                    mutable = [seg for seg in processing_window if int(seg.get("_rewrite_passes", 0)) < 3]
+                    if mutable and enabled:
                         n += 1
-                        _run_beat(list(buffer), n)
+                        _run_beat(mutable, n)
                     if doc_turn is not None:  # post-meeting WRITE: author/update the kg meeting entity
                         _emit_turn(stream, out_topic, lambda: doc_turn(cards), "meeting-doc")
                     return  # meeting ended → reap
-                for seg in payload.get("segments", []):
+                for seg_index, seg in enumerate(payload.get("segments", [])):
                     if not seg.get("completed", True):
                         continue  # skip live drafts
-                    buffer.append(seg)
+                    item = dict(seg)
+                    item.setdefault("segment_id", f"{entry_id}:{seg_index}")
+                    item["_rewrite_passes"] = 0
+                    buffer.append(item)
+                    processing_window.append(item)
                     sp = seg.get("speaker")
                     if sp and sp not in seen_speakers:
                         seen_speakers.add(sp)
                         new_speaker = True
         if enabled and buffer and (new_speaker or len(buffer) >= beat_segments):
             n += 1
-            _run_beat(list(buffer), n)
+            mutable = [seg for seg in processing_window if int(seg.get("_rewrite_passes", 0)) < 3]
+            if mutable:
+                _run_beat(mutable, n)
+            processing_window = [seg for seg in processing_window if int(seg.get("_rewrite_passes", 0)) < 3]
             buffer = []
 
 

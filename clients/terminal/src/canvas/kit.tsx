@@ -436,111 +436,185 @@ function Transcript({ segments, liveCaption, empty = "Waiting for transcript", l
   );
 }
 
-function LiveTranscript({ segments, liveCaption, empty = "waiting for transcript…", loading = false, maxSegments = 36 }: { segments?: TranscriptSegment[]; liveCaption?: string; empty?: string; maxSegments?: number } & Loadable) {
+function LiveTranscript({ segments, liveCaption, empty = "waiting for transcript…", loading = false, maxSegments = 3 }: { segments?: TranscriptSegment[]; liveCaption?: string; empty?: string; maxSegments?: number } & Loadable) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const safeSegments = normalizeTranscriptSegments(segments);
-  const limit = Math.max(1, Math.floor(toNumber(maxSegments, 36)));
-  const displaySegments = safeSegments.slice(-limit);
+  const limit = Math.max(1, Math.floor(toNumber(maxSegments, 3)));
   const caption = toText(liveCaption).trim();
-  const lastSegment = displaySegments[displaySegments.length - 1];
+  const lastSegment = safeSegments[safeSegments.length - 1];
   const captionMatchesLast = Boolean(caption && lastSegment && toText(lastSegment.text).trim() === caption);
   const showStandaloneCaption = Boolean(caption && !captionMatchesLast);
-  const scrollKey = `${displaySegments.length}:${lastSegment?.ts ?? ""}:${lastSegment?.speaker ?? ""}:${lastSegment?.text ?? ""}:${caption}`;
+
+  // The TAIL: the most recent lines, wrapped and stacked (never a single horizontal scroll line). The
+  // last line is the live one — highlighted with a pending marker.
+  const lines = safeSegments.map((s, i) => ({ speaker: toText(s.speaker, "Speaker"), text: toText(s.text), live: captionMatchesLast && i === safeSegments.length - 1 }));
+  if (showStandaloneCaption) lines.push({ speaker: toText(lastSegment?.speaker, "Live"), text: caption, live: true });
+  const tail = lines.slice(-limit);
+  const scrollKey = `${tail.length}:${tail[tail.length - 1]?.text ?? ""}`;
 
   useEffect(() => {
     const node = scrollerRef.current;
-    if (!node) return;
-    node.scrollLeft = node.scrollWidth;
+    if (node) node.scrollTop = node.scrollHeight;
   }, [scrollKey]);
 
   const bandStyle: CSSProperties = {
     ...frameStyle,
     width: "100%",
-    height: 56,
-    maxHeight: 56,
     border: "1px solid var(--line)",
     borderRadius: 8,
     background: "var(--sidebar, var(--panel))",
     color: "var(--t2)",
-    overflow: "hidden",
-    display: "flex",
-    alignItems: "center",
-    padding: "0 12px",
+    padding: "8px 12px",
   };
 
   if (loading) {
-    return (
-      <div style={bandStyle}>
-        <Skeleton lines={2} compact />
-      </div>
-    );
+    return <div style={bandStyle}><Skeleton lines={2} compact /></div>;
   }
 
-  if (!displaySegments.length && !caption) {
+  if (!tail.length) {
     return (
-      <div role="status" aria-live="polite" style={bandStyle}>
+      <div role="status" aria-live="polite" style={{ ...bandStyle, display: "flex", alignItems: "center" }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--t3)", flex: "none", marginRight: 8 }} />
         <span style={{ color: "var(--t3)", fontSize: 12.5, fontStyle: "italic", ...ellipsisLine() }}>{toText(empty, "waiting for transcript…")}</span>
       </div>
     );
   }
 
-  const captionSpeaker = toText(lastSegment?.speaker, "Live");
-
   return (
     <div role="log" aria-live="polite" style={bandStyle}>
-      <div
-        ref={scrollerRef}
-        style={{
-          ...frameStyle,
-          flex: 1,
-          height: "100%",
-          overflowX: "auto",
-          overflowY: "hidden",
-          whiteSpace: "nowrap",
-          scrollbarWidth: "thin",
-        }}
-      >
-        <div style={{ display: "inline-flex", minWidth: "max-content", height: "100%", alignItems: "center", gap: 8, paddingRight: 2 }}>
-          {displaySegments.map((segment, index) => {
-            const speaker = toText(segment.speaker, "Speaker");
-            const text = toText(segment.text);
-            const isLive = captionMatchesLast && index === displaySegments.length - 1;
-            return (
-              <span
-                key={`${index}-${segment.ts ?? ""}-${speaker}-${text.slice(0, 28)}`}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "baseline",
-                  gap: 4,
-                  flex: "none",
-                  maxWidth: "none",
-                  color: isLive ? "var(--t1)" : "var(--t2)",
-                  background: isLive ? "var(--livebg)" : "transparent",
-                  border: isLive ? "1px solid var(--line2)" : "1px solid transparent",
-                  borderRadius: 7,
-                  padding: isLive ? "4px 7px" : 0,
-                  fontSize: 12.5,
-                  lineHeight: 1.35,
-                }}
-              >
-                {index > 0 && <span aria-hidden="true" style={{ color: "var(--t3)", marginRight: 2 }}>·</span>}
-                <span style={{ color: isLive ? "var(--live)" : "var(--t3)", fontWeight: 750 }}>{speaker}:</span>
-                <span>{text}</span>
-              </span>
-            );
-          })}
-          {showStandaloneCaption && (
-            <>
-              {displaySegments.length > 0 && <span aria-hidden="true" style={{ color: "var(--t3)", flex: "none" }}>·</span>}
-              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4, flex: "none", color: "var(--t1)", background: "var(--livebg)", border: "1px solid var(--line2)", borderRadius: 7, padding: "4px 7px", fontSize: 12.5, lineHeight: 1.35 }}>
-                <span style={{ color: "var(--live)", fontWeight: 800 }}>{captionSpeaker}:</span>
-                <span>{caption}</span>
-              </span>
-            </>
-          )}
-        </div>
+      <div ref={scrollerRef} style={{ ...frameStyle, maxHeight: 92, overflowY: "auto", overflowX: "hidden", scrollbarWidth: "thin" }}>
+        {tail.map((line, index) => {
+          const isLast = index === tail.length - 1;
+          return (
+            <div
+              key={`${index}-${line.speaker}-${line.text.slice(0, 24)}`}
+              style={{ marginBottom: isLast ? 0 : 5, color: line.live || isLast ? "var(--t1)" : "var(--t3)", fontSize: 12.5, lineHeight: 1.5, overflowWrap: "anywhere" }}
+            >
+              <span style={{ color: line.live ? "var(--green)" : "var(--t3)", fontWeight: 750, marginRight: 5 }}>{line.speaker}:</span>
+              <span>{line.text}</span>
+              {line.live && <span aria-hidden="true" style={{ opacity: 0.5, marginLeft: 4 }}>•••</span>}
+            </div>
+          );
+        })}
       </div>
+    </div>
+  );
+}
+
+const NOTE_TAG_DOT: Record<string, string> = {
+  company: "var(--accent)",
+  person: "var(--green)",
+  metric: "var(--accent)",
+  money: "var(--green)",
+  signal: "var(--live)",
+};
+
+function NoteTagChip({ label, kind, context, onClick }: { label: string; kind?: string; context?: string; onClick?: () => void }) {
+  const [hover, setHover] = useState(false);
+  const dot = NOTE_TAG_DOT[toText(kind)] ?? "var(--t2)";
+  const clickable = Boolean(onClick);
+  const active = clickable && hover;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={`Ask the chat about “${label}”`}
+      aria-label={`Ask the chat about ${label}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline", background: active ? "var(--accentbg)" : "var(--panel2)", border: `1px solid ${active ? "var(--accent)" : "var(--line2)"}`, borderRadius: 999, padding: "1px 8px", margin: "0 1px", fontSize: 12.5, fontWeight: 550, color: active ? "var(--accent)" : "var(--t1)", whiteSpace: "nowrap", cursor: clickable ? "pointer" : "default", fontFamily: "inherit", lineHeight: 1.4 }}
+    >
+      <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: "50%", background: active ? "var(--accent)" : dot, flex: "none" }} />
+      {label}
+      {context ? <span style={{ color: active ? "var(--accent)" : "var(--t3)", fontWeight: 400 }}>· {context}</span> : null}
+      {clickable ? <span aria-hidden="true" style={{ marginLeft: 1, fontSize: 11, opacity: hover ? 1 : 0.55 }}>↗</span> : null}
+    </button>
+  );
+}
+
+interface NoteTagLike { id?: string; label?: string; kind?: string; context?: string; at?: number; end?: number }
+interface MeetingNoteLike { id?: string; ts?: string; speaker?: string; chapter?: string; text?: string; tags?: NoteTagLike[] }
+
+/** Render a note's text with its keyword tags swapped inline as clickable chips at first occurrence. */
+function NoteBody({ text, tags, onTag }: { text: string; tags: NoteTagLike[]; onTag?: (tag: NoteTagLike) => void }) {
+  const spans: { at: number; len: number; tag: NoteTagLike }[] = [];
+  const lower = text.toLowerCase();
+  const used: [number, number][] = [];
+  for (const tag of tags) {
+    const label = toText(tag.label).trim();
+    if (!label) continue;
+    const exactAt = typeof tag.at === "number" ? tag.at : Number.NaN;
+    const exactEnd = typeof tag.end === "number" ? tag.end : Number.NaN;
+    const useExact = Number.isFinite(exactAt) && Number.isFinite(exactEnd) && exactAt >= 0 && exactEnd > exactAt && exactEnd <= text.length;
+    const at = useExact ? exactAt : lower.indexOf(label.toLowerCase());
+    if (at < 0) continue;
+    const end = useExact ? exactEnd : at + label.length;
+    if (used.some(([s, e]) => at < e && end > s)) continue;
+    used.push([at, end]);
+    spans.push({ at, len: end - at, tag });
+  }
+  spans.sort((a, b) => a.at - b.at);
+  if (!spans.length) return <>{text}</>;
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  spans.forEach((s, i) => {
+    if (s.at > cursor) out.push(text.slice(cursor, s.at));
+    const tag = s.tag;
+    out.push(<NoteTagChip key={`c-${i}`} label={text.slice(s.at, s.at + s.len)} kind={tag.kind} context={tag.context} onClick={onTag ? () => onTag(tag) : undefined} />);
+    cursor = s.at + s.len;
+  });
+  if (cursor < text.length) out.push(text.slice(cursor));
+  return <>{out}</>;
+}
+
+/** The chat prompt a tag click posts to the meeting chat — phrased per keyword kind. */
+function tagChatPrompt(tag: NoteTagLike): string {
+  const label = toText(tag.label).trim();
+  const kind = toText(tag.kind);
+  if (kind === "person") return `“${label}” came up in this meeting. Who are they — give me a short brief grounded in what was said and the workspace.`;
+  if (kind === "company") return `“${label}” came up in this meeting. What is it — a short brief grounded in what was said and the workspace.`;
+  if (kind === "money" || kind === "metric") return `The figure “${label}” came up in this meeting. What's the context around it, and is it significant?`;
+  return `“${label}” came up in this meeting. What does it mean here and why does it matter?`;
+}
+
+function LiveNotes({ notes, empty = "condensing the conversation…", loading = false, maxNotes = 14 }: { notes?: MeetingNoteLike[]; empty?: string; maxNotes?: number } & Loadable) {
+  const actions = useActions();
+  const onTag = (tag: NoteTagLike) => actions.ask(tagChatPrompt(tag));
+  const safe = safeArray(notes).filter((n) => toText(n?.text).trim());
+  const limit = Math.max(1, Math.floor(toNumber(maxNotes, 14)));
+  const list = safe.slice(-limit);
+  if (loading) return <Panel><Skeleton lines={4} /></Panel>;
+  if (!list.length) return <Empty title="No notes yet" body={toText(empty, "condensing the conversation…")} />;
+  return (
+    <div role="log" aria-live="polite" style={{ ...frameStyle, width: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
+      {list.map((note, index) => {
+        const chapter = toText(note.chapter).trim();
+        const prevChapter = index > 0 ? toText(list[index - 1]?.chapter).trim() : "";
+        const showChapter = Boolean(chapter && chapter !== prevChapter);
+        return (
+          <div key={toText(note.id, `note-${index}`)} style={{ display: "flex", flexDirection: "column", gap: showChapter ? 8 : 0, minWidth: 0 }}>
+            {showChapter ? (
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(78px, 106px) minmax(0, 1fr)", gap: 10, alignItems: "center", minWidth: 0 }}>
+                <span />
+                <div title={chapter} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <span aria-hidden="true" style={{ height: 1, background: "var(--line2)", flex: "1 1 16px", minWidth: 16 }} />
+                  <span style={{ color: "var(--t3)", fontSize: 11, fontWeight: 750, textTransform: "uppercase", letterSpacing: ".04em", flex: "none", maxWidth: "min(320px, 70%)", ...lineClamp(1) }}>{chapter}</span>
+                  <span aria-hidden="true" style={{ height: 1, background: "var(--line2)", flex: "8 1 32px", minWidth: 32 }} />
+                </div>
+              </div>
+            ) : null}
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(78px, 106px) minmax(0, 1fr)", gap: 10, alignItems: "baseline", minWidth: 0 }}>
+              <span style={{ minWidth: 0, paddingTop: 1 }}>
+                <span title={toText(note.speaker, "Speaker")} style={{ display: "block", color: "var(--t2)", fontSize: 12, fontWeight: 650, ...lineClamp(1) }}>{toText(note.speaker, "Speaker")}</span>
+                {note.ts ? <span style={{ display: "block", marginTop: 2, fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)", ...lineClamp(1) }}>{toText(note.ts)}</span> : null}
+              </span>
+              <div style={{ fontSize: 14, lineHeight: 1.6, color: "var(--t1)", overflowWrap: "anywhere", minWidth: 0 }}>
+                <NoteBody text={toText(note.text)} tags={safeArray(note.tags)} onTag={onTag} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -682,6 +756,7 @@ export const ui = {
   Timeline,
   Transcript,
   LiveTranscript,
+  LiveNotes,
   Chart,
   Badge,
   Tag,

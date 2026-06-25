@@ -10,7 +10,7 @@ import { registerList, registerTab, registerCommand, type TabProps } from "../co
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
-import { meetingById, liveMeeting, type MeetingMock } from "./mock";
+import { liveMeeting, type MeetingMock } from "./mock";
 import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 
@@ -180,7 +180,7 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; k
   joining: { label: "Joining", color: "var(--accent)", bg: "var(--accentbg)", kind: "live" },
   awaiting_admission: { label: "Awaiting", color: "var(--violet)", bg: "var(--violetbg)", kind: "awaiting" },
   needs_help: { label: "Needs help", color: "var(--live)", bg: "var(--livebg)", kind: "needshelp" },
-  active: { label: "Live", color: "var(--live)", bg: "var(--livebg)", kind: "live" },
+  active: { label: "Live", color: "var(--green)", bg: "var(--greenbg)", kind: "live" },
   stopping: { label: "Stopping", color: "var(--t3)", bg: "var(--panel2)", kind: "stopping" },
   completed: { label: "Completed", color: "var(--green)", bg: "var(--greenbg)", kind: "terminal" },
   failed: { label: "Failed", color: "var(--live)", bg: "var(--livebg)", kind: "terminal" },
@@ -236,8 +236,9 @@ function StatusBadge({ raw }: { raw?: string }) {
   );
 }
 
-/** Status badge + a small ▾ menu of action→transition items for one meeting row. */
-function RowActions({ m }: { m: MeetingMock }) {
+/** Status badge (only when meaningful) + a small ▾ menu of action→transition items for one meeting row.
+ *  The ▾ is revealed on row hover (or while its menu is open) to keep the list quiet at rest. */
+function RowActions({ m, showBadge, reveal }: { m: MeetingMock; showBadge: boolean; reveal: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const acts = actionsFor(m);
@@ -249,8 +250,8 @@ function RowActions({ m }: { m: MeetingMock }) {
   }, [open]);
   return (
     <div ref={ref} style={{ position: "relative", flex: "none", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-      <StatusBadge raw={m.live_status} />
-      {acts.length > 0 && (
+      {showBadge && <StatusBadge raw={m.live_status} />}
+      {acts.length > 0 && (reveal || open) && (
         <button title="Actions" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
           style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "1px 5px", fontSize: 11, lineHeight: 1.4, cursor: "pointer" }}>▾</button>
       )}
@@ -273,19 +274,29 @@ export function meetingTab(m: MeetingMock): TabDescriptor {
   return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id } };
 }
 
+// Statuses worth a badge — `active` (in-room) is shown by the green dot alone, not a badge; the rest
+// (stopped/completed/failed) live under the "Recorded" header already.
+const BADGE_STATUSES = new Set(["idle", "scheduled", "requested", "joining", "awaiting_admission", "needs_help", "stopping"]);
+
 function MeetingRow({ m }: { m: MeetingMock }) {
   const nav = usePreviewPinTab<HTMLDivElement>(meetingTab(m));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [hover, setHover] = useState(false);
   const native = m.native_id ?? m.id;
+  const live = m.status === "live";
+  const inRoom = m.live_status === "active";   // actually live = green dot + a quiet "live", no badge
+  // Just the meeting code — the platform is implicit (the list + subline already say Google Meet).
+  const label = (m.native_id ?? m.title).replace(/^Google Meet · /, "");
+  const showBadge = BADGE_STATUSES.has(m.live_status ?? "");
   return (
-    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }} style={{ padding: "7px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 1 }}
+      onMouseEnter={(e) => { setHover(true); e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { setHover(false); e.currentTarget.style.background = "transparent"; }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-        {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
-        <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.title}</span>
-        {m.native_id && <RowActions m={m} />}
+        {inRoom && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />}
+        <span style={{ fontSize: 13, color: live ? "var(--t1)" : "var(--t2)", fontWeight: live ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        {m.native_id && <RowActions m={m} showBadge={showBadge} reveal={hover} />}
       </div>
-      <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
+      <div style={{ fontSize: 11, color: inRoom ? "var(--green)" : "var(--t3)", marginTop: 1, paddingLeft: inRoom ? 13 : 0 }}>{inRoom ? "live" : m.when}</div>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, onSelect: () => copyText(`@meeting:${native}`) },
@@ -355,27 +366,28 @@ function MeetingsList() {
 function MeetingTab({ params }: TabProps) {
   const liveList = useLiveMeetings();
   const requestedMeetingId = params.meetingId as string;
-  // real meetings FIRST (the list is the source of truth); mock is only a fallback for ids not in it.
-  const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId) ?? meetingById(requestedMeetingId);
+  // ONE resolver, shared with the canvas body (useMeeting.resolveMeeting): the real meetings list is the
+  // only source of truth — a mock never shadows a real id, and a real id never falls back to a mock. While
+  // the async list is still loading the row is simply not-yet-resolved; we render the canvas bound to the
+  // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
+  const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
   const live = m?.status === "live";
-
-  if (!m) return <div style={{ padding: 24, color: "var(--t3)" }}>Meeting not found.</div>;
 
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
       <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13 }}>
           {live
-            ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--live)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", boxShadow: "0 0 0 3px var(--livebg)" }} />Live</span>
-            : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>Ended</span>}
+            ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
+            : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>{m ? "Ended" : "Connecting…"}</span>}
           <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)" }} />
-          <span style={{ color: "var(--t1)", fontWeight: 550 }}>{m.platform}</span>
-          <span style={{ color: "var(--t3)" }}>{m.participants.length} in the room</span>
+          <span style={{ color: "var(--t1)", fontWeight: 550 }}>{m?.platform ?? "Meeting"}</span>
+          {m && <span style={{ color: "var(--t3)" }}>{m.participants.length} in the room</span>}
         </div>
         <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or ask the right-rail chat for research grounded in this meeting.</p>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <MeetingCanvasView key={m.id} meetingId={m.id} />
+        <MeetingCanvasView key={requestedMeetingId} meetingId={requestedMeetingId} />
       </div>
     </div>
   );

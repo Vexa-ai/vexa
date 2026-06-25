@@ -207,8 +207,11 @@ async def request_bot(
     # gated by transcribe_enabled).
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
+    # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
+    # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
+    token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)
     token = mint_meeting_token(
-        meeting_id, user_id, platform, native_meeting_id, secret=token_secret
+        meeting_id, user_id, platform, native_meeting_id, secret=token_secret, ttl_seconds=token_ttl_seconds
     )
     invocation = build_invocation(
         meeting_id=meeting_id,

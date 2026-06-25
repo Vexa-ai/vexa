@@ -7,10 +7,14 @@
 // header (key stays server-side, never in any client-visible URL), and pipes
 // frames bidirectionally. The browser connects KEYLESS to same-origin `/ws`.
 import { createServer } from "node:http";
+import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 
 const dev = process.env.NODE_ENV !== "production";
+const { loadEnvConfig } = nextEnv;
+loadEnvConfig(process.cwd(), dev);
+
 const port = parseInt(process.env.PORT || "3003", 10);
 const hostname = process.env.HOST || "0.0.0.0";
 

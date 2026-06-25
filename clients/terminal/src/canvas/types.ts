@@ -6,6 +6,16 @@ export interface TranscriptSegment {
   ts?: number | string;
 }
 
+export interface ProcessedTranscriptNote {
+  id: string;
+  speaker?: string;
+  chapter?: string;
+  text: string;
+  ts?: number | string;
+  pass?: number;
+  frozen?: boolean;
+}
+
 export type EntityKind = "person" | "company" | "product" | "number" | "signal";
 
 export interface CanvasEntity {
@@ -57,6 +67,7 @@ export interface MeetingState {
   transcript: {
     segments: TranscriptSegment[];
     liveCaption?: string;
+    notes?: ProcessedTranscriptNote[];
   };
   entities: {
     people: any[];

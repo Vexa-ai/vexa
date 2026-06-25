@@ -16,7 +16,24 @@ export interface SessionSummary {
 }
 
 const truncateSessionId = (session: string) => session.length > 18 ? `${session.slice(0, 18)}...` : session;
-export const sessionTitle = (s: SessionSummary) => s.title?.trim() || truncateSessionId(s.session);
+
+function meetingLabel(value: string): string {
+  const meeting = (value.split("·").pop()?.trim() || value.trim()).replace(/^["'\\]+|["'\\.)]+$/g, "");
+  return meeting ? `Meeting ${meeting}` : "Meeting";
+}
+
+function compactTitle(title: string): string {
+  const raw = title.trim().replace(/^["']|["']$/g, "");
+  const activeRef = raw.match(/^Active meeting reference:\s*@meeting:([A-Za-z0-9._~%+@:/=-]+)/);
+  if (activeRef) return meetingLabel(activeRef[1]);
+  const activeMeeting = raw.match(/^Active meeting ([A-Za-z0-9._~%+@:/=-]+)/);
+  if (activeMeeting) return meetingLabel(activeMeeting[1]);
+  const legacyCopilot = raw.match(/^You are the copilot for a live meeting \((?:\\)?["']([^"']+)/);
+  if (legacyCopilot) return meetingLabel(legacyCopilot[1]);
+  return raw;
+}
+
+export const sessionTitle = (s: SessionSummary) => s.title?.trim() ? compactTitle(s.title) : truncateSessionId(s.session);
 
 function SessionsList() {
   const layout = useService(LayoutServiceId);

@@ -22,6 +22,10 @@ const entities = useEntities({ kind?: "person" | "company" | "product" | "number
 const signals = useSignals()
 // EntityItem[] with kind: "signal", derived from meeting cards and action items.
 
+const notes = useMeetingNotes()
+// MeetingNote[]: { id, ts?, speaker?, text, tags } — attributed FIRST-PERSON notes: the speaker's own
+// words shortened into clean paragraphs, folded as turns complete, with keyword tags inline.
+
 const docs = useMeetingDocs()
 // { brief: { path, present, title? }, report: { path, present, title? } }
 \`\`\`
@@ -75,6 +79,8 @@ The kit is hardened for non-technical authors:
 - \`ui.EntityList({ items?: EntityItem[], empty?, loading? })\`
 - \`ui.Timeline({ items?, empty?, loading? })\`
 - \`ui.Transcript({ segments?, liveCaption?, empty?, loading? })\`
+- \`ui.LiveNotes({ notes?: MeetingNote[], empty?, loading?, maxNotes? })\` — the condensed first-person notes feed with inline keyword tags
+- \`ui.LiveTranscript({ segments?, liveCaption?, empty?, loading?, maxSegments? })\` — the live raw-transcript TAIL (last few lines, wrapped)
 - \`ui.Chart({ kind?: "bar"|"line", data?, tone?, loading? })\`
 - \`ui.Badge({ tone?, loading?, children? })\`
 - \`ui.Tag({ tone?, loading?, children? })\`
@@ -93,7 +99,7 @@ Hot reload never swaps blindly. New \`views/meeting.tsx\` source must pass valid
 ## Rules
 
 - Default-export one React component. It receives no props.
-- You may use \`React\`, \`ui\`, \`useMeeting\`, \`useTranscript\`, \`useSpeakers\`, \`useEntities\`, \`useSignals\`, \`useMeetingDocs\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
+- You may use \`React\`, \`ui\`, \`useMeeting\`, \`useTranscript\`, \`useSpeakers\`, \`useEntities\`, \`useSignals\`, \`useMeetingDocs\`, \`useMeetingNotes\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
 - Imports are unnecessary. If present, imports may only reference React or the harness modules.
 - No \`fetch\`, \`XMLHttpRequest\`, \`WebSocket\`, \`eval\`, \`Function\`, dynamic \`import()\`, \`document\`, \`window\`, \`globalThis\`, \`localStorage\`, or \`dangerouslySetInnerHTML\`.
 - No arbitrary DOM styling. The kit is theme-locked to terminal CSS variables.

@@ -142,10 +142,8 @@ class DockerBackend:
         if mount_src and mount_tgt:
             binds.append(f"{mount_src}:{mount_tgt}")
 
-        # The Runtime BROKERS the model credential. Two ways, both kept OUT of the dispatch envelope (the
-        # agent only ever holds creds the trusted runtime injects): a Claude subscription credentials
-        # file bind-mounted read-only (HOST_CLAUDE_CREDENTIALS — the quorum pattern), and/or an
-        # ANTHROPIC_API_KEY forwarded from the spawner's env.
+        # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only; API-style
+        # Anthropic/OpenRouter env is copied from the trusted runtime service into spawned workers.
         creds = os.getenv("HOST_CLAUDE_CREDENTIALS")
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
@@ -159,9 +157,18 @@ class DockerBackend:
             host_config["Binds"] = binds
 
         spawn_env = dict(env)
-        anthropic = os.getenv("ANTHROPIC_API_KEY")
-        if anthropic and "ANTHROPIC_API_KEY" not in spawn_env:
-            spawn_env["ANTHROPIC_API_KEY"] = anthropic
+        for key in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ):
+            value = os.getenv(key)
+            if value and key not in spawn_env:
+                spawn_env[key] = value
 
         payload: dict[str, Any] = {
             "Image": runnable.image,
