@@ -557,6 +557,7 @@ def create_app(
 def _build_production_app() -> FastAPI:
     from .adapters import LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
     from .config import load_settings
+    from .workspace_routines import start_workspace_routine_reconciler
 
     settings = load_settings()
     runtime = RuntimeHttpClient(settings.runtime_api_url)
@@ -572,6 +573,19 @@ def _build_production_app() -> FastAPI:
         invocations_url=invocations_url,
         redis_url=settings.redis_url,
     )
+    app.state.workspace_routine_reconciler = start_workspace_routine_reconciler(
+        scheduler=scheduler,
+        invocations_url=invocations_url,
+        workspaces_dir=settings.workspaces_dir,
+        interval_sec=settings.routine_reconcile_interval_sec,
+    )
+
+    @app.on_event("shutdown")
+    def _stop_workspace_routine_reconciler() -> None:
+        handle = getattr(app.state, "workspace_routine_reconciler", None)
+        if handle is not None:
+            handle.stop()
+
     # The in-process meetings Integration (replaces the standalone bridge container): a daemon thread
     # tails transcription_segments → fans tc:meeting:{uid} + arms the copilot dispatch on activity.
     from . import transcription_watcher

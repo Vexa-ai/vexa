@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # A unit's unit.v1.tools names resolve against this dir into --allowedTools + an .mcp.json.
     tools_seed_dir: str = "/app/tools-seed"
 
+    # Workspace-authored routines are reconciled from /workspaces/*/routines/*.md onto the durable
+    # runtime scheduler. Set to 0 to disable the background reconciler.
+    routine_reconcile_interval_sec: int = Field(default=60, ge=0)
+
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
     agent_identity_token: SecretStr = SecretStr("")

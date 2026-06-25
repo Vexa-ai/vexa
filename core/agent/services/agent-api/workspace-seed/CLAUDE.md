@@ -25,6 +25,9 @@ to record, research, or restructure knowledge, you **write it into this repo** a
 ## How to work
 
 - To record a person/company/meeting/etc., create or update its entity file under `kg/entities/`.
+- For recurring or scheduled work, create or update a governed routine file at
+  `routines/<name>.md`. It becomes a durable Vexa Scheduler job. Never create an OS cron job,
+  shell background loop, or session-only reminder for scheduled work.
 - Keep facts dated and attributed where it helps. Do not invent — only record what you were given or
   found.
 - You do **not** run git — commits and history happen outside your turn. Just write the files.
