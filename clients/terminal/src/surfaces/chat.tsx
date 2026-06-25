@@ -271,6 +271,7 @@ export function Chat({ params = {} }: ChatProps) {
   const [loading, setLoading] = useState(false);
   const [value, setValue] = useState("");
   const idRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -317,10 +318,12 @@ export function Chat({ params = {} }: ChatProps) {
     const n = idRef.current++;
     setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: v }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
     setBusy(true);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     try {
       const p = await promptWithActiveContext(basePrompt, focusRef, activeMeeting, liveData.transcript);
       const active = focusRef ? { kind: focusRef.kind, ref: focusRef.raw } : undefined;
-      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session, active }) });
+      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session, active }), signal: ctrl.signal });
       const reader = r.body?.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -341,8 +344,12 @@ export function Chat({ params = {} }: ChatProps) {
         }
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
       }
-    } finally { setBusy(false); }
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") patchAgent((t) => ({ ...t, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
+    } finally { setBusy(false); abortRef.current = null; }
   };
+
+  const stop = () => { abortRef.current?.abort(); setBusy(false); };
 
   const onSubmit = () => {
     const v = value.trim();
@@ -376,7 +383,9 @@ export function Chat({ params = {} }: ChatProps) {
           <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13 }}>/</span>
           <input ref={inputRef} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); }} placeholder="Type / for skills, or ask the agent…" disabled={busy}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, minWidth: 0 }} />
-          <button aria-label="Send" onClick={onSubmit} disabled={busy} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, flex: "none" }}><Icon name="send" size={16} /></button>
+          {busy
+            ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
+            : <button aria-label="Send" onClick={onSubmit} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><Icon name="send" size={16} /></button>}
         </div>
       </div>
     </>
