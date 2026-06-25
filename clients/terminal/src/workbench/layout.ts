@@ -4,7 +4,7 @@
 import { createServiceId, createStore, type ObservableStore } from "../platform";
 import type { DockviewApi } from "dockview-react";
 
-const LS_DOCK = "vexa.terminal.dock.v2";
+const LS_DOCK = "vexa.terminal.dock.v3";
 const LS_LIST = "vexa.terminal.activeList.v1";
 
 export interface RightContext { kind: string; params?: Record<string, unknown>; }
@@ -67,6 +67,16 @@ export function createLayoutService(defaultList: string): LayoutService {
   /** drop the preview slot bookkeeping (the panel itself is handled by the caller). */
   const forgetPreview = () => { previewLogicalId = null; };
 
+  /** addPanel that survives a corrupted/stale grid. A layout restored via
+   *  fromJSON can land with no resolvable active group (dockview then throws
+   *  "invalid location" on a bare addPanel). Reset the grid and retry once so a
+   *  click/navigation always opens its tab instead of crashing the surface. */
+  const addPanelSafe = (opts: Parameters<DockviewApi["addPanel"]>[0]) => {
+    if (!api) return;
+    try { api.addPanel(opts); }
+    catch { api.clear(); forgetPreview(); api.addPanel(opts); }
+  };
+
   return {
     store,
     attach(dvApi) {
@@ -86,7 +96,7 @@ export function createLayoutService(defaultList: string): LayoutService {
       if (previewLogicalId === d.id) { api.getPanel(PREVIEW_PANEL)?.api.close(); forgetPreview(); }
       const existing = api.getPanel(d.id);
       if (existing) { existing.api.setActive(); return; }
-      api.addPanel({
+      addPanelSafe({
         id: d.id,
         component: "tab",
         title: d.title,
@@ -106,7 +116,7 @@ export function createLayoutService(defaultList: string): LayoutService {
         slot.api.setTitle(d.title);
         slot.api.setActive();
       } else {
-        api.addPanel({
+        addPanelSafe({
           id: PREVIEW_PANEL,
           component: "tab",
           title: d.title,
