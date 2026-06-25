@@ -4,16 +4,33 @@
  *  optimistic mocks until the backend endpoints land. */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useService } from "../platform";
-import { LayoutServiceId } from "../workbench/layout";
+import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
+import { usePreviewPinTab } from "./previewPinTab";
 
 const SUBJECT = "u_live";
 interface Routine { id: string; name: string; cron: string; plan_summary?: string; enabled?: boolean }
-const BOARD = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
+const BOARD: TabDescriptor = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
 
 async function fetchRoutines(): Promise<Routine[]> {
   try { return ((await (await fetch(`/api/routines?subject=${SUBJECT}`)).json()).routines ?? []).map((r: Routine) => ({ ...r, enabled: true })); } catch { return []; }
+}
+
+function RoutinesBoardNav() {
+  const nav = usePreviewPinTab<HTMLButtonElement>(BOARD);
+  return (
+    <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid var(--line2)", background: "var(--panel)", color: "var(--t1)", fontSize: 13, cursor: "pointer", marginBottom: 8 }}>
+      <Icon name="zap" size={14} />Routines board
+    </button>
+  );
+}
+
+function RoutineNavRow({ routine }: { routine: Routine }) {
+  const nav = usePreviewPinTab<HTMLDivElement>(BOARD);
+  return (
+    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} style={{ padding: "6px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)" }}>{routine.name}</div>
+  );
 }
 
 // ── center BOARD (kind "routines") ────────────────────────────────────────────────
@@ -66,11 +83,9 @@ function RoutinesLeft() {
   useEffect(() => { layout.openTab(BOARD); void fetchRoutines().then(setRoutines); }, [layout]);
   return (
     <div style={{ padding: "8px" }}>
-      <button onClick={() => layout.openTab(BOARD)} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid var(--line2)", background: "var(--panel)", color: "var(--t1)", fontSize: 13, cursor: "pointer", marginBottom: 8 }}>
-        <Icon name="zap" size={14} />Routines board
-      </button>
+      <RoutinesBoardNav />
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>scheduled agents</div>
-      {routines.map((r) => <div key={r.id} onClick={() => layout.openTab(BOARD)} style={{ padding: "6px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)" }}>{r.name}</div>)}
+      {routines.map((r) => <RoutineNavRow key={r.id} routine={r} />)}
       {routines.length === 0 && <div style={{ padding: "8px 4px", color: "var(--t3)", fontSize: 12 }}>None yet — create with <code style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>/routine</code> in Chat.</div>}
     </div>
   );

@@ -16,6 +16,7 @@ import { EntityList, onResearchRequest } from "./entities";
 import { meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
 import { useLiveMeetings, liveMeetingsNow, fetchTranscript, refreshMeetings } from "./liveMeetings";
+import { usePreviewPinTab } from "./previewPinTab";
 import type { TranscriptLine } from "./mock";
 
 function formatTranscriptTime(start?: number | null): string {
@@ -60,11 +61,51 @@ const docTabFor = (path: string, title: string): TabDescriptor =>
 
 type ConnectedDoc = { workspace: string; path: string; title?: string; kind?: string };
 
+function ConnectedDocChip({ doc }: { doc: ConnectedDoc }) {
+  const label = doc.title || baseName(doc.path).replace(/\.md$/, "");
+  const nav = usePreviewPinTab<HTMLButtonElement>(docTabFor(doc.path, label));
+  return (
+    <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} title={`Open ${doc.path}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      {doc.kind && <span style={{ fontSize: 9.5, color: "var(--t3)", fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: ".04em" }}>{doc.kind}</span>}
+    </button>
+  );
+}
+
+function MeetingDocChip({ native, title, hasLinks }: { native: string; title: string; hasLinks: boolean }) {
+  const nav = usePreviewPinTab<HTMLButtonElement>(docTabFor(`kg/entities/meeting/${native}.md`, title));
+  return (
+    <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} title="Open this meeting's notes"
+      style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px 5px 6px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 360, marginBottom: hasLinks ? 8 : 0 }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
+      <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, background: "var(--accentbg)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="panel" size={11} /></span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+    </button>
+  );
+}
+
+function WikiLinkChip({ title, path }: { title: string; path: string }) {
+  const nav = usePreviewPinTab<HTMLButtonElement>(docTabFor(path, title));
+  return (
+    <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} title={`Open ${title}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+    </button>
+  );
+}
+
 // ── Connected (data.docs) — the meeting-api now ships data.docs = the workspace docs this meeting
 //  produced. When present we render them as chips grouped by kind, each opening that doc.path in a doc
 //  tab. When EMPTY we fall back to the deterministic meeting-doc path below.
 function ConnectedDocsPanel({ docs }: { docs: ConnectedDoc[] }) {
-  const layout = useService(LayoutServiceId);
   // group by kind, preserving first-seen order
   const groups: { kind: string; docs: ConnectedDoc[] }[] = [];
   const byKind = new Map<string, ConnectedDoc[]>();
@@ -73,19 +114,6 @@ function ConnectedDocsPanel({ docs }: { docs: ConnectedDoc[] }) {
     if (!byKind.has(k)) { byKind.set(k, []); groups.push({ kind: k, docs: byKind.get(k)! }); }
     byKind.get(k)!.push(d);
   }
-  const chip = (d: ConnectedDoc, i: number) => {
-    const label = d.title || baseName(d.path).replace(/\.md$/, "");
-    return (
-      <button key={`${d.path}-${i}`} onClick={() => layout.openTab(docTabFor(d.path, label))} title={`Open ${d.path}`}
-        style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
-        <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        {d.kind && <span style={{ fontSize: 9.5, color: "var(--t3)", fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: ".04em" }}>{d.kind}</span>}
-      </button>
-    );
-  };
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
@@ -96,7 +124,7 @@ function ConnectedDocsPanel({ docs }: { docs: ConnectedDoc[] }) {
       {groups.map((g) => (
         <div key={g.kind} style={{ marginBottom: 10 }}>
           {groups.length > 1 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", margin: "0 2px 6px" }}>{g.kind}</div>}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{g.docs.map(chip)}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{g.docs.map((d, i) => <ConnectedDocChip key={`${d.path}-${i}`} doc={d} />)}</div>
         </div>
       ))}
     </div>
@@ -104,7 +132,6 @@ function ConnectedDocsPanel({ docs }: { docs: ConnectedDoc[] }) {
 }
 
 function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[] }) {
-  const layout = useService(LayoutServiceId);
   // data.docs first — when the meeting carries connected docs, render them and skip the path fallback
   const hasDocs = !!docs?.length;
   const [state, setState] = useState<{ status: "loading" | "absent" | "present"; title: string; links: string[] }>({ status: "loading", title: "", links: [] });
@@ -145,12 +172,6 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
     return () => { alive = false; };
   }, []);
 
-  const openLink = (title: string) => {
-    const slug = docSlug(title);
-    const path = slugMap[slug] ?? `kg/entities/topic/${slug}.md`;  // resolved type, else default to topic
-    layout.openTab(docTabFor(path, title));
-  };
-
   if (hasDocs) return <ConnectedDocsPanel docs={docs!} />;
   if (state.status === "loading") return null;
   return (
@@ -165,24 +186,14 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
       )}
       {state.status === "present" && (
         <>
-          <button onClick={() => layout.openTab(docTabFor(`kg/entities/meeting/${native}.md`, state.title))} title="Open this meeting's notes"
-            style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px 5px 6px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 360, marginBottom: state.links.length ? 8 : 0 }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
-            <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, background: "var(--accentbg)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="panel" size={11} /></span>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{state.title}</span>
-          </button>
+          <MeetingDocChip native={native} title={state.title} hasLinks={state.links.length > 0} />
           {state.links.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {state.links.map((l) => (
-                <button key={l} onClick={() => openLink(l)} title={`Open ${l}`}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
-                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l}</span>
-                </button>
-              ))}
+              {state.links.map((l) => {
+                const slug = docSlug(l);
+                const path = slugMap[slug] ?? `kg/entities/topic/${slug}.md`;
+                return <WikiLinkChip key={l} title={l} path={path} />;
+              })}
             </div>
           )}
           {state.links.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 2px" }}>Notes recorded — no linked entities yet.</div>}
@@ -304,7 +315,7 @@ function RowActions({ m }: { m: MeetingMock }) {
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
   return (
-    <div ref={ref} style={{ position: "relative", flex: "none", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={(e) => e.stopPropagation()}>
+    <div ref={ref} style={{ position: "relative", flex: "none", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
       <StatusBadge raw={m.live_status} />
       {acts.length > 0 && (
         <button title="Actions" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
@@ -327,6 +338,21 @@ function RowActions({ m }: { m: MeetingMock }) {
 
 export function meetingTab(m: MeetingMock): TabDescriptor {
   return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id }, context: { kind: "transcript", params: { meetingId: m.id } } };
+}
+
+function MeetingRow({ m }: { m: MeetingMock }) {
+  const nav = usePreviewPinTab<HTMLDivElement>(meetingTab(m));
+  return (
+    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
+        <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.title}</span>
+        {m.native_id && <RowActions m={m} />}
+      </div>
+      <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
+    </div>
+  );
 }
 
 // ── Meetings LIST (left) ─────────────────────────────────────────────────────────
@@ -360,17 +386,6 @@ function MeetingsList() {
     } catch { setSent("err"); }
     setTimeout(() => setSent(null), 4000);
   };
-  const row = (m: MeetingMock) => (
-    <div key={m.id} onClick={() => layout.openTab(meetingTab(m))} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-        {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
-        <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.title}</span>
-        {m.native_id && <RowActions m={m} />}
-      </div>
-      <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
-    </div>
-  );
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 6px" }}>meetings</div>
@@ -388,10 +403,10 @@ function MeetingsList() {
       </div>
       {all.length === 0 && <div style={{ padding: "8px 9px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>No meetings yet — paste a Meet link above and I&apos;ll send the bot.</div>}
       {upcomingOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Upcoming</div>}
-      {upcomingOnes.map(row)}
-      {liveOnes.map(row)}
+      {upcomingOnes.map((m) => <MeetingRow key={m.id} m={m} />)}
+      {liveOnes.map((m) => <MeetingRow key={m.id} m={m} />)}
       {pastOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Recorded</div>}
-      {pastOnes.map(row)}
+      {pastOnes.map((m) => <MeetingRow key={m.id} m={m} />)}
     </div>
   );
 }
