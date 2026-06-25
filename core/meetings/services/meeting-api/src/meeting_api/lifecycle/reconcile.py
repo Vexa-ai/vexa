@@ -51,6 +51,71 @@ async def reconcile_stale_stopping_sweep(
     return len(stale)
 
 
+# Statuses where the bot NEVER reported `active` — a hung row here means the bot never started/joined
+# and never will, so it reconciles to `failed` (attributed to the stage it died in). `active`/`stopping`
+# (the bot WAS live) reconcile to `completed`.
+_PRE_ACTIVE_NONTERMINAL = frozenset({"requested", "joining", "awaiting_admission", "needs_help"})
+
+
+async def reconcile_stale_nonterminal_sweep(
+    repo: Any,
+    runtime: Optional[Any],
+    post_lifecycle: Callable[[dict], Awaitable[Any]],
+    *,
+    stop_grace: float,
+    active_grace: float,
+    log: Any,
+) -> int:
+    """The GENERAL backstop: any meeting hung in a non-terminal status whose bot is GONE (its row has
+    been quiet — no status change, no segment/heartbeat — past the grace window) converges to a
+    terminal state through the bot's OWN lifecycle callback (so the FSM → persist → webhook → ws
+    publish path fires identically, never bypassed).
+
+      * `active` / `stopping` (the bot WAS live) → `completed`. `stop_requested` is preserved (carried
+        back into `meeting.data`) so the UI's derived `stopped` still shows.
+      * `requested` / `joining` / `awaiting_admission` / `needs_help` (never reached `active`) → `failed`,
+        attributed to the stage it died in.
+
+    Two grace windows (env-configurable): ``stop_grace`` for `stopping` (a stop was requested — clear it
+    fast), ``active_grace`` for everything else (a longer idle so a momentarily-quiet live bot is not
+    reaped). Best-effort per meeting — never raises. Idempotent: an already-terminal row is not listed by
+    ``list_stale_nonterminal``, and a redelivered terminal is an idempotent 200 no-op at the callback.
+
+    Returns the number of meetings reconciled."""
+    if repo is None or not hasattr(repo, "list_stale_nonterminal"):
+        return 0
+    try:
+        stale = await repo.list_stale_nonterminal(stop_grace=stop_grace, active_grace=active_grace)
+    except Exception:
+        log.exception("nonterminal-reconcile: list_stale_nonterminal failed")
+        return 0
+    reconciled = 0
+    for meeting_id, status, session_uid, bot_container_id, stop_requested in stale:
+        terminal = "failed" if status in _PRE_ACTIVE_NONTERMINAL else "completed"
+        body: dict[str, Any] = {"connection_id": session_uid, "status": terminal}
+        if terminal == "completed":
+            body["completion_reason"] = "stopped" if stop_requested else "left_alone"
+            if stop_requested:
+                body["data"] = {"stop_requested": True}
+        else:
+            body["completion_reason"] = "left_alone"
+            body["reason"] = f"bot gone while {status}; reconciled to failed (never reached active)"
+        try:
+            result = await post_lifecycle(body)
+            reconciled += 1
+            log.info("nonterminal-reconcile %s meeting %s (status %s, session %s) → %s",
+                     terminal, meeting_id, status, session_uid, result)
+        except Exception:
+            log.exception("nonterminal-reconcile failed for meeting %s (status %s)", meeting_id, status)
+            continue
+        if runtime is not None and bot_container_id:
+            try:
+                await runtime.delete_workload(bot_container_id)
+            except Exception as e:  # noqa: BLE001 — best-effort; logged, never fails the sweep
+                _log_orphan_kill_failed(meeting_id, bot_container_id, e)
+    return reconciled
+
+
 def _log_orphan_kill_failed(meeting_id, workload_id, err) -> None:
     try:
         from ..obs import log_event

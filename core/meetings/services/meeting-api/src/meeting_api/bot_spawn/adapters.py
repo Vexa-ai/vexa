@@ -242,6 +242,49 @@ class SqlAlchemyMeetingRepo:
                 out[mid] = (sid, bcid)
         return [(mid, sid, bcid) for mid, (sid, bcid) in out.items()]
 
+    async def list_stale_nonterminal(
+        self, *, stop_grace: float, active_grace: float
+    ) -> list[tuple[int, str, str, Optional[str], bool]]:
+        """Meetings stuck in ANY non-terminal status whose row has gone quiet past its grace window —
+        a bot that exited (or vanished) without ever sending its terminal lifecycle callback leaves the
+        row hung here forever. ``updated_at`` is bumped on every status change AND on segment/heartbeat
+        persistence, so a quiet row past the window means the bot is gone.
+
+        Per-row window: ``stopping`` uses ``stop_grace`` (a stop was requested — clear it fast),
+        everything else uses ``active_grace`` (a longer idle so a momentarily-quiet live bot is not
+        reaped). Returns ``[(meeting_id, status, session_uid, bot_container_id, stop_requested), …]`` with
+        the LATEST session_uid per meeting (mirrors ``list_stale_stopping``)."""
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        non_terminal = [
+            "requested", "joining", "awaiting_admission", "needs_help", "active", "stopping",
+        ]
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting.id, Meeting.status, Meeting.updated_at,
+                           MeetingSession.session_uid, Meeting.bot_container_id, Meeting.data)
+                    .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
+                    .where(Meeting.status.in_(non_terminal))
+                    .order_by(MeetingSession.id.desc())
+                )
+            ).all()
+        now = datetime.now(timezone.utc)
+        out: dict[int, tuple[str, str, Optional[str], bool]] = {}
+        for mid, status, upd, sid, bcid, data in rows:
+            if mid in out or upd is None or not sid:
+                continue
+            u = upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
+            grace = stop_grace if status == "stopping" else active_grace
+            if (now - u).total_seconds() >= grace:
+                stop_req = bool(isinstance(data, dict) and data.get("stop_requested"))
+                out[mid] = (status, sid, bcid, stop_req)
+        return [(mid, st, sid, bcid, sr) for mid, (st, sid, bcid, sr) in out.items()]
+
     async def create_meeting(self, *, user_id, platform, native_meeting_id, data) -> dict:
         from ..sessions.models import Meeting
 

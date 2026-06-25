@@ -590,3 +590,104 @@ def test_sink_history_only_grows_on_real_advance():
     sink.apply({"connection_id": "x", "status": "active"})  # no-op replay
     assert len(rec.history) == n, f"history grew on a no-op replay: {rec.history}"
     assert len(rec.status_transition) == n, "status_transition trail grew on a no-op replay"
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════════════════════╗
+# ║ 7. GENERAL NON-TERMINAL RECONCILE — any hung status whose bot is gone converges to terminal     ║
+# ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+# Drives the SHIPPED ``reconcile_stale_nonterminal_sweep`` against the live TestClient (its
+# ``post_lifecycle`` = the same /bots/internal/callback/lifecycle the loop POSTs to), so the FSM →
+# persist → webhook → ws publish path is exercised end-to-end, no while/sleep wrapper.
+
+from meeting_api.lifecycle.reconcile import reconcile_stale_nonterminal_sweep  # noqa: E402
+
+
+def _set_updated_now(repo: InMemoryMeetingRepo, meeting_id: int) -> None:
+    """Mark a row as JUST-active (recent heartbeat/segment) so the sweep's grace excludes it."""
+    from datetime import datetime, timezone
+    repo._meetings[meeting_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _run_general_sweep(client: TestClient, repo: InMemoryMeetingRepo, *, stop_grace=45.0, active_grace=300.0):
+    """Run ONE general sweep exactly as the loop does, posting through the live callback."""
+    import logging
+
+    async def _post(body: dict):
+        return client.post(ENDPOINT, json=body).status_code
+
+    return asyncio.run(reconcile_stale_nonterminal_sweep(
+        repo, None, _post, stop_grace=stop_grace, active_grace=active_grace,
+        log=logging.getLogger("test.reconcile"),
+    ))
+
+
+def test_general_reconcile_completes_stale_stopping_and_publishes():
+    """A meeting stuck `stopping` with a dead/absent bot past the grace reconciles to `completed`
+    AND publishes the bm: + user-scoped status frames (republish must not be bypassed). The
+    seeded row carries `stop_requested`, so the completion preserves it for the UI's derived `stopped`."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["data"]["stop_requested"] = True  # the stop path set this
+    redis = _RecordingRedis()
+    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+
+    n = _run_general_sweep(client, repo)
+    assert n == 1
+    assert asyncio.run(repo.get_status_by_session(session_uid="sess-uid")) == "completed"
+    # stop_requested preserved into meeting.data so the UI shows `stopped`.
+    assert repo._meetings[m["id"]]["data"].get("stop_requested") is True
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "stopped"
+    # The terminal status frame was published on BOTH channels.
+    channels = {c for c, _ in redis.published}
+    assert f"bm:meeting:{m['id']}:status" in channels
+    assert "u:1:meetings" in channels
+    bm = next(p for c, p in redis.published if c == f"bm:meeting:{m['id']}:status")
+    assert bm["payload"]["status"] == "completed"
+
+
+def test_general_reconcile_leaves_live_active_alone():
+    """An `active` meeting with a live bot (recent updated_at = recent heartbeat/segment) is NOT
+    touched — its age is inside the active grace window."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    _set_updated_now(repo, m["id"])
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep(client, repo)
+    assert n == 0
+    assert repo._meetings[m["id"]]["status"] == "active"
+
+
+def test_general_reconcile_completes_stale_active():
+    """An `active` meeting gone quiet PAST the active grace (bot exited, no terminal callback) →
+    `completed` (the bot WAS live, so not a failure). Seeded row's updated_at is far in the past."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")  # default updated_at is 2026-06-20 — well past any grace
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep(client, repo)
+    assert n == 1
+    assert repo._meetings[m["id"]]["status"] == "completed"
+    # No stop was requested → completion_reason left_alone, NOT stopped.
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "left_alone"
+
+
+def test_general_reconcile_is_idempotent():
+    """Re-running the sweep is a no-op on already-terminal rows: the first pass completes the stale
+    meeting, the second finds nothing (it's terminal now → not listed) and posts nothing."""
+    repo = InMemoryMeetingRepo()
+    _seed(repo, status="stopping")
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _run_general_sweep(client, repo) == 1
+    assert _run_general_sweep(client, repo) == 0
+
+
+def test_general_reconcile_noop_on_terminal_rows():
+    """A row already `completed`/`failed` is never listed/touched by the sweep."""
+    for status in ("completed", "failed"):
+        repo = InMemoryMeetingRepo()
+        m = _seed(repo, status=status)
+        client = TestClient(create_app(meeting_repo=repo))
+        assert _run_general_sweep(client, repo) == 0
+        assert repo._meetings[m["id"]]["status"] == status

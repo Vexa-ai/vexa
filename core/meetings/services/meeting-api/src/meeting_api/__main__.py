@@ -155,6 +155,10 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     # lifecycle callback the bot uses — so the FSM, webhook, and ws status frame all fire identically.
     stop_grace = float(os.getenv("STOP_RECONCILE_GRACE_S", "45"))
     stop_interval = float(os.getenv("STOP_RECONCILE_INTERVAL_S", "15"))
+    # GENERAL reconcile: ANY non-terminal status whose bot is gone (its row quiet past the grace) is
+    # converged to a terminal state through the same lifecycle callback. `stopping` uses stop_grace
+    # (a stop was requested); `active`/etc. use a longer idle so a momentarily-quiet live bot is safe.
+    active_grace = float(os.getenv("RECONCILE_ACTIVE_GRACE_S", "300"))
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
@@ -213,7 +217,10 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             return
         import httpx
 
-        from .lifecycle.reconcile import reconcile_stale_stopping_sweep
+        from .lifecycle.reconcile import (
+            reconcile_stale_nonterminal_sweep,
+            reconcile_stale_stopping_sweep,
+        )
 
         port = int(os.getenv("PORT", "8080"))
         callback = f"http://127.0.0.1:{port}/bots/internal/callback/lifecycle"
@@ -227,8 +234,16 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
                 r = await client.post(callback, json=body, headers=headers)
                 return r.status_code
 
+        # The general sweep (any stale non-terminal status whose bot is gone) subsumes the stale-
+        # stopping sweep, but we keep the latter as the guaranteed orphan-kill backstop for `stopping`.
+        has_general = hasattr(meeting_repo, "list_stale_nonterminal")
         while True:
             try:
+                if has_general:
+                    await reconcile_stale_nonterminal_sweep(
+                        meeting_repo, runtime, _post_lifecycle,
+                        stop_grace=stop_grace, active_grace=active_grace, log=log,
+                    )
                 await reconcile_stale_stopping_sweep(
                     meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
                 )

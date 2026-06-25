@@ -192,6 +192,44 @@ class InMemoryMeetingRepo:
             and m["id"] != exclude_meeting_id
         )
 
+    async def list_stale_nonterminal(
+        self, *, stop_grace: float, active_grace: float
+    ) -> list:
+        """In-memory mirror of the SQL adapter's general reconcile query. A row is stale once its age
+        (now - ``updated_at``) passes its per-status grace (``stopping`` → stop_grace, else
+        active_grace). Rows carry a static created/updated timestamp, so a test sets ``updated_at`` (or
+        leaves it in the past) to mark a row stale; a row whose ``updated_at`` is recent is NOT listed."""
+        from datetime import datetime, timezone
+
+        non_terminal = {
+            "requested", "joining", "awaiting_admission", "needs_help", "active", "stopping",
+        }
+        now = datetime.now(timezone.utc)
+        out: dict = {}
+        # latest session per meeting (mirror the SQL adapter's MeetingSession.id desc)
+        for s in reversed(self.sessions):
+            mid = s["meeting_id"]
+            if mid in out:
+                continue
+            row = self._meetings.get(mid)
+            if row is None or row["status"] not in non_terminal:
+                continue
+            upd = row.get("updated_at")
+            try:
+                u = datetime.fromisoformat(str(upd).replace("Z", "+00:00")) if upd else None
+            except ValueError:
+                u = None
+            if u is None:
+                continue
+            if u.tzinfo is None:
+                u = u.replace(tzinfo=timezone.utc)
+            grace = stop_grace if row["status"] == "stopping" else active_grace
+            if (now - u).total_seconds() < grace:
+                continue
+            stop_req = bool(row.get("data", {}).get("stop_requested"))
+            out[mid] = (row["status"], s["session_uid"], row.get("bot_container_id"), stop_req)
+        return [(mid, st, sid, bcid, sr) for mid, (st, sid, bcid, sr) in out.items()]
+
     # ── test affordances (not part of the port) ──────────────────────────────────────────────────
     def set_status(self, meeting_id: int, status: str) -> None:
         """Flip a meeting's status (simulate the bot reaching active / a session going terminal)."""
