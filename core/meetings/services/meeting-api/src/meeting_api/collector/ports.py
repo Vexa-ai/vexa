@@ -81,6 +81,25 @@ class TranscriptStore(Protocol):
         Returns the updated ``docs`` list (idempotent if absent), or ``None`` when not owned/found."""
         ...
 
+    async def set_intent(
+        self,
+        user_id: int,
+        platform: str,
+        native_meeting_id: str,
+        status: str,
+        scheduled_at: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Write an INTENT status (``idle`` / ``scheduled`` ONLY) onto the owned meeting's
+        ``meetings.status`` column — the user is the source of truth for these pre-FSM states.
+        For ``scheduled`` the ISO8601 ``scheduled_at`` is stamped into ``meeting.data``; for
+        ``idle`` it is cleared. NEVER reaches the bot FSM / ``LifecycleSink.apply_change``.
+
+        Returns a small dict ``{id, user_id, platform, native_id, status, scheduled_at, changed}``
+        describing the row after the write (``changed`` is False when the status was already the
+        requested value AND scheduled_at is unchanged — an idempotent no-op that must NOT re-publish),
+        or ``None`` when the user owns no such meeting."""
+        ...
+
 
 @runtime_checkable
 class PubSub(Protocol):

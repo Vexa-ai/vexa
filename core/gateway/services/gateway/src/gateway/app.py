@@ -321,6 +321,21 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
             await ws.close(code=4401)  # Unauthorized
         return
 
+    # Connect-time identity resolve (Track G — meeting-status-ws §C.2). Today connect only checked
+    # the key was PRESENT and resolved user_id per-subscribe; now we resolve the key to a user up
+    # front (the SAME resolver /auth/me + the proxy use — ports.py resolve / app.py:96-99,119-125)
+    # so we can auto-subscribe the socket to its USER-SCOPED channel. Fail-closed like the proxy:
+    # a present-but-invalid key → invalid_api_key + close 4401, not a silently half-open socket.
+    user_data = await authorizer.resolve(api_key)
+    if not user_data:
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))
+        finally:
+            await ws.close(code=4401)  # Unauthorized
+        return
+    user_id = user_data["user_id"]
+    set_user_id(user_id)
+
     sub_tasks: Dict[Tuple, asyncio.Task] = {}
     subscribed_meetings: Set[Tuple] = set()
 
@@ -361,6 +376,15 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
         if task:
             task.cancel()
         subscribed_meetings.discard(key)
+
+    # Auto-subscribe the authed socket to its USER scope (Track G — meeting-status-ws §C.2). The
+    # user-scoped redis channel `u:{user_id}:meetings` carries every meeting.status frame for this
+    # user (the publisher mirrors each bm:meeting:{id}:status onto it — §C.3). No client `subscribe`
+    # frame is needed: the identity is resolved at connect. This reuses the SAME verbatim `fan_in`
+    # path as the per-meeting channels — the gateway is a thin raw forwarder for the user channel
+    # exactly as it is for tc:/bm:/va:. Per-meeting subscriptions below are unchanged.
+    user_channel = f"u:{user_id}:meetings"
+    user_sub_task = asyncio.create_task(fan_in([user_channel]))
 
     try:
         while True:
@@ -474,6 +498,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     except WebSocketDisconnect:
         pass
     finally:
+        user_sub_task.cancel()  # Track G — tear down the user-scope fan-in on disconnect.
         for task in sub_tasks.values():
             task.cancel()
 

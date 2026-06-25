@@ -270,6 +270,27 @@ def _mount_lifecycle(
                 except Exception as e:  # noqa: BLE001 — publish is best-effort
                     log_event("ws_status_publish_failed", audience="system", level="warning",
                               span="lifecycle.callback", fields={"error": str(e)})
+                # ALSO publish the FLAT frame to the USER-scoped channel u:{user_id}:meetings so the
+                # terminal's list surface gets every bot-FSM transition over WS (superset of bm:; it
+                # also carries the pre-FSM idle/scheduled states). KEEP bm: above for the open-meeting
+                # tab. Best-effort: never fail the lifecycle callback.
+                user_id = meeting_row.get("user_id")
+                if user_id is not None:
+                    user_frame = {
+                        "type": "meeting.status",
+                        "meeting_id": meeting_id,
+                        "native": meeting_row.get("native_meeting_id"),
+                        "status": rec.status.value,
+                        "when": frame["ts"],
+                    }
+                    try:
+                        await redis.publish(
+                            f"u:{user_id}:meetings", _json.dumps(user_frame)
+                        )
+                    except Exception as e:  # noqa: BLE001 — publish is best-effort
+                        log_event("user_meeting_status_publish_failed", audience="system",
+                                  level="warning", span="lifecycle.callback",
+                                  fields={"error": str(e)})
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,

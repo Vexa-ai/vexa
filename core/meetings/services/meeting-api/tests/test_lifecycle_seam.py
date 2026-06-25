@@ -495,6 +495,28 @@ def test_no_ws_publish_on_idempotent_replay():
     assert len(redis.published) == n, f"duplicate ws publish on no-op replay: {redis.published}"
 
 
+def test_bot_advance_publishes_user_channel_frame():
+    """Every genuine bot-FSM advance ALSO publishes a FLAT meeting.status frame to the user-scoped
+    channel u:{user_id}:meetings (Track ②), alongside the existing bm:meeting:{id}:status frame."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="requested")  # user_id=1 per _seed
+    redis = _RecordingRedis()
+    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    r = _post(client, connection_id="sess-uid", status="joining")
+    assert r.status_code == 200, r.text
+
+    channels = {c for c, _ in redis.published}
+    assert f"bm:meeting:{m['id']}:status" in channels  # legacy per-meeting frame kept
+    assert f"u:1:meetings" in channels  # NEW user-scoped frame
+
+    user_frame = next(p for c, p in redis.published if c == "u:1:meetings")
+    assert user_frame["type"] == "meeting.status"
+    assert user_frame["meeting_id"] == m["id"]
+    assert user_frame["native"] == "m1"
+    assert user_frame["status"] == "joining"
+    assert "when" in user_frame
+
+
 # FIXED (L1): the status_change envelope build+append is now gated on `not change.no_op` (app.py),
 # mirroring the persist + ws-publish guards — a no-op replay no longer double-counts. Regression guard.
 def test_no_extra_webhook_envelope_on_idempotent_replay():

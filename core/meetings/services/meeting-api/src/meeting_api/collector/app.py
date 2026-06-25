@@ -41,6 +41,48 @@ from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
 
 
+# The two INTENT states the USER owns (pre-FSM). The user dropdown is the source of truth for
+# these; they sit BEFORE `requested` and are NEVER passed to the bot FSM (LifecycleSink.apply_change).
+_INTENT_STATUSES = frozenset({"idle", "scheduled"})
+# FSM-owned values the intent endpoint MUST reject (422) — the bot lifecycle owns everything from
+# `requested` onward (machine.py); the user cannot set these directly.
+_FSM_OWNED_STATUSES = frozenset({
+    "requested", "joining", "awaiting_admission", "needs_help",
+    "active", "stopping", "completed", "failed",
+})
+
+
+async def _publish_user_meeting_status(
+    redis,
+    *,
+    user_id,
+    meeting_id,
+    native_id,
+    status: str,
+    when: Optional[str],
+    log_event: Callable[..., dict],
+) -> None:
+    """Best-effort publish of a FLAT ``meeting.status`` frame to the user-scoped channel
+    ``u:{user_id}:meetings`` so the terminal's list surface gets every status change over WS
+    (the gateway forwards the redis payload verbatim). No-op if redis is down / args missing."""
+    if redis is None or user_id is None or meeting_id is None:
+        return
+    import json as _json
+
+    frame = {
+        "type": "meeting.status",
+        "meeting_id": meeting_id,
+        "native": native_id,
+        "status": status,
+        "when": when,
+    }
+    try:
+        await redis.publish(f"u:{user_id}:meetings", _json.dumps(frame))
+    except Exception as e:  # noqa: BLE001 — publish is best-effort
+        log_event("user_meeting_status_publish_failed", audience="system", level="warning",
+                  span="meetings.intent.publish", fields={"error": str(e)})
+
+
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
     """The gateway injects ``x-user-id`` after it resolves ``x-api-key`` (anti-spoofing: it
     strips any client-supplied identity header first). Missing → 401 fail-closed."""
@@ -235,6 +277,77 @@ def build_router(
             fields={"path": resolved, "docs": len(docs)},
         )
         return JSONResponse(content={"docs": docs})
+
+    # --- PUT /meetings/{platform}/{native_meeting_id}/intent → set the USER-owned INTENT status.
+    # The user dropdown is the source of truth for the pre-FSM states `idle` / `scheduled`. Writes
+    # meetings.status to `idle`|`scheduled` ONLY; rejects (422) any FSM-owned value. For `scheduled`
+    # with `at`, the ISO8601 time is stamped into meeting.data['scheduled_at'] (scheduler wiring is a
+    # later track). Owner-scoped. On a genuine change, publishes the flat frame to u:{user_id}:meetings.
+    @router.put("/meetings/{platform}/{native_meeting_id}/intent")
+    async def set_intent(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+        intent = payload.get("intent")
+        if not isinstance(intent, str) or not intent.strip():
+            raise HTTPException(status_code=422, detail="'intent' is required")
+        intent = intent.strip()
+        if intent in _FSM_OWNED_STATUSES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{intent}' is FSM-owned and cannot be set as an intent",
+            )
+        if intent not in _INTENT_STATUSES:
+            raise HTTPException(
+                status_code=422,
+                detail="'intent' must be one of: idle, scheduled",
+            )
+        scheduled_at = payload.get("at")
+        if scheduled_at is not None and not isinstance(scheduled_at, str):
+            raise HTTPException(status_code=422, detail="'at' must be an ISO8601 string")
+        if intent == "scheduled" and not scheduled_at:
+            raise HTTPException(status_code=422, detail="'at' is required when intent is 'scheduled'")
+
+        result = await store.set_intent(
+            user_id, platform, native_meeting_id, intent, scheduled_at=scheduled_at
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        log_event(
+            "meeting_intent_set", audience="user", span="meetings.intent.set",
+            user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+            fields={"intent": intent, "scheduled_at": result.get("scheduled_at"),
+                    "changed": result.get("changed")},
+        )
+        # Echo over WS — but ONLY on a genuine change (idempotent PUT to the current state does NOT
+        # re-publish, mirroring the FSM's no_op discipline so reconnect storms don't fan out).
+        if result.get("changed"):
+            await _publish_user_meeting_status(
+                redis,
+                user_id=user_id,
+                meeting_id=result.get("id"),
+                native_id=native_meeting_id,
+                status=intent,
+                when=result.get("scheduled_at"),
+                log_event=log_event,
+            )
+        return JSONResponse(content={
+            "meeting_id": result.get("id"),
+            "status": intent,
+            "scheduled_at": result.get("scheduled_at"),
+        })
 
     # --- POST /ws/authorize-subscribe → the gateway /ws authorizer hop ---
     @router.post("/ws/authorize-subscribe")

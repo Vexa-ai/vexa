@@ -139,3 +139,43 @@ async def test_subscribe_acks_and_forwards_then_unsubscribe_stops():
 
     ws.disconnect()
     await task
+
+
+async def test_invalid_api_key_closes_4401():
+    # Track G (meeting-status-ws §C.2): connect now RESOLVES the key (not just presence). A
+    # present-but-invalid key fails closed like the proxy — invalid_api_key + close 4401.
+    ws = _WS(inbound=[], api_key="vxa_not_a_real_key")
+    redis, auth = _redis_and_auth()
+    await _run_multiplex(ws, auth, redis)
+    assert ws.sent and ws.sent[0]["error"] == "invalid_api_key"
+    assert ws.close_code == 4401
+
+
+async def test_connect_auto_subscribes_user_channel_and_forwards():
+    # Track G: a valid connect resolves user_id (7) and auto-subscribes `u:7:meetings`, with no
+    # client `subscribe` frame. A frame published to that channel reaches the socket verbatim.
+    ws = _WS(inbound=[], api_key=API_KEY, close_when_drained=False)
+    redis, auth = _redis_and_auth()
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+    # user_id from AUTH/FakeAuthorizer is 7 → channel u:7:meetings. No subscribe frame was sent.
+    frame = {
+        "type": "meeting.status",
+        "meeting": {"id": 42, "platform": "google_meet", "native_id": "room-1"},
+        "payload": {"status": "scheduled"},
+        "user_id": 7,
+        "meeting_id": 42,
+        "native": "room-1",
+        "status": "scheduled",
+    }
+    await redis.publish("u:7:meetings", json.dumps(frame))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert any(
+        f.get("type") == "meeting.status" and f.get("status") == "scheduled" for f in ws.sent
+    ), ws.sent
+
+    ws.disconnect()
+    await task

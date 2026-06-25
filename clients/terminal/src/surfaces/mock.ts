@@ -13,6 +13,8 @@ export interface MeetingMock {
   title: string;
   when: string;
   status: "live" | "past";
+  live_status?: string;       // the RAW meeting-api status (idle·scheduled·requested·joining·awaiting_admission·needs_help·active·stopping·completed·failed·stopped) — drives the status badge + action dropdown
+  scheduled_at?: string;      // when a `scheduled` meeting is due (data.scheduled_at)
   platform: string;
   participants: Participant[];
   mentioned: string[];          // workspace entity titles surfaced from the conversation

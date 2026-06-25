@@ -175,7 +175,9 @@ def test_ws_status_frame_matches_010_6_contract(goldens):
     client = TestClient(create_app(meeting_repo=repo, redis=redis))
     client.post(ENDPOINT, json=goldens["completed-stopped"])
 
-    frame = redis.published[-1][1]
+    # The legacy per-meeting frame (bm:meeting:{id}:status) carries the nested 0.10.6 shape. A second
+    # FLAT frame now also lands on the user channel (u:{id}:meetings, Track ②) — select the bm: one.
+    frame = next(p for c, p in redis.published if c.startswith("bm:meeting:"))
     assert frame["type"] == "meeting.status"
     assert isinstance(frame.get("meeting"), dict) and "id" in frame["meeting"]
     assert isinstance(frame.get("payload"), dict)

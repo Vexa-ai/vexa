@@ -15,7 +15,7 @@ import { Icon } from "../ui-kit";
 import { EntityList, onResearchRequest } from "./entities";
 import { meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
-import { useLiveMeetings, liveMeetingsNow, fetchTranscript } from "./liveMeetings";
+import { useLiveMeetings, liveMeetingsNow, fetchTranscript, refreshMeetings } from "./liveMeetings";
 import type { TranscriptLine } from "./mock";
 
 // ── live entities (streamed from the real dispatch) — compact, clickable to research ──────────────
@@ -213,6 +213,104 @@ function LiveCards({ cards, connected, onResearch }: { cards: LiveCard[]; connec
   );
 }
 
+// ── Per-meeting status badge + action dropdown ─────────────────────────────────────
+//  The badge shows the REAL meeting-api status; the dropdown is an ACTION→TRANSITION map (not free
+//  status editing) — each item calls ONE endpoint that performs the one legal write (design doc §B).
+type BadgeKind = "intent" | "live" | "awaiting" | "needshelp" | "stopping" | "terminal";
+const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; kind: BadgeKind }> = {
+  idle: { label: "Idle", color: "var(--t3)", bg: "var(--panel2)", kind: "intent" },
+  scheduled: { label: "Scheduled", color: "var(--blue)", bg: "var(--bluebg)", kind: "intent" },
+  requested: { label: "Requested", color: "var(--accent)", bg: "var(--accentbg)", kind: "live" },
+  joining: { label: "Joining", color: "var(--accent)", bg: "var(--accentbg)", kind: "live" },
+  awaiting_admission: { label: "Awaiting", color: "var(--violet)", bg: "var(--violetbg)", kind: "awaiting" },
+  needs_help: { label: "Needs help", color: "var(--live)", bg: "var(--livebg)", kind: "needshelp" },
+  active: { label: "Live", color: "var(--live)", bg: "var(--livebg)", kind: "live" },
+  stopping: { label: "Stopping", color: "var(--t3)", bg: "var(--panel2)", kind: "stopping" },
+  completed: { label: "Completed", color: "var(--green)", bg: "var(--greenbg)", kind: "terminal" },
+  failed: { label: "Failed", color: "var(--live)", bg: "var(--livebg)", kind: "terminal" },
+  stopped: { label: "Stopped", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" },
+};
+const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "—", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" as BadgeKind };
+
+type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: () => void };
+
+/** The action→transition map for a row, keyed on its REAL status. Each action hits exactly one endpoint. */
+function actionsFor(m: MeetingMock): RowAction[] {
+  const native = m.native_id ?? m.id;
+  const intent = (state: "idle" | "scheduled", at?: string) =>
+    void fetch(`/api/meetings/google_meet/${encodeURIComponent(native)}/intent`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ intent: state, ...(at ? { at } : {}) }),
+    }).finally(refreshMeetings);
+  const send = () =>
+    void fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: `https://meet.google.com/${native}` }) }).finally(refreshMeetings);
+  const stop = () =>
+    void fetch("/api/meeting/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ native_id: native, platform: "google_meet" }) }).finally(refreshMeetings);
+  const schedule = () => {
+    // minimal time picker: prompt for a local datetime, send as ISO. (A richer picker can replace this.)
+    const def = new Date(Date.now() + 3600_000).toISOString().slice(0, 16);
+    const input = typeof window !== "undefined" ? window.prompt("Schedule for (YYYY-MM-DD HH:MM, local):", def) : null;
+    if (!input) return;
+    const at = new Date(input).toISOString();
+    intent("scheduled", at);
+  };
+
+  const raw = m.live_status ?? (m.status === "live" ? "active" : "completed");
+  switch (raw) {
+    case "idle":
+      return [{ id: "schedule", label: "Schedule", tone: "accent", run: schedule }, { id: "send", label: "Send now", tone: "accent", run: send }];
+    case "scheduled":
+      return [{ id: "send", label: "Send now", tone: "accent", run: send }, { id: "cancel", label: "Cancel", tone: "muted", run: () => intent("idle") }];
+    case "requested": case "joining": case "awaiting_admission": case "needs_help": case "active": case "stopping":
+      return [{ id: "stop", label: "Stop", tone: "live", run: stop }];
+    case "completed": case "failed": case "stopped": default:
+      return [{ id: "resend", label: "Re-send", tone: "accent", run: send }];
+  }
+}
+
+function StatusBadge({ raw }: { raw?: string }) {
+  const b = badgeFor(raw);
+  const dot = b.kind === "live" || b.kind === "needshelp";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "1px 7px", borderRadius: 5, background: b.bg, color: b.color, fontSize: 10, fontWeight: 600, letterSpacing: ".02em", whiteSpace: "nowrap", flex: "none" }}>
+      {dot && <span style={{ width: 5, height: 5, borderRadius: "50%", background: b.color }} />}{b.label}
+    </span>
+  );
+}
+
+/** Status badge + a small ▾ menu of action→transition items for one meeting row. */
+function RowActions({ m }: { m: MeetingMock }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const acts = actionsFor(m);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: "relative", flex: "none", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={(e) => e.stopPropagation()}>
+      <StatusBadge raw={m.live_status} />
+      {acts.length > 0 && (
+        <button title="Actions" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+          style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "1px 5px", fontSize: 11, lineHeight: 1.4, cursor: "pointer" }}>▾</button>
+      )}
+      {open && (
+        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, minWidth: 132, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,.28)", padding: 4, zIndex: 40 }}>
+          {acts.map((a) => (
+            <button key={a.id} onClick={(e) => { e.stopPropagation(); setOpen(false); a.run(); }}
+              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: a.tone === "live" ? "var(--live)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", borderRadius: 6, padding: "6px 9px", fontSize: 12, fontWeight: 550, cursor: "pointer" }}
+              onMouseEnter={(ev) => (ev.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(ev) => (ev.currentTarget.style.background = "transparent")}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function meetingTab(m: MeetingMock): TabDescriptor {
   return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id }, context: { kind: "transcript", params: { meetingId: m.id } } };
 }
@@ -221,8 +319,11 @@ export function meetingTab(m: MeetingMock): TabDescriptor {
 function MeetingsList() {
   const layout = useService(LayoutServiceId);
   const all = useLiveMeetings();                                   // real meetings (live + past) from agent-api
-  const liveOnes = all.filter((m) => m.status === "live");
-  const pastOnes = all.filter((m) => m.status !== "live");
+  // Three buckets: upcoming intent (idle/scheduled), live (bot in/heading to the room), and recorded/past.
+  const INTENT = new Set(["idle", "scheduled"]);
+  const upcomingOnes = all.filter((m) => INTENT.has(m.live_status ?? ""));
+  const liveOnes = all.filter((m) => m.status === "live" && !INTENT.has(m.live_status ?? ""));
+  const pastOnes = all.filter((m) => m.status !== "live" && !INTENT.has(m.live_status ?? ""));
   const autoOpened = useRef(false);
   useEffect(() => {                                                // a live meeting opens itself, once
     const firstLive = all.find((m) => m.status === "live");
@@ -245,17 +346,13 @@ function MeetingsList() {
     } catch { setSent("err"); }
     setTimeout(() => setSent(null), 4000);
   };
-  const stopBot = (m: MeetingMock) => void fetch("/api/meeting/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ native_id: m.native_id, platform: "google_meet" }) });
-  const sendBot = (m: MeetingMock) => void fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: `https://meet.google.com/${m.native_id}` }) });
   const row = (m: MeetingMock) => (
     <div key={m.id} onClick={() => layout.openTab(meetingTab(m))} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
         <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: m.status === "live" ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.title}</span>
-        {m.native_id && (m.status === "live"
-          ? <button title="Remove the bot from this meeting" onClick={(e) => { e.stopPropagation(); stopBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--live)", color: "var(--live)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Stop</button>
-          : <button title="Send the bot back to this meeting" onClick={(e) => { e.stopPropagation(); sendBot(m); }} style={{ flex: "none", background: "transparent", border: "1px solid var(--accent)", color: "var(--accent)", borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Send</button>)}
+        {m.native_id && <RowActions m={m} />}
       </div>
       <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
     </div>
@@ -276,6 +373,8 @@ function MeetingsList() {
         {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>Couldn&apos;t send — make sure it&apos;s a Google Meet link.</div>}
       </div>
       {all.length === 0 && <div style={{ padding: "8px 9px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>No meetings yet — paste a Meet link above and I&apos;ll send the bot.</div>}
+      {upcomingOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Upcoming</div>}
+      {upcomingOnes.map(row)}
       {liveOnes.map(row)}
       {pastOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Recorded</div>}
       {pastOnes.map(row)}

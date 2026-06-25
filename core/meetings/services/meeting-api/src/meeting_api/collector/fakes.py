@@ -164,6 +164,31 @@ class InMemoryTranscriptStore:
         data["docs"] = docs
         return docs
 
+    async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        m = self._meetings[mid]
+        data = m["data"]
+        prev_status = m.get("status")
+        prev_at = data.get("scheduled_at")
+        new_at = scheduled_at if status == "scheduled" else None
+        m["status"] = status
+        if status == "scheduled":
+            data["scheduled_at"] = new_at
+        else:
+            data.pop("scheduled_at", None)
+        changed = (prev_status != status) or (prev_at != new_at)
+        return {
+            "id": mid,
+            "user_id": user_id,
+            "platform": platform,
+            "native_id": native_meeting_id,
+            "status": status,
+            "scheduled_at": new_at,
+            "changed": changed,
+        }
+
     async def append_segment(self, meeting_id, segment) -> None:
         m = self._meetings.get(meeting_id)
         if m is None:

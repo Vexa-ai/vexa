@@ -265,6 +265,53 @@ class SqlAlchemyTranscriptStore:
             user_id, platform, native_meeting_id, lambda docs: _remove_doc(docs, path)
         )
 
+    async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
+        """Owner-scoped atomic write of the INTENT status (``idle`` / ``scheduled``) onto the
+        ``meetings.status`` column under ONE ``SELECT … FOR UPDATE`` row lock. Stamps / clears
+        ``meeting.data['scheduled_at']``. NEVER touches the bot FSM."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                )
+                .order_by(Meeting.created_at.desc())
+                .limit(1)
+                .with_for_update()
+            )
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prev_status = meeting.status
+            prev_at = data.get("scheduled_at")
+            new_at = scheduled_at if status == "scheduled" else None
+            meeting.status = status
+            if status == "scheduled":
+                data["scheduled_at"] = new_at
+            else:
+                data.pop("scheduled_at", None)
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            changed = (prev_status != status) or (prev_at != new_at)
+            return {
+                "id": meeting.id,
+                "user_id": user_id,
+                "platform": platform,
+                "native_id": native_meeting_id,
+                "status": status,
+                "scheduled_at": new_at,
+                "changed": changed,
+            }
+
 
 class RedisStreamBus:
     """``RedisBus`` over a ``redis.asyncio`` client — XREADGROUP the segments stream, XACK,
