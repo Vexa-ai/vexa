@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { DockviewReact, type DockviewReadyEvent, type IDockviewPanelProps, themeAbyss } from "dockview-react";
+import { DockviewReact, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
 import "dockview/dist/styles/dockview.css";
 
 const PANES_KEY = "vexa.terminal.panes.v1";
@@ -37,6 +37,29 @@ function TabHost(props: IDockviewPanelProps) {
   return <Comp id={props.api.id} params={params.p ?? {}} active={active} />;
 }
 const dvComponents = { tab: TabHost };
+
+// ── custom tab header: VS Code-style — PREVIEW tabs render their title in italic ──
+function TabHeader(props: IDockviewPanelHeaderProps) {
+  const preview = Boolean((props.params as { preview?: boolean }).preview);
+  const [title, setTitle] = useState<string>(props.api.title ?? "");
+  useEffect(() => {
+    const d = props.api.onDidTitleChange((e: { title: string }) => setTitle(e.title));
+    return () => d.dispose();
+  }, [props.api]);
+  return (
+    <div className="dv-default-tab" style={{ display: "flex", alignItems: "center", height: "100%" }}>
+      <span className="dv-default-tab-content" style={{ fontStyle: preview ? "italic" : "normal" }}>{title}</span>
+      <span
+        className="dv-default-tab-action"
+        role="button"
+        aria-label="Close tab"
+        onPointerDown={(e) => e.preventDefault()}
+        onClick={(e) => { e.stopPropagation(); props.api.close(); }}
+      >×</span>
+    </div>
+  );
+}
+const dvTabComponents = { default: TabHeader };
 
 // ── LEFT pane: brand + segmented list switcher + active list ─────────────────────
 function LeftPane() {
@@ -135,7 +158,7 @@ export function Workbench() {
           <Allotment.Pane minSize={360}>
             <div style={{ height: "100%", position: "relative" }}>
               <div style={{ position: "absolute", inset: 0 }}>
-                <DockviewReact onReady={onReady} components={dvComponents} theme={themeAbyss} />
+                <DockviewReact onReady={onReady} components={dvComponents} tabComponents={dvTabComponents} defaultTabComponent={TabHeader} theme={themeAbyss} />
               </div>
             </div>
           </Allotment.Pane>

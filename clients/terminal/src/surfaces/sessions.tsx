@@ -1,7 +1,7 @@
 "use client";
 /** Sessions — the chat-sessions LIST (left). "New session" opens a fresh Chat tab; a saved session opens
  *  its Chat tab (resume). Lists from /api/sessions. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList } from "../contributions";
@@ -25,11 +25,13 @@ function SessionsList() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   useEffect(() => { void (async () => { try { const data = await (await fetch(`/api/sessions?subject=${SUBJECT}`)).json() as { sessions?: SessionSummary[] }; setSessions(data.sessions ?? []); } catch { /* offline */ } })(); }, []);
 
-  const newSession = () => {
-    const session = mintSessionId();
-    layout.openTab({ id: `chat:${session}`, title: "New chat", kind: "chat", params: { subject: SUBJECT, session }, context: null });
-  };
-  const open = (s: SessionSummary) => layout.openTab({ id: `chat:${s.session}`, title: sessionTitle(s), kind: "chat", params: { subject: SUBJECT, session: s.session }, context: null });
+  const chatTab = (session: string, title: string) => ({ id: `chat:${session}`, title, kind: "chat", params: { subject: SUBJECT, session }, context: null });
+
+  // "New session" is an explicit action → pinned tab.
+  const newSession = () => { const session = mintSessionId(); layout.openTab(chatTab(session, "New chat")); };
+  // single-click → preview, double-click → pinned (debounced so a dblclick leaves no stray preview).
+  const previewSession = (s: SessionSummary) => layout.openPreview(chatTab(s.session, sessionTitle(s)));
+  const pinSession = (s: SessionSummary) => layout.openTab(chatTab(s.session, sessionTitle(s)));
 
   return (
     <div style={{ padding: "8px" }}>
@@ -38,12 +40,22 @@ function SessionsList() {
       </button>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>sessions</div>
       {sessions.map((s) => (
-        <div key={s.session} onClick={() => open(s)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-          <Icon name="msg" size={13} />{sessionTitle(s)}
-        </div>
+        <SessionRow key={s.session} session={s} onPreview={() => previewSession(s)} onPin={() => pinSession(s)} />
       ))}
       {sessions.length === 0 && <div style={{ padding: "8px 4px", color: "var(--t3)", fontSize: 12 }}>No saved sessions yet — start one above.</div>}
+    </div>
+  );
+}
+
+function SessionRow({ session, onPreview, onPin }: { session: SessionSummary; onPreview: () => void; onPin: () => void }) {
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return (
+    <div
+      onClick={() => { if (clickTimer.current) clearTimeout(clickTimer.current); clickTimer.current = setTimeout(() => { clickTimer.current = null; onPreview(); }, 220); }}
+      onDoubleClick={() => { if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; } onPin(); }}
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)" }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+      <Icon name="msg" size={13} />{sessionTitle(session)}
     </div>
   );
 }

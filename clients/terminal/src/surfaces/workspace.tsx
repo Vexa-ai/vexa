@@ -2,7 +2,7 @@
 /** Workspace — the git knowledge graph as: a "Files" LIST (left), a "doc" center TAB-kind (renders an
  *  entity: frontmatter + wikilinked body), and a "doc-context" RIGHT context (frontmatter + related
  *  [[links]]). Clicking a file opens a Doc tab that carries its own context. Reuses /api/workspace/*. */
-import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, registerContext, type TabProps, type ContextProps } from "../contributions";
@@ -54,14 +54,20 @@ function buildTree(paths: string[]): TreeNode[] {
 }
 
 // ── recursive tree row (folders collapse, files open a doc tab) ──────────────────
-function TreeRow({ node, depth, expanded, toggle, openFile }: {
-  node: TreeNode; depth: number; expanded: Set<string>; toggle: (p: string) => void; openFile: (p: string) => void;
+function TreeRow({ node, depth, expanded, toggle, openFile, pinFile }: {
+  node: TreeNode; depth: number; expanded: Set<string>; toggle: (p: string) => void; openFile: (p: string) => void; pinFile: (p: string) => void;
 }) {
   const pad = 9 + depth * 13;
   const hover = { onMouseEnter: (e: MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "var(--panel2)"), onMouseLeave: (e: MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "transparent") };
+  // single-click → preview (debounced so a double-click doesn't also leave a stray preview);
+  // double-click → pinned tab.
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   if (!node.isDir) {
     return (
-      <div onClick={() => openFile(node.path)} {...hover}
+      <div
+        onClick={() => { if (clickTimer.current) clearTimeout(clickTimer.current); clickTimer.current = setTimeout(() => { clickTimer.current = null; openFile(node.path); }, 220); }}
+        onDoubleClick={() => { if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; } pinFile(node.path); }}
+        {...hover}
         style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", paddingLeft: pad + 14, borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         <Icon name="file" size={13} style={{ color: "var(--t3)" }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.name}</span>
@@ -77,7 +83,7 @@ function TreeRow({ node, depth, expanded, toggle, openFile }: {
         <Icon name="folder" size={13} style={{ color: "var(--accent)" }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.name}</span>
       </div>
-      {open && node.children.map((c) => <TreeRow key={c.path} node={c} depth={depth + 1} expanded={expanded} toggle={toggle} openFile={openFile} />)}
+      {open && node.children.map((c) => <TreeRow key={c.path} node={c} depth={depth + 1} expanded={expanded} toggle={toggle} openFile={openFile} pinFile={pinFile} />)}
     </>
   );
 }
@@ -117,7 +123,7 @@ function FilesList() {
           <Icon name={hidden ? "eye" : "eyeOff"} size={13} />
         </span>
       </div>
-      {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openTab(docTab(p))} />)}
+      {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} />)}
       {tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
       <GitSection />
     </div>
@@ -150,7 +156,7 @@ function GitSection() {
       ) : (<>
       {git.changes.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "2px 9px" }}>CHANGES</div>}
       {git.changes.map((c) => (
-        <div key={c.path} onClick={() => layout.openTab(docTab(c.path))} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
+        <div key={c.path} onClick={() => layout.openPreview(docTab(c.path))} onDoubleClick={() => layout.openTab(docTab(c.path))} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
           <span style={{ width: 14, fontFamily: "var(--mono)", color: c.kind === "A" ? "var(--green)" : "var(--accent)", flex: "none" }}>{c.kind}</span>
           <span style={{ color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{base(c.path)}</span>

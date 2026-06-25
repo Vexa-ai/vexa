@@ -29,6 +29,8 @@ export interface LayoutService {
   store: ObservableStore<LayoutState>;
   attach(api: DockviewApi): void;
   openTab(d: TabDescriptor): void;
+  /** open the tab in the single shared PREVIEW slot (reused on the next single-click) */
+  openPreview(d: TabDescriptor): void;
   closeTab(id: string): void;
   /** the active tab pushes its right-pane context here */
   setContext(ctx: RightContext | null): void;
@@ -51,8 +53,19 @@ export function createLayoutService(defaultList: string): LayoutService {
     context: null,
   });
   let api: DockviewApi | null = null;
+  // the single shared preview slot. We keep one dockview panel (fixed id) and swap its
+  // params/title in place so a single-click reuses ONE tab. `previewLogicalId` records
+  // which descriptor currently lives in the slot (so pinning that same thing promotes it).
+  const PREVIEW_PANEL = "__preview__";
+  let previewLogicalId: string | null = null;
 
   const persist = () => { if (api) writeLS(LS_DOCK, JSON.stringify(api.toJSON())); };
+
+  const panelParams = (d: TabDescriptor, preview: boolean) =>
+    ({ kind: d.kind, p: d.params ?? {}, ctx: d.context ?? null, preview });
+
+  /** drop the preview slot bookkeeping (the panel itself is handled by the caller). */
+  const forgetPreview = () => { previewLogicalId = null; };
 
   return {
     store,
@@ -61,19 +74,46 @@ export function createLayoutService(defaultList: string): LayoutService {
       try { const s = readLS(LS_DOCK); if (s) api.fromJSON(JSON.parse(s)); } catch { /* stale layout — start empty */ }
       // the active tab pushes its context via setContext; here we only clear it when nothing is active.
       api.onDidActivePanelChange((p) => { if (!p) store.set((st) => ({ ...st, context: null })); });
+      // if the preview panel goes away (closed/reset), forget the slot.
+      api.onDidRemovePanel((p) => { if (p.id === PREVIEW_PANEL) forgetPreview(); });
       api.onDidLayoutChange(persist);
     },
     setContext(ctx) { store.set((st) => ({ ...st, context: ctx })); },
     openTab(d) {
       if (!api) return;
+      // pinning the thing currently in preview → promote it: drop the preview slot so the
+      // single shared tab is free again, and open the content as a persistent panel.
+      if (previewLogicalId === d.id) { api.getPanel(PREVIEW_PANEL)?.api.close(); forgetPreview(); }
       const existing = api.getPanel(d.id);
       if (existing) { existing.api.setActive(); return; }
       api.addPanel({
         id: d.id,
         component: "tab",
         title: d.title,
-        params: { kind: d.kind, p: d.params ?? {}, ctx: d.context ?? null },
+        params: panelParams(d, false),
       });
+    },
+    openPreview(d) {
+      if (!api) return;
+      // already pinned as a real tab? just activate it — don't spawn a preview duplicate.
+      const pinned = api.getPanel(d.id);
+      if (pinned) { pinned.api.setActive(); return; }
+      const slot = api.getPanel(PREVIEW_PANEL);
+      if (slot) {
+        // REPLACE in place: same dockview panel, swap kind/params/title. TabHost re-renders
+        // on the params change and its effects re-fetch (no remount-thrash).
+        slot.api.updateParameters(panelParams(d, true));
+        slot.api.setTitle(d.title);
+        slot.api.setActive();
+      } else {
+        api.addPanel({
+          id: PREVIEW_PANEL,
+          component: "tab",
+          title: d.title,
+          params: panelParams(d, true),
+        });
+      }
+      previewLogicalId = d.id;
     },
     closeTab(id) { api?.getPanel(id)?.api.close(); },
     setActiveList(id) { store.set((s) => ({ ...s, activeList: id })); writeLS(LS_LIST, id); },
@@ -81,6 +121,7 @@ export function createLayoutService(defaultList: string): LayoutService {
     toggleRight() { store.set((s) => ({ ...s, rightCollapsed: !s.rightCollapsed })); },
     resetLayout() {
       try { localStorage.removeItem(LS_DOCK); } catch { /* noop */ }
+      forgetPreview();
       api?.clear();
       store.set((s) => ({ ...s, context: null }));
     },
