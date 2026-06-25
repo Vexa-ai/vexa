@@ -1,0 +1,38 @@
+/** ws.v1 CONTRACT-CONFORMANCE for the terminal CONSUMER.
+ *
+ *  Pins gatewayWS.parseFrame to the SHARED ws.v1 golden — the same sealed frame the producer (meeting-api)
+ *  and the other consumer (gateway) assert against:
+ *      core/gateway/contracts/ws.v1/golden/MeetingStatus.scheduled.json
+ *  (vendored verbatim into ./fixtures/ for the terminal package). If the contract drifts, this fails.
+ */
+import { describe, it, expect } from "vitest";
+import { parseFrame } from "../gatewayWS";
+import golden from "./fixtures/MeetingStatus.scheduled.json";
+
+describe("parseFrame pinned to ws.v1 golden", () => {
+  it("normalises the sealed golden frame to its flat fields", () => {
+    const f = parseFrame(golden);
+    expect(f).not.toBeNull();
+    // The golden carries BOTH flat fields and the legacy-nested shape; the consumer reads the flat ones.
+    expect(f).toEqual({
+      meeting_id: golden.meeting_id,
+      native: golden.native,
+      status: golden.status,
+      when: golden.when,
+    });
+  });
+
+  it("reads the flat fields exactly as the golden declares them", () => {
+    const f = parseFrame(golden)!;
+    expect(f.status).toBe("scheduled");
+    expect(f.native).toBe("abc-defg-hij");
+    expect(f.meeting_id).toBe(42);
+    expect(f.when).toBe("2026-06-25T18:00:00Z");
+  });
+
+  it("rejects non-meeting.status frames", () => {
+    expect(parseFrame({ ...golden, type: "transcription_segment" })).toBeNull();
+    expect(parseFrame({ type: "meeting.status" })).toBeNull(); // no status anywhere
+    expect(parseFrame(null)).toBeNull();
+  });
+});

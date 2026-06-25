@@ -4,10 +4,13 @@ import path from "path";
 /**
  * Terminal composition root.
  *
- * Same-origin fallbacks for the streaming surfaces that can't go through a REST proxy:
- * `/ws` (the live transcript multiplex) and `/b/` (per-bot VNC/CDP). Both target the deploy SSOT
- * `VEXA_API_URL`. During early scaffolding (no backend) the rewrites are simply omitted so
- * `npm run dev` works against the prototype with no env required.
+ * Same-origin fallback for `/b/` (per-bot VNC/CDP), targeting the deploy SSOT `VEXA_API_URL`.
+ * During early scaffolding (no backend) the rewrite is simply omitted so `npm run dev` works
+ * against the prototype with no env required.
+ *
+ * NOTE: `/ws` is intentionally NOT rewritten here — Next.js rewrites proxy HTTP only and do not
+ * carry the WebSocket upgrade. The custom server (server.mjs) handles the `/ws` upgrade directly,
+ * proxying it to the gateway with the server-side api_key. A rewrite here would shadow that path.
  */
 const VEXA_API_URL = process.env.VEXA_API_URL;
 
@@ -18,7 +21,6 @@ const nextConfig: NextConfig = {
     return VEXA_API_URL
       ? [
           { source: "/b/:path*", destination: `${VEXA_API_URL}/b/:path*` },
-          { source: "/ws", destination: `${VEXA_API_URL}/ws` },
         ]
       : [];
   },

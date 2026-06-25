@@ -234,8 +234,10 @@ const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "�
 
 type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: () => void };
 
-/** The action→transition map for a row, keyed on its REAL status. Each action hits exactly one endpoint. */
-function actionsFor(m: MeetingMock): RowAction[] {
+/** The action→transition map for a row, keyed on its REAL status. Each action hits exactly one endpoint.
+ *  Exported (additive — no runtime behavior change) so the behavioral test can assert each status offers
+ *  the correct actions and each fires the correct endpoint+body. */
+export function actionsFor(m: MeetingMock): RowAction[] {
   const native = m.native_id ?? m.id;
   const intent = (state: "idle" | "scheduled", at?: string) =>
     void fetch(`/api/meetings/google_meet/${encodeURIComponent(native)}/intent`, {

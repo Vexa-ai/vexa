@@ -42,6 +42,21 @@ def load_golden(name: str) -> Dict[str, Any]:
     return json.loads((_golden_dir() / f"{name}.json").read_text())
 
 
+# --- ws.v1 golden (the SHARED user-channel meeting.status contract) ---------------------
+# Producer (meeting-api) and both consumers (gateway, terminal) pin to this ONE sealed frame:
+#   core/gateway/contracts/ws.v1/golden/MeetingStatus.scheduled.json
+# _repo_root() resolves to .../vexa-ei/core (it locates `meetings/contracts/lifecycle.v1`),
+# so the gateway lane is `gateway/contracts/ws.v1` from there.
+
+def _ws_golden_path(name: str) -> Path:
+    return _repo_root() / "gateway" / "contracts" / "ws.v1" / "golden" / f"{name}.json"
+
+
+def load_ws_golden(name: str = "MeetingStatus.scheduled") -> Dict[str, Any]:
+    """Load a ws.v1 golden frame by stem (default the user-scoped meeting.status frame)."""
+    return json.loads(_ws_golden_path(name).read_text())
+
+
 @pytest.fixture
 def goldens() -> Dict[str, Dict[str, Any]]:
     """Every lifecycle.v1 golden, keyed by case (e.g. 'joining', 'active')."""

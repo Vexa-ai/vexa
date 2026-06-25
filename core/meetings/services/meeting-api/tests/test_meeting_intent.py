@@ -128,3 +128,41 @@ def test_intent_idempotent_noop_does_not_publish():
     r = client.put(f"/meetings/{PLAT}/{NID}/intent", json={"intent": "idle"}, headers=H)
     assert r.status_code == 200
     assert redis.published == []  # PUT to the current state is a no-op → no fan-out
+
+
+# ---- PRODUCER pinned to the SHARED ws.v1 golden ------------------------------------
+# The published `u:{user_id}:meetings` frame is the SHARED contract every party agrees on. We load the
+# sealed golden (core/gateway/contracts/ws.v1/golden/MeetingStatus.scheduled.json) and assert the frame
+# meeting-api PUBLISHES conforms to it — same `type`, same FLAT field set, same per-field types. If
+# meeting-api's frame shape drifts from the sealed contract, this fails.
+
+# The flat user-channel field set the contract pins (the golden ALSO carries the legacy-nested
+# meeting/payload/user_id/ts mirror; the user-channel publish emits exactly these flat keys).
+_WS_FLAT_KEYS = {"type", "meeting_id", "native", "status", "when"}
+
+
+def test_published_frame_conforms_to_ws_v1_golden():
+    from conftest import load_ws_golden
+
+    golden = load_ws_golden("MeetingStatus.scheduled")
+    # the golden's flat projection — the exact shape the user-channel forward carries verbatim
+    golden_flat = {k: golden[k] for k in _WS_FLAT_KEYS}
+
+    client, _store, redis, mid = _client(status="idle")
+    r = client.put(f"/meetings/{PLAT}/{NID}/intent", json={"intent": "scheduled", "at": AT}, headers=H)
+    assert r.status_code == 200
+    _channel, raw = redis.published[0]
+    frame = json.loads(raw)
+
+    # same message type as the sealed contract
+    assert frame["type"] == golden["type"] == "meeting.status"
+    # EXACT flat key set — no missing/extra fields vs the golden's flat projection
+    assert set(frame.keys()) == _WS_FLAT_KEYS == set(golden_flat.keys())
+    # per-field TYPES match the golden (so e.g. meeting_id stays an int, native/status/when stay str)
+    for k in _WS_FLAT_KEYS:
+        assert type(frame[k]) is type(golden_flat[k]), f"field {k!r} type drifted from ws.v1 golden"
+    # and the concrete values for this drive line up with the golden's scheduled case
+    assert frame["status"] == golden_flat["status"] == "scheduled"
+    assert frame["native"] == NID
+    assert frame["when"] == AT
+    assert frame["meeting_id"] == mid

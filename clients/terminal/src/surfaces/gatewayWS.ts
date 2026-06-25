@@ -7,9 +7,10 @@
  *  carries the flat fields `{meeting_id, native, status, when}` AND may keep the legacy nested shape
  *  `{meeting:{id,native_id}, payload:{status}, ts}` — we read either.
  *
- *  Transport: the api_key is server-side, so we first fetch `/api/ws` for the gateway WS URL (key
- *  embedded server-side, mirroring the SSE proxy), then open it. Reconnect with capped backoff; the
- *  consumer re-seeds via one `GET /api/meetings` snapshot on each (re)connect.
+ *  Transport: the browser connects KEYLESS to same-origin `/ws`. The custom Next server (server.mjs)
+ *  intercepts the upgrade, opens a server-side socket to the gateway with the `x-api-key` header, and
+ *  pipes frames — so the api_key never appears in any client-visible URL. Reconnect with capped
+ *  backoff; the consumer re-seeds via one `GET /api/meetings` snapshot on each (re)connect.
  */
 
 export interface MeetingStatusFrame {
@@ -36,8 +37,10 @@ function setConnected(v: boolean) {
   connListeners.forEach((f) => f(v));
 }
 
-/** Normalise either the flat (§C.1) or legacy-nested (§0.2) meeting.status shape to a flat frame. */
-function parseFrame(data: unknown): MeetingStatusFrame | null {
+/** Normalise either the flat (§C.1) or legacy-nested (§0.2) meeting.status shape to a flat frame.
+ *  Exported (additive — no runtime behavior change) so the contract-conformance test can pin it to
+ *  the ws.v1 golden frame. */
+export function parseFrame(data: unknown): MeetingStatusFrame | null {
   if (!data || typeof data !== "object") return null;
   const o = data as Record<string, unknown>;
   if (o.type !== "meeting.status") return null;
@@ -51,21 +54,17 @@ function parseFrame(data: unknown): MeetingStatusFrame | null {
   return { meeting_id, native, status, when };
 }
 
-async function connect() {
+/** Open the ONE shared socket. The `ws`/`starting` guards make this idempotent, so the many
+ *  components mounting `useGatewayWS` collapse onto a single socket no matter how often they call it.
+ *  Connects KEYLESS to same-origin `/ws` — the custom server (server.mjs) injects the api_key
+ *  server-side on the upgrade to the gateway. */
+function connect() {
   if (typeof window === "undefined" || ws || starting) return;
+  if (listeners.size === 0) return;            // only (re)connect when someone is listening
   starting = true;
-  let url: string;
   try {
-    const r = await fetch("/api/ws", { cache: "no-store" });
-    url = (await r.json()).url as string;
-    if (!url) throw new Error("no ws url");
-  } catch {
-    starting = false;
-    scheduleReconnect();
-    return;
-  }
-  try {
-    const sock = new WebSocket(url);
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const sock = new WebSocket(`${proto}//${location.host}/ws`);
     ws = sock;
     sock.onopen = () => { retry = 0; setConnected(true); };
     sock.onmessage = (m) => {
@@ -74,7 +73,11 @@ async function connect() {
       const f = parseFrame(data);
       if (f) listeners.forEach((fn) => fn(f));
     };
-    sock.onclose = () => { ws = null; setConnected(false); scheduleReconnect(); };
+    sock.onclose = () => {
+      if (ws === sock) ws = null;
+      setConnected(false);
+      scheduleReconnect();
+    };
     sock.onerror = () => { try { sock.close(); } catch { /* noop */ } };
   } catch {
     ws = null;
@@ -84,20 +87,28 @@ async function connect() {
   }
 }
 
+function clearReconnect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+
 function scheduleReconnect() {
   if (reconnectTimer || listeners.size === 0) return;
   const delay = Math.min(1000 * 2 ** retry, 30000);  // 1s, 2s, 4s … capped at 30s
   retry += 1;
-  reconnectTimer = setTimeout(() => { reconnectTimer = null; void connect(); }, delay);
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
 }
 
 /** Subscribe to meeting.status frames. Returns an unsubscribe fn; opens the socket on first subscriber. */
 export function onMeetingStatus(fn: Listener): () => void {
   listeners.add(fn);
-  void connect();
+  connect();
   return () => {
     listeners.delete(fn);
-    if (listeners.size === 0 && ws) { try { ws.close(); } catch { /* noop */ } ws = null; }
+    if (listeners.size === 0) {
+      clearReconnect();                          // kill any pending reconnect on the last unsubscribe
+      retry = 0;
+      if (ws) { try { ws.close(); } catch { /* noop */ } ws = null; }
+    }
   };
 }
 

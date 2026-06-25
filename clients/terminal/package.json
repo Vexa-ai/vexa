@@ -4,10 +4,11 @@
   "private": true,
   "description": "Vexa Terminal — an AI-first knowledge-worker terminal (Claude Code × Outlook) on the Vexa meeting-bot + agentic-runtime backend. Self-hostable (VPC / air-gapped) with BYO inference. Scaffolded from public/prototype.html.",
   "scripts": {
-    "dev": "next dev -p 3003",
+    "dev": "PORT=3003 node server.mjs",
     "build": "next build",
-    "start": "next start -p 3003",
-    "lint": "next lint"
+    "start": "PORT=3003 NODE_ENV=production node server.mjs",
+    "lint": "next lint",
+    "test": "vitest run"
   },
   "dependencies": {
     "allotment": "^1.20.5",
@@ -24,14 +25,21 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
     "tinykeys": "^4.0.0",
+    "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.3",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.9"
   }
 }
