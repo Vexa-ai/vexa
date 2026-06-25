@@ -153,6 +153,9 @@ class ChatBody(BaseModel):
     prompt: str
     subject: str
     session: Optional[str] = None
+    # the terminal's active center tab ({kind, ref}) — grounds the chat in what's
+    # in focus. Accepted now (Wave 2 wires it into the meeting tool / file context).
+    active: Optional[dict] = None
 
 
 class RoutineCreate(BaseModel):
