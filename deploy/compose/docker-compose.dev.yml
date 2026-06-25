@@ -47,4 +47,6 @@ services:
   agent-api:
     volumes:
       - ../../core/agent/services/agent-api/src/agent_api:/app/src/agent_api
+      # hot seed: new workspaces are seeded from the live repo template (no image rebuild)
+      - ../../core/agent/services/agent-api/workspace-seed:/app/workspace-seed
     command: ["python", "-m", "watchfiles", "uvicorn agent_api.api:app --host 0.0.0.0 --port 8100", "/app/src/agent_api"]
