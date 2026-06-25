@@ -18,15 +18,16 @@ import { useMeetingLive, type LiveCard } from "./meetingLive";
 import { useLiveMeetings, liveMeetingsNow, fetchTranscript, refreshMeetings } from "./liveMeetings";
 import type { TranscriptLine } from "./mock";
 
-function formatTranscriptTime(start?: number | null, firstStart?: number | null): string {
-  if (start == null || firstStart == null) return "";
-  const offset = Math.max(0, Math.floor(start - firstStart));
-  if (!Number.isFinite(offset)) return "";
-  const hours = Math.floor(offset / 3600);
-  const minutes = Math.floor((offset % 3600) / 60);
-  const seconds = offset % 60;
-  const mmss = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  return hours > 0 ? `${String(hours).padStart(2, "0")}:${mmss}` : mmss;
+function formatTranscriptTime(start?: number | null): string {
+  if (start == null || !Number.isFinite(start)) return "";
+  const date = new Date(start * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 // ── live entities (streamed from the real dispatch) — compact, clickable to research ──────────────
@@ -530,9 +531,8 @@ function TranscriptContext({ params }: ContextProps) {
   }, [m?.id, m?.platform, m?.native_id, isLive]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [liveData.transcript.length, recorded.length]);
   if (!m) return <div style={{ padding: 16, color: "var(--t3)" }}>No transcript.</div>;
-  const firstLiveStart = liveData.transcript.find((s) => s.t != null)?.t ?? null;
   const lines = isLive
-    ? liveData.transcript.map((s) => ({ t: formatTranscriptTime(s.t, firstLiveStart), speaker: s.speaker, text: s.text, pending: s.completed === false, id: s.id }))
+    ? liveData.transcript.map((s) => ({ t: formatTranscriptTime(s.t), speaker: s.speaker, text: s.text, pending: s.completed === false, id: s.id }))
     : recorded.map((l) => ({ t: l.t, speaker: l.speaker, text: l.text, pending: false, id: undefined as string | undefined }));
   const streaming = isLive && liveData.connected && !liveData.ended;
   const liveDot = isLive ? (liveData.connected && !liveData.ended) : m.status === "live";

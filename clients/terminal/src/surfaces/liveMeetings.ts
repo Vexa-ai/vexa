@@ -33,15 +33,16 @@ interface SegmentDTO {
   text?: string | null;
 }
 
-function formatTranscriptTime(start?: number | null, firstStart?: number | null): string {
-  if (start == null || firstStart == null) return "";
-  const offset = Math.max(0, Math.floor(start - firstStart));
-  if (!Number.isFinite(offset)) return "";
-  const hours = Math.floor(offset / 3600);
-  const minutes = Math.floor((offset % 3600) / 60);
-  const seconds = offset % 60;
-  const mmss = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  return hours > 0 ? `${String(hours).padStart(2, "0")}:${mmss}` : mmss;
+function formatTranscriptTime(start?: number | null): string {
+  if (start == null || !Number.isFinite(start)) return "";
+  const date = new Date(start * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 // Statuses where the bot is in/heading-to the room — these map to the list's "live" bucket and carry a
@@ -142,10 +143,9 @@ export async function fetchTranscript(platform: string, nativeId: string): Promi
     if (!r.ok) return [];
     const { segments } = (await r.json()) as { segments?: SegmentDTO[] };
     const list = segments || [];
-    const firstStart = list.find((s) => s.start != null)?.start ?? null;
     return list
       .filter((s) => (s.text ?? "").trim())
-      .map((s) => ({ t: formatTranscriptTime(s.start, firstStart), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
+      .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
   } catch {
     return [];
   }
