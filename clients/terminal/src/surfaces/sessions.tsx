@@ -8,7 +8,7 @@ import { Icon } from "../ui-kit";
 
 const SUBJECT = "u_live";  // the terminal's single subject (matches workspace + meetings; one identity until §0 auth)
 
-interface SessionSummary {
+export interface SessionSummary {
   session: string;
   title?: string | null;
   created?: string | null;
@@ -16,7 +16,7 @@ interface SessionSummary {
 }
 
 const truncateSessionId = (session: string) => session.length > 18 ? `${session.slice(0, 18)}...` : session;
-const sessionTitle = (s: SessionSummary) => s.title?.trim() || truncateSessionId(s.session);
+export const sessionTitle = (s: SessionSummary) => s.title?.trim() || truncateSessionId(s.session);
 
 function SessionsList() {
   const layout = useService(LayoutServiceId);
@@ -28,20 +28,16 @@ function SessionsList() {
     layout.showRight();
     window.setTimeout(() => window.dispatchEvent(new Event("vexa:terminal:focus-chat")), 0);
   };
-  // switch the right rail to a session (revealing it); New chat starts a fresh one.
+  // switch the right rail to a session (revealing it) from the recent-session list.
   const openSession = (id: string) => { layout.setActiveSession(id); focusChat(); };
-  const newChat = () => openSession(`chat-${Date.now().toString(36)}`);
 
   return (
     <div style={{ padding: "8px" }}>
-      <button onClick={newChat} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid var(--line2)", background: "var(--panel)", color: "var(--t1)", fontSize: 13, cursor: "pointer", marginBottom: 8 }}>
-        <Icon name="msg" size={14} />New chat
-      </button>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>sessions</div>
       {sessions.map((s) => (
         <SessionRow key={s.session} session={s} active={s.session === activeSession} onOpen={() => openSession(s.session)} />
       ))}
-      {sessions.length === 0 && <div style={{ padding: "8px 4px", color: "var(--t3)", fontSize: 12 }}>No saved sessions yet — start one with “New chat”.</div>}
+      {sessions.length === 0 && <div style={{ padding: "8px 4px", color: "var(--t3)", fontSize: 12 }}>No saved sessions yet.</div>}
     </div>
   );
 }

@@ -128,14 +128,8 @@ function LeftPane() {
 
 // ── RIGHT pane: persistent chat singleton ────────────────────────────────────────
 function RightPane() {
-  const layout = useService(LayoutServiceId);
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--rail)", borderLeft: "1px solid var(--line)", minHeight: 0 }}>
-      <div style={{ height: 38, flex: "none", display: "flex", alignItems: "center", padding: "0 12px 0 16px", borderBottom: "1px solid var(--line)", fontSize: 12, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
-        chat
-        <div style={{ flex: 1 }} />
-        <button aria-label="Close chat" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="x" size={14} /></button>
-      </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <Chat />
       </div>

@@ -8,6 +8,7 @@ import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
+import { sessionTitle, type SessionSummary } from "./sessions";
 import { fetchTranscript, useLiveMeetings } from "./liveMeetings";
 import { useMeetingLive, type LiveSegment } from "./meetingLive";
 import { meetingById, type MeetingMock, type TranscriptLine } from "./mock";
@@ -84,6 +85,107 @@ function ReferenceText({ text }: { text: string }) {
 }
 
 const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
+
+function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
+  subject: string;
+  session: string;
+  onSelectSession: (id: string) => void;
+  onNewChat: () => void;
+  onClose: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await (await fetch(`/api/sessions?subject=${encodeURIComponent(subject)}`)).json() as { sessions?: SessionSummary[] };
+        if (!cancelled) setSessions(data.sessions ?? []);
+      } catch {
+        if (!cancelled) setSessions([]);
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [subject]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await (await fetch(`/api/sessions?subject=${encodeURIComponent(subject)}`)).json() as { sessions?: SessionSummary[] };
+        if (!cancelled) setSessions(data.sessions ?? []);
+      } catch {
+        if (!cancelled) setSessions([]);
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [open, subject]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const activeSummary = sessions.find((s) => s.session === session) ?? { session };
+  const visibleSessions = sessions.some((s) => s.session === session) ? sessions : [activeSummary, ...sessions];
+  const currentTitle = sessionTitle(activeSummary);
+  const iconButton: CSSProperties = { width: 28, height: 28, borderRadius: 7, border: "1px solid transparent", background: "transparent", color: "var(--t3)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" };
+
+  return (
+    <div ref={menuRef} style={{ height: 38, flex: "none", position: "relative", display: "flex", alignItems: "center", gap: 4, padding: "0 8px", borderBottom: "1px solid var(--line)", background: "var(--panel)", minWidth: 0 }}>
+      <button
+        aria-label="Switch chat session"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{ flex: 1, minWidth: 0, height: 28, borderRadius: 7, border: "1px solid transparent", background: open ? "var(--panel2)" : "transparent", color: "var(--t1)", display: "flex", alignItems: "center", gap: 7, padding: "0 8px", cursor: "pointer" }}
+      >
+        <Icon name="msg" size={13} style={{ color: "var(--t3)" }} />
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, lineHeight: 1 }}>{currentTitle}</span>
+        <Icon name="chevR" size={12} style={{ color: "var(--t3)", transform: open ? "rotate(-90deg)" : "rotate(90deg)", transition: "transform .12s" }} />
+      </button>
+      <button aria-label="New chat" title="New chat" onClick={onNewChat} style={iconButton}><Icon name="plus" size={15} /></button>
+      <button aria-label="Close chat" title="Close chat" onClick={onClose} style={iconButton}><Icon name="x" size={14} /></button>
+
+      {open && (
+        <div role="menu" style={{ position: "absolute", zIndex: 30, top: 36, left: 8, right: 8, maxHeight: 260, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", boxShadow: "0 14px 34px rgba(0,0,0,.32)", padding: 4 }}>
+          {visibleSessions.map((s) => {
+            const active = s.session === session;
+            return (
+              <button
+                key={s.session}
+                role="menuitemradio"
+                aria-checked={active}
+                onClick={() => { onSelectSession(s.session); setOpen(false); }}
+                style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", border: "none", borderRadius: 6, background: active ? "var(--panel2)" : "transparent", color: active ? "var(--t1)" : "var(--t2)", cursor: "pointer", textAlign: "left", fontSize: 12.5 }}
+              >
+                <Icon name="msg" size={13} style={{ color: active ? "var(--t2)" : "var(--t3)" }} />
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sessionTitle(s)}</span>
+              </button>
+            );
+          })}
+          {visibleSessions.length === 0 && <div style={{ padding: "8px", color: "var(--t3)", fontSize: 12 }}>No recent sessions</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ChatConversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
   if (turns.length === 0 && empty) return <>{empty}</>;
@@ -254,7 +356,7 @@ export function Chat({ params = {} }: ChatProps) {
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
   const { activeTab, activeSession } = useStore(layout.store);
-  // the rail follows the store's active session (switched from the Sessions list / New chat); params override if ever passed.
+  // the rail follows the store's active session (switched from the rail header or Sessions list); params override if ever passed.
   const session = typeof params.session === "string" && params.session.trim() ? params.session : activeSession;
   const activeRef = activeReference(activeTab);
   // the user can clear focus with the chip's ×; a newly-focused tab re-shows it.
@@ -350,6 +452,9 @@ export function Chat({ params = {} }: ChatProps) {
   };
 
   const stop = () => { abortRef.current?.abort(); setBusy(false); };
+  const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
+  const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
+  const newChat = () => selectSession(`chat-${Date.now().toString(36)}`);
 
   const onSubmit = () => {
     const v = value.trim();
@@ -392,7 +497,7 @@ export function Chat({ params = {} }: ChatProps) {
   );
 
   return (
-    <AgentWindow scrollRef={scrollRef} composer={composer}>
+    <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
       <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: "var(--t3)", fontSize: 13, textAlign: "center", marginTop: 40 }}>{loading ? "Loading conversation…" : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits."}</div>} />
     </AgentWindow>
   );
