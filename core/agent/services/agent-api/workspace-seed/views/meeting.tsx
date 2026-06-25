@@ -43,7 +43,7 @@ function elapsed(startedAt, segments, now) {
 
 export default function MeetingCanvas() {
   const meeting = useMeeting();
-  const transcript = useTranscript({ by: "time", window: 80 });
+  const transcript = useTranscript({ by: "time" });
   const people = useEntities({ kind: "person" });
   const companies = useEntities({ kind: "company" });
   const numbers = useEntities({ kind: "number" });
@@ -92,9 +92,7 @@ export default function MeetingCanvas() {
         </ui.Grid>
       </ui.Section>
 
-      <ui.Section title="Transcript">
-        <ui.Transcript segments={transcript.segments} liveCaption={transcript.liveCaption} />
-      </ui.Section>
+      <ui.LiveTranscript segments={transcript.segments} liveCaption={transcript.liveCaption} />
     </ui.Stack>
   );
 }

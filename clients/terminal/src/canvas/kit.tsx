@@ -1,5 +1,5 @@
 "use client";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Markdown as MarkdownView } from "../ui-kit/Markdown";
 import { useActions } from "./actions";
 import type { EntityItem, TranscriptSegment } from "./types";
@@ -436,6 +436,115 @@ function Transcript({ segments, liveCaption, empty = "Waiting for transcript", l
   );
 }
 
+function LiveTranscript({ segments, liveCaption, empty = "waiting for transcript…", loading = false, maxSegments = 36 }: { segments?: TranscriptSegment[]; liveCaption?: string; empty?: string; maxSegments?: number } & Loadable) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const safeSegments = normalizeTranscriptSegments(segments);
+  const limit = Math.max(1, Math.floor(toNumber(maxSegments, 36)));
+  const displaySegments = safeSegments.slice(-limit);
+  const caption = toText(liveCaption).trim();
+  const lastSegment = displaySegments[displaySegments.length - 1];
+  const captionMatchesLast = Boolean(caption && lastSegment && toText(lastSegment.text).trim() === caption);
+  const showStandaloneCaption = Boolean(caption && !captionMatchesLast);
+  const scrollKey = `${displaySegments.length}:${lastSegment?.ts ?? ""}:${lastSegment?.speaker ?? ""}:${lastSegment?.text ?? ""}:${caption}`;
+
+  useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) return;
+    node.scrollLeft = node.scrollWidth;
+  }, [scrollKey]);
+
+  const bandStyle: CSSProperties = {
+    ...frameStyle,
+    width: "100%",
+    height: 56,
+    maxHeight: 56,
+    border: "1px solid var(--line)",
+    borderRadius: 8,
+    background: "var(--sidebar, var(--panel))",
+    color: "var(--t2)",
+    overflow: "hidden",
+    display: "flex",
+    alignItems: "center",
+    padding: "0 12px",
+  };
+
+  if (loading) {
+    return (
+      <div style={bandStyle}>
+        <Skeleton lines={2} compact />
+      </div>
+    );
+  }
+
+  if (!displaySegments.length && !caption) {
+    return (
+      <div role="status" aria-live="polite" style={bandStyle}>
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--t3)", flex: "none", marginRight: 8 }} />
+        <span style={{ color: "var(--t3)", fontSize: 12.5, fontStyle: "italic", ...ellipsisLine() }}>{toText(empty, "waiting for transcript…")}</span>
+      </div>
+    );
+  }
+
+  const captionSpeaker = toText(lastSegment?.speaker, "Live");
+
+  return (
+    <div role="log" aria-live="polite" style={bandStyle}>
+      <div
+        ref={scrollerRef}
+        style={{
+          ...frameStyle,
+          flex: 1,
+          height: "100%",
+          overflowX: "auto",
+          overflowY: "hidden",
+          whiteSpace: "nowrap",
+          scrollbarWidth: "thin",
+        }}
+      >
+        <div style={{ display: "inline-flex", minWidth: "max-content", height: "100%", alignItems: "center", gap: 8, paddingRight: 2 }}>
+          {displaySegments.map((segment, index) => {
+            const speaker = toText(segment.speaker, "Speaker");
+            const text = toText(segment.text);
+            const isLive = captionMatchesLast && index === displaySegments.length - 1;
+            return (
+              <span
+                key={`${index}-${segment.ts ?? ""}-${speaker}-${text.slice(0, 28)}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "baseline",
+                  gap: 4,
+                  flex: "none",
+                  maxWidth: "none",
+                  color: isLive ? "var(--t1)" : "var(--t2)",
+                  background: isLive ? "var(--livebg)" : "transparent",
+                  border: isLive ? "1px solid var(--line2)" : "1px solid transparent",
+                  borderRadius: 7,
+                  padding: isLive ? "4px 7px" : 0,
+                  fontSize: 12.5,
+                  lineHeight: 1.35,
+                }}
+              >
+                {index > 0 && <span aria-hidden="true" style={{ color: "var(--t3)", marginRight: 2 }}>·</span>}
+                <span style={{ color: isLive ? "var(--live)" : "var(--t3)", fontWeight: 750 }}>{speaker}:</span>
+                <span>{text}</span>
+              </span>
+            );
+          })}
+          {showStandaloneCaption && (
+            <>
+              {displaySegments.length > 0 && <span aria-hidden="true" style={{ color: "var(--t3)", flex: "none" }}>·</span>}
+              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4, flex: "none", color: "var(--t1)", background: "var(--livebg)", border: "1px solid var(--line2)", borderRadius: 7, padding: "4px 7px", fontSize: 12.5, lineHeight: 1.35 }}>
+                <span style={{ color: "var(--live)", fontWeight: 800 }}>{captionSpeaker}:</span>
+                <span>{caption}</span>
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function normalizeTranscriptSegments(segments: TranscriptSegment[] | undefined): TranscriptSegment[] {
   return safeArray(segments)
     .map((segment) => ({ speaker: toText(segment.speaker, "Speaker"), text: toText(segment.text), ts: segment.ts }))
@@ -572,6 +681,7 @@ export const ui = {
   EntityList,
   Timeline,
   Transcript,
+  LiveTranscript,
   Chart,
   Badge,
   Tag,
