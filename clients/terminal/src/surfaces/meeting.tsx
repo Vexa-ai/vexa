@@ -46,8 +46,55 @@ const baseName = (p: string) => p.split("/").pop() ?? p;
 const docTabFor = (path: string, title: string): TabDescriptor =>
   ({ id: `doc:${path}`, title, kind: "doc", params: { path }, context: { kind: "doc-context", params: { path } } });
 
-function ConnectedPanel({ native }: { native: string }) {
+type ConnectedDoc = { workspace: string; path: string; title?: string; kind?: string };
+
+// ── Connected (data.docs) — the meeting-api now ships data.docs = the workspace docs this meeting
+//  produced. When present we render them as chips grouped by kind, each opening that doc.path in a doc
+//  tab. When EMPTY we fall back to the deterministic meeting-doc path below.
+function ConnectedDocsPanel({ docs }: { docs: ConnectedDoc[] }) {
   const layout = useService(LayoutServiceId);
+  // group by kind, preserving first-seen order
+  const groups: { kind: string; docs: ConnectedDoc[] }[] = [];
+  const byKind = new Map<string, ConnectedDoc[]>();
+  for (const d of docs) {
+    const k = d.kind || "doc";
+    if (!byKind.has(k)) { byKind.set(k, []); groups.push({ kind: k, docs: byKind.get(k)! }); }
+    byKind.get(k)!.push(d);
+  }
+  const chip = (d: ConnectedDoc, i: number) => {
+    const label = d.title || baseName(d.path).replace(/\.md$/, "");
+    return (
+      <button key={`${d.path}-${i}`} onClick={() => layout.openTab(docTabFor(d.path, label))} title={`Open ${d.path}`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
+        <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        {d.kind && <span style={{ fontSize: 9.5, color: "var(--t3)", fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: ".04em" }}>{d.kind}</span>}
+      </button>
+    );
+  };
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
+        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Connected</span>
+        <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{docs.length}</span>
+        <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
+      </div>
+      {groups.map((g) => (
+        <div key={g.kind} style={{ marginBottom: 10 }}>
+          {groups.length > 1 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", margin: "0 2px 6px" }}>{g.kind}</div>}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{g.docs.map(chip)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[] }) {
+  const layout = useService(LayoutServiceId);
+  // data.docs first — when the meeting carries connected docs, render them and skip the path fallback
+  const hasDocs = !!docs?.length;
   const [state, setState] = useState<{ status: "loading" | "absent" | "present"; title: string; links: string[] }>({ status: "loading", title: "", links: [] });
   // slug → real entity doc path, built from the workspace tree (so a [[Title]] resolves to its true type)
   const [slugMap, setSlugMap] = useState<Record<string, string>>({});
@@ -92,6 +139,7 @@ function ConnectedPanel({ native }: { native: string }) {
     layout.openTab(docTabFor(path, title));
   };
 
+  if (hasDocs) return <ConnectedDocsPanel docs={docs!} />;
   if (state.status === "loading") return null;
   return (
     <div style={{ marginTop: 22 }}>
@@ -342,7 +390,7 @@ function MeetingTab({ params }: TabProps) {
         </header>
         {!isLive && <EntityList present={present} detected={detected} onOpen={openEntity} onResearch={(e) => research(e.title, e.type)} />}
         {isLive && <LiveCards cards={liveData.cards} connected={liveData.connected} onResearch={(c) => research(c.title, c.kind)} />}
-        {m.native_id && <ConnectedPanel native={m.native_id} />}
+        {m.native_id && <ConnectedPanel native={m.native_id} docs={m.docs} />}
         {feed.length > 0 && (
           <div className="vx-fade-up" style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 20 }}>
             <Conversation turns={feed} busy={busy} />

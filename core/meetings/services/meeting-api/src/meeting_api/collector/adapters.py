@@ -24,6 +24,31 @@ from typing import Optional
 from .ports import RedisBus, TranscriptStore
 
 
+def _doc_ref(doc: dict) -> dict:
+    """Normalize a connect-doc body to a stored ``data.docs[]`` ref: ``workspace`` + ``path`` are
+    required; ``title`` / ``kind`` ride along when present. Doc bodies live in the agent workspace —
+    only this ref is persisted."""
+    ref = {"workspace": doc.get("workspace"), "path": doc["path"]}
+    for k in ("title", "kind"):
+        if doc.get(k) is not None:
+            ref[k] = doc[k]
+    return ref
+
+
+def _upsert_doc(docs: list[dict], doc: dict) -> list[dict]:
+    """Append the doc ref deduped by ``path`` — re-connecting the same path updates in place
+    (idempotent, order-preserving)."""
+    ref = _doc_ref(doc)
+    out = [d for d in docs if d.get("path") != ref["path"]]
+    out.append(ref)
+    return out
+
+
+def _remove_doc(docs: list[dict], path: str) -> list[dict]:
+    """Drop the doc ref with ``path`` (idempotent when absent)."""
+    return [d for d in docs if d.get("path") != path]
+
+
 def _segment_to_api(seg: dict) -> dict:
     """Map a stored/Redis segment to an api.v1 ``TranscriptionSegment`` (start/end/text/language
     required; the optional fields ride along)."""
@@ -196,6 +221,48 @@ class SqlAlchemyTranscriptStore:
             return
         await self._redis.hset(
             f"meeting:{meeting_id}:segments", segment["segment_id"], json.dumps(segment)
+        )
+
+    async def _mutate_docs(self, user_id, platform, native_meeting_id, mutator):
+        """Owner-scoped atomic read→modify→write of ``meeting.data['docs']`` under ONE
+        ``SELECT … FOR UPDATE`` row lock. Returns the updated docs list, or ``None`` when the
+        user owns no such meeting."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                )
+                .order_by(Meeting.created_at.desc())
+                .limit(1)
+                .with_for_update()
+            )
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            docs = mutator(list(data.get("docs", [])))
+            data["docs"] = docs
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return docs
+
+    async def connect_doc(self, user_id, platform, native_meeting_id, doc):
+        return await self._mutate_docs(
+            user_id, platform, native_meeting_id, lambda docs: _upsert_doc(docs, doc)
+        )
+
+    async def disconnect_doc(self, user_id, platform, native_meeting_id, path):
+        return await self._mutate_docs(
+            user_id, platform, native_meeting_id, lambda docs: _remove_doc(docs, path)
         )
 
 

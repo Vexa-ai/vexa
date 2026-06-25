@@ -15,7 +15,7 @@ interface MeetingRowDTO {
   status: string;
   start_time?: string | null;
   end_time?: string | null;
-  data?: { recordings?: unknown[] } | null;
+  data?: { recordings?: unknown[]; docs?: { workspace: string; path: string; title?: string; kind?: string }[] } | null;
 }
 
 /** A transcript segment from meeting-api GET /transcripts/{platform}/{native}. */
@@ -50,6 +50,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     status: live ? "live" : "past",
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
+    docs: d.data?.docs ?? [],
     participants: [],
     mentioned: [],
     actions: [],

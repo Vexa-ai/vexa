@@ -19,6 +19,7 @@ export interface MeetingMock {
   actions: ProposedAction[];
   transcript: TranscriptLine[];
   insights: { t: string; text: string }[];  // copilot notes, revealed alongside the transcript
+  docs?: { workspace: string; path: string; title?: string; kind?: string }[];  // connected workspace docs (data.docs)
 }
 
 export const MEETINGS: MeetingMock[] = [

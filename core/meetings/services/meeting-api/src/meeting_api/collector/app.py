@@ -161,6 +161,81 @@ def build_router(
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
         return JSONResponse(content=meeting)
 
+    # --- POST /meetings/{platform}/{native_meeting_id}/docs → connect a workspace doc to a meeting.
+    # Appends {workspace, path, title?, kind?} to meeting.data['docs'], deduped by path (idempotent).
+    # Owner-scoped. Returns the updated docs array. Doc bodies live in the agent workspace — only the
+    # ref lands here. ---
+    @router.post("/meetings/{platform}/{native_meeting_id}/docs")
+    async def connect_doc(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+        path = str(payload.get("path", "")).strip()
+        workspace = str(payload.get("workspace", "")).strip()
+        if not path:
+            raise HTTPException(status_code=422, detail="'path' is required")
+        if not workspace:
+            raise HTTPException(status_code=422, detail="'workspace' is required")
+        doc = {"workspace": workspace, "path": path}
+        for k in ("title", "kind"):
+            if payload.get(k) is not None:
+                doc[k] = payload[k]
+        docs = await store.connect_doc(user_id, platform, native_meeting_id, doc)
+        if docs is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        log_event(
+            "meeting_doc_connected", audience="user", span="meetings.docs.connect",
+            user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+            fields={"path": path, "docs": len(docs)},
+        )
+        return JSONResponse(content={"docs": docs})
+
+    # --- DELETE /meetings/{platform}/{native_meeting_id}/docs → disconnect a doc by path (body or
+    # query ?path=). Owner-scoped, idempotent. Returns the updated docs array. ---
+    @router.delete("/meetings/{platform}/{native_meeting_id}/docs")
+    async def disconnect_doc(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+        path: Optional[str] = Query(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        resolved = (path or "").strip()
+        if not resolved:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                resolved = str(payload.get("path", "")).strip()
+        if not resolved:
+            raise HTTPException(status_code=422, detail="'path' is required")
+        docs = await store.disconnect_doc(user_id, platform, native_meeting_id, resolved)
+        if docs is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        log_event(
+            "meeting_doc_disconnected", audience="user", span="meetings.docs.disconnect",
+            user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+            fields={"path": resolved, "docs": len(docs)},
+        )
+        return JSONResponse(content={"docs": docs})
+
     # --- POST /ws/authorize-subscribe → the gateway /ws authorizer hop ---
     @router.post("/ws/authorize-subscribe")
     async def ws_authorize_subscribe(

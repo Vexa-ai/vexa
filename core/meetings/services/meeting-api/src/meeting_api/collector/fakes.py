@@ -142,6 +142,28 @@ class InMemoryTranscriptStore:
     async def authorize_subscribe(self, user_id, platform, native_meeting_id) -> Optional[int]:
         return self._find(user_id, platform, native_meeting_id)
 
+    async def connect_doc(self, user_id, platform, native_meeting_id, doc):
+        from .adapters import _upsert_doc
+
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        data = self._meetings[mid]["data"]
+        docs = _upsert_doc(list(data.get("docs", [])), doc)
+        data["docs"] = docs
+        return docs
+
+    async def disconnect_doc(self, user_id, platform, native_meeting_id, path):
+        from .adapters import _remove_doc
+
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        data = self._meetings[mid]["data"]
+        docs = _remove_doc(list(data.get("docs", [])), path)
+        data["docs"] = docs
+        return docs
+
     async def append_segment(self, meeting_id, segment) -> None:
         m = self._meetings.get(meeting_id)
         if m is None:

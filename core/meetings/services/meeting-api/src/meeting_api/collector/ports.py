@@ -64,6 +64,23 @@ class TranscriptStore(Protocol):
         persistence)."""
         ...
 
+    async def connect_doc(
+        self, user_id: int, platform: str, native_meeting_id: str, doc: dict
+    ) -> Optional[list[dict]]:
+        """Append a workspace-doc ref ``{workspace, path, title?, kind?}`` to the owned meeting's
+        ``meeting.data['docs']`` (created if absent), deduped by ``path`` (idempotent — re-connecting
+        the same path updates in place). Returns the updated ``docs`` list, or ``None`` when the user
+        owns no such meeting (the route maps ``None`` → 404). Doc BODIES live in the agent workspace;
+        only refs land here."""
+        ...
+
+    async def disconnect_doc(
+        self, user_id: int, platform: str, native_meeting_id: str, path: str
+    ) -> Optional[list[dict]]:
+        """Remove the doc ref with ``path`` from the owned meeting's ``meeting.data['docs']``.
+        Returns the updated ``docs`` list (idempotent if absent), or ``None`` when not owned/found."""
+        ...
+
 
 @runtime_checkable
 class PubSub(Protocol):
