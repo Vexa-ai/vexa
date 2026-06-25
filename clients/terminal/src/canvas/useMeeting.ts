@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLiveMeetings, fetchTranscript } from "../surfaces/liveMeetings";
-import { meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/mock";
+import { meetingById, meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/mock";
 import { useMeetingLive } from "../surfaces/meetingLive";
 import { useCanvasActionState } from "./actions";
 import type { MeetingState } from "./types";
@@ -19,8 +19,26 @@ const EMPTY_MEETING: MeetingMock = {
   insights: [],
 };
 
+const MeetingScopeContext = createContext<string | undefined>(undefined);
+
+export function MeetingScopeProvider({ meetingId, children }: { meetingId?: string; children: ReactNode }) {
+  return createElement(MeetingScopeContext.Provider, { value: meetingId }, children);
+}
+
 function pickMeeting(meetings: MeetingMock[]): MeetingMock {
   return meetings.find((m) => m.status === "live") ?? meetings[0] ?? EMPTY_MEETING;
+}
+
+function matchesMeeting(m: MeetingMock, meetingId: string): boolean {
+  return m.id === meetingId || m.native_id === meetingId;
+}
+
+function unresolvedMeeting(meetingId: string): MeetingMock {
+  return { ...EMPTY_MEETING, id: meetingId, title: "Meeting" };
+}
+
+function resolveMeeting(meetings: MeetingMock[], meetingId: string): MeetingMock {
+  return meetings.find((m) => matchesMeeting(m, meetingId)) ?? meetingById(meetingId) ?? unresolvedMeeting(meetingId);
 }
 
 function latestCaption(segments: { text: string; completed?: boolean }[], note: string): string | undefined {
@@ -53,9 +71,14 @@ function lineTs(line: TranscriptLine): string | undefined {
   return line.t || undefined;
 }
 
-export function useMeeting(): MeetingState {
+export function useMeeting(meetingId?: string): MeetingState {
+  const contextMeetingId = useContext(MeetingScopeContext);
+  const scopedMeetingId = meetingId ?? contextMeetingId;
   const meetings = useLiveMeetings();
-  const selected = pickMeeting(meetings);
+  const selected = useMemo(
+    () => scopedMeetingId ? resolveMeeting(meetings, scopedMeetingId) : pickMeeting(meetings),
+    [meetings, scopedMeetingId],
+  );
   const live = useMeetingLive(selected.id, selected.session_uid ?? "");
   const actions = useCanvasActionState();
   const [recorded, setRecorded] = useState<TranscriptLine[]>([]);
