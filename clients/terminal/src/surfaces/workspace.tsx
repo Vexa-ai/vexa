@@ -93,7 +93,7 @@ const SS_EXPANDED = "ws.tree.expanded", SS_HIDDEN = "ws.tree.hidden";
 function FilesList() {
   const layout = useService(LayoutServiceId);
   const [tree, setTree] = useState<string[]>([]);
-  const [hidden, setHidden] = useState<boolean>(() => readSS(SS_HIDDEN) === "1");
+  const [hidden, setHidden] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { const a = JSON.parse(readSS(SS_EXPANDED) ?? "null"); return new Set(Array.isArray(a) ? a : []); } catch { return new Set(); }
   });
