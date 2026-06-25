@@ -426,7 +426,7 @@ function Transcript({ segments, liveCaption, empty = "Waiting for transcript", l
         const speaker = toText(segment.speaker, "Speaker");
         const text = toText(segment.text);
         return (
-          <div key={`${segment.ts ?? index}-${speaker}`} style={{ display: "grid", gridTemplateColumns: "minmax(68px, 92px) minmax(0, 1fr)", gap: 9, fontSize: 12.5, minWidth: 0 }}>
+          <div key={`${index}-${segment.ts ?? ""}-${speaker}`} style={{ display: "grid", gridTemplateColumns: "minmax(68px, 92px) minmax(0, 1fr)", gap: 9, fontSize: 12.5, minWidth: 0 }}>
             <div title={speaker} style={{ color: "var(--t3)", ...lineClamp(1) }}>{speaker}</div>
             <div title={text} style={{ color: "var(--t2)", lineHeight: 1.45, ...lineClamp(3) }}>{text}</div>
           </div>

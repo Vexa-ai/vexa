@@ -409,7 +409,11 @@ export function MeetingSourceProvider({ meetingId, children }: { meetingId?: str
 
   const mock = useMemo(() => buildMockMeetingState(mockState), [mockState]);
   const liveHasData = meetingStateHasData(live);
-  const activeMode: MeetingSourceMode = mode === "mock" || !liveHasData ? "mock" : "live";
+  // Only auto-fall-back to mock when NOTHING real is bound (the standalone canvas preview). A real
+  // bound meeting (the meeting page always passes a meetingId) shows its LIVE state even when sparse
+  // — the real empty states, never the mock scenario — unless the user explicitly toggles Mock.
+  const boundToRealMeeting = Boolean(scopedMeetingId);
+  const activeMode: MeetingSourceMode = mode === "mock" ? "mock" : (boundToRealMeeting || liveHasData ? "live" : "mock");
   const state = activeMode === "mock" ? mock : live;
 
   const play = useCallback(() => setMockState((current) => setMockPlaying(current, true)), []);
