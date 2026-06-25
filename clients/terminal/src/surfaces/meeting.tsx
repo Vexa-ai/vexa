@@ -374,7 +374,7 @@ function MeetingTab({ params }: TabProps) {
         <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or ask the right-rail chat for research grounded in this meeting.</p>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <MeetingCanvasView meetingId={m.id} />
+        <MeetingCanvasView key={m.id} meetingId={m.id} />
       </div>
     </div>
   );

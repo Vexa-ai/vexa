@@ -82,7 +82,9 @@ function unresolvedMeeting(meetingId: string): MeetingMock {
 }
 
 function resolveMeeting(meetings: MeetingMock[], meetingId: string): MeetingMock {
-  return meetings.find((m) => matchesMeeting(m, meetingId)) ?? meetingById(meetingId) ?? unresolvedMeeting(meetingId);
+  // A real meeting id must NEVER resolve to a MOCK meeting. If it isn't in the live+past list yet,
+  // show an empty placeholder for THAT id (it fills in when the list loads) — not a wrong meeting.
+  return meetings.find((m) => matchesMeeting(m, meetingId)) ?? unresolvedMeeting(meetingId);
 }
 
 function latestCaption(segments: { text: string; completed?: boolean }[], note: string): string | undefined {
