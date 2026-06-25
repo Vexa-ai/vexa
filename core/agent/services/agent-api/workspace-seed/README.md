@@ -11,5 +11,7 @@ non-dotfile, git-tracked. `agents/meeting.md` steers the live copilot; `skills/<
 Claude Code skills the worker auto-discovers (the governed `skills/` tree is symlinked into
 `.claude/skills` per turn). `routines/<name>.md` files compile to durable Vexa Scheduler jobs for
 recurring work, using frontmatter `enabled`, `cron`, and `prompt` plus optional body text.
+`skills/scheduling/` is the discoverable skill that teaches the agent to author those routine files
+(so the durable-scheduling capability is learned on demand rather than living in always-on `CLAUDE.md`);
 `skills/hello-workspace/` is a minimal example — replace or delete it. Skill helper scripts run under
 whatever `--allowedTools` the turn already grants (no separate skills gate).
