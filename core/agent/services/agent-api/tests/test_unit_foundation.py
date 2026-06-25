@@ -128,26 +128,24 @@ def test_run_unit_turn_commits_conformant(tmp_path: Path):
     assert "wrote jane" in log
 
 
-def test_run_unit_turn_rejects_and_reverts_nonconformant(tmp_path: Path):
+def test_run_unit_turn_commits_nonconformant_free_zone(tmp_path: Path):
+    """Free zone: governance is prompt-only — a non-conformant entity write is NO LONGER reverted;
+    it commits like any other write (no enforcement gate)."""
     repo = tmp_path / "ws"
     repo.mkdir()
     _init_repo(repo)
-    head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
 
-    def fake_exec(argv, cwd):  # the "model" writes a NON-conformant entity (missing type+id)
+    def fake_exec(argv, cwd):  # the "model" writes a non-conformant entity (missing type+id)
         f = Path(cwd) / "kg/entities/person/bad.md"
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(_entity(BAD))
         yield json.dumps({"type": "result", "subtype": "success", "result": "x", "session_id": "s1"})
 
     evs = list(run_unit_turn(repo, "create bad", fake_exec))
-    rejected = [e for e in evs if e["type"] == "rejected"]
-    assert rejected and rejected[0]["violations"], "non-conformant write must be rejected"
-    assert not any(e["type"] == "commit" for e in evs), "nothing may commit"
-    # the gate held: the bad file is gone and HEAD is unchanged
-    assert not (repo / "kg/entities/person/bad.md").exists()
-    head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
-    assert head_after == head_before
+    assert not any(e["type"] == "rejected" for e in evs), "free zone never rejects"
+    assert any(e["type"] == "commit" for e in evs), "the write must commit"
+    # the write survived: the file is present and committed
+    assert (repo / "kg/entities/person/bad.md").exists()
 
 
 # ── the dispatcher: unit.v1 → runtime.v1 spawn, quota keyed on the person ─────

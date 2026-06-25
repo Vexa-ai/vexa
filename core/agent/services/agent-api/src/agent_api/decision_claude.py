@@ -171,12 +171,12 @@ def run_unit_turn(
     commit_message: Optional[str] = None,
     commit: bool = True,
 ) -> Iterator[dict]:
-    """Run one claude turn over ``work_dir``, streaming normalized UnitEvents, then ENFORCE governance.
+    """Run one claude turn over ``work_dir``, streaming normalized UnitEvents, then commit.
 
-    After the turn: re-validate every changed entity against workspace.v1. On any violation → revert
-    the working tree and emit ``{"type":"rejected", "violations":[...]}`` (nothing is committed). Else,
-    if the tree changed, commit and emit ``{"type":"commit","sha":...}``. The model's raw file writes
-    never escape the contract gate.
+    The workspace is a FREE ZONE: governance is PROMPT-ONLY (CLAUDE.md + conventions guide the
+    agent). After the turn we no longer validate or revert entity frontmatter — if the tree
+    changed, commit and emit ``{"type":"commit","sha":...}``. (Hard enforcement is still available
+    via revalidate_entities()+revert if it needs to come back.)
     """
     work = Path(work_dir)
     argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model, mcp_config=mcp_config)
@@ -191,15 +191,9 @@ def run_unit_turn(
         # never touch a workspace another agent may be committing to (the index.lock collision).
         return
 
-    violations = revalidate_entities(work)
-    if violations:
-        # Revert EVERY write of this turn — tracked (reset) and untracked (clean) — so a rejected turn
-        # leaves the repo exactly at HEAD. Keep `.claude` (session continuity for the next turn).
-        _git(work, "reset", "--hard", "HEAD")
-        _git(work, "clean", "-fd", "-e", ".claude")
-        yield {"type": "rejected", "violations": violations}
-        return
-
+    # Workspace is a FREE ZONE: governance is PROMPT-ONLY (CLAUDE.md + conventions guide the
+    # agent). We no longer re-validate entity frontmatter or revert non-conformant writes — the
+    # turn's writes always commit. (Re-enable revalidate_entities()+revert to restore hard enforcement.)
     if _git(work, "status", "--porcelain"):
         _git(work, "add", "-A")
         msg = commit_message or ((done or {}).get("reply") or "agent turn")
