@@ -138,9 +138,12 @@ function Section({ title, loading = false, children }: { title?: string; childre
 function Grid({ columns = "auto", size = "md", loading = false, children }: { columns?: 1 | 2 | 3 | 4 | "auto"; size?: Size; children?: ReactNode } & Loadable) {
   const safeSize = asSize(size);
   const count = columns === 1 || columns === 2 || columns === 3 || columns === 4 ? columns : "auto";
-  const template = count === "auto" ? "repeat(auto-fit, minmax(min(190px, 100%), 1fr))" : `repeat(${count}, minmax(0, 1fr))`;
+  const safeGap = gap[safeSize];
+  const template = count === "auto"
+    ? "repeat(auto-fit, minmax(min(190px, 100%), 1fr))"
+    : `repeat(auto-fit, minmax(min(100%, max(220px, calc((100% - ${safeGap * (count - 1)}px) / ${count}))), 1fr))`;
   return (
-    <div style={{ ...frameStyle, display: "grid", gridTemplateColumns: template, gap: gap[safeSize], alignItems: "stretch", width: "100%" }}>
+    <div style={{ ...frameStyle, display: "grid", gridTemplateColumns: template, gap: safeGap, alignItems: "stretch", width: "100%" }}>
       {loading ? Array.from({ length: count === "auto" ? 3 : count }).map((_, index) => <Panel key={index} loading />) : children}
     </div>
   );

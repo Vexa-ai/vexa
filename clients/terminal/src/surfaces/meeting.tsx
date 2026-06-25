@@ -9,7 +9,7 @@ import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
-import { MeetingCanvasView } from "../canvas/MeetingCanvasView";
+import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { meetingById, liveMeeting, type MeetingMock } from "./mock";
 import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
@@ -361,8 +361,8 @@ function MeetingTab({ params }: TabProps) {
   if (!m) return <div style={{ padding: 24, color: "var(--t3)" }}>Meeting not found.</div>;
 
   return (
-    <div style={{ width: "100%", padding: "16px 24px 24px", boxSizing: "border-box" }}>
-      <header style={{ marginBottom: 16 }}>
+    <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
+      <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13 }}>
           {live
             ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--live)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", boxShadow: "0 0 0 3px var(--livebg)" }} />Live</span>
@@ -373,7 +373,9 @@ function MeetingTab({ params }: TabProps) {
         </div>
         <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or ask the right-rail chat for research grounded in this meeting.</p>
       </header>
-      <MeetingCanvasView meetingId={m.id} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <MeetingCanvasView meetingId={m.id} />
+      </div>
     </div>
   );
 }
