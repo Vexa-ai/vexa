@@ -280,6 +280,13 @@ def meeting_card_turn(
     card per salient finding. Reuses the governed turn (with session continuity across beats). The
     wanted ``card_kinds`` + workspace ``steering`` shape the prompt, and cards are filtered to the
     allowed kinds."""
+    # Copilot behavior is steered EXCLUSIVELY by agents/meeting.md (folded into the prompt below).
+    # Residual risk: the card turn runs `claude -p` with cwd=workspace, so claude also auto-loads the
+    # workspace CLAUDE.md as project memory. There is no clean, granular Claude Code flag to suppress
+    # ONLY CLAUDE.md for a single turn (`--bare` exists but also strips skills/MCP/hooks and narrows the
+    # toolset — too blunt for a turn that Reads kg entities for context). So we keep CLAUDE.md free of
+    # copilot steering (seed guard) instead of stripping it: CLAUDE.md must carry file conventions only,
+    # and all watch/ignore/tone steering lives in agents/meeting.md's body.
     kinds = card_kinds or list(DEFAULT_CARD_KINDS)
     lines = "\n".join(f"[{s.get('speaker', '?')}] {s.get('text', '')}" for s in segments)
     reply: str | None = None

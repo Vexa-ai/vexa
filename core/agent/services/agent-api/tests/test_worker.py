@@ -366,3 +366,18 @@ def test_link_skills_keeps_real_claude_skills_dir(tmp_path):
     link = tmp_path / ".claude" / "skills"
     assert not link.is_symlink() and link.is_dir()
     assert (link / "x.md").read_text() == "real"
+
+
+def test_seed_claude_md_defers_copilot_steering_to_meeting_md():
+    """Guard: the workspace-seed CLAUDE.md must declare agents/meeting.md as the EXCLUSIVE source of
+    meeting-copilot steering and must not itself carry copilot behavior. CLAUDE.md is auto-loaded as
+    project memory on every turn, so copilot steering here would be a second, conflicting source."""
+    seed = pathlib.Path(__file__).resolve().parents[1] / "workspace-seed" / "CLAUDE.md"
+    text = seed.read_text()
+    lower = text.lower()
+    # Names meeting.md as the governing source, with an exclusivity word.
+    assert "agents/meeting.md" in text
+    assert "exclusiv" in lower
+    # No copilot watch/ignore steering smuggled into CLAUDE.md (only the guard *mentions* the words).
+    assert "surface only new entities" not in lower
+    assert "real-time meeting behavior" not in lower
