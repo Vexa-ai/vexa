@@ -248,7 +248,9 @@ class SqlAlchemyMeetingRepo:
         """Meetings stuck in ANY non-terminal status whose row has gone quiet past its grace window —
         a bot that exited (or vanished) without ever sending its terminal lifecycle callback leaves the
         row hung here forever. ``updated_at`` is bumped on every status change AND on segment/heartbeat
-        persistence, so a quiet row past the window means the bot is gone.
+        persistence. NOTE: for a LIVE status (`active`/`needs_help`) ``updated_at`` staleness is a
+        CANDIDATE signal only — the sweep additionally gates the active-reap on runtime workload
+        liveness (see ``reconcile.py``), because a silent-but-live bot stops bumping ``updated_at``.
 
         Per-row window: ``stopping`` uses ``stop_grace`` (a stop was requested — clear it fast),
         everything else uses ``active_grace`` (a longer idle so a momentarily-quiet live bot is not
@@ -432,6 +434,17 @@ class HttpRuntimeClient:
         Best-effort: a 404 (already gone) is fine, and any error is left for the caller to log; this
         teardown must never mask the original post-spawn DB failure that triggered it."""
         await self._client.delete(f"{self._url}/workloads/{workload_id}", timeout=30.0)
+
+    async def get_workload(self, workload_id: str) -> Optional[dict]:
+        """Liveness probe (``GET /workloads/{id}``). 404 → the kernel no longer tracks the workload
+        (the bot is GONE) → ``None``. Any other non-200 raises (treated by the caller as 'unknown,
+        do not reap' — fail safe toward NOT killing a possibly-live meeting)."""
+        resp = await self._client.get(f"{self._url}/workloads/{workload_id}", timeout=10.0)
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise SpawnFailed(f"runtime kernel get_workload returned {resp.status_code}")
+        return resp.json()
 
 
 def build_production_router(*, database_url: Optional[str] = None, runtime_api_url: Optional[str] = None):

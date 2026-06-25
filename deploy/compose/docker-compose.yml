@@ -215,8 +215,6 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
-      # reconcile: don't reap a live-but-quiet meeting on transcript silence (proper bot-liveness gate lands separately)
-      - RECONCILE_ACTIVE_GRACE_S=${RECONCILE_ACTIVE_GRACE_S:-86400}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       # MeetingToken is signed (mint) AND verified (recordings upload) with ADMIN_TOKEN — the SAME
       # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like

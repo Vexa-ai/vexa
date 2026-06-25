@@ -148,6 +148,14 @@ class RuntimeClient(Protocol):
         uploads. Best-effort — a teardown that itself fails must not mask the original spawn failure."""
         ...
 
+    async def get_workload(self, workload_id: str) -> Optional[dict]:
+        """The bot LIVENESS probe (``GET /workloads/{id}`` on the kernel). Returns the workload status
+        ``{"workloadId": ..., "state": ...}`` while the kernel still tracks it, or ``None`` when the
+        workload is GONE (404 — destroyed and reaped from the store). The reconcile sweep keys the
+        active-reap on this, NOT on transcript-segment staleness: a quiet-but-live bot keeps a
+        ``running`` workload, so it is never reaped on silence alone."""
+        ...
+
 
 class QuotaExceeded(Exception):
     """The runtime kernel rejected the spawn for owner quota (429) — surfaced as HTTP 429.

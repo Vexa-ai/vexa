@@ -691,3 +691,109 @@ def test_general_reconcile_noop_on_terminal_rows():
         client = TestClient(create_app(meeting_repo=repo))
         assert _run_general_sweep(client, repo) == 0
         assert repo._meetings[m["id"]]["status"] == status
+
+
+# ── liveness gate (the correctness fix): a quiet-but-LIVE bot must NOT be reaped on silence alone ────
+# The active-reap is keyed on runtime WORKLOAD liveness (RuntimeClient.get_workload), NOT on segment/
+# `updated_at` staleness. A live workload (starting/running/stopping) means the bot is in the room even
+# if it has produced no segments; a 404 / terminal workload means the bot is gone.
+
+from meeting_api.bot_spawn.fakes import FakeRuntimeClient  # noqa: E402
+
+
+def _run_general_sweep_rt(client, repo, runtime, *, stop_grace=45.0, active_grace=300.0):
+    """Run ONE general sweep with a real RuntimeClient injected (so the liveness gate is exercised)."""
+    import logging
+
+    async def _post(body: dict):
+        return client.post(ENDPOINT, json=body).status_code
+
+    return asyncio.run(reconcile_stale_nonterminal_sweep(
+        repo, runtime, _post, stop_grace=stop_grace, active_grace=active_grace,
+        log=logging.getLogger("test.reconcile"),
+    ))
+
+
+def test_quiet_but_live_active_not_reaped_even_past_grace():
+    """THE BUG FIX: an `active` meeting gone quiet PAST the active grace (no segments) but whose bot
+    WORKLOAD IS STILL ALIVE (runtime reports `running`) is NOT reaped. Silence alone must never kill a
+    bot-present meeting."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")  # default updated_at far in the past — well past any grace
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-live"
+    # The workload is alive and running in the runtime — the bot is still in the meeting.
+    runtime = FakeRuntimeClient(workloads={"wl-live": {"workloadId": "wl-live", "state": "running"}})
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep_rt(client, repo, runtime)
+    assert n == 0
+    assert repo._meetings[m["id"]]["status"] == "active"  # untouched — bot is present
+    assert "wl-live" not in runtime.deleted  # the live bot's workload was NOT torn down
+
+
+def test_dead_active_workload_gone_is_reaped():
+    """An `active` meeting past the grace whose bot WORKLOAD IS GONE (runtime 404 → not tracked) IS
+    reaped to `completed` (the ujp-aqif-kmv convergence: a truly-dead active bot still completes)."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")  # past the grace
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-dead"
+    # Empty workload map → get_workload("wl-dead") returns None (404, gone).
+    runtime = FakeRuntimeClient(workloads={})
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep_rt(client, repo, runtime)
+    assert n == 1
+    assert repo._meetings[m["id"]]["status"] == "completed"
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "left_alone"
+    assert "wl-dead" in runtime.deleted  # the orphan workload was torn down
+
+
+def test_dead_active_terminal_workload_state_is_reaped():
+    """An `active` meeting whose workload reached a TERMINAL state (`stopped`/`destroyed`) — not just a
+    404 — is also reaped: the bot exited without sending its terminal callback."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-exited"
+    runtime = FakeRuntimeClient(workloads={"wl-exited": {"workloadId": "wl-exited", "state": "stopped"}})
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep_rt(client, repo, runtime)
+    assert n == 1
+    assert repo._meetings[m["id"]]["status"] == "completed"
+
+
+def test_stopping_still_reaps_regardless_of_workload_liveness():
+    """A `stopping` meeting (a stop WAS requested) past its short grace still reaps to `completed` even
+    if its workload is reported alive — the bot SHOULD be leaving; the stop-reconcile guarantees the kill."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-stopping"
+    repo._meetings[m["id"]]["data"]["stop_requested"] = True
+    # Even though the workload still reports alive, `stopping` is exempt from the liveness gate.
+    runtime = FakeRuntimeClient(
+        workloads={"wl-stopping": {"workloadId": "wl-stopping", "state": "running"}}
+    )
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep_rt(client, repo, runtime)
+    assert n == 1
+    assert repo._meetings[m["id"]]["status"] == "completed"
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "stopped"
+
+
+def test_active_with_unknown_liveness_is_not_reaped():
+    """Fail-safe: an `active` meeting with a bot_container_id but an UNRESOLVABLE liveness probe
+    (runtime errors) is NOT reaped — never kill a possibly-live meeting on an inconclusive signal."""
+    class _BrokenRuntime(FakeRuntimeClient):
+        async def get_workload(self, workload_id):
+            raise RuntimeError("runtime unreachable")
+
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-x"
+    runtime = _BrokenRuntime()
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep_rt(client, repo, runtime)
+    assert n == 0
+    assert repo._meetings[m["id"]]["status"] == "active"

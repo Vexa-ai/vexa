@@ -157,7 +157,11 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     stop_interval = float(os.getenv("STOP_RECONCILE_INTERVAL_S", "15"))
     # GENERAL reconcile: ANY non-terminal status whose bot is gone (its row quiet past the grace) is
     # converged to a terminal state through the same lifecycle callback. `stopping` uses stop_grace
-    # (a stop was requested); `active`/etc. use a longer idle so a momentarily-quiet live bot is safe.
+    # (a stop was requested); `active`/etc. use `active_grace`. The active-reap is ADDITIONALLY gated on
+    # runtime WORKLOAD liveness (reconcile.py `_bot_workload_gone`): a meeting whose bot workload is still
+    # alive is NEVER reaped, even past the grace — so a quiet-but-live (silent) bot is safe regardless of
+    # this window. With that gate in place, 300s is a SANE default again (the 86400 env stopgap, which
+    # only worked because it disabled the time-based reap entirely, is no longer needed).
     active_grace = float(os.getenv("RECONCILE_ACTIVE_GRACE_S", "300"))
 
     async def _segment_consumer_loop() -> None:

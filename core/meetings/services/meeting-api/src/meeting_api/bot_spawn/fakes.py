@@ -239,11 +239,16 @@ class InMemoryMeetingRepo:
 class FakeRuntimeClient:
     """A ``RuntimeClient`` that records the spec and returns a synthetic ``workloadId``."""
 
-    def __init__(self, *, quota_exceeded: bool = False, fail: bool = False):
+    def __init__(self, *, quota_exceeded: bool = False, fail: bool = False,
+                 workloads: Optional[dict[str, dict]] = None):
         self._quota_exceeded = quota_exceeded
         self._fail = fail
         self.specs: list[dict] = []  # every spawned spec, for assertions
         self.deleted: list[str] = []  # workload ids torn down (ROB3 compensation), for assertions
+        # Liveness map for the reconcile sweep: workload_id -> status dict ({"state": ...}). A workload
+        # ABSENT from this map is treated as GONE (404 → None) by ``get_workload``. ``None`` defaults to
+        # "every workload is alive and running" (back-compat for tests that don't care about liveness).
+        self._workloads: Optional[dict[str, dict]] = workloads
 
     async def create_workload(self, spec: dict) -> dict[str, Any]:
         self.specs.append(spec)
@@ -256,3 +261,13 @@ class FakeRuntimeClient:
     async def delete_workload(self, workload_id: str) -> None:
         # Record the teardown so the partial-spawn test asserts the orphaned workload was torn down.
         self.deleted.append(workload_id)
+        if self._workloads is not None:
+            self._workloads.pop(workload_id, None)
+
+    async def get_workload(self, workload_id: str) -> Optional[dict[str, Any]]:
+        # Default (no map injected): every workload reports alive+running, so liveness gating defers to
+        # the time window only when there is NO container id. A test exercising the liveness gate injects
+        # ``workloads={...}`` — a workload absent from the map is GONE (None), present is alive.
+        if self._workloads is None:
+            return {"workloadId": workload_id, "state": "running"}
+        return self._workloads.get(workload_id)

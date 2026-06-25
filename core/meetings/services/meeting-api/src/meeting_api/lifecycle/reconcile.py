@@ -56,6 +56,38 @@ async def reconcile_stale_stopping_sweep(
 # (the bot WAS live) reconcile to `completed`.
 _PRE_ACTIVE_NONTERMINAL = frozenset({"requested", "joining", "awaiting_admission", "needs_help"})
 
+# Statuses where a BOT IS (or was) IN THE MEETING and may be legitimately quiet — silence (no segments)
+# does NOT mean the bot is gone, so the active-reap on these is gated on POSITIVE evidence the bot's
+# workload is no longer alive (runtime liveness), NOT on `updated_at`/segment staleness. `stopping` is
+# EXCLUDED: a stop was requested, so it reaps on its short grace regardless (its bot SHOULD be leaving).
+_LIVE_NONTERMINAL = frozenset({"active", "needs_help"})
+
+# runtime.v1 workload states that mean the bot is STILL ALIVE in the meeting (the workload exists and is
+# not torn down). Anything else — or a 404 (workload gone, ``get_workload`` → None) — is "bot gone".
+_ALIVE_WORKLOAD_STATES = frozenset({"starting", "running", "stopping"})
+
+
+async def _bot_workload_gone(
+    runtime: Optional[Any], bot_container_id: Optional[str], *, log: Any
+) -> Optional[bool]:
+    """Liveness probe for the active-reap gate. Returns:
+
+      * ``True``  — POSITIVE evidence the bot is gone (workload 404'd, or in a terminal state).
+      * ``False`` — the workload is ALIVE (``starting``/``running``/``stopping``): a quiet-but-live bot.
+      * ``None``  — UNKNOWN (no runtime, no container id, or the probe errored): the caller must NOT reap
+                    on this — fail safe toward keeping a possibly-live meeting.
+    """
+    if runtime is None or not bot_container_id or not hasattr(runtime, "get_workload"):
+        return None
+    try:
+        info = await runtime.get_workload(bot_container_id)
+    except Exception:  # noqa: BLE001 — probe is best-effort; unknown ⇒ do NOT reap
+        log.warning("nonterminal-reconcile: get_workload(%s) failed; not reaping", bot_container_id)
+        return None
+    if info is None:  # 404 — kernel no longer tracks it ⇒ bot gone
+        return True
+    return info.get("state") not in _ALIVE_WORKLOAD_STATES
+
 
 async def reconcile_stale_nonterminal_sweep(
     repo: Any,
@@ -91,6 +123,20 @@ async def reconcile_stale_nonterminal_sweep(
         return 0
     reconciled = 0
     for meeting_id, status, session_uid, bot_container_id, stop_requested in stale:
+        # LIVENESS GATE (the correctness fix): for a status where a bot is in the meeting and may be
+        # legitimately QUIET (`active`/`needs_help`), `updated_at` staleness is NOT evidence the bot is
+        # gone — segments stop bumping it during silence. Only reap on POSITIVE evidence the bot's
+        # workload is no longer alive. `stopping` is exempt (a stop was requested → reap on its grace).
+        if status in _LIVE_NONTERMINAL and bot_container_id:
+            gone = await _bot_workload_gone(runtime, bot_container_id, log=log)
+            if gone is not True:
+                # ALIVE (False) or UNKNOWN (None) → do not reap a possibly-live, bot-present meeting.
+                # (No bot_container_id at all falls through to the time-based reap — there is no live
+                #  workload that could be holding the meeting open, so a quiet row IS a gone bot.)
+                log.info("nonterminal-reconcile: skip live/unknown bot for meeting %s "
+                         "(status %s, workload %s, gone=%s)",
+                         meeting_id, status, bot_container_id, gone)
+                continue
         terminal = "failed" if status in _PRE_ACTIVE_NONTERMINAL else "completed"
         body: dict[str, Any] = {"connection_id": session_uid, "status": terminal}
         if terminal == "completed":
