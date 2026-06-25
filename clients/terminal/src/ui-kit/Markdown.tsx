@@ -3,7 +3,8 @@
  *  (--t1/--t2/--t3, --accent, --blue, --mono, --line, --panel, --panel2). Supports:
  *  headings (#..####), bold, italic, inline code, fenced ```code```, bullet + numbered
  *  lists, links (new tab, rel noreferrer), [[wikilinks]], blockquotes, horizontal rules,
- *  paragraphs and line breaks. Intentionally a small subset — robust, not spec-complete. */
+ *  GFM pipe tables, paragraphs and line breaks. Intentionally a small subset — robust,
+ *  not spec-complete. */
 import { Fragment, type ReactNode } from "react";
 
 // ── inline span parsing: code, bold, italic, links, wikilinks ──────────────────────
@@ -60,6 +61,60 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
 }
 
 const HEADING_SIZE: Record<number, number> = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 };
+type TableAlign = "left" | "center" | "right";
+
+function splitTableRow(line: string): string[] | null {
+  let body = line.trim();
+  if (!body.includes("|")) return null;
+  if (body.startsWith("|")) body = body.slice(1);
+  if (body.endsWith("|")) body = body.slice(0, -1);
+
+  const cells: string[] = [];
+  let cell = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "\\" && body[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (ch === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += ch;
+    }
+  }
+  cells.push(cell.trim());
+
+  return cells.length >= 2 ? cells : null;
+}
+
+function parseTableSeparator(line: string): TableAlign[] | null {
+  const cells = splitTableRow(line);
+  if (!cells) return null;
+
+  const aligns: TableAlign[] = [];
+  for (const cell of cells) {
+    const marker = cell.replace(/\s+/g, "");
+    if (!/^:?-{3,}:?$/.test(marker)) return null;
+    const left = marker.startsWith(":");
+    const right = marker.endsWith(":");
+    aligns.push(left && right ? "center" : right ? "right" : "left");
+  }
+  return aligns;
+}
+
+function tableStart(lines: string[], index: number): { header: string[]; align: TableAlign[] } | null {
+  if (index + 1 >= lines.length) return null;
+  const header = splitTableRow(lines[index]);
+  const align = parseTableSeparator(lines[index + 1]);
+  if (!header || !align) return null;
+
+  const columns = Math.max(header.length, align.length);
+  return {
+    header: Array.from({ length: columns }, (_, col) => header[col] ?? ""),
+    align: Array.from({ length: columns }, (_, col) => align[col] ?? "left"),
+  };
+}
 
 // ── block parser: split lines into headings, lists, code fences, quotes, rules, paras ──
 export function Markdown({ children, style }: { children: string; style?: React.CSSProperties }): ReactNode {
@@ -145,9 +200,47 @@ export function Markdown({ children, style }: { children: string; style?: React.
       continue;
     }
 
+    // GFM pipe table
+    const table = tableStart(lines, i);
+    if (table) {
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length) {
+        const row = splitTableRow(lines[i]);
+        if (!row) break;
+        rows.push(Array.from({ length: table.header.length }, (_, col) => row[col] ?? ""));
+        i++;
+      }
+      blocks.push(
+        <table key={key++} style={{ width: "100%", borderCollapse: "collapse", margin: "6px 0 10px", color: "var(--t1)", fontSize: "inherit", lineHeight: 1.45 }}>
+          <thead>
+            <tr>
+              {table.header.map((cell, col) => (
+                <th key={col} style={{ background: "var(--panel)", border: "1px solid var(--line2)", padding: "6px 9px", textAlign: table.align[col], color: "var(--t1)", fontWeight: 600 }}>
+                  {inline(cell)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, col) => (
+                  <td key={col} style={{ border: "1px solid var(--line)", padding: "6px 9px", textAlign: table.align[col], color: "var(--t2)", verticalAlign: "top" }}>
+                    {inline(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>,
+      );
+      continue;
+    }
+
     // paragraph — gather consecutive plain lines until a blank or a block starter
     const para: string[] = [];
-    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i])) {
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !tableStart(lines, i)) {
       para.push(lines[i]); i++;
     }
     blocks.push(
