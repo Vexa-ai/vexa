@@ -3,7 +3,7 @@
  *  it's the same engine as the meeting copilot. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. Composer (with /-skill autocomplete) sits under it. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useService, CommandServiceId } from "../platform";
 import { registerTab, registerCommand, type TabProps } from "../contributions";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
@@ -26,6 +26,116 @@ type HistoryTurn =
 /** map a backend op label (read/search/edit/git/web/tool) to a frontend Op (icon from opIcon) */
 function historyOp(op: { label: string }): Op {
   return { icon: opIcon[op.label] ?? opIcon.tool, label: op.label, status: "done" };
+}
+
+type ReferenceToken = { kind: "file" | "meeting"; value: string; raw: string };
+type ReferenceSegment = { kind: "text"; text: string } | { kind: "reference"; ref: ReferenceToken };
+const REFERENCE_RE = /@(file|meeting):([A-Za-z0-9._~%+@:/=-]+)/g;
+
+function tokenizeReferences(text: string): ReferenceSegment[] {
+  const parts: ReferenceSegment[] = [];
+  REFERENCE_RE.lastIndex = 0;
+  let last = 0;
+  for (const m of text.matchAll(REFERENCE_RE)) {
+    const index = m.index ?? 0;
+    if (index > last) parts.push({ kind: "text", text: text.slice(last, index) });
+    parts.push({ kind: "reference", ref: { kind: m[1] as "file" | "meeting", value: m[2], raw: m[0] } });
+    last = index + m[0].length;
+  }
+  if (last < text.length) parts.push({ kind: "text", text: text.slice(last) });
+  return parts;
+}
+
+function referenceTokens(text: string): ReferenceToken[] {
+  const out: ReferenceToken[] = [];
+  const seen = new Set<string>();
+  for (const part of tokenizeReferences(text)) {
+    if (part.kind !== "reference") continue;
+    const key = `${part.ref.kind}:${part.ref.value}`;
+    if (!seen.has(key)) { seen.add(key); out.push(part.ref); }
+  }
+  return out;
+}
+
+function fileLabel(path: string): string {
+  return path.split("/").filter(Boolean).pop()?.replace(/\.md$/, "") || path;
+}
+
+function ReferenceChip({ refToken }: { refToken: ReferenceToken }) {
+  const isFile = refToken.kind === "file";
+  const label = isFile ? fileLabel(refToken.value) : refToken.value;
+  return (
+    <span title={refToken.raw}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, maxWidth: 220, verticalAlign: "baseline", margin: "0 2px", padding: "1px 7px 1px 5px", borderRadius: 6, border: "1px solid var(--line2)", background: isFile ? "var(--bluebg)" : "var(--accentbg)", color: isFile ? "var(--blue)" : "var(--accent)", fontSize: "0.92em", lineHeight: 1.45, whiteSpace: "nowrap" }}>
+      <Icon name={isFile ? "file" : "cal"} size={11} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+    </span>
+  );
+}
+
+function ReferenceText({ text }: { text: string }) {
+  return <>{tokenizeReferences(text).map((part, i) => part.kind === "text"
+    ? <span key={i}>{part.text}</span>
+    : <ReferenceChip key={i} refToken={part.ref} />)}</>;
+}
+
+const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
+
+function ChatConversation({ turns, busy, empty }: { turns: Turn[]; busy?: boolean; empty?: ReactNode }) {
+  if (turns.length === 0 && empty) return <>{empty}</>;
+  return (
+    <>
+      {turns.map((t, i) => t.role === "user"
+        ? <div key={t.id} style={{ marginBottom: 16 }}><div style={userBubble}><ReferenceText text={t.text} /></div></div>
+        : <Conversation key={t.id} turns={[t]} busy={!!busy && i === turns.length - 1} />)}
+    </>
+  );
+}
+
+function ComposerReferences({ text }: { text: string }) {
+  const refs = referenceTokens(text);
+  if (refs.length === 0) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 5, minWidth: 0 }}>
+      {refs.map((r) => <ReferenceChip key={`${r.kind}:${r.value}`} refToken={r} />)}
+    </div>
+  );
+}
+
+function referenceContext(text: string): string {
+  const refs = referenceTokens(text);
+  if (refs.length === 0) return "";
+  const lines = [
+    "Referenced context:",
+    "The user included these paste-safe reference tokens. Resolve them before answering when relevant.",
+  ];
+  for (const ref of refs) {
+    if (ref.kind === "file") {
+      lines.push(
+        `- token: ${ref.raw}`,
+        "  kind: file",
+        `  workspace_path: ${ref.value}`,
+        "  instruction: Read this workspace-relative path before relying on it.",
+      );
+    } else {
+      const notesPath = `kg/entities/meeting/${ref.value}.md`;
+      lines.push(
+        `- token: ${ref.raw}`,
+        "  kind: meeting",
+        `  native_id: ${ref.value}`,
+        "  platform: google_meet",
+        `  notes_workspace_path: ${notesPath}`,
+        `  transcript_api_path: /api/transcripts/google_meet/${ref.value}`,
+        "  instruction: Use notes_workspace_path for the meeting notes if present; use platform + native_id to fetch or identify the transcript when needed.",
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+function promptWithReferences(prompt: string, userText: string): string {
+  const context = referenceContext(userText);
+  return context ? `${prompt.trim()}\n\n---\n${context}` : prompt.trim();
 }
 
 const ROUTINE_COMMAND = "/routine";
@@ -126,7 +236,7 @@ function ChatTab({ params }: TabProps) {
 
   const send = async (text: string, prompt = text) => {
     const v = text.trim();
-    const p = prompt.trim();
+    const p = promptWithReferences(prompt, v);
     if (!v || !p || busy) return;
     const n = idRef.current++;
     setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: v }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
@@ -175,18 +285,21 @@ function ChatTab({ params }: TabProps) {
           {skills.map((c) => <div key={c.id} onMouseDown={() => setValue(c.skill! + " ")} style={{ display: "flex", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13 }}><code style={{ fontFamily: "var(--mono)", color: "var(--accent)", minWidth: 88 }}>{c.skill}</code><span style={{ color: "var(--t3)", fontSize: 12 }}>{c.title}</span></div>)}
         </div>
       )}
-      <div style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "11px 12px", display: "flex", alignItems: "center", gap: 11 }}>
-        <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13 }}>/</span>
-        <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); }} placeholder="Type / for skills, or ask the agent…" disabled={busy}
-          style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14 }} />
-        <button aria-label="Send" onClick={onSubmit} disabled={busy} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}><Icon name="send" size={16} /></button>
+      <div style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
+        <ComposerReferences text={value} />
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13 }}>/</span>
+          <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); }} placeholder="Type / for skills, or ask the agent…" disabled={busy}
+            style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, minWidth: 0 }} />
+          <button aria-label="Send" onClick={onSubmit} disabled={busy} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, flex: "none" }}><Icon name="send" size={16} /></button>
+        </div>
       </div>
     </>
   );
 
   return (
     <AgentWindow scrollRef={scrollRef} composer={composer}>
-      <Conversation turns={turns} busy={busy || loading} empty={<div style={{ color: "var(--t3)", fontSize: 13, textAlign: "center", marginTop: 40 }}>{loading ? "Loading conversation…" : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits."}</div>} />
+      <ChatConversation turns={turns} busy={busy || loading} empty={<div style={{ color: "var(--t3)", fontSize: 13, textAlign: "center", marginTop: 40 }}>{loading ? "Loading conversation…" : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits."}</div>} />
     </AgentWindow>
   );
 }

@@ -12,6 +12,7 @@ import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { registerList, registerTab, registerContext, registerCommand, type TabProps, type ContextProps } from "../contributions";
 import { Icon } from "../ui-kit";
+import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { EntityList, onResearchRequest } from "./entities";
 import { meetingById, liveMeeting, meetingEntities, type MeetingMock, type Entity } from "./mock";
 import { useMeetingLive, type LiveCard } from "./meetingLive";
@@ -342,8 +343,10 @@ export function meetingTab(m: MeetingMock): TabDescriptor {
 
 function MeetingRow({ m }: { m: MeetingMock }) {
   const nav = usePreviewPinTab<HTMLDivElement>(meetingTab(m));
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const native = m.native_id ?? m.id;
   return (
-    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
+    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }} style={{ padding: "8px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 2 }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         {m.status === "live" && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />}
@@ -351,6 +354,11 @@ function MeetingRow({ m }: { m: MeetingMock }) {
         {m.native_id && <RowActions m={m} />}
       </div>
       <div style={{ fontSize: 11.5, color: m.status === "live" ? "var(--live)" : "var(--t3)", marginTop: 2, paddingLeft: m.status === "live" ? 14 : 0 }}>{m.when} · {m.platform}</div>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+          { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, onSelect: () => copyText(`@meeting:${native}`) },
+        ]} />
+      )}
     </div>
   );
 }

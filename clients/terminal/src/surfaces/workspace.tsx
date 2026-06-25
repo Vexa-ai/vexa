@@ -7,6 +7,7 @@ import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, registerContext, type TabProps, type ContextProps } from "../contributions";
 import { Icon } from "../ui-kit";
+import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Markdown } from "../ui-kit/Markdown";
 
 const SUBJECT = "u_live";  // the one workspace all the user's agents (chat + meeting research) write to
@@ -54,8 +55,8 @@ function buildTree(paths: string[]): TreeNode[] {
 }
 
 // ── recursive tree row (folders collapse, files open a doc tab) ──────────────────
-function TreeRow({ node, depth, expanded, toggle, openFile, pinFile }: {
-  node: TreeNode; depth: number; expanded: Set<string>; toggle: (p: string) => void; openFile: (p: string) => void; pinFile: (p: string) => void;
+function TreeRow({ node, depth, expanded, toggle, openFile, pinFile, openMenu }: {
+  node: TreeNode; depth: number; expanded: Set<string>; toggle: (p: string) => void; openFile: (p: string) => void; pinFile: (p: string) => void; openMenu: (e: MouseEvent<HTMLDivElement>, p: string) => void;
 }) {
   const pad = 9 + depth * 13;
   const hover = { onMouseEnter: (e: MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "var(--panel2)"), onMouseLeave: (e: MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "transparent") };
@@ -67,6 +68,7 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile }: {
       <div
         onClick={() => { if (clickTimer.current) clearTimeout(clickTimer.current); clickTimer.current = setTimeout(() => { clickTimer.current = null; openFile(node.path); }, 220); }}
         onDoubleClick={() => { if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; } pinFile(node.path); }}
+        onContextMenu={(e) => openMenu(e, node.path)}
         {...hover}
         style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", paddingLeft: pad + 14, borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         <Icon name="file" size={13} style={{ color: "var(--t3)" }} />
@@ -83,7 +85,7 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile }: {
         <Icon name="folder" size={13} style={{ color: "var(--accent)" }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.name}</span>
       </div>
-      {open && node.children.map((c) => <TreeRow key={c.path} node={c} depth={depth + 1} expanded={expanded} toggle={toggle} openFile={openFile} pinFile={pinFile} />)}
+      {open && node.children.map((c) => <TreeRow key={c.path} node={c} depth={depth + 1} expanded={expanded} toggle={toggle} openFile={openFile} pinFile={pinFile} openMenu={openMenu} />)}
     </>
   );
 }
@@ -93,6 +95,7 @@ const SS_EXPANDED = "ws.tree.expanded", SS_HIDDEN = "ws.tree.hidden";
 function FilesList() {
   const layout = useService(LayoutServiceId);
   const [tree, setTree] = useState<string[]>([]);
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
   const [hidden, setHidden] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { const a = JSON.parse(readSS(SS_EXPANDED) ?? "null"); return new Set(Array.isArray(a) ? a : []); } catch { return new Set(); }
@@ -114,6 +117,11 @@ function FilesList() {
     writeSS(SS_EXPANDED, JSON.stringify([...next])); return next;
   });
   const toggleHidden = () => setHidden((v) => { const n = !v; writeSS(SS_HIDDEN, n ? "1" : "0"); return n; });
+  const openMenu = (e: MouseEvent<HTMLDivElement>, path: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, path });
+  };
   return (
     <div style={{ padding: "6px 8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 8px", display: "flex", alignItems: "center", gap: 6 }}>
@@ -123,8 +131,14 @@ function FilesList() {
           <Icon name={hidden ? "eye" : "eyeOff"} size={13} />
         </span>
       </div>
-      {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} />)}
+      {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} openMenu={openMenu} />)}
       {tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+          { id: "copy-reference", label: "Copy reference", detail: `@file:${menu.path}`, onSelect: () => copyText(`@file:${menu.path}`) },
+          { id: "copy-path", label: "Copy path", detail: menu.path, onSelect: () => copyText(menu.path) },
+        ]} />
+      )}
       <GitSection />
     </div>
   );
