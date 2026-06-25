@@ -42,6 +42,12 @@ _native: dict[str, tuple[str, str]] = {}  # numeric meeting_id → (native_meeti
 # but we throttle the refetch per meeting_id so a quiet miss doesn't hammer the gateway every segment.
 _resolve_miss_at: dict[str, float] = {}  # numeric meeting_id → last failed-resolve (monotonic)
 RESOLVE_RETRY_SEC = 3.0
+# The gateway/meeting-api caps `limit` at 100 (>100 → HTTP 422 Unprocessable Entity). Asking for more
+# made EVERY resolve fail, so _resolve_native always returned None → the watcher fell back to the
+# numeric key (tc:meeting:17) while the terminal listens on the native key (tc:meeting:<native>) — the
+# transcript never reached the UI. Keep at/under the cap. (Pagination isn't needed: live meetings are
+# always among the newest rows, which the gateway returns first.)
+MEETINGS_LIST_LIMIT = 100
 
 
 def _title(platform: str, native: str) -> str:
@@ -68,7 +74,8 @@ def _resolve_native(meeting_id: str) -> "tuple[str, str] | None":
         return None
     gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
     try:
-        req = urllib.request.Request(gw + "/meetings?limit=200", headers={"X-API-Key": key})
+        req = urllib.request.Request(
+            gw + f"/meetings?limit={MEETINGS_LIST_LIMIT}", headers={"X-API-Key": key})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode() or "{}")
         items = data if isinstance(data, list) else (data.get("meetings") or data.get("items") or [])
@@ -85,6 +92,33 @@ def _resolve_native(meeting_id: str) -> "tuple[str, str] | None":
     if hit is None:
         _resolve_miss_at[meeting_id] = now  # our id wasn't in the list yet — retry shortly
     return hit
+
+
+def _record_meeting_doc(native: str, platform: str, subject: str) -> None:
+    """Best-effort: connect the meeting's own kg doc ref to the meeting on session_end, via the
+    gateway (X-API-Key). Recorded from the watcher — NOT the isolated worker — so the user key never
+    enters the agent container. MUST NEVER raise: a failure here can't be allowed to crash the
+    watcher, so everything is wrapped and merely logged."""
+    try:
+        key = os.environ.get("VEXA_BOT_API_KEY", "")
+        if not key:
+            return
+        gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
+        body = json.dumps({
+            "workspace": subject,
+            "path": f"kg/entities/meeting/{native}.md",
+            "title": native,
+            "kind": "meeting",
+        }).encode()
+        url = f"{gw}/meetings/{platform}/{native}/docs"
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"X-API-Key": key, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except Exception:  # noqa: BLE001 — recording the doc ref is best-effort; never crash the watcher
+        logger.exception("connect meeting doc ref failed for %s/%s", platform, native)
 
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
@@ -172,6 +206,9 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
         keymap.pop(mid, None)
         first_seen.pop(mid, None)
         logger.info("meeting %s ended → reaping copilot", key)
+        # Connect this meeting's own kg doc (authored by the §4 worker on session_end) to the
+        # meeting — from here, so the user key stays out of the isolated worker container.
+        _record_meeting_doc(native, platform, subject)
         return
     if kind != "transcription":
         return

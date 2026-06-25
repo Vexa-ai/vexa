@@ -131,3 +131,30 @@ def test_resolve_native_returns_only_the_matched_id(monkeypatch):
     assert w._resolve_native("42") == ("aaa-aaaa-aaa", "google_meet")
     assert w._resolve_native("43") == ("bbb-bbbb-bbb", "google_meet")
     assert w._resolve_native("99") is None  # unknown id → miss, NOT some other meeting's native
+
+
+def test_resolve_native_requests_limit_within_gateway_cap(monkeypatch):
+    """The gateway/meeting-api rejects limit>100 with HTTP 422 — which made EVERY resolve fail, so the
+    watcher fell back to the numeric key (tc:meeting:17) while the terminal listens on the native key,
+    and the live transcript never reached the UI. The list request must stay at/under the cap."""
+    _reset_module_caches()
+    import json
+
+    captured: dict[str, str] = {}
+
+    class _Resp:
+        def read(self): return json.dumps({"meetings": []}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _fake_urlopen(req, timeout=5):
+        captured["url"] = req.full_url
+        return _Resp()
+
+    monkeypatch.setenv("VEXA_BOT_API_KEY", "k")
+    monkeypatch.setattr(w.urllib.request, "urlopen", _fake_urlopen)
+
+    w._resolve_native("42")
+    assert "limit=" in captured["url"]
+    requested = int(captured["url"].split("limit=")[1].split("&")[0])
+    assert requested <= 100, f"gateway caps limit at 100; requested {requested} → HTTP 422 every call"
