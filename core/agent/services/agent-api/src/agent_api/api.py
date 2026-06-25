@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from . import routines as routines_mod
 from . import units
+from . import workspace_routines as workspace_routines_mod
 from .dispatch import Dispatcher
 from .events import event_to_invocation
 from .ports import SchedulerPort, StreamReader
@@ -162,6 +163,11 @@ class RoutineCreate(BaseModel):
     cron: str
     prompt: str
     run_now: bool = True  # fire one immediate run so the author sees a result without waiting for cron
+
+
+class RoutineEnabledPatch(BaseModel):
+    model_config = {"extra": "forbid"}
+    enabled: bool
 
 
 class MeetingStart(BaseModel):
@@ -457,8 +463,40 @@ def create_app(
     def list_routines(subject: str):
         if scheduler is None:
             return {"routines": []}
-        cards = [routines_mod.routine_card_from_job(j) for j in scheduler.list_jobs()]
-        return {"routines": [c for c in cards if c and c.get("owner") == subject]}
+        cards = workspace_routines_mod.routine_cards_for_subject(
+            subject,
+            jobs=scheduler.list_jobs(limit=1000),
+            workspaces_dir=wsr.root,
+        )
+        return {"routines": cards}
+
+    @app.patch("/api/routines/{name}/enabled")
+    def set_routine_enabled(name: str, subject: str, body: RoutineEnabledPatch):
+        if scheduler is None or not invocations_url:
+            raise HTTPException(status_code=501, detail="scheduler not wired")
+        try:
+            workspace_routines_mod.set_routine_file_enabled(
+                subject,
+                name,
+                enabled=body.enabled,
+                workspaces_dir=wsr.root,
+            )
+            result = workspace_routines_mod.reconcile_workspace_routines(
+                subject,
+                scheduler=scheduler,
+                invocations_url=invocations_url,
+                workspaces_dir=wsr.root,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="unknown routine")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {
+            "ok": True,
+            "name": name,
+            "enabled": body.enabled,
+            "reconcile": result.__dict__,
+        }
 
     @app.delete("/api/routines/{routine_id}")
     def delete_routine(routine_id: str, subject: str):

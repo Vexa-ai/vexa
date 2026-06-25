@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_api.workspace_routines import load_routine_file, reconcile_workspace_routines
+from agent_api.workspace_routines import load_routine_file, reconcile_workspace_routines, set_routine_file_enabled
 from tests.test_routines import _FakeScheduler
 
 
@@ -49,6 +49,34 @@ def test_load_routine_file_invalid_and_disabled(tmp_path, caplog):
     assert off.enabled is False
     assert "invalid cron" in caplog.text
     assert "missing prompt" in caplog.text
+
+
+def test_set_routine_file_enabled_preserves_frontmatter_and_body(tmp_path):
+    workspaces = tmp_path / "workspaces"
+    path = workspaces / "u_jane" / "routines" / "brief.md"
+    _write(
+        path,
+        "---\n"
+        "cron: '0 9 * * *'\n"
+        "enabled: true # user-visible toggle\n"
+        "prompt: Do the brief.\n"
+        "---\n"
+        "Keep this body exactly.\n",
+    )
+
+    set_routine_file_enabled("u_jane", "brief", enabled=False, workspaces_dir=workspaces)
+
+    assert path.read_text() == (
+        "---\n"
+        "cron: '0 9 * * *'\n"
+        "enabled: false # user-visible toggle\n"
+        "prompt: Do the brief.\n"
+        "---\n"
+        "Keep this body exactly.\n"
+    )
+    routine = load_routine_file(path)
+    assert routine is not None
+    assert routine.enabled is False
 
 
 def test_reconcile_upserts_and_is_idempotent(tmp_path):

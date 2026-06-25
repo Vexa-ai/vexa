@@ -50,6 +50,10 @@ class WorkspaceReader:
     def __init__(self, workspaces_dir: str) -> None:
         self._root = Path(workspaces_dir)
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
     def _ws(self, subject: str) -> Path:
         ws = (self._root / subject).resolve()
         root = self._root.resolve()

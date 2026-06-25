@@ -28,6 +28,10 @@ ROUTINES_DIR = "routines"
 WORKSPACE_ROUTINE_SOURCE = "workspace-routine"
 
 _FRONTMATTER = re.compile(r"^\s*---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
+_FRONTMATTER_BLOCK = re.compile(r"^(\s*---[^\S\n]*\n)(.*?)(\n---[^\S\n]*(?:\n|$))(.*)\Z", re.DOTALL)
+_ENABLED_LINE = re.compile(
+    r"(?m)^(?P<prefix>[ \t]*enabled[ \t]*:[ \t]*)(?P<value>[^#\n]*?)(?P<suffix>[ \t]*(?:#.*)?$)"
+)
 _MONTHS = {
     "jan": 1,
     "feb": 2,
@@ -85,6 +89,12 @@ def routine_id_for_workspace_file(subject: str, name: str) -> str:
     return f"rt_{digest}"
 
 
+def _safe_routine_path(workspaces_dir: str | Path, subject: str, name: str) -> Path:
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError("invalid routine name")
+    return _safe_workspace_dir(workspaces_dir, subject) / ROUTINES_DIR / f"{name}.md"
+
+
 def _split_frontmatter(text: str, *, label: str) -> tuple[dict, str]:
     m = _FRONTMATTER.match(text)
     if not m:
@@ -113,6 +123,114 @@ def _as_bool(value: object, default: bool, *, label: str) -> bool:
             return False
     log.warning("%s: enabled must be a boolean; using %s", label, default)
     return default
+
+
+def _string_value(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict] = None) -> dict:
+    label = path.as_posix()
+    try:
+        text = path.read_text()
+    except OSError:
+        text = ""
+    fm, body = _split_frontmatter(text, label=label)
+    enabled = _as_bool(fm.get("enabled"), True, label=label)
+    cron = _string_value(fm.get("cron"))
+    prompt = _string_value(fm.get("prompt"))
+    plan_parts = [prompt] if prompt else []
+    if body:
+        plan_parts.append(body)
+
+    name = path.stem
+    card = dict(job_card or {})
+    card.update({
+        "id": routine_id_for_workspace_file(subject, name),
+        "owner": subject,
+        "name": name,
+        "routine_name": name,
+        "enabled": enabled,
+    })
+    card.setdefault("kind", "scheduled")
+    card.setdefault("lifecycle", "oneshot")
+    card["cron"] = cron or card.get("cron")
+    if plan_parts or "plan_summary" not in card:
+        card["plan_summary"] = "\n\n".join(plan_parts)
+    card["plan_kind"] = "prompt" if card.get("plan_summary") else card.get("plan_kind")
+    card.setdefault("job_id", None)
+    card.setdefault("next_run", None)
+    if not enabled:
+        card["status"] = "disabled"
+    else:
+        card.setdefault("status", None)
+    return card
+
+
+def set_routine_file_enabled(
+    subject: str,
+    name: str,
+    *,
+    enabled: bool,
+    workspaces_dir: str | Path = "/workspaces",
+) -> Path:
+    """Rewrite only the ``enabled`` frontmatter field for ``routines/<name>.md``."""
+    path = _safe_routine_path(workspaces_dir, subject, name)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(path)
+
+    text = path.read_text()
+    m = _FRONTMATTER_BLOCK.match(text)
+    if not m:
+        raise ValueError("routine file missing YAML frontmatter")
+
+    open_marker, raw_fm, close_marker, body = m.groups()
+    value = "true" if enabled else "false"
+    line = _ENABLED_LINE.search(raw_fm)
+    if line:
+        raw_fm = (
+            raw_fm[: line.start("value")]
+            + value
+            + raw_fm[line.end("value") :]
+        )
+    else:
+        raw_fm = f"enabled: {value}\n{raw_fm}" if raw_fm else f"enabled: {value}"
+    path.write_text(open_marker + raw_fm + close_marker + body)
+    return path
+
+
+def routine_cards_for_subject(
+    subject: str,
+    *,
+    jobs: list[dict],
+    workspaces_dir: str | Path = "/workspaces",
+) -> list[dict]:
+    """Routine cards for the API list, with workspace files as the enabled-state source."""
+    job_by_rid: dict[str, dict] = {}
+    legacy_cards: list[dict] = []
+    for job in jobs:
+        card = routines_mod.routine_card_from_job(job)
+        if not card or card.get("owner") != subject:
+            continue
+        meta = job.get("metadata") or {}
+        if meta.get("source") == WORKSPACE_ROUTINE_SOURCE:
+            job_by_rid[card["id"]] = card
+            continue
+        card = dict(card)
+        card["enabled"] = True
+        card["routine_name"] = card.get("name")
+        legacy_cards.append(card)
+
+    ws = _safe_workspace_dir(workspaces_dir, subject)
+    routines_dir = ws / ROUTINES_DIR
+    cards: list[dict] = []
+    for path in sorted(routines_dir.glob("*.md")) if routines_dir.exists() else []:
+        rid = routine_id_for_workspace_file(subject, path.stem)
+        job_card = job_by_rid.get(rid)
+        cards.append(_routine_card_from_file(path, subject=subject, job_card=job_card))
+
+    cards.extend(legacy_cards)
+    return cards
 
 
 def _cron_value(value: str, names: dict[str, int], minimum: int, maximum: int) -> Optional[int]:

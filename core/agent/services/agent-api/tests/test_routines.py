@@ -14,6 +14,8 @@ from agent_api import contracts, routines as R
 from agent_api.api import create_app
 from agent_api.config import load_settings
 from agent_api.dispatch import Dispatcher
+from agent_api.workspace_reader import WorkspaceReader
+from agent_api.workspace_routines import reconcile_workspace_routines
 
 
 class _FakeRuntime:
@@ -99,11 +101,17 @@ def test_firing_a_compiled_job_spawns_the_unit():
     assert dispatcher.dispatched and dispatcher.dispatched[0]["trigger"] == "scheduled"
 
 
-def _app(scheduler):
+def _write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def _app(scheduler, *, reader=None):
     dispatcher = Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity())
     return TestClient(create_app(
         dispatcher, scheduler=scheduler,
         invocations_url="http://agent-api:8100/invocations",
+        reader=reader,
     )), dispatcher
 
 
@@ -124,6 +132,8 @@ def test_create_and_list_routines_over_http():
 
     listed = client.get("/api/routines", params={"subject": "u_jane"}).json()["routines"]
     assert len(listed) == 1 and listed[0]["name"] == "Morning brief"
+    assert listed[0]["enabled"] is True
+    assert listed[0]["routine_name"] == "Morning brief"
 
     # A different subject sees none (owner-scoped).
     assert client.get("/api/routines", params={"subject": "u_bob"}).json()["routines"] == []
@@ -141,3 +151,81 @@ def test_routines_501_when_scheduler_not_wired():
         "subject": "u_jane", "name": "x", "cron": "* * * * *", "prompt": "y",
     }).status_code == 501
     assert client.get("/api/routines", params={"subject": "u_jane"}).json() == {"routines": []}
+
+
+def test_workspace_routine_enabled_patch_rewrites_file_and_reconciles(tmp_path):
+    workspaces = tmp_path / "workspaces"
+    routine_path = workspaces / "u_jane" / "routines" / "brief.md"
+    _write(
+        routine_path,
+        "---\n"
+        "enabled: true\n"
+        "cron: '0 9 * * *'\n"
+        "prompt: Do the brief.\n"
+        "---\n"
+        "Use the workspace context.\n",
+    )
+    scheduler = _FakeScheduler()
+    client, _ = _app(scheduler, reader=WorkspaceReader(str(workspaces)))
+    reconcile_workspace_routines(
+        "u_jane",
+        scheduler=scheduler,
+        invocations_url="http://agent-api:8100/invocations",
+        workspaces_dir=workspaces,
+    )
+    assert len(scheduler.jobs) == 1
+
+    listed = client.get("/api/routines", params={"subject": "u_jane"}).json()["routines"]
+    assert listed == [{
+        "id": listed[0]["id"],
+        "owner": "u_jane",
+        "name": "brief",
+        "cron": "0 9 * * *",
+        "kind": "scheduled",
+        "lifecycle": "oneshot",
+        "plan_kind": "prompt",
+        "plan_summary": "Do the brief.\n\nUse the workspace context.",
+        "job_id": "job_0",
+        "next_run": 1000.0,
+        "status": "pending",
+        "routine_name": "brief",
+        "enabled": True,
+    }]
+
+    disabled = client.patch(
+        "/api/routines/brief/enabled",
+        params={"subject": "u_jane"},
+        json={"enabled": False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["reconcile"]["cancelled"] == 1
+    assert "enabled: false\n" in routine_path.read_text()
+    assert scheduler.jobs == []
+
+    disabled_list = client.get("/api/routines", params={"subject": "u_jane"}).json()["routines"]
+    assert len(disabled_list) == 1
+    assert disabled_list[0]["routine_name"] == "brief"
+    assert disabled_list[0]["enabled"] is False
+    assert disabled_list[0]["status"] == "disabled"
+    assert disabled_list[0]["job_id"] is None
+
+    enabled = client.patch(
+        "/api/routines/brief/enabled",
+        params={"subject": "u_jane"},
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["reconcile"]["scheduled"] == 1
+    assert "enabled: true\n" in routine_path.read_text()
+    assert len(scheduler.jobs) == 1
+
+    enabled_list = client.get("/api/routines", params={"subject": "u_jane"}).json()["routines"]
+    assert enabled_list[0]["enabled"] is True
+    assert enabled_list[0]["job_id"] == "job_0"
+
+    absent = client.patch(
+        "/api/routines/missing/enabled",
+        params={"subject": "u_jane"},
+        json={"enabled": False},
+    )
+    assert absent.status_code == 404
