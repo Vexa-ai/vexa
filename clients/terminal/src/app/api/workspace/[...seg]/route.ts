@@ -7,23 +7,39 @@ const AGENT_API = process.env.AGENT_API_URL || "http://127.0.0.1:18100";
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ seg: string[] }> }) {
   const { seg } = await ctx.params;
-  const upstream = await fetch(`${AGENT_API}/api/workspace/${seg.join("/")}${req.nextUrl.search}`);
-  return new Response(await upstream.text(), {
-    status: upstream.status,
-    headers: { "Content-Type": "application/json" },
-  });
+  try {
+    const upstream = await fetch(`${AGENT_API}/api/workspace/${seg.join("/")}${req.nextUrl.search}`);
+    return new Response(await upstream.text(), {
+      status: upstream.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    console.error("[terminal-api] workspace read proxy failed", err);
+    return new Response(JSON.stringify({ error: "upstream_unavailable" }), {
+      status: 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ seg: string[] }> }) {
   const { seg } = await ctx.params;
-  const upstream = await fetch(`${AGENT_API}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
-    method: "POST",
-    body: req.body,
-    headers: { "Content-Type": req.headers.get("Content-Type") ?? "" },
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-  return new Response(await upstream.text(), {
-    status: upstream.status,
-    headers: { "Content-Type": upstream.headers.get("Content-Type") || "application/json" },
-  });
+  try {
+    const upstream = await fetch(`${AGENT_API}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
+      method: "POST",
+      body: req.body,
+      headers: { "Content-Type": req.headers.get("Content-Type") ?? "" },
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    return new Response(await upstream.text(), {
+      status: upstream.status,
+      headers: { "Content-Type": upstream.headers.get("Content-Type") || "application/json" },
+    });
+  } catch (err) {
+    console.error("[terminal-api] workspace write proxy failed", err);
+    return new Response(JSON.stringify({ error: "upstream_unavailable" }), {
+      status: 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }
