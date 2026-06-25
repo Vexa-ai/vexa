@@ -18,6 +18,7 @@ honestly. Built lazily (PEP 562) so ``uvicorn agent_api.api:app`` wires the real
 from __future__ import annotations
 
 import json
+import logging
 from typing import Iterator, Optional
 
 from fastapi import Body, FastAPI, HTTPException
@@ -31,6 +32,8 @@ from .dispatch import Dispatcher
 from .events import event_to_invocation
 from .ports import SchedulerPort, StreamReader
 from .workspace_reader import WorkspaceReader
+
+logger = logging.getLogger("agent_api.api")
 
 
 class _Sessions:
@@ -249,6 +252,55 @@ def create_app(
                 raise HTTPException(status_code=e.code, detail=f"stop failed: {e.read().decode()[:200]}")
         live.stop(body.native_id)
         return {"native_id": body.native_id, "stopped": True}
+
+    @app.get("/api/meetings")
+    def list_meetings():
+        """The terminal's meetings list — live AND past. Proxies meeting-api `GET /meetings` (the user's
+        meetings, all statuses, newest first) and MERGES the live copilot registry so a live meeting
+        carries its copilot `unit_id`; past meetings carry their recording/transcript handles."""
+        import os
+        import urllib.error
+        import urllib.request
+
+        live_by_id = {m["session_uid"]: m for m in live.list()}
+        rows: list[dict] = []
+        seen: set[str] = set()
+        key = os.environ.get("VEXA_BOT_API_KEY", "")
+        if key:
+            gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
+            try:
+                req = urllib.request.Request(gw + "/meetings?limit=50", headers={"X-API-Key": key})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    data = json.loads(r.read().decode() or "{}")
+                items = data.get("meetings") if isinstance(data, dict) else (data or [])
+                for mt in items or []:
+                    native = mt.get("native_meeting_id") or mt.get("native_id")
+                    if not native or native in seen:
+                        continue
+                    seen.add(native)
+                    copilot = live_by_id.get(native)
+                    db_status = (mt.get("status") or "").lower()
+                    is_live = (copilot and copilot.get("status") == "live") or db_status in ("active", "joining", "requested")
+                    platform = mt.get("platform") or "google_meet"
+                    rows.append({
+                        "native_id": native, "platform": platform,
+                        "title": f"{'Google Meet' if platform == 'google_meet' else platform} · {native}",
+                        "status": "live" if is_live else "past",
+                        "start": mt.get("start_time"), "end": mt.get("end_time"),
+                        "has_recording": bool((mt.get("data") or {}).get("recordings")),
+                        "unit_id": (copilot or {}).get("unit_id"),
+                    })
+            except Exception:  # noqa: BLE001 — the list must still return the live registry if the proxy fails
+                logger.exception("meetings list proxy to meeting-api failed")
+        # live copilots not yet reflected in the DB list (just-started) — keep them visible
+        for m in live.list():
+            if m["session_uid"] not in seen:
+                rows.append({
+                    "native_id": m["session_uid"], "platform": m.get("platform") or "google_meet",
+                    "title": m.get("title"), "status": m.get("status", "live"),
+                    "start": None, "end": None, "has_recording": False, "unit_id": m.get("unit_id"),
+                })
+        return {"meetings": rows}
 
     @app.post("/api/chat")
     def chat(body: ChatBody):
