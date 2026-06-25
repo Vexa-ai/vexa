@@ -18,6 +18,7 @@ import { LayoutServiceId, type TabDescriptor, type RightContext } from "./layout
 import { CommandPalette } from "./CommandPalette";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
+import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 
 const DEFAULT_TAB: TabDescriptor = { id: "chat:default", title: "Chat", kind: "chat", params: { subject: "u_live", session: null }, context: null };
 
@@ -40,14 +41,49 @@ const dvComponents = { tab: TabHost };
 
 // ── custom tab header: VS Code-style — PREVIEW tabs render their title in italic ──
 function TabHeader(props: IDockviewPanelHeaderProps) {
-  const preview = Boolean((props.params as { preview?: boolean }).preview);
+  const params = props.params as { kind?: string; p?: { path?: unknown; meetingId?: unknown }; preview?: boolean };
+  const preview = Boolean(params.preview);
   const [title, setTitle] = useState<string>(props.api.title ?? "");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     const d = props.api.onDidTitleChange((e: { title: string }) => setTitle(e.title));
     return () => d.dispose();
   }, [props.api]);
+  const path = typeof params.p?.path === "string" ? params.p.path : null;
+  const meetingId = typeof params.p?.meetingId === "string" ? params.p.meetingId : null;
+  const copyItems = params.kind === "doc" && path
+    ? [
+      { id: "copy-reference", label: "Copy reference", detail: `@file:${path}`, onSelect: () => copyText(`@file:${path}`) },
+      { id: "copy-path", label: "Copy path", detail: path, onSelect: () => copyText(path) },
+    ]
+    : params.kind === "meeting" && meetingId
+      ? [{ id: "copy-reference", label: "Copy reference", detail: `@meeting:${meetingId}`, onSelect: () => copyText(`@meeting:${meetingId}`) }]
+      : [];
   return (
-    <div className="dv-default-tab" style={{ display: "flex", alignItems: "center", height: "100%" }}>
+    <div
+      className="dv-default-tab"
+      onMouseDown={(e) => {
+        if (e.button !== 1) return;
+        e.preventDefault();
+        e.stopPropagation();
+        props.api.close();
+      }}
+      onAuxClick={(e) => {
+        if (e.button !== 1) return;
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (copyItems.length === 0) {
+          setMenu(null);
+          return;
+        }
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+      style={{ display: "flex", alignItems: "center", height: "100%" }}
+    >
       <span className="dv-default-tab-content" style={{ fontStyle: preview ? "italic" : "normal" }}>{title}</span>
       <span
         className="dv-default-tab-action"
@@ -56,6 +92,7 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
         onPointerDown={(e) => e.preventDefault()}
         onClick={(e) => { e.stopPropagation(); props.api.close(); }}
       >×</span>
+      {menu && copyItems.length > 0 && <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={copyItems} />}
     </div>
   );
 }
