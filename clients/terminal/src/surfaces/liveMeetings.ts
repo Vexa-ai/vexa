@@ -45,7 +45,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     id: native,
     native_id: native,
     session_uid: live ? native : undefined,  // only live meetings subscribe to the copilot stream
-    title: `${d.platform} · ${native}`,
+    title: `${d.platform === "google_meet" ? "Google Meet" : d.platform} · ${native}`,
     when: whenLabel(d, live),
     status: live ? "live" : "past",
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
@@ -62,7 +62,10 @@ async function poll() {
   try {
     const r = await fetch("/api/meetings", { cache: "no-store" });
     const { meetings: list } = (await r.json()) as { meetings: MeetingRowDTO[] };
-    const next = (list || []).map(toMock);
+    // meeting-api returns one row per bot-launch; the same Meet relaunched yields several rows with the
+    // same native code. Dedupe to ONE row per native (newest wins — the list is newest-first).
+    const seen = new Set<string>();
+    const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) => `${x.id}|${x.status}|${x.has_recording}`).join(",");
     if (key(next) !== key(meetings)) {
       meetings = next;

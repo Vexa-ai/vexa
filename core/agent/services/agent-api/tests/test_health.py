@@ -19,8 +19,13 @@ class _FakeRuntime:
         return workload_id
 
 
+class _FakeIdentity:
+    def mint(self, subject, launcher, workspaces, tools):
+        return "fake-token"
+
+
 def test_health_ok_when_dispatcher_wired():
-    app = create_app(Dispatcher(load_settings(), _FakeRuntime()))
+    app = create_app(Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()))
     r = TestClient(app).get("/health")
     assert r.status_code == 200
     body = r.json()
