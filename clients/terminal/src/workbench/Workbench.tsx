@@ -24,7 +24,15 @@ import { Chat } from "../surfaces/chat";
 // ── the dockview panel host: render a tab by its kind, tracking active state ─────
 function TabHost(props: IDockviewPanelProps) {
   const layout = useService(LayoutServiceId);
-  const params = props.params as { kind?: string; p?: Record<string, unknown> };
+  // dockview reuses ONE panel for the shared preview slot and swaps its params via updateParameters
+  // WITHOUT re-rendering the React content — subscribe to the param-change event so single-clicking a
+  // different meeting/file in the preview slot actually re-binds the content to the new params.
+  const [params, setParams] = useState(props.params as { kind?: string; p?: Record<string, unknown> });
+  useEffect(() => {
+    setParams(props.api.getParameters() as { kind?: string; p?: Record<string, unknown> });
+    const d = props.api.onDidParametersChange(() => setParams(props.api.getParameters() as { kind?: string; p?: Record<string, unknown> }));
+    return () => d.dispose();
+  }, [props.api]);
   const kind = params.kind ?? "";
   const Comp = registry.tabComponent(kind);
   const [active, setActive] = useState<boolean>(props.api.isActive);
