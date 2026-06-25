@@ -99,6 +99,30 @@ def _link_chat_into_workspace(work: Path) -> None:
         pass  # best-effort; a fresh turn still works, just without cross-turn resume
 
 
+def _link_skills_into_workspace(work: Path) -> None:
+    """Expose the user's GOVERNED skills to claude. Skills live as VISIBLE, git-tracked files under the
+    workspace's ``skills/<name>/SKILL.md`` (the ``skills/`` tree mirrors the ``agents/`` config home —
+    not a dotfile, so it shows in the Files surface and is committed). claude auto-discovers skills from
+    ``.claude/skills``, which is governance-excluded; so we point ``.claude/skills`` at the real
+    ``skills/`` dir via a symlink. The real files stay durable + committed; claude finds them through the
+    link. Idempotent: create ``skills/`` if absent, then (re)point a stale/wrong symlink — but never
+    clobber a real ``.claude/skills`` directory."""
+    skills = work / "skills"
+    skills.mkdir(parents=True, exist_ok=True)
+    link = work / ".claude" / "skills"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if link.is_symlink():
+            if os.readlink(link) == str(skills):
+                return
+            link.unlink()
+        elif link.exists():
+            return  # a real dir already there — don't clobber
+        link.symlink_to(skills, target_is_directory=True)
+    except OSError:
+        pass  # best-effort; the turn still works, just without workspace skills
+
+
 DEFAULT_CHAT_SESSION = "main"
 
 
@@ -128,6 +152,7 @@ def run_turn_over_workspace(
     ``session`` namespaces the continuity file so chat threads stay distinct (default ``"main"``)."""
     _ensure_repo(work)
     _link_chat_into_workspace(work)  # chats are saved to / resumed from the workspace, not ~/.claude
+    _link_skills_into_workspace(work)  # governed skills/ → .claude/skills so claude auto-discovers them
     sess_file = _session_file(work, session)
     # session_continuity=False (the meeting copilot): never read/write the shared chat session — its
     # card-extraction beats must NOT pollute the user's chat conversation memory.

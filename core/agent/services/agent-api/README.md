@@ -66,6 +66,10 @@ uv run pytest -q        # uv manages this package's own venv/deps
   natural-language steering body merged into the prompt. Parsed by `agent_config.load_meeting_config`
   with per-key fallback to code defaults (absent file ⇒ all defaults). `agents/` is extensible to
   chat/routines configs ⬜ planned.
+- ✅ delivered — workspace skills: governed `skills/<name>/SKILL.md` (a VISIBLE, git-tracked tree,
+  seeded with one example) symlinked into `.claude/skills` per turn so the isolated worker's `claude`
+  auto-discovers them. `agents/` + `skills/` are the two per-workspace agent-extension homes. Skill
+  helper scripts run under the turn's existing `--allowedTools` grant (no separate skills gate).
 - ⬜ planned — multi-workspace (company/service tiers — a FUTURE axis beyond the single user workspace)
 - 🟡 partial — in-memory live-meeting registry (redis-backed adapter pending)
 - ⬜ planned — GET /api/meetings (proxy meeting-api + merge live registry)
