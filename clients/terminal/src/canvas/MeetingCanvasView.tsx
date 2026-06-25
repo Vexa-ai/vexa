@@ -1,8 +1,9 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { CanvasActionsProvider } from "./actions";
+import { EvalPanel } from "./EvalPanel";
 import { CanvasRuntime } from "./runtime";
-import { MeetingScopeProvider, useMeeting } from "./useMeeting";
+import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
 
 const SUBJECT = "u_live";
 const VIEW_PATH = "views/meeting.tsx";
@@ -57,22 +58,25 @@ export function MeetingCanvasView({ meetingId }: { meetingId?: string }) {
 
   return (
     <MeetingScopeProvider meetingId={meetingId}>
-      <CanvasActionsProvider>
-        <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)" }}>
-          <header style={{ height: 38, flex: "none", borderBottom: "1px solid var(--line)", background: "var(--sidebar)", display: "flex", alignItems: "center", gap: 10, padding: "0 12px" }}>
-            <div style={{ color: "var(--t1)", fontSize: 13, fontWeight: 650 }}>Meeting Canvas</div>
-            <div style={{ color: "var(--t3)", fontSize: 11.5, fontFamily: "var(--mono)" }}>{VIEW_PATH}</div>
-            <div style={{ flex: 1 }} />
-            {stamp && <div style={{ color: "var(--t3)", fontSize: 11.5 }}>reloaded {stamp}</div>}
-          </header>
-          <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-            <div style={{ padding: 14 }}>
-              <CanvasRuntime source={source} />
-            </div>
-          </main>
-          <CaptionStrip />
-        </div>
-      </CanvasActionsProvider>
+      <MeetingSourceProvider meetingId={meetingId}>
+        <CanvasActionsProvider>
+          <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)" }}>
+            <header style={{ height: 38, flex: "none", borderBottom: "1px solid var(--line)", background: "var(--sidebar)", display: "flex", alignItems: "center", gap: 10, padding: "0 12px" }}>
+              <div style={{ color: "var(--t1)", fontSize: 13, fontWeight: 650 }}>Meeting Canvas</div>
+              <div style={{ color: "var(--t3)", fontSize: 11.5, fontFamily: "var(--mono)" }}>{VIEW_PATH}</div>
+              <div style={{ flex: 1 }} />
+              {stamp && <div style={{ color: "var(--t3)", fontSize: 11.5 }}>reloaded {stamp}</div>}
+            </header>
+            <EvalPanel />
+            <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+              <div style={{ padding: 14 }}>
+                <CanvasRuntime source={source} />
+              </div>
+            </main>
+            <CaptionStrip />
+          </div>
+        </CanvasActionsProvider>
+      </MeetingSourceProvider>
     </MeetingScopeProvider>
   );
 }

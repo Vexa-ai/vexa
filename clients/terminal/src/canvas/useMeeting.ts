@@ -1,10 +1,28 @@
 "use client";
-import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLiveMeetings, fetchTranscript } from "../surfaces/liveMeetings";
 import { meetingById, meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/mock";
 import { useMeetingLive } from "../surfaces/meetingLive";
 import { useCanvasActionState } from "./actions";
+import {
+  MOCK_SCENARIOS,
+  buildMockMeetingState,
+  createMockSourceState,
+  injectMockItem,
+  meetingStateHasData,
+  resetMockSource,
+  setMockPlaying,
+  setMockScenario,
+  setMockSpeed,
+  stepMockSource,
+  type MeetingSourceMode,
+  type MockInjectKind,
+  type MockScenarioId,
+  type MockSourceState,
+} from "./mockSource";
 import type { CanvasEntity, EntityKind, MeetingState, SpeakerSummary, TranscriptSegment } from "./types";
+
+export type { MeetingSourceMode, MockInjectKind, MockScenarioId } from "./mockSource";
 
 const EMPTY_MEETING: MeetingMock = {
   id: "u_live",
@@ -24,6 +42,32 @@ const MeetingScopeContext = createContext<string | undefined>(undefined);
 export function MeetingScopeProvider({ meetingId, children }: { meetingId?: string; children: ReactNode }) {
   return createElement(MeetingScopeContext.Provider, { value: meetingId }, children);
 }
+
+interface MeetingSourceControls {
+  play(): void;
+  pause(): void;
+  step(): void;
+  reset(): void;
+  setScenario(scenarioId: MockScenarioId): void;
+  setSpeed(speed: number): void;
+  inject(kind: MockInjectKind): void;
+}
+
+interface MeetingSourceContextValue {
+  state: MeetingState;
+  live: MeetingState;
+  mock: MeetingState;
+  mode: MeetingSourceMode;
+  activeMode: MeetingSourceMode;
+  liveHasData: boolean;
+  scenarios: { id: MockScenarioId; label: string }[];
+  mockState: MockSourceState;
+  setMode(mode: MeetingSourceMode): void;
+  controls: MeetingSourceControls;
+}
+
+const MeetingSourceContext = createContext<MeetingSourceContextValue | null>(null);
+const DEFAULT_MEETING_STATE = buildMockMeetingState(createMockSourceState());
 
 function pickMeeting(meetings: MeetingMock[]): MeetingMock {
   return meetings.find((m) => m.status === "live") ?? meetings[0] ?? EMPTY_MEETING;
@@ -133,7 +177,7 @@ function normalizeEntity(kind: EntityKind, item: unknown, index: number): Canvas
   };
 }
 
-export function useMeeting(meetingId?: string): MeetingState {
+function useLiveMeetingState(meetingId?: string): MeetingState {
   const contextMeetingId = useContext(MeetingScopeContext);
   const scopedMeetingId = meetingId ?? contextMeetingId;
   const meetings = safeArray(useLiveMeetings());
@@ -207,6 +251,72 @@ export function useMeeting(meetingId?: string): MeetingState {
       sections: actions.sections,
     };
   }, [actions.metrics, actions.sections, live.cards, live.note, live.transcript, recorded, selected]);
+}
+
+function playbackIntervalMs(speed: number): number {
+  return Math.max(350, Math.round(1800 / Math.max(0.5, speed)));
+}
+
+export function MeetingSourceProvider({ meetingId, children }: { meetingId?: string; children: ReactNode }) {
+  const contextMeetingId = useContext(MeetingScopeContext);
+  const scopedMeetingId = meetingId ?? contextMeetingId;
+  const live = useLiveMeetingState(scopedMeetingId);
+  const [mode, setMode] = useState<MeetingSourceMode>("live");
+  const [mockState, setMockState] = useState<MockSourceState>(() => createMockSourceState());
+
+  useEffect(() => {
+    if (!mockState.playing || typeof window === "undefined") return;
+    const id = window.setInterval(() => {
+      setMockState((current) => stepMockSource(current));
+    }, playbackIntervalMs(mockState.speed));
+    return () => window.clearInterval(id);
+  }, [mockState.playing, mockState.speed]);
+
+  const mock = useMemo(() => buildMockMeetingState(mockState), [mockState]);
+  const liveHasData = meetingStateHasData(live);
+  const activeMode: MeetingSourceMode = mode === "mock" || !liveHasData ? "mock" : "live";
+  const state = activeMode === "mock" ? mock : live;
+
+  const play = useCallback(() => setMockState((current) => setMockPlaying(current, true)), []);
+  const pause = useCallback(() => setMockState((current) => setMockPlaying(current, false)), []);
+  const step = useCallback(() => setMockState((current) => stepMockSource(setMockPlaying(current, false))), []);
+  const reset = useCallback(() => setMockState((current) => resetMockSource(current)), []);
+  const selectScenario = useCallback((scenarioId: MockScenarioId) => setMockState((current) => setMockScenario(current, scenarioId)), []);
+  const selectSpeed = useCallback((speed: number) => setMockState((current) => setMockSpeed(current, speed)), []);
+  const inject = useCallback((kind: MockInjectKind) => setMockState((current) => injectMockItem(current, kind)), []);
+  const controls = useMemo<MeetingSourceControls>(() => ({
+    play,
+    pause,
+    step,
+    reset,
+    setScenario: selectScenario,
+    setSpeed: selectSpeed,
+    inject,
+  }), [inject, pause, play, reset, selectScenario, selectSpeed, step]);
+
+  const scenarios = useMemo(() => MOCK_SCENARIOS.map((scenario) => ({ id: scenario.id, label: scenario.label })), []);
+  const value = useMemo<MeetingSourceContextValue>(() => ({
+    state,
+    live,
+    mock,
+    mode,
+    activeMode,
+    liveHasData,
+    scenarios,
+    mockState,
+    setMode,
+    controls,
+  }), [activeMode, controls, live, liveHasData, mock, mockState, mode, scenarios, state]);
+
+  return createElement(MeetingSourceContext.Provider, { value }, children);
+}
+
+export function useMeetingSource(): MeetingSourceContextValue | null {
+  return useContext(MeetingSourceContext);
+}
+
+export function useMeeting(_meetingId?: string): MeetingState {
+  return useContext(MeetingSourceContext)?.state ?? DEFAULT_MEETING_STATE;
 }
 
 export function useTranscript(opts?: { by?: "time" | "speaker"; window?: number }): { segments: TranscriptSegment[]; liveCaption?: string } {
