@@ -1,52 +1,49 @@
-# @vexa/desktop — the meetings all-in-one host (gmeet subset)
+# desktop — the meetings all-in-one capture host (Node/TS)
 
-_meetings/ · service · the data plane in ONE process — no Docker / Postgres / Redis._
+`@vexa/desktop` (`startDesktop()`) is the meetings data plane composed into **one local process** —
+no Docker / Postgres / Redis. It accepts the browser extension's `capture.v1` audio over an ingest
+WebSocket, routes it dual-lane (`gmeet-pipeline` per-channel for Google Meet, `mixed-pipeline` for
+zoom/teams/youtube), drives **real STT**, and serves transcripts + assembled recordings over an HTTP
+gateway. TypeScript because it runs the same browser-adjacent bricks the cloud splits across
+meeting-api + collector + gateway, here as a single deployable "modular monolith."
 
-Composes the validated gmeet spine into a runnable backend:
+## Seams
 
-```
-capture.v1 ─► ingest WS (:9099)
-   ├─ decode frames     @vexa/capture-codec
-   ├─ gmeet channels ─► @vexa/gmeet-pipeline   (channel-routed, glow-named)
-   ├─ STT egress        @vexa/transcribe-whisper (the real backend)
-   ├─ recording.v1   ─► RecordingSink port → @vexa/recording buildRecordingMaster → master file
-   │   (SAME ingest WS; decodeRecordingChunk discriminates the chunk from an audio frame)
-   └─ store + deliver ─► in-memory + gateway
-gateway (:8056): POST /extension/sessions · GET /bots · GET /transcripts/{p}/{n}
-              · GET /recordings/{p}/{n} (serve the assembled master) · WS /ws
-```
+| Direction | Neighbour | Via | What crosses |
+|---|---|---|---|
+| consumes | browser extension | ingest `WS :9099` (`capture.v1` frames, codec-discriminated) | audio frames (ch999 mix / ch1000 mic / per-channel gmeet) + active-speaker event hints |
+| consumes | browser extension | `POST /extension/sessions`, `POST /extension/sessions/end`, `POST /telemetry` | session mint / finalize-now (Stop contract) / diagnostics ring buffer |
+| consumes | extension | ingest WS (`recording.v1` chunks, same socket, `REC1`-magic discriminated) | recording chunks → `RecordingSink` |
+| calls | `@vexa/transcribe-whisper` | `TranscriptionClient` over `TRANSCRIPTION_SERVICE_URL` | PCM → `stt.v1` segments |
+| produces | transcript readers / live UI | gateway `GET /transcripts/{p}/{n}`, `WS /ws` | `transcript.v1`-shaped confirmed/pending segments + `health` frames |
+| produces | recording readers | gateway `GET /recordings/{p}/{n}` (+ `/player`), `GET /bots`, `GET /health` | assembled `recording.v1` master, meeting list, liveness |
 
-The desktop is the **LOCAL recording.v1 receiver** (ADR-0005): in the all-in-one path it subsumes
-meeting-api's assembly role over the SAME contract. Recording chunks (the extension's offscreen tee →
-`@vexa/record-chunker`) ride the existing ingest WS as `recording.v1` frames; assembly lives behind the
-`RecordingSink` port (`src/recording-sink.ts`), with WS + disk as adapters in `desktop.ts`. Masters land
-in `VEXA_RECORDINGS_DIR` (default `.recordings/`).
+## Contracts
 
-It's the **same bricks the cloud splits** across `meeting-api` + collector + `gateway/`, composed
-as one deployable. Crucially its gateway serves `/transcripts` **locally, unauthenticated** — so the
-[eval](../../eval/) `judge` can score it with zero cloud / zero scope `403`s. The store is in-memory
-(sqlite is a later refinement).
+**Owns:** none — the gateway shapes are local HTTP, not a sealed `*.v1` it defines.
+**Consumes:** [`core/meetings/contracts/transcript.v1`](../../contracts/transcript.v1) (the transcript
+envelope it emits over `/ws` + `/transcripts`); `capture.v1` / `recording.v1` / `stt.v1` are owned by
+the `@vexa/capture-codec`, `@vexa/recording`, and `@vexa/transcribe-whisper` packages it composes, not
+by the meetings `contracts/` registry. Access is mediated through one `canAccess` seam (`access.ts`,
+P20 / ADR-0012; default `ownerOnly` = allow-all on single-user localhost).
 
-## Surface
-`startDesktop({ ingestPort, gatewayPort, txUrl, txToken, recordingsDir })` →
-`{ ingestPort, gatewayPort, recordingsDir, close() }`. Front door: [`src/desktop.ts`](src/desktop.ts).
+## Isolated evaluation
 
-## Run
-```bash
-TRANSCRIPTION_SERVICE_URL=https://transcription.vexa.ai TRANSCRIPTION_SERVICE_TOKEN=… \
-  pnpm --filter @vexa/desktop dev          # ingest ws://localhost:9099/ingest · gateway :8056
-```
+Tests live alongside the source in `src/*.test.ts`. Run with `pnpm test` (the package's `test` script
+runs each via `tsx`):
 
-## Verify
-`pnpm --filter @vexa/desktop test` runs cheapest first:
-- **L2** `transcript-store.test.ts` — the store UPSERTS confirmed segments by `segment_id`: a late-box
-  claim / cluster re-resolve re-publishes the same id with the real name and REPLACES the provisional
-  (empty-speaker) copy in place — no ghost duplicate in `GET /transcripts`.
-- **L2** `recording-sink.test.ts` — the `RecordingSink` port fed synthetic recording.v1 chunks via an
-  in-memory fake (no WS, no disk); asserts the `buildRecordingMaster` output.
-- **L3** `recording-e2e.test.ts` — synthetic recording.v1 over the real ingest WS → decode → sink → a
-  REAL master file on disk → served by the gateway `GET /recordings`. No live meeting, no STT.
-- **L4** `desktop-e2e.live.test.ts` — starts the host, feeds known TTS clips as `capture.v1` over the
-  ingest WS, reads `/transcripts`, asserts glow-attributed, schema-valid `transcript.v1`. Skips without
-  `VEXA_TX_KEY` + `EVAL_CACHE` (turbo passes them through). Validates the **whole composition** against
-  real STT.
+- **L2 unit** — `recording-sink.test.ts`, `transcript-store.test.ts`, `health.test.ts`, `access.test.ts`
+- **L3 integration** — `recording-e2e.test.ts` (synthetic `recording.v1` over the real ingest WS → real file on disk → served by the gateway; no live meeting)
+- **L4 live** — `desktop-e2e.live.test.ts` (real STT; skips without `VEXA_TX_KEY` + `EVAL_CACHE`)
+
+`pnpm check:isolation` enforces the brick-boundary rule.
+
+## Status
+
+- ✅ delivered — dual-lane ingest (gmeet per-channel + mixed pyannote-cut) with real STT
+- ✅ delivered — gateway: sessions mint/end, `/transcripts`, `/bots`, `/health`, telemetry ring buffer, live `/ws`
+- ✅ delivered — `recording.v1` receiver → assembled master + dependency-free `/player`
+- ✅ delivered — `canAccess` mediation seam on every read path (default owner-only)
+- ✅ delivered — P18 fault surfacing (engine fault + no-signal watchdog → `/ws health` · `/telemetry` · log)
+- 🟡 partial — store is in-memory single-process (sqlite persistence is a later refinement)
+- 🟡 partial — access grants are the seam only (`ownerOnly`); real owner/visibility grants land additively (ADR-0003)

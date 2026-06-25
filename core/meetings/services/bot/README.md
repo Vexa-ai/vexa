@@ -1,57 +1,51 @@
-# @vexa/bot — the meetings ephemeral container WORKER
+# bot — the meetings ephemeral join+capture worker (Node/TS)
 
-_meetings/ · service (P7 worker) · join → capture → transcribe → emit → die._
+## Purpose
 
-The bot is a stateless, disposable container (12-Factor): it boots from one env var, joins one
-meeting, runs the capture→transcribe→emit data plane, and exits. One bot per meeting (horizontal
-fan-out). Built as a **modular monolith behind ports** — the orchestrator core is offline-provable;
-every transport is an adapter wired only at the composition root.
+The disposable meeting-joining browser bot (P7 worker). It boots from a single `invocation.v1`
+config in `VEXA_BOT_CONFIG`, joins a Google Meet / Zoom / Teams call over a humanized browser,
+captures audio, transcribes it (`@vexa/transcribe-whisper`), and publishes confirmed
+`transcript.v1` segments + `lifecycle.v1` status — then dies. Node/TS because the join+capture
+domain lives in the browser/Playwright ecosystem; it's a modular monolith behind ports — the
+orchestrator core is offline-provable, while browser/redis/http are adapters wired only at the
+composition root (`src/index.ts`).
 
-```
-VEXA_BOT_CONFIG (invocation.v1)  ─►  config.ts (ajv-validate, fail-fast, P14)
-                                       │
-                          composition root (index.ts) wires the adapters ▼
-   ┌─────────────────────────────────────────────────────────────────────────────┐
-   │ orchestrator.ts — the lifecycle.v1 STATE MACHINE (pure; depends only on ports)│
-   │   joining → awaiting_admission → active → (completed | failed)                │
-   └─────────────────────────────────────────────────────────────────────────────┘
-        ▲ JoinDriver   ▲ Pipeline        ▲ ActsSource    ▼ TranscriptSink ▼ LifecycleSink ▼ RecordingSink
-   @vexa/join +    @vexa/{gmeet,mixed}-   redis pub/sub    redis stream     HTTP callback   @vexa/recording
-   @vexa/remote-   pipeline + transcribe- (acts.v1)        (transcript.v1)  (lifecycle.v1)  → upload
-   browser (auth)  whisper + recording
-```
+## Seams
 
-## Surface
-The **composition root** [`src/index.ts`](src/index.ts) exposes `main(env) → Promise<exitCode>` and
-runs as the container entrypoint. The reusable core:
-- [`src/config.ts`](src/config.ts) — `loadInvocation(env)` / `parseInvocation(raw)` → typed `Invocation`,
-  validated against `invocation.v1` with ajv (schema loaded by path; the goldens are the spec, P8).
-- [`src/ports.ts`](src/ports.ts) — `JoinDriver · Pipeline · TranscriptSink · LifecycleSink · ActsSource ·
-  RecordingSink` (pure interfaces; no transport types).
-- [`src/orchestrator.ts`](src/orchestrator.ts) — `createOrchestrator(inv, deps) → { run, handle }`, the
-  state machine emitting the correct `lifecycle.v1` event at each transition.
-- [`src/contracts.ts`](src/contracts.ts) — TS mirrors of the published `lifecycle.v1 · acts.v1 ·
-  transcript.v1` schemas + the executable `canTransition` machine.
+| Direction | Neighbour | Via | What crosses |
+|---|---|---|---|
+| consumes | scheduler / meeting-api (spawner) | `invocation.v1` in `VEXA_BOT_CONFIG` env | boot config: meeting URL, platform, ids, callback/upload URLs, secrets |
+| spawns-over | `@vexa/join` + `@vexa/remote-browser` | in-process port (`JoinDriver`) | join/leave/removal over a humanized browser page |
+| publishes | collector [Py] | redis stream `transcription_segments` (XADD) | `transcript.v1` durable segment feed |
+| publishes | gateway → dashboard | redis pub/sub `tc:meeting:{id}:mutable` | live mutable `transcript.v1` segment |
+| produces | meeting-api | HTTP POST → `inv.meetingApiCallbackUrl` | `lifecycle.v1` status events (retry/backoff) |
+| produces | meeting-api | HTTP POST → `inv.recordingUploadUrl` | assembled recording master (multipart) |
+| consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`) |
 
-## Deps
-`@vexa/{join, remote-browser, recording, record-chunker, gmeet-pipeline, mixed-pipeline,
-transcribe-whisper}` (the meetings bricks it composes, by their published front doors, P6) + `ajv` /
-`ajv-formats` (invocation.v1 + lifecycle.v1 boot validation). It imports no other domain's internals
-and no transport client libs — the real redis/HTTP/browser are adapters at the composition root.
-Enforced by [`scripts/check-isolation.js`](scripts/check-isolation.js) (`gate:isolation`, P2).
+## Contracts
 
-## Status (this increment)
-The gate-green **core** is delivered: config + ports + orchestrator + L2 tests. The live transports in
-`index.ts` are **stubbed** placeholders (clearly marked `TODO(live)`) — the seam exists now (P16); the
-next increment swaps each stub for its real adapter (join over a browser, redis bus, HTTP callback,
-recording upload). The **voice agent** (acts.v1 speak/chat/screen/avatar) is **deferred** — out of scope.
+**Owns:** none — the bot is a worker that implements published meetings contracts.
+**Consumes:** [`invocation.v1`](../../contracts/invocation.v1) (boot config),
+[`acts.v1`](../../contracts/acts.v1) (inbound commands),
+[`lifecycle.v1`](../../contracts/lifecycle.v1) (status it produces),
+[`transcript.v1`](../../contracts/transcript.v1) (segments it publishes). All four are TS-mirrored
+in `src/contracts.ts` and validated against the sealed registry goldens (`contracts.seal.json`).
 
-## Verify
-```bash
-npx tsx src/config.test.ts          # L1/L2 — goldens parse, off-contract input fails fast
-npx tsx src/orchestrator.test.ts    # L2   — full lifecycle.v1 sequence (ajv-conformant) + transcript routing
-npx tsc --noEmit -p .               # typecheck
-node scripts/check-isolation.js     # gate:isolation
-```
-`pnpm --filter @vexa/bot test` runs both L2 suites (cheapest first). No browser / redis / STT —
-every port is an in-memory fake.
+## Isolated evaluation
+
+Unit/integration: `pnpm test` (chained `tsx` runs — no build step). Levels:
+**L1** config ajv goldens · **L2** orchestrator `lifecycle.v1` state machine (fake ports) ·
+**L3** transport adapters (lifecycle-http · transcript-redis · acts-redis), pipeline lane, recording
+assembler, replay tape. **L4** (browser/capture/speak/upload legs) runs via the standalone harness in
+[`eval/`](./eval): `make -C eval run MEETING=<id>` drives a live Meet with synthetic speakers and an
+autonomous PASS/FAIL verdict (`make -C eval verify` for the offline oracle self-test).
+
+## Status
+
+- ✅ delivered — `invocation.v1` boot config (parse + ajv-validate, fail-fast)
+- ✅ delivered — orchestrator `lifecycle.v1` state machine (joining → admission → active → completed/failed)
+- ✅ delivered — `transcript.v1` egress (redis stream + mutable pub/sub)
+- ✅ delivered — `lifecycle.v1` HTTP callback (retry/backoff, never crashes the bot)
+- ✅ delivered — `acts.v1` ingress (redis subscriber; unknown acts dropped, never thrown)
+- ✅ delivered — recording assembler core (webm/wav/seq, L2/L3)
+- 🟡 partial — browser join + capture + recording-upload + speak (wired; L4-gated, proven on VM via `eval/`, not unit tests)

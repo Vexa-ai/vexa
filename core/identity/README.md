@@ -1,48 +1,44 @@
-# identity — access · accounts · tokens · audit — authN/authZ, schema-agnostic
+# core/identity — authN/authZ + accounts (Python)
 
-The identity lane owns authN/authZ for the platform.
+## Purpose
+The identity lane owns **who you are** and **what you may do** for the whole platform: it
+authenticates opaque API tokens to a `User`, decides ownership/scope access (default-deny, P20),
+and brokers scoped credentials. It exists TWICE on purpose — the live DB-backed
+`services/admin-api` (users · scoped tokens · `/internal/validate`, the one auth oracle) and the
+pure, DB-free `src/identity_core` reference library — both honoring the frozen `identity.v1` wire
+shape. Python because the gate stack (`gate:python` / `gate:stack`) and the admin-api token model
+already live here.
 
-## The authN/authZ model
+## Seams
+| Direction | Neighbour | Via | What crosses |
+|---|---|---|---|
+| produces | `core/gateway` (+ any hop) | HTTP `POST /internal/validate` (`X-Internal-Secret`, fail-closed) | raw token → `{user_id, scopes, max_concurrent, email, webhook}`; gateway injects `X-User-ID` downstream |
+| consumes | end users / dashboard | HTTP `X-API-Key` (user tier) / `X-Admin-API-Key` (admin tier) | self-serve token use; user/token CRUD |
+| produces | any guarded read path | `identity.v1` `AccessDecision` (`canAccess` port) | allow/deny verdict + stable `reason` for `meeting_transcript \| recording \| ws_subscribe` |
+| produces | workers needing credentials | `src/identity_core/secrets.py` `SecretsPort` (P15) | a scoped credential whose raw value never hits repr/logs/audit |
+| produces | `core/agent`, `core/runtime` consumers | `identity.v1` `ScopedToken` value object | validated subject + scopes + expiry — the identity that travels in a worker's `env` |
 
-Two questions, two mechanisms:
+## Contracts
+**Owns:** [`core/identity/contracts/identity.v1`](contracts/identity.v1) — `ScopedToken`,
+`AccessDecision`, `ResourceKind` (sealed in the registry `contracts.seal.json`; goldens under
+`contracts/identity.v1/golden/`).
+**Consumes:** none — identity is the root of the trust graph; it reads no other lane's `*.v1`.
 
-- **authN — "who are you?"** An opaque API token `vxa_<scope>_<random>` resolves to a `User`. The
-  prefix is only a hint; the DB `api_tokens.scopes` column is authoritative (un-prefixed tokens are
-  legacy = full access). The platform authenticates through ONE oracle — admin-api's
-  **`/internal/validate`**: the gateway holds no identity itself, it POSTs each request's token there
-  and gets back `{user_id, scopes, max_concurrent, email, webhook}`, then injects `X-User-ID` so
-  downstream hops (meeting-api, collector) trust the resolved id and never see the raw token.
-  **Fail-closed**: no `INTERNAL_API_SECRET` → 503; bad secret → 403; missing/invalid/expired token →
-  401. There is no allow-on-error path.
+## Isolated evaluation
+- **`tests/`** — pure `identity_core` evals (L1 contract · L2 unit): access deny-tests, token
+  mint/validate, secrets-broker non-leak, `identity.v1` golden conformance. Run from `identity/`:
+  ```bash
+  uv run pytest -q
+  ```
+- **`services/admin-api/tests/`** — the Group-1 backing-stack evals (L3 integration, testcontainers
+  PG + Redis; skip cleanly if docker is absent):
+  ```bash
+  cd services/admin-api && uv run pytest -q     # or: pnpm gate:stack
+  ```
 
-- **authZ — "what may you do?"** TWO gates, both must pass:
-  1. **capability (scope)** — does the token carry the scope the path needs? Scopes are the closed set
-     `{bot, tx, browser}` (`VALID_SCOPES`); a mismatch is `missing-scope` (parent 403).
-  2. **ownership (`canAccess`)** — `OwnerOnlyPolicy` is **default-deny** (P20): a subject may read only
-     resources it OWNS (keyed on `user_id`); unknown owner / empty subject → denied. Guards the three
-     read paths `meeting_transcript | recording | ws_subscribe`. Verdicts carry a stable reason code
-     (`owner | not-owner | default-deny | missing-scope | token-expired`) sealed in `identity.v1`.
-
-Three trust tiers gate the surface, each by its own header (constant-time `hmac.compare_digest`):
-**admin** (`X-Admin-API-Key` → user/token CRUD), **user** (`X-API-Key` → self-serve), **internal**
-(`X-Internal-Secret` → `/internal/validate`).
-
-These rules live TWICE on purpose: as the live DB-backed `services/admin-api`, and as the pure,
-DB-free `src/identity_core` reference — a `ScopedToken` value object *is* the validated identity; a
-`canAccess` port replaces ownership checks otherwise scattered through route bodies. `identity.v1` is
-the frozen contract both honor.
-
-## Layout
-
-- **`contracts/identity.v1/`** — the sealed wire shapes: `ScopedToken` (subject + scopes + expiry)
-  and `AccessDecision` (the `canAccess` verdict). gate:schema + gate:contract-version.
-- **`src/identity_core/`** — the CORE (this lane's `index`): scoped tokens (`tokens.py`), the
-  `canAccess` authz port + default-deny owner-only adapter (`access.py`, P20), and the `SecretsPort`
-  credential broker (`secrets.py`, P15). Pure, DB-free, dependency-light. Why here and not under
-  `services/`: it is a reusable library of policy/broker primitives, not a long-running deployable —
-  the runnable carve (`services/admin-api/`, users + tokens + `/internal/validate`) is owned by a
-  separate stream and consumes these primitives.
-- **`tests/`** — pure unit evals riding gate:python (incl. the `gate:access` deny-tests).
-- **`services/`** — runnable identity services (admin-api carve, Group 1).
-
-_Governed by `docs/ARCHITECTURE.md` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._
+## Status
+- ✅ delivered — `identity.v1` sealed (`ScopedToken` · `AccessDecision` · `ResourceKind`) + goldens
+- ✅ delivered — `identity_core`: scoped tokens, `canAccess` default-deny owner-only policy (P20), `SecretsPort` broker (P15)
+- ✅ delivered — `admin-api`: 3 auth tiers, `/internal/validate` fail-closed oracle, scoped-token minting
+- ✅ delivered — Group-1 stack evals (PG schema convergence, redis usage classes, admin-api flow)
+- ⬜ planned — map the authed `user_id` → the agent `subject` (`subject = u_<user_id>`) so one user ⇒ one workspace + agents + meetings + routines

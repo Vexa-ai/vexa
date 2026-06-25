@@ -25,3 +25,17 @@ mechanism, the redis scheduler.
 
 **Next:** finish M1 — the bucket-backed (minio) [workspace](/primitives/workspace) store + warm-reuse
 (`touch` / idle-enforcer). Then M2 — the [live meeting](/capabilities/live-meetings) dispatch.
+
+## Delivery tracker
+
+The planned features, the [modules](/architecture/modules) each touches, and status. All
+five are **⬜ planned**; Calendar is **deferred**.
+
+| Feature | Status | Module(s) it touches |
+|---|---|---|
+| **Auth spine** — opaque token → `User` → scoped access end-to-end | ⬜ planned | core/identity (admin-api), core/gateway |
+| **Real meetings list** — the live, persisted list of a user's meetings on the surface | ⬜ planned | core/meetings (meeting-api), core/gateway, clients/terminal |
+| **Routines: scheduled meetings** — a `routine.v1` / `schedule.v1` job that joins on a cron | ⬜ planned | core/runtime (scheduler), core/agent, core/meetings |
+| **Docs ↔ meetings binding** — bind a workspace doc to a meeting (capture → governed action) | ⬜ planned | core/agent (workspace.v1), core/meetings, clients/terminal |
+| **WebSocket coverage** — the `/ws` multiplex fanning transcripts · bot status · chat | ⬜ planned | core/gateway (ws.v1), core/meetings, clients/terminal |
+| **Calendar** _(deferred)_ — calendar-driven auto-join | 🟦 deferred | core/runtime, core/meetings |

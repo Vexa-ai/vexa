@@ -22,6 +22,17 @@
         "pages": ["concepts"]
       },
       {
+        "group": "Architecture",
+        "pages": [
+          "architecture/modules",
+          "architecture/execution",
+          "architecture/dispatch",
+          "architecture/streaming",
+          "architecture/identity-and-trust",
+          "architecture/governance"
+        ]
+      },
+      {
         "group": "Capabilities",
         "pages": [
           "capabilities/knowledge-agent",

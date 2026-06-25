@@ -1,0 +1,102 @@
+---
+title: "Modules & Seams"
+description: "The single map of the codebase: the module tree, the sealed contract registry (owner → consumers), and the four eval levels."
+---
+
+This is the one-page index of the system: **which module owns what**, **which sealed
+contracts join them**, and **how each level is proven**. Every module entry links to its
+in-tree README — the README is the source of truth; this page is the map.
+
+## The module tree
+
+Five core domains, a client, and the composition layer. Each domain owns its contracts +
+the services that honour them.
+
+| Module | Path | Purpose |
+|---|---|---|
+| **core/agent** | [`core/agent`](https://github.com/Vexa-ai/vexa/tree/main/core/agent/README.md) | The **execution domain** — turns a trigger (chat turn · fired schedule · external event · live transcript beat) into a **governed agent action** committed to a user's `workspace.v1` git repo. Funnels every trigger through one `unit.v1` envelope (the one Dispatcher). |
+| ↳ agent-api | [`core/agent/services/agent-api`](https://github.com/Vexa-ai/vexa/tree/main/core/agent/services/agent-api) | The one Dispatcher + the in-container `agent_api.worker` (claude-in-container) it spawns via the runtime. |
+| **core/meetings** | [`core/meetings`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/README.md) | The **capture domain** — joins a meeting, captures + transcribes it, emits a speaker-attributed `transcript.v1`. The same `modules/` bricks composed three ways. |
+| ↳ bot | [`core/meetings/services/bot`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/services/bot) | TS realtime capture / STT + browser automation — produces `transcript.v1`. |
+| ↳ meeting-api | [`core/meetings/services/meeting-api`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/services/meeting-api) | Python control-plane: the REST surface + lifecycle sink. |
+| ↳ desktop | [`core/meetings/services/desktop`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/services/desktop) | Single-process desktop host (same bricks, one process). |
+| **core/gateway** | [`core/gateway`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/README.md) | The world-facing **edge** — resolves `x-api-key` (fail-closed), enforces per-route scopes, proxies the CORE REST surface verbatim, runs the `/ws` multiplex (per-meeting redis channels → one socket). |
+| ↳ gateway | [`core/gateway/services/gateway`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/services/gateway) | The shipped FastAPI edge (`create_app`, hexagonal). |
+| ↳ conformance | [`core/gateway/services/conformance`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/services/conformance) | The O-API-1 conformance suite, driven against fakes. |
+| **core/runtime** | [`core/runtime`](https://github.com/Vexa-ai/vexa/tree/main/core/runtime/README.md) | The **kernel** — spawns + supervises isolated workloads (`runtime.v1`) over a pluggable Backend (process / Docker / K8s), and runs the redis-backed `Scheduler` for `schedule.v1` jobs. Mechanism, not policy (P11). |
+| ↳ runtime_kernel | [`core/runtime/src`](https://github.com/Vexa-ai/vexa/tree/main/core/runtime/src) | The kernel + scheduler library; backends (process · docker · k8s). |
+| **core/identity** | [`core/identity`](https://github.com/Vexa-ai/vexa/tree/main/core/identity/README.md) | The **authN/authZ + accounts** lane — authenticates opaque tokens to a `User`, decides ownership/scope (default-deny, P20), brokers scoped creds. Exists twice on purpose. |
+| ↳ admin-api | [`core/identity/services/admin-api`](https://github.com/Vexa-ai/vexa/tree/main/core/identity/services/admin-api) | The live DB-backed auth oracle (`/internal/validate`). |
+| ↳ identity_core | [`core/identity/src`](https://github.com/Vexa-ai/vexa/tree/main/core/identity/src) | The pure, DB-free reference library honouring `identity.v1`. |
+| **clients/terminal** | [`clients/terminal`](https://github.com/Vexa-ai/vexa/tree/main/clients/terminal/README.md) | The browser-CLI **workbench** (Next.js) — a dockview over a registry of surfaces (chat · meeting · workspace · routines · sessions · tasks). Owns no business logic; thin `/api/*` proxies to agent-api. |
+| **deploy** | [`deploy`](https://github.com/Vexa-ai/vexa/tree/main/deploy/README.md) | The **composition** layer (Compose) — brings up the whole v0.12 control plane as one ordered, health-gated stack (postgres · redis · minio + the five Python services). Owns `execution-targets.v1`. |
+
+## Contract registry
+
+The sealed seam between modules. **16 `*.v1` contracts are frozen** in
+[`contracts.seal.json`](https://github.com/Vexa-ai/vexa/tree/main/contracts.seal.json) — a
+sha256 per contract; CI fails if a sealed schema drifts. Grouped by owning module, with
+`owner → consumers`.
+
+<Note>The agent domain also defines six **unsealed** control-plane contracts still in flight —
+`event.v1`, `unit.v1`, `invoke.v1` (UNSEALED), `task.v1`, `routine.v1`, `tool.v1`,
+`proactive-card.v1`. Only the 16 below carry a seal hash today.</Note>
+
+### core/agent
+
+| Contract | Owner → Consumers | What it is |
+|---|---|---|
+| `invoke.v1` | agent ← meetings transcript bridge → agent-api | The meeting → agent trigger; an `Invocation` agent-api turns into a `runtime.v1` worker. (seal: UNSEALED marker in README; hashed in seal) |
+| `workspace.v1` | agent → agent-api worker, terminal | The agent's git-repo workspace convention — durable memory; data, not platform code. |
+
+### core/meetings
+
+| Contract | Owner → Consumers | What it is |
+|---|---|---|
+| `transcript.v1` | bot (TS) → collector (Py), gateway, eval | Speaker-attributed segments — the product's core output; the TS↔Py seam. |
+| `lifecycle.v1` | bot → meeting-api callback | The bot's domain status (distinct from container lifecycle). |
+| `invocation.v1` | meeting-api → bot (`VEXA_BOT_CONFIG`) | The bot's constructor, validated at boot (fail-fast). |
+| `acts.v1` | control-plane → bot (redis pub/sub) | The bot command bus; unknown actions ignored (forward-compatible). |
+| `webhook.v1` | control-plane → subscriber URLs | Outbound delivery envelope + signed-header scheme. |
+| `captured-signal.v1` | bot capture bridge → eval replay | Raw capture signal teed before the pipeline — replays offline (O-TEL-2). |
+| `flagged-issue.v1` | user / system → eval | A flagged transcript/attribution bug → reproducible offline test (O-TEL-3). |
+
+### core/gateway
+
+| Contract | Owner → Consumers | What it is |
+|---|---|---|
+| `api.v1` | gateway → all clients (eval · dashboard · SDKs) | The public REST + WS + MCP surface, OpenAPI 3.1, frozen to vexa `main`. |
+| `ws.v1` | gateway → clients | The live `/ws` multiplex (transcripts · bot status · chat), pinned to `main`'s G5 gate. |
+| `logevent.v1` | all control-plane services → observability | The structured log envelope + distributed `trace_id` — the observability SSOT. |
+
+### core/identity
+
+| Contract | Owner → Consumers | What it is |
+|---|---|---|
+| `identity.v1` | admin-api → gateway, every service | Scoped token + access decision; the one auth wire shape (P20). |
+
+### core/runtime
+
+| Contract | Owner → Consumers | What it is |
+|---|---|---|
+| `runtime.v1` | runtime kernel ← meeting-api, agent-api | The workload lifecycle contract (mechanism, not policy — P11). |
+| `schedule.v1` | runtime scheduler ← agent-api, routines | HTTP-call job spec: one-shot (`execute_at`) or recurring (`cron`) + retry policy. |
+
+### deploy
+
+| Contract | Owner → Consumers | What it is |
+|---|---|---|
+| `execution-targets.v1` | deploy → planner | "Where can work run, and what does it need?" — resolved in planning, before execution (ADR-0020). |
+
+## Eval levels — the validation pyramid
+
+Every change is proven at the lowest level that can catch it. Governed by
+`docs/ARCHITECTURE.md`; the live gate lives at
+[`core/meetings/eval`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/eval/README.md).
+
+| Level | Name | What it proves | Where |
+|---|---|---|---|
+| **L1** | Contract | A schema is honoured — every `*.v1` validates its golden fixtures (`validate.mjs`), and the seal catches drift. | each `*/contracts/<name>.v1/` |
+| **L2** | Unit | A brick does its job in isolation, collaborators faked (ports/adapters). | per-service tests |
+| **L3** | Integration | Modules compose across a real seam (e.g. gateway → meeting-api, agent-api → runtime). | per-service / cross-module tests |
+| **L4** | Live + eval | A **real meeting, scored** — bots join, speak a known timeline, and the captured `transcript.v1` is scored (completeness · leakage · attribution) vs ground truth. 0.12 is "done" when live scores ≥ the 0.11 baseline. | [`core/meetings/eval`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/eval/README.md) |

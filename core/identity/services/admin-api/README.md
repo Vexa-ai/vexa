@@ -1,51 +1,46 @@
-# admin-api — identity service: users · scoped tokens · /internal/validate + Group-1 stack evals
+# admin-api — users + API tokens (Python)
 
-The v0.12 carve of the parent `services/admin-api`, plus the **Group-1 backing-stack evals**
-(the `gate:stack` home — the structure Groups 2–8 follow).
+The identity control plane: the `User` + `APIToken` source-of-truth and the HTTP surface that
+mints, resolves, and **validates** scoped tokens. Its one job is to be the **gateway's authz
+oracle** — `/internal/validate` turns a raw token into `{user_id, scopes, email, …}` so every other
+service stays out of the identity business. Python because it carves the parent admin-api
+(`libs/admin-models` + FastAPI) clean onto the v0.12 backing stack.
 
-## Layout (the v0.12 stack-eval pattern)
+## Seams
 
-```
-admin-api/
-  pyproject.toml          # uv package; gate:python discovers it (pyproject + tests/)
-  src/admin_api/
-    schema/               # the v0.12 SQLAlchemy source-of-truth (identity + meeting tables)
-      models.py           #   User, APIToken, Meeting, Transcription, MeetingSession
-                          #   (recordings/media_files DROPPED — see MIGRATION-0001)
-      sync.py             #   ensure_schema() — idempotent convergence (no alembic)
-      MIGRATION-0001-drop-recordings.md
-    token_scope.py        # vxa_<scope>_ token minting ({bot,tx,browser})
-    app/
-      db.py               # injectable async engine (point at testcontainers or prod)
-      main.py             # create_app() — 3 auth tiers, /internal/validate (fail-closed)
-  tests/                  # the backing-stack evals — gate:stack runs these
-    conftest.py           #   testcontainers PG + Redis fixtures; skip-if-docker-absent
-    test_stack_postgres.py    # O-STACK-1
-    test_stack_redis.py       # O-STACK-2
-    test_stack_admin_api.py   # O-STACK-3
-```
+| Direction | Neighbour | Via | What crosses |
+|---|---|---|---|
+| **calls** | terminal / dashboard login | `GET /admin/users/email/{email}` | resolve a returning user by email (find-or-create) |
+| **calls** | terminal / dashboard login | `POST /admin/users` · `POST /admin/users/{id}/tokens` | create user · mint a scoped session token |
+| **consumes** | the gateway | `POST /internal/validate` | a raw token → `{user_id, scopes, max_concurrent, email, webhook_*}` (fail-closed) |
+| **calls** | bot/worker clients | `X-API-Key` on `/user/*` | user-tier self-serve (webhook config in `user.data`) |
+| **produces** | Postgres (backing stack) | SQLAlchemy `users` · `api_tokens` | the identity tables (one `Base`, FK `api_tokens.user_id → users.id`) |
 
-## Evals (autonomous — testcontainers, no live bbb, no meetings)
+## Contracts
 
-- **O-STACK-1 (postgres)** — bring up PG, `ensure_schema`, assert table set + idempotency, FK
-  integrity (orphan inserts rejected), CRUD golden round-trips (user→token; meeting→
-  transcription→session), the `recordings`-table-is-dead verdict, and the real JSONB recording
-  path.
-- **O-STACK-2 (redis)** — each usage class from `services/redis.md`: stream XADD→XREADGROUP→XACK
-  (transcription_segments), pub/sub PUBLISH→SUBSCRIBE (tc:meeting:*, bot_commands:*,
-  meeting:*:status), list LPUSH→BRPOP (webhook_retry_queue), sorted-set ZADD→ZRANGEBYSCORE.
-- **O-STACK-3 (admin-api)** — FastAPI TestClient against testcontainers-PG: create user → mint
-  scoped token → `/internal/validate` (user_id+scopes+webhook config; HMAC secret required +
-  fail-closed) → revoke → expired rejected → invalid scope 422 → admin-tier auth enforced.
+**Owns:** [`core/identity/contracts/identity.v1`](../../contracts/identity.v1) — `ScopedToken`
+(`subject`, `scopes[]` ∈ `{bot,tx,browser}`, `expires_at`), `AccessDecision` (default-deny verdict),
+`ResourceKind`. Sealed in [`contracts.seal.json`](../../../../contracts.seal.json).
+Token prefix/scope rules live in `src/admin_api/token_scope.py` (`VALID_SCOPES`, `vxa_<scope>_…`).
 
-## Run
+**Consumes:** none — this is the root of the identity domain; it produces the token others validate.
+
+## Isolated evaluation
+
+`tests/` are the Group-1 backing-stack evals — ephemeral testcontainers Postgres + Redis, no live
+stack (`conftest.py` skips if Docker is absent). `test_stack_admin_api.py` drives the full surface;
+`test_health.py` is the pure-liveness probe.
 
 ```bash
-cd identity/services/admin-api && uv run pytest -q      # all three (skips if docker absent)
-cd ../../.. && pnpm gate:stack                          # the gate (discovers + runs)
+uv run pytest -q     # L3 integration (testcontainers Postgres) · L1 health
 ```
 
-Skips cleanly where docker is unavailable; PASSES where docker exists (local or `ssh bbb`).
+## Status
 
-_Governed by `docs/ARCHITECTURE.md` (P1–P12). This folder owns one concern; its public surface
-is its `index`/contract; it may depend only on what the dependency-rules allow._
+- ✅ delivered — `User` + `APIToken` tables (one `Base`, v0.12 carve)
+- ✅ delivered — admin tier: `POST /admin/users`, `GET /admin/users/email/{email}`, `POST /admin/users/{id}/tokens`, `DELETE /admin/tokens/{id}`
+- ✅ delivered — `/internal/validate` authz oracle → `{user_id, scopes, max_concurrent, email, webhook_*}`, fail-closed, expiry-rejecting, `last_used_at` bump
+- ✅ delivered — scoped/multi-scope/expiring token mint (`vxa_<scope>_…`, `VALID_SCOPES`)
+- 🟡 partial — user tier: `PUT /user/webhook` self-serve (other `/user/*` surfaces deferred)
+- ⬜ planned — `/internal/validate` also returns the canonical `subject` (`u_<user_id>`)
+- ⬜ planned — the find-or-create-user + mint-token flow backs the terminal login (Google + dev type-any-email)

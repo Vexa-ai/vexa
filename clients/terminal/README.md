@@ -1,62 +1,58 @@
-# Vexa Terminal
+# terminal — the browser-CLI workbench (Next.js)
 
-**An AI-first knowledge-worker terminal — Claude Code × Outlook, on a backend of meeting bots and an agentic runtime.** Deployable fully self-hosted (your VPC or air-gapped) with BYO inference.
+## Purpose
 
-One agent, one persistent chat spine, operating over your whole work surface: live meetings, an office workspace (a git-backed knowledge graph), email, calendar, tasks, and routines. The agent doesn't just answer — it *acts and commits*: it maintains the knowledge graph, files tasks, drafts email, and runs scheduled/triggered routines.
+The user-facing client for the agent domain: a browser "terminal" that renders a
+[dockview](https://dockview.dev) workbench over a registry of surfaces (chat, meeting,
+workspace, routines, sessions, tasks). It owns no business logic — every surface talks to
+agent-api through thin `/api/*` Next route proxies that keep the backend host (and any key)
+server-side. Next.js because the workbench is a rich client UI and the proxies want a
+same-origin server runtime (SSE relay, no CORS).
 
-## Why "terminal"
+## Seams
 
-Not a dashboard. It's keyboard-first and command-driven (the composer is a `/`-skill bar), dense, and dark — the Claude-Code feel — fused with the comms surface of Outlook (inbox + calendar). The backend underneath is real: Vexa meeting bots (live transcription) and a per-org agentic runtime that reads/writes a git workspace.
+| Direction | Neighbour | Via | What crosses |
+|---|---|---|---|
+| calls | agent-api | `POST /api/chat` (SSE proxy → `${AGENT_API}/api/chat`) | a chat now-dispatch; SSE relay of the agent's output stream |
+| calls | agent-api | `GET /api/sessions?subject=` | a subject's chat-session list (resume) |
+| calls | agent-api | `GET/POST /api/routines`, `DELETE /api/routines/{id}` | list / create / delete a `routine.v1` cron job |
+| produces | agent-api | `POST /api/events` (→ `${AGENT_API}/events`) | an `event.v1` Event → a `unit.v1` Invocation → Dispatcher |
+| calls | agent-api | `GET /api/meetings/live` (polled 4s) | live-meeting registry, mapped to meeting surface entries |
+| calls | agent-api | `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE, `EventSource`) | live transcript + copilot output wire |
+| calls | agent-api | `POST /api/meeting/bot`, `POST /api/meeting/stop` | launch / stop a self-hosted meeting bot |
+| calls | agent-api | `GET /api/workspace/{tree,file,git}?subject=` (git polled 5s) | workspace tree, file content, the agent's real git state |
+| consumes | browser | dockview workbench + surfaces registry (`src/surfaces/index.tsx`) | LEFT lists, CENTER tab-kinds, RIGHT context-kinds, `/`-skill commands |
 
-## The surfaces (IA)
+All upstreams resolve to `AGENT_API_URL` (default `http://127.0.0.1:18100`).
 
-Three-region layout (left sidebar · main chat · right context rail), Claude-Code/Cursor style.
+## Contracts
 
-| Surface | What it is |
-|---|---|
-| **Live meeting** | During a call: proactive cards (new person / action item / decision), an entity cockpit, quick actions; live transcript in the right rail. |
-| **Chat** | The agentic runtime — streaming turns with tools, `@`-mentions, git-commit badges, `[[wikilink]]` citations. |
-| **Workspace** | Git-backed knowledge graph: people / companies / meetings / deals as wiki-linked markdown; documents are first-class. |
-| **Inbox** | Email. The `Inbox triage` routine checks importance and surfaces **proposed actions on the message page**. |
-| **Calendar** | Calendar = meetings. Day grid + flat List view; past events are recorded meetings that open their note. |
-| **Tasks** | Action items from meetings, email, and routines — priority, due, source, done. |
-| **Routines** | **Trigger → plan.** Time-triggered or event-triggered agents. Create one from chat with `/routine`. |
+**Owns:** none — the terminal defines no `*.v1`; it is a pure client of the agent domain.
+**Consumes:** `core/agent/contracts/event.v1` (the `/api/events` ingress shape), `routine.v1`
+(routines CRUD), `unit.v1` (chat + SSE relay), and the meeting/workspace surfaces of
+`core/agent/services/agent-api`. Schemas are sealed in `contracts.seal.json` (repo root) — the
+proxies forward bodies verbatim, they do not re-declare schemas.
 
-Setup is a vertical-templated wizard (Sales · HR · Financial markets → DTCC / Morgan Stanley / Citi) ending in a **Deployment** step (Cloud / VPC / air-gapped + BYO inference + the governance profile for that industry).
+## Isolated evaluation
+
+No test suite yet (`tests/` absent). Standalone build + typecheck:
+
+```bash
+pnpm install && pnpm build      # next build = typecheck + lint (L1/L2)
+pnpm dev                        # next dev -p 3003 — drive surfaces against a live agent-api (L4)
+```
 
 ## Status
 
-Early scaffold. **The prototype is the source of truth for look, feel, and interaction** — a finished, clickable single-file mock at [`public/prototype.html`](public/prototype.html). The Next.js app currently renders it full-bleed; real views are extracted into React incrementally (the strangler pattern).
-
-```bash
-# Prototype only (no deps, no backend):
-open public/prototype.html
-#   or serve it:  python3 -m http.server 8080  → http://localhost:8080/public/prototype.html
-
-# The Next.js app (after deps land):
-npm install
-npm run dev            # http://localhost:3003  (renders the prototype today)
-```
-
-## Architecture
-
-**Frontend** (this package — a Next.js composition root):
-- Reuse the proven `clients/dashboard_new/modules/@vexa/dash-*` bricks for the meeting half: `dash-api-client` (gateway REST proxy), `dash-ws` (live transcript multiplex), `dash-meeting-state`, `dash-contracts`, `dash-transcript-viewer`, `dash-recording-players`, `dash-vnc-view`.
-- Port the EI chat + workspace UI from `feature/ei-workspace-0.11` (`services/dashboard/src/components/workspace/*`: `ei-chat`, `wiki-markdown`, `file-panel`, `mention-menu`).
-- New terminal modules: `tasks`, `routines` (trigger→plan), `inbox`, `calendar`, the `/`-skill command bar, and the setup wizard.
-
-**Backend** (Vexa services — see [`docs/BACKEND.md`](docs/BACKEND.md) for the full gap analysis):
-- **Have, production-ready in 0.12 `core/`:** gateway (auth/routing/WS), meeting-api (bots, transcripts, recordings), admin-api (users/tokens/webhooks), runtime (workload spawn), live transcription.
-- **Have, but on the `ei-workspace` branch — must be ported into 0.12:** the agentic runtime (`agent-api`: SSE chat, per-org containers, workspace git/S3 sync, the knowledge-graph lineage), calendar-service (Google), the MCP server, the one-shot scheduler.
-- **Missing — must be built:** email/inbox, tasks, the routines engine (cron execution + an event dispatcher beyond `meeting.completed`), real-time in-meeting extraction (today's lineage runs *post*-meeting), SSO/SCIM, a BYO-inference adapter for the agent LLM, and Outlook (email + calendar).
-
-## Layout
-
-```
-clients/terminal/
-  public/prototype.html     ← the clickable design SSOT (the mock)
-  src/app/                  ← Next.js composition root (layout, page, globals)
-  src/components/           ← extracted React views (grows from the prototype)
-  src/lib/                  ← server seam (api proxy, config) — to add
-  docs/BACKEND.md           ← what's needed vs. what Vexa has vs. what's missing
-```
+- ✅ delivered — dockview workbench + surfaces registry (chat / meeting / workspace / routines / sessions / tasks)
+- ✅ delivered — `/api/chat` SSE proxy + resumable chat sessions (`/api/sessions`)
+- ✅ delivered — routines board over `/api/routines` CRUD
+- ✅ delivered — workspace files + docs viewer + git source-control panel (5s poll)
+- ✅ delivered — live meeting surface: `/api/meetings/live` poll (4s) + `/api/meeting/stream` SSE + bot start/stop
+- ✅ delivered — generic event ingress proxy (`/api/events` → `event.v1`)
+- 🟡 partial — hardcoded `subject` per surface (`u_jane` / `u_live`), no real identity
+- ⬜ planned — login (Google + dev type-any-email, mirroring `clients/dashboard`) → drop the hardcoded subject
+- ⬜ planned — real meetings list (live + past) with a recorded view
+- ⬜ planned — routines type-toggle (agent | meeting)
+- ⬜ planned — meeting ↔ doc cross-links
+- ⬜ planned — a single gateway WS client replacing the polls
