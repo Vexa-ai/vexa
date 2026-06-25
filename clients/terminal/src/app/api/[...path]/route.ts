@@ -45,6 +45,19 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
 
   try {
     const upstream = await fetch(url, init);
+    const contentType = upstream.headers.get("Content-Type") || "";
+    if (contentType.includes("text/event-stream")) {
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
+        },
+      });
+    }
+
     return new Response(await upstream.text(), {
       status: upstream.status,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
