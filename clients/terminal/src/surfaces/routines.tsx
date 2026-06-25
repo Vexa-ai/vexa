@@ -1,7 +1,7 @@
 "use client";
 /** Routines — a center BOARD of editable cards (created in CHAT via /routine). The left "Routines" item
- *  opens the board + shows a compact list. Delete is real (/api/routines); enable/disable + edit are
- *  optimistic mocks until the backend endpoints land. */
+ *  opens the board + shows a compact list. Delete and enable/disable call /api/routines; edit updates
+ *  the current card draft locally. */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
@@ -10,11 +10,11 @@ import { Icon } from "../ui-kit";
 import { usePreviewPinTab } from "./previewPinTab";
 
 const SUBJECT = "u_live";
-interface Routine { id: string; name: string; cron: string; plan_summary?: string; enabled?: boolean }
+interface Routine { id: string; name: string; cron: string; plan_summary?: string; enabled: boolean }
 const BOARD: TabDescriptor = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
 
 async function fetchRoutines(): Promise<Routine[]> {
-  try { return ((await (await fetch(`/api/routines?subject=${SUBJECT}`)).json()).routines ?? []).map((r: Routine) => ({ ...r, enabled: true })); } catch { return []; }
+  try { return (((await (await fetch(`/api/routines?subject=${SUBJECT}`)).json()).routines ?? []) as Routine[]).map((r) => ({ ...r, name: r.name, enabled: r.enabled })); } catch { return []; }
 }
 
 function RoutinesBoardNav() {
@@ -39,8 +39,21 @@ function RoutinesBoard() {
   const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => { void fetchRoutines().then(setRoutines); }, []);
   const del = async (id: string) => { await fetch(`/api/routines/${id}?subject=${SUBJECT}`, { method: "DELETE" }); setRoutines((rs) => rs.filter((r) => r.id !== id)); };
-  const toggle = (id: string) => setRoutines((rs) => rs.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)));          // mock
-  const patch = (id: string, k: keyof Routine, v: string) => setRoutines((rs) => rs.map((r) => (r.id === id ? { ...r, [k]: v } : r))); // mock
+  const toggle = async (routine: Routine) => {
+    const nextEnabled = !routine.enabled;
+    setRoutines((rs) => rs.map((r) => (r.id === routine.id ? { ...r, enabled: nextEnabled } : r)));
+    try {
+      const res = await fetch(`/api/routines/${encodeURIComponent(routine.name)}/enabled?subject=${encodeURIComponent(SUBJECT)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: nextEnabled }),
+      });
+      if (!res.ok) throw new Error(`Routine toggle failed: ${res.status}`);
+    } catch {
+      setRoutines((rs) => rs.map((r) => (r.id === routine.id && r.enabled === nextEnabled ? { ...r, enabled: routine.enabled } : r)));
+    }
+  };
+  const patch = (id: string, k: "name" | "cron", v: string) => setRoutines((rs) => rs.map((r) => (r.id === id ? { ...r, [k]: v } : r))); // local card draft
 
   const sw = (on: boolean): CSSProperties => ({ width: 32, height: 18, borderRadius: 10, background: on ? "var(--green)" : "var(--panel2)", position: "relative", cursor: "pointer", flex: "none", transition: "background .15s" });
   const knob = (on: boolean): CSSProperties => ({ position: "absolute", top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .15s" });
@@ -57,7 +70,7 @@ function RoutinesBoard() {
               {editing === r.id
                 ? <input style={{ ...inp, flex: 1, fontSize: 14 }} value={r.name} onChange={(e) => patch(r.id, "name", e.target.value)} />
                 : <span style={{ fontSize: 14.5, color: "var(--t1)", fontWeight: 500, flex: 1 }}>{r.name}</span>}
-              <div style={sw(!!r.enabled)} onClick={() => toggle(r.id)} title={r.enabled ? "Enabled" : "Disabled"}><div style={knob(!!r.enabled)} /></div>
+              <div style={sw(!!r.enabled)} onClick={() => void toggle(r)} title={r.enabled ? "Enabled" : "Disabled"}><div style={knob(!!r.enabled)} /></div>
               <button onClick={() => setEditing(editing === r.id ? null : r.id)} title="Edit" style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="panel" size={14} /></button>
               <button onClick={() => void del(r.id)} title="Delete" style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="x" size={14} /></button>
             </div>
