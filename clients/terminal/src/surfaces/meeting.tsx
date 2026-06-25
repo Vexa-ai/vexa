@@ -361,8 +361,8 @@ function MeetingTab({ params }: TabProps) {
   if (!m) return <div style={{ padding: 24, color: "var(--t3)" }}>Meeting not found.</div>;
 
   return (
-    <div style={{ maxWidth: 560, margin: "0 auto" }}>
-      <header style={{ marginBottom: 24 }}>
+    <div style={{ width: "100%", padding: "16px 24px 24px", boxSizing: "border-box" }}>
+      <header style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13 }}>
           {live
             ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--live)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", boxShadow: "0 0 0 3px var(--livebg)" }} />Live</span>
