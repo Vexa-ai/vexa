@@ -251,10 +251,11 @@ type ChatProps = Partial<TabProps>;
 
 export function Chat({ params = {} }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "u_live";  // one workspace shared with meeting research
-  const session = typeof params.session === "string" && params.session.trim() ? params.session : "main";
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
-  const { activeTab } = useStore(layout.store);
+  const { activeTab, activeSession } = useStore(layout.store);
+  // the rail follows the store's active session (switched from the Sessions list / New chat); params override if ever passed.
+  const session = typeof params.session === "string" && params.session.trim() ? params.session : activeSession;
   const activeRef = activeReference(activeTab);
   const meetings = useLiveMeetings();
   const activeMeeting = activeRef?.kind === "meeting"

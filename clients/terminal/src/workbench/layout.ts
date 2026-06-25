@@ -5,6 +5,7 @@ import type { DockviewApi } from "dockview-react";
 
 const LS_DOCK = "vexa.terminal.dock.v3";
 const LS_LIST = "vexa.terminal.activeList.v1";
+const LS_SESSION = "vexa.terminal.activeSession.v1";
 
 export interface RightContext { kind: string; params?: Record<string, unknown>; }
 export interface ActiveTab { kind: string; params: Record<string, unknown>; }
@@ -24,6 +25,8 @@ export interface LayoutState {
   rightCollapsed: boolean;
   context: RightContext | null;
   activeTab: ActiveTab | null;
+  /** which chat session the persistent right rail is showing */
+  activeSession: string;
 }
 
 export interface LayoutService {
@@ -37,6 +40,8 @@ export interface LayoutService {
   /** optional contextual metadata for legacy descriptors */
   setContext(ctx: RightContext | null): void;
   setActiveTab(tab: ActiveTab | null): void;
+  /** switch which chat session the right rail shows (Sessions list / New chat) */
+  setActiveSession(id: string): void;
   setActiveList(id: string): void;
   toggleLeft(): void;
   toggleRight(): void;
@@ -56,6 +61,7 @@ export function createLayoutService(defaultList: string): LayoutService {
     rightCollapsed: false,
     context: null,
     activeTab: null,
+    activeSession: readLS(LS_SESSION) || "main",
   });
   let api: DockviewApi | null = null;
   // the single shared preview slot. We keep one dockview panel (fixed id) and swap its
@@ -102,6 +108,7 @@ export function createLayoutService(defaultList: string): LayoutService {
     detach(dvApi) { if (api === dvApi) { api = null; forgetPreview(); } },
     setContext(ctx) { store.set((st) => ({ ...st, context: ctx })); },
     setActiveTab(tab) { store.set((st) => ({ ...st, activeTab: tab })); },
+    setActiveSession(id) { store.set((st) => ({ ...st, activeSession: id })); writeLS(LS_SESSION, id); },
     openTab(d) {
       if (!api) return;
       // pinning the thing currently in preview → promote it: drop the preview slot so the
