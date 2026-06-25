@@ -66,6 +66,7 @@ export function MeetingCanvasView({ meetingId }: { meetingId?: string }) {
               <div style={{ color: "var(--t1)", fontSize: 13, fontWeight: 650 }}>Meeting Canvas</div>
               <div style={{ color: "var(--t3)", fontSize: 11.5, fontFamily: "var(--mono)" }}>{VIEW_PATH}</div>
               <div style={{ flex: 1 }} />
+              <div style={{ color: "var(--t3)", fontSize: 10, fontFamily: "var(--mono)", marginRight: 10 }}>bound={String(meetingId ?? "—")}</div>
               {stamp && <div style={{ color: "var(--t3)", fontSize: 11.5 }}>reloaded {stamp}</div>}
             </header>
             <EvalPanel />

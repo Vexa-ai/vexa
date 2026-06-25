@@ -355,7 +355,8 @@ function MeetingsList() {
 function MeetingTab({ params }: TabProps) {
   const liveList = useLiveMeetings();
   const requestedMeetingId = params.meetingId as string;
-  const m = meetingById(requestedMeetingId) ?? liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
+  // real meetings FIRST (the list is the source of truth); mock is only a fallback for ids not in it.
+  const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId) ?? meetingById(requestedMeetingId);
   const live = m?.status === "live";
 
   if (!m) return <div style={{ padding: 24, color: "var(--t3)" }}>Meeting not found.</div>;
@@ -370,6 +371,7 @@ function MeetingTab({ params }: TabProps) {
           <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)" }} />
           <span style={{ color: "var(--t1)", fontWeight: 550 }}>{m.platform}</span>
           <span style={{ color: "var(--t3)" }}>{m.participants.length} in the room</span>
+          <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 10, color: "var(--t3)" }}>dbg req={String(requestedMeetingId)} → m.id={String(m.id)} native={String(m.native_id)} “{m.title}”</span>
         </div>
         <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or ask the right-rail chat for research grounded in this meeting.</p>
       </header>
