@@ -39,7 +39,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     assistant text → message-delta · assistant tool_use → tool-call · user tool_result →
     tool-result · result → done. Malformed lines are skipped (fail-soft on the wire, P18 keeps the
     structured ones).
+
+    With ``--include-partial-messages`` the stream also carries ``stream_event`` lines wrapping the
+    Anthropic streaming events; each ``content_block_delta`` with ``delta.type=="text_delta"`` becomes
+    an INCREMENTAL message-delta so the UI renders token-by-token. When partial deltas have been
+    emitted, the consolidated full ``text`` block on the trailing ``assistant`` message is SUPPRESSED
+    (else the prose doubles). The ``result`` event still carries the full ``reply``.
     """
+    streamed_partial = False  # saw any text_delta → don't re-emit the consolidated assistant text
     for raw in lines:
         raw = raw.strip()
         if not raw:
@@ -49,11 +56,19 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
         except json.JSONDecodeError:
             continue
         t = obj.get("type")
-        if t == "assistant":
+        if t == "stream_event":
+            event = obj.get("event", {}) or {}
+            if event.get("type") == "content_block_delta":
+                delta = event.get("delta", {}) or {}
+                if delta.get("type") == "text_delta" and delta.get("text"):
+                    streamed_partial = True
+                    yield {"type": "message-delta", "text": delta["text"]}
+        elif t == "assistant":
             for block in obj.get("message", {}).get("content", []) or []:
                 bt = block.get("type")
                 if bt == "text" and block.get("text"):
-                    yield {"type": "message-delta", "text": block["text"]}
+                    if not streamed_partial:  # no partials → emit the whole block (back-compat)
+                        yield {"type": "message-delta", "text": block["text"]}
                 elif bt == "tool_use":
                     yield {
                         "type": "tool-call",
@@ -131,7 +146,7 @@ def build_argv(
     re-validation are the other two enforcement layers.
     """
     argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "acceptEdits"]
+            "--include-partial-messages", "--permission-mode", "acceptEdits"]
     tools = list(allowed_tools)
     if tools:
         argv += ["--allowedTools", ",".join(tools)]

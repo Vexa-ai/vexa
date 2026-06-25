@@ -80,6 +80,33 @@ def test_parse_stream_json_normalizes():
     assert evs[3]["sessionId"] == "s1" and evs[3]["ok"] is True
 
 
+def test_parse_stream_json_partial_messages_stream_incrementally():
+    # Captured --include-partial-messages JSONL shape: stream_event(content_block_delta/text_delta)*
+    # then the consolidated assistant text block, then result. The deltas must surface incrementally
+    # AND the trailing full block must NOT re-emit (else the text doubles).
+    lines = [
+        json.dumps({"type": "stream_event", "event": {"type": "message_start"}}),
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "index": 0}}),
+        json.dumps({"type": "stream_event", "event": {
+            "type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hel"}}}),
+        json.dumps({"type": "stream_event", "event": {
+            "type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "lo "}}}),
+        json.dumps({"type": "stream_event", "event": {
+            "type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}}}),
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}}),
+        # the consolidated assistant message claude emits at block close — must be suppressed:
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello world"}]}}),
+        json.dumps({"type": "result", "subtype": "success", "result": "Hello world", "session_id": "s2"}),
+    ]
+    evs = list(parse_stream_json(lines))
+    assert [e["type"] for e in evs] == ["message-delta", "message-delta", "message-delta", "done"]
+    assert [e["text"] for e in evs[:3]] == ["Hel", "lo ", "world"]
+    # incremental deltas concatenate to the full text with no duplication:
+    assert "".join(e["text"] for e in evs[:3]) == "Hello world"
+    # the result still carries the full reply (commit messages / non-streaming consumers):
+    assert evs[3]["reply"] == "Hello world"
+
+
 # ── the governance: conformant commits, non-conformant is reverted ───────────
 
 def test_run_unit_turn_commits_conformant(tmp_path: Path):

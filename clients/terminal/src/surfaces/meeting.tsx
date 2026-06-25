@@ -425,7 +425,7 @@ function MeetingTab({ params }: TabProps) {
           if (!line.startsWith("data: ")) continue;
           let ev: { type: string; text?: string; tool?: string; sha?: string };
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-          if (ev.type === "message-delta") patchAgent((t) => ({ ...t, text: t.text ? `${t.text}\n\n${ev.text}` : ev.text ?? "" }));
+          if (ev.type === "message-delta") patchAgent((t) => ({ ...t, text: (t.text ?? "") + (ev.text ?? "") }));
           else if (ev.type === "tool-call") patchAgent((t) => ({ ...t, ops: [...t.ops, toolOp(ev.tool ?? "tool")] }));
           else if (ev.type === "commit") patchAgent((t) => ({ ...t, commit: ev.sha }));
           else if (ev.type === "rejected") patchAgent((t) => ({ ...t, rejected: "workspace.v1 violation — reverted" }));
