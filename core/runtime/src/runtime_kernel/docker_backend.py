@@ -22,6 +22,28 @@ from .profiles import Runnable
 MANAGED_LABEL = "runtime.managed"
 
 
+def _worker_naming(workload_id: str) -> tuple[str, dict[str, str]]:
+    """Map an agent-dispatch workload id to its container leaf name + worker grouping labels.
+
+    Agent workers carry an ``agent-…`` workload id (minted by ``agent_api.units.dispatch_id``). For
+    Docker visibility we rename the *container* leaf from ``agent-*`` to ``worker-*`` (the workload id,
+    Stream topics, and reaper keys are UNTOUCHED — only the cosmetic container name changes) and stamp
+    ``vexa.role=worker`` plus a ``vexa.kind`` (meet | chat | event) so the ephemeral workers can be
+    filtered/grouped apart from the compose-owned ``agent-api`` service. Non-agent workloads (e.g.
+    ``meeting-bot``) pass through unchanged with no extra labels.
+    """
+    if not workload_id.startswith("agent-"):
+        return workload_id, {}
+    rest = workload_id[len("agent-"):]
+    if rest.startswith("meet-"):
+        kind = "meet"
+    elif rest.endswith("-chat"):
+        kind = "chat"
+    else:
+        kind = "event"
+    return f"worker-{rest}", {"vexa.role": "worker", "vexa.kind": kind}
+
+
 def _socket_url() -> str:
     """Encode DOCKER_HOST (unix:///var/run/docker.sock) as a requests_unixsocket http+unix URL."""
     raw = os.getenv("DOCKER_HOST", "unix:///var/run/docker.sock")
@@ -51,7 +73,8 @@ class DockerBackend:
         self._session = requests_unixsocket.Session()
 
     def _cname(self, workload_id: str) -> str:
-        return f"{self._prefix}{workload_id}"
+        leaf, _labels = _worker_naming(workload_id)
+        return f"{self._prefix}{leaf}"
 
     def _req(self, method: str, path: str, *, timeout: int = 30, **kw):
         return self._session.request(method, f"{self._url}{path}", timeout=timeout, **kw)
@@ -60,6 +83,7 @@ class DockerBackend:
         if not runnable.image:
             raise ValueError("docker backend requires an image")
         name = self._cname(workload_id)
+        _leaf, worker_labels = _worker_naming(workload_id)
 
         host_config: dict[str, Any] = {}
         network = os.getenv("DOCKER_NETWORK")
@@ -103,7 +127,7 @@ class DockerBackend:
         payload: dict[str, Any] = {
             "Image": runnable.image,
             "Env": [f"{k}={v}" for k, v in spawn_env.items()],
-            "Labels": {MANAGED_LABEL: "true", "runtime.workload_id": workload_id},
+            "Labels": {MANAGED_LABEL: "true", "runtime.workload_id": workload_id, **worker_labels},
             "HostConfig": host_config,
         }
         if runnable.command:
