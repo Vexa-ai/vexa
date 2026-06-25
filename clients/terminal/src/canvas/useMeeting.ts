@@ -342,8 +342,13 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     const recordedSegments = safeArray(recorded).map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
+    const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: c.title, body: c.body }));
+    // The copilot surfaces ENTITY mentions (people/companies/products/numbers) as cards too. Route
+    // those into the entity groups (they dedup downstream via mergeEntityItems) and keep only real
+    // SIGNAL cards as `cards`, so a person mentioned 4 times doesn't pile up 4× in the Signals column.
+    const isEntityCard = (k: unknown) => /person|people|compan|product|number|num/i.test(textOf(k));
     const cards: MeetingState["cards"] = [
-      ...safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: c.title, body: c.body })),
+      ...copilotCards.filter((c) => !isEntityCard(c.kind)),
       ...normalizedSelected.insights.map((c, i) => ({ id: `insight-${i}`, kind: cardKindFromText(c.text), title: c.text, ts: c.t })),
       ...normalizedSelected.actions.map((a) => ({ id: a.id, kind: "action", title: a.label, body: a.detail })),
     ];
@@ -351,10 +356,17 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     const people = [
       ...present,
       ...participants.map((p) => ({ title: p.name, role: p.role, initials: p.initials })),
+      ...copilotCards.filter((c) => /person|people/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
     ];
-    const companies = detected.filter((e) => e.type === "company");
-    const products = detected.filter((e) => e.type === "topic" || e.type === "task");
-    const textCorpus = [...segments.map((s) => s.text), ...cards.flatMap((c) => [c.title, c.body ?? ""])];
+    const companies = [
+      ...detected.filter((e) => e.type === "company"),
+      ...copilotCards.filter((c) => /compan/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
+    ];
+    const products = [
+      ...detected.filter((e) => e.type === "topic" || e.type === "task"),
+      ...copilotCards.filter((c) => /product/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
+    ];
+    const textCorpus = [...segments.map((s) => s.text), ...copilotCards.flatMap((c) => [c.title, c.body ?? ""])];
     const numbers = extractNumbers(textCorpus);
     return {
       meeting: {
@@ -511,21 +523,27 @@ export function useEntities(opts?: { kind?: EntityKind }): EntityItem[] {
 
 export function useSignals(): EntityItem[] {
   const meeting = useMeeting();
-  return useMemo(() => safeArray(meeting.cards).map((card, index) => {
-    const title = textOf(card.title, `Signal ${index + 1}`);
-    const body = textOf(card.body);
-    return {
-      id: card.id || `signal:${index}`,
-      kind: "signal" as const,
-      name: title,
-      context: oneWord(card.kind, "Signal"),
-      summary: body || title,
-      quote: body || undefined,
-      researched: false,
-      title,
-      body,
-    };
-  }), [meeting.cards]);
+  return useMemo(() => {
+    const seen = new Map<string, EntityItem>();
+    safeArray(meeting.cards).forEach((card, index) => {
+      const title = textOf(card.title, `Signal ${index + 1}`);
+      const key = slug(title);
+      if (seen.has(key)) return;
+      const body = textOf(card.body);
+      seen.set(key, {
+        id: card.id || `signal:${index}`,
+        kind: "signal" as const,
+        name: title,
+        context: oneWord(card.kind, "Signal"),
+        summary: body || title,
+        quote: body || undefined,
+        researched: false,
+        title,
+        body,
+      });
+    });
+    return [...seen.values()];
+  }, [meeting.cards]);
 }
 
 export function useMeetingDocs(): { brief: MeetingDocLink; report: MeetingDocLink } {
