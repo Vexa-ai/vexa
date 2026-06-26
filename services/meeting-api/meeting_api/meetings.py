@@ -816,13 +816,8 @@ async def request_bot(
             "mode": "browser_session",
             "meeting_id": new_meeting.id,
             "session_token": session_token,
-<<<<<<< HEAD
-            "redisUrl": REDIS_URL,
-            "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
-=======
             "redisUrl": BOT_REDIS_URL,
             "meetingApiCallbackUrl": f"{BOT_MEETING_API_URL}/bots/internal/callback/exited",
->>>>>>> 34ec368 (feat: RunPod stateful + stateless pod architecture with GPU bot spawning)
             "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
             **s3_config,
         }
@@ -1094,31 +1089,19 @@ async def request_bot(
         "language": req.language,
         "task": req.task,
         "transcriptionTier": req.transcription_tier or "realtime",
-<<<<<<< HEAD
-        "redisUrl": REDIS_URL,
-=======
         "redisUrl": BOT_REDIS_URL,
->>>>>>> 34ec368 (feat: RunPod stateful + stateless pod architecture with GPU bot spawning)
         # Map API names → bot-side frozen names
         "automaticLeave": {
             "waitingRoomTimeout": resolved_max_wait_for_admission,
             "noOneJoinedTimeout": resolved_no_one_joined_timeout,
             "everyoneLeftTimeout": resolved_max_time_left_alone,
         },
-<<<<<<< HEAD
-        "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
-=======
         "meetingApiCallbackUrl": f"{BOT_MEETING_API_URL}/bots/internal/callback/exited",
->>>>>>> 34ec368 (feat: RunPod stateful + stateless pod architecture with GPU bot spawning)
         "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "true").lower() == "true"),
         "transcribeEnabled": transcribe,
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
-<<<<<<< HEAD
-        "recordingUploadUrl": f"{MEETING_API_URL}/internal/recordings/upload",
-=======
         "recordingUploadUrl": f"{BOT_MEETING_API_URL}/internal/recordings/upload",
->>>>>>> 34ec368 (feat: RunPod stateful + stateless pod architecture with GPU bot spawning)
         "transcriptionServiceUrl": os.getenv("TRANSCRIPTION_SERVICE_URL"),
         "transcriptionServiceToken": os.getenv("TRANSCRIPTION_SERVICE_TOKEN"),
     }
