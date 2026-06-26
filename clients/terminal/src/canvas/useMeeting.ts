@@ -328,7 +328,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       insights: safeArray(selected.insights),
       docs: safeArray(selected.docs),
     };
-    const liveSegments = safeArray(live.transcript).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t }));
+    const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t }));
     const recordedSegments = safeArray(recorded).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);

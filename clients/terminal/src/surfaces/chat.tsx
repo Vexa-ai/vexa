@@ -2,7 +2,7 @@
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
-import { useEffect, useRef, useState, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { useService, useStore, CommandServiceId } from "../platform";
 import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
@@ -26,6 +26,62 @@ function toolOp(tool: string): Op {
 type HistoryTurn =
   | { role: "user"; text: string }
   | { role: "agent"; text: string; ops?: { label: string }[]; commit?: string };
+
+type AgentTurn = Extract<Turn, { role: "agent" }>;
+type ChatSessionState = {
+  turns: Turn[];
+  busy: boolean;
+  loading: boolean;
+  loaded: boolean;
+  nextId: number;
+  abort: AbortController | null;
+};
+
+const EMPTY_CHAT_STATE: ChatSessionState = { turns: [], busy: false, loading: false, loaded: false, nextId: 0, abort: null };
+const chatSessions = new Map<string, ChatSessionState>();
+const chatSubscribers = new Map<string, Set<() => void>>();
+
+function chatStateKey(subject: string, session: string): string {
+  return `${subject}\u0000${session}`;
+}
+
+function getChatState(key: string): ChatSessionState {
+  let state = chatSessions.get(key);
+  if (!state) {
+    state = { ...EMPTY_CHAT_STATE };
+    chatSessions.set(key, state);
+  }
+  return state;
+}
+
+function emitChatState(key: string): void {
+  chatSubscribers.get(key)?.forEach((fn) => fn());
+}
+
+function updateChatState(key: string, fn: (state: ChatSessionState) => ChatSessionState): void {
+  chatSessions.set(key, fn(getChatState(key)));
+  emitChatState(key);
+}
+
+function subscribeChatState(key: string, cb: () => void): () => void {
+  let subs = chatSubscribers.get(key);
+  if (!subs) {
+    subs = new Set();
+    chatSubscribers.set(key, subs);
+  }
+  subs.add(cb);
+  return () => {
+    subs?.delete(cb);
+    if (subs?.size === 0) chatSubscribers.delete(key);
+  };
+}
+
+function patchAgentTurn(key: string, agentId: string, fn: (turn: AgentTurn) => AgentTurn): void {
+  updateChatState(key, (state) => ({
+    ...state,
+    turns: state.turns.map((turn) => (turn.id === agentId && turn.role === "agent" ? fn(turn) : turn)),
+  }));
+}
 
 /** map a backend op label (read/search/edit/git/web/tool) to a frontend Op (icon from opIcon) */
 function historyOp(op: { label: string }): Op {
@@ -414,6 +470,13 @@ export function Chat({ params = {} }: ChatProps) {
   const { activeTab, activeSession } = useStore(layout.store);
   // the rail follows the store's active session (switched from the rail header or Sessions list); params override if ever passed.
   const session = typeof params.session === "string" && params.session.trim() ? params.session : activeSession;
+  const chatKey = chatStateKey(subject, session);
+  const chatState = useSyncExternalStore(
+    (cb) => subscribeChatState(chatKey, cb),
+    () => getChatState(chatKey),
+    () => getChatState(chatKey),
+  );
+  const { turns, busy, loading } = chatState;
   const activeRef = activeReference(activeTab);
   // the user can clear focus with the chip's ×; a newly-focused tab re-shows it.
   const [focusCleared, setFocusCleared] = useState(false);
@@ -426,15 +489,10 @@ export function Chat({ params = {} }: ChatProps) {
   const contextRef: ActiveReference | null = focusRef?.kind === "meeting"
     ? { kind: "meeting", value: activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value, raw: `@meeting:${activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value}` }
     : focusRef;
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const idRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -455,13 +513,14 @@ export function Chat({ params = {} }: ChatProps) {
     }
   }, []);
 
-  // Load the session's prior conversation on mount AND whenever `session` changes — the layout may REUSE
-  // one ChatTab instance and just swap the session param, so reset+reload is keyed on `session`. New sends
-  // still append to the loaded turns; `idRef` is bumped past the loaded ids so live ids never collide.
+  // Load history into an idle, empty session snapshot. Live turns stay in the per-session store so switching
+  // sessions never redirects or clears an in-flight stream.
   useEffect(() => {
+    const key = chatKey;
+    const state = getChatState(key);
+    if (state.loaded || state.loading || state.busy) return;
     let cancelled = false;
-    setLoading(true);
-    setTurns([]);
+    updateChatState(key, (s) => ({ ...s, loading: true }));
     (async () => {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history?subject=${encodeURIComponent(subject)}`);
@@ -471,19 +530,16 @@ export function Chat({ params = {} }: ChatProps) {
           t.role === "user"
             ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
             : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
-        idRef.current = loaded.length;  // keep live `u-<n>`/`a-<n>` ids clear of the `h-*` loaded ids
-        setTurns(loaded);
+        updateChatState(key, (s) => {
+          if (s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
+          return { ...s, turns: loaded, nextId: Math.max(s.nextId, loaded.length), loading: false, loaded: true };
+        });
       } catch {
-        if (!cancelled) setTurns([]);
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) updateChatState(key, (s) => ({ ...s, loading: false, loaded: true }));
       }
     })();
     return () => { cancelled = true; };
-  }, [session, subject]);
-
-  const patchAgent = (fn: (t: Extract<Turn, { role: "agent" }>) => Extract<Turn, { role: "agent" }>) =>
-    setTurns((ts) => ts.map((t, i) => (i === ts.length - 1 && t.role === "agent" ? fn(t) : t)));
+  }, [chatKey, session, subject]);
 
   const addFiles = (files: File[]) => {
     if (files.length === 0) return;
@@ -541,20 +597,32 @@ export function Chat({ params = {} }: ChatProps) {
   const send = async (text: string, prompt = text, referenceSource = text) => {
     const v = text.trim();
     const basePrompt = promptWithReferences(prompt, referenceSource.trim());
-    if (!v || !basePrompt || busy) return;
-    const n = idRef.current++;
+    const key = chatKey;
+    const sessionForSend = session;
+    const state = getChatState(key);
+    if (!v || !basePrompt || state.busy) return;
+    const n = state.nextId;
+    const agentId = `a-${n}`;
     const displayText = appendReferenceToken(v, contextRef);
-    setTurns((ts) => [...ts, { id: `u-${n}`, role: "user", text: displayText }, { id: `a-${n}`, role: "agent", text: "", ops: [] }]);
-    setBusy(true);
     const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    updateChatState(key, (s) => ({
+      ...s,
+      turns: [...s.turns, { id: `u-${n}`, role: "user", text: displayText }, { id: agentId, role: "agent", text: "", ops: [] }],
+      busy: true,
+      loading: false,
+      loaded: true,
+      nextId: Math.max(s.nextId, n + 1),
+      abort: ctrl,
+    }));
     try {
       const p = promptWithActiveContext(basePrompt, contextRef, activeMeeting);
       const active = contextRef ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
-      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session, active }), signal: ctrl.signal });
+      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session: sessionForSend, active }), signal: ctrl.signal });
+      if (!r.ok) throw new Error(`Chat request failed (${r.status})`);
       const reader = r.body?.getReader();
       const dec = new TextDecoder();
       let buf = "";
+      let sawVisibleOutput = false;
       while (reader) {
         const { value: chunk, done } = await reader.read();
         if (done) break;
@@ -563,21 +631,43 @@ export function Chat({ params = {} }: ChatProps) {
         buf = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          let ev: { type: string; text?: string; tool?: string; sha?: string };
+          let ev: { type: string; text?: string; tool?: string; sha?: string; ok?: boolean; reply?: string };
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-          if (ev.type === "message-delta") patchAgent((t) => ({ ...t, text: (t.text ?? "") + (ev.text ?? "") }));
-          else if (ev.type === "tool-call") patchAgent((t) => ({ ...t, ops: [...t.ops, toolOp(ev.tool ?? "tool")] }));
-          else if (ev.type === "commit") patchAgent((t) => ({ ...t, commit: ev.sha }));
-          else if (ev.type === "rejected") patchAgent((t) => ({ ...t, rejected: "workspace.v1 violation — reverted" }));
+          if (ev.type === "message-delta") {
+            sawVisibleOutput = sawVisibleOutput || Boolean(ev.text);
+            patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") + (ev.text ?? "") }));
+          }
+          else if (ev.type === "tool-call") {
+            sawVisibleOutput = true;
+            patchAgentTurn(key, agentId, (t) => ({ ...t, ops: [...t.ops, toolOp(ev.tool ?? "tool")] }));
+          }
+          else if (ev.type === "commit") patchAgentTurn(key, agentId, (t) => ({ ...t, commit: ev.sha }));
+          else if (ev.type === "rejected") patchAgentTurn(key, agentId, (t) => ({ ...t, rejected: "workspace.v1 violation — reverted" }));
+          else if (ev.type === "done" && ev.ok === false) {
+            sawVisibleOutput = true;
+            patchAgentTurn(key, agentId, (t) => ({
+              ...t,
+              text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${ev.reply ? `: ${ev.reply}` : "."}`,
+            }));
+          }
         }
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
       }
+      if (!sawVisibleOutput) {
+        patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") || "No chat output arrived before the stream closed." }));
+      }
     } catch (e) {
-      if ((e as Error)?.name === "AbortError") patchAgent((t) => ({ ...t, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
-    } finally { setBusy(false); abortRef.current = null; }
+      if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
+      else patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") + (t.text ? "\n\n" : "") + ((e as Error)?.message || "Chat request failed.") }));
+    } finally {
+      updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
+    }
   };
 
-  const stop = () => { abortRef.current?.abort(); setBusy(false); };
+  const stop = () => {
+    getChatState(chatKey).abort?.abort();
+    updateChatState(chatKey, (s) => ({ ...s, busy: false, abort: null }));
+  };
 
   // A canvas keyword chip (or any harness `actions.ask`) asks the visible chat a question: reveal the rail
   // and stream the answer here. sendRef keeps the latest `send` closure so the listener stays stable.

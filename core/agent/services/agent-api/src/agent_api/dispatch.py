@@ -49,6 +49,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     }
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
+    if settings.meeting_model:
+        env["VEXA_MEETING_MODEL"] = settings.meeting_model
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
@@ -64,17 +66,27 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env["VEXA_MEETING_SESSION_UID"] = str(meeting["session_uid"])
         if meeting.get("platform"):
             env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
+        if meeting.get("transcript_start_id"):
+            env["VEXA_TRANSCRIPT_START_ID"] = str(meeting["transcript_start_id"])
     return env
 
 
 def _without_chat_session(invocation: dict) -> dict:
-    """A shallow copy with ``context.session`` removed — for the unit.v1 contract check (the published
-    Context has no ``session`` field; the thread id is an internal routing hint, see ``dispatch``)."""
+    """A shallow copy with internal routing hints removed for the unit.v1 contract check."""
     ctx = invocation.get("context")
-    if not isinstance(ctx, dict) or "session" not in ctx:
+    if not isinstance(ctx, dict):
+        return invocation
+    meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
+    needs_clean = "session" in ctx or (
+        isinstance(meeting, dict) and "transcript_start_id" in meeting
+    )
+    if not needs_clean:
         return invocation
     clean = dict(invocation)
-    clean["context"] = {k: v for k, v in ctx.items() if k != "session"}
+    clean_ctx = {k: v for k, v in ctx.items() if k != "session"}
+    if isinstance(meeting, dict) and "transcript_start_id" in meeting:
+        clean_ctx["meeting"] = {k: v for k, v in meeting.items() if k != "transcript_start_id"}
+    clean["context"] = clean_ctx
     return clean
 
 

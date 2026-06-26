@@ -1,6 +1,6 @@
 ---
 enabled: true
-model: claude-haiku-4-5-20251001     # must be in the allowlist; else falls back to the default + logs
+model: openrouter/free               # must be in the allowlist; else falls back to the default + logs
 cadence_segments: 4                  # run a copilot beat every N completed segments (or on a new speaker)
 card_kinds: [person, topic, action]
 write_meeting_doc: true              # author the post-meeting kg entity on session_end

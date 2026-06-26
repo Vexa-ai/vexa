@@ -54,6 +54,20 @@ def _truncate_title(text: str, *, limit: int = 60) -> str:
     return title[: limit - 1] + "…" if len(title) > limit else title
 
 
+def _stream_tail_id(redis_url: str | None, stream: str) -> str | None:
+    if not redis_url:
+        return None
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        rows = r.xrevrange(stream, count=1)
+        return str(rows[0][0]) if rows else "0-0"
+    except Exception as exc:
+        logger.warning("could not resolve transcript stream tail for %s: %s", stream, exc)
+        return None
+
+
 class _Sessions:
     """Durable, per-subject chat-session index. Each session carries a created + last-active stamp and an
     optional title (default the first prompt, truncated). ``list`` returns them most-recent first.
@@ -273,12 +287,16 @@ def create_app(
         ``make_dispatch`` like every other trigger. ``meeting_id == session_uid == native_id`` so the
         transcript wire (``tc:meeting:{id}``), the dispatch (``agent-meet-{id}``), and the terminal all
         key on the same id. The bridge feeds ``tc:meeting:{native_id}``; the worker tails it."""
+        meeting_ctx = {
+            "meeting_id": body.native_id, "session_uid": body.native_id, "platform": body.platform,
+        }
+        transcript_start_id = _stream_tail_id(redis_url, f"tc:meeting:{body.native_id}")
+        if transcript_start_id:
+            meeting_ctx["transcript_start_id"] = transcript_start_id
         inv = units.make_dispatch(
             subject=body.subject, trigger="transcription",
             start=units.entrypoint(inline=_MEETING_BRIEF),
-            context={"kind": "meeting", "meeting": {
-                "meeting_id": body.native_id, "session_uid": body.native_id, "platform": body.platform,
-            }},
+            context={"kind": "meeting", "meeting": meeting_ctx},
         )
         unit_id = dispatcher.dispatch(inv)
         meeting = {

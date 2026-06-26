@@ -37,6 +37,34 @@ export function cleanTranscriptText(text: string): string {
   return out.replace(/\s+([,.!?;:])/g, "$1").replace(/([^\d])([.!?])(?=\S)/g, "$1$2 ");
 }
 
+const SPEAKER_NOTE_REWRITES: [RegExp, string][] = [
+  [/^Speaker\s+mentions\s+using\s+(.+?)\s+and\s+finding\s+(.+?)\s+appealing\.?$/i, "I use $1 and find $2 appealing."],
+  [/^Speaker\s+(?:describes|frames)\s+(.+?)\s+as\s+/i, "$1 is "],
+  [/^Speaker\s+read\s+more\s+about\s+/i, "I read more about "],
+  [/^Speaker\s+(?:expresses|has)\s+fear\s+that\s+/i, "I'm afraid "],
+  [/^Speaker\s+(?:initially\s+)?thought\s+/i, "I initially thought "],
+  [/^Speaker\s+(?:believes|thinks)\s+(?:that\s+)?/i, ""],
+  [/^Speaker\s+(?:announces|states|says|notes|reports|explains|emphasizes)\s+(?:that\s+)?/i, ""],
+  [/^Speaker\s+will\s+/i, "I will "],
+  [/^Speaker\s+wants\s+/i, "I want "],
+  [/^Speaker\s+needs\s+/i, "I need "],
+  [/^Speaker\s+plans\s+to\s+/i, "I plan to "],
+  [/^Speaker\s+asks\s+/i, "I ask "],
+  [/^Speaker\s+/i, ""],
+];
+
+export function cleanProcessedNoteText(text: string): string {
+  let out = cleanTranscriptText(text);
+  for (const [pattern, replacement] of SPEAKER_NOTE_REWRITES) {
+    const next = out.replace(pattern, replacement).trim();
+    if (next !== out) {
+      out = next;
+      break;
+    }
+  }
+  return out.replace(/^[a-z]/, (ch) => ch.toUpperCase());
+}
+
 function valueOf(label: string): number | undefined {
   const cleaned = label.replace(/[^0-9.-]/g, "");
   const value = cleaned ? Number(cleaned) : undefined;

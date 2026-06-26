@@ -188,29 +188,57 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; k
 };
 const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "—", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" as BadgeKind };
 
-type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: () => void };
+type MeetingActionFailure = { actionId: string; actionLabel: string; native: string; message: string };
+type MeetingActionFailureHandler = (failure: MeetingActionFailure) => void;
+type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: (onFailure?: MeetingActionFailureHandler) => Promise<void> | void };
+
+function failureMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.trim()) return error.trim();
+  return "Request failed";
+}
+
+async function readFailure(r: Response): Promise<string> {
+  const detail = (await r.text().catch(() => "")).trim().replace(/\s+/g, " ");
+  const status = `${r.status}${r.statusText ? ` ${r.statusText}` : ""}`;
+  if (!detail) return status;
+  return `${status}: ${detail.slice(0, 180)}`;
+}
+
+async function runMeetingAction(action: Omit<MeetingActionFailure, "message">, request: Promise<Response>, onFailure?: MeetingActionFailureHandler): Promise<void> {
+  try {
+    const r = await request;
+    if (!r.ok) throw new Error(await readFailure(r));
+  } catch (error) {
+    const message = failureMessage(error);
+    console.warn("meeting action failed", { ...action, message });
+    onFailure?.({ ...action, message });
+  } finally {
+    refreshMeetings();
+  }
+}
 
 /** The action→transition map for a row, keyed on its REAL status. Each action hits exactly one endpoint.
  *  Exported (additive — no runtime behavior change) so the behavioral test can assert each status offers
  *  the correct actions and each fires the correct endpoint+body. */
 export function actionsFor(m: MeetingMock): RowAction[] {
   const native = m.native_id ?? m.id;
-  const intent = (state: "idle" | "scheduled", at?: string) =>
-    void fetch(`/api/meetings/google_meet/${encodeURIComponent(native)}/intent`, {
+  const intent = (state: "idle" | "scheduled", at?: string, onFailure?: MeetingActionFailureHandler) =>
+    runMeetingAction({ actionId: state === "idle" ? "cancel" : "schedule", actionLabel: state === "idle" ? "Cancel" : "Schedule", native }, fetch(`/api/meetings/google_meet/${encodeURIComponent(native)}/intent`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ intent: state, ...(at ? { at } : {}) }),
-    }).finally(refreshMeetings);
-  const send = () =>
-    void fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: `https://meet.google.com/${native}` }) }).finally(refreshMeetings);
-  const stop = () =>
-    void fetch("/api/meeting/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ native_id: native, platform: "google_meet" }) }).finally(refreshMeetings);
-  const schedule = () => {
+    }), onFailure);
+  const send = (onFailure?: MeetingActionFailureHandler) =>
+    runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: `https://meet.google.com/${native}` }) }), onFailure);
+  const stop = (onFailure?: MeetingActionFailureHandler) =>
+    runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch("/api/meeting/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ native_id: native, platform: "google_meet" }) }), onFailure);
+  const schedule = (onFailure?: MeetingActionFailureHandler) => {
     // minimal time picker: prompt for a local datetime, send as ISO. (A richer picker can replace this.)
     const def = new Date(Date.now() + 3600_000).toISOString().slice(0, 16);
     const input = typeof window !== "undefined" ? window.prompt("Schedule for (YYYY-MM-DD HH:MM, local):", def) : null;
     if (!input) return;
     const at = new Date(input).toISOString();
-    intent("scheduled", at);
+    return intent("scheduled", at, onFailure);
   };
 
   const raw = m.live_status ?? (m.status === "live" ? "active" : "completed");
@@ -218,7 +246,7 @@ export function actionsFor(m: MeetingMock): RowAction[] {
     case "idle":
       return [{ id: "schedule", label: "Schedule", tone: "accent", run: schedule }, { id: "send", label: "Send now", tone: "accent", run: send }];
     case "scheduled":
-      return [{ id: "send", label: "Send now", tone: "accent", run: send }, { id: "cancel", label: "Cancel", tone: "muted", run: () => intent("idle") }];
+      return [{ id: "send", label: "Send now", tone: "accent", run: send }, { id: "cancel", label: "Cancel", tone: "muted", run: (onFailure) => intent("idle", undefined, onFailure) }];
     case "requested": case "joining": case "awaiting_admission": case "needs_help": case "active": case "stopping":
       return [{ id: "stop", label: "Stop", tone: "live", run: stop }];
     case "completed": case "failed": case "stopped": default:
@@ -238,7 +266,7 @@ function StatusBadge({ raw }: { raw?: string }) {
 
 /** Status badge (only when meaningful) + a small ▾ menu of action→transition items for one meeting row.
  *  The ▾ is revealed on row hover (or while its menu is open) to keep the list quiet at rest. */
-function RowActions({ m, showBadge, reveal }: { m: MeetingMock; showBadge: boolean; reveal: boolean }) {
+function RowActions({ m, showBadge, reveal, onActionStart, onActionFailure }: { m: MeetingMock; showBadge: boolean; reveal: boolean; onActionStart?: () => void; onActionFailure?: MeetingActionFailureHandler }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const acts = actionsFor(m);
@@ -258,7 +286,7 @@ function RowActions({ m, showBadge, reveal }: { m: MeetingMock; showBadge: boole
       {open && (
         <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, minWidth: 132, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,.28)", padding: 4, zIndex: 40 }}>
           {acts.map((a) => (
-            <button key={a.id} onClick={(e) => { e.stopPropagation(); setOpen(false); a.run(); }}
+            <button key={a.id} onClick={(e) => { e.stopPropagation(); setOpen(false); onActionStart?.(); void a.run(onActionFailure); }}
               style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: a.tone === "live" ? "var(--live)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", borderRadius: 6, padding: "6px 9px", fontSize: 12, fontWeight: 550, cursor: "pointer" }}
               onMouseEnter={(ev) => (ev.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(ev) => (ev.currentTarget.style.background = "transparent")}>
               {a.label}
@@ -282,21 +310,32 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   const nav = usePreviewPinTab<HTMLDivElement>(meetingTab(m));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [hover, setHover] = useState(false);
+  const [actionFailure, setActionFailure] = useState<MeetingActionFailure | null>(null);
   const native = m.native_id ?? m.id;
   const live = m.status === "live";
   const inRoom = m.live_status === "active";   // actually live = green dot + a quiet "live", no badge
   // Just the meeting code — the platform is implicit (the list + subline already say Google Meet).
   const label = (m.native_id ?? m.title).replace(/^Google Meet · /, "");
   const showBadge = BADGE_STATUSES.has(m.live_status ?? "");
+  useEffect(() => {
+    if (!actionFailure) return;
+    const t = window.setTimeout(() => setActionFailure(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [actionFailure]);
   return (
     <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }} style={{ padding: "7px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 1 }}
       onMouseEnter={(e) => { setHover(true); e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { setHover(false); e.currentTarget.style.background = "transparent"; }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         {inRoom && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />}
         <span style={{ fontSize: 13, color: live ? "var(--t1)" : "var(--t2)", fontWeight: live ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        {m.native_id && <RowActions m={m} showBadge={showBadge} reveal={hover} />}
+        {m.native_id && <RowActions m={m} showBadge={showBadge} reveal={hover} onActionStart={() => setActionFailure(null)} onActionFailure={setActionFailure} />}
       </div>
       <div style={{ fontSize: 11, color: inRoom ? "var(--green)" : "var(--t3)", marginTop: 1, paddingLeft: inRoom ? 13 : 0 }}>{inRoom ? "live" : m.when}</div>
+      {actionFailure && (
+        <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--live)", marginTop: 4, lineHeight: 1.35 }}>
+          {actionFailure.actionLabel} failed: {actionFailure.message}
+        </div>
+      )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, onSelect: () => copyText(`@meeting:${native}`) },

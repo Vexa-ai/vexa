@@ -3,8 +3,8 @@
  *  speaker's own words, shortened and folded as turns complete, with keyword tags inline. */
 import { useMemo } from "react";
 import { useEntities, useMeeting, useTranscript } from "./useMeeting";
-import { cleanTranscriptText, extractNotableNumberSpans } from "./textSignals";
-import type { EntityItem, TranscriptSegment } from "./types";
+import { cleanProcessedNoteText, cleanTranscriptText, extractNotableNumberSpans } from "./textSignals";
+import type { EntityItem, ProcessedTranscriptNote, TranscriptSegment } from "./types";
 
 export type NoteTagKind = "company" | "person" | "metric" | "money" | "signal";
 export interface NoteTag { id: string; label: string; kind: NoteTagKind; context?: string; at?: number; end?: number }
@@ -36,7 +36,7 @@ function formatTs(ts: number | string | undefined): string {
   return m ? m[0] : "";
 }
 
-function speakerOf(segment: TranscriptSegment | undefined): string {
+function speakerOf(segment: Pick<TranscriptSegment, "speaker"> | undefined): string {
   const speaker = (segment?.speaker ?? "").trim();
   return speaker || "Speaker";
 }
@@ -164,62 +164,125 @@ export function extractNoteTags(text: string, entities: EntityItem[], index: num
   return acc;
 }
 
-/** The live notes for the current meeting. Completed speaker turns fold immediately; a continuing turn
- *  folds after a few utterances, and the newest partial turn remains visible in the raw tail. */
+function processedMeetingNote(note: ProcessedTranscriptNote, entities: EntityItem[], index: number): MeetingNote | null {
+  const text = titleCaseStart(condense(cleanProcessedNoteText(note.text)));
+  if (!text) return null;
+  return {
+    id: note.id || `processed-${index}`,
+    ts: formatTs(note.ts),
+    speaker: speakerOf(note),
+    chapter: cleanTranscriptText(note.chapter ?? ""),
+    text,
+    tags: extractNoteTags(text, entities, index),
+  };
+}
+
+function fallbackMeetingNotes(segments: TranscriptSegment[], entities: EntityItem[], skipIds: Set<string>): MeetingNote[] {
+  const segs = segments.filter((s) => (s.text ?? "").trim() && !(s.id && skipIds.has(s.id)));
+  const notes: MeetingNote[] = [];
+  let group: TranscriptSegment[] = [];
+  let groupStart = 0;
+  let groupSpeaker = "";
+
+  const pushGroup = (force: boolean) => {
+    if (!group.length || (!force && group.length < CLUSTER)) return;
+    const text = titleCaseStart(condense(group.map((s) => s.text).join(" ")));
+    if (text) {
+      notes.push({
+        id: `note-${groupStart}`,
+        ts: formatTs(group[group.length - 1]?.ts),
+        speaker: groupSpeaker,
+        text,
+        tags: extractNoteTags(text, entities, groupStart),
+      });
+    }
+  };
+
+  segs.forEach((segment, index) => {
+    const speaker = speakerOf(segment);
+    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER)) {
+      pushGroup(speaker !== groupSpeaker);
+      group = [];
+    }
+    if (!group.length) {
+      groupStart = index;
+      groupSpeaker = speaker;
+    }
+    group.push(segment);
+  });
+  pushGroup(false);
+  return notes;
+}
+
+export function buildMeetingNotes(
+  processedInput: ProcessedTranscriptNote[] | undefined,
+  segmentInput: TranscriptSegment[] | undefined,
+  entities: EntityItem[],
+): MeetingNote[] {
+  const processed = (Array.isArray(processedInput) ? processedInput : []).filter((note) => (note.text ?? "").trim());
+  const segments = (Array.isArray(segmentInput) ? segmentInput : []).filter((s) => (s.text ?? "").trim());
+  if (!processed.length) return fallbackMeetingNotes(segments, entities, new Set());
+
+  const processedById = new Map(processed.filter((note) => note.id).map((note) => [note.id, note]));
+  const consumed = new Set<string>();
+  const notes: MeetingNote[] = [];
+  let group: TranscriptSegment[] = [];
+  let groupStart = 0;
+  let groupSpeaker = "";
+
+  const pushGroup = (force: boolean) => {
+    if (!group.length || (!force && group.length < CLUSTER)) return;
+    const text = titleCaseStart(condense(group.map((s) => s.text).join(" ")));
+    if (text) {
+      const index = notes.length;
+      notes.push({
+        id: `note-${groupStart}`,
+        ts: formatTs(group[group.length - 1]?.ts),
+        speaker: groupSpeaker,
+        text,
+        tags: extractNoteTags(text, entities, index),
+      });
+    }
+  };
+
+  segments.forEach((segment, index) => {
+    const processedNote = segment.id ? processedById.get(segment.id) : undefined;
+    if (processedNote) {
+      pushGroup(true);
+      group = [];
+      const note = processedMeetingNote(processedNote, entities, notes.length);
+      if (note) notes.push(note);
+      consumed.add(processedNote.id);
+      return;
+    }
+    const speaker = speakerOf(segment);
+    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER)) {
+      pushGroup(speaker !== groupSpeaker);
+      group = [];
+    }
+    if (!group.length) {
+      groupStart = index;
+      groupSpeaker = speaker;
+    }
+    group.push(segment);
+  });
+  pushGroup(false);
+
+  for (const note of processed) {
+    if (note.id && consumed.has(note.id)) continue;
+    const rendered = processedMeetingNote(note, entities, notes.length);
+    if (rendered) notes.push(rendered);
+  }
+  return notes;
+}
+
+/** The live notes for the current meeting. Processed notes replace the exact live segment they cover;
+ *  segments still waiting on the model remain visible through the local condensed fallback. */
 export function useMeetingNotes(): MeetingNote[] {
   const meeting = useMeeting();
   const { segments } = useTranscript({ by: "time" });
   const entities = useEntities();
   return useMemo(() => {
-    const processed = Array.isArray(meeting.transcript.notes) ? meeting.transcript.notes : [];
-    if (processed.length) {
-      return processed
-        .filter((note) => (note.text ?? "").trim())
-        .map((note, index) => {
-          const text = titleCaseStart(condense(note.text));
-          return {
-            id: note.id || `processed-${index}`,
-            ts: formatTs(note.ts),
-            speaker: speakerOf(note),
-            chapter: cleanTranscriptText(note.chapter ?? ""),
-            text,
-            tags: extractNoteTags(text, entities, index),
-          };
-        });
-    }
-    const segs = (Array.isArray(segments) ? segments : []).filter((s: TranscriptSegment) => (s.text ?? "").trim());
-    const notes: MeetingNote[] = [];
-    let group: TranscriptSegment[] = [];
-    let groupStart = 0;
-    let groupSpeaker = "";
-
-    const pushGroup = (force: boolean) => {
-      if (!group.length || (!force && group.length < CLUSTER)) return;
-      const text = titleCaseStart(condense(group.map((s) => s.text).join(" ")));
-      if (text) {
-        notes.push({
-          id: `note-${groupStart}`,
-          ts: formatTs(group[group.length - 1]?.ts),
-          speaker: groupSpeaker,
-          text,
-          tags: extractNoteTags(text, entities, groupStart),
-        });
-      }
-    };
-
-    segs.forEach((segment, index) => {
-      const speaker = speakerOf(segment);
-      if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER)) {
-        pushGroup(speaker !== groupSpeaker);
-        group = [];
-      }
-      if (!group.length) {
-        groupStart = index;
-        groupSpeaker = speaker;
-      }
-      group.push(segment);
-    });
-    pushGroup(false);
-    return notes;
+    return buildMeetingNotes(meeting.transcript.notes, segments, entities);
   }, [meeting.transcript.notes, segments, entities]);
 }

@@ -82,6 +82,22 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
     expect(body).toEqual({ native_id: NATIVE, platform: "google_meet" });
   });
 
+  it("active→Stop reports network failures instead of throwing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const onFailure = vi.fn();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await expect(actionsFor(row("active")).find((a) => a.id === "stop")!.run(onFailure)).resolves.toBeUndefined();
+
+    expect(onFailure).toHaveBeenCalledWith({
+      actionId: "stop",
+      actionLabel: "Stop",
+      native: NATIVE,
+      message: "Failed to fetch",
+    });
+    expect(warn).toHaveBeenCalledWith("meeting action failed", expect.objectContaining({ actionId: "stop", message: "Failed to fetch" }));
+  });
+
   it("idle→Schedule PUTs intent:scheduled with an ISO `at`", () => {
     const at = "2026-06-25T18:00:00.000Z";
     vi.spyOn(window, "prompt").mockReturnValue("2026-06-25 18:00");

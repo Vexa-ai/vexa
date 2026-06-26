@@ -126,6 +126,7 @@ services:
     environment:
       - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:dev}
+      - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
       - REDIS_URL=redis://redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
@@ -175,6 +176,7 @@ services:
       - VEXA_AGENT_PROFILE=agent
       - VEXA_WORKSPACES_DIR=/workspaces
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
+      - VEXA_MEETING_MODEL=${VEXA_MEETING_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}

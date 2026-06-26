@@ -19,6 +19,15 @@ class _FakeRedis:
     def xadd(self, key, fields):
         self.streams.setdefault(key, []).append(fields)
 
+    def xrevrange(self, key, _max="+", _min="-", count=None):
+        rows = self.streams.get(key) or []
+        if not rows:
+            return []
+        selected = list(reversed(rows))
+        if count is not None:
+            selected = selected[:count]
+        return [(f"{len(rows) - i}-0", fields) for i, fields in enumerate(selected)]
+
 
 class _FakeDispatcher:
     def __init__(self) -> None:
@@ -158,3 +167,21 @@ def test_resolve_native_requests_limit_within_gateway_cap(monkeypatch):
     assert "limit=" in captured["url"]
     requested = int(captured["url"].split("limit=")[1].split("&")[0])
     assert requested <= 100, f"gateway caps limit at 100; requested {requested} → HTTP 422 every call"
+
+
+def test_dispatch_carries_stream_tail_cursor(monkeypatch):
+    """A spawned meeting worker starts after the pre-existing stream tail and consumes only newer entries."""
+    _reset_module_caches()
+    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
+
+    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
+    r.streams["tc:meeting:aaa-aaaa-aaa"] = [
+        {"payload": "old-1"},
+        {"payload": "old-2"},
+    ]
+
+    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
+
+    meeting = disp.dispatched[0]["context"]["meeting"]
+    assert meeting["transcript_start_id"] == "2-0"
+    assert len(r.streams["tc:meeting:aaa-aaaa-aaa"]) == 3

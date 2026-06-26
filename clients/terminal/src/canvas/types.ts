@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 
 export interface TranscriptSegment {
+  id?: string;
   speaker?: string;
   text: string;
   ts?: number | string;

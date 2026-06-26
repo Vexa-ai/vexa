@@ -121,6 +121,18 @@ def _record_meeting_doc(native: str, platform: str, subject: str) -> None:
         logger.exception("connect meeting doc ref failed for %s/%s", platform, native)
 
 
+def _stream_tail_id(r, stream: str) -> str:
+    """Return the current Redis Stream tail id, or ``0-0`` when the stream has no entries."""
+    try:
+        rows = r.xrevrange(stream, "+", "-", count=1)
+    except Exception:  # noqa: BLE001 — cursoring is best-effort; an empty cursor is still valid
+        logger.exception("stream tail lookup failed for %s", stream)
+        return "0-0"
+    if not rows:
+        return "0-0"
+    return str(rows[0][0])
+
+
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
     """Spawn the watcher as a daemon thread. Returns it (mostly for tests/introspection)."""
     t = threading.Thread(
@@ -213,6 +225,8 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
     if kind != "transcription":
         return
 
+    transcript_start_id = _stream_tail_id(r, out_stream)
+
     # Keep the terminal's live feed fresh on EVERY batch (a cheap dict write) so an agent-api restart
     # can't drop the meeting from the list — it reappears on the first segment. Throttle only the spawn.
     live.add({
@@ -222,7 +236,7 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
     now = time.monotonic()
     if now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
-        _arm(dispatcher, subject, key, platform)
+        _arm(dispatcher, subject, key, platform, transcript_start_id=transcript_start_id)
 
     # (b) fan segments (drafts + finals) onto the per-meeting wire
     for seg in p.get("segments") or []:
@@ -257,7 +271,7 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, final_done, last_te
         r.xadd(out_stream, {"payload": json.dumps(out)})
 
 
-def _arm(dispatcher, subject: str, key: str, platform: str) -> None:
+def _arm(dispatcher, subject: str, key: str, platform: str, *, transcript_start_id: str = "0-0") -> None:
     """Spawn-or-touch the meeting's copilot (keyed agent-meet-{key}). Idempotent: spawns if reaped,
     touches (keep-alive) if already running. The live-feed registration happens in _handle every batch."""
     inv = units.make_dispatch(
@@ -265,6 +279,7 @@ def _arm(dispatcher, subject: str, key: str, platform: str) -> None:
         start=units.entrypoint(inline=_BRIEF),
         context={"kind": "meeting", "meeting": {
             "meeting_id": key, "session_uid": key, "platform": platform,
+            "transcript_start_id": transcript_start_id,
         }},
     )
     try:

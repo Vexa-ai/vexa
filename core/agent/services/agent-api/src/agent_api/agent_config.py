@@ -21,14 +21,15 @@ import yaml
 
 log = logging.getLogger(__name__)
 
-# The default live-meeting model — Haiku 4.5 (cheap, high-frequency card beats). Env is the ultimate
-# default; this is the hard-coded fallback if neither env nor config name a model.
-DEFAULT_MEETING_MODEL = os.environ.get("VEXA_MEETING_MODEL") or "claude-haiku-4-5-20251001"
+# The default live-meeting model. Env can pin an operator-selected route; the hard-coded fallback keeps
+# high-frequency meeting beats on a zero-cost OpenRouter route.
+DEFAULT_MEETING_MODEL = os.environ.get("VEXA_MEETING_MODEL") or "openrouter/free"
 
-# A model named in config must be on this allowlist (real anthropic model ids as referenced across the
-# codebase) — anything else falls back to the default with a log line (the config file is governed but
-# user-editable, so we don't let a typo silently pin an unexpected/expensive model).
+# A model named in config must be on this allowlist. Anything else falls back to the default with a log
+# line; the config file is governed but user-editable, so a typo cannot silently pin an unexpected route.
 MODEL_ALLOWLIST: frozenset[str] = frozenset({
+    "openrouter/free",
+    "deepseek/deepseek-v4-flash",
     "claude-haiku-4-5-20251001",
     "claude-sonnet-4-20250514",
     "claude-sonnet-4-5-20250929",

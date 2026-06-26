@@ -26,6 +26,8 @@ def _write(work: Path, text: str) -> None:
 def test_absent_file_all_defaults(tmp_path):
     cfg = load_meeting_config(tmp_path)
     assert cfg.enabled is True
+    assert DEFAULT_MEETING_MODEL == "openrouter/free"
+    assert DEFAULT_MEETING_MODEL in MODEL_ALLOWLIST
     assert cfg.model == DEFAULT_MEETING_MODEL
     assert cfg.cadence_segments == DEFAULT_CADENCE_SEGMENTS
     assert cfg.card_kinds == list(DEFAULT_CARD_KINDS)

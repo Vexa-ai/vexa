@@ -16,6 +16,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -141,6 +142,33 @@ def _session_file(work: Path, session: str) -> Path:
     return namespaced
 
 
+def _chat_resume_max_bytes() -> int:
+    try:
+        return int(os.environ.get("VEXA_CHAT_RESUME_MAX_BYTES", "1000000"))
+    except ValueError:
+        return 1000000
+
+
+def _session_transcript_bytes(work: Path, session_id: str) -> int:
+    total = 0
+    for path in (work / ".claude" / "projects").glob(f"*/{session_id}.jsonl"):
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _resume_id(work: Path, sess_file: Path) -> str | None:
+    if not sess_file.exists():
+        return None
+    sid = sess_file.read_text().strip()
+    limit = _chat_resume_max_bytes()
+    if sid and limit > 0 and _session_transcript_bytes(work, sid) > limit:
+        return None
+    return sid or None
+
+
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
@@ -156,7 +184,7 @@ def run_turn_over_workspace(
     sess_file = _session_file(work, session)
     # session_continuity=False (the meeting copilot): never read/write the shared chat session — its
     # card-extraction beats must NOT pollute the user's chat conversation memory.
-    resume = (sess_file.read_text().strip() if sess_file.exists() else None) if session_continuity else None
+    resume = _resume_id(work, sess_file) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
     gen = run_unit_turn(str(work), prompt, _exec_claude, allowed_tools=allowed, session=resume, model=model, commit=commit)
     first = next(gen, None)
@@ -229,7 +257,10 @@ CARD_PROMPT = (
     "Return a concise, book-readable processed transcript plus tracking cards. For each input line, emit "
     "one note with the SAME id and speaker. Keep it first-person and attributed to the speaker's meaning; "
     "remove filler, false starts, duplicated fragments, prompt leakage, and obvious transcript/model "
-    "artifacts. Preserve facts, uncertainty, and tone. Do not invent missing content.\n\n"
+    "artifacts. Preserve facts, uncertainty, and tone. Do not invent missing content. Never write observer "
+    "boilerplate like \"Speaker says\", \"Speaker believes\", \"Speaker mentions\", \"the speaker describes\", "
+    "or \"they talk about\". For subjective or intention statements, write from the speaker's first-person "
+    "view (\"I...\"). For plain facts, write the fact directly (\"Anthropic released...\").\n\n"
     "Assign each note a short chapter title (2-5 words) for the current theme. Reuse the same chapter "
     "title while the theme continues; change it only when the conversation has genuinely moved to a new "
     "topic, decision, story, or workstream.\n\n"
@@ -302,7 +333,11 @@ def parse_cards(reply: str | None, card_kinds: list[str] | None = None) -> list[
     return out
 
 
-def parse_notes(reply: str | None, stage_by_id: dict[str, int] | None = None) -> list[dict]:
+def parse_notes(
+    reply: str | None,
+    stage_by_id: dict[str, int] | None = None,
+    segment_by_id: dict[str, dict] | None = None,
+) -> list[dict]:
     """Pull processed transcript notes from the copilot JSON object."""
     value = _extract_json_value(reply)
     if not isinstance(value, dict):
@@ -311,24 +346,60 @@ def parse_notes(reply: str | None, stage_by_id: dict[str, int] | None = None) ->
     if not isinstance(arr, list):
         return []
     stages = stage_by_id or {}
+    segments = segment_by_id or {}
     out = []
     for item in arr:
         if not isinstance(item, dict):
             continue
         note_id = str(item.get("id") or "").strip()
-        text = str(item.get("text") or "").strip()
+        text = _first_person_note_text(str(item.get("text") or ""))
         if not note_id or not text:
             continue
         stage = int(item.get("pass") or stages.get(note_id) or 1)
-        out.append({
+        source = segments.get(note_id) or {}
+        note = {
             "id": note_id,
             "speaker": str(item.get("speaker") or "").strip() or "Speaker",
             "chapter": str(item.get("chapter") or item.get("chapter_title") or "").strip(),
             "text": text,
             "pass": max(1, min(3, stage)),
             "frozen": stage >= 3,
-        })
+        }
+        ts = item.get("t", item.get("ts", source.get("start")))
+        if ts is not None:
+            note["t"] = ts
+        out.append(note)
     return out
+
+
+def _first_person_note_text(text: str) -> str:
+    out = " ".join(text.split()).strip()
+    rewrites = [
+        (re.compile(r"^Speaker\s+mentions\s+using\s+(.+?)\s+and\s+finding\s+(.+?)\s+appealing\.?$", re.I), r"I use \1 and find \2 appealing."),
+        (re.compile(r"^Speaker\s+(?:describes|frames)\s+(.+?)\s+as\s+", re.I), r"\1 is "),
+        (re.compile(r"^Speaker\s+read\s+more\s+about\s+", re.I), "I read more about "),
+        (re.compile(r"^Speaker\s+(?:expresses|has)\s+fear\s+that\s+", re.I), "I'm afraid "),
+        (re.compile(r"^Speaker\s+(?:initially\s+)?thought\s+", re.I), "I initially thought "),
+        (re.compile(r"^Speaker\s+(?:believes|thinks)\s+(?:that\s+)?", re.I), ""),
+        (re.compile(r"^Speaker\s+(?:announces|states|says|notes|reports|explains|emphasizes)\s+(?:that\s+)?", re.I), ""),
+        (re.compile(r"^Speaker\s+will\s+", re.I), "I will "),
+        (re.compile(r"^Speaker\s+wants\s+", re.I), "I want "),
+        (re.compile(r"^Speaker\s+needs\s+", re.I), "I need "),
+        (re.compile(r"^Speaker\s+plans\s+to\s+", re.I), "I plan to "),
+        (re.compile(r"^Speaker\s+asks\s+", re.I), "I ask "),
+        (re.compile(r"^Speaker\s+", re.I), ""),
+    ]
+    for pattern, replacement in rewrites:
+        next_out = pattern.sub(replacement, out, count=1).strip()
+        if next_out != out:
+            out = next_out
+            break
+    return out[:1].upper() + out[1:] if out else out
+
+
+def _model_error_event(message: object, *, model: str | None, stage: str) -> dict:
+    text = " ".join(str(message or "model inference failed").split())
+    return {"type": "model-error", "error": {"stage": stage, "model": model or "", "message": text[:600]}}
 
 
 def meeting_card_turn(
@@ -347,22 +418,38 @@ def meeting_card_turn(
     # copilot steering (seed guard) instead of stripping it: CLAUDE.md must carry file conventions only,
     # and all watch/ignore/tone steering lives in agents/meeting.md's body.
     kinds = card_kinds or list(DEFAULT_CARD_KINDS)
-    stage_by_id = {str(s.get("segment_id") or s.get("id") or ""): int(s.get("rewrite_pass") or 1) for s in segments}
+    segment_by_id = {str(s.get("segment_id") or s.get("id") or ""): s for s in segments}
+    stage_by_id = {seg_id: int(s.get("rewrite_pass") or 1) for seg_id, s in segment_by_id.items()}
     lines = "\n".join(
         f"[pass {int(s.get('rewrite_pass') or 1)}/3 id={s.get('segment_id') or s.get('id') or '?'} "
         f"speaker={s.get('speaker', '?')}] {s.get('text', '')}"
         for s in segments
     )
     reply: str | None = None
+    chunks: list[str] = []
     prompt = build_card_prompt(lines, kinds, steering)
     # propose-only: a read-only turn (no Write/Edit). We DON'T forward the streaming turn events — the
     # raw JSON reply would leak into the UI as a "note"; the meeting feed wants only the parsed cards.
-    for ev in run_turn_over_workspace(work, prompt, model=model, allowed_tools=["Read"], commit=False, session_continuity=False):
-        if ev.get("type") == "done":
-            reply = ev.get("reply")
-    for note in parse_notes(reply, stage_by_id):
+    try:
+        for ev in run_turn_over_workspace(work, prompt, model=model, allowed_tools=["Read"], commit=False, session_continuity=False):
+            if ev.get("type") == "message-delta" and ev.get("text"):
+                chunks.append(str(ev.get("text") or ""))
+            if ev.get("type") == "done":
+                reply = ev.get("reply") or "".join(chunks)
+                if ev.get("ok") is False:
+                    yield _model_error_event(reply, model=model, stage="meeting-card")
+                    return
+    except Exception as exc:
+        yield _model_error_event(exc, model=model, stage="meeting-card")
+        return
+    reply = reply or "".join(chunks)
+    notes = parse_notes(reply, stage_by_id, segment_by_id)
+    cards = parse_cards(reply, kinds)
+    if segments and not notes:
+        yield _model_error_event("model response did not include processed transcript notes", model=model, stage="meeting-card")
+    for note in notes:
         yield {"type": "note", "note": note}
-    for card in parse_cards(reply, kinds):
+    for card in cards:
         yield {"type": "card", "card": card}
 
 
@@ -372,6 +459,7 @@ def serve_meeting(
     beat_segments: int = 4,
     doc_turn: Callable[[list[dict]], Iterator[dict]] | None = None,
     enabled: bool = True,
+    start_id: str = "0",
 ) -> None:
     """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
     cheaply (a NEW speaker, or ``beat_segments`` completed segments), and run a copilot beat that XADDs
@@ -386,7 +474,7 @@ def serve_meeting(
     processing_window: list[dict] = []
     cards: list[dict] = []          # running, de-duped (by title) list of every surfaced card
     seen_titles: set[str] = set()
-    last = "0"  # read the whole transcript from the start (never miss early segments)
+    last = start_id
     n = 0
 
     def _run_beat(segs: list[dict], idx: int) -> None:
@@ -546,6 +634,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             ),
             idle_ms=idle_ms, beat_segments=cfg.cadence_segments,
             doc_turn=doc_turn, enabled=cfg.enabled,
+            start_id=os.environ.get("VEXA_TRANSCRIPT_START_ID", "0"),
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
         # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are still governed

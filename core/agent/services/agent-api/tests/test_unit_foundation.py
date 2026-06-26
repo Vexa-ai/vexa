@@ -200,6 +200,37 @@ def test_dispatcher_worker_env_carries_configured_model():
     assert env["VEXA_AGENT_MODEL"] == "deepseek/deepseek-v4-pro"
 
 
+def test_dispatcher_worker_env_carries_configured_meeting_model():
+    settings = load_settings(meeting_model="openrouter/free")
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_MEETING_MODEL"] == "openrouter/free"
+
+
+def test_dispatcher_worker_env_carries_meeting_transcript_cursor():
+    settings = load_settings()
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
+    inv = {
+        **VALID_INV,
+        "trigger": "transcription",
+        "identity": {"subject": "u_jane", "launcher": "integration:meetings"},
+        "workspaces": [{"id": "u_jane", "mode": "ro"}],
+        "context": {"kind": "meeting", "meeting": {
+            "meeting_id": "abc-defg-hij",
+            "session_uid": "abc-defg-hij",
+            "platform": "google_meet",
+            "transcript_start_id": "42-0",
+        }},
+    }
+    d.dispatch(inv)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:abc-defg-hij"
+    assert env["VEXA_TRANSCRIPT_START_ID"] == "42-0"
+
+
 def test_local_identity_minter_emits_signed_dispatch_claims():
     token = LocalIdentityMinter("secret", ttl_sec=60).mint(
         "u_jane",

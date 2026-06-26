@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     workspaces_dir: str = "/workspaces"
     workspace_seed_dir: str = "/app/workspace-seed"
     agent_model: str = ""
+    meeting_model: str = ""
 
     # ── MVP3 toolbelt — tool.v1 descriptors + MCP launch specs (the generic tool mechanism) ──
     # A unit's unit.v1.tools names resolve against this dir into --allowedTools + an .mcp.json.

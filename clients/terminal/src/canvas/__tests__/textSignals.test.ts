@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { extractNoteTags } from "../notes";
-import { cleanTranscriptText, extractNotableNumbers } from "../textSignals";
+import { buildMeetingNotes, extractNoteTags } from "../notes";
+import { cleanProcessedNoteText, cleanTranscriptText, extractNotableNumbers } from "../textSignals";
 
 describe("transcript text cleanup", () => {
   it("repairs common transcript artifacts before display", () => {
@@ -10,6 +10,19 @@ describe("transcript text cleanup", () => {
     expect(clean).toContain("China is paying.");
     expect(clean).toContain("University of Chicago.");
     expect(clean).toContain("Claude Code and Anthropic.");
+  });
+
+  it("removes third-person speaker boilerplate from processed notes", () => {
+    expect(cleanProcessedNoteText("Speaker announces Anthropic released a new feature called Claude Tag."))
+      .toBe("Anthropic released a new feature called Claude Tag.");
+    expect(cleanProcessedNoteText("Speaker describes Claude Tag as a convenient way to invoke Claude from Slack."))
+      .toBe("Claude Tag is a convenient way to invoke Claude from Slack.");
+    expect(cleanProcessedNoteText("Speaker mentions using Slack and finding the feature appealing."))
+      .toBe("I use Slack and find the feature appealing.");
+    expect(cleanProcessedNoteText("Speaker believes Anthropic is entering knowledge work."))
+      .toBe("Anthropic is entering knowledge work.");
+    expect(cleanProcessedNoteText("Speaker expresses fear that Anthropic aims to own knowledge work."))
+      .toBe("I'm afraid Anthropic aims to own knowledge work.");
   });
 });
 
@@ -44,5 +57,29 @@ describe("live note tag extraction", () => {
     expect(labels).not.toContain("48");
     expect(labels).not.toContain("S");
     expect(labels).not.toContain("P");
+  });
+});
+
+describe("live note shaping", () => {
+  it("keeps raw-derived notes visible while processed notes are partial", () => {
+    const notes = buildMeetingNotes(
+      [{ id: "seg-2", speaker: "Jane", text: "Speaker mentions using Slack and finding the feature appealing.", ts: 12 }],
+      [
+        { id: "seg-0", speaker: "Jane", text: "first raw line", ts: 1 },
+        { id: "seg-1", speaker: "Jane", text: "second raw line", ts: 2 },
+        { id: "seg-2", speaker: "Jane", text: "noisy second processed source", ts: 12 },
+        { id: "seg-3", speaker: "Jane", text: "third raw line", ts: 13 },
+        { id: "seg-4", speaker: "Jane", text: "fourth raw line", ts: 14 },
+        { id: "seg-5", speaker: "Jane", text: "fifth raw line", ts: 15 },
+      ],
+      [],
+    );
+
+    expect(notes.map((note) => note.text)).toEqual([
+      "First raw line second raw line",
+      "I use Slack and find the feature appealing.",
+      "Third raw line fourth raw line fifth raw line",
+    ]);
+    expect(notes.map((note) => note.id)).toEqual(["note-0", "seg-2", "note-3"]);
   });
 });

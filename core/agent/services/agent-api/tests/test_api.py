@@ -113,6 +113,28 @@ def test_chat_defaults_session_to_main(tmp_path):
     assert rows[0]["session"] == "main" and rows[0]["title"] == "no session given"
 
 
+def test_meeting_start_threads_transcript_tail_cursor(monkeypatch):
+    import redis
+
+    class FakeRedis:
+        def xrevrange(self, stream, count=1):
+            assert stream == "tc:meeting:abc-defg-hij"
+            assert count == 1
+            return [("42-0", {})]
+
+    monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: FakeRedis())
+    runtime = _FakeRuntime()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), redis_url="redis://test",
+    ))
+
+    r = c.post("/api/meeting/start", json={"platform": "google_meet", "native_id": "abc-defg-hij", "subject": "u_jane"})
+
+    assert r.status_code == 202
+    env = runtime.spawned[0][2]
+    assert env["VEXA_TRANSCRIPT_START_ID"] == "42-0"
+
+
 def test_workspace_read_and_traversal_guard(tmp_path):
     from agent_api.workspace_reader import WorkspaceReader
     p = tmp_path / "u_jane" / "kg" / "entities" / "person"

@@ -73,7 +73,7 @@ def test_stop_message_exits_immediately():
 
 # ── meeting mode: consume transcript Stream → gate → emit cards ───────────────────────────────────
 
-from agent_api.worker import parse_cards, parse_notes, serve_meeting  # noqa: E402
+from agent_api.worker import meeting_card_turn, parse_cards, parse_notes, serve_meeting  # noqa: E402
 
 
 class MeetingStream:
@@ -103,6 +103,16 @@ class StepMeetingStream(MeetingStream):
             return []
         entry = self._inbox.pop(0)
         return [(tname, [entry])]
+
+
+class CursorMeetingStream(MeetingStream):
+    def __init__(self, inbox):
+        super().__init__(inbox)
+        self.cursors = []
+
+    def xread(self, streams, count=1, block=None):
+        self.cursors.append(dict(streams))
+        return super().xread(streams, count=count, block=block)
 
 
 def _seg(speaker, text, completed=True):
@@ -188,6 +198,15 @@ def test_serve_meeting_reprocesses_transcript_window_three_passes():
     ]
 
 
+def test_serve_meeting_starts_from_injected_cursor():
+    s = CursorMeetingStream(inbox=[_transcript("43-0", _seg("Jane", "new"))])
+    serve_meeting(
+        s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn,
+        idle_ms=10, start_id="42-0",
+    )
+    assert s.cursors[0] == {"tc:m1": "42-0"}
+
+
 def test_run_turn_persists_namespaced_session_file(tmp_path):
     """A chat turn on thread `work` captures the claude session id into its OWN namespaced continuity
     file (`.claude/sessions/work.session`) — distinct threads don't collide on `.claude/.session`."""
@@ -204,6 +223,33 @@ def test_run_turn_persists_namespaced_session_file(tmp_path):
     f = tmp_path / ".claude" / "sessions" / "work.session"
     assert f.read_text() == "WORK_SID"
     assert not (tmp_path / ".claude" / ".session").exists()  # never touched the legacy single-thread file
+
+
+def test_run_turn_starts_fresh_when_resume_transcript_is_too_large(tmp_path, monkeypatch):
+    """A bloated Claude Code transcript is preserved on disk, but no longer resumed for a live chat turn."""
+    import unittest.mock as mock
+
+    from agent_api import worker
+
+    sess = tmp_path / ".claude" / "sessions"
+    sess.mkdir(parents=True)
+    (sess / "work.session").write_text("OLD_SID")
+    transcript = tmp_path / ".claude" / "projects" / "-workspace"
+    transcript.mkdir(parents=True)
+    (transcript / "OLD_SID.jsonl").write_text("x" * 32)
+    monkeypatch.setenv("VEXA_CHAT_RESUME_MAX_BYTES", "8")
+    seen: dict = {}
+
+    def fake_exec(argv, cwd):
+        seen["argv"] = argv
+        yield json.dumps({"type": "result", "subtype": "success", "result": "ok", "session_id": "NEW_SID"})
+
+    with mock.patch.object(worker, "_exec_claude", fake_exec):
+        list(worker.run_turn_over_workspace(tmp_path, "hello", session="work"))
+
+    assert "--resume" not in seen["argv"]
+    assert (sess / "work.session").read_text() == "NEW_SID"
+    assert (transcript / "OLD_SID.jsonl").exists()
 
 
 def test_meeting_doc_turn_authors_entity_with_frontmatter_and_links(tmp_path):
@@ -287,6 +333,94 @@ def test_parse_notes_from_processed_transcript_reply():
         "text": "I want a cleaner digest.",
         "pass": 3,
         "frozen": True,
+    }]
+
+
+def test_parse_notes_adds_segment_timestamp_when_available():
+    reply = '{"notes":[{"id":"a","speaker":"Jane","chapter":"Live Digest","text":"I want a cleaner digest."}],"cards":[]}'
+    notes = parse_notes(reply, {"a": 2}, {"a": {"start": 42.5}})
+
+    assert notes[0]["t"] == 42.5
+    assert notes[0]["pass"] == 2
+    assert notes[0]["frozen"] is False
+
+
+def test_parse_notes_removes_third_person_speaker_boilerplate():
+    reply = json.dumps({
+        "notes": [
+            {"id": "a", "speaker": "Speaker", "chapter": "Launch", "text": "Speaker announces Anthropic released Claude Tag."},
+            {"id": "b", "speaker": "Speaker", "chapter": "Concern", "text": "Speaker expresses fear that Anthropic aims to own knowledge work."},
+            {"id": "c", "speaker": "Speaker", "chapter": "Tools", "text": "Speaker mentions using Slack and finding the feature appealing."},
+        ],
+        "cards": [],
+    })
+    notes = parse_notes(reply)
+
+    assert [n["text"] for n in notes] == [
+        "Anthropic released Claude Tag.",
+        "I'm afraid Anthropic aims to own knowledge work.",
+        "I use Slack and find the feature appealing.",
+    ]
+
+
+def test_meeting_card_turn_parses_streamed_delta_when_done_reply_is_empty(tmp_path):
+    import unittest.mock as mock
+    from agent_api import worker
+
+    def fake_run(*_args, **_kwargs):
+        yield {"type": "message-delta", "text": '{"notes":[{"id":"a","speaker":"Jane","chapter":"Plan","text":"I will send the plan."}],"cards":['}
+        yield {"type": "message-delta", "text": '{"kind":"action","title":"Send plan","body":"Jane will send it."}]}'}
+        yield {"type": "done", "ok": True, "reply": ""}
+
+    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
+        evs = list(meeting_card_turn(tmp_path, [{"segment_id": "a", "speaker": "Jane", "text": "I'll send the plan.", "start": 7.0}], model="openrouter/free"))
+
+    assert evs[0] == {
+        "type": "note",
+        "note": {
+            "id": "a",
+            "speaker": "Jane",
+            "chapter": "Plan",
+            "text": "I will send the plan.",
+            "pass": 1,
+            "frozen": False,
+            "t": 7.0,
+        },
+    }
+    assert evs[1]["type"] == "card"
+    assert evs[1]["card"]["title"] == "Send plan"
+
+
+def test_meeting_card_turn_surfaces_model_done_failure(tmp_path):
+    import unittest.mock as mock
+    from agent_api import worker
+
+    def fake_run(*_args, **_kwargs):
+        yield {"type": "done", "ok": False, "reply": "model unavailable"}
+
+    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
+        evs = list(meeting_card_turn(tmp_path, [_seg("Jane", "hello")], model="openrouter/free"))
+
+    assert evs == [{
+        "type": "model-error",
+        "error": {"stage": "meeting-card", "model": "openrouter/free", "message": "model unavailable"},
+    }]
+
+
+def test_meeting_card_turn_surfaces_model_exception(tmp_path):
+    import unittest.mock as mock
+    from agent_api import worker
+
+    def fake_run(*_args, **_kwargs):
+        raise RuntimeError("router rejected request")
+        yield {}
+
+    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
+        evs = list(meeting_card_turn(tmp_path, [_seg("Jane", "hello")], model="openrouter/free"))
+
+    assert evs == [{
+        "type": "model-error",
+        "error": {"stage": "meeting-card", "model": "openrouter/free", "message": "router rejected request"},
     }]
 
 

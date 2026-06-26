@@ -14,10 +14,12 @@ import { useSyncExternalStore } from "react";
 export interface LiveSegment { speaker: string; text: string; t?: number; id?: string; completed?: boolean }
 export interface LiveCard { kind: string; title: string; body?: string }
 export interface LiveNote { id: string; speaker?: string; chapter?: string; text: string; t?: number; pass?: number; frozen?: boolean }
+export interface LiveModelError { stage?: string; model?: string; message: string; t?: number }
 export interface LiveState {
   transcript: LiveSegment[];
   notes: LiveNote[];
   cards: LiveCard[];
+  errors: LiveModelError[];
   note: string;            // the agent's latest message-delta (what the copilot is thinking)
   ended: boolean;
   connected: boolean;
@@ -25,7 +27,7 @@ export interface LiveState {
 
 interface Entry { state: LiveState; subs: Set<() => void>; es?: EventSource; refs: number; retry?: number }
 const stores = new Map<string, Entry>();
-const EMPTY: LiveState = { transcript: [], notes: [], cards: [], note: "", ended: false, connected: false };
+const EMPTY: LiveState = { transcript: [], notes: [], cards: [], errors: [], note: "", ended: false, connected: false };
 const RECONNECT_MS = 2500;
 
 function ensure(key: string): Entry {
@@ -42,7 +44,7 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
   // recompute (mutating the arrays in place leaves their identity stable and the memo would go stale).
   const emit = () => {
     const s = e.state;
-    e.state = { ...s, transcript: [...s.transcript], notes: [...s.notes], cards: [...s.cards] };
+    e.state = { ...s, transcript: [...s.transcript], notes: [...s.notes], cards: [...s.cards], errors: [...s.errors] };
     e.subs.forEach((f) => f());
   };
 
@@ -50,7 +52,7 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
   e.es = es;
   es.onopen = () => { e.state.connected = true; emit(); };
   es.onmessage = (m) => {
-    let ev: { type?: string; speaker?: string; text?: string; t?: number; id?: string; completed?: boolean; card?: LiveCard; note?: LiveNote };
+    let ev: { type?: string; speaker?: string; text?: string; t?: number; id?: string; completed?: boolean; card?: LiveCard; note?: LiveNote; error?: LiveModelError | string };
     try { ev = JSON.parse(m.data); } catch { return; }
     const s = e.state;
     if (ev.type === "transcript") {
@@ -61,6 +63,19 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
       if (i >= 0) s.transcript[i] = seg; else s.transcript.push(seg);
     }
     else if (ev.type === "card" && ev.card) s.cards.push(ev.card);
+    else if (ev.type === "model-error") {
+      const raw = ev.error;
+      const err: LiveModelError = typeof raw === "string"
+        ? { message: raw }
+        : { stage: raw?.stage, model: raw?.model, message: raw?.message || "Model inference failed", t: ev.t };
+      s.errors.push(err);
+      if (s.errors.length > 20) s.errors.splice(0, s.errors.length - 20);
+      s.cards.push({
+        kind: "warning",
+        title: "Model inference error",
+        body: [err.model, err.stage, err.message].filter(Boolean).join(" · "),
+      });
+    }
     else if (ev.type === "note" && ev.note?.id && ev.note.text) {
       const next: LiveNote = { id: ev.note.id, speaker: ev.note.speaker, chapter: ev.note.chapter, text: ev.note.text, t: ev.note.t, pass: ev.note.pass, frozen: ev.note.frozen };
       const i = s.notes.findIndex((x) => x.id === next.id);
