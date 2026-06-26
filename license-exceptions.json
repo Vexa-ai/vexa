@@ -8,6 +8,14 @@
       "disposition": "Logged exception AND pruned from the deployment artifact (`--no-optional` / omit @img/sharp-*), so no LGPL binary ships.",
       "scope": "@vexa/mixed-pipeline (transitive, build-time only)",
       "approved": "ADR-0004"
+    },
+    {
+      "package": "lightningcss",
+      "license": "MPL-2.0",
+      "reason": "Native CSS transform/minification engine used by the Next/Tailwind toolchain. MPL applies to the unmodified dependency files, not to Vexa source or generated CSS.",
+      "disposition": "Logged exception; dependency remains an isolated build/runtime package managed by pnpm.",
+      "scope": "frontend build pipeline and Next CSS handling",
+      "approved": "ADR-0004"
     }
   ]
 }

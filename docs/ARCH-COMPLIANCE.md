@@ -11,9 +11,9 @@
 |---|---|---|---|---|
 | **P2** | Couple only through contracts — no import reaches around a contract into a sibling module's internals (prod AND tests). | `gate:isolation` · `gate:isolation-py` · `gate:test-isolation` | 15 brick(s) checked; every Python sibling import is own-module, declared, or an allowed edge; no Python test imports a sibling module's internals (test lane gated, P2) | ✅ |
 | **P3** | Dependencies point inward to the kernel; the graph is acyclic (runtime depends on nothing above). | `gate:graph` · `gate:graph-py` | acyclic + allowed-edges; Python cross-package edges acyclic + allow-listed | ✅ |
-| **P4** | Cross a process/network boundary → a sealed, versioned, golden-pinned schema. | `gate:schema` · `gate:contract-version` | 16 contract(s) conform (goldens ≡ schema); 15 sealed contract(s) frozen; 1 unsealed (in development): deploy/contracts/execution-targets.v1 | ✅ |
-| **P6** | One public front door per module; internals are private. | `gate:exports` | 13 library package(s) lock their front door | ✅ |
-| **P12** | Every folder self-documents (README: concern · surface · deps). | `gate:readme` | 167 dirs each carry a README | ✅ |
+| **P4** | Cross a process/network boundary → a sealed, versioned, golden-pinned schema. | `gate:schema` · `gate:contract-version` | 22 contract(s) conform (goldens ≡ schema); 22 sealed contract(s) frozen | ✅ |
+| **P6** | One public front door per module; internals are private. | `gate:exports` | 26 library package(s) lock their front door | ✅ |
+| **P12** | Every folder self-documents (README: concern · surface · deps). | `gate:readme` | 288 dirs each carry a README | ✅ |
 
 **Modularity verdict: all gates green — the v0.12 backend is fully modular by the constitution's own definition.**
 

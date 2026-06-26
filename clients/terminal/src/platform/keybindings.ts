@@ -7,7 +7,7 @@
  */
 import { tinykeys } from "tinykeys";
 import { type IDisposable, toDisposable } from "./disposable";
-import { type ServiceContainer, createServiceId, CommandServiceId, ContextKeyServiceId } from "./index";
+import { type ServiceContainer, createServiceId, CommandServiceId, ContextKeyServiceId } from "./core";
 
 export interface Keybinding {
   /** a tinykeys chord, e.g. "$mod+k", "$mod+b", "$mod+1", "$mod+Shift+p" */

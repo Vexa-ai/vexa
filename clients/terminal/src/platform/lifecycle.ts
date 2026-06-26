@@ -6,7 +6,7 @@
  */
 import { Signal } from "./signal";
 import { DisposableStore, type IDisposable } from "./disposable";
-import { createServiceId } from "./index";
+import { createServiceId } from "./core";
 
 export type Phase = "starting" | "ready" | "disposed";
 

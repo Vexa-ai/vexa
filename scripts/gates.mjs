@@ -273,7 +273,7 @@ function gateCompose() {
   try { execSync("docker info", { stdio: "pipe" }); }
   catch { console.log("  ✓ gate:compose — docker not available → skip (green-or-skip)"); return true; }
   if (!existsSync(runner)) return fail([`gate:compose — compose stack present but no readiness proof (deploy/compose/bin/stack-test missing)`]);
-  try { execSync(`bash ${JSON.stringify(runner)}`, { stdio: "pipe" }); }
+  try { execSync(`bash ${JSON.stringify(runner)}`, { stdio: "pipe", env: { ...process.env, COMPOSE_DYNAMIC_PORTS: process.env.COMPOSE_DYNAMIC_PORTS || "1" } }); }
   catch (e) { return fail([`compose stack-readiness proof:\n${(e.stdout || e.stderr || e).toString().slice(-3000)}`]); }
   console.log("  ✓ gate:compose — REAL compose stack proven bot-ready (health·auth·transcript·recording·control-plane)");
   return true;
@@ -343,7 +343,7 @@ function gateLicenses() {
   catch (e) { raw = (e.stdout || "").toString(); }
   if (!raw.trim()) { console.log("  ✓ gate:licenses — no resolved deps yet (green-on-empty)"); return true; }
   let data; try { data = JSON.parse(raw); } catch { return fail(["`pnpm licenses list --json` returned non-JSON — run `pnpm install` first"]); }
-  const A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /OR CC0-1\.0/];
+  const A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i, /OR CC0-1\.0/];
   const B = [/LGPL/i, /^MPL/i, /^EPL/i];                                          // weak copyleft — needs a logged exception
   const X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/];
   const exFile = join(ROOT, "license-exceptions.json");

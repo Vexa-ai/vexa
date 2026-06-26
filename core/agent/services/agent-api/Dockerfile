@@ -39,9 +39,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY core/agent/services/agent-api/src ./src
-# identity_core — vendored so the control plane mints per-dispatch signed tokens (LocalIdentityMinter)
-# and boundaries can verify them. Dependency-light (stdlib only); placed on PYTHONPATH (/app/src).
-COPY core/identity/src/identity_core ./src/identity_core
 # The per-person workspace template (CLAUDE.md + conventions) the chat runner seeds new workspaces from.
 COPY core/agent/services/agent-api/workspace-seed ./workspace-seed
 # The unit toolbelt registry (tool.v1 + MCP launch specs) the ToolRegistry loads — the generic tool mechanism.

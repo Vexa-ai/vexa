@@ -6,6 +6,9 @@ conformant write commits. Plus the unit.v1 seam validation and the stream-json n
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import subprocess
 from pathlib import Path
@@ -14,6 +17,7 @@ import pytest
 import yaml
 
 from agent_api import contracts, dispatch
+from agent_api.adapters import LocalIdentityMinter
 from agent_api.config import load_settings
 from agent_api.decision_claude import parse_stream_json, run_unit_turn
 
@@ -33,6 +37,10 @@ def _init_repo(d: Path) -> None:
 
 def _entity(fm: dict, body: str = "body") -> str:
     return "---\n" + yaml.safe_dump(fm, sort_keys=True).strip() + "\n---\n" + body
+
+
+def _b64u_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
 GOOD = {"type": "person", "id": "jane-liu", "title": "Jane Liu"}
@@ -190,6 +198,24 @@ def test_dispatcher_worker_env_carries_configured_model():
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_AGENT_MODEL"] == "deepseek/deepseek-v4-pro"
+
+
+def test_local_identity_minter_emits_signed_dispatch_claims():
+    token = LocalIdentityMinter("secret", ttl_sec=60).mint(
+        "u_jane",
+        "user:u_jane",
+        [{"id": "u_jane", "mode": "rw"}],
+        ["workspace.write"],
+    )
+    header, payload, signature = token.split(".")
+    claims = json.loads(_b64u_decode(payload))
+    assert claims["sub"] == "u_jane"
+    assert claims["lch"] == "user:u_jane"
+    assert claims["ws"] == [{"id": "u_jane", "mode": "rw"}]
+    assert claims["tools"] == ["workspace.write"]
+    assert claims["exp"] - claims["iat"] == 60
+    expected = hmac.new(b"secret", f"{header}.{payload}".encode("ascii"), hashlib.sha256).digest()
+    assert hmac.compare_digest(expected, _b64u_decode(signature))
 
 
 def test_dispatcher_rejects_nonconformant_invocation():

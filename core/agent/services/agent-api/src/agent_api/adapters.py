@@ -11,10 +11,14 @@ logged, never written into the repo's persisted remote (we strip it afterward, a
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -200,22 +204,52 @@ class RuntimeHttpClient(RuntimePort):
         return status.get("state", "unknown")
 
 
+def _b64u(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _signing_key(key: str | bytes) -> bytes:
+    return key.encode("utf-8") if isinstance(key, str) else key
+
+
+def _canon(obj: dict) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 class LocalIdentityMinter(IdentityPort):
-    """Dev-tier ``IdentityPort`` — signs a per-dispatch token with a shared key (HS256), behind the same
-    interface k8s fills with SPIRE/Keycloak (RFC 8693). ``identity_core`` is imported LAZILY so the unit
-    tests (which inject a fake minter) never need the cross-package dep."""
+    """Dev-tier ``IdentityPort`` — signs a per-dispatch token with a shared key (HS256)."""
 
     def __init__(self, signing_key: str, *, ttl_sec: int = 900) -> None:
         self._key = signing_key
         self._ttl = ttl_sec
 
     def mint(self, subject: str, launcher: str, workspaces: list[dict], tools: list[str]) -> str:
-        from identity_core.dispatch_tokens import WorkspaceGrant, mint_dispatch_token
-
-        grants = [WorkspaceGrant(w["id"], w["mode"]) for w in workspaces]
-        return mint_dispatch_token(
-            subject, launcher, grants, list(tools or ()), key=self._key, ttl_sec=self._ttl,
-        )
+        if not subject:
+            raise ValueError("dispatch token subject is required")
+        if not launcher:
+            raise ValueError("dispatch token launcher is required")
+        grants = []
+        for grant in workspaces:
+            mode = str(grant.get("mode", ""))
+            if mode not in ("ro", "rw"):
+                raise ValueError(f"workspace grant mode must be ro|rw, got {mode!r}")
+            workspace_id = str(grant.get("id", ""))
+            if not workspace_id:
+                raise ValueError("workspace grant id is required")
+            grants.append({"id": workspace_id, "mode": mode})
+        iat = int(time.time())
+        payload = {
+            "sub": subject,
+            "lch": launcher,
+            "ws": grants,
+            "tools": list(tools or ()),
+            "iat": iat,
+            "exp": iat + int(self._ttl),
+        }
+        header = {"alg": "HS256", "typ": "vxd"}
+        signing_input = f"{_b64u(_canon(header))}.{_b64u(_canon(payload))}"
+        sig = hmac.new(_signing_key(self._key), signing_input.encode("ascii"), hashlib.sha256).digest()
+        return f"{signing_input}.{_b64u(sig)}"
 
 
 class RedisStreamReader(StreamReader):

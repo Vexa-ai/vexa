@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import time
 import urllib.error
@@ -25,14 +26,32 @@ COMPOSE_DIR = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = COMPOSE_DIR / "docker-compose.yml"
 PROJECT = os.getenv("COMPOSE_PROJECT", "vexa-compose-gate")  # override on a shared host (e.g. bbb prod box)
 
-# The four built services + the host ports they publish. The ports read from the SAME env vars the
-# compose file interpolates (API_GATEWAY_HOST_PORT / ADMIN_API_PORT / MEETING_API_PORT /
-# RUNTIME_API_PORT), defaulting to the compose defaults — so the suite runs ISOLATED on a shared host
-# (e.g. bbb, alongside a live vexa-dash) by shifting the published ports without touching defaults.
-GATEWAY_PORT = os.getenv("API_GATEWAY_HOST_PORT", "18056")
-ADMIN_API_HOST_PORT = os.getenv("ADMIN_API_PORT", "18057")
-MEETING_API_HOST_PORT = os.getenv("MEETING_API_PORT", "18080")
-RUNTIME_HOST_PORT = os.getenv("RUNTIME_API_PORT", "18090")
+# The built services + the host ports they publish. The ports read from the same env vars the
+# compose file interpolates. Routine gates can request dynamic ports so a proof stack can run beside
+# a local developer stack.
+def _free_tcp_port() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return str(s.getsockname()[1])
+
+
+def _host_port(name: str, default: str) -> str:
+    configured = os.getenv(name)
+    if configured:
+        return configured
+    if os.getenv("COMPOSE_DYNAMIC_PORTS") == "1":
+        return _free_tcp_port()
+    return default
+
+
+GATEWAY_PORT = _host_port("API_GATEWAY_HOST_PORT", "18056")
+ADMIN_API_HOST_PORT = _host_port("ADMIN_API_PORT", "18057")
+MEETING_API_HOST_PORT = _host_port("MEETING_API_PORT", "18080")
+RUNTIME_HOST_PORT = _host_port("RUNTIME_API_PORT", "18090")
+AGENT_API_HOST_PORT = _host_port("AGENT_API_PORT", "18100")
+POSTGRES_HOST_PORT = _host_port("POSTGRES_HOST_PORT", "5458")
+MINIO_HOST_PORT = _host_port("MINIO_HOST_PORT", "9000")
+MINIO_CONSOLE_HOST_PORT = _host_port("MINIO_CONSOLE_HOST_PORT", "9001")
 GATEWAY_URL = f"http://127.0.0.1:{GATEWAY_PORT}"
 ADMIN_API_URL = f"http://127.0.0.1:{ADMIN_API_HOST_PORT}"
 MEETING_API_URL = f"http://127.0.0.1:{MEETING_API_HOST_PORT}"
@@ -61,8 +80,19 @@ requires_docker = pytest.mark.skipif(not docker_available(), reason="docker not 
 def _compose(*args: str, env: dict | None = None, check: bool = True, timeout: int = 1200) -> subprocess.CompletedProcess:
     base = ["docker", "compose", "-p", PROJECT, "-f", str(COMPOSE_FILE)]
     full_env = {**os.environ, **_stack_env(), **(env or {})}
-    return subprocess.run(base + list(args), capture_output=True, text=True, env=full_env,
-                          check=check, timeout=timeout)
+    cmd = base + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=full_env, check=False, timeout=timeout)
+    if check and result.returncode != 0:
+        stdout = (result.stdout or "")[-4000:]
+        stderr = (result.stderr or "")[-4000:]
+        raise RuntimeError(
+            "docker compose failed"
+            f"\ncommand: {' '.join(cmd)}"
+            f"\nexit: {result.returncode}"
+            f"\nstdout tail:\n{stdout}"
+            f"\nstderr tail:\n{stderr}"
+        )
+    return result
 
 
 def _stack_env() -> dict:
@@ -76,6 +106,14 @@ def _stack_env() -> dict:
         "INTERNAL_API_SECRET": INTERNAL_API_SECRET,
         "MINIO_BUCKET": MINIO_BUCKET,
         "BROWSER_IMAGE": os.getenv("BROWSER_IMAGE", "vexaai/vexa-bot:dev"),
+        "API_GATEWAY_HOST_PORT": GATEWAY_PORT,
+        "ADMIN_API_PORT": ADMIN_API_HOST_PORT,
+        "MEETING_API_PORT": MEETING_API_HOST_PORT,
+        "RUNTIME_API_PORT": RUNTIME_HOST_PORT,
+        "AGENT_API_PORT": AGENT_API_HOST_PORT,
+        "POSTGRES_HOST_PORT": POSTGRES_HOST_PORT,
+        "MINIO_HOST_PORT": MINIO_HOST_PORT,
+        "MINIO_CONSOLE_HOST_PORT": MINIO_CONSOLE_HOST_PORT,
         # Docker-Desktop / Linux root socket → group 0 is fine for the mounted socket.
         "DOCKER_GID": os.getenv("DOCKER_GID", "0"),
         "LOG_LEVEL": os.getenv("LOG_LEVEL", "info"),
