@@ -7,6 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -150,3 +151,33 @@ def test_list_jobs_filter_by_status(client):
     assert resp.status_code == 200
     for job in resp.json():
         assert job["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_fire_request_does_not_follow_redirect_to_private_host(monkeypatch):
+    """Scheduled callbacks must not follow redirects to internal/private URLs."""
+    from runtime_api import scheduler
+
+    requested_urls = []
+    original_async_client = httpx.AsyncClient
+
+    async def handler(request):
+        requested_urls.append(str(request.url))
+        if str(request.url) == "https://public.example/callback":
+            return httpx.Response(
+                302,
+                headers={"Location": "http://127.0.0.1:8080/internal"},
+                request=request,
+            )
+        return httpx.Response(200, text="private metadata", request=request)
+
+    def client_with_mock_transport(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler.httpx, "AsyncClient", client_with_mock_transport)
+
+    result = await scheduler._fire_request({"method": "POST", "url": "https://public.example/callback"})
+
+    assert result["status_code"] == 302
+    assert requested_urls == ["https://public.example/callback"]
