@@ -18,7 +18,6 @@ export interface MeetingNote {
   tags: NoteTag[];
 }
 
-const CLUSTER = 3;        // utterances folded into one note
 const MAX_NOTE_CHARS = 240;
 const MAX_TAGS = 6;
 
@@ -50,22 +49,13 @@ function speakerOf(segment: Pick<TranscriptSegment, "speaker"> | undefined): str
   return speaker || "Speaker";
 }
 
-/** Absolute wall-clock (epoch ms) for a note: take the last segment in the group that carries one,
- *  so the note is timestamped at when its final utterance was spoken. */
-function groupTsMs(group: { tsMs?: number }[]): number | undefined {
-  for (let i = group.length - 1; i >= 0; i--) {
-    const ms = group[i]?.tsMs;
-    if (typeof ms === "number" && Number.isFinite(ms)) return ms;
-  }
-  return undefined;
+/** Absolute wall-clock (epoch ms) for a segment, if it carries one. */
+function segmentTsMs(segment: { tsMs?: number }): number | undefined {
+  const ms = segment?.tsMs;
+  return typeof ms === "number" && Number.isFinite(ms) ? ms : undefined;
 }
 
-/** A group is pending (live, in-progress) if its last segment is explicitly not completed. */
-function groupPending(group: { completed?: boolean }[]): boolean {
-  return group.length > 0 && group[group.length - 1]?.completed === false;
-}
-
-/** Shorten a cluster of utterances to ~one or two sentences without paraphrasing — keep the speaker's
+/** Shorten a single utterance to ~one or two sentences without paraphrasing — keep the speaker's
  *  voice, just trim. Collapses whitespace and stops at a sentence boundary under the char budget. */
 function condense(text: string): string {
   const clean = cleanTranscriptText(text);
@@ -163,106 +153,50 @@ function processedMeetingNote(note: ProcessedTranscriptNote, entities: EntityIte
   };
 }
 
-function fallbackMeetingNotes(segments: TranscriptSegment[], entities: EntityItem[], skipIds: Set<string>): MeetingNote[] {
-  const segs = segments.filter((s) => (s.text ?? "").trim() && !(s.id && skipIds.has(s.id)));
-  const notes: MeetingNote[] = [];
-  let group: TranscriptSegment[] = [];
-  let groupStart = 0;
-  let groupSpeaker = "";
-
-  const pushGroup = (force: boolean) => {
-    // Always emit a PENDING (live, in-progress) tail so the in-flight line reaches the view — even
-    // when the group is shorter than CLUSTER and we wouldn't normally flush it yet.
-    if (!group.length || (!force && !groupPending(group) && group.length < CLUSTER)) return;
-    const text = titleCaseStart(condense(group.map((s) => s.text).join(" ")));
-    if (text) {
-      notes.push({
-        id: `note-${groupStart}`,
-        ts: formatTs(group[group.length - 1]?.ts),
-        tsMs: groupTsMs(group),
-        completed: groupPending(group) ? false : undefined,
-        speaker: groupSpeaker,
-        text,
-        tags: extractNoteTags(text, entities, groupStart),
-      });
-    }
+/** Render a single uncovered raw segment as exactly ONE note — cleaned, never clustered.
+ *  Preserves `completed:false` for a pending (in-progress ASR) line so the live tail still surfaces. */
+function rawSegmentNote(segment: TranscriptSegment, entities: EntityItem[], index: number): MeetingNote | null {
+  const text = titleCaseStart(condense(segment.text ?? ""));
+  if (!text) return null;
+  return {
+    id: segment.id || `note-${index}`,
+    ts: formatTs(segment.ts),
+    tsMs: segmentTsMs(segment),
+    completed: segment.completed === false ? false : undefined,
+    speaker: speakerOf(segment),
+    text,
+    tags: extractNoteTags(text, entities, index),
   };
-
-  segs.forEach((segment, index) => {
-    const speaker = speakerOf(segment);
-    // A pending segment ends its group immediately, so it surfaces as its own live line.
-    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER || groupPending(group) || segment.completed === false)) {
-      pushGroup(speaker !== groupSpeaker || groupPending(group));
-      group = [];
-    }
-    if (!group.length) {
-      groupStart = index;
-      groupSpeaker = speaker;
-    }
-    group.push(segment);
-  });
-  pushGroup(true);
-  return notes;
 }
 
-export function buildMeetingNotes(
+/** Strictly 1:1 processed-transcript builder (ARCHITECTURE P23 — a reader never re-derives a
+ *  producer's data). Each processed note renders one note (keeping its tags); each uncovered raw
+ *  segment renders exactly ONE note. No clustering. Time order is preserved. */
+export function buildProcessedNotes(
   processedInput: ProcessedTranscriptNote[] | undefined,
   segmentInput: TranscriptSegment[] | undefined,
   entities: EntityItem[],
 ): MeetingNote[] {
   const processed = (Array.isArray(processedInput) ? processedInput : []).filter((note) => (note.text ?? "").trim());
   const segments = (Array.isArray(segmentInput) ? segmentInput : []).filter((s) => (s.text ?? "").trim());
-  if (!processed.length) return fallbackMeetingNotes(segments, entities, new Set());
 
   const processedById = new Map(processed.filter((note) => note.id).map((note) => [note.id, note]));
   const consumed = new Set<string>();
   const notes: MeetingNote[] = [];
-  let group: TranscriptSegment[] = [];
-  let groupStart = 0;
-  let groupSpeaker = "";
-
-  const pushGroup = (force: boolean) => {
-    // Always emit a PENDING (live, in-progress) tail so the in-flight line reaches the view.
-    if (!group.length || (!force && !groupPending(group) && group.length < CLUSTER)) return;
-    const text = titleCaseStart(condense(group.map((s) => s.text).join(" ")));
-    if (text) {
-      const index = notes.length;
-      notes.push({
-        id: `note-${groupStart}`,
-        ts: formatTs(group[group.length - 1]?.ts),
-        tsMs: groupTsMs(group),
-        completed: groupPending(group) ? false : undefined,
-        speaker: groupSpeaker,
-        text,
-        tags: extractNoteTags(text, entities, index),
-      });
-    }
-  };
 
   segments.forEach((segment, index) => {
     const processedNote = segment.id ? processedById.get(segment.id) : undefined;
     if (processedNote) {
-      pushGroup(true);
-      group = [];
       const note = processedMeetingNote(processedNote, entities, notes.length);
       if (note) notes.push(note);
-      consumed.add(processedNote.id);
+      if (processedNote.id) consumed.add(processedNote.id);
       return;
     }
-    const speaker = speakerOf(segment);
-    // A pending segment ends its group immediately, so it surfaces as its own live line.
-    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER || groupPending(group) || segment.completed === false)) {
-      pushGroup(speaker !== groupSpeaker || groupPending(group));
-      group = [];
-    }
-    if (!group.length) {
-      groupStart = index;
-      groupSpeaker = speaker;
-    }
-    group.push(segment);
+    const note = rawSegmentNote(segment, entities, index);
+    if (note) notes.push(note);
   });
-  pushGroup(true);
 
+  // Processed notes that never matched a live segment still render, in arrival order.
   for (const note of processed) {
     if (note.id && consumed.has(note.id)) continue;
     const rendered = processedMeetingNote(note, entities, notes.length);
@@ -271,13 +205,13 @@ export function buildMeetingNotes(
   return notes;
 }
 
-/** The live notes for the current meeting. Processed notes replace the exact live segment they cover;
- *  segments still waiting on the model remain visible through the local condensed fallback. */
+/** The live notes for the current meeting. Processed notes replace the exact live segment they cover
+ *  (1:1, keeping tags); uncovered raw segments each render as their own cleaned note. */
 export function useMeetingNotes(): MeetingNote[] {
   const meeting = useMeeting();
   const { segments } = useTranscript({ by: "time" });
   const entities = useEntities();
   return useMemo(() => {
-    return buildMeetingNotes(meeting.transcript.notes, segments, entities);
+    return buildProcessedNotes(meeting.transcript.notes, segments, entities);
   }, [meeting.transcript.notes, segments, entities]);
 }
