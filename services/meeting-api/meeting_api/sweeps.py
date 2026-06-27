@@ -33,7 +33,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import attributes
 
@@ -52,6 +52,21 @@ STALE_STOPPING_THRESHOLD_SECONDS = 300  # 5 min
 STALE_STOPPING_POLL_INTERVAL = 60  # check every 60 s
 UNFINALIZED_RECORDINGS_MIN_AGE_SECONDS = 5
 UNFINALIZED_RECORDINGS_LIMIT = 100
+
+# Terminal cap for the unfinalized-recordings sweep. A terminal meeting whose
+# session chunks never reconcile to a playable recording (no chunks in storage,
+# or a partial/abandoned upload) would otherwise be re-selected and re-listed
+# every poll interval forever. After this many failed reconciliation attempts
+# we mark the meeting and exclude it from selection so the loop converges.
+UNFINALIZED_RECORDINGS_MAX_ATTEMPTS = 5
+UNFINALIZED_RECORDINGS_ABANDONED_KEY = "recording_finalize_abandoned"
+UNFINALIZED_RECORDINGS_ATTEMPTS_KEY = "recording_finalize_attempts"
+
+# Cap on how many per-recording prefixes a single session-scoped chunk search
+# will probe. A user with more recordings than this is pathological; we log and
+# scan only the newest slice rather than block. Combined with the terminal cap
+# above, no meeting is ever re-listed without bound.
+SESSION_CHUNK_SCAN_PREFIX_CAP = 500
 
 # v0.10.5 Pack K.5 (meeting-api side analog).
 # Module-level state for /health probe / Pack M metrics.
@@ -345,6 +360,50 @@ def _parse_recording_chunk_key(user_id: int, session_uid: str, key: str) -> Opti
     return recording_id, media_type, filename.rsplit(".", 1)[-1].lower()
 
 
+async def _list_session_chunks(storage, user_id: int, session_uid: str) -> list:
+    """Session-scoped chunk listing — non-blocking and bounded.
+
+    The storage layout is
+    ``recordings/<user>/<rec_id>/<session_uid>/<media_type>/<seq>.<ext>``;
+    the rec_id sits *between* the user and the session, so we cannot prefix
+    straight to a session. Earlier code listed the whole-user prefix
+    ``recordings/<user>/`` (up to max_keys=10000 chunk objects) and filtered
+    in Python — two bugs:
+      * the boto3 list ran SYNCHRONOUSLY on the async event loop, freezing
+        /health + /readyz for ~1.5 s on heavy users → liveness probe killed
+        the pod → CrashLoopBackOff;
+      * truncation at max_keys could drop a late-sorting session's chunks
+        entirely, so that meeting never reconciled and was re-swept forever.
+
+    This enumerates the user's per-recording prefixes (cheap CommonPrefixes —
+    one entry per recording, not one per chunk) and lists only the
+    ``recordings/<user>/<rec_id>/<session_uid>/`` slice for each. Every
+    blocking boto3 call is offloaded with ``asyncio.to_thread`` so the event
+    loop never stalls.
+    """
+    user_prefix = f"recordings/{user_id}/"
+    rec_prefixes = await asyncio.to_thread(storage.list_common_prefixes, user_prefix)
+
+    if len(rec_prefixes) > SESSION_CHUNK_SCAN_PREFIX_CAP:
+        # Newest recordings sort last lexicographically (zero-padded ids), and
+        # the session we're recovering is almost always recent — scan the tail.
+        logger.warning(
+            "[sweep] user %s has %d recording prefixes (> cap %d); scanning the "
+            "newest %d for session %s, remainder skipped this iteration",
+            user_id, len(rec_prefixes), SESSION_CHUNK_SCAN_PREFIX_CAP,
+            SESSION_CHUNK_SCAN_PREFIX_CAP, session_uid,
+        )
+        rec_prefixes = rec_prefixes[-SESSION_CHUNK_SCAN_PREFIX_CAP:]
+
+    keys: list[str] = []
+    for rec_prefix in rec_prefixes:
+        session_prefix = f"{rec_prefix}{session_uid}/"
+        chunk_keys = await asyncio.to_thread(storage.list_objects_bounded, session_prefix)
+        if chunk_keys:
+            keys.extend(chunk_keys)
+    return keys
+
+
 def _recording_has_playback_url(rec: dict) -> bool:
     playback_url = rec.get("playback_url") if isinstance(rec, dict) else None
     if not isinstance(playback_url, dict):
@@ -392,13 +451,12 @@ async def recover_recordings_jsonb_from_storage(
     for session in sessions:
         if session.session_uid in existing_sessions:
             continue
-        prefix = f"recordings/{meeting.user_id}/"
         try:
-            keys = storage.list_objects_bounded(prefix)
+            keys = await _list_session_chunks(storage, meeting.user_id, session.session_uid)
         except Exception as e:
             logger.warning(
-                "[finalizer-recovery] storage list failed meeting_id=%s prefix=%s error=%s",
-                meeting.id, prefix, str(e)[:200],
+                "[finalizer-recovery] storage list failed meeting_id=%s session_uid=%s error=%s",
+                meeting.id, session.session_uid, str(e)[:200],
             )
             continue
 
@@ -492,6 +550,16 @@ async def _sweep_unfinalized_recordings(
             select(Meeting.id)
             .where(Meeting.status.in_([MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]))
             .where(Meeting.created_at < cutoff)
+            # Terminal cap: skip meetings already abandoned after
+            # UNFINALIZED_RECORDINGS_MAX_ATTEMPTS failed reconciliations, so an
+            # un-finalizable recording stops being re-selected (and re-listed)
+            # every poll interval forever.
+            .where(
+                or_(
+                    Meeting.data[UNFINALIZED_RECORDINGS_ABANDONED_KEY].astext.is_(None),
+                    Meeting.data[UNFINALIZED_RECORDINGS_ABANDONED_KEY].astext != "true",
+                )
+            )
             .order_by(Meeting.id.desc())
             .limit(UNFINALIZED_RECORDINGS_LIMIT)
         )).fetchall()
@@ -521,6 +589,7 @@ async def _sweep_unfinalized_recordings(
             )
 
             changed = False
+            unresolved_session = False
             sessions = (await db.execute(
                 select(MeetingSession).where(MeetingSession.meeting_id == meeting.id)
             )).scalars().all()
@@ -535,14 +604,16 @@ async def _sweep_unfinalized_recordings(
                 if session.session_uid in existing_sessions:
                     continue
 
-                prefix = f"recordings/{meeting.user_id}/"
                 try:
-                    keys = storage.list_objects_bounded(prefix)
+                    keys = await _list_session_chunks(storage, meeting.user_id, session.session_uid)
                 except Exception as e:
+                    # Transient storage error — do NOT count toward the terminal
+                    # cap; we retry next iteration rather than abandon a meeting
+                    # whose chunks may still be reachable.
                     logger.warning(
                         "[sweep] unfinalized-recordings storage list failed "
-                        "meeting_id=%s prefix=%s error=%s",
-                        meeting.id, prefix, str(e)[:200],
+                        "meeting_id=%s session_uid=%s error=%s",
+                        meeting.id, session.session_uid, str(e)[:200],
                     )
                     continue
 
@@ -554,6 +625,9 @@ async def _sweep_unfinalized_recordings(
                     grouped.setdefault(parsed, []).append(key)
 
                 if not grouped:
+                    # Session has no reconcilable chunks in storage — the state
+                    # that, pre-fix, kept this meeting in the sweep set forever.
+                    unresolved_session = True
                     continue
 
                 now = datetime.utcnow().isoformat()
@@ -582,6 +656,7 @@ async def _sweep_unfinalized_recordings(
                     })
 
                 if recording_id is None or not media_files:
+                    unresolved_session = True
                     continue
 
                 recordings.append({
@@ -624,6 +699,32 @@ async def _sweep_unfinalized_recordings(
                         meeting.id, str(e)[:200], exc_info=True,
                     )
                     await db.rollback()
+            elif unresolved_session:
+                # Nothing reconciled and no JSONB to finalize: this terminal
+                # meeting has a session whose chunks will never become a
+                # recording. Count the attempt and, at the cap, mark it
+                # abandoned so the selection query above stops returning it —
+                # converging the loop instead of re-listing storage forever.
+                attempts = int(data.get(UNFINALIZED_RECORDINGS_ATTEMPTS_KEY) or 0) + 1
+                data[UNFINALIZED_RECORDINGS_ATTEMPTS_KEY] = attempts
+                if attempts >= UNFINALIZED_RECORDINGS_MAX_ATTEMPTS:
+                    data[UNFINALIZED_RECORDINGS_ABANDONED_KEY] = True
+                    data[UNFINALIZED_RECORDINGS_ABANDONED_KEY + "_at"] = datetime.utcnow().isoformat()
+                    logger.warning(
+                        "[sweep] unfinalized-recordings ABANDONING meeting_id=%s after "
+                        "%d attempts — no reconcilable chunks for its session(s); "
+                        "excluding from future sweeps",
+                        meeting.id, attempts,
+                    )
+                else:
+                    logger.info(
+                        "[sweep] unfinalized-recordings meeting_id=%s attempt %d/%d — "
+                        "no reconcilable chunks yet",
+                        meeting.id, attempts, UNFINALIZED_RECORDINGS_MAX_ATTEMPTS,
+                    )
+                meeting.data = data
+                attributes.flag_modified(meeting, "data")
+                await db.commit()
 
     return swept
 

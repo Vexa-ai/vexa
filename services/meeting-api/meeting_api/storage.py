@@ -76,6 +76,19 @@ class StorageClient(ABC):
         memory growth from a user with very many chunks."""
         ...
 
+    @abstractmethod
+    def list_common_prefixes(self, prefix: str) -> list:
+        """List the immediate child "directories" under prefix (delimiter '/').
+
+        Returns a sorted list of common-prefix strings, each ending in '/'.
+        Lets callers enumerate per-recording prefixes
+        (`recordings/<user>/<rec>/`) cheaply — one entry per recording
+        rather than one object per chunk — so a session-scoped chunk search
+        doesn't have to page a heavy user's entire object list (which both
+        blocks the caller and can truncate before reaching a late-sorting
+        session's chunks)."""
+        ...
+
 
 class MinIOStorageClient(StorageClient):
     """MinIO/S3-compatible storage client using boto3."""
@@ -260,6 +273,19 @@ class MinIOStorageClient(StorageClient):
         keys.sort()
         return keys
 
+    def list_common_prefixes(self, prefix: str) -> list:
+        prefixes = []
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(
+            Bucket=self.bucket, Prefix=prefix, Delimiter="/"
+        ):
+            for cp in page.get("CommonPrefixes", []):
+                key = cp.get("Prefix")
+                if key:
+                    prefixes.append(key)
+        prefixes.sort()
+        return prefixes
+
 
 class LocalStorageClient(StorageClient):
     """Filesystem-based storage client for development/testing."""
@@ -353,6 +379,20 @@ class LocalStorageClient(StorageClient):
             )
         keys.sort()
         return keys
+
+    def list_common_prefixes(self, prefix: str) -> list:
+        normalized_prefix = self._normalize_path(prefix) if prefix else ""
+        full_prefix = os.path.join(self.base_dir, normalized_prefix) if normalized_prefix else self.base_dir
+        if not os.path.isdir(full_prefix):
+            return []
+        base = normalized_prefix.rstrip("/")
+        prefixes = []
+        for entry in os.scandir(full_prefix):
+            if entry.is_dir():
+                child = f"{base}/{entry.name}/" if base else f"{entry.name}/"
+                prefixes.append(child)
+        prefixes.sort()
+        return prefixes
 
 
 def create_storage_client(backend: Optional[str] = None) -> StorageClient:
