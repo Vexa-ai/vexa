@@ -2098,7 +2098,7 @@ async def transcribe_meeting(
     # 2. Download audio from storage
     try:
         storage = create_storage_client()
-        audio_data = storage.download_file(storage_path)
+        audio_data = await asyncio.to_thread(storage.download_file, storage_path)
     except Exception as e:
         logger.error(f"Failed to download recording for meeting {meeting_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to download recording: {e}")

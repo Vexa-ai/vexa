@@ -394,7 +394,7 @@ async def recover_recordings_jsonb_from_storage(
             continue
         prefix = f"recordings/{meeting.user_id}/"
         try:
-            keys = storage.list_objects_bounded(prefix)
+            keys = await asyncio.to_thread(storage.list_objects_bounded, prefix)
         except Exception as e:
             logger.warning(
                 "[finalizer-recovery] storage list failed meeting_id=%s prefix=%s error=%s",
@@ -537,7 +537,7 @@ async def _sweep_unfinalized_recordings(
 
                 prefix = f"recordings/{meeting.user_id}/"
                 try:
-                    keys = storage.list_objects_bounded(prefix)
+                    keys = await asyncio.to_thread(storage.list_objects_bounded, prefix)
                 except Exception as e:
                     logger.warning(
                         "[sweep] unfinalized-recordings storage list failed "
