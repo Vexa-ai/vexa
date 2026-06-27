@@ -400,27 +400,32 @@ def create_app(
     def meeting_process(body: MeetingProcess):
         """User-controlled copilot PROCESSING for a meeting. Processing is OPT-IN: the transcription
         watcher only arms / keeps the copilot alive while ``proc:meeting:{native}`` is set — so OFF means
-        NO processing runs at all (the raw transcript still streams). ON sets the flag and, if the meeting
-        has not been processed yet (no cached output on ``unit:agent-meet-{native}:out``), dispatches a
-        FULL-HISTORY backfill (``transcript_start_id='0-0'`` → the copilot reads the whole transcript from
-        the start); if it was already processed, it resumes live from the current tail (no re-processing)."""
+        NO processing runs at all (the raw transcript still streams).
+
+        ON resumes from the per-meeting CURSOR (``proc:meeting:{native}:cursor`` = the last raw transcript
+        stream-id already cleaned): the copilot gets ``transcript_start_id = cursor`` and processes the gap
+        ``[cursor → tail]`` in ONE catch-up pass, then continues live. A never-processed meeting has no
+        cursor ⇒ ``'0-0'`` (process the whole history). OFF just clears the flag — the cursor is FROZEN at
+        the last processed entry so a later re-enable gap-fills from exactly where we left off."""
         import redis as _redis
 
         r = _redis.from_url(redis_url, decode_responses=True)
         flag = f"proc:meeting:{body.native_id}"
+        cursor_key = f"proc:meeting:{body.native_id}:cursor"
         if not body.on:
             try:
-                r.delete(flag)
+                r.delete(flag)  # cursor is intentionally LEFT in place (frozen) for the next re-enable
             except Exception:  # noqa: BLE001 — best-effort; the watcher reaps the copilot on TTL anyway
                 pass
             return {"native_id": body.native_id, "processing": False}
+        cursor: str | None = None
         try:
             r.set(flag, "1")
-            cached = (r.xlen(f"unit:agent-meet-{body.native_id}:out") or 0) > 0
+            cursor = r.get(cursor_key)
         except Exception:  # noqa: BLE001
-            cached = False
-        # not cached → process ALL prior (from the stream start); cached → resume live from the tail.
-        start_id = (_stream_tail_id(redis_url, f"tc:meeting:{body.native_id}") or "0-0") if cached else "0-0"
+            cursor = None
+        # Gap-fill from the cursor (last cleaned raw id); no cursor yet ⇒ from the start of the transcript.
+        start_id = cursor or "0-0"
         inv = units.make_dispatch(
             subject=body.subject, trigger="transcription",
             start=units.entrypoint(inline=_MEETING_BRIEF),
@@ -430,7 +435,7 @@ def create_app(
             }},
         )
         dispatcher.dispatch(inv)
-        return {"native_id": body.native_id, "processing": True, "backfilled": not cached}
+        return {"native_id": body.native_id, "processing": True, "resumed_from": start_id}
 
     @app.get("/api/meetings")
     def list_meetings():

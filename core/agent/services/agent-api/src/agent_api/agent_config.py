@@ -21,9 +21,10 @@ import yaml
 
 log = logging.getLogger(__name__)
 
-# The default live-meeting model. Env can pin an operator-selected route; the hard-coded fallback keeps
-# high-frequency meeting beats on a zero-cost OpenRouter route.
-DEFAULT_MEETING_MODEL = os.environ.get("VEXA_MEETING_MODEL") or "openrouter/free"
+# The default live-meeting model. Env (``VEXA_MEETING_MODEL``) can pin an operator-selected route; the
+# committed fallback is a CAPABLE route so cleaning/cards are reliable out of the box (reliability over
+# the old zero-cost "openrouter/free" default).
+DEFAULT_MEETING_MODEL = os.environ.get("VEXA_MEETING_MODEL") or "deepseek/deepseek-v4-flash"
 
 # A model named in config must be on this allowlist. Anything else falls back to the default with a log
 # line; the config file is governed but user-editable, so a typo cannot silently pin an unexpected route.

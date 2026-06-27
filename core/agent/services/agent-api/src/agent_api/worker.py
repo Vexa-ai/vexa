@@ -582,6 +582,27 @@ def meeting_card_turn(
         yield {"type": "card", "card": card}
 
 
+def _set_cursor(stream: _Stream, cursor_key: str | None, raw_id: str) -> None:
+    """Freeze the per-meeting processed CURSOR = the last raw transcript stream-id cleaned. Best-effort:
+    a fake stream without ``set`` (or a transient redis error) must never break the live beat."""
+    if not cursor_key:
+        return
+    setter = getattr(stream, "set", None)
+    if setter is None:
+        return
+    try:
+        setter(cursor_key, str(raw_id))
+    except Exception:  # noqa: BLE001 — the cursor is an optimization; never crash the meeting loop
+        pass
+
+
+def _proc_note(segment: dict) -> dict | None:
+    """The baseline 1:1 cleaned note for ONE segment — id == segment_id, the speaker, and the cleaned
+    text (same first-person cleanup the fallback uses). None when there's nothing to emit (empty text)."""
+    notes = fallback_processed_notes([segment])
+    return notes[0] if notes else None
+
+
 def serve_meeting(
     stream: _Stream, *, transcript_stream: str, out_topic: str,
     card_turn: Callable[[list[dict]], Iterator[dict]], idle_ms: int,
@@ -589,6 +610,8 @@ def serve_meeting(
     doc_turn: Callable[[list[dict]], Iterator[dict]] | None = None,
     enabled: bool = True,
     start_id: str = "0",
+    proc_stream: str | None = None,
+    cursor_key: str | None = None,
 ) -> None:
     """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
     cheaply (a NEW speaker, or ``beat_segments`` segments), and run a copilot beat that XADDs proactive
@@ -608,12 +631,22 @@ def serve_meeting(
     last = start_id
     n = 0
 
+    def _emit_proc_note(note: dict) -> None:
+        """XADD ONE cleaned note (id == segment_id) onto the per-meeting processed STREAM — the reliable
+        1:1 CLEANED transcript channel, SEPARATE from the cards beat on ``out_topic``."""
+        if proc_stream and note:
+            stream.xadd(proc_stream, {"note": json.dumps(note)})
+
     def _run_beat(segs: list[dict], idx: int) -> None:
         tid = f"beat{idx}"
         staged = [{**seg, "rewrite_pass": int(seg.get("_rewrite_passes", 0)) + 1} for seg in segs]
         for ev in card_turn(staged):
             if ev.get("type") == "card":
                 _accumulate_card(cards, seen_titles, ev.get("card") or {})
+            elif ev.get("type") == "note":
+                # The LLM rewrite returned a valid note for this id → UPGRADE the cleaned-stream text
+                # (baseline already emitted at ingest; this is the richer pass, still 1:1 by segment_id).
+                _emit_proc_note(ev.get("note") or {})
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": tid})})
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": tid})})
         sent_ids = {id(seg) for seg in segs}
@@ -654,10 +687,18 @@ def serve_meeting(
                     window_by_id[sid] = item
                     buffer.append(item)
                     processing_window.append(item)
+                    # Baseline 1:1 cleaned note onto the processed stream — ALWAYS present per segment,
+                    # so the cleaned channel never has a gap even before/without an LLM upgrade beat.
+                    base = _proc_note(item)
+                    if base is not None:
+                        _emit_proc_note(base)
                     sp = seg.get("speaker")
                     if sp and sp not in seen_speakers:
                         seen_speakers.add(sp)
                         new_speaker = True
+                # Advance the per-meeting CURSOR to the last raw stream-id we've now cleaned (gap-fill
+                # picks up from here on re-enable; OFF freezes it at the last processed entry).
+                _set_cursor(stream, cursor_key, entry_id)
         if enabled and buffer and (new_speaker or len(buffer) >= beat_segments):
             n += 1
             mutable = [seg for seg in processing_window if int(seg.get("_rewrite_passes", 0)) < 3]
@@ -780,6 +821,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             idle_ms=idle_ms, beat_segments=cfg.cadence_segments,
             doc_turn=doc_turn, enabled=cfg.enabled,
             start_id=os.environ.get("VEXA_TRANSCRIPT_START_ID", "0"),
+            proc_stream=f"proc:meeting:{native}",
+            cursor_key=f"proc:meeting:{native}:cursor",
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
         # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are still governed

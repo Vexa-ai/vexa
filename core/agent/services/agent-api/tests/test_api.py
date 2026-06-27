@@ -157,6 +157,96 @@ def test_meeting_start_threads_transcript_tail_cursor(monkeypatch):
     assert env["VEXA_TRANSCRIPT_START_ID"] == "42-0"
 
 
+def test_meeting_process_resumes_from_cursor_gap_fill(monkeypatch):
+    """Phase C (c): on re-enable, /api/meeting/process dispatches a SINGLE catch-up pass starting from the
+    persisted cursor (last cleaned raw id) — the gap [cursor → tail] — not from the tail or 0."""
+    import redis
+
+    class FakeRedis:
+        def __init__(self):
+            self.kv = {"proc:meeting:m9:cursor": "37-0"}  # we cleaned up to 37-0 last time
+
+        def set(self, k, v):
+            self.kv[k] = v
+
+        def get(self, k):
+            return self.kv.get(k)
+
+        def delete(self, k):
+            self.kv.pop(k, None)
+
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: FakeRedis())
+    runtime = _FakeRuntime()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), redis_url="redis://test",
+    ))
+
+    r = c.post("/api/meeting/process", json={"native_id": "m9", "on": True, "subject": "u_jane"})
+
+    assert r.status_code == 202
+    assert r.json()["resumed_from"] == "37-0"
+    env = runtime.spawned[0][2]
+    assert env["VEXA_TRANSCRIPT_START_ID"] == "37-0"  # ONE catch-up pass from the cursor, not the tail
+
+
+def test_meeting_process_no_cursor_processes_full_history(monkeypatch):
+    """A never-processed meeting has no cursor ⇒ start from 0-0 (process the whole transcript once)."""
+    import redis
+
+    class FakeRedis:
+        kv: dict = {}
+
+        def set(self, k, v):
+            type(self).kv[k] = v
+
+        def get(self, k):
+            return None
+
+        def delete(self, k):
+            type(self).kv.pop(k, None)
+
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: FakeRedis())
+    runtime = _FakeRuntime()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), redis_url="redis://test",
+    ))
+
+    r = c.post("/api/meeting/process", json={"native_id": "m10", "on": True})
+
+    assert r.json()["resumed_from"] == "0-0"
+    assert runtime.spawned[0][2]["VEXA_TRANSCRIPT_START_ID"] == "0-0"
+
+
+def test_meeting_process_off_freezes_cursor(monkeypatch):
+    """OFF clears the processing flag but LEAVES the cursor frozen for the next re-enable."""
+    import redis
+
+    class FakeRedis:
+        def __init__(self):
+            self.kv = {"proc:meeting:m9": "1", "proc:meeting:m9:cursor": "37-0"}
+
+        def set(self, k, v):
+            self.kv[k] = v
+
+        def get(self, k):
+            return self.kv.get(k)
+
+        def delete(self, k):
+            self.kv.pop(k, None)
+
+    fake = FakeRedis()
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake)
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+    ))
+
+    r = c.post("/api/meeting/process", json={"native_id": "m9", "on": False})
+
+    assert r.json()["processing"] is False
+    assert "proc:meeting:m9" not in fake.kv          # flag cleared
+    assert fake.kv["proc:meeting:m9:cursor"] == "37-0"  # cursor frozen
+
+
 def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatch):
     import json
     import redis

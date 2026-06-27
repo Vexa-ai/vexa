@@ -230,6 +230,78 @@ def test_serve_meeting_starts_from_injected_cursor():
     assert s.cursors[0] == {"tc:m1": "42-0"}
 
 
+class ProcMeetingStream(MeetingStream):
+    """A MeetingStream that also serves as a key/value store (``set``) so we can observe the per-meeting
+    processed CURSOR, and exposes the cleaned notes XADD'd to ``proc:meeting:{native}`` separately."""
+
+    def __init__(self, inbox):
+        super().__init__(inbox)
+        self.kv = {}
+
+    def set(self, key, value):
+        self.kv[key] = value
+
+    def proc_notes(self, proc_stream):
+        return [json.loads(f["note"]) for name, f in self.out if name == proc_stream and "note" in f]
+
+
+def _notes_card_turn(segments):
+    """A card_turn that returns an LLM-style UPGRADE note for each input segment (id == segment_id)."""
+    for seg in segments:
+        yield {"type": "note", "note": {"id": seg["segment_id"], "speaker": seg.get("speaker", "Speaker"),
+                                        "text": f"clean:{seg.get('text', '')}", "pass": 1, "frozen": False}}
+
+
+def test_serve_meeting_emits_one_proc_note_per_segment_keyed_by_segment_id():
+    """Phase C (a): each NEW segment yields exactly ONE cleaned note onto the SEPARATE processed STREAM
+    (``proc:meeting:{native}``), keyed id == segment_id — the reliable 1:1 cleaned channel."""
+    s = ProcMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "um hello there"), "segment_id": "a"}),
+        _transcript("2-0", {**_seg("Raj", "yeah hi"), "segment_id": "b"}),
+    ])
+    serve_meeting(
+        s, transcript_stream="tc:m1", out_topic="unit:u:out", card_turn=_card_turn,
+        idle_ms=10, proc_stream="proc:meeting:m1", cursor_key="proc:meeting:m1:cursor",
+    )
+    notes = s.proc_notes("proc:meeting:m1")
+    ids = [n["id"] for n in notes]
+    # 1:1 — one baseline cleaned note per ingested segment, id == segment_id, never on out_topic.
+    assert ids.count("a") >= 1 and ids.count("b") >= 1
+    assert {n["id"] for n in notes} == {"a", "b"}
+    assert all(n["text"] for n in notes)
+    # the cards beat stays on its OWN topic — proc notes are NOT mixed into out_topic
+    assert all(name != "proc:meeting:m1" for name, _ in s.out if name == "unit:u:out")
+
+
+def test_serve_meeting_persists_and_advances_cursor():
+    """Phase C (b): the per-meeting CURSOR is persisted and ADVANCES to the last raw stream-id cleaned."""
+    s = ProcMeetingStream(inbox=[
+        _transcript("5-0", {**_seg("Jane", "first"), "segment_id": "a"}),
+        _transcript("6-0", {**_seg("Raj", "second"), "segment_id": "b"}),
+    ])
+    serve_meeting(
+        s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn,
+        idle_ms=10, proc_stream="proc:meeting:m1", cursor_key="proc:meeting:m1:cursor",
+    )
+    assert s.kv["proc:meeting:m1:cursor"] == "6-0"  # advanced to the last cleaned raw entry
+
+
+def test_serve_meeting_upgrades_proc_note_text_from_llm_rewrite():
+    """A valid LLM note for a segment UPGRADES its cleaned text on the proc stream (still 1:1 by id)."""
+    s = ProcMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "raw text"), "segment_id": "a"}, {**_seg("Raj", "more"), "segment_id": "b"}),
+    ])
+    serve_meeting(
+        s, transcript_stream="tc:m1", out_topic="o", card_turn=_notes_card_turn,
+        idle_ms=10, beat_segments=1, proc_stream="proc:meeting:m1", cursor_key="proc:meeting:m1:cursor",
+    )
+    notes = s.proc_notes("proc:meeting:m1")
+    by_id = {}
+    for n in notes:
+        by_id.setdefault(n["id"], []).append(n["text"])
+    assert "clean:raw text" in by_id["a"]  # the LLM upgrade landed on the proc stream for id 'a'
+
+
 def test_run_turn_persists_namespaced_session_file(tmp_path):
     """A chat turn on thread `work` captures the claude session id into its OWN namespaced continuity
     file (`.claude/sessions/work.session`) — distinct threads don't collide on `.claude/.session`."""
