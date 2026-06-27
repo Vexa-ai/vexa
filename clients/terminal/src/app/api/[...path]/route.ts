@@ -13,26 +13,27 @@
  *  stay as their own files — they need streaming / segment-specific shaping.
  */
 import type { NextRequest } from "next/server";
+import { resolveApiKey } from "../proxyAuth";
 
 export const dynamic = "force-dynamic";
 
 const AGENT_API = (process.env.AGENT_API_URL || "http://127.0.0.1:18100").replace(/\/$/, "");
 const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
-const BOT_KEY = process.env.VEXA_BOT_API_KEY || "";
 
 const MEETINGS_DOMAIN = /^(meetings|transcripts|bots)(\/|$)/;
 
-/** Resolve the upstream URL + headers for a captured /api/<path...> request. */
-function upstreamFor(path: string, search: string): { url: string; headers: HeadersInit } {
+/** Resolve the upstream URL + headers for a captured /api/<path...> request.
+ *  Meetings-domain calls carry the per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY). */
+async function upstreamFor(path: string, search: string): Promise<{ url: string; headers: HeadersInit }> {
   if (MEETINGS_DOMAIN.test(path)) {
-    return { url: `${GATEWAY_URL}/${path}${search}`, headers: { "X-API-Key": BOT_KEY } };
+    return { url: `${GATEWAY_URL}/${path}${search}`, headers: { "X-API-Key": await resolveApiKey() } };
   }
   return { url: `${AGENT_API}/api/${path}${search}`, headers: {} };
 }
 
 async function forward(req: NextRequest, params: Promise<{ path: string[] }>): Promise<Response> {
   const { path } = await params;
-  const { url, headers } = upstreamFor(path.join("/"), req.nextUrl.search);
+  const { url, headers } = await upstreamFor(path.join("/"), req.nextUrl.search);
 
   const init: RequestInit = { method: req.method, headers: { ...headers }, cache: "no-store" };
   if (req.method !== "GET" && req.method !== "DELETE") {

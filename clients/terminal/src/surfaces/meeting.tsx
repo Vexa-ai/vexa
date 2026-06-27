@@ -13,6 +13,7 @@ import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/Meeti
 import { liveMeeting, type MeetingMock } from "./mock";
 import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
+import { parseMeetingInput } from "./meetingId";
 
 // ── Connected docs — the meeting's knowledge-graph entity + the [[entities]] it links ─────────────
 //  The meeting doc lives at a deterministic path: kg/entities/meeting/<native>.md. When present we show
@@ -368,9 +369,22 @@ function MeetingsList() {
   const addBot = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
+    // Parse + validate the pasted link/id against the platform formats (mirrors join-form).
+    const parsed = parseMeetingInput(u);
+    if (!parsed) { setSent("err"); setTimeout(() => setSent(null), 4000); return; }
     setSent("sending");
     try {
-      const r = await fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: u }) });
+      // POST /bots through the authed gateway proxy (X-API-Key injected server-side from the cookie token).
+      const r = await fetch("/api/bots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: parsed.platform,
+          native_meeting_id: parsed.native_meeting_id,
+          meeting_url: u,
+          bot_name: "Vexa",
+        }),
+      });
       setSent(r.ok ? "ok" : "err");
       if (r.ok) setUrl("");
     } catch { setSent("err"); }

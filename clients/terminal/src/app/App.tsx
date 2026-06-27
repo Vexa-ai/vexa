@@ -13,6 +13,7 @@ import { PaletteServiceId, createPaletteService } from "../workbench/palette";
 import { registerEngineCommands } from "../workbench/commands";
 import { Workbench } from "../workbench/Workbench";
 import { registry } from "../contributions";
+import { AuthGate } from "./AuthGate";
 import "../surfaces";
 
 const container = createContainer([
@@ -32,8 +33,10 @@ export function App() {
   useEffect(() => setMounted(true), []);
   if (!mounted) return <div style={{ height: "100vh", background: "var(--bg)" }} />;
   return (
-    <ServicesProvider container={container}>
-      <Workbench />
-    </ServicesProvider>
+    <AuthGate>
+      <ServicesProvider container={container}>
+        <Workbench />
+      </ServicesProvider>
+    </AuthGate>
   );
 }

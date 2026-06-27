@@ -1,5 +1,6 @@
 /** SSE proxy — forwards the live meeting feed (transcript + copilot cards) from agent-api. */
 import type { NextRequest } from "next/server";
+import { resolveApiKey } from "../../proxyAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -68,8 +69,10 @@ export async function GET(req: NextRequest) {
   req.signal.addEventListener("abort", onClientGone);
 
   try {
+    const apiKey = await resolveApiKey();
     const upstream = await fetch(`${AGENT_API}/api/meeting/stream${req.nextUrl.search}`, {
       method: "GET",
+      headers: apiKey ? { "X-API-Key": apiKey } : {},
       signal: abort.signal,
     });
     if (!upstream.ok) {
