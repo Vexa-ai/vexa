@@ -354,3 +354,65 @@ class TestUpdateBotConfig:
             json={"language": "es"},
         )
         assert resp.status_code == 403
+
+
+class TestGetParticipants:
+    @pytest.mark.asyncio
+    async def test_get_participants_success(self, client, mock_db):
+        """GET participants → 200 with speakers aggregated from transcript segments."""
+        meeting = make_meeting(id=42)
+        rows = [
+            ("Alice", 3, datetime(2024, 1, 1, 12, 0, 0), datetime(2024, 1, 1, 12, 5, 0), 42.5),
+            ("Bob", 1, datetime(2024, 1, 1, 12, 1, 0), datetime(2024, 1, 1, 12, 1, 30), 8.0),
+        ]
+        # First execute() resolves the meeting; second returns aggregated rows.
+        mock_db.execute = AsyncMock(side_effect=[MockResult([meeting]), MockResult(rows)])
+
+        resp = await client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == 42
+        assert data["participant_count"] == 2
+        # Most active speaker first.
+        assert data["participants"][0]["name"] == "Alice"
+        assert data["participants"][0]["segment_count"] == 3
+        assert data["participants"][0]["speaking_time_seconds"] == 42.5
+        assert {p["name"] for p in data["participants"]} == {"Alice", "Bob"}
+
+    @pytest.mark.asyncio
+    async def test_get_participants_unknown_speaker(self, client, mock_db):
+        """Segments with a null speaker are reported under 'Unknown'."""
+        meeting = make_meeting(id=7)
+        rows = [(None, 2, datetime(2024, 1, 1, 12, 0, 0), datetime(2024, 1, 1, 12, 2, 0), 5.0)]
+        mock_db.execute = AsyncMock(side_effect=[MockResult([meeting]), MockResult(rows)])
+
+        resp = await client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["participant_count"] == 1
+        assert data["participants"][0]["name"] == "Unknown"
+
+    @pytest.mark.asyncio
+    async def test_get_participants_meeting_not_found(self, client, mock_db):
+        """GET participants for a non-existent meeting → 404."""
+        mock_db.execute = AsyncMock(return_value=MockResult([]))
+
+        resp = await client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
+        )
+
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_participants_auth_required(self, unauthed_client):
+        """GET participants without auth → 403."""
+        resp = await unauthed_client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
+        )
+        assert resp.status_code == 403

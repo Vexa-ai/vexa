@@ -1108,7 +1108,30 @@ class TranscriptionResponse(BaseModel): # Doesn't inherit MeetingResponse to avo
         from_attributes = True # Allows creation from ORM models (e.g., joined query result)
         use_enum_values = True
 
-# --- Utility Schemas --- 
+# --- Participant Schemas ---
+class ParticipantInfo(BaseModel):
+    """A single participant (speaker) detected in a meeting."""
+    name: str = Field(..., description="Participant/speaker name as detected in the meeting.")
+    segment_count: int = Field(..., description="Number of transcript segments attributed to this participant.")
+    first_seen: Optional[datetime] = Field(None, description="UTC time of this participant's first transcript segment.")
+    last_seen: Optional[datetime] = Field(None, description="UTC time of this participant's most recent transcript segment.")
+    speaking_time_seconds: float = Field(0.0, description="Total speaking time in seconds (sum of segment durations).")
+
+    class Config:
+        from_attributes = True
+
+class ParticipantsResponse(BaseModel):
+    """Response for getting a meeting's participants."""
+    id: int = Field(..., description="Internal database ID for the meeting.")
+    platform: str = Field(..., description="Meeting platform.")
+    native_meeting_id: Optional[str] = Field(None, description="Native (platform-specific) meeting ID.")
+    participant_count: int = Field(..., description="Number of distinct participants detected.")
+    participants: List[ParticipantInfo] = Field(default_factory=list, description="Participants detected in the meeting.")
+
+    class Config:
+        from_attributes = True
+
+# --- Utility Schemas ---
 
 class HealthResponse(BaseModel):
     status: str
