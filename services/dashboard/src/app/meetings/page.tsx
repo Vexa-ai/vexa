@@ -37,6 +37,9 @@ function PlatformIcon({ platform }: { platform: string }) {
   if (platform === "browser_session") {
     return <Monitor className="h-5 w-5 text-muted-foreground" />;
   }
+  if (platform === "discord") {
+    return <Image src="/icons/discord.svg" alt="Discord" width={20} height={20} className="rounded" />;
+  }
   return <Image src="/icons/icons8-zoom-96.png" alt="Zoom" width={20} height={20} className="rounded" />;
 }
 

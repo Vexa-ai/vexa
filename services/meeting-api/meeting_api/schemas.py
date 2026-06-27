@@ -212,7 +212,10 @@ class Platform(str, Enum):
     ZOOM = "zoom"
     TEAMS = "teams"
     BROWSER_SESSION = "browser_session"
-    
+    # External ingest platform: transcripts are written directly by a third-party
+    # adapter rather than a Vexa bot (same non-bot treatment as BROWSER_SESSION).
+    DISCORD = "discord"
+
     @property
     def bot_name(self) -> str:
         """
@@ -307,6 +310,10 @@ class Platform(str, Enum):
                 # Browser sessions use opaque IDs (UUIDs, etc.) — no meeting URL to construct
                 if native_id:
                     return f"browser_session://{native_id}"
+                return None
+            elif platform == Platform.DISCORD:
+                # Discord meetings are ingested by an external adapter (native_id is the
+                # channel ID); there is no joinable Vexa URL to construct.
                 return None
             else:
                 return None
