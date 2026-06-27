@@ -554,13 +554,14 @@ class VexaClient:
 
     # --- Admin: Token Management ---
 
-    def create_token(self, user_id: Optional[int] = None) -> Dict[str, Any]:
+    def create_token(self, user_id: Optional[int] = None, scopes: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Generates a new API token for a specific user (Admin Only).
         If no user_id is provided, uses self.user_id.
 
         Args:
             user_id: The ID of the user for whom to create the token. If None, uses self.user_id.
+            scopes: Optional list of token scopes to assign to the token. Valid scopes are "bot","browser" and "tx".
 
         Returns:
             Dictionary representing the created APIToken object.
@@ -569,7 +570,12 @@ class VexaClient:
             if self.user_id is None:
                 raise VexaClientError("user_id must be provided either as parameter or set in client instance.")
             user_id = self.user_id
-        return self._request("POST", f"/admin/users/{user_id}/tokens", api_type='admin')
+        
+        params = {}
+        if scopes:
+            params['scopes'] = ",".join(scopes)
+
+        return self._request("POST", f"/admin/users/{user_id}/tokens", api_type='admin', params = params)
 
     def set_api_key(self, api_key: str) -> None:
         """

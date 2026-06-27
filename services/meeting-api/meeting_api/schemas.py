@@ -82,6 +82,8 @@ class MeetingCompletionReason(str, Enum):
     STOPPED_WITH_NO_AUDIO = "stopped_with_no_audio"  # Bot ran ≥30s with transcribe enabled but produced 0 segments (125 cases / 30d)
     # Pack D (#5) — canonicalized pre-admission failure reasons:
     JOIN_FAILURE = "join_failure"  # Bot failed to navigate to the meeting (pre-lobby fast fail, distinct from user-stopped)
+    # v0.10.6 (#421) — split lobby timeout from explicit host denial:
+    NEVER_ADMITTED = "never_admitted"  # Bot waited full lobby timeout; host did not explicitly deny
 
 class MeetingFailureStage(str, Enum):
     """
@@ -210,7 +212,10 @@ class Platform(str, Enum):
     ZOOM = "zoom"
     TEAMS = "teams"
     BROWSER_SESSION = "browser_session"
-    
+    # External ingest platform: transcripts are written directly by a third-party
+    # adapter rather than a Vexa bot (same non-bot treatment as BROWSER_SESSION).
+    DISCORD = "discord"
+
     @property
     def bot_name(self) -> str:
         """
@@ -305,6 +310,10 @@ class Platform(str, Enum):
                 # Browser sessions use opaque IDs (UUIDs, etc.) — no meeting URL to construct
                 if native_id:
                     return f"browser_session://{native_id}"
+                return None
+            elif platform == Platform.DISCORD:
+                # Discord meetings are ingested by an external adapter (native_id is the
+                # channel ID); there is no joinable Vexa URL to construct.
                 return None
             else:
                 return None
@@ -594,6 +603,10 @@ class MeetingCreate(BaseModel):
         None,
         description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
     )
+    zoom_zak_token: Optional[str] = Field(
+        None,
+        description="Optional one-time Zoom ZAK token for joining as a specific Zoom user."
+    )
     voice_agent_enabled: Optional[bool] = Field(
         False,
         description="Enable voice agent (TTS, chat, screen share, avatar streaming) capabilities for this meeting"
@@ -675,6 +688,16 @@ class MeetingCreate(BaseModel):
             platform = info.data.get('platform') if info.data else None
             if platform != Platform.ZOOM:
                 raise ValueError("zoom_obf_token is only supported for Zoom meetings")
+        return v
+
+    @field_validator('zoom_zak_token')
+    @classmethod
+    def validate_zoom_zak_token(cls, v, info: ValidationInfo):
+        """Validate ZAK token usage based on platform."""
+        if v is not None and v != "":
+            platform = info.data.get('platform') if info.data else None
+            if platform != Platform.ZOOM:
+                raise ValueError("zoom_zak_token is only supported for Zoom meetings")
         return v
 
     @field_validator('language')
@@ -1085,7 +1108,30 @@ class TranscriptionResponse(BaseModel): # Doesn't inherit MeetingResponse to avo
         from_attributes = True # Allows creation from ORM models (e.g., joined query result)
         use_enum_values = True
 
-# --- Utility Schemas --- 
+# --- Participant Schemas ---
+class ParticipantInfo(BaseModel):
+    """A single participant (speaker) detected in a meeting."""
+    name: str = Field(..., description="Participant/speaker name as detected in the meeting.")
+    segment_count: int = Field(..., description="Number of transcript segments attributed to this participant.")
+    first_seen: Optional[datetime] = Field(None, description="UTC time of this participant's first transcript segment.")
+    last_seen: Optional[datetime] = Field(None, description="UTC time of this participant's most recent transcript segment.")
+    speaking_time_seconds: float = Field(0.0, description="Total speaking time in seconds (sum of segment durations).")
+
+    class Config:
+        from_attributes = True
+
+class ParticipantsResponse(BaseModel):
+    """Response for getting a meeting's participants."""
+    id: int = Field(..., description="Internal database ID for the meeting.")
+    platform: str = Field(..., description="Meeting platform.")
+    native_meeting_id: Optional[str] = Field(None, description="Native (platform-specific) meeting ID.")
+    participant_count: int = Field(..., description="Number of distinct participants detected.")
+    participants: List[ParticipantInfo] = Field(default_factory=list, description="Participants detected in the meeting.")
+
+    class Config:
+        from_attributes = True
+
+# --- Utility Schemas ---
 
 class HealthResponse(BaseModel):
     status: str

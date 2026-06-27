@@ -1991,6 +1991,8 @@ export default function MeetingDetailPage() {
                       ? "/icons/icons8-google-meet-96.png"
                       : currentMeeting.platform === "teams"
                       ? "/icons/icons8-teams-96.png"
+                      : currentMeeting.platform === "discord"
+                      ? "/icons/discord.svg"
                       : "/icons/icons8-zoom-96.png"}
                     alt={platformConfig.name}
                     width={32}

@@ -1303,11 +1303,11 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     const isGoogleMeet = botConfig.platform === 'google_meet';
     speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
-      minAudioDuration: 3,     // 3s of unconfirmed audio before submission
-      submitInterval: 2,       // submit every 2s — lower latency
+      minAudioDuration: process.env.MIN_AUDIO_DURATION_SEC ? parseFloat(process.env.MIN_AUDIO_DURATION_SEC) : 3,  // s of unconfirmed audio before submission
+      submitInterval: process.env.SUBMIT_INTERVAL_SEC ? parseFloat(process.env.SUBMIT_INTERVAL_SEC) : 2,          // submit every Ns
       confirmThreshold: 2,     // 2 consecutive matches — faster confirmation
       maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
-      idleTimeoutSec: 15,      // 15s idle → emit + reset
+      idleTimeoutSec: process.env.IDLE_TIMEOUT_SEC ? parseFloat(process.env.IDLE_TIMEOUT_SEC) : 15,                // Ns idle → emit + reset
     });
     // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
     // SpeakerStreamManager no longer does VAD — it only receives real speech.

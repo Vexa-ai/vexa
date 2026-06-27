@@ -41,6 +41,10 @@ profiles:
       TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
       TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
       INTERNAL_API_SECRET: "${INTERNAL_API_SECRET}"
+      # Segment-latency knobs (optional) — lower for real-time/voice-agent use.
+      MIN_AUDIO_DURATION_SEC: "${MIN_AUDIO_DURATION_SEC:-3}"
+      SUBMIT_INTERVAL_SEC: "${SUBMIT_INTERVAL_SEC:-2}"
+      IDLE_TIMEOUT_SEC: "${IDLE_TIMEOUT_SEC:-15}"
     ports:
       "9222/tcp": {}         # CDP debug port
 

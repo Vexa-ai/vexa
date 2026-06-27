@@ -372,14 +372,16 @@ async def ws_authorize_subscribe(
         platform_value = meeting_ref.platform.value if isinstance(meeting_ref.platform, Platform) else str(meeting_ref.platform)
         native_id = meeting_ref.native_meeting_id
 
-        try:
-            constructed = Platform.construct_meeting_url(platform_value, native_id)
-        except Exception:
-            constructed = None
-        if not constructed:
-            errors.append(f"meetings[{idx}] invalid native_meeting_id for platform '{platform_value}'")
-            continue
-
+        # Authorization is DB ownership, not URL constructability. The
+        # ``Platform.construct_meeting_url`` helper is for *client-side*
+        # reconstruction of join URLs and explicitly returns ``None`` for
+        # hash-derived native_meeting_id forms (e.g. 16-hex Teams IDs
+        # generated server-side from raw enterprise URLs — see PR #140).
+        # Running it as a pre-check rejected legitimate subscriptions to
+        # meetings the user already owned in the DB (#384). Look up the
+        # meeting first; only fall back to URL validation when the row
+        # is absent so callers still get a clear "invalid native_id"
+        # message for never-seen IDs.
         stmt_meeting = select(Meeting).where(
             Meeting.user_id == current_user.id,
             Meeting.platform == platform_value,
@@ -389,7 +391,14 @@ async def ws_authorize_subscribe(
         result = await db.execute(stmt_meeting)
         meeting = result.scalars().first()
         if not meeting:
-            errors.append(f"meetings[{idx}] not authorized or not found for user")
+            try:
+                constructed = Platform.construct_meeting_url(platform_value, native_id)
+            except Exception:
+                constructed = None
+            if not constructed:
+                errors.append(f"meetings[{idx}] invalid native_meeting_id for platform '{platform_value}'")
+            else:
+                errors.append(f"meetings[{idx}] not authorized or not found for user")
             continue
 
         authorized.append({
