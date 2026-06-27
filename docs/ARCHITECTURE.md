@@ -68,61 +68,25 @@ microservices, carved where a real force requires it (runtime, scale, data, ephe
 
 ---
 
-## 3. The structure (current scope)
+## 3. The structure — render the chart, don't snapshot it
+
+The module / service / contract inventory **and** the runtime data-flow ARE the chart —
+[`architecture.calm.json`](../architecture.calm.json), the single source of truth, gated against drift
+(P23, `gate:dataflow`). A hand-written tree here would drift (it already had), so structure lives nowhere
+but the chart. Render any slice instead of restating it:
 
 ```
-vexa/
-├── core/           THE PLATFORM BACKEND — the five backend domains live together so the tree
-│   │               reads itself: the runnable platform is `core/`, everything else (clients, sdks,
-│   │               integrations, deploy, tools) consumes it across a contract seam.
-│   ├── runtime/    ① KERNEL — spawn/execute workloads · Docker·K8s·process · domain-agnostic
-│   │   └── contracts/  runtime.v1 · schedule.v1 (one-shot/cron job spec for the Scheduler)
-│   ├── meetings/   ② CAPTURE — meeting-api · bot · transcription · tts · eval/ → transcript + events
-│   │   └── contracts/  transcript.v1 · lifecycle.v1 · acts.v1 · invocation.v1 · captured-signal.v1 · flagged-issue.v1 · webhook.v1
-│   ├── agent/      ③ EXECUTION — agent-api (one Dispatcher: trigger → unit.v1 → claude-turn over a mounted
-│   │   │           workspace, spawned via runtime.v1) · routines (cron) · generic event ingress · tool mechanism
-│   │   └── contracts/  unit.v1 (universal invocation envelope) · workspace.v1 · routine.v1 · task.v1 ·
-│   │       │           tool.v1 · event.v1 · proactive-card.v1 · invoke.v1 (sealed; meetings→agent, retiring)
-│   ├── identity/   access · accounts · tokens · audit — authN/authZ   (+ rest-api · webhook contracts when built)
-│   └── gateway/    the edge — auth · routing · WS fan-out
-├── integrations/   out/ (FINOS adapters, on the agent emit port) · in/ (calendar → scheduler)   [email/github deferred]
-├── clients/        terminal (AI-first workbench: Chat·Workspace·Tasks·Routines surfaces) · dashboard · extension · desktop · telegram · mcp
-├── sdks/           vexa-client · vexa-cli · transcript-rendering
-├── tools/ · deploy/ · docs/
-├── package.json · pnpm-workspace.yaml · turbo.json    ← workspace root
-└── .github/workflows/gates.yml
-# `core/` groups the platform domains; it is an ORGANIZING folder, not a domain — it owns no code or
-# contract of its own, so the bounded-context rules (P1–P3) still apply per-domain, one level down.
-# Contracts NEST with their owner domain (no top-level schemas/). Language-neutrality is the FORMAT
-# (JSON Schema, read by path), not the location — so each domain stays self-contained and liftable.
-# A workspace is a USER git repo (data, not in this tree); template = core/agent/contracts/workspace.v1.
-# deferred (NOT platform domains): crm (an app over a workspace, P11) · retrieval (a vector+KG service)
+pnpm arch:viz cluster:<domain|terminal>   # a bundle's services/modules/contracts + the carriers it touches
+pnpm arch:viz flow:<id> | path:<carrier>  # a data path | a carrier's writers -> readers (contract per hop)
 ```
 
-**Dependency rules** (the `gate:graph` spec — acyclic):
-
-```
-A domain's INTERNALS (services/, modules/) may import: its own code · another domain's contracts/
-(the published seam) · core/runtime/contracts. They may NOT import another domain's internals.
-
-runtime internals  → (nothing above; owns runtime.v1 · schedule.v1)
-meetings internals → core/runtime/contracts · its own contracts
-agent internals    → core/runtime/contracts (spawns workers + schedules via runtime.v1 · schedule.v1) ·
-                     core/meetings/contracts (consumes transcript.v1 / invoke.v1) · its own contracts
-identity · gateway → contracts only (gateway routes over HTTP, imports no internals)
-clients · sdks     → contracts (+ sdks); clients/terminal consumes core/agent/contracts (unit.v1 et al.)
-
-★ meetings ⊥ agent at the INTERNALS level. agent MAY reference core/meetings/contracts/transcript.v1
-  (that IS the seam); it may never import core/meetings/services or core/meetings/modules.
-```
-
-**Contract placement** (P4 applied): a contract **nests with its owner domain** in `<domain>/contracts/`
-as JSON Schema — `runtime.v1`·`schedule.v1`→runtime, `transcript/lifecycle/acts/invocation.v1`→meetings,
-`unit.v1`·`workspace.v1`·`routine.v1`·`task.v1`·`tool.v1`·`event.v1`·`proactive-card.v1`·`invoke.v1`→agent.
-The agent set is **unsealed** (in development) except `invoke.v1` (sealed; the meetings→agent seam, retiring as
-callers move to `unit.v1`); seal them via `pnpm seal:contracts` as each freezes. Cross-language is satisfied by the *format* (JSON Schema, read by path), **not** a
-shared location — so domains stay self-contained and liftable. Purely in-process, TS-to-TS brick contracts
-(e.g. `capture.v1`) still nest as `.ts` inside the owning module's `src/contracts/`.
+**Code-dependency rule** — the acyclic seam, enforced by `gate:graph` / `gate:graph-py` (spec in
+`.dependency-cruiser.cjs` + `scripts/check-isolation-py.mjs`), so it is doctrine, not a snapshot: a
+domain's internals (`services/`, `modules/`) may import only **its own code · another domain's
+`contracts/` · `core/runtime/contracts`** — never another domain's internals. **meetings ⊥ agent** at the
+internals level: agent may reference `core/meetings/contracts/transcript.v1` (that IS the seam), never
+`core/meetings/services` / `modules`. Contracts **nest with their owner domain** as JSON Schema (P4); the
+chart lists which contract each domain exposes.
 
 ---
 
