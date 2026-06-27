@@ -599,20 +599,13 @@ function gateDataflow() {
   };
 
   // (b) render-only: a forbidden symbol must not be defined/used inside the node's own source.
-  // Known, reasoned debt is bounded by an explicit waiver list (cf. gate:contract-conformance); a NEW
-  // (unwaived) render-only violation still turns RED. Completeness + seal above are never waived.
-  const RENDER_ONLY_WAIVERS = new Map([
-    ["terminal:buildMeetingNotes", "Phase C — the live-transcript refactor deletes the terminal's buildMeetingNotes re-derivation (gate:dataflow DoD)"],
-  ]);
-  const waived = [];
+  // Enforced with NO waiver — any render-only violation (reader re-deriving a producer's data) turns RED.
   for (const n of nodes) {
     const rc = (n.controls || {})["render-only"]; if (!rc) continue;
     const np = (n.metadata || []).find((m) => m.path)?.path;
     for (const req of (rc.requirements || [])) for (const sym of (req.config?.["forbidden-symbols"] || [])) {
       const hits = grepFiles(sym).filter((f) => !np || f.startsWith(np));
       if (!hits.length) continue;
-      const key = `${n["unique-id"]}:${sym}`;
-      if (RENDER_ONLY_WAIVERS.has(key)) { waived.push(`${key} — ${RENDER_ONLY_WAIVERS.get(key)}`); continue; }
       errs.push(`render-only: '${n["unique-id"]}' re-derives producer data — '${sym}' found in ${hits.map(rel).join(", ")}`);
     }
   }
@@ -645,7 +638,6 @@ function gateDataflow() {
   if (errs.length) return fail(["dataflow (P23) — data-flow ownership violations:", ...errs.map((e) => "   " + e)]);
   const carriers = nodes.filter((n) => (n.controls || {}).ownership).length;
   console.log(`  ✓ gate:dataflow — ${nodes.length} nodes · ${rels.length} edges · ${carriers} carriers · complete + sealed (P23)`);
-  if (waived.length) console.log(`     known-debt (waived render-only): ${waived.join(" ; ")}`);
   if (report.length) console.log(`     detected writers: ${report.join(" ")}`);
   if (shared.length) console.log(`     shared-writer (review, P23 prefers one): ${shared.join(" ")}`);
   if (undeclared.length) console.log(`     note (advisory, attribution approximate): ${undeclared.join("; ")}`);

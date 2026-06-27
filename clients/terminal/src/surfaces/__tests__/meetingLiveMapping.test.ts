@@ -7,7 +7,7 @@ import { useMeetingLive, type LiveSegment } from "../meetingLive";
  *
  * The original bug: a `completed:false` (pending / in-progress ASR) transcript event mapped
  * through to a segment that had its `completed` flag stripped, so the downstream meeting-render
- * path (useMeeting -> buildMeetingNotes) could no longer tell pending from finalized. The wire
+ * path (useMeeting -> buildProcessedNotes) could no longer tell pending from finalized. The wire
  * timestamp-derived `tsMs` likewise had to survive.
  *
  * `useMeetingLive(meetingId, sessionUid)` opens an EventSource and accumulates events into a

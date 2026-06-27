@@ -29,7 +29,7 @@ function hms(at: number): string {
 }
 
 /** RAW WIRE — the UNCLEANED truth: a dedicated EventSource that appends EVERY transcript event
- *  exactly as it arrives off the SSE (no upsert-by-id, no buildMeetingNotes clustering, no copilot).
+ *  exactly as it arrives off the SSE (no upsert-by-id, no note shaping, no copilot).
  *  This is what the bot actually emits — every pending refinement, every re-word — so you can watch
  *  the raw ASR behaviour in real time. Capped to the last 600 events. */
 interface RawEvent { at: number; speaker?: string; text?: string; completed?: boolean; id?: string; tsMs?: number }

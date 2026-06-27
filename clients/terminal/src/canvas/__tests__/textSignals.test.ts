@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMeetingNotes, extractNoteTags } from "../notes";
+import { buildProcessedNotes, extractNoteTags } from "../notes";
 import { cleanProcessedNoteText, cleanTranscriptText, extractNotableNumbers } from "../textSignals";
 
 describe("transcript text cleanup", () => {
@@ -64,8 +64,8 @@ describe("live note tag extraction", () => {
 });
 
 describe("live note shaping", () => {
-  it("keeps raw-derived notes visible while processed notes are partial", () => {
-    const notes = buildMeetingNotes(
+  it("renders each raw segment 1:1 while a processed note replaces the segment it covers", () => {
+    const notes = buildProcessedNotes(
       [{ id: "seg-2", speaker: "Jane", text: "Speaker mentions using Slack and finding the feature appealing.", ts: 12 }],
       [
         { id: "seg-0", speaker: "Jane", text: "first raw line", ts: 1 },
@@ -79,10 +79,13 @@ describe("live note shaping", () => {
     );
 
     expect(notes.map((note) => note.text)).toEqual([
-      "First raw line second raw line",
+      "First raw line",
+      "Second raw line",
       "I use Slack and find the feature appealing.",
-      "Third raw line fourth raw line fifth raw line",
+      "Third raw line",
+      "Fourth raw line",
+      "Fifth raw line",
     ]);
-    expect(notes.map((note) => note.id)).toEqual(["note-0", "seg-2", "note-3"]);
+    expect(notes.map((note) => note.id)).toEqual(["seg-0", "seg-1", "seg-2", "seg-3", "seg-4", "seg-5"]);
   });
 });
