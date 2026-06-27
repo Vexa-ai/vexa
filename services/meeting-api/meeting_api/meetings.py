@@ -714,6 +714,56 @@ async def _find_meeting_any_status(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+async def _enforce_bot_concurrency_limit(
+    db: AsyncSession,
+    user: Any,
+    *,
+    exclude_browser_session: bool,
+) -> None:
+    """Enforce the per-user concurrent bot quota before launching a bot.
+
+    A limit of 0 (or less) means the user's quota is **depleted** — no launches
+    are allowed. Unlimited access is represented by a large positive limit, not 0
+    (the dashboard renders ``max_concurrent_bots == 0`` as "depleted"). Treating
+    0 as "unlimited" — by only checking ``limit > 0`` — let 0-quota users (the
+    admin-api default) launch unlimited bots; see issue #402.
+
+    Raises HTTP 403 when the quota is depleted or already fully in use.
+    """
+    user_limit = int(getattr(user, "max_concurrent_bots", 0) or 0)
+    if user_limit <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Concurrent bot quota is depleted (limit is 0). Contact your administrator to increase it.",
+        )
+
+    active_statuses = [
+        s.value
+        for s in (
+            MeetingStatus.REQUESTED,
+            MeetingStatus.JOINING,
+            MeetingStatus.AWAITING_ADMISSION,
+            MeetingStatus.ACTIVE,
+        )
+    ]
+    conditions = [
+        Meeting.user_id == user.id,
+        Meeting.status.in_(active_statuses),
+    ]
+    if exclude_browser_session:
+        # Exclude non-bot platforms from the count — browser_session is
+        # infrastructure and discord is external ingest; neither spawns a Vexa bot.
+        conditions.append(Meeting.platform.notin_(["browser_session", "discord"]))
+
+    count_stmt = select(func.count()).select_from(Meeting).where(and_(*conditions))
+    active_count = int((await db.execute(count_stmt)).scalar() or 0)
+    if active_count >= user_limit:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Concurrent bot limit reached ({active_count}/{user_limit}).",
+        )
+
+
 @router.post(
     "/bots",
     response_model=MeetingResponse,
@@ -764,18 +814,8 @@ async def request_bot(
 
     # --- Browser session mode ---
     if req.mode == "browser_session":
-        # Concurrency check
-        user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
-        if user_limit > 0:
-            count_stmt = select(func.count()).select_from(Meeting).where(
-                and_(
-                    Meeting.user_id == current_user.id,
-                    Meeting.status.in_([s.value for s in (MeetingStatus.REQUESTED, MeetingStatus.JOINING, MeetingStatus.AWAITING_ADMISSION, MeetingStatus.ACTIVE)]),
-                )
-            )
-            active_count = int((await db.execute(count_stmt)).scalar() or 0)
-            if active_count >= user_limit:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Concurrent bot limit reached ({active_count}/{user_limit})")
+        # Concurrency check (counts browser sessions too).
+        await _enforce_bot_concurrency_limit(db, current_user, exclude_browser_session=False)
 
         session_token = secrets.token_urlsafe(24)
         new_meeting = Meeting(
@@ -953,18 +993,7 @@ async def request_bot(
 
     # Concurrency limit (exclude non-bot platforms from the count — browser_session is
     # infrastructure and discord is external ingest; neither spawns a Vexa bot)
-    user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
-    if user_limit > 0:
-        count_stmt = select(func.count()).select_from(Meeting).where(
-            and_(
-                Meeting.user_id == current_user.id,
-                Meeting.status.in_([s.value for s in (MeetingStatus.REQUESTED, MeetingStatus.JOINING, MeetingStatus.AWAITING_ADMISSION, MeetingStatus.ACTIVE)]),
-                Meeting.platform.notin_(["browser_session", "discord"]),
-            )
-        )
-        active_count = int((await db.execute(count_stmt)).scalar() or 0)
-        if active_count >= user_limit:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"User has reached the maximum concurrent bot limit ({user_limit}).")
+    await _enforce_bot_concurrency_limit(db, current_user, exclude_browser_session=True)
 
     # Create meeting record
     meeting_data: Dict[str, Any] = {}
