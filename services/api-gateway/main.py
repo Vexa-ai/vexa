@@ -79,8 +79,8 @@ if not all([ADMIN_API_URL, MEETING_API_URL, TRANSCRIPTION_COLLECTOR_URL, MCP_URL
     raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Security Schemes for OpenAPI
-api_key_scheme = APIKeyHeader(name="X-API-Key", description="API Key for client operations", auto_error=False)
-admin_api_key_scheme = APIKeyHeader(name="X-Admin-API-Key", description="API Key for admin operations", auto_error=False)
+api_key_scheme = APIKeyHeader(name="X-API-Key", scheme_name="ApiKeyAuth", description="API Key for client operations", auto_error=False)
+admin_api_key_scheme = APIKeyHeader(name="X-Admin-API-Key", scheme_name="AdminApiKeyAuth", description="API Key for admin operations", auto_error=False)
 
 _VEXA_ENV = os.getenv("VEXA_ENV", "development")
 _PUBLIC_DOCS = _VEXA_ENV != "production"
