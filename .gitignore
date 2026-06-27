@@ -16,3 +16,6 @@ deploy/execution-targets.json
 /*.png
 # local Claude Code settings + worktrees (per-machine, never committed)
 .claude/
+# generated architecture perspectives (regenerate: pnpm arch:viz) — keep the README, ignore the SVGs
+docs/views/*
+!docs/views/README.md

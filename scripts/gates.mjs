@@ -208,6 +208,10 @@ function gateSchema() {
 // BACK-COMPATIBLE change re-seals (`pnpm seal:contracts`) — a one-line seal diff that rides a
 // `lane:contract` review. Unsealed contracts (still in development) are reported, not failed.
 const SEAL_FILE = join(ROOT, "contracts.seal.json");
+const ARCH_FILE = join(ROOT, "architecture.calm.json");
+const ARCH_SEAL = join(ROOT, "architecture.seal.json");
+// canonical hash of the chart (parsed → re-stringified, so formatting/whitespace doesn't churn the seal)
+const archHash = () => createHash("sha256").update(JSON.stringify(JSON.parse(readFileSync(ARCH_FILE, "utf8")))).digest("hex");
 function gateContractVersion() {
   const dirs = contractVersionDirs();
   if (!dirs.length) { console.log("  ✓ gate:contract-version — no contracts yet (green-on-empty)"); return true; }
@@ -520,7 +524,135 @@ function gateExecutionEnv() {
   return true;
 }
 
-const GATES = { readme: gateReadme, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+// gate:dataflow (P23) — data-flow ownership, the dimension the rest of the suite did not model. The
+// architecture.calm.json registry (FINOS CALM) declares each data carrier's allowed writer-set and
+// per-node controls. This gate: (a) checks the model is internally consistent; (b) enforces
+// `render-only` controls — a reader must NOT re-derive a producer's data (e.g. no transcript clustering
+// in a client); (c) best-effort diffs declared ownership against real code (who actually xadds/publishes
+// each carrier). Cross-language, var-indirected writes are not always statically attributable, so (c)
+// reports detected writers and hard-fails only on a clearly-attributable undeclared writer.
+// GREEN-ON-EMPTY before architecture.calm.json lands.
+function gateDataflow() {
+  const file = join(ROOT, "architecture.calm.json");
+  if (!existsSync(file)) { console.log("  ✓ gate:dataflow — no architecture.calm.json yet (green-on-empty)"); return true; }
+  let model; try { model = JSON.parse(readFileSync(file, "utf8")); }
+  catch (e) { return fail([`dataflow: architecture.calm.json is not valid JSON — ${e.message}`]); }
+
+  const nodes = model.nodes || [], rels = model.relationships || [], flows = model.flows || [];
+  const byId = new Map(nodes.map((n) => [n["unique-id"], n]));
+  const relIds = new Set(rels.map((r) => r["unique-id"]));
+  const errs = [];
+
+  // (a0) seal — the chart is the asserted-true baseline; any change must be re-sealed (a deliberate,
+  // reviewed act). Mirrors contracts.seal.json: `pnpm seal:arch` stamps the canonical hash; drift fails
+  // here until re-sealed, so a silent edit to ownership/edges/flows can't slip through review.
+  if (existsSync(ARCH_SEAL)) {
+    const sealed = (JSON.parse(readFileSync(ARCH_SEAL, "utf8")) || {})["architecture.calm.json"];
+    if (sealed && sealed !== archHash()) errs.push("seal: architecture.calm.json changed since last seal — review the diff, then run `pnpm seal:arch` (the chart is the asserted-true baseline; drift from it is deliberate-only)");
+  }
+
+  // (a) consistency: every relationship + flow transition references a declared node/relationship
+  for (const r of rels) {
+    const t = r["relationship-type"] || {}, refs = [];
+    if (t.connects) refs.push(t.connects.source?.node, t.connects.destination?.node);
+    for (const k of ["composed-of", "deployed-in"]) if (t[k]) { refs.push(t[k].container, ...(t[k].nodes || [])); }
+    if (t.interacts) refs.push(...(t.interacts.nodes || []));
+    for (const id of refs.filter(Boolean)) if (!byId.has(id)) errs.push(`relationship ${r["unique-id"]} -> unknown node '${id}'`);
+  }
+  for (const f of flows) for (const tr of (f.transitions || []))
+    if (!relIds.has(tr["relationship-unique-id"])) errs.push(`flow ${f["unique-id"]} -> unknown relationship '${tr["relationship-unique-id"]}'`);
+
+  // (a2) completeness — the model covers EVERY real service/module/contract/client (no drift), and no
+  // node points at a path that no longer exists (no phantom). This is the anti-drift guard: add a module
+  // without registering it here and CI goes red.
+  const lsdirs = (p) => existsSync(join(ROOT, p)) ? readdirSync(join(ROOT, p)).filter((n) => { try { return statSync(join(ROOT, p, n)).isDirectory(); } catch { return false; } }) : [];
+  const required = new Set();
+  for (const dom of lsdirs("core")) {
+    for (const s of lsdirs(`core/${dom}/services`)) required.add(`core/${dom}/services/${s}`);
+    for (const m of lsdirs(`core/${dom}/modules`)) required.add(`core/${dom}/modules/${m}`);
+    for (const c of lsdirs(`core/${dom}/contracts`)) if (/\.v\d+$/.test(c)) required.add(`core/${dom}/contracts/${c}`);
+  }
+  for (const c of lsdirs("deploy/contracts")) if (/\.v\d+$/.test(c)) required.add(`deploy/contracts/${c}`);
+  // a client that is composed-of (a "mapped" client, e.g. terminal) must register every src/* concern
+  // module too, so its internal modularity can't drift either; unmapped clients stay opaque webclients.
+  const containers = new Set(rels.filter((r) => r["relationship-type"]?.["composed-of"]).map((r) => r["relationship-type"]["composed-of"].container));
+  for (const cl of lsdirs("clients")) {
+    required.add(`clients/${cl}`);
+    const clNode = nodes.find((n) => n["node-type"] === "webclient" && (n.metadata || []).some((mm) => mm.path === `clients/${cl}`));
+    if (clNode && containers.has(clNode["unique-id"]))
+      for (const d of lsdirs(`clients/${cl}/src`)) required.add(`clients/${cl}/src/${d}`);
+  }
+  const modelPaths = new Set(nodes.flatMap((n) => (n.metadata || []).map((m) => m.path).filter(Boolean)));
+  for (const r of [...required].sort()) if (!modelPaths.has(r)) errs.push(`completeness: '${r}' exists on disk but is not registered in architecture.calm.json`);
+  for (const n of nodes) for (const m of (n.metadata || [])) if (m.path && !existsSync(join(ROOT, m.path))) errs.push(`completeness: node '${n["unique-id"]}' points at missing path '${m.path}'`);
+
+  // path -> owning node (longest-prefix wins)
+  const paths = nodes.filter((n) => (n.metadata || []).some((m) => m.path))
+    .map((n) => ({ id: n["unique-id"], path: n.metadata.find((m) => m.path).path }))
+    .sort((a, b) => b.path.length - a.path.length);
+  const ownerOf = (f) => (paths.find((p) => f.startsWith(p.path)) || {}).id;
+  const grepFiles = (re) => {
+    try {
+      return execSync(`grep -rlE ${JSON.stringify(re)} --include=*.py --include=*.ts --include=*.tsx core clients 2>/dev/null | grep -vE 'node_modules|/dist/|\\.test\\.|/tests/|/eval/' || true`,
+        { cwd: ROOT, encoding: "utf8" }).split("\n").map((s) => s.trim()).filter(Boolean);
+    } catch { return []; }
+  };
+
+  // (b) render-only: a forbidden symbol must not be defined/used inside the node's own source.
+  // Known, reasoned debt is bounded by an explicit waiver list (cf. gate:contract-conformance); a NEW
+  // (unwaived) render-only violation still turns RED. Completeness + seal above are never waived.
+  const RENDER_ONLY_WAIVERS = new Map([
+    ["terminal:buildMeetingNotes", "Phase C — the live-transcript refactor deletes the terminal's buildMeetingNotes re-derivation (gate:dataflow DoD)"],
+  ]);
+  const waived = [];
+  for (const n of nodes) {
+    const rc = (n.controls || {})["render-only"]; if (!rc) continue;
+    const np = (n.metadata || []).find((m) => m.path)?.path;
+    for (const req of (rc.requirements || [])) for (const sym of (req.config?.["forbidden-symbols"] || [])) {
+      const hits = grepFiles(sym).filter((f) => !np || f.startsWith(np));
+      if (!hits.length) continue;
+      const key = `${n["unique-id"]}:${sym}`;
+      if (RENDER_ONLY_WAIVERS.has(key)) { waived.push(`${key} — ${RENDER_ONLY_WAIVERS.get(key)}`); continue; }
+      errs.push(`render-only: '${n["unique-id"]}' re-derives producer data — '${sym}' found in ${hits.map(rel).join(", ")}`);
+    }
+  }
+
+  // (c) single-writer reality diff — best-effort, line-level (carrier name + write op on ONE line).
+  // Var-indirected writes (e.g. `xadd(out_topic, …)`) and helper-built keys aren't statically
+  // attributable, so this is REPORT-ONLY: it prints the detected ownership map and a soft note on any
+  // literal undeclared writer, but never hard-fails (precise cross-language attribution is out of scope
+  // for a static gate; (b) render-only is the enforcing check for reader re-derivation).
+  const opRe = { xadd: "x[aA]dd", publish: "publish", "db-write": "session\\.add|INSERT INTO|\\.insert\\(" };
+  const grepLines = (re) => {
+    try { return execSync(`grep -rnE ${JSON.stringify(re)} --include=*.py --include=*.ts --include=*.tsx core clients 2>/dev/null | grep -vE 'node_modules|/dist/|\\.test\\.|/tests/|/eval/' || true`,
+      { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean); } catch { return []; }
+  };
+  const shared = [], report = [], undeclared = [];
+  for (const n of nodes) {
+    const own = (n.controls || {}).ownership; if (!own) continue;
+    for (const req of (own.requirements || [])) {
+      const { writers = [], match, op } = req.config || {}; if (!match) continue;
+      if (writers.length > 1) shared.push(`${n["unique-id"]}[${writers.join("+")}]`);
+      const mre = new RegExp(match);
+      const actual = new Set(grepLines(opRe[op] || op)
+        .filter((l) => mre.test(l.replace(/^[^:]*:\d+:/, "")))
+        .map((l) => ownerOf(l.split(":")[0])).filter(Boolean));
+      if (actual.size) report.push(`${n["unique-id"]}<-{${[...actual].join(",")}}`);
+      for (const w of actual) if (!writers.includes(w)) undeclared.push(`${n["unique-id"]}<-${w} (declared [${writers.join(",")}])`);
+    }
+  }
+
+  if (errs.length) return fail(["dataflow (P23) — data-flow ownership violations:", ...errs.map((e) => "   " + e)]);
+  const carriers = nodes.filter((n) => (n.controls || {}).ownership).length;
+  console.log(`  ✓ gate:dataflow — ${nodes.length} nodes · ${rels.length} edges · ${carriers} carriers · complete + sealed (P23)`);
+  if (waived.length) console.log(`     known-debt (waived render-only): ${waived.join(" ; ")}`);
+  if (report.length) console.log(`     detected writers: ${report.join(" ")}`);
+  if (shared.length) console.log(`     shared-writer (review, P23 prefers one): ${shared.join(" ")}`);
+  if (undeclared.length) console.log(`     note (advisory, attribution approximate): ${undeclared.join("; ")}`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
@@ -530,6 +662,14 @@ if (which === "seal") {
   for (const d of contractVersionDirs().sort()) seal[rel(d).replace(/\\/g, "/")] = schemaHash(d);
   writeFileSync(SEAL_FILE, JSON.stringify(seal, null, 2) + "\n");
   console.log(`sealed ${Object.keys(seal).length} contract(s) → ${rel(SEAL_FILE)}`);
+  process.exit(0);
+}
+// `seal-arch` (not a gate) — stamp the chart's canonical hash as the new asserted-true baseline.
+// Run after deliberately reviewing a change to architecture.calm.json (the diff is the review surface).
+if (which === "seal-arch") {
+  const h = archHash();
+  writeFileSync(ARCH_SEAL, JSON.stringify({ "architecture.calm.json": h }, null, 2) + "\n");
+  console.log(`sealed architecture.calm.json (${h.slice(0, 12)}…) → ${rel(ARCH_SEAL)}`);
   process.exit(0);
 }
 const run = which === "all" ? Object.keys(GATES) : [which];

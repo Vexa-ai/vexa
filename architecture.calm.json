@@ -1,0 +1,1407 @@
+{
+  "$schema": "https://calm.finos.org/release/1.0/meta/calm.json",
+  "metadata": [
+    {
+      "vexa": {
+        "purpose": "Data-flow + ownership registry (the dimension the gate suite did not model) AND the complete module/service/contract inventory. gate:dataflow enforces (a) model<->disk completeness, (b) single-writer + render-only ownership, (c) a reality diff against code.",
+        "principle": "P23 — one writer per data carrier; readers never re-derive a producer's data; the model covers every module/service/contract (no drift)."
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "unique-id": "meetings",
+      "node-type": "system",
+      "name": "meetings",
+      "description": "capture → transcribe → record; owns the raw transcript",
+      "metadata": [
+        {
+          "path": "core/meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent",
+      "node-type": "system",
+      "name": "agent",
+      "description": "copilot; owns the processed (cleaned) transcript + signals",
+      "metadata": [
+        {
+          "path": "core/agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "gateway",
+      "node-type": "system",
+      "name": "gateway",
+      "description": "the one public edge (api.v1, ws.v1)",
+      "metadata": [
+        {
+          "path": "core/gateway"
+        }
+      ]
+    },
+    {
+      "unique-id": "identity",
+      "node-type": "system",
+      "name": "identity",
+      "description": "access + audit; owns the durable DB",
+      "metadata": [
+        {
+          "path": "core/identity"
+        }
+      ]
+    },
+    {
+      "unique-id": "runtime",
+      "node-type": "system",
+      "name": "runtime",
+      "description": "workload spawn (bot/agent containers)",
+      "metadata": [
+        {
+          "path": "core/runtime"
+        }
+      ]
+    },
+    {
+      "unique-id": "deploy",
+      "node-type": "system",
+      "name": "deploy",
+      "description": "deployment + execution-target registry",
+      "metadata": [
+        {
+          "path": "deploy"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-api",
+      "node-type": "service",
+      "name": "agent-api",
+      "description": "agent-api — service in agent",
+      "metadata": [
+        {
+          "path": "core/agent/services/agent-api"
+        }
+      ]
+    },
+    {
+      "unique-id": "conformance",
+      "node-type": "service",
+      "name": "conformance",
+      "description": "conformance — service in gateway",
+      "metadata": [
+        {
+          "path": "core/gateway/services/conformance"
+        }
+      ]
+    },
+    {
+      "unique-id": "gateway",
+      "node-type": "service",
+      "name": "gateway",
+      "description": "gateway — service in gateway",
+      "metadata": [
+        {
+          "path": "core/gateway/services/gateway"
+        }
+      ]
+    },
+    {
+      "unique-id": "admin-api",
+      "node-type": "service",
+      "name": "admin-api",
+      "description": "admin-api — service in identity",
+      "metadata": [
+        {
+          "path": "core/identity/services/admin-api"
+        }
+      ]
+    },
+    {
+      "unique-id": "bot",
+      "node-type": "service",
+      "name": "bot",
+      "description": "bot — service in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/services/bot"
+        }
+      ]
+    },
+    {
+      "unique-id": "desktop",
+      "node-type": "service",
+      "name": "desktop",
+      "description": "desktop — service in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/services/desktop"
+        }
+      ]
+    },
+    {
+      "unique-id": "meeting-api",
+      "node-type": "service",
+      "name": "meeting-api",
+      "description": "meeting-api — service in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/services/meeting-api"
+        }
+      ]
+    },
+    {
+      "unique-id": "buffer",
+      "node-type": "module",
+      "name": "buffer",
+      "description": "buffer — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/buffer"
+        }
+      ]
+    },
+    {
+      "unique-id": "capture-codec",
+      "node-type": "module",
+      "name": "capture-codec",
+      "description": "capture-codec — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/capture-codec"
+        }
+      ]
+    },
+    {
+      "unique-id": "gmeet-capture",
+      "node-type": "module",
+      "name": "gmeet-capture",
+      "description": "gmeet-capture — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/gmeet-capture"
+        }
+      ]
+    },
+    {
+      "unique-id": "gmeet-pipeline",
+      "node-type": "module",
+      "name": "gmeet-pipeline",
+      "description": "gmeet-pipeline — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/gmeet-pipeline"
+        }
+      ]
+    },
+    {
+      "unique-id": "join",
+      "node-type": "module",
+      "name": "join",
+      "description": "join — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/join"
+        }
+      ]
+    },
+    {
+      "unique-id": "mixed-capture-core",
+      "node-type": "module",
+      "name": "mixed-capture-core",
+      "description": "mixed-capture-core — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/mixed-capture-core"
+        }
+      ]
+    },
+    {
+      "unique-id": "mixed-pipeline",
+      "node-type": "module",
+      "name": "mixed-pipeline",
+      "description": "mixed-pipeline — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/mixed-pipeline"
+        }
+      ]
+    },
+    {
+      "unique-id": "record-chunker",
+      "node-type": "module",
+      "name": "record-chunker",
+      "description": "record-chunker — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/record-chunker"
+        }
+      ]
+    },
+    {
+      "unique-id": "recording",
+      "node-type": "module",
+      "name": "recording",
+      "description": "recording — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/recording"
+        }
+      ]
+    },
+    {
+      "unique-id": "remote-browser",
+      "node-type": "module",
+      "name": "remote-browser",
+      "description": "remote-browser — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/remote-browser"
+        }
+      ]
+    },
+    {
+      "unique-id": "teams-capture",
+      "node-type": "module",
+      "name": "teams-capture",
+      "description": "teams-capture — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/teams-capture"
+        }
+      ]
+    },
+    {
+      "unique-id": "whisper",
+      "node-type": "module",
+      "name": "whisper",
+      "description": "whisper — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/whisper"
+        }
+      ]
+    },
+    {
+      "unique-id": "zoom-capture",
+      "node-type": "module",
+      "name": "zoom-capture",
+      "description": "zoom-capture — atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/zoom-capture"
+        }
+      ]
+    },
+    {
+      "unique-id": "event.v1",
+      "node-type": "contract",
+      "name": "event.v1",
+      "description": "event.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/event.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "invoke.v1",
+      "node-type": "contract",
+      "name": "invoke.v1",
+      "description": "invoke.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/invoke.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "proactive-card.v1",
+      "node-type": "contract",
+      "name": "proactive-card.v1",
+      "description": "proactive-card.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/proactive-card.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "routine.v1",
+      "node-type": "contract",
+      "name": "routine.v1",
+      "description": "routine.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/routine.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "task.v1",
+      "node-type": "contract",
+      "name": "task.v1",
+      "description": "task.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/task.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "tool.v1",
+      "node-type": "contract",
+      "name": "tool.v1",
+      "description": "tool.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/tool.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "unit.v1",
+      "node-type": "contract",
+      "name": "unit.v1",
+      "description": "unit.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/unit.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "workspace.v1",
+      "node-type": "contract",
+      "name": "workspace.v1",
+      "description": "workspace.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/workspace.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "api.v1",
+      "node-type": "contract",
+      "name": "api.v1",
+      "description": "api.v1 — sealed/published contract (gateway)",
+      "metadata": [
+        {
+          "path": "core/gateway/contracts/api.v1",
+          "domain": "gateway"
+        }
+      ]
+    },
+    {
+      "unique-id": "logevent.v1",
+      "node-type": "contract",
+      "name": "logevent.v1",
+      "description": "logevent.v1 — sealed/published contract (gateway)",
+      "metadata": [
+        {
+          "path": "core/gateway/contracts/logevent.v1",
+          "domain": "gateway"
+        }
+      ]
+    },
+    {
+      "unique-id": "ws.v1",
+      "node-type": "contract",
+      "name": "ws.v1",
+      "description": "ws.v1 — sealed/published contract (gateway)",
+      "metadata": [
+        {
+          "path": "core/gateway/contracts/ws.v1",
+          "domain": "gateway"
+        }
+      ]
+    },
+    {
+      "unique-id": "identity.v1",
+      "node-type": "contract",
+      "name": "identity.v1",
+      "description": "identity.v1 — sealed/published contract (identity)",
+      "metadata": [
+        {
+          "path": "core/identity/contracts/identity.v1",
+          "domain": "identity"
+        }
+      ]
+    },
+    {
+      "unique-id": "acts.v1",
+      "node-type": "contract",
+      "name": "acts.v1",
+      "description": "acts.v1 — sealed/published contract (meetings)",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/acts.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "captured-signal.v1",
+      "node-type": "contract",
+      "name": "captured-signal.v1",
+      "description": "captured-signal.v1 — sealed/published contract (meetings)",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/captured-signal.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "flagged-issue.v1",
+      "node-type": "contract",
+      "name": "flagged-issue.v1",
+      "description": "flagged-issue.v1 — sealed/published contract (meetings)",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/flagged-issue.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "invocation.v1",
+      "node-type": "contract",
+      "name": "invocation.v1",
+      "description": "invocation.v1 — sealed/published contract (meetings)",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/invocation.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "lifecycle.v1",
+      "node-type": "contract",
+      "name": "lifecycle.v1",
+      "description": "lifecycle.v1 — sealed/published contract (meetings)",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/lifecycle.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "transcript.v1",
+      "node-type": "contract",
+      "name": "transcript.v1",
+      "description": "transcript.v1 — sealed/published contract (meetings)",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/transcript.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "webhook.v1",
+      "node-type": "contract",
+      "name": "webhook.v1",
+      "description": "webhook.v1 — sealed/published contract (meetings)",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/webhook.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
+      "unique-id": "runtime.v1",
+      "node-type": "contract",
+      "name": "runtime.v1",
+      "description": "runtime.v1 — sealed/published contract (runtime)",
+      "metadata": [
+        {
+          "path": "core/runtime/contracts/runtime.v1",
+          "domain": "runtime"
+        }
+      ]
+    },
+    {
+      "unique-id": "schedule.v1",
+      "node-type": "contract",
+      "name": "schedule.v1",
+      "description": "schedule.v1 — sealed/published contract (runtime)",
+      "metadata": [
+        {
+          "path": "core/runtime/contracts/schedule.v1",
+          "domain": "runtime"
+        }
+      ]
+    },
+    {
+      "unique-id": "execution-targets.v1",
+      "node-type": "contract",
+      "name": "execution-targets.v1",
+      "description": "execution-targets.v1 — sealed/published contract (deploy)",
+      "metadata": [
+        {
+          "path": "deploy/contracts/execution-targets.v1",
+          "domain": "deploy"
+        }
+      ]
+    },
+    {
+      "unique-id": "dashboard",
+      "node-type": "webclient",
+      "name": "dashboard",
+      "description": "dashboard — client",
+      "metadata": [
+        {
+          "path": "clients/dashboard"
+        }
+      ]
+    },
+    {
+      "unique-id": "dashboard_new",
+      "node-type": "webclient",
+      "name": "dashboard_new",
+      "description": "dashboard_new — client",
+      "metadata": [
+        {
+          "path": "clients/dashboard_new"
+        }
+      ]
+    },
+    {
+      "unique-id": "extension",
+      "node-type": "webclient",
+      "name": "extension",
+      "description": "extension — client",
+      "metadata": [
+        {
+          "path": "clients/extension"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal",
+      "node-type": "webclient",
+      "name": "terminal",
+      "description": "terminal — client",
+      "metadata": [
+        {
+          "path": "clients/terminal"
+        }
+      ],
+      "controls": {
+        "render-only": {
+          "description": "A reader must not re-derive a producer's data. The terminal renders raw|processed; it must NOT contain a transcript-shaping transform (e.g. clustering).",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/render-only",
+              "config": {
+                "forbidden-symbols": [
+                  "buildMeetingNotes"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "segments-stream",
+      "node-type": "data-asset",
+      "name": "transcription_segments (stream)",
+      "description": "durable raw segment feed (transcript.v1); bot XADDs, collector XREADGROUPs",
+      "controls": {
+        "ownership": {
+          "description": "single writer",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/single-writer",
+              "config": {
+                "writers": [
+                  "bot"
+                ],
+                "match": "transcription_segments",
+                "op": "xadd"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "transcript.v1"
+        },
+        {
+          "stage": "raw"
+        }
+      ]
+    },
+    {
+      "unique-id": "tc-mutable",
+      "node-type": "data-asset",
+      "name": "tc:meeting:{id}:mutable (pubsub)",
+      "description": "change-only transcript deltas the gateway + agent-api subscribe to",
+      "controls": {
+        "ownership": {
+          "description": "shared — review (P23 prefers one writer)",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/single-writer",
+              "config": {
+                "writers": [
+                  "bot",
+                  "meeting-api"
+                ],
+                "match": "tc:meeting:.*:mutable",
+                "op": "publish"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "transcript.v1"
+        },
+        {
+          "stage": "raw"
+        }
+      ]
+    },
+    {
+      "unique-id": "tc-stream",
+      "node-type": "data-asset",
+      "name": "tc:meeting:{id} (stream)",
+      "description": "raw transcript stream the agent worker + SSE read",
+      "controls": {
+        "ownership": {
+          "description": "single writer",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/single-writer",
+              "config": {
+                "writers": [
+                  "agent-api"
+                ],
+                "match": "tc:meeting:[^:]*$",
+                "op": "xadd"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "transcript.v1"
+        },
+        {
+          "stage": "raw"
+        }
+      ]
+    },
+    {
+      "unique-id": "proc-stream",
+      "node-type": "data-asset",
+      "name": "proc:meeting:{id} (stream)",
+      "description": "cleaned 1:1 processed transcript mirror, keyed by segment_id [NEW]",
+      "controls": {
+        "ownership": {
+          "description": "single writer",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/single-writer",
+              "config": {
+                "writers": [
+                  "agent-api"
+                ],
+                "match": "proc:meeting:",
+                "op": "xadd"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "transcript.v1"
+        },
+        {
+          "stage": "cleaned"
+        }
+      ]
+    },
+    {
+      "unique-id": "out-stream",
+      "node-type": "data-asset",
+      "name": "unit:agent-meet-{id}:out (stream)",
+      "description": "copilot cards/signals + message deltas",
+      "controls": {
+        "ownership": {
+          "description": "single writer",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/single-writer",
+              "config": {
+                "writers": [
+                  "agent-api"
+                ],
+                "match": "unit:agent-meet-.*:out",
+                "op": "xadd"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "proactive-card.v1"
+        },
+        {
+          "stage": "cards"
+        }
+      ]
+    },
+    {
+      "unique-id": "segments-table",
+      "node-type": "database",
+      "name": "transcription_segments (table)",
+      "description": "persisted raw transcript rows",
+      "controls": {
+        "ownership": {
+          "description": "single writer",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/single-writer",
+              "config": {
+                "writers": [
+                  "meeting-api"
+                ],
+                "match": "transcription_segments",
+                "op": "db-write"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "transcript.v1"
+        },
+        {
+          "stage": "raw"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-app",
+      "node-type": "module",
+      "name": "terminal/app",
+      "description": "Next.js routes + SSE proxy (terminal)",
+      "metadata": [
+        {
+          "path": "clients/terminal/src/app"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-canvas",
+      "node-type": "module",
+      "name": "terminal/canvas",
+      "description": "render engine: kit, runtime, useMeeting, notes (terminal)",
+      "metadata": [
+        {
+          "path": "clients/terminal/src/canvas"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-contributions",
+      "node-type": "module",
+      "name": "terminal/contributions",
+      "description": "contributed surfaces/commands (terminal)",
+      "metadata": [
+        {
+          "path": "clients/terminal/src/contributions"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-platform",
+      "node-type": "module",
+      "name": "terminal/platform",
+      "description": "platform adapters (terminal)",
+      "metadata": [
+        {
+          "path": "clients/terminal/src/platform"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-surfaces",
+      "node-type": "module",
+      "name": "terminal/surfaces",
+      "description": "state stores + surfaces (meetingLive, chat, gatewayWS) (terminal)",
+      "metadata": [
+        {
+          "path": "clients/terminal/src/surfaces"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-ui-kit",
+      "node-type": "module",
+      "name": "terminal/ui-kit",
+      "description": "shared UI primitives (terminal)",
+      "metadata": [
+        {
+          "path": "clients/terminal/src/ui-kit"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-workbench",
+      "node-type": "module",
+      "name": "terminal/workbench",
+      "description": "dockview workbench shell (terminal)",
+      "metadata": [
+        {
+          "path": "clients/terminal/src/workbench"
+        }
+      ]
+    },
+    {
+      "unique-id": "recording-blob",
+      "node-type": "data-asset",
+      "name": "recording artifact (blob)",
+      "description": "chunked meeting recording (record-chunker -> recording)",
+      "controls": {
+        "ownership": {
+          "description": "single writer",
+          "requirements": [
+            {
+              "requirement-url": "vexa/controls/single-writer",
+              "config": {
+                "writers": [
+                  "bot"
+                ],
+                "match": "recording",
+                "op": "blob-write"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "stage": "audio"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "agent-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "agent",
+          "nodes": [
+            "agent-api",
+            "event.v1",
+            "invoke.v1",
+            "proactive-card.v1",
+            "routine.v1",
+            "task.v1",
+            "tool.v1",
+            "unit.v1",
+            "workspace.v1"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "gateway-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "gateway",
+          "nodes": [
+            "conformance",
+            "gateway",
+            "api.v1",
+            "logevent.v1",
+            "ws.v1"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "identity-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "identity",
+          "nodes": [
+            "admin-api",
+            "identity.v1"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "meetings-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "meetings",
+          "nodes": [
+            "bot",
+            "desktop",
+            "meeting-api",
+            "buffer",
+            "capture-codec",
+            "gmeet-capture",
+            "gmeet-pipeline",
+            "join",
+            "mixed-capture-core",
+            "mixed-pipeline",
+            "record-chunker",
+            "recording",
+            "remote-browser",
+            "teams-capture",
+            "whisper",
+            "zoom-capture",
+            "acts.v1",
+            "captured-signal.v1",
+            "flagged-issue.v1",
+            "invocation.v1",
+            "lifecycle.v1",
+            "transcript.v1",
+            "webhook.v1"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "runtime-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "runtime",
+          "nodes": [
+            "runtime.v1",
+            "schedule.v1"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "deploy-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "deploy",
+          "nodes": [
+            "execution-targets.v1"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "bot-writes-segments-stream",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "segments-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "bot-publishes-mutable",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "tc-mutable"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "collector-reads-segments",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "segments-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "collector-publishes-mutable",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "tc-mutable"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "collector-writes-table",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "segments-table"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-relays-tc",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "tc-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-reads-mutable",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "tc-mutable"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-reads-tc",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "tc-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-writes-processed",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "proc-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        },
+        {
+          "transform": "raw -> cleaned",
+          "by": "agent-api"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-writes-out",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "out-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        },
+        {
+          "transform": "transcript -> cards",
+          "by": "agent-api"
+        }
+      ]
+    },
+    {
+      "unique-id": "gateway-reads-mutable",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "tc-mutable"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-reads-tc",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "terminal"
+          },
+          "destination": {
+            "node": "tc-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-reads-processed",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "terminal"
+          },
+          "destination": {
+            "node": "proc-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-reads-out",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "terminal"
+          },
+          "destination": {
+            "node": "out-stream"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "terminal",
+          "nodes": [
+            "terminal-app",
+            "terminal-canvas",
+            "terminal-contributions",
+            "terminal-platform",
+            "terminal-surfaces",
+            "terminal-ui-kit",
+            "terminal-workbench"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "bot-writes-recording",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "recording-blob"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "gateway-reads-recording",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "recording-blob"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "gateway-ws-dashboard",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "dashboard"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        },
+        {
+          "contract": "ws.v1"
+        }
+      ]
+    },
+    {
+      "unique-id": "gateway-ws-extension",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "extension"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        },
+        {
+          "contract": "ws.v1"
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "transcript-flow",
+      "name": "live transcript",
+      "description": "raw transcript → cleaned 1:1 mirror → one render engine. The processed transcript has exactly one producer (agent-api); the terminal only renders.",
+      "transitions": [
+        {
+          "relationship-unique-id": "bot-writes-segments-stream",
+          "sequence-number": 1,
+          "description": "bot confirms raw segments (ASR + LocalAgreement)"
+        },
+        {
+          "relationship-unique-id": "collector-publishes-mutable",
+          "sequence-number": 2,
+          "description": "collector ingests + republishes change-only"
+        },
+        {
+          "relationship-unique-id": "agent-relays-tc",
+          "sequence-number": 3,
+          "description": "watcher relays into the per-meeting stream"
+        },
+        {
+          "relationship-unique-id": "agent-writes-processed",
+          "sequence-number": 4,
+          "description": "worker cleans raw → processed 1:1 (catch-up then live)"
+        },
+        {
+          "relationship-unique-id": "terminal-reads-processed",
+          "sequence-number": 5,
+          "description": "one engine renders raw|processed; no re-derivation"
+        }
+      ]
+    }
+  ]
+}

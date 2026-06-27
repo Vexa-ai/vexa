@@ -36,6 +36,7 @@ const PRINCIPLES = [
   { p: "P4",  rule: "Cross a process/network boundary → a sealed, versioned, golden-pinned schema.", gates: ["schema", "contract-version"] },
   { p: "P6",  rule: "One public front door per module; internals are private.", gates: ["exports"] },
   { p: "P12", rule: "Every folder self-documents (README: concern · surface · deps).", gates: ["readme"] },
+  { p: "P23", rule: "One writer per data carrier; a reader never re-derives a producer's data (data-flow ownership, architecture.calm.json).", gates: ["dataflow"] },
 ];
 
 const rows = PRINCIPLES.map((pr) => {

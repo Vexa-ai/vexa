@@ -107,6 +107,25 @@ assuming a tunnel. Hours of "fixes" went to bbb while the browser watched a loca
 `Operations:` line). Enforced by `gate:execution-env` (the registry conforms) + the planning preflight
 (each resource's validation check **and each operation's can/may check** passes).
 
+## The architecture chart — read it first (`architecture.calm.json`, P23)
+
+The runtime **data-flow + ownership** model (FINOS CALM) is the **index for AI and the mental model for
+humans**: every service / module / contract / client is a node; every redis stream · pubsub · table · blob
+is a *data carrier* with **exactly one writer**; `connects` edges carry the governing contract (the *shape*)
+and mark where content is *transformed* (and by whom). To understand any slice, **render a perspective —
+never read the whole graph**:
+- `pnpm arch:viz cluster:<domain|terminal>` — a concern bundle + the carriers it touches
+- `pnpm arch:viz flow:<id>` · `path:<carrier>` — a data path · a carrier's writers→readers
+  (`--lod=0..3`, `--scale`; **deterministic** → `docs/views/*.svg`).
+
+**It must not drift** (`gate:dataflow`, in `pnpm gates` → pre-push/CI): (a) every SoC container on disk has
+a node — add a module without registering it and CI goes **red**; (b) one writer per carrier + a reader
+never re-derives a producer's data (`render-only`); (c) the chart is **sealed** — any edit fails CI until
+you review the diff and run `pnpm seal:arch` (the chart is the *asserted-true* baseline; drift from it is
+deliberate-only). **So: when you add/move a module, change a data flow, or alter ownership/contract, update
+`architecture.calm.json` in the SAME change and re-seal.** This is P23 — the data-flow dimension the rest of
+the gate suite (code-coupling) did not model.
+
 ## The preflight — prove the WHOLE execution surface in planning (consolidated)
 
 The validation economy (§8.2) is only as good as its **coverage**. A thin preflight that checks *resources*
