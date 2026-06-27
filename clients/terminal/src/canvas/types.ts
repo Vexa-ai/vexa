@@ -4,7 +4,9 @@ export interface TranscriptSegment {
   id?: string;
   speaker?: string;
   text: string;
-  ts?: number | string;
+  ts?: number | string;       // meeting-relative time (seconds) — back-compat
+  tsMs?: number;              // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
+  completed?: boolean;        // false = live pending (in-progress ASR); true/undefined = finalized
 }
 
 export interface ProcessedTranscriptNote {
@@ -12,7 +14,9 @@ export interface ProcessedTranscriptNote {
   speaker?: string;
   chapter?: string;
   text: string;
-  ts?: number | string;
+  ts?: number | string;       // meeting-relative time (seconds) — back-compat
+  tsMs?: number;              // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
+  completed?: boolean;        // false = live pending (in-progress ASR); true/undefined = finalized
   pass?: number;
   frozen?: boolean;
 }
@@ -55,6 +59,15 @@ export interface MeetingDocLink {
   title?: string;
 }
 
+export interface MeetingDiagnosticIssue {
+  kind: "stream" | "model" | "parse";
+  message: string;
+  status?: number;
+  at?: number;
+  model?: string;
+  stage?: string;
+}
+
 export interface MeetingState {
   meeting: {
     id: string;
@@ -77,6 +90,14 @@ export interface MeetingState {
     numbers: any[];
   };
   cards: { id: string; kind: string; title: string; body?: string; ts?: number | string }[];
+  diagnostics?: {
+    liveConnected?: boolean;
+    ended?: boolean;
+    reconnects?: number;
+    lastEventAt?: number;
+    lastTranscriptAt?: number;
+    issues?: MeetingDiagnosticIssue[];
+  };
   metrics: Record<string, number | string>;
   sections: Record<string, unknown>;
 }

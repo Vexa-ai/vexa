@@ -519,26 +519,29 @@ export function Chat({ params = {} }: ChatProps) {
     const key = chatKey;
     const state = getChatState(key);
     if (state.loaded || state.loading || state.busy) return;
-    let cancelled = false;
     updateChatState(key, (s) => ({ ...s, loading: true }));
+    // The result is committed to the per-session `key`, so it is safe to apply even if this effect run
+    // was cancelled (deps changed / StrictMode remount): a real session switch targets a different key,
+    // and an identical-key remount wants exactly this data. Crucially `loading` is ALWAYS released here —
+    // bailing on cancel previously left `loading: true` stuck, and the guard above then blocked every retry,
+    // hanging the pane forever on "Loading conversation…".
     (async () => {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history?subject=${encodeURIComponent(subject)}`);
         const data: { turns?: HistoryTurn[] } = await r.json();
-        if (cancelled) return;
         const loaded: Turn[] = (data.turns ?? []).map((t, i) =>
           t.role === "user"
             ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
             : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
         updateChatState(key, (s) => {
-          if (s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
+          if (s.loaded || s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
           return { ...s, turns: loaded, nextId: Math.max(s.nextId, loaded.length), loading: false, loaded: true };
         });
       } catch {
-        if (!cancelled) updateChatState(key, (s) => ({ ...s, loading: false, loaded: true }));
+        // A failed fetch must always clear `loading` (never hang) and leave `loaded` false so it retries.
+        updateChatState(key, (s) => (s.loaded ? s : { ...s, loading: false }));
       }
     })();
-    return () => { cancelled = true; };
   }, [chatKey, session, subject]);
 
   const addFiles = (files: File[]) => {
@@ -780,7 +783,7 @@ export function Chat({ params = {} }: ChatProps) {
               void onSubmit();
             }}
             placeholder="Type / for skills, or ask the agent…"
-            disabled={busy || uploading}
+            disabled={uploading}
             rows={1}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 28, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "4px 0", margin: 0, fontFamily: "inherit" }}
           />

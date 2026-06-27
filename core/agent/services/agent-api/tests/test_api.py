@@ -56,6 +56,28 @@ def test_health_ok():
     assert r.status_code == 200 and r.json()["status"] == "ok"
 
 
+def test_models_reports_chat_and_workspace_streaming_model(tmp_path):
+    from agent_api.workspace_reader import WorkspaceReader
+
+    meeting_cfg = tmp_path / "u_jane" / "agents" / "meeting.md"
+    meeting_cfg.parent.mkdir(parents=True)
+    meeting_cfg.write_text("---\nmodel: openrouter/free\n---\n")
+    c = TestClient(create_app(
+        Dispatcher(
+            load_settings(agent_model="deepseek/deepseek-v4-flash", meeting_model="deepseek/deepseek-v4-flash"),
+            _FakeRuntime(),
+            _FakeIdentity(),
+        ),
+        reader=WorkspaceReader(str(tmp_path)),
+    ))
+
+    r = c.get("/api/models", params={"subject": "u_jane"})
+
+    assert r.status_code == 200
+    assert r.json()["chat_model"] == "deepseek/deepseek-v4-flash"
+    assert r.json()["streaming_model"] == "openrouter/free"
+
+
 def test_invocations_dispatches():
     r = _client().post("/invocations", json=VALID_INV)
     assert r.status_code == 202 and r.json()["workload_id"]
@@ -133,6 +155,51 @@ def test_meeting_start_threads_transcript_tail_cursor(monkeypatch):
     assert r.status_code == 202
     env = runtime.spawned[0][2]
     assert env["VEXA_TRANSCRIPT_START_ID"] == "42-0"
+
+
+def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatch):
+    import json
+    import redis
+
+    class FakeRedis:
+        def __init__(self):
+            self.first_xread = None
+            self.calls = 0
+
+        def xrevrange(self, stream, count=1):
+            if stream == "tc:meeting:abc":
+                return [
+                    ("9-0", {"payload": json.dumps({"type": "transcription", "segments": [{"speaker": "Recent", "text": "tail", "start": 9, "segment_id": "recent"}]})}),
+                    ("8-0", {"payload": json.dumps({"type": "transcription", "segments": [{"speaker": "Older", "text": "still recent", "start": 8, "segment_id": "older"}]})}),
+                ]
+            if stream == "unit:agent-meet-abc:out":
+                return [
+                    ("4-0", {"event": json.dumps({"type": "note", "note": {"id": "n1", "text": "processed tail"}})}),
+                ]
+            return []
+
+        def xread(self, streams, count=500, block=15000):
+            self.calls += 1
+            if self.first_xread is None:
+                self.first_xread = dict(streams)
+                return [("tc:meeting:abc", [("10-0", {"payload": json.dumps({"type": "session_end"})})])]
+            return []
+
+    fake = FakeRedis()
+    monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: fake)
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+    ))
+
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "abc", "session_uid": "abc"}) as r:
+        body = "".join(r.iter_text())
+
+    assert r.status_code == 200
+    assert '"text": "still recent"' in body
+    assert '"text": "tail"' in body
+    assert '"processed tail"' in body
+    assert '"meeting-end"' in body
+    assert fake.first_xread == {"tc:meeting:abc": "9-0", "unit:agent-meet-abc:out": "4-0"}
 
 
 def test_workspace_read_and_traversal_guard(tmp_path):

@@ -1,14 +1,22 @@
 "use client";
-/** Live meeting notes condense the running transcript into attributed, first-person paragraphs: the
- *  speaker's own words, shortened and folded as turns complete, with keyword tags inline. */
+/** Live meeting notes condense the running transcript into attributed, first-person paragraphs. */
 import { useMemo } from "react";
 import { useEntities, useMeeting, useTranscript } from "./useMeeting";
-import { cleanProcessedNoteText, cleanTranscriptText, extractNotableNumberSpans } from "./textSignals";
+import { cleanProcessedNoteText, cleanTranscriptText } from "./textSignals";
 import type { EntityItem, ProcessedTranscriptNote, TranscriptSegment } from "./types";
 
-export type NoteTagKind = "company" | "person" | "metric" | "money" | "signal";
+export type NoteTagKind = "company" | "person" | "product";
 export interface NoteTag { id: string; label: string; kind: NoteTagKind; context?: string; at?: number; end?: number }
-export interface MeetingNote { id: string; ts?: string; speaker?: string; chapter?: string; text: string; tags: NoteTag[] }
+export interface MeetingNote {
+  id: string;
+  ts?: string;             // pre-formatted meeting-relative label — back-compat
+  tsMs?: number;           // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
+  completed?: boolean;     // false = live pending (in-progress ASR); true/undefined = finalized
+  speaker?: string;
+  chapter?: string;
+  text: string;
+  tags: NoteTag[];
+}
 
 const CLUSTER = 3;        // utterances folded into one note
 const MAX_NOTE_CHARS = 240;
@@ -21,6 +29,7 @@ const STOPWORDS = new Set([
   "no", "not", "well", "ok", "okay", "how", "what", "when", "where", "why", "who", "everyone", "everything",
   "definitions", "has", "is", "are", "was", "were", "do", "does", "did", "let", "look", "mean", "actually",
   "maybe", "sure", "right", "good", "of", "in", "on", "at", "to", "for", "if", "as", "there", "here", "yeah",
+  "speaker",
   "european", "american", "chinese", "british", "french", "german", "indian", "japanese", "russian", "global",
   "western", "eastern", "northern", "southern",
 ]);
@@ -39,6 +48,21 @@ function formatTs(ts: number | string | undefined): string {
 function speakerOf(segment: Pick<TranscriptSegment, "speaker"> | undefined): string {
   const speaker = (segment?.speaker ?? "").trim();
   return speaker || "Speaker";
+}
+
+/** Absolute wall-clock (epoch ms) for a note: take the last segment in the group that carries one,
+ *  so the note is timestamped at when its final utterance was spoken. */
+function groupTsMs(group: { tsMs?: number }[]): number | undefined {
+  for (let i = group.length - 1; i >= 0; i--) {
+    const ms = group[i]?.tsMs;
+    if (typeof ms === "number" && Number.isFinite(ms)) return ms;
+  }
+  return undefined;
+}
+
+/** A group is pending (live, in-progress) if its last segment is explicitly not completed. */
+function groupPending(group: { completed?: boolean }[]): boolean {
+  return group.length > 0 && group[group.length - 1]?.completed === false;
 }
 
 /** Shorten a cluster of utterances to ~one or two sentences without paraphrasing — keep the speaker's
@@ -63,34 +87,6 @@ function pushTag(acc: NoteTag[], seen: Set<string>, tag: Omit<NoteTag, "id">, in
   acc.push({ ...tag, id: `tag-${index}-${key.replace(/[^a-z0-9]+/g, "-")}` });
 }
 
-// Runs of Capitalized words, including institution connectors like "University of Chicago".
-const PROPER_RE = /\b[A-Z][a-zA-Z]*(?:[''][A-Za-z]+)?(?:\s+(?:(?:of|for|and|the|in|at|to|&)\s+)?[A-Z][a-zA-Z]*(?:[''][A-Za-z]+)?)*\b/g;
-const SPECIAL_SIGNAL_RE = /\b(?:Series\s+[A-Z]|Mag\s+7|S&P(?:\s*500)?)\b/g;
-const INSTITUTION_RE = /^(?:University|College|Institute|School|Center|Centre|Department|Hospital|Laboratory|Labs?|Federal Reserve|Bank)\b/i;
-
-function isSentenceStart(text: string, at: number): boolean {
-  for (let i = at - 1; i >= 0; i--) {
-    const ch = text[i];
-    if (ch === " " || ch === "\n" || ch === "\t") continue;
-    return ch === "." || ch === "!" || ch === "?" || ch === '"' || ch === "—" || ch === "-";
-  }
-  return true;
-}
-
-function classifyProper(phrase: string): NoteTagKind {
-  if (/^Series\s+[A-Z]\b/.test(phrase)) return "signal";
-  if (INSTITUTION_RE.test(phrase)) return "company";
-  if (phrase.includes(" ")) return "person";                 // "Shane Legg"
-  if (/^[A-Z]{2,5}$/.test(phrase)) return "signal";          // "AGI", "API"
-  return "company";                                          // "DeepMind", "Amazon"
-}
-
-function contextForProper(phrase: string, fallback?: string): string | undefined {
-  if (/^Series\s+[A-Z]\b/.test(phrase)) return "Round";
-  if (INSTITUTION_RE.test(phrase)) return "Institution";
-  return fallback;
-}
-
 function overlaps(found: { at: number; end: number }[], at: number, end: number): boolean {
   return found.some((item) => at < item.end && end > item.at);
 }
@@ -99,60 +95,48 @@ function titleCaseStart(text: string): string {
   return text.replace(/^[a-z]/, (ch) => ch.toUpperCase());
 }
 
-/** Pull keyword tags out of a note text alone (no dependency on the entity pass, so tags show up even on
- *  a fresh live meeting): proper nouns (companies/people/acronyms) and notable figures.
- *  Entities, when available, only enrich a matched proper noun with context. */
+function tagKind(kind: string | undefined): NoteTagKind | undefined {
+  const normalized = (kind ?? "").toLowerCase();
+  if (normalized === "person" || normalized === "company" || normalized === "product") return normalized;
+  return undefined;
+}
+
+function escapeRe(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findEntitySpan(text: string, label: string): { at: number; end: number } | undefined {
+  const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_])(${escapeRe(label)})(?=$|[^\\p{L}\\p{N}_])`, "iu");
+  const match = pattern.exec(text);
+  if (!match || match.index == null) return undefined;
+  const at = match.index + match[1].length;
+  return { at, end: at + match[2].length };
+}
+
+/** Render tags only for explicit meeting entities. The model/entity pass owns what is tag-worthy. */
 export function extractNoteTags(text: string, entities: EntityItem[], index: number): NoteTag[] {
   const found: { at: number; end: number; tag: Omit<NoteTag, "id"> }[] = [];
-  const entityCtx = new Map<string, string>();
+  const seenCandidates = new Set<string>();
   for (const e of entities) {
-    const name = cleanTranscriptText(e.name ?? "").toLowerCase();
-    if (name && e.context) entityCtx.set(name, e.context);
-  }
-
-  for (const m of text.matchAll(SPECIAL_SIGNAL_RE)) {
-    const at = m.index ?? 0;
-    const label = m[0].trim();
-    const context = /^Series\s+[A-Z]\b/.test(label) ? "Round" : "Market";
-    found.push({ at, end: at + label.length, tag: { label, kind: "signal", context, at, end: at + label.length } });
-  }
-
-  for (const m of text.matchAll(PROPER_RE)) {
-    const matchAt = m.index ?? 0;
-    if (overlaps(found, matchAt, matchAt + m[0].length)) continue;
-    // Strip leading/trailing stopword tokens ("And I" → dropped; "Now DeepMind" → "DeepMind").
-    const words = m[0].trim().split(/\s+/);
-    let startOff = 0;
-    while (words.length && STOPWORDS.has(words[0].toLowerCase())) { startOff += words[0].length + 1; words.shift(); }
-    while (words.length && STOPWORDS.has(words[words.length - 1].toLowerCase())) words.pop();
-    if (!words.length) continue;
-    const phrase = words.join(" ").replace(/['']s$/i, "");
-    const at = matchAt + startOff;
-    const end = at + phrase.length;
-    const single = words.length === 1;
-    const internalCaps = /[a-z][A-Z]/.test(phrase) || /^[A-Z]{2,5}$/.test(phrase);
-    if (single && phrase.length <= 1) continue;
-    // Drop bare sentence-start capitalization unless it's clearly a name (internal caps / acronym / multi-word).
-    if (single && !internalCaps && startOff === 0 && isSentenceStart(text, at)) continue;
-    if (overlaps(found, at, end)) continue;
-    const context = contextForProper(phrase, entityCtx.get(phrase.toLowerCase()));
-    found.push({ at, end, tag: { label: phrase, kind: classifyProper(phrase), context, at, end } });
-  }
-
-  for (const signal of extractNotableNumberSpans(text)) {
-    const at = signal.at ?? 0;
-    const label = signal.text.trim();
-    const end = signal.end ?? at + label.length;
-    if (!label || overlaps(found, at, end)) continue;
+    const kind = tagKind(e.kind);
+    if (!kind) continue;
+    const label = cleanTranscriptText(e.name ?? e.title ?? "").replace(/['']s$/i, "").trim();
+    const key = `${kind}:${label.toLowerCase()}`;
+    if (!label || label.length < 2 || STOPWORDS.has(label.toLowerCase()) || seenCandidates.has(key)) continue;
+    if (kind === "person" && !/\s/.test(label)) continue;
+    seenCandidates.add(key);
+    const span = findEntitySpan(text, label);
+    if (!span || overlaps(found, span.at, span.end)) continue;
+    if (!/[A-Z0-9]/.test(text.slice(span.at, span.end))) continue;
     found.push({
-      at,
-      end,
+      at: span.at,
+      end: span.end,
       tag: {
         label,
-        kind: signal.context === "Money" ? "money" : "metric",
-        context: signal.context === "Money" ? undefined : signal.context,
-        at,
-        end,
+        kind,
+        context: e.context,
+        at: span.at,
+        end: span.end,
       },
     });
   }
@@ -170,6 +154,8 @@ function processedMeetingNote(note: ProcessedTranscriptNote, entities: EntityIte
   return {
     id: note.id || `processed-${index}`,
     ts: formatTs(note.ts),
+    tsMs: typeof note.tsMs === "number" && Number.isFinite(note.tsMs) ? note.tsMs : undefined,
+    completed: note.completed,
     speaker: speakerOf(note),
     chapter: cleanTranscriptText(note.chapter ?? ""),
     text,
@@ -185,12 +171,16 @@ function fallbackMeetingNotes(segments: TranscriptSegment[], entities: EntityIte
   let groupSpeaker = "";
 
   const pushGroup = (force: boolean) => {
-    if (!group.length || (!force && group.length < CLUSTER)) return;
+    // Always emit a PENDING (live, in-progress) tail so the in-flight line reaches the view — even
+    // when the group is shorter than CLUSTER and we wouldn't normally flush it yet.
+    if (!group.length || (!force && !groupPending(group) && group.length < CLUSTER)) return;
     const text = titleCaseStart(condense(group.map((s) => s.text).join(" ")));
     if (text) {
       notes.push({
         id: `note-${groupStart}`,
         ts: formatTs(group[group.length - 1]?.ts),
+        tsMs: groupTsMs(group),
+        completed: groupPending(group) ? false : undefined,
         speaker: groupSpeaker,
         text,
         tags: extractNoteTags(text, entities, groupStart),
@@ -200,8 +190,9 @@ function fallbackMeetingNotes(segments: TranscriptSegment[], entities: EntityIte
 
   segs.forEach((segment, index) => {
     const speaker = speakerOf(segment);
-    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER)) {
-      pushGroup(speaker !== groupSpeaker);
+    // A pending segment ends its group immediately, so it surfaces as its own live line.
+    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER || groupPending(group) || segment.completed === false)) {
+      pushGroup(speaker !== groupSpeaker || groupPending(group));
       group = [];
     }
     if (!group.length) {
@@ -210,7 +201,7 @@ function fallbackMeetingNotes(segments: TranscriptSegment[], entities: EntityIte
     }
     group.push(segment);
   });
-  pushGroup(false);
+  pushGroup(true);
   return notes;
 }
 
@@ -231,13 +222,16 @@ export function buildMeetingNotes(
   let groupSpeaker = "";
 
   const pushGroup = (force: boolean) => {
-    if (!group.length || (!force && group.length < CLUSTER)) return;
+    // Always emit a PENDING (live, in-progress) tail so the in-flight line reaches the view.
+    if (!group.length || (!force && !groupPending(group) && group.length < CLUSTER)) return;
     const text = titleCaseStart(condense(group.map((s) => s.text).join(" ")));
     if (text) {
       const index = notes.length;
       notes.push({
         id: `note-${groupStart}`,
         ts: formatTs(group[group.length - 1]?.ts),
+        tsMs: groupTsMs(group),
+        completed: groupPending(group) ? false : undefined,
         speaker: groupSpeaker,
         text,
         tags: extractNoteTags(text, entities, index),
@@ -256,8 +250,9 @@ export function buildMeetingNotes(
       return;
     }
     const speaker = speakerOf(segment);
-    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER)) {
-      pushGroup(speaker !== groupSpeaker);
+    // A pending segment ends its group immediately, so it surfaces as its own live line.
+    if (group.length && (speaker !== groupSpeaker || group.length >= CLUSTER || groupPending(group) || segment.completed === false)) {
+      pushGroup(speaker !== groupSpeaker || groupPending(group));
       group = [];
     }
     if (!group.length) {
@@ -266,7 +261,7 @@ export function buildMeetingNotes(
     }
     group.push(segment);
   });
-  pushGroup(false);
+  pushGroup(true);
 
   for (const note of processed) {
     if (note.id && consumed.has(note.id)) continue;

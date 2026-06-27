@@ -504,9 +504,7 @@ function LiveTranscript({ segments, liveCaption, empty = "waiting for transcript
 const NOTE_TAG_DOT: Record<string, string> = {
   company: "var(--accent)",
   person: "var(--green)",
-  metric: "var(--accent)",
-  money: "var(--green)",
-  signal: "var(--live)",
+  product: "var(--blue)",
 };
 
 function NoteTagChip({ label, kind, context, onClick }: { label: string; kind?: string; context?: string; onClick?: () => void }) {
@@ -533,7 +531,21 @@ function NoteTagChip({ label, kind, context, onClick }: { label: string; kind?: 
 }
 
 interface NoteTagLike { id?: string; label?: string; kind?: string; context?: string; at?: number; end?: number }
-interface MeetingNoteLike { id?: string; ts?: string; speaker?: string; chapter?: string; text?: string; tags?: NoteTagLike[] }
+interface MeetingNoteLike { id?: string; ts?: string; tsMs?: number; completed?: boolean; speaker?: string; chapter?: string; text?: string; tags?: NoteTagLike[] }
+
+/** Resolve a note's display timestamp: an absolute epoch-ms `tsMs` is formatted in the VIEWER'S local
+ *  timezone; otherwise fall back to the pre-formatted relative `ts` string. Never throws. */
+function noteClock(note: MeetingNoteLike): string {
+  const ms = typeof note.tsMs === "number" ? note.tsMs : Number.NaN;
+  if (Number.isFinite(ms)) {
+    try {
+      return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      /* fall through to relative ts */
+    }
+  }
+  return toText(note.ts);
+}
 
 /** Render a note's text with its keyword tags swapped inline as clickable chips at first occurrence. */
 function NoteBody({ text, tags, onTag }: { text: string; tags: NoteTagLike[]; onTag?: (tag: NoteTagLike) => void }) {
@@ -573,11 +585,38 @@ function tagChatPrompt(tag: NoteTagLike): string {
   const kind = toText(tag.kind);
   if (kind === "person") return `“${label}” came up in this meeting. Who are they — give me a short brief grounded in what was said and the workspace.`;
   if (kind === "company") return `“${label}” came up in this meeting. What is it — a short brief grounded in what was said and the workspace.`;
-  if (kind === "money" || kind === "metric") return `The figure “${label}” came up in this meeting. What's the context around it, and is it significant?`;
-  return `“${label}” came up in this meeting. What does it mean here and why does it matter?`;
+  return `“${label}” came up in this meeting. What is this product or project, and why does it matter here?`;
 }
 
-function LiveNotes({ notes, empty = "condensing the conversation…", loading = false, maxNotes = 14 }: { notes?: MeetingNoteLike[]; empty?: string; maxNotes?: number } & Loadable) {
+/** A run of consecutive notes from the same speaker (within one chapter), merged into one block. */
+interface NoteBlock { speaker: string; chapter: string; clock: string; lines: MeetingNoteLike[] }
+
+/** Group a flat note list into speaker blocks: consecutive notes from the SAME speaker (and same
+ *  chapter) fold into one block so the label + timestamp render once and the text flows together. */
+function groupNotesBySpeaker(list: MeetingNoteLike[]): NoteBlock[] {
+  const blocks: NoteBlock[] = [];
+  for (const note of list) {
+    const speaker = toText(note.speaker, "Speaker");
+    const chapter = toText(note.chapter).trim();
+    const last = blocks[blocks.length - 1];
+    if (last && last.speaker === speaker && last.chapter === chapter) {
+      last.lines.push(note);
+      if (!last.clock) last.clock = noteClock(note); // keep the block's first available timestamp
+    } else {
+      blocks.push({ speaker, chapter, clock: noteClock(note), lines: [note] });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * The canonical live-transcript renderer for the meeting canvas. Consolidates ALL meeting-transcript
+ * markup here so callers never hand-roll divergent layouts (anti-drift). Behavior:
+ *  - merge=true (default): consecutive same-speaker notes fold into one compact block (label + clock once).
+ *  - timestamps: absolute `tsMs` rendered in the viewer's LOCAL timezone, else the relative `ts` fallback.
+ *  - pending: a note with completed===false renders as a dim/italic trailing "live" line in its block.
+ */
+function LiveNotes({ notes, empty = "condensing the conversation…", loading = false, maxNotes = 14, merge = true }: { notes?: MeetingNoteLike[]; empty?: string; maxNotes?: number; merge?: boolean } & Loadable) {
   const actions = useActions();
   const onTag = (tag: NoteTagLike) => actions.ask(tagChatPrompt(tag));
   const safe = safeArray(notes).filter((n) => toText(n?.text).trim());
@@ -585,31 +624,45 @@ function LiveNotes({ notes, empty = "condensing the conversation…", loading = 
   const list = safe.slice(-limit);
   if (loading) return <Panel><Skeleton lines={4} /></Panel>;
   if (!list.length) return <Empty title="No notes yet" body={toText(empty, "condensing the conversation…")} />;
+  // When merge is off each note is its own single-line block — same renderer, no divergent path.
+  const blocks = merge ? groupNotesBySpeaker(list) : list.map((note) => ({ speaker: toText(note.speaker, "Speaker"), chapter: toText(note.chapter).trim(), clock: noteClock(note), lines: [note] }));
   return (
-    <div role="log" aria-live="polite" style={{ ...frameStyle, width: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
-      {list.map((note, index) => {
-        const chapter = toText(note.chapter).trim();
-        const prevChapter = index > 0 ? toText(list[index - 1]?.chapter).trim() : "";
-        const showChapter = Boolean(chapter && chapter !== prevChapter);
+    <div role="log" aria-live="polite" style={{ ...frameStyle, width: "100%", display: "flex", flexDirection: "column", gap: 7 }}>
+      {blocks.map((block, index) => {
+        const prevChapter = index > 0 ? blocks[index - 1].chapter : "";
+        const showChapter = Boolean(block.chapter && block.chapter !== prevChapter);
+        const blockKey = toText(block.lines[0]?.id, `block-${index}`);
         return (
-          <div key={toText(note.id, `note-${index}`)} style={{ display: "flex", flexDirection: "column", gap: showChapter ? 8 : 0, minWidth: 0 }}>
+          <div key={blockKey} style={{ display: "flex", flexDirection: "column", gap: showChapter ? 6 : 0, minWidth: 0 }}>
             {showChapter ? (
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(78px, 106px) minmax(0, 1fr)", gap: 10, alignItems: "center", minWidth: 0 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(78px, 106px) minmax(0, 1fr)", gap: 10, alignItems: "center", minWidth: 0, marginTop: index ? 4 : 0 }}>
                 <span />
-                <div title={chapter} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <div title={block.chapter} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                   <span aria-hidden="true" style={{ height: 1, background: "var(--line2)", flex: "1 1 16px", minWidth: 16 }} />
-                  <span style={{ color: "var(--t3)", fontSize: 11, fontWeight: 750, textTransform: "uppercase", letterSpacing: ".04em", flex: "none", maxWidth: "min(320px, 70%)", ...lineClamp(1) }}>{chapter}</span>
+                  <span style={{ color: "var(--t3)", fontSize: 11, fontWeight: 750, textTransform: "uppercase", letterSpacing: ".04em", flex: "none", maxWidth: "min(320px, 70%)", ...lineClamp(1) }}>{block.chapter}</span>
                   <span aria-hidden="true" style={{ height: 1, background: "var(--line2)", flex: "8 1 32px", minWidth: 32 }} />
                 </div>
               </div>
             ) : null}
             <div style={{ display: "grid", gridTemplateColumns: "minmax(78px, 106px) minmax(0, 1fr)", gap: 10, alignItems: "baseline", minWidth: 0 }}>
               <span style={{ minWidth: 0, paddingTop: 1 }}>
-                <span title={toText(note.speaker, "Speaker")} style={{ display: "block", color: "var(--t2)", fontSize: 12, fontWeight: 650, ...lineClamp(1) }}>{toText(note.speaker, "Speaker")}</span>
-                {note.ts ? <span style={{ display: "block", marginTop: 2, fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)", ...lineClamp(1) }}>{toText(note.ts)}</span> : null}
+                <span title={block.speaker} style={{ display: "block", color: "var(--t2)", fontSize: 12, fontWeight: 650, ...lineClamp(1) }}>{block.speaker}</span>
+                {block.clock ? <span style={{ display: "block", marginTop: 2, fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)", ...lineClamp(1) }}>{block.clock}</span> : null}
               </span>
-              <div style={{ fontSize: 14, lineHeight: 1.6, color: "var(--t1)", overflowWrap: "anywhere", minWidth: 0 }}>
-                <NoteBody text={toText(note.text)} tags={safeArray(note.tags)} onTag={onTag} />
+              <div style={{ fontSize: 14, lineHeight: 1.5, color: "var(--t1)", overflowWrap: "anywhere", minWidth: 0 }}>
+                {block.lines.map((note, lineIndex) => {
+                  const pending = note.completed === false;
+                  return (
+                    <span
+                      key={toText(note.id, `${blockKey}-${lineIndex}`)}
+                      style={pending ? { color: "var(--t3)", fontStyle: "italic", opacity: 0.85 } : undefined}
+                    >
+                      {lineIndex ? " " : null}
+                      <NoteBody text={toText(note.text)} tags={safeArray(note.tags)} onTag={onTag} />
+                      {pending ? <span aria-hidden="true" style={{ marginLeft: 4, opacity: 0.6 }}>•••</span> : null}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           </div>

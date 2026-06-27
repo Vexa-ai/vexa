@@ -229,6 +229,7 @@ def test_dispatcher_worker_env_carries_meeting_transcript_cursor():
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:abc-defg-hij"
     assert env["VEXA_TRANSCRIPT_START_ID"] == "42-0"
+    assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(4 * 60 * 60)
 
 
 def test_local_identity_minter_emits_signed_dispatch_claims():

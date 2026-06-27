@@ -53,6 +53,16 @@ interface SpeakerBuffer {
   generation: number;
   /** Last confirmed text — passed as prompt to Whisper for context continuity */
   lastConfirmedText: string;
+  /** The text of the OUTSTANDING (unconfirmed) live pending draft, or '' if none.
+   *  Set every time onSegmentPending publishes a draft; cleared when that draft is
+   *  finalized (re-emitted confirmed under the same id) or the buffer fully resets.
+   *  A turn-close uses it to FINALIZE the draft so it never lingers as completed:false. */
+  pendingDraftText: string;
+  /** windowStartMs the outstanding pending draft was published under — its segment id.
+   *  Finalizing re-emits the confirmed under THIS exact start so the consumer's
+   *  upsert-by-id replaces the pending row (rather than appending a new id and
+   *  leaving the draft dangling). */
+  pendingDraftStartMs: number;
 }
 
 export interface SpeakerStreamManagerConfig {
@@ -128,6 +138,8 @@ export class SpeakerStreamManager {
       carryForwardSamples: 0,
       generation: 0,
       lastConfirmedText: '',
+      pendingDraftText: '',
+      pendingDraftStartMs: now,
     });
 
     const timer = setInterval(() => this.trySubmit(speakerId), this.submitInterval * 1000);
@@ -278,13 +290,12 @@ export class SpeakerStreamManager {
 
       buffer.lastWords = currentWords;
 
-      // PENDING: the unconfirmed tail (words past the stable prefix) is the live
-      // forming draft — emit it so the multistream path has the same pending tail
-      // the mixed/mic ChunkedTranscriber gives. Cleared when nothing's unconfirmed.
-      if (this.onSegmentPending) {
-        const tail = currentWords.slice(prefixLen).join(' ');
-        this.onSegmentPending(buffer.speakerId, buffer.speakerName, tail, buffer.windowStartMs);
-      }
+      // The live draft is published ONCE per submission, as the WHOLE forming window text, by the
+      // full-text fall-through below — so a consumer that upserts by segment_id sees a single draft
+      // that only grows. Emitting a second draft here (the unconfirmed tail, a shorter fragment under
+      // the SAME id `key:round(windowStartMs)`) made the draft alternate full↔fragment → a visible
+      // upsert flicker. The whole-window draft is the sole pending representation; confirmed prefixes
+      // below are published separately as confirmed segments.
 
       // Confirm if prefix covers at least 1 word but NOT all current words
       // (trailing words are still forming and may change next submission).
@@ -346,6 +357,10 @@ export class SpeakerStreamManager {
       this.advanceOffset(buffer, segmentEndSec);
     } else if (this.onSegmentPending) {
       // Still forming — emit the whole draft as pending (no per-segment timing here).
+      // Remember it (text + the id it went out under) so a turn-close can FINALIZE it
+      // instead of leaving a dangling completed:false.
+      buffer.pendingDraftText = trimmed;
+      buffer.pendingDraftStartMs = buffer.windowStartMs;
       this.onSegmentPending(buffer.speakerId, buffer.speakerName, trimmed, buffer.windowStartMs);
     }
     return true;
@@ -357,8 +372,13 @@ export class SpeakerStreamManager {
     this.timers.delete(speakerId);
 
     const buffer = this.buffers.get(speakerId);
-    if (buffer && this.unconfirmedSamples(buffer) > 0 && buffer.lastTranscript) {
-      this.emitSegment(buffer, buffer.lastTranscript);
+    if (buffer) {
+      if (this.unconfirmedSamples(buffer) > 0 && buffer.lastTranscript) {
+        this.emitSegment(buffer, buffer.lastTranscript);
+      }
+      // Finalize any still-outstanding pending draft (emitSegment above may have cleared it; if
+      // not — e.g. no unconfirmed audio remained — this confirms it so no completed:false dangles).
+      this.finalizePendingDraft(buffer);
     }
 
     this.buffers.delete(speakerId);
@@ -421,6 +441,10 @@ export class SpeakerStreamManager {
 
     if (trimAtMs !== undefined) this.trimTailAfter(buffer, trimAtMs);
     if (buffer.totalSamples === 0) {
+      // No audio owned, but a pending draft may still be dangling (the live "stale pending"
+      // case: a draft formed, the window was trimmed/confirmed to empty, then the turn closes).
+      // Finalize it so it doesn't linger as completed:false.
+      this.finalizePendingDraft(buffer);
       this.fullReset(buffer);
       return;
     }
@@ -456,10 +480,52 @@ export class SpeakerStreamManager {
       return;
     }
 
+    this.finalizePendingDraft(buffer);
     this.fullReset(buffer);
   }
 
   // ── Private ──────────────────────────────────────────────────
+
+  /**
+   * TURN-CLOSE finalize: if the speaker has an OUTSTANDING unconfirmed pending draft,
+   * confirm it (emit via onSegmentConfirmed) under the SAME segment id it was published
+   * under, then CLEAR the draft (onSegmentPending "") so NO completed:false lingers.
+   *
+   * This is the source-side fix for the "stale pending" bug: the draft was published
+   * under id `key:round(pendingDraftStartMs)`; if the turn closes via a path that emits
+   * the final confirmed segment under a DIFFERENT id (windowStartMs advanced), or that
+   * doesn't emit at all (no audio buffered, or emit deduped to a no-op), the consumer's
+   * upsert-by-id never replaces the draft and it dangles forever. Finalizing under the
+   * draft's own id guarantees the upsert replaces it; the explicit clear is belt-and-
+   * suspenders so no completed:false survives even if the confirm is filtered/deduped.
+   *
+   * Idempotent: clears pendingDraftText, so a second call is a no-op. Callers invoke it
+   * before fullReset on every close path.
+   */
+  private finalizePendingDraft(buffer: SpeakerBuffer): void {
+    const text = buffer.pendingDraftText;
+    if (!text) return;
+    const startMs = buffer.pendingDraftStartMs;
+    // Clear the tracking FIRST so emitSegment (called below) doesn't recurse/re-finalize.
+    buffer.pendingDraftText = '';
+
+    // Finalize: emit the draft text as a CONFIRMED segment under the draft's own id, so a
+    // consumer upserting by id replaces the pending row in place. We bypass emitSegment's
+    // dedup-vs-lastConfirmedText guard on purpose — the pending row carries this exact text
+    // as completed:false and MUST be replaced by a completed:true row of the same id.
+    if (text !== buffer.lastConfirmedText && this.onSegmentConfirmed && !isHallucination(text)) {
+      const endMs = buffer.totalSamples > 0
+        ? buffer.windowStartMs + (buffer.totalSamples / this.sampleRate) * 1000
+        : startMs;
+      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, startMs, endMs, `${buffer.speakerId}:${buffer.sequenceNumber}`);
+      buffer.sequenceNumber++;
+      buffer.lastConfirmedText = text;
+    } else if (this.onSegmentPending) {
+      // The text already went out confirmed (or is junk) — just CLEAR the dangling draft row
+      // so no completed:false survives. Empty string ⇒ consumer drops the draft.
+      this.onSegmentPending(buffer.speakerId, buffer.speakerName, '', startMs);
+    }
+  }
 
   private unconfirmedSamples(buffer: SpeakerBuffer): number {
     return buffer.totalSamples - buffer.confirmedSamples;
@@ -561,6 +627,9 @@ export class SpeakerStreamManager {
     // Dedup: don't re-emit the same text that was just confirmed (acoustic echo / residual audio)
     if (text === buffer.lastConfirmedText) {
       log(`[SpeakerStreams] Dedup skip for "${buffer.speakerName}": "${text.substring(0, 50)}" (same as last confirmed)`);
+      // The text is already confirmed, but a pending draft of it may still be dangling under a
+      // DIFFERENT id — clear it so no completed:false lingers (the stale-pending bug's dedup case).
+      this.clearStaleDraft(buffer, buffer.windowStartMs);
       return;
     }
     // Audio-time end via the buffer's gapless timeline — NOT Date.now(),
@@ -573,6 +642,25 @@ export class SpeakerStreamManager {
     this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, buffer.windowStartMs, endMs, segmentId);
     buffer.sequenceNumber++;
     buffer.lastConfirmedText = text;
+    // This confirmed segment supersedes the outstanding pending draft. If it went out under a
+    // DIFFERENT id than the draft (windowStartMs advanced), the consumer's upsert-by-id won't
+    // replace the draft — clear the stale draft row explicitly so it can't dangle as completed:false.
+    this.clearStaleDraft(buffer, buffer.windowStartMs);
+  }
+
+  /**
+   * Reconcile the outstanding pending draft after a confirmed emit at `confirmedStartMs`.
+   * If the draft was published under a DIFFERENT id, emit an empty pending to drop that stale
+   * row (the consumer keys drafts by `key:round(startMs)` and treats "" as a delete). Always
+   * clears the in-memory tracking so finalizePendingDraft is a subsequent no-op.
+   */
+  private clearStaleDraft(buffer: SpeakerBuffer, confirmedStartMs: number): void {
+    if (!buffer.pendingDraftText) return;
+    const draftStartMs = buffer.pendingDraftStartMs;
+    buffer.pendingDraftText = '';
+    if (Math.round(draftStartMs) !== Math.round(confirmedStartMs) && this.onSegmentPending) {
+      this.onSegmentPending(buffer.speakerId, buffer.speakerName, '', draftStartMs);
+    }
   }
 
   /**
@@ -606,6 +694,11 @@ export class SpeakerStreamManager {
     buffer.confirmCount = 0;
     buffer.lastWords = [];
     buffer.windowStartMs = Date.now();
+    // The window moved on; the prior pending draft (under the OLD windowStartMs) is superseded.
+    // Drop the in-memory tracking so a later turn-close finalize can't re-emit this stale window's
+    // text. We don't clear the consumer's draft row here (mid-stream) to avoid a live-edge flicker —
+    // the next submission republishes the forming draft under the new id, and turn-close finalizes it.
+    buffer.pendingDraftText = '';
 
     log(`[SpeakerStreams] Offset advanced for "${buffer.speakerName}" (confirmed=${buffer.confirmedSamples}, total=${buffer.totalSamples}, trimmed to ${buffer.chunks.length} chunks)`);
   }

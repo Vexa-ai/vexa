@@ -158,9 +158,12 @@ function estimateTalkMs(text: string): number {
 function normalizeSegments(segments: TranscriptSegment[] | null | undefined): TranscriptSegment[] {
   return safeArray(segments)
     .map((segment) => ({
+      id: segment.id,
       speaker: textOf(segment.speaker, "Speaker"),
       text: cleanTranscriptText(textOf(segment.text)),
       ts: segment.ts,
+      tsMs: segment.tsMs,
+      completed: segment.completed,
     }))
     .filter((segment) => segment.text.trim());
 }
@@ -328,11 +331,26 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       insights: safeArray(selected.insights),
       docs: safeArray(selected.docs),
     };
-    const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t }));
+    const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t, tsMs: s.tsMs, completed: s.completed }));
     const recordedSegments = safeArray(recorded).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
+    const diagnostics = {
+      liveConnected: live.connected,
+      ended: live.ended,
+      reconnects: live.reconnects,
+      lastEventAt: live.lastEventAt,
+      lastTranscriptAt: live.lastTranscriptAt,
+      issues: safeArray(live.issues).map((issue) => ({
+        kind: issue.kind,
+        message: cleanTranscriptText(issue.message),
+        status: issue.status,
+        at: issue.at,
+        model: issue.model,
+        stage: issue.stage,
+      })),
+    };
     // The copilot surfaces ENTITY mentions (people/companies/products/numbers) as cards too. Route
     // those into the entity groups (they dedup downstream via mergeEntityItems) and keep only real
     // SIGNAL cards as `cards`, so a person mentioned 4 times doesn't pile up 4× in the Signals column.
@@ -353,7 +371,6 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       ...copilotCards.filter((c) => /compan/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
     ];
     const products = [
-      ...detected.filter((e) => e.type === "topic" || e.type === "task"),
       ...copilotCards.filter((c) => /product/i.test(textOf(c.kind))).map((c) => ({ title: c.title, summary: c.body })),
     ];
     const textCorpus = [...segments.map((s) => s.text), ...copilotCards.flatMap((c) => [c.title, c.body ?? ""])];
@@ -382,12 +399,14 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
           chapter: note.chapter,
           text: cleanTranscriptText(note.text),
           ts: note.t,
+          tsMs: note.tsMs,
           pass: note.pass,
           frozen: note.frozen,
         })),
       },
       entities: { people, companies, products, numbers },
       cards,
+      diagnostics,
       metrics: {
         participants: participants.length,
         cards: cards.length,
@@ -396,7 +415,22 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       },
       sections: actions.sections,
     };
-  }, [actions.metrics, actions.sections, live.cards, live.note, live.notes, live.transcript, recorded, selected]);
+  }, [
+    actions.metrics,
+    actions.sections,
+    live.cards,
+    live.connected,
+    live.ended,
+    live.issues,
+    live.lastEventAt,
+    live.lastTranscriptAt,
+    live.note,
+    live.notes,
+    live.reconnects,
+    live.transcript,
+    recorded,
+    selected,
+  ]);
 }
 
 function playbackIntervalMs(speed: number): number {

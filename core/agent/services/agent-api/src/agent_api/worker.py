@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import os
 import re
 import shutil
@@ -25,6 +26,8 @@ from typing import Callable, Iterator, Protocol
 from .agent_config import DEFAULT_CARD_KINDS, MeetingConfig, load_meeting_config
 from .decision_claude import run_unit_turn
 
+log = logging.getLogger("agent_api.worker")
+
 # A turn-runner: given a prompt, yield the turn's UnitEvents (message-delta/tool-call/commit/...).
 TurnFn = Callable[[str], Iterator[dict]]
 
@@ -34,6 +37,98 @@ class _Stream(Protocol):
 
     def xadd(self, name: str, fields: dict) -> str: ...
     def xread(self, streams: dict, count: int = 1, block: int | None = None) -> list: ...
+
+
+# ── provider/token fail-loud (WS1) ────────────────────────────────────────────────────────────────
+# A 401 from the model provider (e.g. an OpenRouter `sk-or-` token sent to api.anthropic.com, or vice
+# versa) used to surface only as a GENERIC "Model inference failed" — the operator was never told the
+# token and the endpoint disagreed. We detect that signature in the subprocess output / done reply and
+# emit a DISTINCT `auth-error` event that names the provider host + the exact "check BASE_URL vs TOKEN"
+# fix, plus a cheap boot preflight that catches an obviously-mismatched token/host pair before any call.
+
+# Substrings that mark a provider authentication failure in claude-CLI / OpenRouter / Anthropic output.
+_AUTH_SIGNATURE_RE = re.compile(
+    r"\b401\b"
+    r"|unauthorized"
+    r"|invalid[ _-]*bearer"
+    r"|invalid[ _-]*(?:x-)?api[ _-]*key"
+    r"|authentication[ _-]*error"
+    r"|no auth credentials"
+    r"|user not found",  # OpenRouter's 401 body for a bad key
+    re.IGNORECASE,
+)
+
+
+def looks_like_auth_failure(text: object) -> bool:
+    """True if a blob of provider/CLI output carries an authentication-failure signature (401/Unauthorized/
+    invalid bearer/invalid api key/authentication_error). Used to upgrade a generic model error into a
+    distinct, actionable auth-error."""
+    if not text:
+        return False
+    return bool(_AUTH_SIGNATURE_RE.search(str(text)))
+
+
+def provider_host(base_url: str | None = None) -> str:
+    """The host of ``ANTHROPIC_BASE_URL`` (the provider the token is being sent to), for the auth-error
+    hint. Falls back to the raw value, then to ``"unknown"``."""
+    raw = base_url if base_url is not None else os.environ.get("ANTHROPIC_BASE_URL", "")
+    raw = (raw or "").strip()
+    if not raw:
+        return "unknown"
+    from urllib.parse import urlparse
+
+    host = urlparse(raw).netloc or urlparse(raw).path  # bare host (no scheme) lands in .path
+    return host.strip("/") or raw
+
+
+def _auth_error_event(detail: object, *, model: str | None, stage: str) -> dict:
+    """A DISTINCT auth-error event (NOT the generic model-error): names the provider host and tells the
+    operator to reconcile ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN — the token/endpoint mismatch that
+    produces a silent 401."""
+    host = provider_host()
+    text = " ".join(str(detail or "provider rejected the token").split())
+    return {
+        "type": "auth-error",
+        "error": {
+            "stage": stage,
+            "model": model or "",
+            "provider_host": host,
+            "hint": (
+                f"provider {host} returned an auth failure (401) — token/endpoint mismatch; "
+                "check ANTHROPIC_BASE_URL vs ANTHROPIC_AUTH_TOKEN (an sk-or- token must go to "
+                "openrouter.ai, an sk-ant- token to api.anthropic.com)"
+            ),
+            "message": text[:600],
+        },
+    }
+
+
+def preflight_provider_guard(
+    *, base_url: str | None = None, token: str | None = None
+) -> str | None:
+    """Cheap boot guard: if the token PREFIX and the base_url HOST obviously disagree (an ``sk-or-``
+    OpenRouter token pointed at ``api.anthropic.com``, or an ``sk-ant-`` Anthropic token pointed at an
+    openrouter host), return a loud warning string (the caller logs it). Returns None when the pair is
+    consistent or can't be judged (missing values, third-party host). Intentionally conservative — it
+    only fires on a known-bad combination so it never nags on a legitimate custom gateway."""
+    tok = (token if token is not None else os.environ.get("ANTHROPIC_AUTH_TOKEN", "")) or ""
+    host = provider_host(base_url).lower()
+    tok = tok.strip()
+    is_openrouter_host = "openrouter.ai" in host
+    is_anthropic_host = "api.anthropic.com" in host
+    if tok.startswith("sk-or-") and is_anthropic_host:
+        return (
+            "PROVIDER MISMATCH: ANTHROPIC_AUTH_TOKEN looks like an OpenRouter key (sk-or-…) but "
+            f"ANTHROPIC_BASE_URL points at {host} — this will 401. Point the base_url at openrouter.ai/api "
+            "or supply an Anthropic (sk-ant-…) token."
+        )
+    if tok.startswith("sk-ant-") and is_openrouter_host:
+        return (
+            "PROVIDER MISMATCH: ANTHROPIC_AUTH_TOKEN looks like an Anthropic key (sk-ant-…) but "
+            f"ANTHROPIC_BASE_URL points at {host} — this will 401. Point the base_url at api.anthropic.com "
+            "or supply an OpenRouter (sk-or-…) token."
+        )
+    return None
 
 
 # ── the claude turn over the mounted workspace (reuses the governed run_unit_turn) ───────────────
@@ -254,25 +349,22 @@ CARD_PROMPT = (
     "processing window. Each line is sent through at most three passes; pass 1 is fresh, pass 2 should "
     "repair obvious ASR/name/entity errors, and pass 3 should be the final clean version before the line "
     "freezes and leaves this window.\n\n{lines}\n\n"
-    "Return a concise, book-readable processed transcript plus tracking cards. For each input line, emit "
+    "Return a concise, book-readable processed transcript plus entity cards. For each input line, emit "
     "one note with the SAME id and speaker. Keep it first-person and attributed to the speaker's meaning; "
     "remove filler, false starts, duplicated fragments, prompt leakage, and obvious transcript/model "
     "artifacts. Preserve facts, uncertainty, and tone. Do not invent missing content. Never write observer "
     "boilerplate like \"Speaker says\", \"Speaker believes\", \"Speaker mentions\", \"the speaker describes\", "
     "or \"they talk about\". For subjective or intention statements, write from the speaker's first-person "
     "view (\"I...\"). For plain facts, write the fact directly (\"Anthropic released...\").\n\n"
-    "Assign each note a short chapter title (2-5 words) for the current theme. Reuse the same chapter "
-    "title while the theme continues; change it only when the conversation has genuinely moved to a new "
-    "topic, decision, story, or workstream.\n\n"
-    "Also surface what a participant would want tracked from THESE lines, but ONLY these card kinds: "
-    "{kinds}. (person = PEOPLE or companies introduced; topic = TOPICS / decisions / notable claims "
-    "discussed; action = ACTION items or commitments.) Be useful and reasonably generous — this is a live "
-    "feed, not a final summary.\n\n"
+    "Do not create topic headings. Set chapter to an empty string unless the source text itself gives a "
+    "literal section title.\n\n"
+    "Also surface ONLY concrete named entities from THESE lines, using ONLY these card kinds: {kinds}. "
+    "Use person for people, company for organizations/institutions, and product for products/projects. "
+    "Do not create topic, decision, claim, sentiment, or action cards.\n\n"
     "Respond with ONLY this JSON object (no prose, no markdown fence, and do NOT write any files):\n"
-    "{{\"notes\":[{{\"id\":\"<input id>\",\"speaker\":\"<speaker>\",\"chapter\":\"<short theme title>\",\"text\":\"<clean one-line note>\"}}],"
+    "{{\"notes\":[{{\"id\":\"<input id>\",\"speaker\":\"<speaker>\",\"chapter\":\"\",\"text\":\"<clean one-line note>\"}}],"
     "\"cards\":[{{\"kind\":\"<one of {kinds}>\",\"title\":\"<short>\",\"body\":\"<one line>\"}}]}}\n"
-    "Use an empty cards array only if these specific lines add no trackable people, topics, decisions, "
-    "or actions.{steering}"
+    "Use an empty cards array if these specific lines add no named entities.{steering}"
 )
 
 # Appended to CARD_PROMPT only when the workspace config carries non-empty steering.
@@ -352,6 +444,8 @@ def parse_notes(
         if not isinstance(item, dict):
             continue
         note_id = str(item.get("id") or "").strip()
+        if segments and note_id not in segments:
+            continue
         text = _first_person_note_text(str(item.get("text") or ""))
         if not note_id or not text:
             continue
@@ -397,6 +491,30 @@ def _first_person_note_text(text: str) -> str:
     return out[:1].upper() + out[1:] if out else out
 
 
+def fallback_processed_notes(segments: list[dict], stage_by_id: dict[str, int] | None = None) -> list[dict]:
+    stages = stage_by_id or {}
+    notes: list[dict] = []
+    for index, segment in enumerate(segments):
+        note_id = str(segment.get("segment_id") or segment.get("id") or f"segment-{index + 1}").strip()
+        text = _first_person_note_text(str(segment.get("text") or ""))
+        if not note_id or not text:
+            continue
+        stage = max(1, min(3, int(segment.get("rewrite_pass") or stages.get(note_id) or 1)))
+        note = {
+            "id": note_id,
+            "speaker": str(segment.get("speaker") or "").strip() or "Speaker",
+            "chapter": "Live Transcript",
+            "text": text,
+            "pass": stage,
+            "frozen": stage >= 3,
+        }
+        ts = segment.get("start")
+        if ts is not None:
+            note["t"] = ts
+        notes.append(note)
+    return notes
+
+
 def _model_error_event(message: object, *, model: str | None, stage: str) -> dict:
     text = " ".join(str(message or "model inference failed").split())
     return {"type": "model-error", "error": {"stage": stage, "model": model or "", "message": text[:600]}}
@@ -437,9 +555,19 @@ def meeting_card_turn(
             if ev.get("type") == "done":
                 reply = ev.get("reply") or "".join(chunks)
                 if ev.get("ok") is False:
+                    # Fail LOUD on a 401/auth mismatch: a distinct auth-error (provider host + the
+                    # BASE_URL-vs-TOKEN fix) instead of the opaque generic model-error (WS1b). The 401
+                    # text may be in the done reply OR in earlier streamed chunks, so scan both.
+                    blob = (reply or "") + " " + "".join(chunks)
+                    if looks_like_auth_failure(blob):
+                        yield _auth_error_event(reply or blob, model=model, stage="meeting-card")
+                        return
                     yield _model_error_event(reply, model=model, stage="meeting-card")
                     return
     except Exception as exc:
+        if looks_like_auth_failure(exc):
+            yield _auth_error_event(exc, model=model, stage="meeting-card")
+            return
         yield _model_error_event(exc, model=model, stage="meeting-card")
         return
     reply = reply or "".join(chunks)
@@ -447,6 +575,7 @@ def meeting_card_turn(
     cards = parse_cards(reply, kinds)
     if segments and not notes:
         yield _model_error_event("model response did not include processed transcript notes", model=model, stage="meeting-card")
+        notes = fallback_processed_notes(segments, stage_by_id)
     for note in notes:
         yield {"type": "note", "note": note}
     for card in cards:
@@ -462,9 +591,10 @@ def serve_meeting(
     start_id: str = "0",
 ) -> None:
     """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
-    cheaply (a NEW speaker, or ``beat_segments`` completed segments), and run a copilot beat that XADDs
-    proactive cards to ``out_topic``. The transcript keeps it non-idle; ``session_end`` (or an idle gap)
-    reaps it.
+    cheaply (a NEW speaker, or ``beat_segments`` segments), and run a copilot beat that XADDs proactive
+    cards to ``out_topic``. Live drafts (``completed:false``) are included and upserted by ``segment_id``
+    — a refining draft updates its line in place rather than piling up a duplicate. The transcript keeps
+    it non-idle; ``session_end`` (or an idle gap) reaps it.
 
     Cards surfaced across the meeting are accumulated (de-duped by title) and, on ``session_end``,
     handed to ``doc_turn`` — the post-meeting WRITE turn that authors/updates the kg meeting entity.
@@ -472,6 +602,7 @@ def serve_meeting(
     seen_speakers: set[str] = set()
     buffer: list[dict] = []
     processing_window: list[dict] = []
+    window_by_id: dict[str, dict] = {}  # segment_id → its window item, so a refining draft upserts
     cards: list[dict] = []          # running, de-duped (by title) list of every surfaced card
     seen_titles: set[str] = set()
     last = start_id
@@ -508,11 +639,19 @@ def serve_meeting(
                         _emit_turn(stream, out_topic, lambda: doc_turn(cards), "meeting-doc")
                     return  # meeting ended → reap
                 for seg_index, seg in enumerate(payload.get("segments", [])):
-                    if not seg.get("completed", True):
-                        continue  # skip live drafts
+                    sid = seg.get("segment_id") or f"{entry_id}:{seg_index}"
+                    existing = window_by_id.get(sid)
+                    if existing is not None:
+                        # A live draft refining (or finalizing) a segment already in the window: update
+                        # it IN PLACE so the next beat reads the latest text, never a duplicate line.
+                        # Identity is preserved, so the rewrite-pass bookkeeping still holds.
+                        existing["text"] = seg.get("text", existing.get("text"))
+                        existing["completed"] = seg.get("completed", True)
+                        continue
                     item = dict(seg)
-                    item.setdefault("segment_id", f"{entry_id}:{seg_index}")
+                    item["segment_id"] = sid
                     item["_rewrite_passes"] = 0
+                    window_by_id[sid] = item
                     buffer.append(item)
                     processing_window.append(item)
                     sp = seg.get("speaker")
@@ -525,6 +664,7 @@ def serve_meeting(
             if mutable:
                 _run_beat(mutable, n)
             processing_window = [seg for seg in processing_window if int(seg.get("_rewrite_passes", 0)) < 3]
+            window_by_id = {seg["segment_id"]: seg for seg in processing_window}
             buffer = []
 
 
@@ -554,8 +694,7 @@ def _emit_beat(stream: _Stream, out_topic: str, card_turn, segments: list[dict],
 # ── post-meeting WRITE turn: distill the surfaced cards into the kg meeting entity ────────────────
 
 _CARD_GROUP = {  # card kind → the section it lands under in the doc
-    "person": "Attendees", "company": "Companies", "topic": "Topics",
-    "action": "Actions",
+    "person": "Attendees", "company": "Companies", "product": "Products",
 }
 
 MEETING_DOC_PROMPT = (
@@ -604,6 +743,12 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
 
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
+    # Boot preflight (WS1b): if the token prefix and the base_url host obviously disagree (sk-or- token →
+    # api.anthropic.com, or sk-ant- token → openrouter), log a loud warning NOW — before the first call —
+    # so a misconfigured provider pair is visible at container start, not only as a runtime 401.
+    _warn = preflight_provider_guard()
+    if _warn:
+        log.warning("agent-api worker: %s", _warn)
     client = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     out_topic = os.environ["VEXA_UNIT_OUT_TOPIC"]
     idle_ms = int(os.environ.get("VEXA_IDLE_TIMEOUT_SEC", "120")) * 1000

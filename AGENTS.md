@@ -11,14 +11,16 @@ Concurrent work is isolated: each chat works in its **own `git worktree*`* on a 
 another chat's uncommitted files** — if surprise files appear from another chat on a shared tree, surface
 them, don't adopt them (ADR-0019).
 
-## Plan first — two modes; goal vs objective
+## Plan first — three modes; goal vs objective
 
 Never build without a current plan. **Planning mode** produces/revises the *full path* to the **goal**
 (`[docs/RELEASE-PLAN.md](docs/RELEASE-PLAN.md)` — the always-current, staged plan); **execution mode** runs
-it one **objective** at a time under the loop below. **Goal** = destination (end of plan = the release);
-**objective** = the current *go*. You are always executing toward exactly one open objective; it closes
-**expected** (→ next objective, autonomously) or **unexpected** (→ stop, interpret *with the human*, as
-learning → codify, re-plan). Never drift; always in exactly one mode (ADR-0015/0017).
+it one **objective** at a time, *in-line*, under the loop below; **debug mode** runs the same loop as an
+**orchestrator** — delegating isolated objectives to background agents/workflows to keep the chat open for the
+human (next section). **Goal** = destination (end of plan = the release); **objective** = the current *go*.
+You are always executing toward exactly one open objective; it closes **expected** (→ next objective,
+autonomously) or **unexpected** (→ stop, interpret *with the human*, as learning → codify, re-plan). Never
+drift; always in exactly one mode (ADR-0015/0017).
 
 **What planning mode must produce — settled *before* any execution:**
 - **The goal — the destination.** One **falsifiable, gate-backed** end-state (ADR-0017): the exact green the
@@ -40,6 +42,36 @@ migration, a git push, opening a PR, sending anything outward** — named and **
 cleared, the action non-disruptive to others. **Validate the verb, not just the noun** — you can hold the STT
 token yet lack the ability or permission to rebuild the stale image you'll need. An unproven operation is a
 **blocker to clear before approval**, never a mid-execution scramble (Learning #31).
+
+## Debug mode — orchestrate, delegate, keep the chat open
+
+In **debug mode** you stop being the hands and become the **orchestrator**. The chat is a scarce, serial
+resource — the one place the human steers; it must stay **open for new input and re-direction**, never
+blocked on a long-running task you could have handed off. So the moment an objective is **well-understood,
+scoped, and isolated** (clear inputs, a falsifiable `Expected`, no shared mutable state with other live
+work), you **delegate it** to a background agent or a workflow and return to the chat — you do not sit and
+watch it run.
+
+- **Delegate as soon as it's isolatable, not before.** Think the task through *first* — its `Expected`, its
+  resources/operations preflighted (the registry + preflight sections still apply to delegated work), its
+  blast radius. A half-understood task handed to a background agent just relocates the confusion. **Isolation
+  is the gate:** only a task that can run to its own DoD without further human steering is eligible to leave
+  the chat.
+- **Parallel by default when independent.** Multiple objectives with **no ordering dependency and no shared
+  working tree** launch **in parallel**, not in sequence — fan them out in a single batch (`run_in_background`
+  agents, or a `Workflow` when the fan-out has its own multi-stage structure). Anything with a real
+  dependency stays a pipeline; never fake-parallelize work that shares state (one worktree per chat still
+  holds — give parallel mutators their own isolation, ADR-0019).
+- **The chat is the control plane, not the worker.** While delegates run, the chat takes new human input,
+  re-prioritizes, scopes the next task. You surface only **gates and verdicts**: a delegate returns, you read
+  its **Actual vs Expected**, stamp the **Verdict** in the ledger (delegation does **not** drop the loop —
+  every backgrounded objective still closes EXPECTED → continue · UNEXPECTED → STOP+learn), and either close
+  it or fold its result into the next hop.
+- **Track every outstanding delegate.** A backgrounded objective that no one is waiting on is a dropped hop.
+  Keep the open delegates visible (the task list / ledger), so the human can see what is in flight and the
+  loop still fires when each returns.
+
+> *Debug mode = think it through → isolate → delegate (parallel if independent) → keep the chat free → collect verdicts. The orchestrator never blocks on a task it could hand off.*
 
 ## Where work runs — the execution-target registry (ADR-0020)
 
@@ -186,7 +218,7 @@ L1–L3 green. Name which level a "green" rests on.
 - **Report state from evidence, not intent (P21).** Don't claim a success you haven't observed.
 - **Contracts & principles ride `lane:contract`** — a human-reviewed change, recorded as an ADR under
 `docs/adr/`. Everything else merges on green gates.
-- **Fix in the brick that owns the symptom; reproduce with no live meeting before you fix.**
+- **Fix at the point of INTRODUCTION, not the point of OBSERVATION — the brick that *owns* a symptom is the one that *introduces* it, never the one where it *surfaces*.** A defect is observed downstream (a consumer: terminal, relay, renderer) but introduced upstream (the producer that first violated the contract). **Trace it hop-by-hop from where you see it back to where it's born — and only then choose the fix site.** **Never patch a symptom in a consumer to compensate for a producer's defect**: that workaround scatters compensating logic across every consumer, leaves the bug live for all the *other* consumers (the same producer feeds them too), and rots the contract — *we never work around our own bugs.* *Smell:* "I'll make the terminal ignore / normalize / de-flicker the bad frames." "Where I see it" ≠ "where it's introduced." **Reproduce with no live meeting before you fix.**
 - **A brick's front door is per-runtime; inject runtime dependencies.** When a brick spans runtimes
 (browser + node), its `.` front door is **types-only** (fully erased ⇒ zero browser runtime); any node-only
 capability (e.g. an fs-backed validator) lives behind a **separate subpath** (`pkg/validate`). A cross-brick

@@ -37,7 +37,7 @@ MODEL_ALLOWLIST: frozenset[str] = frozenset({
     "claude-opus-4-1-20250805",
 })
 
-DEFAULT_CARD_KINDS: tuple[str, ...] = ("person", "topic", "action")
+DEFAULT_CARD_KINDS: tuple[str, ...] = ("person", "company", "product")
 DEFAULT_CADENCE_SEGMENTS = 4
 
 

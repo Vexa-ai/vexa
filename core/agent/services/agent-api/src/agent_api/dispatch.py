@@ -60,6 +60,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
     if meeting and meeting.get("meeting_id"):
         env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{meeting['meeting_id']}"
+        env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.meeting_idle_timeout_sec)
         # Carry the meeting facts the post-meeting WRITE turn stamps into the kg entity frontmatter.
         env["VEXA_MEETING_ID"] = str(meeting["meeting_id"])
         if meeting.get("session_uid"):
@@ -99,6 +100,10 @@ class Dispatcher:
         self._runtime = runtime
         self._identity = identity
         self.dispatched: list[dict] = []  # observability — the dispatches that fired
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
 
     def dispatch(self, invocation: dict) -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).

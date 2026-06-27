@@ -133,7 +133,7 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
         const map: Record<string, string> = {};
         for (const f of files) if (f.startsWith("kg/entities/") && f.endsWith(".md")) map[baseName(f).replace(/\.md$/, "")] = f;
         setSlugMap(map);
-      } catch { /* offline — fall back to topic/<slug> */ }
+      } catch { /* offline — keep wikilinks on the meeting doc */ }
     })();
     return () => { alive = false; };
   }, []);
@@ -157,7 +157,7 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {state.links.map((l) => {
                 const slug = docSlug(l);
-                const path = slugMap[slug] ?? `kg/entities/topic/${slug}.md`;
+                const path = slugMap[slug] ?? `kg/entities/meeting/${native}.md`;
                 return <WikiLinkChip key={l} title={l} path={path} />;
               })}
             </div>
@@ -402,6 +402,44 @@ function MeetingsList() {
 }
 
 // ── Meeting COPILOT tab (center) — meeting shell + canvas ──────────────────────────
+type ModelInfo = { chat_model?: string; streaming_model?: string; agent_model?: string; meeting_model?: string };
+
+function useModelInfo(): ModelInfo | null {
+  const [models, setModels] = useState<ModelInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/models?subject=${SUBJECT_DOCS}`, { cache: "no-store" });
+        if (!alive || !r.ok) return;
+        setModels(await r.json() as ModelInfo);
+      } catch {
+        /* model labels are informational */
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+  return models;
+}
+
+function ModelChips() {
+  const models = useModelInfo();
+  const streaming = models?.streaming_model || models?.meeting_model || "streaming";
+  const chat = models?.chat_model || models?.agent_model || "chat";
+  const chip = (label: string, value: string) => (
+    <span title={`${label} model: ${value}`} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t2)", background: "var(--panel)", fontSize: 11.5, whiteSpace: "nowrap", minWidth: 0 }}>
+      <span style={{ color: "var(--t3)", fontFamily: "var(--mono)", flex: "none" }}>{label}</span>
+      <span style={{ color: "var(--t1)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{value}</span>
+    </span>
+  );
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "flex-end", minWidth: 0 }}>
+      {chip("stream", streaming)}
+      {chip("chat", chat)}
+    </div>
+  );
+}
+
 function MeetingTab({ params }: TabProps) {
   const liveList = useLiveMeetings();
   const requestedMeetingId = params.meetingId as string;
@@ -415,15 +453,18 @@ function MeetingTab({ params }: TabProps) {
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
       <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13 }}>
-          {live
-            ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
-            : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>{m ? "Ended" : "Connecting…"}</span>}
-          <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)" }} />
-          <span style={{ color: "var(--t1)", fontWeight: 550 }}>{m?.platform ?? "Meeting"}</span>
-          {m && <span style={{ color: "var(--t3)" }}>{m.participants.length} in the room</span>}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 13, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+            {live
+              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
+              : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>{m ? "Ended" : "Connecting…"}</span>}
+            <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)", flex: "none" }} />
+            <span style={{ color: "var(--t1)", fontWeight: 550, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m?.platform ?? "Meeting"}</span>
+            {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
+          </div>
+          <div style={{ flex: 1 }} />
+          <ModelChips />
         </div>
-        <p style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.5, margin: "6px 0 0", maxWidth: 460 }}>People and topics surfaced from this meeting. Open one for its card, or ask the right-rail chat for research grounded in this meeting.</p>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>
         <MeetingCanvasView key={requestedMeetingId} meetingId={requestedMeetingId} />

@@ -1,6 +1,5 @@
 // Harness-governed Meeting Canvas view. The terminal trial-renders this before promotion.
-// Live FIRST-PERSON notes (the transcript condensed in the speaker's own words, folded in every few
-// utterances, with inline keyword tags) over the live raw-transcript TAIL.
+// Live FIRST-PERSON transcript: model-cleaned lines plus local fallback lines in one attributed body.
 function statusLabel(status) {
   const v = String(status || "live").toLowerCase();
   if (v === "active" || v === "live") return "Live";
@@ -20,8 +19,8 @@ function statusTone(status) {
 
 export default function MeetingCanvas() {
   const meeting = useMeeting();
-  const transcript = useTranscript({ by: "time" });
   const notes = useMeetingNotes();
+  const cleanNotes = notes.map((note) => ({ ...note, chapter: "" }));
 
   const status = meeting.meeting.status || "live";
   const title = meeting.meeting.title || "Meeting";
@@ -33,16 +32,9 @@ export default function MeetingCanvas() {
         <ui.Tag tone="default">{title}</ui.Tag>
       </ui.Row>
 
-      <ui.Section title="Live notes">
-        <ui.LiveNotes notes={notes} empty="Condensing the conversation — notes appear as people speak." />
+      <ui.Section title="Transcript">
+        <ui.LiveNotes notes={cleanNotes} maxNotes={80} merge empty="Clean attributed transcript appears as people speak." />
       </ui.Section>
-
-      <ui.LiveTranscript
-        segments={transcript.segments}
-        liveCaption={transcript.liveCaption}
-        maxSegments={3}
-        empty="waiting for the live transcript…"
-      />
     </ui.Stack>
   );
 }

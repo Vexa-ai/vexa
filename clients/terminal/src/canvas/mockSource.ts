@@ -334,7 +334,6 @@ export function buildMockMeetingState(state: MockSourceState): MeetingState {
   ];
   const products = [
     ...seededProducts,
-    ...detected.filter((entity) => entity.type === "topic" || entity.type === "task").slice(0, revealedEntities + 1),
     ...injected.products,
   ];
   const textCorpus = [...segments.map((segment) => segment.text), ...cards.flatMap((card) => [card.title, card.body ?? ""])];

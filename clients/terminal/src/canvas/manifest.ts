@@ -11,7 +11,8 @@ const { segments, liveCaption } = useTranscript({ by?: "time" | "speaker", windo
 // segments: { speaker?: string; text: string; ts?: number | string }[]
 
 const meeting = useMeeting()
-// { meeting: { id, nativeId?, title, status?, startedAt?, participants?, docs? }, transcript, entities, cards, metrics, sections }
+// { meeting: { id, nativeId?, title, status?, startedAt?, participants?, docs? }, transcript, entities, cards, diagnostics, metrics, sections }
+// diagnostics: { liveConnected?, ended?, reconnects?, lastEventAt?, lastTranscriptAt?, issues?: { kind, message, status?, at?, model?, stage? }[] }
 
 const speakers = useSpeakers()
 // { name: string; segments: number; talkMs: number; talkPct: number }[]
@@ -20,11 +21,12 @@ const entities = useEntities({ kind?: "person" | "company" | "product" | "number
 // EntityItem[]: { id, kind, name, context?, summary?, quote?, docPath?, researched? }
 
 const signals = useSignals()
-// EntityItem[] with kind: "signal", derived from meeting cards and action items.
+// EntityItem[] with kind: "signal", derived from meeting cards.
 
 const notes = useMeetingNotes()
 // MeetingNote[]: { id, ts?, speaker?, text, tags } — attributed FIRST-PERSON notes: the speaker's own
-// words shortened into clean paragraphs, folded as turns complete, with keyword tags inline.
+// words shortened into clean paragraphs, folded as turns complete, with explicit entity tags inline. Processed
+// notes and local fallback transcript lines are already merged into this one body.
 
 const docs = useMeetingDocs()
 // { brief: { path, present, title? }, report: { path, present, title? } }
@@ -79,7 +81,7 @@ The kit is hardened for non-technical authors:
 - \`ui.EntityList({ items?: EntityItem[], empty?, loading? })\`
 - \`ui.Timeline({ items?, empty?, loading? })\`
 - \`ui.Transcript({ segments?, liveCaption?, empty?, loading? })\`
-- \`ui.LiveNotes({ notes?: MeetingNote[], empty?, loading?, maxNotes? })\` — the condensed first-person notes feed with inline keyword tags
+- \`ui.LiveNotes({ notes?: MeetingNote[], empty?, loading?, maxNotes? })\` — the clean attributed transcript feed with inline entity tags
 - \`ui.LiveTranscript({ segments?, liveCaption?, empty?, loading?, maxSegments? })\` — the live raw-transcript TAIL (last few lines, wrapped)
 - \`ui.Chart({ kind?: "bar"|"line", data?, tone?, loading? })\`
 - \`ui.Badge({ tone?, loading?, children? })\`

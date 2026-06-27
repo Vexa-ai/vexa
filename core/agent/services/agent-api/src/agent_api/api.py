@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from . import routines as routines_mod
 from . import units
 from . import workspace_routines as workspace_routines_mod
+from .agent_config import DEFAULT_MEETING_MODEL, load_meeting_config
 from .dispatch import Dispatcher
 from .events import event_to_invocation
 from .ports import SchedulerPort, StreamReader
@@ -39,6 +40,8 @@ from .workspace_reader import WorkspaceReader
 
 logger = logging.getLogger("agent_api.api")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MEETING_STREAM_TRANSCRIPT_REPLAY = 80
+MEETING_STREAM_OUTPUT_REPLAY = 160
 
 
 def _upload_filename(name: str | None) -> str:
@@ -225,11 +228,21 @@ class MeetingStop(BaseModel):
     platform: str = "google_meet"
 
 
+class MeetingProcess(BaseModel):
+    """Toggle copilot PROCESSING for a meeting. on=false → no processing (raw transcript only);
+    on=true → process the meeting (full-history backfill the first time, else resume live)."""
+    model_config = {"extra": "forbid"}
+    native_id: str
+    platform: str = "google_meet"
+    on: bool
+    subject: str = "u_live"
+
+
 # The meeting copilot's start brief. The in-container worker drives per-beat extraction with its own
 # CARD_PROMPT; this is the envelope's entrypoint (continuity = the session file in the workspace).
 _MEETING_BRIEF = (
     "You are the live meeting copilot. Watch the meeting transcript as it streams in and surface the "
-    "people, companies, topics, decisions, and action items worth acting on."
+    "people, companies, products, and projects worth tagging."
 )
 
 
@@ -271,6 +284,22 @@ def create_app(
             {"status": "ok" if ok else "degraded", "service": "agent-api", "checks": {"dispatcher": ok}},
             status_code=200 if ok else 503,
         )
+
+    @app.get("/api/models")
+    def models(subject: str = "u_live"):
+        settings = dispatcher.settings
+        streaming_model = settings.meeting_model or DEFAULT_MEETING_MODEL
+        try:
+            streaming_model = load_meeting_config(wsr.workspace_dir(subject)).model
+        except ValueError:
+            pass
+        chat_model = settings.agent_model or "default"
+        return {
+            "chat_model": chat_model,
+            "agent_model": chat_model,
+            "streaming_model": streaming_model,
+            "meeting_model": streaming_model,
+        }
 
     @app.post("/invocations", status_code=202)
     def invocations(invocation: dict = Body(...)):
@@ -366,6 +395,42 @@ def create_app(
                 raise HTTPException(status_code=e.code, detail=f"stop failed: {e.read().decode()[:200]}")
         live.stop(body.native_id)
         return {"native_id": body.native_id, "stopped": True}
+
+    @app.post("/api/meeting/process", status_code=202)
+    def meeting_process(body: MeetingProcess):
+        """User-controlled copilot PROCESSING for a meeting. Processing is OPT-IN: the transcription
+        watcher only arms / keeps the copilot alive while ``proc:meeting:{native}`` is set — so OFF means
+        NO processing runs at all (the raw transcript still streams). ON sets the flag and, if the meeting
+        has not been processed yet (no cached output on ``unit:agent-meet-{native}:out``), dispatches a
+        FULL-HISTORY backfill (``transcript_start_id='0-0'`` → the copilot reads the whole transcript from
+        the start); if it was already processed, it resumes live from the current tail (no re-processing)."""
+        import redis as _redis
+
+        r = _redis.from_url(redis_url, decode_responses=True)
+        flag = f"proc:meeting:{body.native_id}"
+        if not body.on:
+            try:
+                r.delete(flag)
+            except Exception:  # noqa: BLE001 — best-effort; the watcher reaps the copilot on TTL anyway
+                pass
+            return {"native_id": body.native_id, "processing": False}
+        try:
+            r.set(flag, "1")
+            cached = (r.xlen(f"unit:agent-meet-{body.native_id}:out") or 0) > 0
+        except Exception:  # noqa: BLE001
+            cached = False
+        # not cached → process ALL prior (from the stream start); cached → resume live from the tail.
+        start_id = (_stream_tail_id(redis_url, f"tc:meeting:{body.native_id}") or "0-0") if cached else "0-0"
+        inv = units.make_dispatch(
+            subject=body.subject, trigger="transcription",
+            start=units.entrypoint(inline=_MEETING_BRIEF),
+            context={"kind": "meeting", "meeting": {
+                "meeting_id": body.native_id, "session_uid": body.native_id,
+                "platform": body.platform, "transcript_start_id": start_id,
+            }},
+        )
+        dispatcher.dispatch(inv)
+        return {"native_id": body.native_id, "processing": True, "backfilled": not cached}
 
     @app.get("/api/meetings")
     def list_meetings():
@@ -622,13 +687,33 @@ def create_app(
             r = redis.from_url(redis_url, decode_responses=True)
             tkey = f"tc:meeting:{meeting_id}"
             okey = f"unit:agent-meet-{session_uid}:out"
-            last = {tkey: "0", okey: "0"}
+            last = {tkey: "$", okey: "$"}
             idle = 0
             ending = False  # transcript hit session_end — drain trailing cards before meeting-end
+
+            seed_rows = list(reversed(r.xrevrange(tkey, count=MEETING_STREAM_TRANSCRIPT_REPLAY) or []))
+            for entry_id, fields in seed_rows:
+                last[tkey] = entry_id
+                payload = json.loads(fields.get("payload", "{}"))
+                if payload.get("type") == "session_end":
+                    ending = True
+                    last.pop(tkey, None)
+                    continue
+                for seg in payload.get("segments", []):
+                    yield {"type": "transcript", "speaker": seg.get("speaker"),
+                           "text": seg.get("text"), "t": seg.get("start"),
+                           "tsMs": seg.get("abs_start_ms"),
+                           "completed": seg.get("completed", True),
+                           "id": seg.get("segment_id")}
+            output_seed_rows = list(reversed(r.xrevrange(okey, count=MEETING_STREAM_OUTPUT_REPLAY) or []))
+            for entry_id, fields in output_seed_rows:
+                last[okey] = entry_id
+                yield json.loads(fields.get("event", "{}"))
+
             while True:
                 # once the transcript ends, poll ONLY the out-stream (briefly) to flush trailing cards.
-                # on a reconnect both streams carry a full backlog at once: end the transcript LAST so
-                # session_end can't terminate the generator before the card Stream is replayed.
+                # The transcript stream is seeded from a bounded recent tail; the output stream replays
+                # from the start so existing cards and notes remain available after a browser reconnect.
                 resp = r.xread(last, count=500, block=1500 if ending else 15000)
                 if not resp:
                     if ending:               # out-stream drained → now it's safe to end
@@ -653,6 +738,7 @@ def create_app(
                             for seg in payload.get("segments", []):
                                 yield {"type": "transcript", "speaker": seg.get("speaker"),
                                        "text": seg.get("text"), "t": seg.get("start"),
+                                       "tsMs": seg.get("abs_start_ms"),
                                        "completed": seg.get("completed", True),
                                        "id": seg.get("segment_id")}
                         else:

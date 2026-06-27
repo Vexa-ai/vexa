@@ -123,6 +123,11 @@ services:
       - "${DOCKER_GID:-0}"
     ports:
       - "127.0.0.1:${RUNTIME_API_PORT:-18090}:8090"
+    # Provider auth (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL) is sourced from .env via env_file so the
+    # token/endpoint pair is a SINGLE SOURCE OF TRUTH the ambient shell cannot shadow. The runtime brokers
+    # these into spawned agent containers, so a shell-shadowed base_url here would poison every agent.
+    env_file:
+      - .env
     environment:
       - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:dev}
@@ -132,8 +137,8 @@ services:
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL now come from env_file (above), NOT environment: — an
+      # `environment:` ${VAR} entry interpolates the AMBIENT SHELL first and silently shadowed .env (prod 401).
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
       - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
@@ -168,6 +173,11 @@ services:
     image: vexaai/v012-agent-api:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${AGENT_API_PORT:-18100}:8100"
+    # Provider auth (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL) is sourced from .env via env_file so it is
+    # a SINGLE SOURCE OF TRUTH that the ambient shell cannot shadow. env_file values are NOT interpolated
+    # through the host shell (unlike `environment:` ${VAR} entries), which is exactly the prod-401 fix.
+    env_file:
+      - .env
     environment:
       - VEXA_AGENT_API_PORT=8100
       - VEXA_RUNTIME_API_URL=http://runtime:8090
@@ -178,8 +188,10 @@ services:
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       - VEXA_MEETING_MODEL=${VEXA_MEETING_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL come from env_file (below), NOT environment: — an
+      # `environment:` entry interpolates the AMBIENT SHELL first, so a host `export ANTHROPIC_BASE_URL`
+      # silently shadowed deploy/compose/.env and a prod 401 followed (OpenRouter token → api.anthropic.com).
+      # env_file reads the value literally from .env; the shell can no longer override it (single source of truth).
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
       - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}

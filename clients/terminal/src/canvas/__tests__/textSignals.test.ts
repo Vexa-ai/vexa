@@ -41,19 +41,22 @@ describe("notable number extraction", () => {
 });
 
 describe("live note tag extraction", () => {
-  it("keeps institution phrases atomic and filters noisy single-token tags", () => {
+  it("tags only explicit meeting entities and keeps numbers/noisy words plain", () => {
     const text = cleanTranscriptText("I think University of Chicago and European universities came up. Deep Sea closes $7.4 billion Series A after 48 hours. Only two of the Mag 7 outperformed the S&P.");
-    const labels = extractNoteTags(text, [], 0).map((tag) => tag.label);
+    const labels = extractNoteTags(text, [
+      { id: "company:university-of-chicago", kind: "company", name: "University of Chicago", context: "Institution" },
+      { id: "product:deepseek", kind: "product", name: "DeepSeek" },
+    ], 0).map((tag) => tag.label);
 
     expect(labels).toContain("University of Chicago");
     expect(labels).toContain("DeepSeek");
-    expect(labels).toContain("$7.4 billion");
-    expect(labels).toContain("Series A");
-    expect(labels).toContain("Mag 7");
-    expect(labels).toContain("S&P");
     expect(labels).not.toContain("University");
     expect(labels).not.toContain("Chicago");
     expect(labels).not.toContain("European");
+    expect(labels).not.toContain("$7.4 billion");
+    expect(labels).not.toContain("Series A");
+    expect(labels).not.toContain("Mag 7");
+    expect(labels).not.toContain("S&P");
     expect(labels).not.toContain("48");
     expect(labels).not.toContain("S");
     expect(labels).not.toContain("P");

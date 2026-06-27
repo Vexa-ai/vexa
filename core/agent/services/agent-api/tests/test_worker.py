@@ -198,6 +198,29 @@ def test_serve_meeting_reprocesses_transcript_window_three_passes():
     ]
 
 
+def test_serve_meeting_processes_drafts_and_upserts_refinements():
+    """Live drafts (``completed:false``) are processed, not dropped — and a refining draft of the same
+    ``segment_id`` updates the line IN PLACE, so a later beat sees ONE line carrying the final text,
+    never a duplicate."""
+    observed = []
+
+    def card_turn(segs):
+        observed.append([(s["segment_id"], s["text"]) for s in segs])
+        return iter(())
+
+    s = StepMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "hel", completed=False), "segment_id": "a"}),  # draft → beat1
+        _transcript("2-0", {**_seg("Jane", "hello world", completed=True), "segment_id": "a"}),  # refine a
+        _transcript("3-0", {**_seg("Raj", "hi", completed=True), "segment_id": "b"}),  # new speaker → beat2
+    ])
+    # beat_segments=5 so beats gate only on a NEW speaker (never the refining draft, which adds no length).
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=card_turn,
+                  idle_ms=10, beat_segments=5)
+
+    assert observed[0] == [("a", "hel")]                          # the draft WAS processed, not skipped
+    assert observed[-1] == [("a", "hello world"), ("b", "hi")]    # refinement upserted: one "a", final text
+
+
 def test_serve_meeting_starts_from_injected_cursor():
     s = CursorMeetingStream(inbox=[_transcript("43-0", _seg("Jane", "new"))])
     serve_meeting(
@@ -369,7 +392,7 @@ def test_meeting_card_turn_parses_streamed_delta_when_done_reply_is_empty(tmp_pa
 
     def fake_run(*_args, **_kwargs):
         yield {"type": "message-delta", "text": '{"notes":[{"id":"a","speaker":"Jane","chapter":"Plan","text":"I will send the plan."}],"cards":['}
-        yield {"type": "message-delta", "text": '{"kind":"action","title":"Send plan","body":"Jane will send it."}]}'}
+        yield {"type": "message-delta", "text": '{"kind":"company","title":"Acme","body":"Customer mentioned."}]}'}
         yield {"type": "done", "ok": True, "reply": ""}
 
     with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
@@ -388,7 +411,47 @@ def test_meeting_card_turn_parses_streamed_delta_when_done_reply_is_empty(tmp_pa
         },
     }
     assert evs[1]["type"] == "card"
-    assert evs[1]["card"]["title"] == "Send plan"
+    assert evs[1]["card"]["title"] == "Acme"
+
+
+def test_meeting_card_turn_falls_back_when_model_omits_matching_notes(tmp_path):
+    import unittest.mock as mock
+    from agent_api import worker
+
+    def fake_run(*_args, **_kwargs):
+        yield {
+            "type": "done",
+            "ok": True,
+            "reply": '{"notes":[{"id":"1","speaker":"Jane","chapter":"Plan","text":"Speaker says I will send the plan."}],"cards":[]}',
+        }
+
+    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
+        evs = list(meeting_card_turn(
+            tmp_path,
+            [{"segment_id": "seg-a", "speaker": "Jane", "text": "Speaker says I will send the plan.", "start": 7.0, "rewrite_pass": 2}],
+            model="openrouter/free",
+        ))
+
+    assert evs[0] == {
+        "type": "model-error",
+        "error": {
+            "stage": "meeting-card",
+            "model": "openrouter/free",
+            "message": "model response did not include processed transcript notes",
+        },
+    }
+    assert evs[1] == {
+        "type": "note",
+        "note": {
+            "id": "seg-a",
+            "speaker": "Jane",
+            "chapter": "Live Transcript",
+            "text": "I will send the plan.",
+            "pass": 2,
+            "frozen": False,
+            "t": 7.0,
+        },
+    }
 
 
 def test_meeting_card_turn_surfaces_model_done_failure(tmp_path):
