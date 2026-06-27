@@ -91,6 +91,9 @@ export async function runMeetingFlow(
           if (msg.includes("rejected by meeting admin")) {
             return { admitted: false, rejected: true, reason: "admission_rejected_by_admin" } as AdmissionDecision;
           }
+          if (msg.includes("never_admitted") || msg.includes("not admitted to the meeting after lobby timeout")) {
+            return { admitted: false, rejected: false, reason: "admission_never_admitted" } as AdmissionDecision;
+          }
           return { admitted: false, rejected: false, reason: "admission_timeout" } as AdmissionDecision;
         }),
       strategies.prepare(page, botConfig),

@@ -82,6 +82,8 @@ class MeetingCompletionReason(str, Enum):
     STOPPED_WITH_NO_AUDIO = "stopped_with_no_audio"  # Bot ran ≥30s with transcribe enabled but produced 0 segments (125 cases / 30d)
     # Pack D (#5) — canonicalized pre-admission failure reasons:
     JOIN_FAILURE = "join_failure"  # Bot failed to navigate to the meeting (pre-lobby fast fail, distinct from user-stopped)
+    # v0.10.6 (#421) — split lobby timeout from explicit host denial:
+    NEVER_ADMITTED = "never_admitted"  # Bot waited full lobby timeout; host did not explicitly deny
 
 class MeetingFailureStage(str, Enum):
     """
