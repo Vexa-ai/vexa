@@ -179,6 +179,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- fastapi-guard: per-IP rate limiting, IP allow/deny + auto-ban ---
+# Complementary to the per-key rate_limit_middleware below (per-key catches
+# one-token-many-IPs; guard's per-IP catches many-tokens-from-one-IP and
+# auto-bans repeat offenders). See guard_config.py for the full config and the
+# rationale for what's enabled/disabled. The per-key limiter is NOT replaced.
+from guard_config import apply_guard  # noqa: E402
+
+apply_guard(app)
+
 # --- Rate Limiting Middleware ---
 RATE_LIMIT_SKIP_PATHS = {"/", "/docs", "/openapi.json", "/redoc"}
 
