@@ -69,7 +69,7 @@ async function makeT(fake?: Fake) {
       rename: (from: string, to: string, segments: ChunkSegment[]) => renamed.push({ from, to, segments }),
     },
     log: () => {},
-    binder: new (await import('@vexa/pipeline')).ClusterNameBinder({}),
+    binder: new (await import('@vexa/mixed-pipeline')).ClusterNameBinder({}),
     diarizer: null,
     ring: [], ringMs: 0, carry: null, queue: [], pumping: false,
     lastConfirmedText: '', commitCounter: 0, turnCounter: 0, disposed: false,

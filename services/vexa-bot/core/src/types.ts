@@ -51,6 +51,11 @@ export type BotConfig = {
   s3Bucket?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  // HTTP cookie storage backend (alternative to S3)
+  cookieStorageBackend?: 'http';
+  cookieServiceUrl?: string;
+  cookieServiceToken?: string;
+  userId?: string;
 }
 
 export type BrowserSessionConfig = {
