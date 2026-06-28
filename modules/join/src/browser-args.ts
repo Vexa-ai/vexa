@@ -39,6 +39,11 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--disable-blink-features=AutomationControlled",
   "--disable-features=VizDisplayCompositor",
   "--disable-site-isolation-trials",
+  // Allow AudioContext to start in "running" state without a user gesture.
+  // Without this, ctx.resume() in the per-speaker audio pipeline never
+  // actually starts the AudioContext — the promise stays pending — so the
+  // AudioWorklet never processes audio and whisper=0 forever.
+  "--autoplay-policy=no-user-gesture-required",
 ];
 
 /** The canonical join launch args, as a fresh mutable array per call. */
