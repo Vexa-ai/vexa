@@ -6,6 +6,15 @@ control-plane (`meeting-api`, Python), and a single-process desktop host — the
 composed three ways (desktop process · bot container · split cloud services). TS where realtime audio
 + browser automation live; Python for the control-plane seams.
 
+## Boundary (SoC)
+
+**This domain is about:** joining meetings, capturing + transcribing them, the meeting row + bot
+lifecycle, meeting status, and the **transcript** — it is the *single writer* of the transcript carrier
+(P23). **It is never about:** the copilot, chat, the agent's workspace, or what gets *extracted* from a
+transcript — that is the **agent** domain. `meetings ⊥ agent`: the two domains never call each other; they
+meet **only at the gateway**, over published contracts (`transcript.v1`, `api.v1`). See
+[`docs/CONTROL-PLANE.md`](../../docs/CONTROL-PLANE.md).
+
 ## Seams
 
 | Direction | Neighbour | Via | What crosses |

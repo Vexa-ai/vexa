@@ -8,6 +8,13 @@ redis channels into one authenticated socket. It is the v0.12 carve of the deplo
 `services/api-gateway/main.py`, with collaborators (admin-api, downstream, redis) injected as
 ports so the same shipped `create_app` runs in prod and under the conformance harness.
 
+## Boundary (SoC)
+**This is the single edge.** It is about: authentication, *verbatim* proxy to the domain APIs, and
+**composition** across domains (`/ws` fan-in, and cookbook ops that orchestrate ≥2 domain contracts).
+**It is never about:** the business logic of either domain. The two domains (`meetings`, `agent`) never
+talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1`, `transcript.v1`,
+`tool.v1`). See [`docs/CONTROL-PLANE.md`](../../../../docs/CONTROL-PLANE.md).
+
 ## Seams
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
