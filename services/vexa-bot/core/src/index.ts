@@ -2471,7 +2471,19 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       permissions: ["camera", "microphone"],
       userAgent: userAgent,
       viewport: null, // CDP fullscreen removes browser chrome; window fills the 1920x1080 Xvfb display
+      bypassCSP: true,
+      ignoreHTTPSErrors: true,
     });
+
+    // Pre-inject browser utils so it's available before any page scripts run
+    try {
+      await context.addInitScript({
+        path: require('path').join(__dirname, 'browser-utils.global.js'),
+      });
+      log('[Bot] Browser utils pre-injected via context.addInitScript');
+    } catch (e: any) {
+      log(`[Bot] Warning: browser utils addInitScript failed: ${e.message}`);
+    }
 
     // Set voice agent flag before virtual camera script so it knows
     // whether to disable incoming video tracks (saves ~87% CPU per bot).
