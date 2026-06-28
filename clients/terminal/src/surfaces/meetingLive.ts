@@ -30,7 +30,7 @@ export interface LiveState {
   lastTranscriptAt?: number;
 }
 
-interface Entry { state: LiveState; subs: Set<() => void>; es?: EventSource; refs: number; retry?: number; watchdog?: number; startEpochMs?: number }
+interface Entry { state: LiveState; subs: Set<() => void>; es?: EventSource; refs: number; retry?: number; watchdog?: number; startEpochMs?: number; lastEventId?: string }
 const stores = new Map<string, Entry>();
 const EMPTY: LiveState = { transcript: [], notes: [], cards: [], errors: [], issues: [], note: "", ended: false, connected: false, reconnects: 0 };
 const RECONNECT_MS = 2500;
@@ -112,7 +112,11 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
     }, WATCHDOG_TICK_MS);
   };
 
-  const es = new EventSource(`/api/meeting/stream?meeting_id=${encodeURIComponent(meetingId)}&session_uid=${encodeURIComponent(sessionUid)}`);
+  // Resume from the last segment we saw so a RECONNECT is gapless (the proxy turns `lid` into the
+  // Last-Event-ID header agent-api resumes from). A manual forceReconnect opens a FRESH EventSource,
+  // which would otherwise lose the browser's native Last-Event-ID — so we carry it ourselves.
+  const resume = e.lastEventId ? `&lid=${encodeURIComponent(e.lastEventId)}` : "";
+  const es = new EventSource(`/api/meeting/stream?meeting_id=${encodeURIComponent(meetingId)}&session_uid=${encodeURIComponent(sessionUid)}${resume}`);
   e.es = es;
   es.onopen = () => { e.state.connected = true; e.state.lastEventAt = Date.now(); armWatchdog(); emit(); };
   es.onmessage = (m) => {
@@ -124,6 +128,7 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
     }
     const s = e.state;
     s.lastEventAt = Date.now();
+    if (m.lastEventId) e.lastEventId = m.lastEventId;   // remember the cursor for a gapless reconnect
     if (ev.type === "transcript") {
       // pending (completed:false) segments arrive repeatedly as ASR refines — upsert on segment id so
       // the line updates in place (and finalizes when completed:true), rather than piling up duplicates.

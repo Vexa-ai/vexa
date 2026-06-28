@@ -5,15 +5,10 @@ import { useService, useStore } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList } from "../contributions";
 import { Icon } from "../ui-kit";
-
-const SUBJECT = "u_live";  // the terminal's single subject (matches workspace + meetings; one identity until §0 auth)
-
-export interface SessionSummary {
-  session: string;
-  title?: string | null;
-  created?: string | null;
-  last_active?: string | null;
-}
+// Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
+// proven in isolation by sessionsApi.test.ts.
+import { listSessions, type SessionSummary } from "./sessionsApi";
+export type { SessionSummary } from "./sessionsApi";  // re-exported for the chat surface
 
 const truncateSessionId = (session: string) => session.length > 18 ? `${session.slice(0, 18)}...` : session;
 
@@ -39,7 +34,8 @@ function SessionsList() {
   const layout = useService(LayoutServiceId);
   const { activeSession } = useStore(layout.store);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  useEffect(() => { void (async () => { try { const data = await (await fetch(`/api/sessions?subject=${SUBJECT}`)).json() as { sessions?: SessionSummary[] }; setSessions(data.sessions ?? []); } catch { /* offline */ } })(); }, []);
+  const [error, setError] = useState<string | null>(null);  // fail-loud (P18)
+  useEffect(() => { void listSessions().then((s) => { setSessions(s); setError(null); }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))); }, []);
 
   const focusChat = () => {
     layout.showRight();
@@ -51,6 +47,7 @@ function SessionsList() {
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>sessions</div>
+      {error && <div role="alert" style={{ fontSize: 12, color: "var(--live)", padding: "6px 9px" }}>⚠ Couldn’t load sessions — {error}</div>}
       {sessions.map((s) => (
         <SessionRow key={s.session} session={s} active={s.session === activeSession} onOpen={() => openSession(s.session)} />
       ))}

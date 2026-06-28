@@ -20,7 +20,7 @@ import { parseMeetingInput } from "./meetingId";
 //  its title + the [[wikilinks]] parsed from the body as chips that open that entity's doc. A wikilink
 //  [[Title]] is resolved to a real doc by matching its slug against the workspace tree (so we open the
 //  entity under its true type folder, whatever that is). 404 → a quiet "no notes yet" state.
-const SUBJECT_DOCS = "u_live";
+// No client subject: workspace docs are read through the gateway, which injects X-User-Id → agent-api scopes (P20).
 const docSlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const baseName = (p: string) => p.split("/").pop() ?? p;
 const docTabFor = (path: string, title: string): TabDescriptor =>
@@ -110,7 +110,7 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
     const path = `kg/entities/meeting/${native}.md`;
     void (async () => {
       try {
-        const r = await fetch(`/api/workspace/file?subject=${SUBJECT_DOCS}&path=${encodeURIComponent(path)}`);
+        const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
         if (!alive) return;
         if (!r.ok) { setState({ status: "absent", title: "", links: [] }); return; }
         const content: string = (await r.json()).content ?? "";
@@ -129,7 +129,7 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
     let alive = true;
     void (async () => {
       try {
-        const files: string[] = (await (await fetch(`/api/workspace/tree?subject=${SUBJECT_DOCS}`)).json()).files ?? [];
+        const files: string[] = (await (await fetch(`/api/workspace/tree`)).json()).files ?? [];
         if (!alive) return;
         const map: Record<string, string> = {};
         for (const f of files) if (f.startsWith("kg/entities/") && f.endsWith(".md")) map[baseName(f).replace(/\.md$/, "")] = f;
@@ -230,9 +230,11 @@ export function actionsFor(m: MeetingMock): RowAction[] {
       body: JSON.stringify({ intent: state, ...(at ? { at } : {}) }),
     }), onFailure);
   const send = (onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/meeting/bot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: `https://meet.google.com/${native}` }) }), onFailure);
+    runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/bots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: "google_meet", native_meeting_id: native, meeting_url: `https://meet.google.com/${native}`, bot_name: "Vexa" }) }), onFailure);
+  // Stop = the gateway-backed user-stop route DELETE /bots/{platform}/{native} (meeting-api lifecycle/stop_router).
+  // (The old POST /api/meeting/stop had no route → fell through the catch-all to agent-api and silently no-op'd.)
   const stop = (onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch("/api/meeting/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ native_id: native, platform: "google_meet" }) }), onFailure);
+    runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch(`/api/bots/google_meet/${encodeURIComponent(native)}`, { method: "DELETE" }), onFailure);
   const schedule = (onFailure?: MeetingActionFailureHandler) => {
     // minimal time picker: prompt for a local datetime, send as ISO. (A richer picker can replace this.)
     const def = new Date(Date.now() + 3600_000).toISOString().slice(0, 16);
@@ -366,29 +368,39 @@ function MeetingsList() {
   // 'add bot from URL': send OUR bot into a meeting; the watcher attaches the copilot once it transcribes
   const [url, setUrl] = useState("");
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
   const addBot = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
     // Parse + validate the pasted link/id against the platform formats (mirrors join-form).
     const parsed = parseMeetingInput(u);
-    if (!parsed) { setSent("err"); setTimeout(() => setSent(null), 4000); return; }
-    setSent("sending");
+    if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams link."); setTimeout(() => setSent(null), 5000); return; }
+    setSent("sending"); setErrMsg(null);
     try {
       // POST /bots through the authed gateway proxy (X-API-Key injected server-side from the cookie token).
       const r = await fetch("/api/bots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          platform: parsed.platform,
-          native_meeting_id: parsed.native_meeting_id,
-          meeting_url: u,
-          bot_name: "Vexa",
-        }),
+        body: JSON.stringify({ platform: parsed.platform, native_meeting_id: parsed.native_meeting_id, meeting_url: u, bot_name: "Vexa" }),
       });
-      setSent(r.ok ? "ok" : "err");
-      if (r.ok) setUrl("");
-    } catch { setSent("err"); }
-    setTimeout(() => setSent(null), 4000);
+      if (r.ok) {
+        setSent("ok"); setUrl("");
+        // The list has no background poll, so force a re-fetch now and again as the bot
+        // transitions requested → joining → active (else the meeting only shows on reload).
+        refreshMeetings(); setTimeout(refreshMeetings, 2000); setTimeout(refreshMeetings, 6000);
+      } else {
+        // Surface the REAL reason, not a generic "bad link" (the cap/dup/auth cases are common).
+        const detail = (await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
+        setSent("err");
+        setErrMsg(
+          r.status === 429 ? "You're at your meeting limit — stop one first."
+            : r.status === 409 ? "That meeting already has a bot."
+              : r.status === 401 ? "Not signed in — sign in and retry."
+                : `Couldn't send (${r.status})${detail ? `: ${detail}` : ""}`,
+        );
+      }
+    } catch { setSent("err"); setErrMsg("Couldn't reach the server."); }
+    setTimeout(() => setSent(null), 5000);
   };
   return (
     <div style={{ padding: "8px" }}>
@@ -403,7 +415,7 @@ function MeetingsList() {
           </button>
         </div>
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
-        {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>Couldn&apos;t send — make sure it&apos;s a Google Meet link.</div>}
+        {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
       </div>
       {all.length === 0 && <div style={{ padding: "8px 9px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>No meetings yet — paste a Meet link above and I&apos;ll send the bot.</div>}
       {upcomingOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Upcoming</div>}
@@ -424,7 +436,7 @@ function useModelInfo(): ModelInfo | null {
     let alive = true;
     void (async () => {
       try {
-        const r = await fetch(`/api/models?subject=${SUBJECT_DOCS}`, { cache: "no-store" });
+        const r = await fetch(`/api/models`, { cache: "no-store" });
         if (!alive || !r.ok) return;
         setModels(await r.json() as ModelInfo);
       } catch {

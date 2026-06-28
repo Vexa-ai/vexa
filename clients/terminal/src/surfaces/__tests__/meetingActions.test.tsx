@@ -66,20 +66,19 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
     expect(body).toEqual({ intent: "idle" });
   });
 
-  it("idle→Send now POSTs the bot launch", () => {
+  it("idle→Send now POSTs the bot launch to the gateway-fronted /api/bots", () => {
     actionsFor(row("idle")).find((a) => a.id === "send")!.run();
     const { url, init, body } = lastFetch();
-    expect(url).toBe("/api/meeting/bot");
+    expect(url).toBe("/api/bots");
     expect(init.method).toBe("POST");
-    expect(body).toEqual({ url: `https://meet.google.com/${NATIVE}` });
+    expect(body).toEqual({ platform: "google_meet", native_meeting_id: NATIVE, meeting_url: `https://meet.google.com/${NATIVE}`, bot_name: "Vexa" });
   });
 
-  it("active→Stop POSTs the stop route with native+platform", () => {
+  it("active→Stop DELETEs the bot by platform+native (the gateway /api/bots route)", () => {
     actionsFor(row("active")).find((a) => a.id === "stop")!.run();
-    const { url, init, body } = lastFetch();
-    expect(url).toBe("/api/meeting/stop");
-    expect(init.method).toBe("POST");
-    expect(body).toEqual({ native_id: NATIVE, platform: "google_meet" });
+    const { url, init } = lastFetch();
+    expect(url).toBe(`/api/bots/google_meet/${NATIVE}`);
+    expect(init.method).toBe("DELETE");
   });
 
   it("active→Stop reports network failures instead of throwing", async () => {
@@ -113,6 +112,6 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
   it("completed→Re-send POSTs the bot launch", () => {
     actionsFor(row("completed")).find((a) => a.id === "resend")!.run();
     const { url } = lastFetch();
-    expect(url).toBe("/api/meeting/bot");
+    expect(url).toBe("/api/bots");
   });
 });

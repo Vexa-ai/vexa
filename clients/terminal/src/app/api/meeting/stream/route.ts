@@ -4,7 +4,8 @@ import { resolveApiKey } from "../../proxyAuth";
 
 export const dynamic = "force-dynamic";
 
-const AGENT_API = process.env.AGENT_API_URL || "http://127.0.0.1:18100";
+// One authenticated edge: the live feed streams through the gateway (which injects X-User-Id), not agent-api directly.
+const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -70,9 +71,18 @@ export async function GET(req: NextRequest) {
 
   try {
     const apiKey = await resolveApiKey();
-    const upstream = await fetch(`${AGENT_API}/api/meeting/stream${req.nextUrl.search}`, {
+    const headers: Record<string, string> = apiKey ? { "X-API-Key": apiKey } : {};
+    // Forward Last-Event-ID so the live feed RESUMES from the client's last-seen segment after a
+    // reconnect (gapless). Without it, a transient disconnect dropped every segment published in the
+    // gap from the live view — the real-time transcript-loss bug. The browser EventSource sets this
+    // automatically once the upstream emits `id:` lines (agent-api meeting_stream does).
+    // Last-Event-ID arrives EITHER as the header (browser-native auto-reconnect) OR as the `lid` query
+    // param (the engine's manual forceReconnect, which opens a fresh EventSource that drops the header).
+    const lastEventId = req.headers.get("last-event-id") || req.nextUrl.searchParams.get("lid");
+    if (lastEventId) headers["Last-Event-ID"] = lastEventId;
+    const upstream = await fetch(`${GATEWAY_URL}/api/meeting/stream${req.nextUrl.search}`, {
       method: "GET",
-      headers: apiKey ? { "X-API-Key": apiKey } : {},
+      headers,
       signal: abort.signal,
     });
     if (!upstream.ok) {

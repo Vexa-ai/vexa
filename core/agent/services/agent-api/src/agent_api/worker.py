@@ -23,7 +23,13 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
-from .agent_config import DEFAULT_CARD_KINDS, MeetingConfig, load_meeting_config
+from .agent_config import (
+    DEFAULT_CARD_KINDS,
+    DEFAULT_POLISH_RULES,
+    DEFAULT_TAG_RULES,
+    MeetingConfig,
+    load_meeting_config,
+)
 from .decision_claude import run_unit_turn
 
 log = logging.getLogger("agent_api.worker")
@@ -344,41 +350,57 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
 
 # ── meeting mode: consume the transcript Stream, gate, emit proactive cards ───────────────────────
 
-CARD_PROMPT = (
+# build_card_prompt is a THIN COMPOSER: the MECHANISM (the transcript-window framing + the strict JSON
+# shape the parser depends on) lives here in code; the POLICY (how to polish each line, and what to tag)
+# is INJECTED from the workspace-governed MeetingConfig.polish_rules / .tag_rules — so a user can change
+# copilot behavior by prompting the agent to edit agents/meeting.md, no redeploy.
+
+# The fixed frame around the workspace policy. `{polish}` / `{tags}` are the governed rules; `{kinds}` is
+# the wanted card kinds; `{steering}` is the (optional) free-text steering section.
+_CARD_FRAME = (
     "You are a live meeting copilot watching a conversation in real time. Here is the mutable transcript "
     "processing window. Each line is sent through at most three passes; pass 1 is fresh, pass 2 should "
     "repair obvious ASR/name/entity errors, and pass 3 should be the final clean version before the line "
     "freezes and leaves this window.\n\n{lines}\n\n"
-    "Return a concise, book-readable processed transcript plus entity cards. For each input line, emit "
-    "one note with the SAME id and speaker. Keep it first-person and attributed to the speaker's meaning; "
-    "remove filler, false starts, duplicated fragments, prompt leakage, and obvious transcript/model "
-    "artifacts. Preserve facts, uncertainty, and tone. Do not invent missing content. Never write observer "
-    "boilerplate like \"Speaker says\", \"Speaker believes\", \"Speaker mentions\", \"the speaker describes\", "
-    "or \"they talk about\". For subjective or intention statements, write from the speaker's first-person "
-    "view (\"I...\"). For plain facts, write the fact directly (\"Anthropic released...\").\n\n"
+    "Return a processed transcript plus tag cards. For each input line, emit one note with the SAME id "
+    "and speaker, following the POLISH RULES below.\n\n"
+    "## Polish rules (governed by this workspace)\n{polish}\n\n"
     "Do not create topic headings. Set chapter to an empty string unless the source text itself gives a "
     "literal section title.\n\n"
-    "Also surface ONLY concrete named entities from THESE lines, using ONLY these card kinds: {kinds}. "
-    "Use person for people, company for organizations/institutions, and product for products/projects. "
-    "Do not create topic, decision, claim, sentiment, or action cards.\n\n"
+    "## Tag rules (governed by this workspace)\n{tags}\n\n"
+    "Emit tags ONLY as cards of these kinds: {kinds}. Do not use any other kind.\n\n"
     "Respond with ONLY this JSON object (no prose, no markdown fence, and do NOT write any files):\n"
     "{{\"notes\":[{{\"id\":\"<input id>\",\"speaker\":\"<speaker>\",\"chapter\":\"\",\"text\":\"<clean one-line note>\"}}],"
-    "\"cards\":[{{\"kind\":\"<one of {kinds}>\",\"title\":\"<short>\",\"body\":\"<one line>\"}}]}}\n"
-    "Use an empty cards array if these specific lines add no named entities.{steering}"
+    "\"cards\":[{{\"kind\":\"<one of {kinds}>\",\"title\":\"<short>\",\"body\":\"<one line>\",\"actionable\":true}}]}}\n"
+    "Use an empty cards array if these specific lines add no tags.{steering}"
 )
 
-# Appended to CARD_PROMPT only when the workspace config carries non-empty steering.
+# Appended to the frame only when the workspace config carries non-empty steering.
 _STEERING_SECTION = (
     "\n\n## Standing instructions from this workspace\n"
     "Follow these workspace-set instructions about what to watch / ignore / tone:\n\n{steering}\n"
 )
 
 
-def build_card_prompt(lines: str, card_kinds: list[str], steering: str = "") -> str:
-    """Render CARD_PROMPT with the wanted kinds and (only when non-empty) the workspace steering as a
-    clearly delimited section."""
+def build_card_prompt(
+    lines: str,
+    card_kinds: list[str],
+    steering: str = "",
+    *,
+    polish_rules: str = DEFAULT_POLISH_RULES,
+    tag_rules: str = DEFAULT_TAG_RULES,
+) -> str:
+    """Compose the copilot prompt: inject the workspace-governed ``polish_rules`` + ``tag_rules`` (the
+    POLICY) and the wanted ``card_kinds`` around the transcript ``lines`` (the MECHANISM frame), plus the
+    optional ``steering`` section. Changing a governed rule (via agents/meeting.md) changes the prompt."""
     section = _STEERING_SECTION.format(steering=steering.strip()) if steering.strip() else ""
-    return CARD_PROMPT.format(lines=lines, kinds=", ".join(card_kinds), steering=section)
+    return _CARD_FRAME.format(
+        lines=lines,
+        kinds=", ".join(card_kinds),
+        polish=(polish_rules or DEFAULT_POLISH_RULES).strip(),
+        tags=(tag_rules or DEFAULT_TAG_RULES).strip(),
+        steering=section,
+    )
 
 
 def _extract_json_value(reply: str | None):
@@ -523,6 +545,7 @@ def _model_error_event(message: object, *, model: str | None, stage: str) -> dic
 def meeting_card_turn(
     work: Path, segments: list[dict], *, model: str | None = None,
     card_kinds: list[str] | None = None, steering: str = "",
+    polish_rules: str = DEFAULT_POLISH_RULES, tag_rules: str = DEFAULT_TAG_RULES,
 ) -> Iterator[dict]:
     """One copilot beat: read the recent transcript, stream the agent working, then emit a proactive
     card per salient finding. Reuses the governed turn (with session continuity across beats). The
@@ -545,7 +568,7 @@ def meeting_card_turn(
     )
     reply: str | None = None
     chunks: list[str] = []
-    prompt = build_card_prompt(lines, kinds, steering)
+    prompt = build_card_prompt(lines, kinds, steering, polish_rules=polish_rules, tag_rules=tag_rules)
     # propose-only: a read-only turn (no Write/Edit). We DON'T forward the streaming turn events — the
     # raw JSON reply would leak into the UI as a "note"; the meeting feed wants only the parsed cards.
     try:
@@ -582,6 +605,79 @@ def meeting_card_turn(
         yield {"type": "card", "card": card}
 
 
+# ── Auth-B/#3(a): persist the processed transcript to the workspace, INCREMENTALLY ────────────────
+# As the worker emits 1:1 cleaned `proc:meeting` notes, it ALSO upserts a per-meeting workspace file at
+# kg/entities/meeting/<native>.md so a chat agent focused on the meeting can `Read` it and answer "what's
+# the meeting about" — WITHOUT waiting for the post-meeting doc turn. The write is idempotent: each line
+# is keyed by its note id (== segment_id) with an HTML-comment marker, so a refining pass UPDATES the
+# line in place rather than duplicating it. This reuses the same VISIBLE, git-tracked kg/entities/meeting
+# path the post-meeting doc turn authors (the doc turn later distills a summary into the SAME tree).
+
+_PROC_LINE_RE = re.compile(r"^<!-- id:(?P<id>.*?) -->", )
+
+
+def render_meeting_transcript(meta: dict, notes: list[dict]) -> str:
+    """Render the per-meeting transcript file: YAML frontmatter (type/id/title/… from ``meta``), a
+    Speakers list, and a Transcript section with one id-keyed line per note. Pure + deterministic so the
+    upsert is testable offline."""
+    speakers: list[str] = []
+    for n in notes:
+        sp = str(n.get("speaker") or "Speaker").strip() or "Speaker"
+        if sp not in speakers:
+            speakers.append(sp)
+    fm_keys = ("type", "id", "title", "meeting_id", "session_uid", "platform", "date")
+    fm_lines = [f"{k}: {meta[k]}" for k in fm_keys if meta.get(k) is not None]
+    parts = ["---", *fm_lines, "---", "", "## Speakers", ""]
+    parts += [f"- {sp}" for sp in speakers] or ["- (none yet)"]
+    parts += ["", "## Transcript", ""]
+    for n in notes:
+        nid = str(n.get("id") or "").strip()
+        sp = str(n.get("speaker") or "Speaker").strip() or "Speaker"
+        text = " ".join(str(n.get("text") or "").split())
+        tags = n.get("tags") or []
+        suffix = f"  _[tags: {', '.join(str(t) for t in tags)}]_" if tags else ""
+        parts.append(f"<!-- id:{nid} --> **{sp}:** {text}{suffix}")
+    return "\n".join(parts) + "\n"
+
+
+def upsert_meeting_transcript_file(path: Path, meta: dict, note: dict) -> None:
+    """Idempotently UPSERT one cleaned ``note`` (keyed by ``note['id']``) into the per-meeting transcript
+    file at ``path``. Reads the current id-keyed lines, replaces the matching id (or appends a new one),
+    preserves order, and rewrites the whole file. Re-running with the same note id never duplicates a
+    line; a refining note for an existing id overwrites its text."""
+    nid = str(note.get("id") or "").strip()
+    if not nid:
+        return
+    notes: list[dict] = []
+    if path.exists():
+        try:
+            for line in path.read_text().splitlines():
+                m = _PROC_LINE_RE.match(line)
+                if not m:
+                    continue
+                rest = line[m.end():].strip()
+                # parse "**Speaker:** text"
+                sp = "Speaker"
+                body = rest
+                if rest.startswith("**") and ":**" in rest:
+                    sp = rest[2:rest.index(":**")].strip() or "Speaker"
+                    body = rest[rest.index(":**") + 3:].strip()
+                notes.append({"id": m.group("id"), "speaker": sp, "text": body})
+        except OSError:
+            notes = []
+    replaced = False
+    for existing in notes:
+        if existing.get("id") == nid:
+            existing["speaker"] = note.get("speaker") or existing.get("speaker")
+            existing["text"] = note.get("text") or existing.get("text")
+            replaced = True
+            break
+    if not replaced:
+        notes.append({"id": nid, "speaker": note.get("speaker") or "Speaker", "text": note.get("text") or ""})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_meeting_transcript(meta, notes))
+
+
 def _set_cursor(stream: _Stream, cursor_key: str | None, raw_id: str) -> None:
     """Freeze the per-meeting processed CURSOR = the last raw transcript stream-id cleaned. Best-effort:
     a fake stream without ``set`` (or a transient redis error) must never break the live beat."""
@@ -612,6 +708,7 @@ def serve_meeting(
     start_id: str = "0",
     proc_stream: str | None = None,
     cursor_key: str | None = None,
+    on_proc_note: Callable[[dict], None] | None = None,
 ) -> None:
     """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
     cheaply (a NEW speaker, or ``beat_segments`` segments), and run a copilot beat that XADDs proactive
@@ -633,9 +730,18 @@ def serve_meeting(
 
     def _emit_proc_note(note: dict) -> None:
         """XADD ONE cleaned note (id == segment_id) onto the per-meeting processed STREAM — the reliable
-        1:1 CLEANED transcript channel, SEPARATE from the cards beat on ``out_topic``."""
-        if proc_stream and note:
+        1:1 CLEANED transcript channel, SEPARATE from the cards beat on ``out_topic`` — and ALSO upsert it
+        into the per-meeting workspace file (Auth-B/#3a) via ``on_proc_note``, so a chat agent can Read the
+        meeting context incrementally. Both are best-effort over the same 1:1 cleaned note."""
+        if not note:
+            return
+        if proc_stream:
             stream.xadd(proc_stream, {"note": json.dumps(note)})
+        if on_proc_note is not None:
+            try:
+                on_proc_note(note)
+            except Exception:  # noqa: BLE001 — the workspace mirror is an optimization; never crash the loop
+                log.warning("serve_meeting: on_proc_note upsert failed", exc_info=True)
 
     def _run_beat(segs: list[dict], idx: int) -> None:
         tid = f"beat{idx}"
@@ -806,6 +912,14 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         import datetime as _dt
         date = _dt.date.today().isoformat()
         title = f"Meeting {native}"
+        # Auth-B/#3a: mirror each cleaned proc note into the per-meeting workspace file, incrementally,
+        # so a chat agent focused on the meeting can `Read kg/entities/meeting/<native>.md` mid-meeting.
+        meeting_file = work / "kg" / "entities" / "meeting" / f"{native}.md"
+        meeting_meta = {
+            "type": "meeting", "id": native, "title": title, "meeting_id": native,
+            "session_uid": session_uid, "platform": platform, "date": date,
+        }
+        on_proc_note = lambda note: upsert_meeting_transcript_file(meeting_file, meeting_meta, note)  # noqa: E731
         # write_meeting_doc=false ⇒ no doc_turn (independent of `enabled`, which gates the live beats).
         doc_turn = None
         if cfg.write_meeting_doc:
@@ -817,12 +931,14 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             client, transcript_stream=transcript_stream, out_topic=out_topic,
             card_turn=lambda segs: meeting_card_turn(
                 work, segs, model=cfg.model, card_kinds=cfg.card_kinds, steering=cfg.steering,
+                polish_rules=cfg.polish_rules, tag_rules=cfg.tag_rules,
             ),
             idle_ms=idle_ms, beat_segments=cfg.cadence_segments,
             doc_turn=doc_turn, enabled=cfg.enabled,
             start_id=os.environ.get("VEXA_TRANSCRIPT_START_ID", "0"),
             proc_stream=f"proc:meeting:{native}",
             cursor_key=f"proc:meeting:{native}:cursor",
+            on_proc_note=on_proc_note,
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
         # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are still governed

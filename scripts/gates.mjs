@@ -635,6 +635,12 @@ function gateDataflow() {
     }
   }
 
+  // (d) the concise DSL projection (docs/views/architecture.dsl) must reflect the chart — it is GENERATED
+  //     (scripts/arch-dsl.mjs), never hand-edited, and is the always-in-context LLM view. A CALM edit that
+  //     re-seals MUST regenerate it (`pnpm arch:dsl --write`) or this turns RED, so the projection never lies.
+  try { execSync("node scripts/arch-dsl.mjs --check", { cwd: ROOT, stdio: "pipe" }); }
+  catch (e) { errs.push(`dsl: docs/views/architecture.dsl is stale — run \`pnpm arch:dsl --write\` (generated from architecture.calm.json, never hand-edited)`); }
+
   if (errs.length) return fail(["dataflow (P23) — data-flow ownership violations:", ...errs.map((e) => "   " + e)]);
   const carriers = nodes.filter((n) => (n.controls || {}).ownership).length;
   console.log(`  ✓ gate:dataflow — ${nodes.length} nodes · ${rels.length} edges · ${carriers} carriers · complete + sealed (P23)`);
@@ -662,6 +668,8 @@ if (which === "seal-arch") {
   const h = archHash();
   writeFileSync(ARCH_SEAL, JSON.stringify({ "architecture.calm.json": h }, null, 2) + "\n");
   console.log(`sealed architecture.calm.json (${h.slice(0, 12)}…) → ${rel(ARCH_SEAL)}`);
+  // Regenerate the concise DSL projection from the same baseline so it never lags the seal.
+  execSync("node scripts/arch-dsl.mjs --write", { cwd: ROOT, stdio: "inherit" });
   process.exit(0);
 }
 const run = which === "all" ? Object.keys(GATES) : [which];

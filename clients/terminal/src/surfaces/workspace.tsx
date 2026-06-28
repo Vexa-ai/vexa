@@ -9,10 +9,9 @@ import { registerList, registerTab, type TabProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Markdown } from "../ui-kit/Markdown";
-
-const SUBJECT = "u_live";  // the one workspace all the user's agents (chat + meeting research) write to
-
-interface GitState { branch: string; changes: { path: string; kind: string }[]; commits: { sha: string; msg: string; when: string }[] }
+// Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
+// proven in isolation by workspaceApi.test.ts.
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, type GitState } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path } });
 
@@ -27,7 +26,7 @@ function wikilinks(text: string): ReactNode[] {
   return text.split(/(\[\[[^\]]+\]\])/).map((part, i) => part.startsWith("[[") ? <span key={i} style={{ color: "var(--blue)" }}>{part}</span> : <span key={i}>{part}</span>);
 }
 async function readFile(path: string): Promise<string> {
-  try { const r = await fetch(`/api/workspace/file?subject=${SUBJECT}&path=${encodeURIComponent(path)}`); return r.ok ? (await r.json()).content ?? "" : "(not found)"; } catch { return "(error)"; }
+  return (await readWorkspaceFile(path)) ?? "(not found)";
 }
 
 // ── session-persisted UI flags ───────────────────────────────────────────────────
@@ -94,15 +93,16 @@ const SS_EXPANDED = "ws.tree.expanded", SS_HIDDEN = "ws.tree.hidden";
 function FilesList() {
   const layout = useService(LayoutServiceId);
   const [tree, setTree] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);  // fail-loud (P18): a tree-load failure is shown, not hidden as "empty"
   const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
   const [hidden, setHidden] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { const a = JSON.parse(readSS(SS_EXPANDED) ?? "null"); return new Set(Array.isArray(a) ? a : []); } catch { return new Set(); }
   });
   useEffect(() => {
-    void (async () => {
-      try { setTree((await (await fetch(`/api/workspace/tree?subject=${SUBJECT}${hidden ? "&hidden=1" : ""}`)).json()).files ?? []); } catch { /* offline */ }
-    })();
+    void listWorkspaceTree({ hidden })
+      .then((t) => { setTree(t); setError(null); })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, [hidden]);
   const nodes = buildTree(tree);
   // default expansion: top-level folders open, deeper folders collapsed (only when no saved state yet)
@@ -130,8 +130,9 @@ function FilesList() {
           <Icon name={hidden ? "eye" : "eyeOff"} size={13} />
         </span>
       </div>
+      {error && <div role="alert" style={{ margin: "0 8px 8px", fontSize: 12, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 10px" }}>⚠ Couldn’t load the workspace — {error}</div>}
       {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} openMenu={openMenu} />)}
-      {tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+      {!error && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           { id: "copy-reference", label: "Copy reference", detail: `@file:${menu.path}`, onSelect: () => copyText(`@file:${menu.path}`) },
@@ -149,9 +150,10 @@ function GitSection() {
   const layout = useService(LayoutServiceId);
   const [open, setOpen] = useState<boolean>(() => readSS(SS_GIT_OPEN) === "1");  // default collapsed
   const [git, setGit] = useState<GitState>({ branch: "", changes: [], commits: [] });
+  const [gitError, setGitError] = useState<string | null>(null);  // fail-loud (P18): show git failures, never crash/blank
   useEffect(() => {
     if (!open) return;  // only poll while expanded
-    const load = () => fetch(`/api/workspace/git?subject=${SUBJECT}`).then((r) => r.json()).then(setGit).catch(() => {});
+    const load = () => { void readWorkspaceGit().then((g) => { setGit(g); setGitError(null); }).catch((e: unknown) => setGitError(e instanceof Error ? e.message : String(e))); };
     load();
     const id = setInterval(load, 5000);  // reflect the agent's commits as they land
     return () => clearInterval(id);
@@ -164,7 +166,8 @@ function GitSection() {
         <Icon name="zap" size={12} />source control
         {git.branch && <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", color: "var(--t2)", textTransform: "none" }}>{git.branch}</span>}
       </div>
-      {!open ? null : (!git.branch && git.commits.length === 0) ? (
+      {open && gitError && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ git unavailable — {gitError}</div>}
+      {!open || gitError ? null : (!git.branch && git.commits.length === 0) ? (
         <div style={{ padding: "2px 9px", fontSize: 12, color: "var(--t3)" }}>Not a repo yet.</div>
       ) : (<>
       {git.changes.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "2px 9px" }}>CHANGES</div>}

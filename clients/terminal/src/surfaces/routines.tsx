@@ -8,14 +8,11 @@ import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
 import { usePreviewPinTab } from "./previewPinTab";
+// Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
+// proven in isolation by routinesApi.test.ts.
+import { listRoutines, deleteRoutine, setRoutineEnabled, type Routine } from "./routinesApi";
 
-const SUBJECT = "u_live";
-interface Routine { id: string; name: string; cron: string; plan_summary?: string; enabled: boolean }
 const BOARD: TabDescriptor = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
-
-async function fetchRoutines(): Promise<Routine[]> {
-  try { return (((await (await fetch(`/api/routines?subject=${SUBJECT}`)).json()).routines ?? []) as Routine[]).map((r) => ({ ...r, name: r.name, enabled: r.enabled })); } catch { return []; }
-}
 
 function RoutinesBoardNav() {
   const nav = usePreviewPinTab<HTMLButtonElement>(BOARD);
@@ -37,19 +34,19 @@ function RoutineNavRow({ routine }: { routine: Routine }) {
 function RoutinesBoard() {
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
-  useEffect(() => { void fetchRoutines().then(setRoutines); }, []);
-  const del = async (id: string) => { await fetch(`/api/routines/${id}?subject=${SUBJECT}`, { method: "DELETE" }); setRoutines((rs) => rs.filter((r) => r.id !== id)); };
+  const [error, setError] = useState<string | null>(null);  // fail-loud (P18): a load/mutation error is shown, never swallowed
+  useEffect(() => { void listRoutines().then((rs) => { setRoutines(rs); setError(null); }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))); }, []);
+  const del = async (id: string) => {
+    try { await deleteRoutine(id); setRoutines((rs) => rs.filter((r) => r.id !== id)); }
+    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+  };
   const toggle = async (routine: Routine) => {
     const nextEnabled = !routine.enabled;
     setRoutines((rs) => rs.map((r) => (r.id === routine.id ? { ...r, enabled: nextEnabled } : r)));
     try {
-      const res = await fetch(`/api/routines/${encodeURIComponent(routine.name)}/enabled?subject=${encodeURIComponent(SUBJECT)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: nextEnabled }),
-      });
-      if (!res.ok) throw new Error(`Routine toggle failed: ${res.status}`);
-    } catch {
+      await setRoutineEnabled(routine.name, nextEnabled);  // throws on a backend error (fail-loud)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
       setRoutines((rs) => rs.map((r) => (r.id === routine.id && r.enabled === nextEnabled ? { ...r, enabled: routine.enabled } : r)));
     }
   };
@@ -64,6 +61,7 @@ function RoutinesBoard() {
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px" }}>
         <div style={{ fontSize: 18, color: "var(--t1)", fontWeight: 500, marginBottom: 4 }}>Routines</div>
         <div style={{ fontSize: 13, color: "var(--t3)", marginBottom: 20 }}>Scheduled agents. Create one in Chat with <code style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>/routine</code>; manage them here.</div>
+        {error && <div role="alert" style={{ fontSize: 12.5, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 11px", marginBottom: 14 }}>⚠ Couldn’t load routines — {error}</div>}
         {routines.map((r) => (
           <div key={r.id} style={{ border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)", padding: "14px 16px", marginBottom: 12, opacity: r.enabled ? 1 : 0.55 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -93,7 +91,7 @@ function RoutinesBoard() {
 function RoutinesLeft() {
   const layout = useService(LayoutServiceId);
   const [routines, setRoutines] = useState<Routine[]>([]);
-  useEffect(() => { layout.openTab(BOARD); void fetchRoutines().then(setRoutines); }, [layout]);
+  useEffect(() => { layout.openTab(BOARD); void listRoutines().then(setRoutines).catch(() => {/* the board view surfaces the error loudly */}); }, [layout]);
   return (
     <div style={{ padding: "8px" }}>
       <RoutinesBoardNav />

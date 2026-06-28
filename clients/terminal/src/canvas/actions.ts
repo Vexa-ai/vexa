@@ -49,7 +49,7 @@ function researchPrompt(entity: { name: string; kind: string }): string {
 }
 
 function postMeetingTurn(prompt: string, session: string): void {
-  const body = JSON.stringify({ prompt, subject: "u_live", session });
+  const body = JSON.stringify({ prompt, session });  // no subject — gateway injects X-User-Id; agent-api derives scope (P20)
   void fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch((err) => {
     console.warn("meeting canvas chat turn failed", err);
   });

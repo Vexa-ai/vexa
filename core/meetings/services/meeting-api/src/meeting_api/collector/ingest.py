@@ -126,6 +126,19 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         confirmed = [s for s in persisted if s["completed"]]
         pending = [s for s in persisted if not s["completed"]]
         speaker = persisted[0].get("speaker") or ""
+        # Stamp the NATIVE meeting id (and platform) so the agent-api live relay can re-key
+        # numeric→native WITHOUT a user-scoped /meetings lookup (which fails for any meeting not owned
+        # by the relay's bot key → segments never reach the terminal's native channel). The collector
+        # owns the mapping (it persists by meeting_id); best-effort — a miss leaves it numeric-only.
+        native_id = platform_native = None
+        _native = getattr(store, "native_for", None)
+        if _native is not None:
+            try:
+                pair = await _native(meeting_id)
+                if pair:
+                    native_id, platform_native = pair
+            except Exception:  # noqa: BLE001 — resolution is best-effort; never abort a persisted batch
+                native_id = platform_native = None
         # FAULT-ISOLATED (P18): the segments are already persisted (durable). A transient redis blip on
         # the live :mutable publish must NOT propagate out of ingest() — that would abort the batch
         # BEFORE consume_segments acks it, leaving the whole batch unacked + re-raised. Surface it and
@@ -135,7 +148,7 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
                 _mutable_channel(meeting_id),
                 json.dumps({
                     "type": "transcript",
-                    "meeting": {"id": meeting_id},
+                    "meeting": {"id": meeting_id, "native_id": native_id, "platform": platform_native},
                     "speaker": speaker,
                     "confirmed": confirmed,
                     "pending": pending,

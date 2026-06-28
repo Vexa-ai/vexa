@@ -104,6 +104,51 @@ def test_chat_streams_sse_and_records_session():
     assert r.headers["X-Unit-Id"] == "agent-u_jane-chat-s1"  # the per-thread warm unit id
 
 
+def test_chat_subject_is_server_derived_from_header_not_client_body():
+    """Stage 1 (P20): the dispatch subject MUST come from the authenticated ``X-User-Id`` header, never the
+    client-supplied ``body.subject``. The warm-unit id encodes the subject, so it reveals which one was used."""
+    c = _client(_FakeReader())
+    r = c.post(
+        "/api/chat",
+        headers={"X-User-Id": "u_alice"},
+        json={"prompt": "hi", "subject": "u_evil", "session": "s1"},  # body subject is a spoof attempt
+    )
+    assert r.status_code == 200
+    assert r.headers["X-Unit-Id"] == "agent-u_alice-chat-s1", \
+        f"subject leaked from client body — got {r.headers.get('X-Unit-Id')!r}, expected the header identity"
+    # the spoofed body subject owns nothing; the header identity owns the session
+    evil = c.get("/api/sessions", headers={"X-User-Id": "u_evil"}).json()["sessions"]
+    assert not any(s["session"] == "s1" for s in evil)
+    alice = c.get("/api/sessions", headers={"X-User-Id": "u_alice"}).json()["sessions"]
+    assert any(s["session"] == "s1" for s in alice)
+
+
+def test_get_routes_derive_subject_from_header_not_a_required_query(tmp_path):
+    """REGRESSION LOCK (P20 · Stage 1↔4): EVERY subject-addressed GET route must derive ``subject`` from
+    the authenticated ``X-User-Id`` header — NOT require a ``?subject=`` query. Stage 4 dropped the client
+    ``subject`` from the terminal; a build whose GET routes still required the query 422'd
+    (``{"loc":["query","subject"],"msg":"Field required"}``) and silently broke sessions/routines/workspace.
+    Called with ONLY ``X-User-Id`` (no subject query), none of these may 422."""
+    from agent_api.workspace_reader import WorkspaceReader
+
+    (tmp_path / "u_alice").mkdir(parents=True, exist_ok=True)
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(tmp_path)),
+    ))
+    h = {"X-User-Id": "u_alice"}
+    for path in (
+        "/api/sessions",
+        "/api/routines",
+        "/api/models",
+        "/api/workspace/tree",
+        "/api/workspace/git",
+        "/api/workspace/file?path=README.md",
+    ):
+        r = c.get(path, headers=h)
+        assert r.status_code != 422, f"{path} still REQUIRES ?subject= (P20 regression) — 422: {r.text}"
+
+
 def test_chat_reset_drops_session_and_continuity_file(tmp_path):
     from agent_api.workspace_reader import WorkspaceReader
 
@@ -223,7 +268,7 @@ def test_meeting_process_off_freezes_cursor(monkeypatch):
 
     class FakeRedis:
         def __init__(self):
-            self.kv = {"proc:meeting:m9": "1", "proc:meeting:m9:cursor": "37-0"}
+            self.kv = {"proc:meeting:m9:on": "1", "proc:meeting:m9:cursor": "37-0"}
 
         def set(self, k, v):
             self.kv[k] = v
@@ -243,7 +288,7 @@ def test_meeting_process_off_freezes_cursor(monkeypatch):
     r = c.post("/api/meeting/process", json={"native_id": "m9", "on": False})
 
     assert r.json()["processing"] is False
-    assert "proc:meeting:m9" not in fake.kv          # flag cleared
+    assert "proc:meeting:m9:on" not in fake.kv          # flag cleared
     assert fake.kv["proc:meeting:m9:cursor"] == "37-0"  # cursor frozen
 
 
@@ -436,3 +481,76 @@ def test_session_history_tolerant_of_missing(tmp_path):
     r = c.get("/api/sessions/main/history", params={"subject": "u_ghost"})
     assert r.status_code == 200
     assert r.json() == {"turns": []}
+
+
+# ── live SSE resume (the real-time transcript-loss fix) ────────────────────────────────────────────
+
+def test_sse_cursor_encode_decode_roundtrip():
+    from agent_api.api import _decode_sse_cursor, _encode_sse_cursor
+    last = {"tc:meeting:m1": "12-0", "unit:agent-meet-m1:out": "5-0"}
+    sid = _encode_sse_cursor(last, "tc:meeting:m1", "unit:agent-meet-m1:out")
+    assert sid == "12-0|5-0"
+    assert _decode_sse_cursor(sid) == ("12-0", "5-0")
+    assert _decode_sse_cursor(None) == (None, None)          # fresh connect
+    assert _decode_sse_cursor("-|-") == (None, None)         # nothing read yet on either stream
+    assert _decode_sse_cursor("9-0|-") == ("9-0", None)
+    # Resilience: a malformed Last-Event-ID must degrade to a fresh connect, never crash the SSE.
+    assert _decode_sse_cursor("") == (None, None)            # empty header
+    assert _decode_sse_cursor("garbage-no-pipe") == (None, None)   # no separator → fresh connect
+    assert _decode_sse_cursor("-|5-0") == (None, "5-0")      # only the output stream was read
+
+
+def _stream_client(fake_redis, monkeypatch):
+    import redis
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake_redis)
+    return TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+    ))
+
+
+class _StreamRedis:
+    """Records the xread resume cursor + which streams were seeded (xrevrange). Ends the SSE fast by
+    returning a session_end then draining empty."""
+    def __init__(self):
+        self.seeded = []
+        self.xread_last = None
+        self._reads = 0
+
+    def xrevrange(self, key, count=1):
+        self.seeded.append(key)
+        return []
+
+    def xread(self, last, count=500, block=0):
+        self._reads += 1
+        if self.xread_last is None:
+            self.xread_last = dict(last)
+        if self._reads == 1:
+            import json as _j
+            return [("tc:meeting:m1", [("9-0", {"payload": _j.dumps({"type": "session_end"})})])]
+        return []   # drain → ending → meeting-end → return
+
+
+def test_sse_resumes_from_last_event_id_no_reseed(monkeypatch):
+    """RECONNECT (the real-time transcript-loss fix): with a Last-Event-ID, the live feed resumes EXACTLY
+    from the client's cursor and does NOT re-seed the bounded tail — so segments published in the gap are
+    delivered, not skipped."""
+    fr = _StreamRedis()
+    c = _stream_client(fr, monkeypatch)
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
+                  headers={"Last-Event-ID": "7-0|3-0"}) as r:
+        assert r.status_code == 200
+        _ = r.read()
+    assert fr.xread_last["tc:meeting:m1"] == "7-0"          # resumed from the cursor, NOT "$"
+    assert fr.xread_last["unit:agent-meet-m1:out"] == "3-0"
+    assert "tc:meeting:m1" not in fr.seeded                 # transcript tail NOT re-seeded on resume
+
+
+def test_sse_fresh_connect_seeds_and_tails(monkeypatch):
+    """No Last-Event-ID (fresh connect): seed the bounded transcript tail, then live-tail from there."""
+    fr = _StreamRedis()
+    c = _stream_client(fr, monkeypatch)
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"}) as r:
+        assert r.status_code == 200
+        _ = r.read()
+    assert "tc:meeting:m1" in fr.seeded                     # fresh connect DID seed the tail
+    assert fr.xread_last["tc:meeting:m1"] == "$"            # then tails live from now

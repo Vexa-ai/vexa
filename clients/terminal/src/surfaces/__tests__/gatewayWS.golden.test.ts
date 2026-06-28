@@ -30,6 +30,25 @@ describe("parseFrame pinned to ws.v1 golden", () => {
     expect(f.when).toBe("2026-06-25T18:00:00Z");
   });
 
+  it("normalises a PURELY-nested legacy frame identically to the flat shape (terminal-bot-action-roundtrip)", () => {
+    // The old producer emitted only {meeting:{id,native_id}, payload:{status}, ts} with NO flat fields.
+    const nested = {
+      type: "meeting.status",
+      meeting: { id: 42, native_id: "abc-defg-hij" },
+      payload: { status: "active" },
+      ts: "2026-06-25T18:05:00Z",
+    };
+    expect(parseFrame(nested)).toEqual({
+      meeting_id: 42, native: "abc-defg-hij", status: "active", when: "2026-06-25T18:05:00Z",
+    });
+  });
+
+  it("normalises the full bot-action lifecycle progression to flat status strings (terminal-bot-action-roundtrip)", () => {
+    const frame = (status: string) => ({ type: "meeting.status", meeting_id: 42, native: "abc-defg-hij", status });
+    expect(["requested", "active", "completed"].map((s) => parseFrame(frame(s))!.status))
+      .toEqual(["requested", "active", "completed"]);
+  });
+
   it("rejects non-meeting.status frames", () => {
     expect(parseFrame({ ...golden, type: "transcription_segment" })).toBeNull();
     expect(parseFrame({ type: "meeting.status" })).toBeNull(); // no status anywhere

@@ -74,6 +74,34 @@ class SqlAlchemyTranscriptStore:
         # The live Redis hash of in-flight segments (``meeting:{id}:segments``) is merged on read
         # in prod; the merge helper is kept here when a client is provided.
         self._redis = redis_client
+        # numeric meeting_id → (native_meeting_id, platform). The id→native map is immutable for a
+        # meeting row, so cache it forever once resolved (bounded by the live meeting set).
+        self._native_cache: dict[int, tuple[str, str]] = {}
+
+    async def native_for(self, meeting_id) -> "Optional[tuple[str, str]]":
+        """Resolve a NUMERIC meeting_id → (native_meeting_id, platform) from the meetings table.
+
+        Cross-user (the collector is the trusted internal segment consumer — it owns the mapping and
+        is NOT user-scoped): the agent-api live-transcript relay re-keys numeric→native off this, so a
+        meeting's segments reach the terminal's native channel regardless of which user owns it. Cached
+        because the pair is immutable per row. Returns None if the id is unknown (caller keeps numeric)."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        if mid in self._native_cache:
+            return self._native_cache[mid]
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            m = (await db.execute(select(Meeting).where(Meeting.id == mid))).scalars().first()
+            if not m or not m.platform_specific_id:
+                return None
+            pair = (m.platform_specific_id, m.platform or "google_meet")
+            self._native_cache[mid] = pair
+            return pair
 
     async def get_transcript(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select  # lazy: SQLAlchemy not needed for the in-memory fakes

@@ -20,6 +20,7 @@
     "gate:contract-version": "node scripts/gates.mjs contract-version",
     "gate:dataflow": "node scripts/gates.mjs dataflow",
     "arch:viz": "node scripts/arch-viz.mjs",
+    "arch:dsl": "node scripts/arch-dsl.mjs --write",
     "seal:contracts": "node scripts/gates.mjs seal",
     "seal:arch": "node scripts/gates.mjs seal-arch",
     "gate:python": "node scripts/gates.mjs python",

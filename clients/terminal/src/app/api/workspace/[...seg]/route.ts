@@ -4,13 +4,14 @@ import { resolveApiKey } from "../../proxyAuth";
 
 export const dynamic = "force-dynamic";
 
-const AGENT_API = process.env.AGENT_API_URL || "http://127.0.0.1:18100";
+// One authenticated edge: workspace KG reads go through the gateway (which injects X-User-Id), not agent-api directly.
+const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ seg: string[] }> }) {
   const { seg } = await ctx.params;
   try {
     const apiKey = await resolveApiKey();
-    const upstream = await fetch(`${AGENT_API}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
+    const upstream = await fetch(`${GATEWAY_URL}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
       headers: apiKey ? { "X-API-Key": apiKey } : {},
     });
     return new Response(await upstream.text(), {
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ seg: strin
   const { seg } = await ctx.params;
   try {
     const apiKey = await resolveApiKey();
-    const upstream = await fetch(`${AGENT_API}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
+    const upstream = await fetch(`${GATEWAY_URL}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
       method: "POST",
       body: req.body,
       headers: {

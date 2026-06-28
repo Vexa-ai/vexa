@@ -41,6 +41,25 @@ MODEL_ALLOWLIST: frozenset[str] = frozenset({
 DEFAULT_CARD_KINDS: tuple[str, ...] = ("person", "company", "product")
 DEFAULT_CADENCE_SEGMENTS = 4
 
+# v2 DEFAULTS — the polish + tagging POLICY. These live as code fallbacks but the user GOVERNS them by
+# editing ``agents/meeting.md`` (the seed carries the same text); changing the file changes the prompt,
+# no redeploy. The mechanism is in code (``build_card_prompt`` composes around the transcript window);
+# the policy is this prose.
+DEFAULT_POLISH_RULES = (
+    "ALWAYS write each line in the FIRST PERSON, attributed to the speaker's meaning (\"I...\"); for "
+    "plain facts, state the fact directly (\"Anthropic released...\"). Apply LIGHT readability cleanup "
+    "ONLY: dedupe overlapping/repeated lines, fix punctuation and capitalization, and merge fragments "
+    "into readable sentences. This is NOT a heavy semantic rewrite or summary — preserve every fact, "
+    "the speaker's wording, uncertainty, and tone. Remove filler, false starts, and obvious "
+    "transcript/model artifacts. Do NOT invent missing content. Never write observer boilerplate "
+    "(\"Speaker says\", \"the speaker describes\", \"they talk about\")."
+)
+DEFAULT_TAG_RULES = (
+    "Extract two kinds of tags from THESE lines and mark them actionable. (1) ENTITIES: person, "
+    "company, product, and any concrete number. (2) SIGNALS: decision, action-item, question, and "
+    "claim. Surface only what is concretely present in the lines — do not invent."
+)
+
 
 @dataclass(frozen=True)
 class MeetingConfig:
@@ -52,6 +71,9 @@ class MeetingConfig:
     card_kinds: list[str] = field(default_factory=lambda: list(DEFAULT_CARD_KINDS))
     write_meeting_doc: bool = True
     steering: str = ""
+    # Workspace-governed POLICY (prompt-only governance): edit agents/meeting.md to change behavior.
+    polish_rules: str = DEFAULT_POLISH_RULES
+    tag_rules: str = DEFAULT_TAG_RULES
 
 
 _FRONTMATTER = re.compile(r"^\s*---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
@@ -105,6 +127,15 @@ def _as_cadence(val: object) -> int:
     return n if n >= 1 else DEFAULT_CADENCE_SEGMENTS
 
 
+def _as_rules(val: object, default: str) -> str:
+    """A governed POLICY string (polish_rules / tag_rules). A non-empty string (frontmatter scalar)
+    overrides the code default; anything else (absent, blank, non-string) falls back to the default so a
+    partial config never blanks out the policy."""
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return default
+
+
 def _as_card_kinds(val: object) -> list[str]:
     if isinstance(val, (list, tuple)):
         kinds = [str(k).strip().lower() for k in val if str(k).strip()]
@@ -133,4 +164,6 @@ def load_meeting_config(work: Path) -> MeetingConfig:
         card_kinds=_as_card_kinds(fm.get("card_kinds")),
         write_meeting_doc=_as_bool(fm.get("write_meeting_doc"), True),
         steering=body,
+        polish_rules=_as_rules(fm.get("polish_rules"), DEFAULT_POLISH_RULES),
+        tag_rules=_as_rules(fm.get("tag_rules"), DEFAULT_TAG_RULES),
     )

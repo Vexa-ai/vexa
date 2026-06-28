@@ -18,10 +18,11 @@ import { GET } from "../route";
  */
 
 /** Build a minimal NextRequest-shaped object the handler actually touches. */
-function makeReq(search = "?meetingId=m1"): NextRequest {
+function makeReq(search = "?meetingId=m1", lastEventId?: string): NextRequest {
   const ctrl = new AbortController();
   return {
-    nextUrl: { search },
+    nextUrl: { search, searchParams: new URLSearchParams(search) },
+    headers: new Headers(lastEventId ? { "last-event-id": lastEventId } : {}),
     signal: ctrl.signal,
     // expose the controller so a test can simulate the client disconnecting
     _clientAbort: ctrl,
@@ -92,6 +93,21 @@ describe("meeting stream SSE proxy — downstream termination", () => {
 
     const result = await withTimeout(drain(res.body as ReadableStream<Uint8Array>));
     expect(result.ok, "downstream must error (not hang) when upstream errors").toBe(false);
+  });
+
+  it("forwards Last-Event-ID upstream (header AND ?lid= param) for a gapless resume", async () => {
+    let upstreamHeaders: Record<string, string> | undefined;
+    const mk = () => new ReadableStream<Uint8Array>({ start: (c) => c.close() });
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      upstreamHeaders = init?.headers as Record<string, string>;
+      return new Response(mk(), { status: 200 });
+    }));
+    // via header (browser-native auto-reconnect)
+    await GET(makeReq("?meeting_id=m1", "12-0|3-0"));
+    expect(upstreamHeaders?.["Last-Event-ID"]).toBe("12-0|3-0");
+    // via ?lid= param (the engine's manual forceReconnect path)
+    await GET(makeReq("?meeting_id=m1&lid=99-0%7C5-0"));
+    expect(upstreamHeaders?.["Last-Event-ID"]).toBe("99-0|5-0");
   });
 
   it("aborts the upstream fetch when the client disconnects", async () => {

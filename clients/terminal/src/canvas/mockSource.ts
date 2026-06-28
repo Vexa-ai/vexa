@@ -70,7 +70,7 @@ const salesMeeting: MeetingMock = {
     { t: "01:25", text: "Next step — Jane will sponsor the Q3 pilot if Raj is comfortable by next Friday." },
   ],
   docs: [
-    { workspace: "u_live", path: "kg/entities/meeting/acme-discovery-call.md", title: "Acme discovery brief", kind: "brief" },
+    { workspace: "me", path: "kg/entities/meeting/acme-discovery-call.md", title: "Acme discovery brief", kind: "brief" },
   ],
 };
 

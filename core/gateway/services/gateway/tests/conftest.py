@@ -54,10 +54,16 @@ class FakeDownstream:
     """Satisfies ``ports.DownstreamClient``: records the last forward and returns a canned reply."""
 
     def __init__(self, status_code: int = 200, body: Optional[dict] = None,
-                 content_type: str = "application/json"):
+                 content_type: str = "application/json",
+                 stream_chunks: Optional[list] = None):
         self.status_code = status_code
         self._body = body if body is not None else {"ok": True}
         self._content_type = content_type
+        # canned SSE frames for the streaming (agent chat) path
+        self._stream_chunks = stream_chunks if stream_chunks is not None else [
+            b'data: {"type":"token","text":"hi"}\n\n',
+            b'data: {"type":"done"}\n\n',
+        ]
         self.last: Optional[dict] = None
 
     async def request(self, method, url, *, headers=None, params=None, content=None):
@@ -65,6 +71,12 @@ class FakeDownstream:
                      "params": params, "content": content}
         return _Resp(self.status_code, json.dumps(self._body).encode(),
                      {"content-type": self._content_type})
+
+    async def stream(self, method, url, *, headers=None, params=None, content=None):
+        self.last = {"method": method, "url": url, "headers": headers or {},
+                     "params": params, "content": content}
+        for chunk in self._stream_chunks:
+            yield chunk
 
 
 class FakePubSub:

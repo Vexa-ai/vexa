@@ -128,6 +128,11 @@ function LeftPane() {
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>{Comp && <Comp />}</div>
       <div style={{ padding: "8px 14px", borderTop: "1px solid var(--line)", fontSize: 11.5, color: "var(--t2)", display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)" }} />Self-hosted · air-gapped
+        <button type="button" title="Sign out"
+          onClick={() => { void fetch("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload()); }}
+          style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer" }}>
+          Sign out
+        </button>
       </div>
     </div>
   );

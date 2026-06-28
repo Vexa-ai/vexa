@@ -7,6 +7,7 @@ Proves, in isolation from the conformance contract layer, the load-bearing carve
   * verbatim body + status passthrough on success,
   * identity headers injected downstream; client-supplied identity headers stripped.
 """
+import pytest
 from fastapi.testclient import TestClient
 
 from gateway import create_app
@@ -76,6 +77,28 @@ def test_rate_limit_does_not_apply_when_unconfigured():
     client, _ = _client()  # _client builds create_app WITHOUT a rate_limiter
     for _ in range(20):
         assert client.get("/bots/status", headers=AUTH).status_code == 200
+
+
+@pytest.mark.xfail(
+    reason="FINDING terminal-p20-complete-mediation: GET /api/meeting/stream forwards WITHOUT a "
+    "per-meeting ownership check (gateway app.py agent_meeting_stream → _forward_stream). Any "
+    "authenticated user can stream any meeting's live transcript by passing its native id — the "
+    "WS /ws path authorizes via authorize_subscribe, the SSE path does not. Fix is lane:contract "
+    "(human-gated, P20/ADR-0012): authorize the requested meeting like /ws before forwarding. This "
+    "executable spec flips RED (strict xfail) the moment the authz lands, forcing the marker's removal.",
+    strict=True,
+)
+def test_meeting_stream_denies_a_meeting_the_user_does_not_own():
+    """P20 complete mediation on the live-transcript SSE: a subscribe to a meeting the user does not
+    own must be denied (403), not silently forwarded. auth_map is EMPTY → the user owns no meeting."""
+    client, _ = _client(authorizer=FakeAuthorizer(auth_map={}))
+    r = client.get(
+        "/api/meeting/stream",
+        headers=AUTH,
+        params={"meeting_id": "someone-elses-native", "platform": "google_meet",
+                "session_uid": "someone-elses-native"},
+    )
+    assert r.status_code == 403
 
 
 def test_identity_headers_injected_and_spoof_stripped():

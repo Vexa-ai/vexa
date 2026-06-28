@@ -36,6 +36,16 @@ class HttpxDownstreamClient:
             method, url, headers=headers, params=params or None, content=content
         )
 
+    async def stream(self, method, url, *, headers=None, params=None, content=None):
+        """Open a streaming downstream request and yield the body chunks (SSE — agent chat).
+        The httpx stream is a context manager; we hold it open for the life of the generator so
+        the gateway can relay each chunk to its client as it arrives."""
+        async with self._client.stream(
+            method, url, headers=headers, params=params or None, content=content
+        ) as resp:
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+
 
 class AdminApiAuthorizer:
     """``Authorizer`` over the admin-api + meeting-api hops.
@@ -110,6 +120,7 @@ def build_production_app(
 
     admin_api_url = admin_api_url or os.getenv("ADMIN_API_URL", "http://admin-api:8001")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
+    agent_api_url = os.getenv("AGENT_API_URL", "http://agent-api:8100")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
     http_client = httpx.AsyncClient(timeout=30.0)
@@ -129,6 +140,7 @@ def build_production_app(
         downstream,
         redis_client,
         meeting_api_url=meeting_api_url,
+        agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
 

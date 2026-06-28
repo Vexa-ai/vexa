@@ -8,7 +8,7 @@
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/capture-liveness.test.ts"
+    "test": "tsx src/endpoints.test.ts && tsx src/capture-liveness.test.ts"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

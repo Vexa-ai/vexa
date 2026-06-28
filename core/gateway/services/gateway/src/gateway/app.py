@@ -32,6 +32,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
 from .ports import Authorizer, DownstreamClient, RedisBus
@@ -50,6 +51,11 @@ ROUTE_SCOPES: Dict[str, Set[str]] = {
 # the transcription-collector INTO meeting-api (one modular monolith), so /transcripts + /meetings
 # now forward to the SAME target as /bots — the standalone collector URL is gone.
 _DEFAULT_MEETING_API_URL = "http://meeting-api"
+# The AGENT control plane (agent-api): chat · sessions · routines · workspace · models · history.
+# The gateway fronts it under /api/* so the SAME edge resolves the key → user and injects X-User-Id;
+# agent-api (Stage 1) derives its `subject` from that header (never from the client). Sentinel base —
+# the DownstreamClient resolves it; what matters is the /api/<path> the gateway forwards verbatim.
+_DEFAULT_AGENT_API_URL = "http://agent-api"
 
 
 def _required_scopes(path: str) -> Optional[Set[str]]:
@@ -65,6 +71,7 @@ def create_app(
     redis: RedisBus,
     *,
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
+    agent_api_url: str = _DEFAULT_AGENT_API_URL,
     rate_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
@@ -105,12 +112,15 @@ def create_app(
             "max_concurrent": user_data.get("max_concurrent", 1),
         }
 
-    # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
-    async def _forward(method: str, url: str, request: Request) -> Response:
+    # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy
+    # (agent chat SSE). Returns (downstream_headers, None) on success, or (None, error_Response) when
+    # the caller is rejected (fail-closed). This is the ONE place the key → user resolution and the
+    # anti-spoof identity injection live, so REST and SSE scope a request identically.
+    async def _authorize(method: str, request: Request):
         client_key = request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
-            return Response(
+            return None, Response(
                 content=json.dumps({"detail": "Missing API key"}),
                 status_code=401,
                 media_type="application/json",
@@ -118,7 +128,7 @@ def create_app(
 
         user_data = await authorizer.resolve(client_key)
         if not user_data:
-            return Response(
+            return None, Response(
                 content=json.dumps({"detail": "Invalid API key"}),
                 status_code=401,
                 media_type="application/json",
@@ -132,7 +142,7 @@ def create_app(
         # the control plane (the max_concurrent_bots cap bounds active bots, not request rate). 429 when
         # the per-user token bucket is empty; the bucket refills continuously (Retry-After: 1s).
         if rate_limiter is not None and not rate_limiter.allow(str(user_id)):
-            return Response(
+            return None, Response(
                 content=json.dumps({"detail": "Rate limit exceeded"}),
                 status_code=429,
                 media_type="application/json",
@@ -140,6 +150,10 @@ def create_app(
             )
 
         # Scope enforcement (main.py:341-351).
+        # Stage 3 SCAFFOLD (not delivered): the agent domain (/api/*) carries NO scope today, so a valid
+        # key reaches any agent route. When Stage 3 lands, add agent-route scopes here (or a canAccess
+        # default-deny resolved per (user_id, resource owner)) so a key can read ONLY its owner's
+        # workspace/sessions/routines — see core/agent canAccess + the capability-token seam.
         required = _required_scopes(request.url.path)
         if required is not None:
             user_scopes = set(user_data.get("scopes", []))
@@ -152,7 +166,7 @@ def create_app(
                     user_id=user_id,
                     fields={"method": method, "path": request.url.path, "required": sorted(required)},
                 )
-                return Response(
+                return None, Response(
                     content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
                     status_code=403,
                     media_type="application/json",
@@ -189,6 +203,13 @@ def create_app(
             if user_data.get("webhook_events"):
                 headers["x-user-webhook-events"] = json.dumps(user_data["webhook_events"])
         headers[TRACE_HEADER] = get_trace_id() or ""
+        return headers, None
+
+    # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
+    async def _forward(method: str, url: str, request: Request) -> Response:
+        headers, error = await _authorize(method, request)
+        if error is not None:
+            return error
 
         content = await request.body()
         # A public gateway must not LEAK its own 500 for an UPSTREAM fault: map a slow upstream → 504 and
@@ -288,6 +309,45 @@ def create_app(
     @app.get("/meetings/{meeting_id}")
     async def meeting(meeting_id: int, request: Request):
         return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)
+
+    # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under /api/* so the SAME edge
+    # resolves key → user and injects X-User-Id; agent-api derives `subject` from it (never the client).
+    # The terminal therefore talks ONLY to the gateway (one authenticated edge, clean SoC).
+    def _agent(path: str) -> str:
+        return f"{agent_api_url}/api/{path}"
+
+    # The agent SSE routes (chat turn · live meeting feed) must be STREAMED, not buffered like the JSON
+    # routes — so they get their own forward, declared BEFORE the catch-all so they win. Identity is
+    # injected by the SAME _authorize the buffered proxy uses (so the streamed turn is scoped identically).
+    SSE_HEADERS = {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+    async def _forward_stream(method: str, url: str, request: Request) -> Response:
+        headers, error = await _authorize(method, request)
+        if error is not None:
+            return error
+        content = await request.body()
+        params = dict(request.query_params) or None
+
+        async def body():
+            async for chunk in downstream.stream(method, url, headers=headers, params=params, content=content):
+                yield chunk
+
+        return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+    @app.post("/api/chat")
+    async def agent_chat(request: Request):
+        return await _forward_stream("POST", _agent("chat"), request)
+
+    @app.get("/api/meeting/stream")
+    async def agent_meeting_stream(request: Request):
+        return await _forward_stream("GET", _agent("meeting/stream"), request)
+
+    # Everything else in the agent domain (sessions · history · routines · workspace tree/file/git/upload ·
+    # models) is request/response JSON → the buffered _forward, with X-User-Id injected. The catch-all
+    # carries the path + method + query + body verbatim to agent-api's matching /api/<path>.
+    @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+    async def agent_proxy(path: str, request: Request):
+        return await _forward(request.method, _agent(path), request)
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")

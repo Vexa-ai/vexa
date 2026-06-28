@@ -28,3 +28,11 @@ def _golden(name: str) -> dict:
 def transcription_golden() -> dict:
     """A confirmed transcript.v1 Transcription envelope (the agent's input)."""
     return _golden("Transcription.confirmed.json")
+
+
+@pytest.fixture(autouse=True)
+def _default_subject(monkeypatch):
+    """The HTTP tests exercise agent-api with no gateway in front, so set the single-user fallback
+    (``VEXA_AGENT_DEFAULT_SUBJECT``) — agent-api derives the subject from it when ``X-User-Id`` is absent.
+    Tests that assert per-user *isolation* pass an explicit ``X-User-Id`` header, which always wins (P20)."""
+    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")

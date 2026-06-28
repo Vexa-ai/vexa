@@ -9,6 +9,7 @@ import { registerCommand, type TabProps } from "../contributions";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
 import { sessionTitle, type SessionSummary } from "./sessions";
+import { listSessions } from "./sessionsApi";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingById, type MeetingMock } from "./mock";
 import { ASK_CHAT_EVENT } from "../canvas/actions";
@@ -204,16 +205,18 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
 }) {
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const data = await (await fetch(`/api/sessions?subject=${encodeURIComponent(subject)}`)).json() as { sessions?: SessionSummary[] };
-        if (!cancelled) setSessions(data.sessions ?? []);
-      } catch {
-        if (!cancelled) setSessions([]);
+        const list = await listSessions();
+        if (!cancelled) { setSessions(list); setError(null); }
+      } catch (e) {
+        // Fail loud: surface the backend error instead of silently showing an empty list.
+        if (!cancelled) setError(e instanceof Error ? e.message : "Couldn't load sessions");
       }
     };
     void load();
@@ -225,10 +228,10 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
     let cancelled = false;
     const load = async () => {
       try {
-        const data = await (await fetch(`/api/sessions?subject=${encodeURIComponent(subject)}`)).json() as { sessions?: SessionSummary[] };
-        if (!cancelled) setSessions(data.sessions ?? []);
-      } catch {
-        if (!cancelled) setSessions([]);
+        const list = await listSessions();
+        if (!cancelled) { setSessions(list); setError(null); }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Couldn't load sessions");
       }
     };
     void load();
@@ -274,6 +277,7 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
 
       {open && (
         <div role="menu" style={{ position: "absolute", zIndex: 30, top: 36, left: 8, right: 8, maxHeight: 260, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", boxShadow: "0 14px 34px rgba(0,0,0,.32)", padding: 4 }}>
+          {error && <div role="alert" style={{ padding: "8px", color: "var(--danger, #e5484d)", fontSize: 12 }}>⚠ Couldn&apos;t load sessions — {error}</div>}
           {visibleSessions.map((s) => {
             const active = s.session === session;
             return (
@@ -464,7 +468,7 @@ function routineCreationPrompt(commandText: string): string {
 type ChatProps = Partial<TabProps>;
 
 export function Chat({ params = {} }: ChatProps) {
-  const subject = typeof params.subject === "string" ? params.subject : "u_live";  // one workspace shared with meeting research
+  const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
   const { activeTab, activeSession } = useStore(layout.store);
@@ -527,7 +531,7 @@ export function Chat({ params = {} }: ChatProps) {
     // hanging the pane forever on "Loading conversation…".
     (async () => {
       try {
-        const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history?subject=${encodeURIComponent(subject)}`);
+        const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
         const data: { turns?: HistoryTurn[] } = await r.json();
         const loaded: Turn[] = (data.turns ?? []).map((t, i) =>
           t.role === "user"
@@ -580,7 +584,6 @@ export function Chat({ params = {} }: ChatProps) {
 
   const uploadAttachments = async (): Promise<UploadedWorkspaceFile[]> => {
     const form = new FormData();
-    form.append("subject", subject);
     for (const a of attachments) form.append("files", a.file, a.file.name || "upload");
     const r = await fetch("/api/workspace/upload", { method: "POST", body: form });
     if (!r.ok) {
@@ -620,7 +623,7 @@ export function Chat({ params = {} }: ChatProps) {
     try {
       const p = promptWithActiveContext(basePrompt, contextRef, activeMeeting);
       const active = contextRef ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
-      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, subject, session: sessionForSend, active }), signal: ctrl.signal });
+      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, session: sessionForSend, active }), signal: ctrl.signal });
       if (!r.ok) throw new Error(`Chat request failed (${r.status})`);
       const reader = r.body?.getReader();
       const dec = new TextDecoder();

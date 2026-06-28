@@ -135,8 +135,8 @@ def test_create_and_list_routines_over_http():
     assert listed[0]["enabled"] is True
     assert listed[0]["routine_name"] == "Morning brief"
 
-    # A different subject sees none (owner-scoped).
-    assert client.get("/api/routines", params={"subject": "u_bob"}).json()["routines"] == []
+    # A different subject sees none (owner-scoped). Subject is the authenticated X-User-Id (P20).
+    assert client.get("/api/routines", headers={"X-User-Id": "u_bob"}).json()["routines"] == []
 
     # Delete cancels the scheduled job.
     rid = body["routine"]["id"]

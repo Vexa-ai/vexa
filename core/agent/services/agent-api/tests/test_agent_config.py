@@ -12,6 +12,8 @@ from agent_api.agent_config import (
     DEFAULT_CADENCE_SEGMENTS,
     DEFAULT_CARD_KINDS,
     DEFAULT_MEETING_MODEL,
+    DEFAULT_POLISH_RULES,
+    DEFAULT_TAG_RULES,
     MODEL_ALLOWLIST,
     load_meeting_config,
 )
@@ -101,3 +103,23 @@ def test_malformed_yaml_falls_back_to_defaults_plus_body(tmp_path):
 def test_empty_steering_body(tmp_path):
     _write(tmp_path, "---\nenabled: true\n---\n")
     assert load_meeting_config(tmp_path).steering == ""
+
+
+def test_polish_and_tag_rules_default_when_absent(tmp_path):
+    _write(tmp_path, "---\nenabled: true\n---\n")
+    cfg = load_meeting_config(tmp_path)
+    assert cfg.polish_rules == DEFAULT_POLISH_RULES
+    assert cfg.tag_rules == DEFAULT_TAG_RULES
+
+
+def test_polish_and_tag_rules_governed_by_workspace(tmp_path):
+    """Editing the workspace file overrides the POLICY (prompt-only governance)."""
+    _write(tmp_path, "---\npolish_rules: Keep it terse.\ntag_rules: Only tag people.\n---\n")
+    cfg = load_meeting_config(tmp_path)
+    assert cfg.polish_rules == "Keep it terse."
+    assert cfg.tag_rules == "Only tag people."
+
+
+def test_blank_rules_fall_back_to_defaults(tmp_path):
+    _write(tmp_path, "---\npolish_rules: '   '\n---\n")
+    assert load_meeting_config(tmp_path).polish_rules == DEFAULT_POLISH_RULES

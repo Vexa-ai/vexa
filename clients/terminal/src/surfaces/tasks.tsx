@@ -6,7 +6,7 @@ import type { TabDescriptor } from "../workbench/layout";
 import { registerList } from "../contributions";
 import { usePreviewPinTab } from "./previewPinTab";
 
-const SUBJECT = "u_live";  // the terminal's single subject (until §0 auth) — must match every other surface
+// No client subject: the gateway injects X-User-Id and agent-api derives `subject` from it (P20 scope).
 interface Task { path: string; title: string; state: string; priority?: string; due?: string }
 const PRIO: Record<string, string> = { high: "var(--live)", med: "var(--accent)", medium: "var(--accent)", low: "var(--t2)" };
 
@@ -41,10 +41,10 @@ function TasksList() {
   const [tasks, setTasks] = useState<Task[]>([]);
   useEffect(() => { void (async () => {
     try {
-      const tree: string[] = (await (await fetch(`/api/workspace/tree?subject=${SUBJECT}`)).json()).files ?? [];
+      const tree: string[] = (await (await fetch(`/api/workspace/tree`)).json()).files ?? [];
       const out: Task[] = [];
       for (const path of tree.filter((f) => f.startsWith("kg/entities/task/"))) {
-        const c = (await (await fetch(`/api/workspace/file?subject=${SUBJECT}&path=${encodeURIComponent(path)}`)).json()).content ?? "";
+        const c = (await (await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`)).json()).content ?? "";
         const f = frontmatter(c);
         out.push({ path, title: f.title ?? path, state: (f.status ?? f.state ?? "open").toLowerCase(), priority: (f.priority ?? "").toLowerCase(), due: f.due });
       }

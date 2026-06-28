@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     # the subject's subdir of it.
     workspace_mount_source: str = "agent-workspaces"
 
+    # ── identity seam — the subject is the authenticated user (P20) ──────────
+    # agent-api is fronted by the gateway, which resolves the api-key → user_id and injects X-User-Id.
+    # The subject (workspace/quota/chat partition) is derived SERVER-SIDE from that header, never from the
+    # client body. ``agent_default_subject`` is the single-user fallback for a direct/self-host deploy with
+    # no gateway in front: empty (default) = FAIL-CLOSED (401 when X-User-Id is absent). Compose sets it to
+    # keep the shared-user dev stack working until the terminal routes through the gateway (Stage 4).
+    agent_default_subject: str = ""
+
     # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─
     redis_url: str = "redis://redis:6379/0"
 

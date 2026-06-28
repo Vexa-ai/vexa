@@ -185,6 +185,11 @@ services:
       - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
       - VEXA_AGENT_PROFILE=agent
       - VEXA_WORKSPACES_DIR=/workspaces
+      # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
+      # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
+      # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
+      # agent-api and X-User-Id is always present — then a missing header fails closed (401).
+      - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       - VEXA_MEETING_MODEL=${VEXA_MEETING_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

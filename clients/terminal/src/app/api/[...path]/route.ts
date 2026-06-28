@@ -1,34 +1,39 @@
 /** The ONE proxy — a single catch-all that forwards every /api/* call to the right backend,
  *  keeping hosts + keys server-side. It replaces the ~9 near-identical thin route files.
  *
- *  Path-based routing (the architecture seam — two domains behind one client API):
- *    • meetings · transcripts · bots  → the MEETINGS domain → the GATEWAY (GATEWAY_URL),
- *      authenticated with X-API-Key: VEXA_BOT_API_KEY. meeting-api owns these, fronted by the
- *      gateway at root paths (/meetings, /transcripts/{platform}/{native}, /bots).
- *    • everything else (chat · copilot · sessions · routines · workspace · events · …)
- *      → the AGENT domain → agent-api (AGENT_API_URL), no key, served under /api/*.
+ *  Path-based routing (the architecture seam — two domains behind ONE authenticated edge, the gateway):
+ *    • meetings · transcripts · bots  → the gateway ROOT paths (/meetings, /transcripts/{…}, /bots),
+ *      where meeting-api is fronted.
+ *    • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /api/*
+ *      prefix, where agent-api is fronted.
+ *  BOTH carry the per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY). The gateway
+ *  resolves it → user and injects X-User-Id downstream, so agent-api derives `subject` from identity
+ *  (the client never sends one — P20 scope). The terminal never reaches agent-api directly.
  *
  *  Carries through: the path after /api/, the query string, the request body, and the upstream
- *  status + JSON. SSE (/api/meeting/stream) and the workspace KG reader (/api/workspace/[...seg])
- *  stay as their own files — they need streaming / segment-specific shaping.
+ *  status + JSON. SSE (/api/chat, /api/meeting/stream) and the workspace KG reader (/api/workspace/[...seg])
+ *  stay as their own files — they need streaming / segment-specific shaping (all → the gateway).
  */
 import type { NextRequest } from "next/server";
 import { resolveApiKey } from "../proxyAuth";
 
 export const dynamic = "force-dynamic";
 
-const AGENT_API = (process.env.AGENT_API_URL || "http://127.0.0.1:18100").replace(/\/$/, "");
 const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
 
+// Two domains behind ONE authenticated edge (the gateway):
+//   • meetings · transcripts · bots  → the gateway ROOT (/meetings, …) — meeting-api behind it.
+//   • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /api/*
+//     prefix — agent-api behind it.
+// BOTH carry the per-user X-API-Key; the gateway resolves it → user and injects X-User-Id downstream,
+// so the client never sends a `subject` (scope is server-derived — P20). agent-api is never reached directly.
 const MEETINGS_DOMAIN = /^(meetings|transcripts|bots)(\/|$)/;
 
-/** Resolve the upstream URL + headers for a captured /api/<path...> request.
- *  Meetings-domain calls carry the per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY). */
+/** Resolve the upstream URL + headers for a captured /api/<path...> request. Every call carries the
+ *  per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY) to the single gateway edge. */
 async function upstreamFor(path: string, search: string): Promise<{ url: string; headers: HeadersInit }> {
-  if (MEETINGS_DOMAIN.test(path)) {
-    return { url: `${GATEWAY_URL}/${path}${search}`, headers: { "X-API-Key": await resolveApiKey() } };
-  }
-  return { url: `${AGENT_API}/api/${path}${search}`, headers: {} };
+  const base = MEETINGS_DOMAIN.test(path) ? `${GATEWAY_URL}/${path}` : `${GATEWAY_URL}/api/${path}`;
+  return { url: `${base}${search}`, headers: { "X-API-Key": await resolveApiKey() } };
 }
 
 async function forward(req: NextRequest, params: Promise<{ path: string[] }>): Promise<Response> {
@@ -63,9 +68,11 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
       status: upstream.status,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
     });
-  } catch {
-    // upstream offline — degrade to an empty-but-valid JSON body so the UI keeps last-known state
-    return new Response(JSON.stringify({}), { status: 502, headers: { "Content-Type": "application/json" } });
+  } catch (err) {
+    // upstream unreachable (gateway down / DNS). FAIL-LOUD (P18): return a real error body + 502 so the
+    // client surfaces "backend unreachable" — never a silent empty {} that masquerades as "no data".
+    const detail = err instanceof Error && err.message ? err.message : "upstream unreachable";
+    return new Response(JSON.stringify({ error: "upstream_unreachable", detail }), { status: 502, headers: { "Content-Type": "application/json" } });
   }
 }
 

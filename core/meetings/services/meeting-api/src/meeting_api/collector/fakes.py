@@ -78,6 +78,18 @@ class InMemoryTranscriptStore:
         }
         return mid
 
+    async def native_for(self, meeting_id):
+        """Numeric meeting_id → (native_meeting_id, platform), cross-user (the internal segment
+        consumer owns the mapping). Mirrors the SqlAlchemy store so ingest can stamp the live payload."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        m = self._meetings.get(mid)
+        if not m or not m.get("native_meeting_id"):
+            return None
+        return (m["native_meeting_id"], m.get("platform") or "google_meet")
+
     def _find(self, user_id, platform, native_meeting_id) -> Optional[int]:
         for mid, m in self._meetings.items():
             if (

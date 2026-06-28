@@ -26,7 +26,7 @@ import type { EntityItem, EntityKind, MeetingDocLink, MeetingState, SpeakerSumma
 export type { MeetingSourceMode, MockInjectKind, MockScenarioId } from "./mockSource";
 
 const EMPTY_MEETING: MeetingMock = {
-  id: "u_live",
+  id: "live",
   title: "Live meeting",
   when: "",
   status: "past",

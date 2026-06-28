@@ -114,7 +114,12 @@ humans**: every service / module / contract / client is a node; every redis stre
 is a *data carrier* with **exactly one writer**; `connects` edges carry the governing contract (the *shape*)
 and mark where content is *transformed* (and by whom). To understand any slice, **render a perspective —
 never read the whole graph**:
-- `pnpm arch:viz cluster:<domain|terminal>` — a concern bundle + the carriers it touches
+- **Read this first — the concise whole-graph index:** [`docs/views/architecture.dsl`](docs/views/architecture.dsl)
+  (~1.4k tokens, edge-list DSL — every node, edge, carrier-owner, and flow). It is **generated** from the
+  CALM chart (`pnpm arch:dsl`, `scripts/arch-dsl.mjs`), **never hand-edited**, and kept byte-current by
+  `gate:dataflow` (a stale DSL turns CI red; `pnpm seal:arch` regenerates it). So the compact chart is always
+  in context without reading the 8k-token JSON.
+- `pnpm arch:viz cluster:<domain|terminal>` — a concern bundle + the carriers it touches (SVG, for visual detail)
 - `pnpm arch:viz flow:<id>` · `path:<carrier>` — a data path · a carrier's writers→readers
   (`--lod=0..3`, `--scale`; **deterministic** → `docs/views/*.svg`).
 

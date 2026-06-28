@@ -8,7 +8,7 @@
  *  source actually changes, so an unchanged poll costs one fetch and zero re-renders. */
 import { useSyncExternalStore } from "react";
 
-const SUBJECT = "u_live";
+// No client subject: the gateway injects X-User-Id and agent-api derives `subject` from it (P20 scope).
 const VIEW_PATH = "views/meeting.tsx";
 const POLL_MS = 4000;
 
@@ -35,7 +35,7 @@ async function load(): Promise<void> {
   if (inflight) return;
   inflight = true;
   try {
-    const r = await fetch(`/api/workspace/file?subject=${SUBJECT}&path=${encodeURIComponent(VIEW_PATH)}`, { cache: "no-store" });
+    const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(VIEW_PATH)}`, { cache: "no-store" });
     const next = r.ok ? (((await r.json()) as { content?: string }).content?.trim() || FALLBACK_SOURCE) : FALLBACK_SOURCE;
     if (next !== state.source) {
       // Only the actual reload bumps the "reloaded" stamp and re-renders consumers.

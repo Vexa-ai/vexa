@@ -1,10 +1,10 @@
 "use client";
 import { useState } from "react";
-import { CanvasActionsProvider } from "./actions";
+import { CanvasActionsProvider, useActions } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
-import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
+import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
 import { useMeetingNotes } from "./notes";
-import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
+import { MeetingScopeProvider, MeetingSourceProvider, useEntities, useMeeting, useSignals } from "./useMeeting";
 
 export const MEETING_CANVAS_CONTENT_INSET = 18;
 
@@ -15,14 +15,54 @@ function RawTranscript() {
   return <LiveTranscriptEngine segments={transcript.segments} />;
 }
 
-/** PROCESSED = the cleaned mirror + keyword tags (entities to research), through the SAME engine. */
+// Map a copilot signal's loose context/kind onto the badge taxonomy (decision / action-item /
+// question / claim). Unknown kinds fall through as-is so they still render with a neutral hue.
+function signalKind(raw: string | undefined): string {
+  const k = (raw ?? "").toLowerCase();
+  if (/decis|commit/.test(k)) return "decision";
+  if (/action|task|next.?step|follow/.test(k)) return "action-item";
+  if (/question|ask|objection|concern/.test(k)) return "question";
+  if (/claim|insight|fact/.test(k)) return "claim";
+  return k || "signal";
+}
+
+/** PROCESSED v2 = the cleaned mirror with INLINE entity highlights (clickable → research / open doc /
+ *  add to brief) and actionable copilot SIGNAL badges, all through the SAME engine. */
 function ProcessedTranscript() {
   const notes = useMeetingNotes();
+  const entityItems = useEntities();
+  const signalItems = useSignals();
+  const actions = useActions();
+
   const segments = notes.map((n) => ({
     speaker: n.speaker, text: n.text, tsMs: n.tsMs, id: n.id, completed: n.completed,
     tags: (n.tags ?? []).map((t) => ({ label: t.label, kind: t.kind })),
   }));
-  return <LiveTranscriptEngine segments={segments} emptyLabel="Processing transcript…" />;
+
+  // Only highlight taggable entities (people/companies/products); numbers/signals aren't worth inline
+  // wrapping in flowing prose. `splitTextIntoSpans` re-finds each label so the merge/tail stay intact.
+  const entities: EngineEntity[] = entityItems
+    .filter((e) => e.kind === "person" || e.kind === "company" || e.kind === "product")
+    .map((e) => ({ id: e.id, label: e.name, kind: e.kind, docPath: e.docPath }));
+
+  const signals: EngineSignal[] = signalItems.map((s) => ({ id: s.id, kind: signalKind(s.context), label: s.name }));
+
+  const engineActions: EngineActions = {
+    research: (e) => actions.research({ name: e.name, kind: e.kind }),
+    openEntityDoc: (e) => { if (e.docPath) actions.openDoc(e.docPath); },
+    addToBrief: (e) => actions.note(`Add to brief: ${e.kind} — ${e.name}`),
+    onSignal: (sig) => actions.ask(`Create a task / fact-check this ${sig.kind}: ${sig.label}`),
+  };
+
+  return (
+    <LiveTranscriptEngine
+      segments={segments}
+      emptyLabel="Processing transcript…"
+      entities={entities}
+      signals={signals}
+      actions={engineActions}
+    />
+  );
 }
 
 export function MeetingCanvasView({ meetingId }: { meetingId?: string }) {

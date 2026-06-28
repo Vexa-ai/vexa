@@ -75,6 +75,20 @@ class DownstreamClient(Protocol):
     ) -> DownstreamResponse:
         ...
 
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[dict] = None,
+        params: Optional[dict] = None,
+        content: Optional[bytes] = None,
+    ) -> AsyncIterator[bytes]:
+        """Forward a request and yield the downstream response body as it arrives (the SSE path —
+        agent chat). An async generator: ``async for chunk in downstream.stream(...)``. Used so a
+        streamed turn is relayed token-by-token instead of buffered."""
+        ...
+
 
 @runtime_checkable
 class PubSub(Protocol):

@@ -302,6 +302,58 @@ def test_serve_meeting_upgrades_proc_note_text_from_llm_rewrite():
     assert "clean:raw text" in by_id["a"]  # the LLM upgrade landed on the proc stream for id 'a'
 
 
+# ── Auth-B/#3a: per-meeting workspace file is upserted from proc notes (idempotent) ────────────────
+
+from agent_api.worker import upsert_meeting_transcript_file  # noqa: E402
+
+_MEETING_META = {
+    "type": "meeting", "id": "m1", "title": "Meeting m1", "meeting_id": "m1",
+    "session_uid": "s1", "platform": "google_meet", "date": "2026-06-27",
+}
+
+
+def test_upsert_meeting_file_writes_then_updates_idempotently(tmp_path):
+    """B) Proc notes write/update kg/entities/meeting/<native>.md — a refining note for the same id
+    updates the line IN PLACE (no duplicate); a new id appends."""
+    path = tmp_path / "kg" / "entities" / "meeting" / "m1.md"
+    upsert_meeting_transcript_file(path, _MEETING_META, {"id": "a", "speaker": "Jane", "text": "hello there"})
+    upsert_meeting_transcript_file(path, _MEETING_META, {"id": "b", "speaker": "Raj", "text": "hi back"})
+    text = path.read_text()
+    # frontmatter for the chat agent to identify the meeting
+    assert "type: meeting" in text and "id: m1" in text and "title: Meeting m1" in text
+    assert "## Speakers" in text and "- Jane" in text and "- Raj" in text
+    assert "hello there" in text and "hi back" in text
+
+    # a refining pass for id 'a' UPDATES in place — not duplicated
+    upsert_meeting_transcript_file(path, _MEETING_META, {"id": "a", "speaker": "Jane", "text": "hello there, everyone"})
+    text2 = path.read_text()
+    assert text2.count("<!-- id:a -->") == 1  # idempotent: one line for id 'a'
+    assert "hello there, everyone" in text2
+    assert text2.count("<!-- id:b -->") == 1
+
+    # re-applying the SAME note is a no-op on content (byte-identical)
+    before = path.read_text()
+    upsert_meeting_transcript_file(path, _MEETING_META, {"id": "a", "speaker": "Jane", "text": "hello there, everyone"})
+    assert path.read_text() == before
+
+
+def test_serve_meeting_upserts_workspace_file_from_proc_notes(tmp_path):
+    """serve_meeting drives on_proc_note → the per-meeting file accumulates one line per segment id."""
+    path = tmp_path / "kg" / "entities" / "meeting" / "m1.md"
+    s = ProcMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "um hello"), "segment_id": "a"}),
+        _transcript("2-0", {**_seg("Raj", "yeah hi"), "segment_id": "b"}),
+    ])
+    serve_meeting(
+        s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn, idle_ms=10,
+        proc_stream="proc:meeting:m1", cursor_key="proc:meeting:m1:cursor",
+        on_proc_note=lambda note: upsert_meeting_transcript_file(path, _MEETING_META, note),
+    )
+    text = path.read_text()
+    assert text.count("<!-- id:a -->") == 1 and text.count("<!-- id:b -->") == 1
+    assert "Jane" in text and "Raj" in text
+
+
 def test_run_turn_persists_namespaced_session_file(tmp_path):
     """A chat turn on thread `work` captures the claude session id into its OWN namespaced continuity
     file (`.claude/sessions/work.session`) — distinct threads don't collide on `.claude/.session`."""
@@ -577,6 +629,33 @@ def test_build_card_prompt_includes_steering_only_when_present():
     steered = build_card_prompt("[Jane] hi", ["person"], steering="Ignore small talk.")
     assert "## Standing instructions from this workspace" in steered
     assert "Ignore small talk." in steered
+
+
+def test_build_card_prompt_composes_governed_polish_and_tag_rules():
+    """A) The prompt is COMPOSED from the workspace-governed polish/tag policy — changing a field
+    changes the prompt (prompt-only governance)."""
+    p = build_card_prompt("[Jane] hi", ["person"], polish_rules="POLISH-X", tag_rules="TAG-Y")
+    assert "## Polish rules (governed by this workspace)" in p
+    assert "POLISH-X" in p
+    assert "## Tag rules (governed by this workspace)" in p
+    assert "TAG-Y" in p
+    # changing a field changes the prompt
+    p2 = build_card_prompt("[Jane] hi", ["person"], polish_rules="POLISH-DIFFERENT", tag_rules="TAG-Y")
+    assert p2 != p
+    assert "POLISH-DIFFERENT" in p2 and "POLISH-X" not in p2
+
+
+def test_build_card_prompt_uses_config_from_meeting_md(tmp_path):
+    """The fields flow from agents/meeting.md → MeetingConfig → build_card_prompt end to end."""
+    from agent_api.agent_config import load_meeting_config
+
+    md = tmp_path / "agents" / "meeting.md"
+    md.parent.mkdir(parents=True)
+    md.write_text("---\npolish_rules: ws-polish\ntag_rules: ws-tags\n---\n")
+    cfg = load_meeting_config(tmp_path)
+    p = build_card_prompt("[Jane] hi", cfg.card_kinds, cfg.steering,
+                          polish_rules=cfg.polish_rules, tag_rules=cfg.tag_rules)
+    assert "ws-polish" in p and "ws-tags" in p
 
 
 def test_serve_meeting_cadence_segments_gates_beats():

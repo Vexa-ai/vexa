@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 from typing import Iterator, Optional
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
@@ -179,7 +179,9 @@ class _LiveMeetings:
 class ChatBody(BaseModel):
     model_config = {"extra": "forbid"}
     prompt: str
-    subject: str
+    # subject is DERIVED server-side from X-User-Id (P20) — kept here only so a client that still sends it
+    # doesn't 422 (extra=forbid); the value is IGNORED. Dropped from the client in Stage 4.
+    subject: Optional[str] = None
     session: Optional[str] = None
     # the terminal's active center tab ({kind, ref}) — grounds the chat in what's
     # in focus. Accepted now (Wave 2 wires it into the meeting tool / file context).
@@ -189,7 +191,7 @@ class ChatBody(BaseModel):
 class RoutineCreate(BaseModel):
     """The Routines surface / ``/routine`` create form — compiles to a routine.v1 + a schedule.v1 job."""
     model_config = {"extra": "forbid"}
-    subject: str
+    subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent. Dropped client-side in Stage 4.
     name: str
     cron: str
     prompt: str
@@ -207,7 +209,7 @@ class MeetingStart(BaseModel):
     model_config = {"extra": "forbid"}
     platform: str               # google_meet | teams | zoom
     native_id: str              # the platform meeting id (e.g. a Google Meet code abc-defg-hij)
-    subject: str = "u_live"
+    subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent.
     title: Optional[str] = None
 
 
@@ -235,7 +237,7 @@ class MeetingProcess(BaseModel):
     native_id: str
     platform: str = "google_meet"
     on: bool
-    subject: str = "u_live"
+    subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent.
 
 
 # The meeting copilot's start brief. The in-container worker drives per-beat extraction with its own
@@ -246,9 +248,26 @@ _MEETING_BRIEF = (
 )
 
 
-def _sse(events: Iterator[dict]) -> Iterator[str]:
-    for ev in events:
-        yield f"data: {json.dumps(ev)}\n\n"
+def _encode_sse_cursor(last: dict, tkey: str, okey: str) -> str:
+    """Pack the per-stream redis cursors into ONE SSE event id (the browser echoes it as
+    Last-Event-ID on reconnect → we resume EXACTLY from here, gapless). '-' = not-yet-read."""
+    return f"{last.get(tkey, '-')}|{last.get(okey, '-')}"
+
+
+def _decode_sse_cursor(raw: str | None) -> "tuple[str | None, str | None]":
+    """Last-Event-ID → (transcript_id, output_id). None when absent/malformed (fresh connect)."""
+    if not raw or "|" not in raw:
+        return (None, None)
+    t, _, o = raw.partition("|")
+    return (t if t and t != "-" else None, o if o and o != "-" else None)
+
+
+def _sse(events) -> Iterator[str]:
+    for item in events:
+        # Each item is either a bare event dict, or (event, sse_id) — the id makes reconnects resumable.
+        ev, sid = item if isinstance(item, tuple) else (item, None)
+        prefix = f"id: {sid}\n" if sid else ""
+        yield f"{prefix}data: {json.dumps(ev)}\n\n"
 
 
 def create_app(
@@ -276,6 +295,20 @@ def create_app(
     app.state.sessions = sess
     app.state.live_meetings = live
     app.state.scheduler = scheduler
+    settings = dispatcher.settings if dispatcher is not None else None
+
+    def subject_of(request: Request) -> str:
+        """The authenticated subject (P20). The gateway resolves the api-key → user_id and injects
+        ``X-User-Id``; agent-api derives the workspace/chat/quota partition from THAT, never from the
+        client body/query. Fail-closed (401) when the header is absent, unless a single-user fallback
+        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front."""
+        uid = request.headers.get("x-user-id")
+        if uid:
+            return uid
+        fallback = settings.agent_default_subject if settings is not None else ""
+        if fallback:
+            return fallback
+        raise HTTPException(status_code=401, detail="missing X-User-Id (agent-api is fronted by the gateway)")
 
     @app.get("/health")
     def health():
@@ -286,8 +319,8 @@ def create_app(
         )
 
     @app.get("/api/models")
-    def models(subject: str = "u_live"):
-        settings = dispatcher.settings
+    def models(request: Request):
+        subject = subject_of(request)
         streaming_model = settings.meeting_model or DEFAULT_MEETING_MODEL
         try:
             streaming_model = load_meeting_config(wsr.workspace_dir(subject)).model
@@ -311,7 +344,7 @@ def create_app(
         return {"workload_id": workload_id}
 
     @app.post("/api/meeting/start", status_code=202)
-    def meeting_start(body: MeetingStart):
+    def meeting_start(body: MeetingStart, request: Request):
         """Launch (or touch) a live-meeting copilot for a real meeting — built through the ONE
         ``make_dispatch`` like every other trigger. ``meeting_id == session_uid == native_id`` so the
         transcript wire (``tc:meeting:{id}``), the dispatch (``agent-meet-{id}``), and the terminal all
@@ -323,7 +356,7 @@ def create_app(
         if transcript_start_id:
             meeting_ctx["transcript_start_id"] = transcript_start_id
         inv = units.make_dispatch(
-            subject=body.subject, trigger="transcription",
+            subject=subject_of(request), trigger="transcription",
             start=units.entrypoint(inline=_MEETING_BRIEF),
             context={"kind": "meeting", "meeting": meeting_ctx},
         )
@@ -397,7 +430,7 @@ def create_app(
         return {"native_id": body.native_id, "stopped": True}
 
     @app.post("/api/meeting/process", status_code=202)
-    def meeting_process(body: MeetingProcess):
+    def meeting_process(body: MeetingProcess, request: Request):
         """User-controlled copilot PROCESSING for a meeting. Processing is OPT-IN: the transcription
         watcher only arms / keeps the copilot alive while ``proc:meeting:{native}`` is set — so OFF means
         NO processing runs at all (the raw transcript still streams).
@@ -410,7 +443,10 @@ def create_app(
         import redis as _redis
 
         r = _redis.from_url(redis_url, decode_responses=True)
-        flag = f"proc:meeting:{body.native_id}"
+        # The opt-in flag has its OWN key suffix — it must NOT collide with the processed-notes STREAM
+        # ``proc:meeting:{native}`` the worker XADDs (worker.py), else a GET on the flag hits a stream →
+        # WRONGTYPE (crashes the watcher's arm loop). ``:cursor`` is likewise a distinct sibling key.
+        flag = f"proc:meeting:{body.native_id}:on"
         cursor_key = f"proc:meeting:{body.native_id}:cursor"
         if not body.on:
             try:
@@ -427,7 +463,7 @@ def create_app(
         # Gap-fill from the cursor (last cleaned raw id); no cursor yet ⇒ from the start of the transcript.
         start_id = cursor or "0-0"
         inv = units.make_dispatch(
-            subject=body.subject, trigger="transcription",
+            subject=subject_of(request), trigger="transcription",
             start=units.entrypoint(inline=_MEETING_BRIEF),
             context={"kind": "meeting", "meeting": {
                 "meeting_id": body.native_id, "session_uid": body.native_id,
@@ -487,18 +523,19 @@ def create_app(
         return {"meetings": rows}
 
     @app.post("/api/chat")
-    def chat(body: ChatBody):
+    def chat(body: ChatBody, request: Request):
         """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE."""
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
+        subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         session = body.session or units.DEFAULT_CHAT_SESSION
         # Upsert the durable index on use: a new thread is titled by its first prompt; an existing one
         # just bumps last_active (title preserved).
-        is_new = not any(r["session"] == session for r in sess.list(body.subject))
-        sess.upsert(body.subject, session,
+        is_new = not any(r["session"] == session for r in sess.list(subject))
+        sess.upsert(subject, session,
                     title=_truncate_title(body.prompt) if is_new else None)
         inv = units.make_dispatch(
-            subject=body.subject, trigger="message",
+            subject=subject, trigger="message",
             start=units.entrypoint(inline=body.prompt), context={"kind": "none", "session": session},
         )
         unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
@@ -510,26 +547,28 @@ def create_app(
         )
 
     @app.post("/api/chat/reset")
-    def chat_reset(body: ChatBody):
+    def chat_reset(body: ChatBody, request: Request):
         """Drop a conversation thread: remove it from the index AND delete its continuity file so a
         future turn on the same name starts a fresh conversation (not a resume of the old one)."""
+        subject = subject_of(request)
         session = body.session or units.DEFAULT_CHAT_SESSION
-        sess.drop(body.subject, session)
+        sess.drop(subject, session)
         try:
-            wsr.drop_session(body.subject, session)
+            wsr.drop_session(subject, session)
         except Exception:  # noqa: BLE001 — index drop is the contract; the file delete is best-effort
-            logger.exception("dropping continuity file failed subject=%s session=%s", body.subject, session)
+            logger.exception("dropping continuity file failed subject=%s session=%s", subject, session)
         return {"ok": True}
 
     @app.get("/api/sessions")
-    def list_sessions(subject: str):
-        return {"sessions": sess.list(subject)}
+    def list_sessions(request: Request):
+        return {"sessions": sess.list(subject_of(request))}
 
     @app.get("/api/sessions/{session}/history")
-    def session_history(session: str, subject: str):
+    def session_history(session: str, request: Request):
         """The session's prior conversation, as simplified turns the terminal can render (so clicking a
         saved chat re-opens its history). Tolerant: a missing/empty transcript returns ``{turns: []}``;
         an invalid subject/session never 500s."""
+        subject = subject_of(request)
         try:
             turns = wsr.history(subject, session)
         except Exception:  # noqa: BLE001 — history is best-effort; a bad path → empty, never an error
@@ -540,12 +579,12 @@ def create_app(
     # ── routines (MVP2) — a scheduled routine compiles to a schedule.v1 cron job whose body is a
     #    unit.v1 dispatch POSTed back to /invocations when due (the runtime owns the durable cron) ──
     @app.post("/api/routines", status_code=201)
-    def create_routine(body: RoutineCreate):
+    def create_routine(body: RoutineCreate, request: Request):
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         try:
             routine = routines_mod.make_routine(
-                subject=body.subject, name=body.name, cron=body.cron, prompt=body.prompt,
+                subject=subject_of(request), name=body.name, cron=body.cron, prompt=body.prompt,
             )
             job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url)
         except (ValueError, ValidationError) as e:  # bad cron form / non-conformant routine — fail loud
@@ -562,20 +601,21 @@ def create_app(
         return {"routine": routine, "job_id": job.get("job_id"), "ran_now": ran_now}
 
     @app.get("/api/routines")
-    def list_routines(subject: str):
+    def list_routines(request: Request):
         if scheduler is None:
             return {"routines": []}
         cards = workspace_routines_mod.routine_cards_for_subject(
-            subject,
+            subject_of(request),
             jobs=scheduler.list_jobs(limit=1000),
             workspaces_dir=wsr.root,
         )
         return {"routines": cards}
 
     @app.patch("/api/routines/{name}/enabled")
-    def set_routine_enabled(name: str, subject: str, body: RoutineEnabledPatch):
+    def set_routine_enabled(name: str, body: RoutineEnabledPatch, request: Request):
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
+        subject = subject_of(request)
         try:
             workspace_routines_mod.set_routine_file_enabled(
                 subject,
@@ -601,9 +641,10 @@ def create_app(
         }
 
     @app.delete("/api/routines/{routine_id}")
-    def delete_routine(routine_id: str, subject: str):
+    def delete_routine(routine_id: str, request: Request):
         if scheduler is None:
             raise HTTPException(status_code=501, detail="scheduler not wired")
+        subject = subject_of(request)
         for job in scheduler.list_jobs():
             meta = job.get("metadata") or {}
             if meta.get("routine_id") == routine_id and meta.get("owner") == subject:
@@ -626,13 +667,14 @@ def create_app(
         return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
     @app.get("/api/workspace/tree")
-    def ws_tree(subject: str, hidden: bool = False):
-        return {"files": wsr.tree(subject, hidden=hidden)}
+    def ws_tree(request: Request, hidden: bool = False):
+        return {"files": wsr.tree(subject_of(request), hidden=hidden)}
 
     @app.post("/api/workspace/upload")
-    async def ws_upload(subject: str = Form(...), files: list[UploadFile] = File(...)):
+    async def ws_upload(request: Request, files: list[UploadFile] = File(...)):
         if not files:
             raise HTTPException(status_code=400, detail="no files uploaded")
+        subject = subject_of(request)
         try:
             ws = wsr.workspace_dir(subject)
         except ValueError:
@@ -661,7 +703,8 @@ def create_app(
         return {"files": uploaded}
 
     @app.get("/api/workspace/file")
-    def ws_file(subject: str, path: str):
+    def ws_file(request: Request, path: str):
+        subject = subject_of(request)
         try:
             content = wsr.read(subject, path)
         except ValueError:
@@ -671,20 +714,29 @@ def create_app(
         return {"path": path, "content": content}
 
     @app.get("/api/workspace/git")
-    def ws_git(subject: str):
+    def ws_git(request: Request):
         """Real source-control state (branch · working changes · recent commits) of the workspace."""
         try:
-            return wsr.git_state(subject)
+            return wsr.git_state(subject_of(request))
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
 
     @app.get("/api/meeting/stream")
-    def meeting_stream(meeting_id: str, session_uid: str):
+    def meeting_stream(meeting_id: str, session_uid: str, request: Request):
         """SSE feed for a LIVE meeting — merges the transcript Stream (`tc:meeting:{id}`) and the
         copilot's output Stream (`unit:agent-meet-{sid}:out`) into one feed the terminal renders:
-        transcript lines + proactive `card`s + the agent working (`message-delta`/`tool-call`)."""
+        transcript lines + proactive `card`s + the agent working (`message-delta`/`tool-call`).
+
+        RESUMABLE: every event carries an SSE ``id:`` = the per-stream redis cursors. On reconnect the
+        browser echoes the last one as ``Last-Event-ID``; we resume EXACTLY from there (redis streams are
+        durable + id-addressable) instead of re-seeding only the last N entries. Without this, a transient
+        disconnect (the 'Live stream disconnected — reconnecting' path) dropped every segment published in
+        the gap beyond the bounded replay window from the LIVE view — the real-time transcript-loss bug
+        (the durable store kept them, so they only reappeared post-time)."""
         if not redis_url:
             raise HTTPException(status_code=501, detail="redis not wired")
+
+        resume_t, resume_o = _decode_sse_cursor(request.headers.get("last-event-id"))
 
         def gen():
             import redis
@@ -692,43 +744,51 @@ def create_app(
             r = redis.from_url(redis_url, decode_responses=True)
             tkey = f"tc:meeting:{meeting_id}"
             okey = f"unit:agent-meet-{session_uid}:out"
-            last = {tkey: "$", okey: "$"}
+            # Resume EXACTLY from the client's last-seen cursors when present (gapless reconnect);
+            # otherwise seed a bounded recent tail then live-tail (fresh connect).
+            last = {tkey: resume_t or "$", okey: resume_o or "$"}
             idle = 0
             ending = False  # transcript hit session_end — drain trailing cards before meeting-end
 
-            seed_rows = list(reversed(r.xrevrange(tkey, count=MEETING_STREAM_TRANSCRIPT_REPLAY) or []))
-            for entry_id, fields in seed_rows:
-                last[tkey] = entry_id
-                payload = json.loads(fields.get("payload", "{}"))
-                if payload.get("type") == "session_end":
-                    ending = True
-                    last.pop(tkey, None)
-                    continue
+            def cursor():
+                return _encode_sse_cursor(last, tkey, okey)
+
+            def seg_events(payload):
                 for seg in payload.get("segments", []):
-                    yield {"type": "transcript", "speaker": seg.get("speaker"),
-                           "text": seg.get("text"), "t": seg.get("start"),
-                           "tsMs": seg.get("abs_start_ms"),
-                           "completed": seg.get("completed", True),
-                           "id": seg.get("segment_id")}
-            output_seed_rows = list(reversed(r.xrevrange(okey, count=MEETING_STREAM_OUTPUT_REPLAY) or []))
-            for entry_id, fields in output_seed_rows:
-                last[okey] = entry_id
-                yield json.loads(fields.get("event", "{}"))
+                    yield ({"type": "transcript", "speaker": seg.get("speaker"),
+                            "text": seg.get("text"), "t": seg.get("start"),
+                            "tsMs": seg.get("abs_start_ms"),
+                            "completed": seg.get("completed", True),
+                            "id": seg.get("segment_id")}, cursor())
+
+            if resume_t is None:   # fresh connect → seed the bounded recent transcript tail
+                seed_rows = list(reversed(r.xrevrange(tkey, count=MEETING_STREAM_TRANSCRIPT_REPLAY) or []))
+                for entry_id, fields in seed_rows:
+                    last[tkey] = entry_id
+                    payload = json.loads(fields.get("payload", "{}"))
+                    if payload.get("type") == "session_end":
+                        ending = True
+                        last.pop(tkey, None)
+                        continue
+                    yield from seg_events(payload)
+            if resume_o is None:   # fresh connect → seed the output (cards/notes) replay
+                output_seed_rows = list(reversed(r.xrevrange(okey, count=MEETING_STREAM_OUTPUT_REPLAY) or []))
+                for entry_id, fields in output_seed_rows:
+                    last[okey] = entry_id
+                    yield (json.loads(fields.get("event", "{}")), cursor())
 
             while True:
                 # once the transcript ends, poll ONLY the out-stream (briefly) to flush trailing cards.
-                # The transcript stream is seeded from a bounded recent tail; the output stream replays
-                # from the start so existing cards and notes remain available after a browser reconnect.
                 resp = r.xread(last, count=500, block=1500 if ending else 15000)
                 if not resp:
                     if ending:               # out-stream drained → now it's safe to end
                         live.drop(session_uid)  # leaves the terminal's live-meetings feed
-                        yield {"type": "meeting-end"}
+                        yield ({"type": "meeting-end"}, cursor())
                         return
                     idle += 15000
                     if idle >= 600000:
                         return
-                    yield {"type": "ping"}
+                    yield ({"type": "ping"}, cursor())
                     continue
                 idle = 0
                 for stream, entries in resp:
@@ -740,14 +800,9 @@ def create_app(
                                 ending = True            # don't end yet — finish draining the out-stream
                                 last.pop(tkey, None)     # session_end is the last transcript entry
                                 break
-                            for seg in payload.get("segments", []):
-                                yield {"type": "transcript", "speaker": seg.get("speaker"),
-                                       "text": seg.get("text"), "t": seg.get("start"),
-                                       "tsMs": seg.get("abs_start_ms"),
-                                       "completed": seg.get("completed", True),
-                                       "id": seg.get("segment_id")}
+                            yield from seg_events(payload)
                         else:
-                            yield json.loads(fields.get("event", "{}"))
+                            yield (json.loads(fields.get("event", "{}")), cursor())
 
         return StreamingResponse(
             _sse(gen()), media_type="text/event-stream",

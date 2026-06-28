@@ -19,3 +19,5 @@ deploy/execution-targets.json
 # generated architecture perspectives (regenerate: pnpm arch:viz) — keep the README, ignore the SVGs
 docs/views/*
 !docs/views/README.md
+# the concise DSL projection IS committed — it's the always-in-context LLM index (gate:dataflow keeps it current)
+!docs/views/architecture.dsl

@@ -249,10 +249,17 @@ def _relay_message(r, keymap: dict, base: dict, data: dict) -> None:
     the arm thread's frozen ``keymap``; a delta whose meeting isn't keyed yet is skipped (the arm thread's
     store-seed back-fills it). Confirmed AND pending are both fanned — the collector already deduped, so
     every segment it sends is relayed faithfully (no drop), keyed by its own unique ``segment_id``."""
-    numeric = str((data.get("meeting") or {}).get("id") or "")
-    native = keymap.get(numeric)
+    meeting = data.get("meeting") or {}
+    numeric = str(meeting.get("id") or "")
+    # Prefer the native id the collector STAMPED on the payload — it owns the meetings table and is not
+    # user-scoped, so it resolves cross-user where the keymap (built off the user-scoped /meetings list)
+    # cannot. Fall back to the frozen keymap for older payloads that don't carry it.
+    native = meeting.get("native_id") or keymap.get(numeric)
     if not native:
         return
+    # Cache the cross-user mapping so the arm thread's copilot keying converges on the native id too.
+    if numeric and meeting.get("native_id"):
+        keymap.setdefault(numeric, native)
     out_stream = f"tc:meeting:{native}"
     for seg in (data.get("confirmed") or []):
         _fan_segment(r, out_stream, native, base, seg)
@@ -344,7 +351,9 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, keymap, first_seen,
     # no processing; the RAW transcript still flows through the relay/seed above. The initial full-history
     # backfill is dispatched by the endpoint; here we just keep it alive while processing stays on.
     now = time.monotonic()
-    if r.get(f"proc:meeting:{key}") and now - last_arm.get(key, 0.0) > REARM_SEC:
+    # The opt-in flag is ``proc:meeting:{key}:on`` — a DISTINCT key from the processed-notes stream
+    # ``proc:meeting:{key}`` (a GET on that stream raises WRONGTYPE and would crash this arm loop).
+    if r.get(f"proc:meeting:{key}:on") and now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
         _arm(dispatcher, subject, key, platform, transcript_start_id=transcript_start_id)
 

@@ -69,7 +69,9 @@ async def test_ingest_publishes_mutable_on_gateway_channel(store, bus):
     payload = json.loads(raw)
     # the bot's live-path shape the dashboard consumes
     assert payload["type"] == "transcript"
-    assert payload["meeting"] == {"id": 1}
+    # meeting carries the NATIVE id (+ platform) the collector resolved, so the agent-api live relay can
+    # re-key numeric→native WITHOUT a user-scoped lookup (the no-live-transcripts cross-user fix).
+    assert payload["meeting"] == {"id": 1, "native_id": "abc-defg-hij", "platform": "google_meet"}
     assert payload["speaker"] == "Alice"
     assert len(payload["confirmed"]) == 1 and payload["pending"] == []
 
