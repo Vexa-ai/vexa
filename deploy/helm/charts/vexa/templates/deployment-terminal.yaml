@@ -42,9 +42,11 @@ spec:
               value: "3000"
             - name: HOST
               value: "0.0.0.0"
-            # WS proxy upstream (/ws → gateway) and REST/login upstreams — in-cluster service DNS.
+            # Gateway base URL — HTTP scheme: the REST proxy ([...path]/route.ts) fetches it as http,
+            # and server.mjs converts it to ws:// itself for the /ws upgrade. Setting ws:// here breaks
+            # the REST proxy (fetch can't speak ws → 502).
             - name: GATEWAY_URL
-              value: "ws://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
             - name: AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             - name: VEXA_ADMIN_API_URL

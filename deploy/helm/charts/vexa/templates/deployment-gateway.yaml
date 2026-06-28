@@ -40,6 +40,10 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
             - name: MEETING_API_URL
               value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
+            # The agent control plane fronted under /api/* (P20 Stage 2). Default is http://agent-api:8100
+            # (the compose service name); helm's service name differs, so set it explicitly.
+            - name: AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: INTERNAL_API_SECRET

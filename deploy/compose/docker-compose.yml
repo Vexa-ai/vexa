@@ -334,7 +334,9 @@ services:
       - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"
     environment:
       - NODE_ENV=production
-      - GATEWAY_URL=ws://gateway:8000
+      # HTTP scheme: the terminal's REST proxy fetches GATEWAY_URL as http; server.mjs converts it to
+      # ws:// itself for the /ws upgrade. ws:// here would break the REST proxy (502 fetch failed).
+      - GATEWAY_URL=http://gateway:8000
       - AGENT_API_URL=http://agent-api:8100
       - VEXA_ADMIN_API_URL=http://admin-api:8001
       - VEXA_API_URL=http://gateway:8000
