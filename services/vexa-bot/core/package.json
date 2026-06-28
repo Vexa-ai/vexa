@@ -26,6 +26,7 @@
     "@vexa/gmeet-pipeline": "file:../../../modules/gmeet/pipeline",
     "@vexa/mixed-pipeline": "file:../../../modules/mixed/pipeline",
     "@vexa/transcribe-whisper": "file:../../../modules/shared/whisper",
+    "@vexa/transcribe-buffer": "file:../../../modules/shared/buffer",
     "@vexa/join": "file:../../../modules/join",
     "@vexa/remote-browser": "file:../../../modules/remote-browser",
     "@vexa/recorder": "file:../../../modules/recorder",
