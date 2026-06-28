@@ -68,7 +68,7 @@ LLM/turn). Where an LLM reply is inherently non-deterministic, assert the *plumb
 | **CP2** | collector single-writer → native transcript feed (D7) | meetings | numeric segments → exact native-keyed, time-anchored entries |
 | **CP3** | `proc:on` → watcher arms → worker reads from `:cursor` | agent | flag + 3-seg stream + cursor → dispatch with right `transcript_start_id`; cursor advances |
 | **CP4** | `serve_meeting`: segments → gate → stub `card_turn` → notes/cards + doc | agent | 3 segs (speaker change) → exact cards/notes/doc |
-| **CP5** | gateway composes transcript feed + card feed → one client stream | gateway | canned transcript + cards → merged ordered stream, gapless resume |
+| **CP5** | live view = transcript feed + card feed → one client stream, gapless resume by a dual-stream cursor | agent-api SSE today (reader-composes); gateway-composed eventually | canned transcript + cards → merged ordered stream, gapless resume | `_encode/_decode_sse_cursor` + `test_meeting_stream` (`test_api.py`) |
 | **CP6** | chat `active={meeting}` → meeting-scoped tool grant → agent calls `/transcripts` | agent↔meetings (contract) | chat body → dispatch context+tool+scoped token; MCP targets `/transcripts/{platform}/{native}` |
 | **CP7** | status change → `u:{user}:meetings` → gateway fan-in → client | meetings | one status change → exact user-channel frame |
 | **CP8** | cookbook "agent-on-meeting" = `POST /bots` + `POST /api/meeting/process` | wiring | meeting input → both calls (right args) + combined state + partial-failure surfaced |
@@ -82,3 +82,18 @@ extract once both exist:
   combined state; lives above the domains.
 - **Per-turn scoped tool grant** — attach a tool only when context warrants, scope a short-lived token to
   the exact resource, authorize at the edge.
+
+## 6. Deferred (seam wired, implementation follows — P16)
+
+These are intentionally staged: the contract/seam is in place and tested; the runtime piece follows.
+- **The meeting-read MCP server** (cookbook #1) — the `tool.v1` descriptor, the dispatch grant, the scoped
+  token mint, and `VEXA_MEETING_NATIVE_ID/PLATFORM` env are wired (CP6). The live MCP server binary that
+  calls `/transcripts`, the `VEXA_MEETING_TOKEN` export, and meeting-api's verification of a
+  meeting-scoped token are the remaining implementation.
+- **Gateway-composed live view** (CP5) — today agent-api's SSE *reads* the meetings-owned transcript
+  carrier and *composes* it with the agent's cards (a reader composing — no P23 violation). Relocating that
+  compose to the gateway (transcript from meetings, cards from agent) is a user-invisible follow-up; the
+  merge + gapless cursor are already pinned by the CP5 tests.
+- **Cookbook home** — the two concrete entries (#1 tool-authorization, #2 composition) exist; where the
+  cookbook layer *permanently* lives (gateway vs a thin orchestration surface) is decided from these real
+  instances, not up front.
