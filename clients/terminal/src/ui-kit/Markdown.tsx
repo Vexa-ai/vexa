@@ -6,6 +6,13 @@
  *  GFM pipe tables, paragraphs and line breaks. Intentionally a small subset — robust,
  *  not spec-complete. */
 import { Fragment, type ReactNode } from "react";
+import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+
+// An entity-doc path (e.g. kg/entities/person/dmitry-grankin.md) → clickable to open the doc.
+const ENTITY_PATH = /^[\w./-]*kg\/entities\/[\w./-]+\.md$/;
+function openEntity(detail: { path?: string; wikilink?: string }): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail }));
+}
 
 // ── inline span parsing: code, bold, italic, links, wikilinks ──────────────────────
 // Order matters — `code` is tokenized first so emphasis markers inside it are left literal.
@@ -15,9 +22,12 @@ function inline(text: string): ReactNode[] {
   const codeParts = text.split(/(`[^`]+`)/g);
   codeParts.forEach((seg, ci) => {
     if (seg.startsWith("`") && seg.endsWith("`") && seg.length >= 2) {
+      const code = seg.slice(1, -1);
+      const isPath = ENTITY_PATH.test(code);
       out.push(
-        <code key={`c${ci}`} style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--t1)" }}>
-          {seg.slice(1, -1)}
+        <code key={`c${ci}`} onClick={isPath ? () => openEntity({ path: code }) : undefined}
+          style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: isPath ? "var(--blue)" : "var(--t1)", cursor: isPath ? "pointer" : undefined }}>
+          {code}
         </code>,
       );
     } else {
@@ -37,8 +47,8 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
     if (m.index > last) out.push(<Fragment key={`${key}-t${i}`}>{text.slice(last, m.index)}</Fragment>);
     const tok = m[0];
     if (m[1]) {
-      // [[wikilink]]
-      out.push(<span key={`${key}-w${i}`} style={{ color: "var(--blue)" }}>{tok}</span>);
+      // [[wikilink]] — clickable: resolve the title to its entity doc
+      out.push(<span key={`${key}-w${i}`} onClick={() => openEntity({ wikilink: tok.slice(2, -2) })} style={{ color: "var(--blue)", cursor: "pointer" }}>{tok}</span>);
     } else if (m[2]) {
       // [text](url)
       const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;

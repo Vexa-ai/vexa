@@ -65,3 +65,28 @@ it's on bbb), `gate:licenses` (pre-existing `geist`/`lightningcss` classificatio
 matter here — `schema`, `contract-version`, `isolation`, `graph`, `python`, `node` — are green. I clean
 up the README dirs I introduce, then push with `git push --no-verify` (the bypass the hook itself
 documents) to sync the branch to bbb. The full stack-aware gate run happens on bbb.
+
+## D6 — onboarding + workspace UX hardening
+A pass to make the first-run + workspace experience real (no mocks, no dead UI):
+
+- **No mock data in the live path.** Deleted `surfaces/mock.ts`, `canvas/mockSource.ts`, and the dead
+  `canvas/EvalPanel.tsx` — the meeting fixtures were rendering for *every* user. Real types moved to
+  `surfaces/meetingModel.ts`; `useMeeting` is live-only (empty state when nothing is bound). The seed's
+  demo `hello-workspace` skill was removed.
+- **Cached, instant onboarding.** A new user is gated on a **durable per-user flag**
+  (`onboardingState.ts`, keyed by email) — fires once, survives reloads. The gate seeds a **canned
+  greeting** instantly (no slow LLM round-trip); the user's first reply silently carries the
+  discovery-loop grounding (`onboarding.md`). The kickoff turn is hidden (live + restored history) and
+  kept out of the session title.
+- **Chat-only (Sessions) mode.** The Sessions view is left-sidebar + chat (no center canvas); the freed
+  space goes to the **chat** (`[20,80]`), and new users land here. Meetings/Files/Knowledge reveal the
+  full 3-pane shell.
+- **Knowledge view.** Renamed Files→Knowledge; defaults to **only `kg/`**, with the rest of the
+  workspace scaffold behind the eye toggle (never requests dotfiles, so no `tree?hidden=1` 500).
+- **Clickable entity links** in chat + the entity menu: `[[wikilinks]]`/`kg/entities/*.md` open the doc
+  (resolve by path or name, reveal the center). Removed the dead "Add to brief"; "Research" now runs in
+  the visible chat.
+- **Logout wipes all client state** (dock layout/tabs, chat focus, onboarding flags) so a new user never
+  inherits the previous one's tabs.
+- **Meeting-grounded chat** answers from the notes file via the Read tool instead of the unwired P5
+  `meeting.read_transcript` tool (which hung the worker and emitted nothing).

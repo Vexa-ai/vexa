@@ -12,7 +12,7 @@ import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
 import { useLiveMeetings } from "./liveMeetings";
 import { type MeetingMock } from "./meetingModel";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK } from "../canvas/actions";
+import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string): Op {
@@ -175,6 +175,11 @@ function meetingTokenFromTitle(title: string): ReferenceToken {
 
 function compactStoredUserText(text: string): string {
   const raw = text.trim();
+  // An onboarding first reply is stored as `<grounding>[reply]<user text>` — show only the user's text.
+  if (raw.includes(ONBOARDING_KICKOFF_MARK)) {
+    const i = raw.indexOf(ONBOARDING_REPLY_SEP);
+    if (i >= 0) return raw.slice(i + ONBOARDING_REPLY_SEP.length).trim();
+  }
   const legacyCopilot = raw.match(/^You are the copilot for a live meeting \("([^"]+)"\)\. The meeting transcript so far:[\s\S]*?\n?---\s*([\s\S]*)$/);
   if (legacyCopilot) {
     return appendReferenceToken(legacyCopilot[2], meetingTokenFromTitle(legacyCopilot[1]));
@@ -398,11 +403,8 @@ function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock |
   const notesPath = `kg/entities/meeting/${native}.md`;
   return [
     `Active meeting reference: @meeting:${native}`,
-    `Platform: ${platform}`,
-    `Native id: ${native}`,
     `Notes workspace path: ${notesPath}`,
-    `Transcript API path: /api/transcripts/${platform}/${native}`,
-    "Instruction: use the notes path first; fetch the transcript only if the answer needs exact meeting evidence. Do not paste the full transcript into the chat.",
+    `Instruction: answer from the meeting notes — Read ${notesPath} with your Read tool. If it doesn't exist yet, say the meeting hasn't been processed yet. Do not paste the full notes into the chat.`,
   ].join("\n");
 }
 
@@ -534,9 +536,9 @@ export function Chat({ params = {} }: ChatProps) {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
         const data: { turns?: HistoryTurn[] } = await r.json();
         const loaded: Turn[] = (data.turns ?? [])
-          // Drop the onboarding kickoff (a system turn carrying the invisible mark) — it's persisted
-          // server-side but must never render, on first load or after a reload.
-          .filter((t) => !(t.role === "user" && t.text.includes(ONBOARDING_KICKOFF_MARK)))
+          // Drop a PURE onboarding kickoff (legacy: marker with no user reply). A grounding-wrapped reply
+          // (marker + grounding + reply) is KEPT and compacted to just the reply by compactStoredUserText.
+          .filter((t) => !(t.role === "user" && t.text.includes(ONBOARDING_KICKOFF_MARK) && !t.text.includes(ONBOARDING_REPLY_SEP)))
           .map((t, i) =>
             t.role === "user"
               ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
@@ -632,7 +634,10 @@ export function Chat({ params = {} }: ChatProps) {
     }));
     try {
       const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
-      const active = ground && contextRef ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
+      // Meeting questions ground on the notes path injected into the prompt (the agent's Read tool), NOT
+      // the server `meeting.read_transcript` tool — that P5 HTTP tool isn't wired and the agent hangs on it
+      // (a meeting-focused turn ran 134s and emitted nothing). Files still pass `active` (harmless, no tool).
+      const active = ground && contextRef && contextRef.kind !== "meeting" ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
       const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, session: sessionForSend, active }), signal: ctrl.signal });
       if (!r.ok) throw new Error(`Chat request failed (${r.status})`);
       const reader = r.body?.getReader();
@@ -701,6 +706,24 @@ export function Chat({ params = {} }: ChatProps) {
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
   }, [layout]);
 
+  // Onboarding seeds a CACHED greeting (instant, no LLM) and arms the chat — the user's next reply carries
+  // the discovery-loop grounding (applied in onSubmit), so the agent starts researching from one answer.
+  const onboardingArmedRef = useRef(false);
+  useEffect(() => {
+    const onSeed = () => {
+      if (layout.store.getState().rightCollapsed) layout.toggleRight();
+      const key = chatKey;
+      updateChatState(key, (s) => (
+        s.turns.length
+          ? { ...s, loaded: true, loading: false }
+          : { ...s, turns: [{ id: "onb-greeting", role: "agent", text: ONBOARDING_GREETING, ops: [] }], nextId: Math.max(s.nextId, 1), loaded: true, loading: false }
+      ));
+      onboardingArmedRef.current = true;
+    };
+    window.addEventListener(ONBOARDING_SEED_EVENT, onSeed);
+    return () => window.removeEventListener(ONBOARDING_SEED_EVENT, onSeed);
+  }, [layout, chatKey]);
+
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
   const selectSession = (id: string) => { layout.setActiveSession(id); focusInput(); };
   const newChat = () => selectSession(`chat-${Date.now().toString(36)}`);
@@ -730,6 +753,12 @@ export function Chat({ params = {} }: ChatProps) {
       referenceSource = [v, uploaded.map((f) => `@file:${f.path}`).join("\n")].filter(Boolean).join("\n");
       displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
       clearAttachments();
+    }
+    // First onboarding reply: prepend the (hidden) discovery-loop grounding so the agent researches from
+    // this one answer. compactStoredUserText strips it back off on reload; the user only ever sees `displayText`.
+    if (onboardingArmedRef.current && !hasAttachments) {
+      onboardingArmedRef.current = false;
+      prompt = ONBOARDING_GROUNDING + ONBOARDING_REPLY_SEP + prompt;
     }
     void send(displayText, prompt, referenceSource);
     setValue("");

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { CanvasActionsProvider, useActions } from "./actions";
+import { CanvasActionsProvider, useActions, OPEN_ENTITY_EVENT } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
 import { useMeetingNotes } from "./notes";
@@ -26,8 +26,8 @@ function signalKind(raw: string | undefined): string {
   return k || "signal";
 }
 
-/** PROCESSED v2 = the cleaned mirror with INLINE entity highlights (clickable → research / open doc /
- *  add to brief) and actionable copilot SIGNAL badges, all through the SAME engine. */
+/** PROCESSED v2 = the cleaned mirror with INLINE entity highlights (clickable → research / open entity
+ *  doc) and actionable copilot SIGNAL badges, all through the SAME engine. */
 function ProcessedTranscript() {
   const notes = useMeetingNotes();
   const entityItems = useEntities();
@@ -48,9 +48,10 @@ function ProcessedTranscript() {
   const signals: EngineSignal[] = signalItems.map((s) => ({ id: s.id, kind: signalKind(s.context), label: s.name }));
 
   const engineActions: EngineActions = {
-    research: (e) => actions.research({ name: e.name, kind: e.kind }),
-    openEntityDoc: (e) => { if (e.docPath) actions.openDoc(e.docPath); },
-    addToBrief: (e) => actions.note(`Add to brief: ${e.kind} — ${e.name}`),
+    // Research in the VISIBLE chat (so the user sees it), not a hidden fire-and-forget session.
+    research: (e) => actions.ask(`Research the ${e.kind} "${e.name}" using the web and my knowledge graph. Write or update its entity doc and commit, then summarize what you found.`),
+    // Open the entity's doc — by its path if known, else resolve by name; reveals the center if needed.
+    openEntityDoc: (e) => { if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: e.docPath, wikilink: e.name } })); },
     onSignal: (sig) => actions.ask(`Create a task / fact-check this ${sig.kind}: ${sig.label}`),
   };
 

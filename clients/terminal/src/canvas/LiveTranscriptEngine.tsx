@@ -7,7 +7,7 @@
  *  picks the source, not the engine.
  *
  *  PROCESSED v2 rendering: when `entities` is supplied, entity mentions are highlighted INLINE (colored
- *  by kind, clickable → Research · Open doc · Add to brief) and copilot `signals` render as small
+ *  by kind, clickable → Research · Open entity doc) and copilot `signals` render as small
  *  actionable badges under the relevant block. RAW mode passes neither, so it stays plain text. */
 
 import { useEffect, useRef, useState } from "react";
@@ -21,7 +21,6 @@ export interface EngineSegment { speaker?: string; text: string; tsMs?: number; 
 export interface EngineActions {
   research?(entity: { id?: string; name: string; kind: string }): void;
   openEntityDoc?(entity: { id?: string; name: string; kind: string; docPath?: string }): void;
-  addToBrief?(entity: { id?: string; name: string; kind: string }): void;
   onSignal?(signal: EngineSignal): void;
 }
 
@@ -79,7 +78,6 @@ function EntityMention({ entity, actions }: { entity: SpanEntity; actions?: Engi
         >
           <button type="button" role="menuitem" onClick={run(actions?.research)} style={menuItemStyle}>Research</button>
           <button type="button" role="menuitem" onClick={run(actions?.openEntityDoc)} style={menuItemStyle}>Open entity doc</button>
-          <button type="button" role="menuitem" onClick={run(actions?.addToBrief)} style={menuItemStyle}>Add to brief</button>
         </span>
       )}
     </span>

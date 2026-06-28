@@ -8,6 +8,7 @@ import { Icon } from "../ui-kit";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by sessionsApi.test.ts.
 import { listSessions, type SessionSummary } from "./sessionsApi";
+import { ONBOARDING_KICKOFF_MARK } from "../canvas/actions";
 export type { SessionSummary } from "./sessionsApi";  // re-exported for the chat surface
 
 const truncateSessionId = (session: string) => session.length > 18 ? `${session.slice(0, 18)}...` : session;
@@ -28,7 +29,13 @@ function compactTitle(title: string): string {
   return raw;
 }
 
-export const sessionTitle = (s: SessionSummary) => s.title?.trim() ? compactTitle(s.title) : truncateSessionId(s.session);
+export const sessionTitle = (s: SessionSummary) => {
+  const title = s.title?.trim();
+  // A session titled by the onboarding kickoff (the first message) must not show the raw prompt — fall
+  // back to the session id (e.g. "main").
+  if (title && !title.includes(ONBOARDING_KICKOFF_MARK)) return compactTitle(title);
+  return truncateSessionId(s.session);
+};
 
 function SessionsList() {
   const layout = useService(LayoutServiceId);

@@ -20,6 +20,10 @@ import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
+import { listWorkspaceTree } from "../surfaces/workspaceApi";
+import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+
+const entitySlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 // ── the dockview panel host: render a tab by its kind, tracking active state ─────
 function TabHost(props: IDockviewPanelProps) {
@@ -129,7 +133,12 @@ function LeftPane() {
       <div style={{ padding: "8px 14px", borderTop: "1px solid var(--line)", fontSize: 11.5, color: "var(--t2)", display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)" }} />Self-hosted · air-gapped
         <button type="button" title="Sign out"
-          onClick={() => { void fetch("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload()); }}
+          onClick={() => { void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+            // Wipe ALL client state on logout (dockview layout/tabs, chat focus, expanded trees, onboarding
+            // flags) so the next user never inherits the previous one's tabs/docs/focus.
+            try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
+            window.location.reload();
+          }); }}
           style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer" }}>
           Sign out
         </button>
@@ -161,6 +170,25 @@ export function Workbench() {
   const commands = useService(CommandServiceId);
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
+  // Clicking an entity link in chat opens its doc. Reveal the center (leave chat-only → Knowledge view),
+  // resolve a [[wikilink]] title to its kg/entities/*.md path, then open the doc tab.
+  useEffect(() => {
+    const onOpenEntity = async (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string; wikilink?: string }>).detail || {};
+      let path = detail.path;
+      if (!path && detail.wikilink) {
+        const slug = entitySlug(detail.wikilink);
+        const tree = await listWorkspaceTree().catch(() => [] as string[]);
+        path = tree.find((p) => p.startsWith("kg/entities/") && p.endsWith(`/${slug}.md`));
+      }
+      if (!path) return;
+      if (layout.store.getState().activeList === "sessions") layout.setActiveList("files");  // reveal the center
+      layout.openTab({ id: `doc:${path}`, title: path.split("/").pop() ?? path, kind: "doc", params: { path } });
+    };
+    window.addEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
+    return () => window.removeEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
+  }, [layout]);
+
   // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
   // service never operates on a disposed grid.
   const apiRef = useRef<DockviewApi | null>(null);
@@ -189,18 +217,26 @@ export function Workbench() {
       </div>
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        <Allotment onChange={persistSizes} defaultSizes={savedSizes() ?? [15, 55, 30]}>
-          <Allotment.Pane visible={!leftCollapsed} minSize={180} preferredSize="15%">
+        {/* chat-only (Sessions) gets its own sizes — the freed center space goes to the CHAT (right), with a
+            narrow left sidebar; full mode keeps the user's saved 3-pane sizes. The `key` re-lays-out on switch. */}
+        <Allotment
+          key={chatOnly ? "chat-only" : "full"}
+          onChange={(s) => { if (!chatOnly) persistSizes(s); }}
+          defaultSizes={chatOnly ? [20, 80] : (savedSizes() ?? [15, 55, 30])}
+        >
+          <Allotment.Pane visible={!leftCollapsed} minSize={180} preferredSize={chatOnly ? "20%" : "15%"}>
             <LeftPane />
           </Allotment.Pane>
-          <Allotment.Pane visible={!chatOnly} minSize={360} preferredSize="55%">
-            <div style={{ height: "100%", position: "relative" }}>
-              <div style={{ position: "absolute", inset: 0 }}>
-                <DockviewReact onReady={onReady} components={dvComponents} tabComponents={dvTabComponents} defaultTabComponent={TabHeader} theme={themeAbyss} />
+          {!chatOnly && (
+            <Allotment.Pane minSize={360} preferredSize="55%">
+              <div style={{ height: "100%", position: "relative" }}>
+                <div style={{ position: "absolute", inset: 0 }}>
+                  <DockviewReact onReady={onReady} components={dvComponents} tabComponents={dvTabComponents} defaultTabComponent={TabHeader} theme={themeAbyss} />
+                </div>
               </div>
-            </div>
-          </Allotment.Pane>
-          <Allotment.Pane visible={chatOnly || !rightCollapsed} minSize={260} preferredSize={chatOnly ? "85%" : "30%"}>
+            </Allotment.Pane>
+          )}
+          <Allotment.Pane visible={chatOnly || !rightCollapsed} minSize={300} preferredSize={chatOnly ? "80%" : "30%"}>
             <RightPane />
           </Allotment.Pane>
         </Allotment>

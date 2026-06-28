@@ -95,16 +95,20 @@ function FilesList() {
   const [tree, setTree] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);  // fail-loud (P18): a tree-load failure is shown, not hidden as "empty"
   const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
-  const [hidden, setHidden] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
+  // Knowledge view defaults to ONLY the knowledge graph (kg/); the eye toggle reveals the rest of the
+  // workspace scaffold (CLAUDE.md, agents/, skills/, views/, …). Default ON = kg-only.
+  const [kgOnly, setKgOnly] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { const a = JSON.parse(readSS(SS_EXPANDED) ?? "null"); return new Set(Array.isArray(a) ? a : []); } catch { return new Set(); }
   });
   useEffect(() => {
-    void listWorkspaceTree({ hidden })
+    // Never request dotfiles (hidden:false) — the `.git`/`.claude` listing 500s; the toggle is a client-side
+    // kg-only vs full-workspace filter, not a dotfile switch.
+    void listWorkspaceTree({ hidden: false })
       .then((t) => { setTree(t); setError(null); })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-  }, [hidden]);
-  const nodes = buildTree(tree);
+  }, []);
+  const nodes = buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree);
   // default expansion: top-level folders open, deeper folders collapsed (only when no saved state yet)
   useEffect(() => {
     if (readSS(SS_EXPANDED) != null || nodes.length === 0) return;
@@ -115,7 +119,7 @@ function FilesList() {
     const next = new Set(prev); next.has(p) ? next.delete(p) : next.add(p);
     writeSS(SS_EXPANDED, JSON.stringify([...next])); return next;
   });
-  const toggleHidden = () => setHidden((v) => { const n = !v; writeSS(SS_HIDDEN, n ? "1" : "0"); return n; });
+  const toggleKgOnly = () => setKgOnly((v) => { const n = !v; writeSS(SS_HIDDEN, n ? "1" : "0"); return n; });
   const openMenu = (e: MouseEvent<HTMLDivElement>, path: string) => {
     e.preventDefault();
     e.stopPropagation();
@@ -124,10 +128,10 @@ function FilesList() {
   return (
     <div style={{ padding: "6px 8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 8px", display: "flex", alignItems: "center", gap: 6 }}>
-        <span>knowledge graph</span>
-        <span onClick={toggleHidden} title={hidden ? "Hide hidden files" : "Show hidden files"}
-          style={{ marginLeft: "auto", display: "flex", cursor: "pointer", color: hidden ? "var(--accent)" : "var(--t3)" }}>
-          <Icon name={hidden ? "eye" : "eyeOff"} size={13} />
+        <span>knowledge</span>
+        <span onClick={toggleKgOnly} title={kgOnly ? "Show all workspace files" : "Show only the knowledge graph"}
+          style={{ marginLeft: "auto", display: "flex", cursor: "pointer", color: kgOnly ? "var(--accent)" : "var(--t3)" }}>
+          <Icon name={kgOnly ? "eye" : "eyeOff"} size={13} />
         </span>
       </div>
       {error && <div role="alert" style={{ margin: "0 8px 8px", fontSize: 12, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 10px" }}>⚠ Couldn’t load the workspace — {error}</div>}
@@ -211,5 +215,5 @@ function DocTab({ params }: TabProps) {
   );
 }
 
-registerList({ id: "files", label: "Files", icon: "panel", order: 30, component: FilesList });
+registerList({ id: "files", label: "Knowledge", icon: "panel", order: 30, component: FilesList });
 registerTab("doc", DocTab);

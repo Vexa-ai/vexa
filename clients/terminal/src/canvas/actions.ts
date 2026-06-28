@@ -57,10 +57,29 @@ function postMeetingTurn(prompt: string, session: string): void {
 
 export const ASK_CHAT_EVENT = "vexa:terminal:ask-chat";
 
-// Invisible marker prefixed to the onboarding kickoff prompt. The agent ignores the zero-width chars,
-// but the chat filters any turn carrying it out of the rendered conversation (live AND restored history)
-// — so the system kickoff is never shown, even after a reload re-fetches the persisted session.
-export const ONBOARDING_KICKOFF_MARK = "\u200B\u200C\u200B";
+// Clicking an entity link in chat (a [[wikilink]] or a kg/entities/*.md path) dispatches this; the
+// workbench resolves it to a file and opens the doc (revealing the center if in chat-only mode).
+export const OPEN_ENTITY_EVENT = "vexa:terminal:open-entity";
+
+// ASCII sentinel prefixed to the onboarding grounding (robust against bundler/linter normalization). The
+// agent ignores the bracketed tag; the chat uses it to recognize an onboarding turn (filter a pure
+// kickoff, compact the grounding off a real reply, keep it out of the session title).
+export const ONBOARDING_KICKOFF_MARK = "[onboarding-kickoff]";
+
+// Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
+// instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
+export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
+export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. To set you up, paste your **LinkedIn** profile text (it's login-walled, so paste the text — not a link). Or just give me your name + company and I'll take it from there.";
+// Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
+export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
+export const ONBOARDING_GROUNDING = ONBOARDING_KICKOFF_MARK + [
+  "Read these workspace files before answering (use the Read tool): onboarding.md",
+  "",
+  "I'm a new user replying to onboarding. Follow the discovery-loop playbook in onboarding.md:",
+  "research my public footprint autonomously and DEEPLY with web search (never bounce back a fact you",
+  "can find online), scaffold my entities, and only ask me about the genuine gaps you can't resolve",
+  "yourself — saying why each matters. Run at least two discovery cycles. My details:",
+].join("\n");
 
 function makeActions(layout?: LayoutService): HarnessActions {
   return {

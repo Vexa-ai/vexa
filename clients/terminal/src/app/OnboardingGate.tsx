@@ -1,26 +1,15 @@
 "use client";
-/** OnboardingGate — sits between auth and the workbench. On first entry it materializes the workspace
- *  (`initWorkspace`, idempotent) and, if it was just SEEDED (a brand-new user) — or `?onboard=1` forces it —
- *  KICKS OFF onboarding IN THE CHAT: one turn that tells the agent to interview the user ONE QUESTION AT A
- *  TIME and scaffold the workspace from the answers. No form — the agent drives, the user answers in chat.
- *  An existing workspace falls straight through to the workbench. */
+/** OnboardingGate — sits between auth and the workbench. On a brand-new user (durable per-user flag) it
+ *  materializes the workspace (`initWorkspace`, idempotent) and SEEDS a cached onboarding greeting into the
+ *  chat — instantly, with no slow LLM round-trip — then arms the chat so the user's first reply carries the
+ *  discovery-loop grounding. An already-onboarded user falls straight through to the workbench. */
 import { useEffect } from "react";
 import { initWorkspace } from "../surfaces/workspaceApi";
-import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK } from "../canvas/actions";
+import { ONBOARDING_SEED_EVENT } from "../canvas/actions";
 import { isOnboarded, setOnboarded } from "./onboardingState";
 
-const KICKOFF = ONBOARDING_KICKOFF_MARK + [
-  "Read these workspace files before answering (use the Read tool): onboarding.md",
-  "",
-  "Onboard me by following the discovery-loop playbook in onboarding.md. First, in one or two sentences,",
-  "tell me what you're building and why. Then ask only for the minimum seed you need to start (my name +",
-  "LinkedIn or company). After that, RESEARCH autonomously and deeply with web search before asking me",
-  "anything else — never bounce back a fact you can find online, and run at least two discovery cycles,",
-  "only asking me about the genuine gaps you can't resolve yourself (and say why each one matters).",
-].join("\n");
-
 // Module-scoped so the bootstrap runs EXACTLY ONCE per page load — React StrictMode (dev) double-invokes
-// effects, which otherwise fires `init` twice (the 2nd races the seed → 500) and drops the kickoff.
+// effects, which otherwise fires `init` twice (the 2nd races the seed → 500).
 let bootstrapped = false;
 
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
@@ -37,10 +26,8 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
       await initWorkspace().catch(() => null);   // ensure the workspace exists (idempotent)
       setOnboarded(uid, true);                   // flip the durable bool BEFORE firing → a reload never re-runs it
       if (window.location.search) window.history.replaceState({}, "", window.location.pathname);
-      // Let the chat surface mount + register its ASK listener, then fire the kickoff into it.
-      window.setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
-        detail: { prompt: KICKOFF, hidden: true, ground: false },   // system kickoff: no user bubble, no meeting context
-      })), 600);
+      // Let the chat surface mount + register its listener, then seed the cached greeting into it.
+      window.setTimeout(() => window.dispatchEvent(new CustomEvent(ONBOARDING_SEED_EVENT)), 600);
     })();
   }, []);
 
