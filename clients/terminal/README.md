@@ -17,9 +17,9 @@ same-origin server runtime (SSE relay, no CORS).
 | calls | agent-api | `GET /api/sessions?subject=` | a subject's chat-session list (resume) |
 | calls | agent-api | `GET/POST /api/routines`, `DELETE /api/routines/{id}` | list / create / delete a `routine.v1` cron job |
 | produces | agent-api | `POST /api/events` (→ `${AGENT_API}/events`) | an `event.v1` Event → a `unit.v1` Invocation → Dispatcher |
-| calls | agent-api | `GET /api/meetings/live` (polled 4s) | live-meeting registry, mapped to meeting surface entries |
+| calls | meeting-api (via gateway) | `GET /meetings` + `WS /ws` (`u:{user}:meetings`) | the user's meetings (live + past); live status deltas over the socket (no poll) |
 | calls | agent-api | `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE, `EventSource`) | live transcript + copilot output wire |
-| calls | agent-api | `POST /api/meeting/bot`, `POST /api/meeting/stop` | launch / stop a self-hosted meeting bot |
+| calls | meeting-api (via gateway) | `POST /bots`, `DELETE /bots/{platform}/{native}` | launch / stop a self-hosted meeting bot |
 | calls | agent-api | `GET /api/workspace/{tree,file,git}?subject=` (git polled 5s) | workspace tree, file content, the agent's real git state |
 | consumes | browser | dockview workbench + surfaces registry (`src/surfaces/index.tsx`) | LEFT lists, CENTER tab-kinds, RIGHT context-kinds, `/`-skill commands |
 
@@ -48,7 +48,7 @@ pnpm dev                        # next dev -p 3003 — drive surfaces against a 
 - ✅ delivered — `/api/chat` SSE proxy + resumable chat sessions (`/api/sessions`)
 - ✅ delivered — routines board over `/api/routines` CRUD
 - ✅ delivered — workspace files + docs viewer + git source-control panel (5s poll)
-- ✅ delivered — live meeting surface: `/api/meetings/live` poll (4s) + `/api/meeting/stream` SSE + bot start/stop
+- ✅ delivered — live meeting surface: `/meetings` + `/ws` status (no poll) + `/api/meeting/stream` SSE + bot start/stop via `/bots`
 - ✅ delivered — generic event ingress proxy (`/api/events` → `event.v1`)
 - 🟡 partial — hardcoded `subject` per surface (`u_jane` / `u_live`), no real identity
 - ⬜ planned — login (Google + dev type-any-email, mirroring `clients/dashboard`) → drop the hardcoded subject

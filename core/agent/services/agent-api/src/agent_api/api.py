@@ -213,23 +213,6 @@ class MeetingStart(BaseModel):
     title: Optional[str] = None
 
 
-class MeetingBot(BaseModel):
-    """Send OUR self-hosted bot into a meeting from its URL — the terminal's 'add bot' box POSTs this;
-    agent-api forwards it to the gateway's POST /bots, and the transcription watcher then auto-attaches
-    the copilot once the bot starts transcribing (no per-meeting wiring)."""
-    model_config = {"extra": "forbid"}
-    url: str
-    bot_name: str = "Vexa EI"
-    language: str = "en"
-
-
-class MeetingStop(BaseModel):
-    """Remove our bot from a meeting — forwarded to the gateway's DELETE /bots/{platform}/{native_id}."""
-    model_config = {"extra": "forbid"}
-    native_id: str
-    platform: str = "google_meet"
-
-
 class MeetingProcess(BaseModel):
     """Toggle copilot PROCESSING for a meeting. on=false → no processing (raw transcript only);
     on=true → process the meeting (full-history backfill the first time, else resume live)."""
@@ -369,66 +352,6 @@ def create_app(
         live.add(meeting)
         return meeting
 
-    @app.get("/api/meetings/live")
-    def meetings_live():
-        """The active meeting copilots — the terminal's live-meetings feed."""
-        return {"meetings": live.list()}
-
-    @app.post("/api/meeting/bot", status_code=202)
-    def meeting_bot(body: MeetingBot):
-        """Send our self-hosted bot into the meeting at ``url`` (forwarded to the gateway's POST /bots).
-        The transcription watcher then sees the bot's transcript and attaches the copilot automatically."""
-        import os
-        import re
-        import urllib.error
-        import urllib.request
-
-        mt = re.search(r"meet\.google\.com/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})", body.url)
-        if not mt:
-            raise HTTPException(status_code=400, detail=f"not a Google Meet URL: {body.url!r}")
-        native_id = mt.group(1)
-        key = os.environ.get("VEXA_BOT_API_KEY", "")
-        if not key:
-            raise HTTPException(status_code=501, detail="bot launch not configured (VEXA_BOT_API_KEY unset)")
-        gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
-        req = urllib.request.Request(
-            gw + "/bots",
-            data=json.dumps({"platform": "google_meet", "native_meeting_id": native_id,
-                             "bot_name": body.bot_name, "language": body.language}).encode(),
-            method="POST", headers={"Content-Type": "application/json", "X-API-Key": key},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                res = json.loads(r.read().decode() or "{}")
-        except urllib.error.HTTPError as e:
-            raise HTTPException(status_code=e.code, detail=f"bot launch failed: {e.read().decode()[:200]}")
-        return {"platform": "google_meet", "native_id": native_id,
-                "meeting_id": res.get("id"), "status": res.get("status")}
-
-    @app.post("/api/meeting/stop", status_code=202)
-    def meeting_stop(body: MeetingStop):
-        """Remove our bot from the meeting (gateway DELETE /bots/{platform}/{native_id}) and mark the
-        meeting stopped in the feed so the terminal can offer to send the bot back."""
-        import os
-        import urllib.error
-        import urllib.request
-
-        key = os.environ.get("VEXA_BOT_API_KEY", "")
-        if not key:
-            raise HTTPException(status_code=501, detail="bot control not configured (VEXA_BOT_API_KEY unset)")
-        gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
-        req = urllib.request.Request(
-            f"{gw}/bots/{body.platform}/{body.native_id}", method="DELETE", headers={"X-API-Key": key},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=20):
-                pass
-        except urllib.error.HTTPError as e:
-            if e.code != 404:  # 404 = already no active bot — still mark it stopped locally
-                raise HTTPException(status_code=e.code, detail=f"stop failed: {e.read().decode()[:200]}")
-        live.stop(body.native_id)
-        return {"native_id": body.native_id, "stopped": True}
-
     @app.post("/api/meeting/process", status_code=202)
     def meeting_process(body: MeetingProcess, request: Request):
         """User-controlled copilot PROCESSING for a meeting. Processing is OPT-IN: the transcription
@@ -472,55 +395,6 @@ def create_app(
         )
         dispatcher.dispatch(inv)
         return {"native_id": body.native_id, "processing": True, "resumed_from": start_id}
-
-    @app.get("/api/meetings")
-    def list_meetings():
-        """The terminal's meetings list — live AND past. Proxies meeting-api `GET /meetings` (the user's
-        meetings, all statuses, newest first) and MERGES the live copilot registry so a live meeting
-        carries its copilot `unit_id`; past meetings carry their recording/transcript handles."""
-        import os
-        import urllib.error
-        import urllib.request
-
-        live_by_id = {m["session_uid"]: m for m in live.list()}
-        rows: list[dict] = []
-        seen: set[str] = set()
-        key = os.environ.get("VEXA_BOT_API_KEY", "")
-        if key:
-            gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
-            try:
-                req = urllib.request.Request(gw + "/meetings?limit=50", headers={"X-API-Key": key})
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    data = json.loads(r.read().decode() or "{}")
-                items = data.get("meetings") if isinstance(data, dict) else (data or [])
-                for mt in items or []:
-                    native = mt.get("native_meeting_id") or mt.get("native_id")
-                    if not native or native in seen:
-                        continue
-                    seen.add(native)
-                    copilot = live_by_id.get(native)
-                    db_status = (mt.get("status") or "").lower()
-                    is_live = (copilot and copilot.get("status") == "live") or db_status in ("active", "joining", "requested")
-                    platform = mt.get("platform") or "google_meet"
-                    rows.append({
-                        "native_id": native, "platform": platform,
-                        "title": f"{'Google Meet' if platform == 'google_meet' else platform} · {native}",
-                        "status": "live" if is_live else "past",
-                        "start": mt.get("start_time"), "end": mt.get("end_time"),
-                        "has_recording": bool((mt.get("data") or {}).get("recordings")),
-                        "unit_id": (copilot or {}).get("unit_id"),
-                    })
-            except Exception:  # noqa: BLE001 — the list must still return the live registry if the proxy fails
-                logger.exception("meetings list proxy to meeting-api failed")
-        # live copilots not yet reflected in the DB list (just-started) — keep them visible
-        for m in live.list():
-            if m["session_uid"] not in seen:
-                rows.append({
-                    "native_id": m["session_uid"], "platform": m.get("platform") or "google_meet",
-                    "title": m.get("title"), "status": m.get("status", "live"),
-                    "start": None, "end": None, "has_recording": False, "unit_id": m.get("unit_id"),
-                })
-        return {"meetings": rows}
 
     @app.post("/api/chat")
     def chat(body: ChatBody, request: Request):

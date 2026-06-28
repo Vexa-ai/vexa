@@ -232,7 +232,6 @@ export function actionsFor(m: MeetingMock): RowAction[] {
   const send = (onFailure?: MeetingActionFailureHandler) =>
     runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/bots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: "google_meet", native_meeting_id: native, meeting_url: `https://meet.google.com/${native}`, bot_name: "Vexa" }) }), onFailure);
   // Stop = the gateway-backed user-stop route DELETE /bots/{platform}/{native} (meeting-api lifecycle/stop_router).
-  // (The old POST /api/meeting/stop had no route → fell through the catch-all to agent-api and silently no-op'd.)
   const stop = (onFailure?: MeetingActionFailureHandler) =>
     runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch(`/api/bots/google_meet/${encodeURIComponent(native)}`, { method: "DELETE" }), onFailure);
   const schedule = (onFailure?: MeetingActionFailureHandler) => {
