@@ -108,7 +108,7 @@ def default_registry() -> ProfileRegistry:
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env={},
             ),
-            # Claude Code agent — the in-container worker harness (agent_api.worker): consumes the
+            # Claude Code agent — the in-container worker harness (worker): consumes the
             # dispatch from env, runs the governed turn over the mounted workspace, XADDs UnitEvents to
             # unit:<id>:out, serves unit:<id>:in until idle. Continuity is the session file in the
             # workspace, so a reaped+respawned container resumes instantly.
@@ -116,7 +116,7 @@ def default_registry() -> ProfileRegistry:
                 name="agent",
                 runnable=Runnable(
                     image=agent_worker_image,
-                    command=["python", "-m", "agent_api.worker"],
+                    command=["python", "-m", "worker"],
                 ),
                 idle_timeout_sec=300,
                 max_lifetime_sec=3600,

@@ -153,7 +153,11 @@ function RightPane() {
 export function Workbench() {
   const layout = useService(LayoutServiceId);
   const keybindings = useService(KeybindingServiceId);
-  const { leftCollapsed, rightCollapsed } = useStore(layout.store);
+  const { leftCollapsed, rightCollapsed, activeList } = useStore(layout.store);
+  // CHAT-ONLY mode: the Sessions view is left-sidebar + chat, no center canvas. New users land here
+  // (default list = "sessions") so onboarding is just the conversation; Meetings/Files/Routines reveal
+  // the full 3-pane interface.
+  const chatOnly = activeList === "sessions";
   const commands = useService(CommandServiceId);
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
@@ -165,8 +169,8 @@ export function Workbench() {
   const onReady = (e: DockviewReadyEvent) => {
     apiRef.current = e.api;
     layout.attach(e.api);
-    if (e.api.panels.length === 0) {
-      void commands.execute("meeting.openLive"); // mock: the scheduled live meeting auto-opens as a tab
+    if (e.api.panels.length === 0 && !chatOnly) {
+      void commands.execute("meeting.openLive"); // auto-open the current live meeting as a tab, if any
     }
   };
 
@@ -189,14 +193,14 @@ export function Workbench() {
           <Allotment.Pane visible={!leftCollapsed} minSize={180} preferredSize="15%">
             <LeftPane />
           </Allotment.Pane>
-          <Allotment.Pane minSize={360} preferredSize="55%">
+          <Allotment.Pane visible={!chatOnly} minSize={360} preferredSize="55%">
             <div style={{ height: "100%", position: "relative" }}>
               <div style={{ position: "absolute", inset: 0 }}>
                 <DockviewReact onReady={onReady} components={dvComponents} tabComponents={dvTabComponents} defaultTabComponent={TabHeader} theme={themeAbyss} />
               </div>
             </div>
           </Allotment.Pane>
-          <Allotment.Pane visible={!rightCollapsed} minSize={260} preferredSize="30%">
+          <Allotment.Pane visible={chatOnly || !rightCollapsed} minSize={260} preferredSize={chatOnly ? "85%" : "30%"}>
             <RightPane />
           </Allotment.Pane>
         </Allotment>

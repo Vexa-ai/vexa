@@ -15,37 +15,34 @@ RUN pip install --no-cache-dir uv==0.9.22
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/src \
+    PYTHONPATH=/app \
     PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app
 
-COPY core/agent/services/agent-api/pyproject.toml core/agent/services/agent-api/uv.lock ./
+COPY core/agent/pyproject.toml core/agent/uv.lock ./
+# Control-plane image installs ONLY base + the `control-plane` dep group (fastapi/uvicorn/multipart);
+# NOT the worker deps, NOT dev/test (D1 — real per-image trimming).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-default-groups --group control-plane
 
-# Production ASGI server (fastapi is already pinned in pyproject) + redis (the per-dispatch Stream
-# primitive: the control plane relays unit:<id>:out as SSE; the in-container worker XADDs to it).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install "uvicorn[standard]==0.34.0" "redis>=5,<6"
+# git only (the control plane reads workspace git state via workspace_reader). NO claude-code / node here:
+# agents never run in the control plane — the claude turn runs in the separate `vexa-agent` WORKER image
+# (core/agent/worker/Dockerfile). This is the payoff of the control-plane ⊥ worker split (a lean image).
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Claude Code (the unit's model+tooling runtime) + git (the governance git ops). node 20 via nodesource
-# so claude-code resolves; the subscription credentials are bind-mounted read-only at runtime (compose),
-# never baked in (P15). MVP0 runs the turn in this container; per-person container isolation is MVP1.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
-    npm install -g @anthropic-ai/claude-code && \
-    apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-COPY core/agent/services/agent-api/src ./src
-# The per-person workspace template (CLAUDE.md + conventions) the chat runner seeds new workspaces from.
-COPY core/agent/services/agent-api/workspace-seed ./workspace-seed
-# The unit toolbelt registry (tool.v1 + MCP launch specs) the ToolRegistry loads — the generic tool mechanism.
-COPY core/agent/services/agent-api/tools-seed ./tools-seed
+# The control-plane packages (NO worker): control_plane + shared + contracts, copied to /app so
+# `PYTHONPATH=/app` resolves them as top-level imports.
+COPY core/agent/shared ./shared
+COPY core/agent/control_plane ./control_plane
+COPY core/agent/contracts ./contracts
+# The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
+# workspace-seeds/<name>/ — one validated seed per subdir (today: default).
+COPY core/agent/workspace-seeds ./workspace-seeds
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
-# walk-up (Path(__file__).resolve().parents → .../src/agent_api/... → /app) resolves
+# walk-up (Path(__file__).resolve().parents → /app/contracts/loader.py → /app) resolves
 # `meetings/contracts/...` and `agent/contracts/...` (repo_root == /app).
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json  ./meetings/contracts/transcript.v1/transcript.schema.json
 COPY core/agent/contracts/workspace.v1/workspace.schema.json       ./agent/contracts/workspace.v1/workspace.schema.json
@@ -56,6 +53,6 @@ COPY core/agent/contracts/event.v1/event.schema.json               ./agent/contr
 COPY core/agent/contracts/tool.v1/tool.schema.json                 ./agent/contracts/tool.v1/tool.schema.json
 
 EXPOSE 8100
-# uvicorn resolves the lazy PEP-562 `app` (agent_api.api:app), which wires the real RuntimeHttpClient
+# uvicorn resolves the lazy PEP-562 `app` (control_plane.api:app), which wires the real RuntimeHttpClient
 # + Dispatcher at startup.
-CMD ["uvicorn", "agent_api.api:app", "--host", "0.0.0.0", "--port", "8100"]
+CMD ["uvicorn", "control_plane.api:app", "--host", "0.0.0.0", "--port", "8100"]

@@ -152,7 +152,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // subscribe surfaces the error and the orchestrator drives to a clean terminal `failed`.
   const transcriptClient = redisClientFrom(inv.redisUrl);
   const actsClient = redisActsClientFrom(inv.redisUrl);
-  const transcript: TranscriptSink = createRedisTranscriptSink({ client: transcriptClient, meetingId });
+  const transcript: TranscriptSink = createRedisTranscriptSink({
+    client: transcriptClient, meetingId, nativeMeetingId: inv.nativeMeetingId,
+  });
   const liveActs = createRedisActsSource({ client: actsClient, meetingId });
 
   // ── 2b: launch the browser + wire join / capture / recording / speak (L4-gated). ──

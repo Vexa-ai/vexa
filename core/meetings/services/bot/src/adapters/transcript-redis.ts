@@ -35,13 +35,16 @@ export interface RedisTranscriptSinkOptions {
   client: RedisTranscriptClient;
   /** The meeting id used in the mutable channel + bundle envelope. */
   meetingId: string | number;
+  /** The native meeting code (e.g. `abc-defg-hij`). Stamped on the segment so the agent watcher keys
+   *  on the native id WITHOUT a /meetings lookup (P23: one writer, no re-derivation). */
+  nativeMeetingId?: string;
 }
 
 /** Build the live transcript sink. `publish` XADDs the durable feed AND publishes the live
  *  mutable channel for one segment (best-effort fan-out; rejections propagate to the engine,
  *  which decides whether a publish failure is fatal). */
 export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): TranscriptSink {
-  const { client, meetingId } = opts;
+  const { client, meetingId, nativeMeetingId } = opts;
   const channel = mutableChannel(meetingId);
 
   async function publish(segment: TranscriptSegment): Promise<void> {
@@ -50,7 +53,9 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     // `segments` LIST to drain (a payload missing either is silently dropped: ingest.py `return 0`).
     // Emit that, not a flat segment, so the bot's transcripts actually reach the collector. (The
     // mock-bot L3 lane caught the flat form: O6 read the raw stream directly and never exercised the collector.)
-    const payload = JSON.stringify({ type: 'transcription', meeting_id: meetingId, segments: [segment] });
+    const payload = JSON.stringify({
+      type: 'transcription', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segments: [segment],
+    });
     await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
 
     // Leg 2: live mutable channel → gateway → dashboard.

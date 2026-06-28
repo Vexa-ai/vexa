@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { actionsFor } from "../meeting";
-import type { MeetingMock } from "../mock";
+import type { MeetingMock } from "../meetingModel";
 
 const NATIVE = "abc-defg-hij";
 

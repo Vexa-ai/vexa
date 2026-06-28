@@ -11,8 +11,8 @@ import { Icon } from "../ui-kit";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
 import { useLiveMeetings } from "./liveMeetings";
-import { meetingById, type MeetingMock } from "./mock";
-import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { type MeetingMock } from "./meetingModel";
+import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string): Op {
@@ -488,7 +488,7 @@ export function Chat({ params = {} }: ChatProps) {
   const focusRef = focusCleared ? null : activeRef;
   const meetings = useLiveMeetings();
   const activeMeeting = activeRef?.kind === "meeting"
-    ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value) ?? meetingById(activeRef.value)
+    ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value)
     : undefined;
   const contextRef: ActiveReference | null = focusRef?.kind === "meeting"
     ? { kind: "meeting", value: activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value, raw: `@meeting:${activeMeeting?.native_id ?? activeMeeting?.id ?? focusRef.value}` }
@@ -533,10 +533,14 @@ export function Chat({ params = {} }: ChatProps) {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
         const data: { turns?: HistoryTurn[] } = await r.json();
-        const loaded: Turn[] = (data.turns ?? []).map((t, i) =>
-          t.role === "user"
-            ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
-            : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
+        const loaded: Turn[] = (data.turns ?? [])
+          // Drop the onboarding kickoff (a system turn carrying the invisible mark) — it's persisted
+          // server-side but must never render, on first load or after a reload.
+          .filter((t) => !(t.role === "user" && t.text.includes(ONBOARDING_KICKOFF_MARK)))
+          .map((t, i) =>
+            t.role === "user"
+              ? { id: `h-u-${i}`, role: "user", text: compactStoredUserText(t.text) }
+              : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
         updateChatState(key, (s) => {
           if (s.loaded || s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
           return { ...s, turns: loaded, nextId: Math.max(s.nextId, loaded.length), loading: false, loaded: true };
@@ -600,7 +604,10 @@ export function Chat({ params = {} }: ChatProps) {
     return data.files ?? [];
   };
 
-  const send = async (text: string, prompt = text, referenceSource = text) => {
+  const send = async (text: string, prompt = text, referenceSource = text, opts: { hidden?: boolean; ground?: boolean } = {}) => {
+    // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
+    // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
+    const { hidden = false, ground = true } = opts;
     const v = text.trim();
     const basePrompt = promptWithReferences(prompt, referenceSource.trim());
     const key = chatKey;
@@ -611,9 +618,12 @@ export function Chat({ params = {} }: ChatProps) {
     const agentId = `a-${n}`;
     const displayText = appendReferenceToken(v, contextRef);
     const ctrl = new AbortController();
+    const newTurns = hidden
+      ? [{ id: agentId, role: "agent" as const, text: "", ops: [] }]
+      : [{ id: `u-${n}`, role: "user" as const, text: displayText }, { id: agentId, role: "agent" as const, text: "", ops: [] }];
     updateChatState(key, (s) => ({
       ...s,
-      turns: [...s.turns, { id: `u-${n}`, role: "user", text: displayText }, { id: agentId, role: "agent", text: "", ops: [] }],
+      turns: [...s.turns, ...newTurns],
       busy: true,
       loading: false,
       loaded: true,
@@ -621,8 +631,8 @@ export function Chat({ params = {} }: ChatProps) {
       abort: ctrl,
     }));
     try {
-      const p = promptWithActiveContext(basePrompt, contextRef, activeMeeting);
-      const active = contextRef ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
+      const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
+      const active = ground && contextRef ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
       const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, session: sessionForSend, active }), signal: ctrl.signal });
       if (!r.ok) throw new Error(`Chat request failed (${r.status})`);
       const reader = r.body?.getReader();
@@ -681,10 +691,11 @@ export function Chat({ params = {} }: ChatProps) {
   sendRef.current = send;
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const prompt = (e as CustomEvent<{ prompt?: string }>).detail?.prompt;
+      const detail = (e as CustomEvent<{ prompt?: string; hidden?: boolean; ground?: boolean }>).detail;
+      const prompt = detail?.prompt;
       if (!prompt) return;
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
-      void sendRef.current(prompt);
+      void sendRef.current(prompt, prompt, prompt, { hidden: detail?.hidden, ground: detail?.ground });
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);

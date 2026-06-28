@@ -78,3 +78,20 @@ async def test_cp2_native_feed_byte_identical_across_runs(store):
         return entries
 
     assert json.dumps(await run(), sort_keys=True) == json.dumps(await run(), sort_keys=True)
+
+
+async def test_collector_prefers_stamped_native_meeting_id(bus):
+    """P23/P18 regression: when the producer STAMPS native_meeting_id, the collector writes
+    tc:meeting:{native} WITHOUT a store lookup — even when the store mapping MISSES (the exact DB miss
+    that left the live meeting's native feed empty and starved the copilot)."""
+    store = InMemoryTranscriptStore()  # NO seed_meeting → store.native_for() would miss
+    msg = {"payload": json.dumps({
+        "type": "transcription", "meeting_id": "1", "native_meeting_id": "gdv-ffkx-vdc",
+        "platform": "google_meet",
+        "segments": [{"segment_id": "a", "start": 1.0, "end": 2.0, "text": "hi", "speaker": "Dmitriy",
+                      "language": "en", "completed": True}],
+    })}
+    n = await ingest(store, bus, msg)
+    assert n == 1
+    entries = await _native_entries(bus._client, "gdv-ffkx-vdc")
+    assert [e["segments"][0]["text"] for e in entries] == ["hi"]

@@ -14,6 +14,7 @@ import { registerEngineCommands } from "../workbench/commands";
 import { Workbench } from "../workbench/Workbench";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
+import { OnboardingGate } from "./OnboardingGate";
 import "../surfaces";
 
 const container = createContainer([
@@ -34,9 +35,11 @@ export function App() {
   if (!mounted) return <div style={{ height: "100vh", background: "var(--bg)" }} />;
   return (
     <AuthGate>
-      <ServicesProvider container={container}>
-        <Workbench />
-      </ServicesProvider>
+      <OnboardingGate>
+        <ServicesProvider container={container}>
+          <Workbench />
+        </ServicesProvider>
+      </OnboardingGate>
     </AuthGate>
   );
 }

@@ -148,9 +148,9 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
     if msg_type == "session_end":
         # P23: the collector owns tc:meeting:{native} — emit the session_end marker the copilot worker +
         # terminal SSE read off it (the agent relay used to do this; the agent now only consumes).
-        native = None
+        native = data.get("native_meeting_id")  # prefer the producer-stamped native id (P23)
         mid_raw = data.get("meeting_id")
-        if mid_raw is not None:
+        if not native and mid_raw is not None:
             try:
                 pair = await _resolve_native(store, int(mid_raw))
                 native = pair[0] if pair else None
@@ -194,8 +194,14 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         # numeric→native WITHOUT a user-scoped /meetings lookup (which fails for any meeting not owned
         # by the relay's bot key → segments never reach the terminal's native channel). The collector
         # owns the mapping (it persists by meeting_id); best-effort — a miss leaves it numeric-only.
-        pair = await _resolve_native(store, meeting_id)
-        native_id, platform_native = pair if pair else (None, None)
+        # PREFER the native id the producer STAMPED on the segment (P23: one writer, no re-derivation —
+        # and no DB lookup that can miss, which left tc:meeting:{native} empty and the copilot starved).
+        # Fall back to the store mapping only for older bots that don't stamp it.
+        native_id = data.get("native_meeting_id")
+        platform_native = data.get("platform")
+        if not native_id:
+            pair = await _resolve_native(store, meeting_id)
+            native_id, platform_native = pair if pair else (None, None)
         # FAULT-ISOLATED (P18): the segments are already persisted (durable). A transient redis blip on
         # the live publish must NOT propagate out of ingest() — that would abort the batch BEFORE
         # consume_segments acks it. Surface it and return the persisted count.

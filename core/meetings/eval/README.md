@@ -2,6 +2,11 @@
 
 _Governed by `docs/ARCHITECTURE.md` (validation pyramid: L1 contract → L2 unit → L3 integration → **L4 live+eval**). This is the meetings domain's L4: a real meeting, scored._
 
+> **Offline, no live meeting?** See **[`COUNTING-FIXTURES.md`](COUNTING-FIXTURES.md)** — a deterministic
+> 1..N counting oracle (TTS → STT → the real transcript pipeline) that runs autonomously any time and
+> attributes any loss to the exact stage. Proven: the **gmeet downstream is lossless @ 1-500 scale**; loss is
+> upstream STT. (This live harness below adds the real bot capture/diarization the offline path can't.)
+
 A **contract-driven, self-oracling** end-to-end validator. It doesn't touch internals —
 it drives whatever Vexa the bots are pointed at through the **public service API**, and
 carries its own ground truth + scoring. So it validates the **live 0.11 deployment today**

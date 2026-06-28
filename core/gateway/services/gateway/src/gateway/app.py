@@ -349,6 +349,21 @@ def create_app(
     async def agent_proxy(path: str, request: Request):
         return await _forward(request.method, _agent(path), request)
 
+    # ---- symmetric domain namespace (peer to the meetings domain): /agent/* is the canonical agent
+    # prefix. /api/* above is kept as a DEPRECATED alias so existing clients don't break; new clients
+    # use /agent/*. Both resolve to the SAME agent-api /api/<path> target via _agent().
+    @app.post("/agent/chat")
+    async def agent_chat_v2(request: Request):
+        return await _forward_stream("POST", _agent("chat"), request)
+
+    @app.get("/agent/meeting/stream")
+    async def agent_meeting_stream_v2(request: Request):
+        return await _forward_stream("GET", _agent("meeting/stream"), request)
+
+    @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+    async def agent_proxy_v2(path: str, request: Request):
+        return await _forward(request.method, _agent(path), request)
+
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")
     async def websocket_multiplex(ws: WebSocket):

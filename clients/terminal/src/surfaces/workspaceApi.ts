@@ -19,6 +19,12 @@ export async function readWorkspaceFile(path: string): Promise<string | null> {
   }
 }
 
+/** Materialize the user's workspace from the seed template — POST /api/workspace/init (idempotent: an
+ *  existing workspace is returned untouched, `seeded:false`). `seeded` is true only on first creation. */
+export async function initWorkspace(): Promise<{ workspace: string; seeded: boolean; already_initialized: boolean }> {
+  return getJson(`/api/workspace/init`, { method: "POST" });
+}
+
 export async function listWorkspaceTree(opts?: { hidden?: boolean }): Promise<string[]> {
   const data = await getJson<{ files?: string[] }>(`/api/workspace/tree${opts?.hidden ? "?hidden=1" : ""}`);
   return data.files ?? [];

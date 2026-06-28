@@ -5,7 +5,7 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
 import type { TabDescriptor } from "../workbench/layout";
 import { Icon } from "../ui-kit";
-import { type Entity, type EntityType } from "./mock";
+import { type Entity, type EntityType } from "./meetingModel";
 
 // ── type → visual language ───────────────────────────────────────────────────────
 const TYPE: Record<EntityType, { icon: string; color: string; bg: string; label: string }> = {

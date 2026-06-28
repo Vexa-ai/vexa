@@ -126,7 +126,7 @@ def test_worker_create_spec_uses_worker_image():
     sess.request = spy
     h = b.start(
         "agent-foo-chat",
-        Runnable(image=TARGET, command=["python", "-m", "agent_api.worker"]),
+        Runnable(image=TARGET, command=["python", "-m", "worker"]),
         {"VEXA_X": "y"},
     )
     assert captured["Image"] == TARGET
@@ -157,7 +157,7 @@ def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
     sess.request = spy
     b.start(
         "agent-foo-chat",
-        Runnable(image=TARGET, command=["python", "-m", "agent_api.worker"]),
+        Runnable(image=TARGET, command=["python", "-m", "worker"]),
         {"ANTHROPIC_AUTH_TOKEN": "dispatch-wins"},
     )
     env = dict(item.split("=", 1) for item in captured["Env"])

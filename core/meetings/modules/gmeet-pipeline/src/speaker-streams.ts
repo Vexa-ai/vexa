@@ -180,7 +180,12 @@ export class SpeakerStreamManager {
         } else if (detached.totalSamples - detached.confirmedSamples > 0 && !detached.inFlight) {
           void this.submitBuffer(detached).then(() => {
             if (detached.lastTranscript) this.emitSegment(detached, detached.lastTranscript);
-          }).catch(() => { /* transcription failed; stretch dropped */ });
+          }).catch((err: any) => {
+            // P18 (ADR 0010): fail LOUD + attributed — never drop a transcription failure silently.
+            // The typed STT fault carries `.kind` (unauthorized / payment_required / rate_limited / …).
+            log(`[SpeakerStreams] [STT-FAULT] ${err?.kind ?? 'error'} on deferred close for ` +
+                `"${detached.speakerName}": ${String(err?.message ?? err)} (audio dropped)`);
+          });
         }
       }
     }
@@ -612,6 +617,9 @@ export class SpeakerStreamManager {
       this.onSegmentReady(buffer.speakerId, buffer.speakerName, combined);
     } catch (err: any) {
       buffer.inFlight = false;
+      // P18: surface the transcription submit failure with its typed kind — do not swallow it.
+      log(`[SpeakerStreams] [STT-FAULT] ${err?.kind ?? 'error'} submitting for ` +
+          `"${buffer.speakerName}": ${String(err?.message ?? err)}`);
     }
   }
 

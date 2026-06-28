@@ -57,6 +57,11 @@ function postMeetingTurn(prompt: string, session: string): void {
 
 export const ASK_CHAT_EVENT = "vexa:terminal:ask-chat";
 
+// Invisible marker prefixed to the onboarding kickoff prompt. The agent ignores the zero-width chars,
+// but the chat filters any turn carrying it out of the rendered conversation (live AND restored history)
+// — so the system kickoff is never shown, even after a reload re-fetches the persisted session.
+export const ONBOARDING_KICKOFF_MARK = "\u200B\u200C\u200B";
+
 function makeActions(layout?: LayoutService): HarnessActions {
   return {
     ask(prompt) {

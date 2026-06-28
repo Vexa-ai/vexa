@@ -130,7 +130,10 @@ services:
       - .env
     environment:
       - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
-      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:dev}
+      # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
+      # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
+      - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/v012-agent-worker:${IMAGE_TAG:-dev}}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
       - REDIS_URL=redis://redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
@@ -162,6 +165,17 @@ services:
         condition: service_healthy
     networks: [vexa]
     restart: unless-stopped
+
+  # Build-only: the per-dispatch WORKER image the runtime spawns (claude-in-container; NOT a long-running
+  # service). Built via `docker compose build agent-worker`; the runtime references it by AGENT_WORKER_IMAGE.
+  # `profiles` keeps it out of `up`; `command: true` makes an accidental start a no-op.
+  agent-worker:
+    build:
+      context: ../..
+      dockerfile: core/agent/worker/Dockerfile
+    image: vexaai/v012-agent-worker:${IMAGE_TAG:-dev}
+    profiles: ["build-only"]
+    command: ["true"]
 
   agent-api:
     # The unit control plane — POST /invocations (dispatch → runtime.v1 agent spawn), /api/chat (SSE),

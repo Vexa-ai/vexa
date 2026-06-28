@@ -5,7 +5,7 @@
  *  Live meetings carry a `session_uid` so the tab subscribes to the copilot stream; past meetings open a
  *  recorded view whose transcript is fetched on demand from `GET /api/transcripts/{platform}/{native}`. */
 import { useSyncExternalStore } from "react";
-import type { MeetingMock, TranscriptLine } from "./mock";
+import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
 
 /** A row from meeting-api GET /meetings (live AND past). */

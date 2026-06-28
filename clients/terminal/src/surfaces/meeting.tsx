@@ -10,7 +10,7 @@ import { registerList, registerTab, registerCommand, type TabProps } from "../co
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
-import { liveMeeting, type MeetingMock } from "./mock";
+import { type MeetingMock } from "./meetingModel";
 import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { parseMeetingInput } from "./meetingId";
@@ -500,4 +500,4 @@ function MeetingTab({ params }: TabProps) {
 
 registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList });
 registerTab("meeting", MeetingTab);
-registerCommand({ id: "meeting.openLive", title: "Open live meeting", run: ({ container }) => { const m = liveMeetingsNow()[0] ?? liveMeeting(); if (m) container.get(LayoutServiceId).openTab(meetingTab(m)); } });
+registerCommand({ id: "meeting.openLive", title: "Open live meeting", run: ({ container }) => { const m = liveMeetingsNow()[0]; if (m) container.get(LayoutServiceId).openTab(meetingTab(m)); } });

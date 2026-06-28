@@ -43,6 +43,26 @@ cleared, the action non-disruptive to others. **Validate the verb, not just the 
 token yet lack the ability or permission to rebuild the stale image you'll need. An unproven operation is a
 **blocker to clear before approval**, never a mid-execution scramble (Learning #31).
 
+## Two roles on one plan — dev (implements) ⊥ followup (steers)
+
+A plan is a **living source of truth** worked by two kinds of session, kept apart so higher-level reasoning
+stays open and **detached from implementation** — the steerer and the implementer are never the same hands,
+so the plan stays an honest, independently-audited record rather than a self-graded one. The skeleton —
+including the Execution-State tracker and the Handoff protocol — is **[docs/PLAN-TEMPLATE.md](docs/PLAN-TEMPLATE.md)**; copy it when starting a plan.
+
+- **`dev` — the implementer (a normal session).** Owns a worktree; reads and **writes code**, runs gates,
+  builds/deploys. **Owns the Execution-State tracker** (updates status + raw evidence as phases land) and
+  **acknowledges handoffs**. The only role that mutates the repo.
+- **`followup` — the steerer (read-anything, plan-write-only).** May **read anything** (code, tree, git,
+  read-only commands) to audit reality against the plan, but **writes ONLY the plan file** — never code,
+  tests, configs, commits, builds, or deploys. Its product is the Execution-State sync, Decisions/Phase
+  revisions, and Handoff entries. It proposes; `dev` disposes.
+
+The two stay in sync through the **Handoff log** at the bottom of the plan: `followup` drops a handoff after
+editing; `dev` replies inline under `ACK` (`pending` → `ack`/`disputed`). The plan file *is* the channel —
+both edit it concurrently, newest on top. Declare your role when it isn't obvious; if you are `followup`,
+treat every code path as read-only — your edits land in the plan, never in the repo.
+
 ## Debug mode — orchestrate, delegate, keep the chat open
 
 In **debug mode** you stop being the hands and become the **orchestrator**. The chat is a scarce, serial
