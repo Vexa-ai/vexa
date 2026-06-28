@@ -13,7 +13,6 @@ capture-codec [module] @core/meetings/modules/capture-codec
 captured-signal.v1 [contract] @core/meetings/contracts/captured-signal.v1
 conformance [service] @core/gateway/services/conformance
 dashboard [webclient] @clients/dashboard
-dashboard_new [webclient] @clients/dashboard_new
 deploy [system] @deploy
 desktop [service] @core/meetings/services/desktop
 event.v1 [contract] @core/agent/contracts/event.v1
@@ -48,6 +47,7 @@ runtime.v1 [contract] @core/runtime/contracts/runtime.v1
 schedule.v1 [contract] @core/runtime/contracts/schedule.v1
 segments-stream [data-asset]
 segments-table [database]
+slim [webclient] @clients/slim
 task.v1 [contract] @core/agent/contracts/task.v1
 tc-mutable [data-asset]
 tc-stream [data-asset]

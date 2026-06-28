@@ -571,13 +571,13 @@
       ]
     },
     {
-      "unique-id": "dashboard_new",
+      "unique-id": "slim",
       "node-type": "webclient",
-      "name": "dashboard_new",
-      "description": "dashboard_new — client",
+      "name": "slim",
+      "description": "slim — client",
       "metadata": [
         {
-          "path": "clients/dashboard_new"
+          "path": "clients/slim"
         }
       ]
     },
