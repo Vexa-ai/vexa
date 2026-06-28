@@ -1,15 +1,12 @@
-"""The in-process transcription watcher: keep DISTINCT meetings SEPARATE, and (the consumer-route
-rewrite) CONSUME the meeting-api collector's canonical confirmed/pending output instead of re-deriving
-the transcript from the raw stream.
+"""The in-process transcription watcher (ARM-only): keep DISTINCT meetings SEPARATE, arm the copilot
+opt-in, and — crucially — NEVER write the transcript carrier.
 
-Two collapse/loss bugs are guarded here:
-  * Multi-meeting collapse — the numeric→native resolution must freeze ONE stable key per meeting (the
-    gateway row lags the first segments); ``_handle`` + ``_resolve_native`` must never flip the key
-    mid-stream (fork) or borrow another meeting's native.
-  * Transcript LOSS — the watcher used to re-derive/dedup segments itself and dropped lines when the bot
-    recycled a ``segment_id`` across utterances. It now RELAYS the collector's already-deduped feed
-    (``:mutable`` confirmed/pending) and BACK-SEEDS from the collector store, so every distinct segment
-    the collector emits is fanned faithfully (no drop) under its own unique id.
+Post-D7 (P23): meeting-api's collector is the SINGLE writer of ``tc:meeting:{native}`` (segments AND the
+session_end marker). The agent watcher only tails ``transcription_segments`` as a TRIGGER to do agent-domain
+jobs: freeze ONE native routing key per meeting, register the live row, re-arm the copilot while processing
+is enabled, and reap on session_end. It READS the native feed's tail for the copilot resume cursor, but
+writes nothing — `meetings ⊥ agent` (P3). These tests assert that behaviour via keymap/live/dispatch, and
+that no ``tc:meeting:*`` write ever originates here.
 """
 from __future__ import annotations
 
@@ -21,7 +18,6 @@ import agent_api.transcription_watcher as w
 class _FakeRedis:
     def __init__(self) -> None:
         self.streams: dict[str, list[dict]] = {}
-        self.hashes: dict[str, dict] = {}
         self.kv: dict[str, str] = {}
 
     def get(self, key):
@@ -45,12 +41,6 @@ class _FakeRedis:
             selected = selected[:count]
         return [(f"{len(rows) - i}-0", fields) for i, fields in enumerate(selected)]
 
-    def hset(self, key, field, value):
-        self.hashes.setdefault(key, {})[field] = value
-
-    def hgetall(self, key):
-        return dict(self.hashes.get(key) or {})
-
 
 class _FakeDispatcher:
     def __init__(self) -> None:
@@ -73,21 +63,13 @@ class _FakeLive:
 
 
 def _payload(meeting_id):
-    # Only meeting_id matters now (the watcher seeds/relays content from the collector, not this payload).
+    # Only meeting_id matters to the arm thread — transcript CONTENT is the collector's (P23).
     return {"type": "transcription", "meeting_id": meeting_id, "segments": [
         {"text": "hi", "completed": True, "start": 0.0, "end": 1.0, "segment_id": "x"}]}
 
 
-def _store_seg(r, numeric, segment_id, text, *, start=0.0, end=1.0, completed=True, **extra):
-    """Write one canonical segment into the collector store the watcher back-seeds from."""
-    seg = {"segment_id": segment_id, "text": text, "start": start, "end": end,
-           "completed": completed, "speaker": "Speaker", "language": "en"}
-    seg.update(extra)
-    r.hset(f"meeting:{numeric}:segments", segment_id, json.dumps(seg))
-
-
 def _fresh_state():
-    return ({}, {}, {}, {}, set())  # last_arm, base, keymap, first_seen, seeded
+    return ({}, {}, {})  # last_arm, keymap, first_seen
 
 
 def _reset_module_caches():
@@ -95,11 +77,16 @@ def _reset_module_caches():
     w._resolve_miss_at.clear()
 
 
-# ── multi-meeting separation (resolution + seed) ──────────────────────────────────────────────────
+def _native_streams(r):
+    """The transcript-carrier streams — these must NEVER be written by the agent (the collector owns them)."""
+    return [k for k in r.streams if k.startswith("tc:meeting:")]
+
+
+# ── multi-meeting separation (resolution + keying) ─────────────────────────────────────────────────
 
 def test_two_distinct_meetings_stay_separate(monkeypatch):
-    """Two numeric ids → two natives → two separate feeds/copilots/live-rows. The collapse the bug
-    produced must NOT happen — and each native feed is back-seeded only from its OWN store."""
+    """Two numeric ids → two natives → two separate live rows / copilot keys. The collapse the bug
+    produced must NOT happen — and the agent writes NO transcript stream (the collector owns it)."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: {
         "42": ("aaa-aaaa-aaa", "google_meet"),
@@ -107,24 +94,18 @@ def test_two_distinct_meetings_stay_separate(monkeypatch):
     }.get(mid))
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _store_seg(r, "42", "s-a", "hi from 42")
-    _store_seg(r, "43", "s-b", "hi from 43")
-    state = _fresh_state()
+    _, keymap, _ = state = _fresh_state()
     for mid in ("42", "43", "42", "43"):
         w._handle(r, disp, live, "u_live", _payload(mid), *state)
 
     assert set(live.by_uid) == {"aaa-aaaa-aaa", "bbb-bbbb-bbb"}
-    assert "tc:meeting:aaa-aaaa-aaa" in r.streams
-    assert "tc:meeting:bbb-bbbb-bbb" in r.streams
-    # back-seeded exactly once per meeting, each from its OWN store (never cross-contaminated)
-    assert len(r.streams["tc:meeting:aaa-aaaa-aaa"]) == 1
-    assert len(r.streams["tc:meeting:bbb-bbbb-bbb"]) == 1
-    assert json.loads(r.streams["tc:meeting:aaa-aaaa-aaa"][0]["payload"])["segments"][0]["text"] == "hi from 42"
+    assert keymap == {"42": "aaa-aaaa-aaa", "43": "bbb-bbbb-bbb"}  # one frozen key per meeting
+    assert _native_streams(r) == []                               # agent wrote NO transcript carrier
 
 
 def test_late_native_resolution_does_not_fork_or_collapse(monkeypatch):
-    """Meeting 43's gateway row lags: it resolves to None first, its native later. The key must NOT flip
-    mid-stream (no fork), 43 must never borrow 42's native, and the feed is seeded only once it's keyed."""
+    """Meeting 43's gateway row lags: None first, native later. The key must NOT flip mid-stream (no fork),
+    43 must never borrow 42's native, and it is keyed only once it resolves."""
     _reset_module_caches()
     state = {"43": None}
 
@@ -137,20 +118,17 @@ def test_late_native_resolution_does_not_fork_or_collapse(monkeypatch):
     monkeypatch.setattr(w, "RESOLVE_GRACE_SEC", 1e9)  # never fall back to numeric during the test
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _store_seg(r, "42", "s-a", "from 42")
-    _store_seg(r, "43", "s-b", "from 43")
-    st = _fresh_state()
+    _, keymap, _ = st = _fresh_state()
 
     w._handle(r, disp, live, "u", _payload("42"), *st)
     w._handle(r, disp, live, "u", _payload("43"), *st)   # 43 unresolved, within grace → held
     assert set(live.by_uid) == {"aaa-aaaa-aaa"}
-    assert "tc:meeting:43" not in r.streams               # never numeric-keyed under its native's nose
-    assert "tc:meeting:bbb-bbbb-bbb" not in r.streams     # not seeded until 43 is keyed
+    assert "43" not in keymap                             # never numeric-keyed under its native's nose
 
     state["43"] = ("bbb-bbbb-bbb", "google_meet")
     w._handle(r, disp, live, "u", _payload("43"), *st)
     assert set(live.by_uid) == {"aaa-aaaa-aaa", "bbb-bbbb-bbb"}
-    assert "tc:meeting:bbb-bbbb-bbb" in r.streams
+    assert keymap["43"] == "bbb-bbbb-bbb"
 
 
 def test_resolve_native_returns_only_the_matched_id(monkeypatch):
@@ -198,157 +176,62 @@ def test_resolve_native_requests_limit_within_gateway_cap(monkeypatch):
     assert requested <= 100, f"gateway caps limit at 100; requested {requested} → HTTP 422 every call"
 
 
-def test_dispatch_carries_stream_tail_cursor(monkeypatch):
-    """The copilot starts after the PRE-existing feed tail (before the back-seed), so the cursor reflects
-    only the meeting's own history; the back-seed then appends to the feed."""
+# ── copilot arming (opt-in) reads the collector-owned feed tail for the resume cursor ───────────────
+
+def test_arm_reads_native_feed_tail_for_resume_cursor(monkeypatch):
+    """The copilot resumes after the native feed's CURRENT tail. The arm thread READS that tail (the
+    collector writes the feed) and passes it as the dispatch's transcript_start_id — it writes nothing."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _store_seg(r, "42", "s-a", "seeded line")
-    r.streams["tc:meeting:aaa-aaaa-aaa"] = [{"payload": "old-1"}, {"payload": "old-2"}]
+    # The collector has already written 2 entries onto the native feed (simulated here).
+    r.streams["tc:meeting:aaa-aaaa-aaa"] = [{"payload": "c-1"}, {"payload": "c-2"}]
     r.set("proc:meeting:aaa-aaaa-aaa:on", "1")  # processing is opt-in — enable it so the copilot arms
 
     w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
 
     meeting = disp.dispatched[0]["context"]["meeting"]
-    assert meeting["transcript_start_id"] == "2-0"            # tail captured BEFORE the seed
-    assert len(r.streams["tc:meeting:aaa-aaaa-aaa"]) == 3     # 2 pre-existing + 1 back-seeded
+    assert meeting["transcript_start_id"] == "2-0"                # tail of the collector-written feed
+    assert len(r.streams["tc:meeting:aaa-aaaa-aaa"]) == 2         # unchanged — the agent appended nothing
 
 
 def test_copilot_processing_is_opt_in(monkeypatch):
-    """Processing is OPT-IN: with no proc:meeting flag the copilot is NOT dispatched (no processing),
-    yet the meeting still registers and the raw transcript still seeds. Flipping the flag arms it."""
+    """Processing is OPT-IN: with no proc:meeting flag the copilot is NOT dispatched, yet the meeting still
+    registers. Flipping the flag arms it. The agent writes no transcript stream either way."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _store_seg(r, "42", "s-a", "hi")
 
     w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
     assert disp.dispatched == []                    # OFF → no copilot, no processing
     assert "aaa-aaaa-aaa" in live.by_uid            # …but the meeting still registers
-    assert "tc:meeting:aaa-aaaa-aaa" in r.streams   # …and the raw transcript still seeds
+    assert _native_streams(r) == []                 # …and the agent writes no transcript carrier
 
     r.set("proc:meeting:aaa-aaaa-aaa:on", "1")         # user enables processing → now it arms
     w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
     assert len(disp.dispatched) == 1
 
 
-def test_back_seed_carries_absolute_timestamp(monkeypatch):
-    """The canonical ABSOLUTE wall-clock survives the seed seam: the collector stores epoch-seconds
-    `start`; the seeded ``tc:meeting:*`` segment must carry ``abs_start_ms`` == start*1000 (relative
-    `start` is meeting-relative, 0.0 for the first seg)."""
+def test_unresolved_meeting_surfaces_under_numeric_after_grace(monkeypatch):
+    """A meeting whose native NEVER resolves is HELD during RESOLVE_GRACE_SEC (not yet keyed), then
+    surfaces under its NUMERIC key — never swallowed."""
     _reset_module_caches()
-    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
+    monkeypatch.setattr(w, "_resolve_native", lambda mid: None)   # never resolves
+    clock = [1000.0]
+    monkeypatch.setattr(w.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(w, "RESOLVE_GRACE_SEC", 6.0)
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    epoch = 1_700_000_123.4
-    _store_seg(r, "42", "s1", "hello", start=epoch, end=epoch + 1.0,
-               absolute_start_time="2023-11-14T22:15:23.400Z")
-    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
+    _, keymap, _ = st = _fresh_state()
 
-    seg = json.loads(r.streams["tc:meeting:aaa-aaaa-aaa"][0]["payload"])["segments"][0]
-    assert seg["abs_start_ms"] == round(epoch * 1000) == 1_700_000_123_400
-    assert seg["absolute_start_time"] == "2023-11-14T22:15:23.400Z"
-    assert seg["start"] == 0.0
-    assert seg["segment_id"] == "s1"
+    w._handle(r, disp, live, "u", _payload("77"), *st)          # within grace → HELD
+    assert set(live.by_uid) == set() and "77" not in keymap
 
+    clock[0] += 7.0                                              # grace elapses
+    w._handle(r, disp, live, "u", _payload("77"), *st)          # now surfaces under numeric
+    assert "77" in live.by_uid and keymap["77"] == "77"         # not swallowed
 
-# ── the consumer route: relay the collector's :mutable canonical feed ──────────────────────────────
-
-def test_relay_fans_confirmed_and_pending():
-    """One :mutable delta → both the confirmed final and the pending draft are fanned, meeting-relative
-    (earliest start becomes the anchor)."""
-    r = _FakeRedis()
-    keymap, base = {"64": "nat-xyz"}, {}
-    data = {"type": "transcript", "meeting": {"id": 64},
-            "confirmed": [{"segment_id": "c1", "text": "final one", "start": 10.0, "end": 12.0, "completed": True}],
-            "pending": [{"segment_id": "p1", "text": "draft two", "start": 13.0, "end": 13.0, "completed": False}]}
-    w._relay_message(r, keymap, base, data)
-
-    segs = {json.loads(e["payload"])["segments"][0]["segment_id"]: json.loads(e["payload"])["segments"][0]
-            for e in r.streams["tc:meeting:nat-xyz"]}
-    assert segs["c1"]["completed"] is True and segs["c1"]["text"] == "final one"
-    assert segs["p1"]["completed"] is False
-    assert segs["c1"]["start"] == 0.0 and segs["p1"]["start"] == 3.0   # anchored at earliest (10.0)
-
-
-def test_relay_skips_meeting_not_yet_keyed():
-    """A :mutable for a meeting the arm thread hasn't frozen yet is skipped (the store-seed back-fills it)
-    — never fanned to a numeric key that would diverge from the terminal's native key."""
-    r = _FakeRedis()
-    data = {"meeting": {"id": 99},
-            "confirmed": [{"segment_id": "x", "text": "hi", "start": 0.0, "end": 1.0, "completed": True}]}
-    w._relay_message(r, {}, {}, data)
-    assert r.streams == {}
-
-
-def test_relay_uses_stamped_native_id_with_empty_keymap():
-    """REGRESSION (no-live-transcripts): the keymap is built off the USER-SCOPED /meetings list, so a
-    meeting owned by another user never gets keyed → the relay used to skip it forever and the terminal
-    (native channel) saw nothing. The collector now STAMPS meeting.native_id; the relay must re-key off
-    THAT even with an empty keymap, so cross-user live transcripts reach the native channel."""
-    r = _FakeRedis()
-    data = {"type": "transcript", "meeting": {"id": 89, "native_id": "gun-bscm-nfb", "platform": "google_meet"},
-            "confirmed": [{"segment_id": "c1", "text": "live now", "start": 5.0, "end": 6.0, "completed": True}]}
-    keymap = {}
-    w._relay_message(r, keymap, {}, data)
-    assert "tc:meeting:gun-bscm-nfb" in r.streams          # fanned to the NATIVE channel, not numeric
-    assert "tc:meeting:89" not in r.streams
-    assert keymap.get("89") == "gun-bscm-nfb"              # cached for the arm thread too
-
-
-def test_recycled_seq_distinct_utterances_both_survive():
-    """THE loss regression: the bot recycles the ``ch:seq`` slot across utterances; the collector finalizes
-    each under a UNIQUE full id (distinct abs-ms). The relay must fan BOTH faithfully — the old re-derive
-    path overwrote the first. No line is lost."""
-    r = _FakeRedis()
-    keymap, base = {"64": "nat"}, {}
-    w._relay_message(r, keymap, base, {"meeting": {"id": 64}, "confirmed": [
-        {"segment_id": "ch-0:4:1000", "text": "So I dont think anyone knows", "start": 100.0, "end": 104.0, "completed": True}]})
-    w._relay_message(r, keymap, base, {"meeting": {"id": 64}, "confirmed": [
-        {"segment_id": "ch-0:4:2000", "text": "TeraFab faster than other fabs", "start": 110.0, "end": 114.0, "completed": True}]})
-
-    fanned = [json.loads(e["payload"])["segments"][0] for e in r.streams["tc:meeting:nat"]]
-    assert {s["segment_id"] for s in fanned} == {"ch-0:4:1000", "ch-0:4:2000"}
-    assert {s["text"] for s in fanned} == {"So I dont think anyone knows", "TeraFab faster than other fabs"}
-
-
-def test_relay_skips_garbage_segments_but_fans_the_good_ones():
-    """Resilience: a :mutable delta carrying a blank-text or id-less segment alongside valid ones must
-    drop ONLY the garbage (the ``_fan_segment`` guard) and faithfully fan the good ones — never abort the
-    batch on a bad row, never fan an unrenderable empty line to the terminal."""
-    r = _FakeRedis()
-    keymap, base = {"64": "nat"}, {}
-    w._relay_message(r, keymap, base, {"meeting": {"id": 64}, "confirmed": [
-        {"segment_id": "g1", "text": "real line", "start": 1.0, "end": 2.0, "completed": True},
-        {"segment_id": "blank", "text": "   ", "start": 2.0, "end": 3.0, "completed": True},  # whitespace-only → dropped
-        {"text": "no id here", "start": 3.0, "end": 4.0, "completed": True},                  # missing segment_id → dropped
-        {"segment_id": "g2", "text": "another real", "start": 4.0, "end": 5.0, "completed": True}]})
-    fanned = [json.loads(e["payload"])["segments"][0] for e in r.streams["tc:meeting:nat"]]
-    assert {s["segment_id"] for s in fanned} == {"g1", "g2"}
-    assert all(s["text"].strip() for s in fanned)               # no empty line ever reaches the terminal
-
-
-def test_relay_skips_a_frame_with_no_meeting_object():
-    """A malformed :mutable with no meeting/id resolves to no native key → skipped cleanly (no crash,
-    no stray numeric-keyed stream)."""
-    r = _FakeRedis()
-    w._relay_message(r, {}, {}, {"confirmed": [{"segment_id": "x", "text": "hi", "start": 0.0, "end": 1.0}]})
-    assert r.streams == {}
-
-
-def test_seed_fans_store_in_start_order():
-    """The back-seed emits the stored transcript in ascending start order (the store is unordered)."""
-    r = _FakeRedis()
-    _store_seg(r, "7", "b", "second", start=20.0)
-    _store_seg(r, "7", "a", "first", start=10.0)
-    w._seed_from_store(r, "7", "natty", {})
-    order = [json.loads(e["payload"])["segments"][0]["text"] for e in r.streams["tc:meeting:natty"]]
-    assert order == ["first", "second"]
-
-
-# ── catalog: terminal-multi-meeting-isolation (never-resolve grace) ────────────────────────────────
 
 class _WrongTypeRedis(_FakeRedis):
     """A redis whose GET raises WRONGTYPE when the key is actually a STREAM — mirrors real redis. Proves
@@ -360,32 +243,9 @@ class _WrongTypeRedis(_FakeRedis):
         return self.kv.get(key)
 
 
-def test_unresolved_meeting_surfaces_under_numeric_after_grace(monkeypatch):
-    """terminal-multi-meeting-isolation (never-resolve): a meeting whose native NEVER resolves is HELD
-    during RESOLVE_GRACE_SEC (not yet keyed), then surfaces under its NUMERIC key — never swallowed."""
-    _reset_module_caches()
-    monkeypatch.setattr(w, "_resolve_native", lambda mid: None)   # never resolves
-    clock = [1000.0]
-    monkeypatch.setattr(w.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(w, "RESOLVE_GRACE_SEC", 6.0)
-
-    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _store_seg(r, "77", "s-77", "hi from 77")
-    st = _fresh_state()
-
-    w._handle(r, disp, live, "u", _payload("77"), *st)          # within grace → HELD
-    assert "tc:meeting:77" not in r.streams
-    assert set(live.by_uid) == set()
-
-    clock[0] += 7.0                                              # grace elapses
-    w._handle(r, disp, live, "u", _payload("77"), *st)          # now surfaces under numeric
-    assert "tc:meeting:77" in r.streams                         # not swallowed
-    assert "77" in live.by_uid
-
-
 def test_proc_flag_get_never_hits_the_processed_stream(monkeypatch):
-    """terminal-processing-toggle (WRONGTYPE guard): with processing ON, the arm-loop GETs the :on flag,
-    NOT the proc:meeting:{key} STREAM that coexists — so a real redis WRONGTYPE never crashes the loop."""
+    """With processing ON, the arm-loop GETs the :on flag, NOT the proc:meeting:{key} STREAM that coexists
+    — so a real redis WRONGTYPE never crashes the loop."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("nat-77", "google_meet"))
     monkeypatch.setattr(w.time, "monotonic", lambda: 100000.0)   # > REARM_SEC since last_arm(0) → arms
@@ -393,48 +253,27 @@ def test_proc_flag_get_never_hits_the_processed_stream(monkeypatch):
     r, disp, live = _WrongTypeRedis(), _FakeDispatcher(), _FakeLive()
     r.xadd("proc:meeting:nat-77", {"payload": "{}"})            # the processed-notes STREAM exists (collision bait)
     r.set("proc:meeting:nat-77:on", "1")                        # processing ENABLED via the flag
-    _store_seg(r, "77", "s-77", "hi")
-    st = _fresh_state()
 
-    w._handle(r, disp, live, "u", _payload("77"), *st)          # must NOT raise WRONGTYPE
+    w._handle(r, disp, live, "u", _payload("77"), *_fresh_state())  # must NOT raise WRONGTYPE
     assert len(disp.dispatched) == 1                            # armed off the flag
-    assert "tc:meeting:nat-77" in r.streams                     # raw still fanned/seeded
 
 
-# ── catalog: terminal-backseed (idempotency) + session_end reap (new scenarios) ────────────────────
+# ── session_end reap (agent-domain only — the collector emits the carrier marker) ───────────────────
 
-def test_session_end_reaps_copilot_and_clears_keymap(monkeypatch):
-    """session_end fans a session_end frame to tc:meeting:{native}, drops the live row, and clears the
-    keymap so a same-numeric relaunch re-resolves cleanly (no stale key)."""
+def test_session_end_reaps_copilot_without_writing_the_carrier(monkeypatch):
+    """On session_end the agent does ONLY its own reaping: drop the live row, clear the keymap, connect
+    the kg doc. It does NOT write the session_end marker onto tc:meeting:{native} — the collector owns
+    that carrier (P23)."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("nat-9", "google_meet"))
     monkeypatch.delenv("VEXA_BOT_API_KEY", raising=False)   # _record_meeting_doc → no-op (no network)
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _store_seg(r, "9", "s-9", "hi")
-    st = _fresh_state()
-    last_arm, base, keymap, first_seen, seeded = st
+    _, keymap, _ = st = _fresh_state()
 
     w._handle(r, disp, live, "u", _payload("9"), *st)        # establish the meeting
     assert "nat-9" in live.by_uid and keymap.get("9") == "nat-9"
 
     w._handle(r, disp, live, "u", {"type": "session_end", "meeting_id": "9"}, *st)
-    end = json.loads(r.streams["tc:meeting:nat-9"][-1]["payload"])
-    assert end["type"] == "session_end" and end["uid"] == "nat-9"
     assert "nat-9" not in live.by_uid                        # live row dropped
-    assert "9" not in keymap and "nat-9" not in seeded       # keymap + seed state cleared
-
-
-def test_back_seed_is_idempotent_across_rehandles(monkeypatch):
-    """terminal-backseed: the store is fanned to the native feed exactly ONCE; subsequent batches for the
-    same meeting do NOT re-seed (no duplicate history) — the relay carries it live thereafter."""
-    _reset_module_caches()
-    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("nat-5", "google_meet"))
-    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
-    _store_seg(r, "5", "s-a", "one", start=1.0)
-    _store_seg(r, "5", "s-b", "two", start=2.0)
-    st = _fresh_state()
-    for _ in range(4):                                       # four batches for the SAME meeting
-        w._handle(r, disp, live, "u", _payload("5"), *st)
-    fanned = [json.loads(e["payload"]) for e in r.streams["tc:meeting:nat-5"]]
-    texts = [s["text"] for f in fanned for s in f.get("segments", [])]
-    assert texts == ["one", "two"]                           # seeded once, in start order; no duplication
+    assert "9" not in keymap                                 # keymap cleared (clean relaunch)
+    assert _native_streams(r) == []                          # the agent wrote NO session_end marker

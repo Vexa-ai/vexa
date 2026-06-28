@@ -1,23 +1,18 @@
-"""transcription_watcher.py — the IN-PROCESS Integration (inbound watch → fire) that replaces the
-standalone bridge container.
+"""transcription_watcher.py — the agent's IN-PROCESS inbound watch (trigger → arm) over the live transcript.
 
-It runs as TWO daemon threads:
+It runs ONE daemon thread, ARM (``_run_arm``): tail ``transcription_segments`` purely as a TRIGGER to do
+the jobs only the agent-api can do — FREEZE one native routing key per meeting (so the copilot keys on a
+single id across bot re-launches), REGISTER the live meeting, RE-ARM the copilot dispatch while the user
+has processing enabled (spawn-or-touch, idempotent), and on ``session_end`` reap the copilot + connect the
+meeting's kg doc.
 
-  (a) RELAY (``_run_relay``) — subscribe to the meeting-api collector's canonical change-only feed
-      ``tc:meeting:{numeric}:mutable`` (``{confirmed:[…], pending:[…]}``, the SAME wire the dashboard
-      renders) and re-fan each confirmed/pending segment onto the per-meeting feed ``tc:meeting:{native}``.
-      We no longer RE-DERIVE the transcript from the raw stream here (that hand-rolled dedup lost lines
-      when the bot recycled a ``segment_id`` across utterances) — we CONSUME the collector's already-
-      correct, dashboard-consistent output (read-only: zero writes to the collector). The terminal and
-      ``serve_meeting`` both read ``tc:meeting:{native}`` exactly as before, so both get the deduped feed.
-  (b) ARM (``_run_arm``) — the jobs only the agent-api can do: tail ``transcription_segments`` to FREEZE
-      one native routing key per meeting, REGISTER the live meeting, RE-ARM the copilot dispatch on
-      transcript activity (spawn-or-touch, idempotent), and on first sight BACK-SEED ``tc:meeting:{native}``
-      from the collector's durable store ``meeting:{numeric}:segments`` (the pubsub has no replay, so an
-      in-progress meeting / agent-api restart shows its history immediately).
+It does NOT write the transcript carrier. The MEETINGS domain (meeting-api's collector) is the SINGLE
+writer of the per-meeting native feed ``tc:meeting:{native}`` and its ``session_end`` marker (P23) — the
+agent only CONSUMES it: the copilot worker reads it, and the arm thread only READS its tail for the copilot
+resume cursor. `meetings ⊥ agent` (P3): the agent re-derives nothing. ``keymap`` (numeric → frozen native
+key) is the arm thread's own state.
 
-No extra container, no HTTP hop: it holds the Dispatcher directly. ``keymap`` (numeric → native, frozen by
-the arm thread) and ``base`` (meeting-relative start) are shared with the relay thread.
+No extra container, no HTTP hop: it holds the Dispatcher directly.
 """
 from __future__ import annotations
 
@@ -139,26 +134,20 @@ def _stream_tail_id(r, stream: str) -> str:
 
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
-    """Spawn the watcher (arm + relay daemon threads) and return the arm thread (tests/introspection).
-
-    ``keymap`` (numeric → frozen native key) and ``base`` (meeting-relative start anchor) are created
-    here and SHARED by both threads: the arm thread writes them, the relay thread reads them."""
-    keymap: dict[str, str] = {}   # numeric meeting_id → frozen native routing key (shared with relay)
-    base: dict[str, float] = {}   # native key → first segment start (meeting-relative normalization)
+    """Spawn the watcher (the ARM daemon thread) and return it (tests/introspection). ``keymap``
+    (numeric meeting_id → frozen native routing key) is the arm thread's own state."""
+    keymap: dict[str, str] = {}
     t = threading.Thread(
-        target=_run_arm, args=(redis_url, dispatcher, live, subject, keymap, base),
+        target=_run_arm, args=(redis_url, dispatcher, live, subject, keymap),
         daemon=True, name="tx-watch",
     )
     t.start()
-    threading.Thread(
-        target=_run_relay, args=(redis_url, keymap, base), daemon=True, name="tx-relay",
-    ).start()
     return t
 
 
-def _run_arm(redis_url: str, dispatcher, live, subject: str, keymap: dict, base: dict) -> None:
-    """Inbound watch → freeze native key, register live, re-arm copilot, and back-seed the feed from the
-    collector store on first sight. Does NOT fan raw segments — the relay fans the collector's :mutable."""
+def _run_arm(redis_url: str, dispatcher, live, subject: str, keymap: dict) -> None:
+    """Inbound watch → freeze native key, register live, re-arm copilot, reap on session_end. Does NOT
+    write the transcript carrier — meeting-api's collector owns ``tc:meeting:{native}`` (P23)."""
     import redis as redislib
 
     r = redislib.from_url(redis_url, decode_responses=True, socket_keepalive=True, health_check_interval=10)
@@ -170,7 +159,6 @@ def _run_arm(redis_url: str, dispatcher, live, subject: str, keymap: dict, base:
             raise
     last_arm: dict[str, float] = {}     # native key → last spawn-or-touch (monotonic)
     first_seen: dict[str, float] = {}   # numeric meeting_id → first segment time (resolve-grace window)
-    seeded: set[str] = set()            # native keys already back-seeded from the collector store
     logger.info("transcription watcher up — consuming %s (group=%s)", SRC, GROUP)
 
     while True:
@@ -187,114 +175,15 @@ def _run_arm(redis_url: str, dispatcher, live, subject: str, keymap: dict, base:
                 try:
                     r.xack(SRC, GROUP, msg_id)
                     _handle(r, dispatcher, live, subject, json.loads(fields.get("payload") or "{}"),
-                            last_arm, base, keymap, first_seen, seeded)
+                            last_arm, keymap, first_seen)
                 except Exception:  # noqa: BLE001
                     logger.exception("bad transcription frame; skipping")
-
-
-# ── the relay: consume the meeting-api collector's canonical :mutable feed, re-fan to the native key ──
-
-MUTABLE_PATTERN = "tc:meeting:*:mutable"   # the collector's change-only pubsub (services/redis.md)
-
-
-def _fan_segment(r, out_stream: str, native: str, base: dict, seg: dict) -> None:
-    """Re-fan ONE canonical collector segment onto ``tc:meeting:{native}`` in the per-segment wire shape
-    the terminal SSE + ``serve_meeting`` already consume. The collector already deduped/normalized it
-    (unique ids, garbage finals dropped), so we add no dedup of our own — just re-key + relative-anchor."""
-    text = (seg.get("text") or "").strip()
-    sid = seg.get("segment_id")
-    if not text or not sid:
-        return
-    raw = float(seg.get("start") or 0.0)
-    b = base.setdefault(native, raw)
-    start_rel = max(0.0, raw - b)
-    out = {
-        "type": "transcription", "session_uid": native, "meeting_id": native,
-        "segments": [{
-            "speaker": seg.get("speaker") or "Speaker", "text": text,
-            "start": round(start_rel, 1), "end": round(max(start_rel, float(seg.get("end") or raw) - b), 1),
-            "abs_start_ms": round(raw * 1000),
-            "absolute_start_time": seg.get("absolute_start_time"),
-            "completed": bool(seg.get("completed")), "language": seg.get("language") or "en",
-            "segment_id": sid,
-        }],
-    }
-    r.xadd(out_stream, {"payload": json.dumps(out)})
-
-
-def _seed_from_store(r, numeric: str, native: str, base: dict) -> None:
-    """Back-seed ``tc:meeting:{native}`` from the collector's durable store ``meeting:{numeric}:segments``
-    (the full transcript so far), in ascending start order. The :mutable pubsub has no replay, so this is
-    how an in-progress meeting (or an agent-api restart) shows its history without a gap. Idempotent:
-    re-fanning a segment_id the terminal already has is an upsert."""
-    out_stream = f"tc:meeting:{native}"
-    try:
-        raw = r.hgetall(f"meeting:{numeric}:segments")
-    except Exception:  # noqa: BLE001 — seeding is best-effort; the live relay still fills the feed
-        logger.exception("seed read failed for meeting:%s:segments", numeric)
-        return
-    segs = []
-    for v in (raw.values() if isinstance(raw, dict) else []):
-        try:
-            segs.append(json.loads(v))
-        except Exception:  # noqa: BLE001 — skip a single bad stored segment
-            continue
-    segs.sort(key=lambda s: float(s.get("start") or 0.0))
-    for seg in segs:
-        _fan_segment(r, out_stream, native, base, seg)
-
-
-def _relay_message(r, keymap: dict, base: dict, data: dict) -> None:
-    """Relay ONE collector ``:mutable`` delta onto ``tc:meeting:{native}``. Re-keys numeric → native via
-    the arm thread's frozen ``keymap``; a delta whose meeting isn't keyed yet is skipped (the arm thread's
-    store-seed back-fills it). Confirmed AND pending are both fanned — the collector already deduped, so
-    every segment it sends is relayed faithfully (no drop), keyed by its own unique ``segment_id``."""
-    meeting = data.get("meeting") or {}
-    numeric = str(meeting.get("id") or "")
-    # Prefer the native id the collector STAMPED on the payload — it owns the meetings table and is not
-    # user-scoped, so it resolves cross-user where the keymap (built off the user-scoped /meetings list)
-    # cannot. Fall back to the frozen keymap for older payloads that don't carry it.
-    native = meeting.get("native_id") or keymap.get(numeric)
-    if not native:
-        return
-    # Cache the cross-user mapping so the arm thread's copilot keying converges on the native id too.
-    if numeric and meeting.get("native_id"):
-        keymap.setdefault(numeric, native)
-    out_stream = f"tc:meeting:{native}"
-    for seg in (data.get("confirmed") or []):
-        _fan_segment(r, out_stream, native, base, seg)
-    for seg in (data.get("pending") or []):
-        _fan_segment(r, out_stream, native, base, seg)
-
-
-def _run_relay(redis_url: str, keymap: dict, base: dict) -> None:
-    """Subscribe to the collector's ``tc:meeting:*:mutable`` and relay each delta via ``_relay_message``."""
-    import redis as redislib
-
-    while True:
-        try:
-            r = redislib.from_url(redis_url, decode_responses=True, socket_keepalive=True, health_check_interval=10)
-            ps = r.pubsub(ignore_subscribe_messages=True)
-            ps.psubscribe(MUTABLE_PATTERN)
-            logger.info("transcription relay up — consuming collector %s", MUTABLE_PATTERN)
-            for msg in ps.listen():
-                if msg.get("type") != "pmessage":
-                    continue
-                try:
-                    _relay_message(r, keymap, base, json.loads(msg.get("data") or "{}"))
-                except Exception:  # noqa: BLE001 — never die on one bad frame
-                    logger.exception("bad :mutable frame; skipping")
-        except (redislib.exceptions.TimeoutError, redislib.exceptions.ConnectionError):
-            time.sleep(1)
-        except Exception:  # noqa: BLE001 — keep the relay alive across transient pubsub errors
-            logger.exception("relay loop error; retrying")
-            time.sleep(1)
 
 
 RESOLVE_GRACE_SEC = 6.0  # how long to wait for a native id before falling back to the numeric key
 
 
-def _handle(r, dispatcher, live, subject, p, last_arm, base, keymap, first_seen, seeded) -> None:
+def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> None:
     # The bot stamps a NUMERIC meeting_id on every segment — but each re-launch of the SAME Meet gets a
     # fresh numeric id. Resolve it to the native Meet code so the wire/dispatch/feed key on ONE id per
     # physical meeting (re-launches dedupe to a single entry). Fall back to numeric if resolution fails.
@@ -323,13 +212,12 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, keymap, first_seen,
     kind = p.get("type")
     out_stream = f"tc:meeting:{key}"
     if kind == "session_end":
-        r.xadd(out_stream, {"payload": json.dumps({"type": "session_end", "uid": key})})
+        # The collector emits the session_end MARKER onto tc:meeting:{native} (P23, single writer); the
+        # agent only does its OWN reaping here — drop the live row, clear keymap, connect the kg doc.
         live.drop(key)
-        base.pop(key, None)
         last_arm.pop(key, None)
         keymap.pop(mid, None)
         first_seen.pop(mid, None)
-        seeded.discard(key)
         logger.info("meeting %s ended → reaping copilot", key)
         # Connect this meeting's own kg doc (authored by the §4 worker on session_end) to the
         # meeting — from here, so the user key stays out of the isolated worker container.
@@ -338,6 +226,7 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, keymap, first_seen,
     if kind != "transcription":
         return
 
+    # READ-only: the native feed's tail is the copilot's RESUME cursor. The collector writes the feed.
     transcript_start_id = _stream_tail_id(r, out_stream)
 
     # Keep the terminal's live feed fresh on EVERY batch (a cheap dict write) so an agent-api restart
@@ -356,14 +245,6 @@ def _handle(r, dispatcher, live, subject, p, last_arm, base, keymap, first_seen,
     if r.get(f"proc:meeting:{key}:on") and now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
         _arm(dispatcher, subject, key, platform, transcript_start_id=transcript_start_id)
-
-    # (b) transcript CONTENT is the relay's job (it fans the collector's canonical confirmed/pending
-    #     deltas from :mutable). Here we only BACK-SEED the feed ONCE per meeting, from the collector's
-    #     durable store, so an in-progress meeting (or an agent-api restart) shows its history immediately
-    #     — the pubsub relay has no replay. The relay then keeps it live.
-    if key not in seeded:
-        seeded.add(key)
-        _seed_from_store(r, mid, key, base)
 
 
 def _arm(dispatcher, subject: str, key: str, platform: str, *, transcript_start_id: str = "0-0") -> None:

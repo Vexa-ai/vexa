@@ -81,6 +81,52 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
     }
 
 
+def _native_stream(native: str) -> str:
+    """The per-meeting native transcript STREAM the collector owns as SINGLE writer (P23) — read by the
+    copilot worker (``serve_meeting``) and the terminal live SSE. (The agent relay used to write this;
+    the agent now only consumes it.)"""
+    return f"tc:meeting:{native}"
+
+
+def _to_native_wire(native: str, seg: dict) -> dict:
+    """Shape ONE persisted segment into the per-segment wire the native feed carries — a
+    ``transcription`` envelope with a single segment, exactly the shape the worker + terminal SSE consume."""
+    raw = float(seg.get("start") or 0.0)
+    end = float(seg.get("end") or raw)
+    return {
+        "type": "transcription", "session_uid": native, "meeting_id": native,
+        "segments": [{
+            "speaker": seg.get("speaker") or "Speaker", "text": (seg.get("text") or "").strip(),
+            "start": round(raw, 1), "end": round(max(raw, end), 1),
+            "abs_start_ms": round(raw * 1000),
+            "absolute_start_time": seg.get("absolute_start_time"),
+            "completed": bool(seg.get("completed")), "language": seg.get("language") or "en",
+            "segment_id": seg.get("segment_id"),
+        }],
+    }
+
+
+async def _resolve_native(store: TranscriptStore, meeting_id: int) -> Optional["tuple[str, str]"]:
+    """numeric meeting_id → (native_id, platform), via the store (it owns the meetings table). Best-effort."""
+    fn = getattr(store, "native_for", None)
+    if fn is None:
+        return None
+    try:
+        return await fn(meeting_id)
+    except Exception:  # noqa: BLE001 — resolution is best-effort; a miss leaves the feed unwritten
+        return None
+
+
+def _log_publish_failure(meeting_id: int, e: Exception) -> None:
+    try:
+        from ..obs import log_event
+
+        log_event("segment_publish_failed", audience="system", level="warning",
+                  span="collector.ingest", fields={"meeting_id": meeting_id, "error": str(e)})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
     """Process ONE ``transcription_segments`` stream message.
 
@@ -99,8 +145,26 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         return 0
 
     msg_type = data.get("type", "transcription")
+    if msg_type == "session_end":
+        # P23: the collector owns tc:meeting:{native} — emit the session_end marker the copilot worker +
+        # terminal SSE read off it (the agent relay used to do this; the agent now only consumes).
+        native = None
+        mid_raw = data.get("meeting_id")
+        if mid_raw is not None:
+            try:
+                pair = await _resolve_native(store, int(mid_raw))
+                native = pair[0] if pair else None
+            except (TypeError, ValueError):
+                native = None
+        native = native or data.get("uid") or data.get("session_uid")
+        if native:
+            try:
+                await redis.xadd(_native_stream(native), {"type": "session_end", "uid": native})
+            except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
+                _log_publish_failure(0, e)
+        return 0
     if msg_type not in ("transcription", "transcript"):
-        # session_start / session_end / speaker events are out of scope for this segment unit.
+        # session_start / speaker events are out of scope for this segment unit.
         return 0
 
     try:
@@ -130,19 +194,11 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         # numeric→native WITHOUT a user-scoped /meetings lookup (which fails for any meeting not owned
         # by the relay's bot key → segments never reach the terminal's native channel). The collector
         # owns the mapping (it persists by meeting_id); best-effort — a miss leaves it numeric-only.
-        native_id = platform_native = None
-        _native = getattr(store, "native_for", None)
-        if _native is not None:
-            try:
-                pair = await _native(meeting_id)
-                if pair:
-                    native_id, platform_native = pair
-            except Exception:  # noqa: BLE001 — resolution is best-effort; never abort a persisted batch
-                native_id = platform_native = None
+        pair = await _resolve_native(store, meeting_id)
+        native_id, platform_native = pair if pair else (None, None)
         # FAULT-ISOLATED (P18): the segments are already persisted (durable). A transient redis blip on
-        # the live :mutable publish must NOT propagate out of ingest() — that would abort the batch
-        # BEFORE consume_segments acks it, leaving the whole batch unacked + re-raised. Surface it and
-        # return the persisted count (the dashboard recovers the segment on its next REST refresh).
+        # the live publish must NOT propagate out of ingest() — that would abort the batch BEFORE
+        # consume_segments acks it. Surface it and return the persisted count.
         try:
             await redis.publish(
                 _mutable_channel(meeting_id),
@@ -156,14 +212,19 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
                 }),
             )
         except Exception as e:  # noqa: BLE001 — publish is best-effort; persistence already succeeded
-            try:
-                from ..obs import log_event
-
-                log_event("segment_publish_failed", audience="system", level="warning",
-                          span="collector.ingest",
-                          fields={"meeting_id": meeting_id, "error": str(e)})
-            except Exception:
-                pass
+            _log_publish_failure(meeting_id, e)
+        # P23: the collector is the SINGLE writer of the native transcript feed tc:meeting:{native}.
+        # Append each persisted segment (confirmed + pending, in order) for the copilot worker +
+        # terminal SSE. Empty-text segments are skipped (parity with the old agent relay).
+        if native_id:
+            stream = _native_stream(native_id)
+            for seg in persisted:
+                if not (seg.get("text") or "").strip():
+                    continue
+                try:
+                    await redis.xadd(stream, _to_native_wire(native_id, seg))
+                except Exception as e:  # noqa: BLE001 — best-effort; persistence already succeeded
+                    _log_publish_failure(meeting_id, e)
 
     return len(persisted)
 

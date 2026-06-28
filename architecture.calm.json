@@ -685,7 +685,7 @@
       "unique-id": "tc-stream",
       "node-type": "data-asset",
       "name": "tc:meeting:{id} (stream)",
-      "description": "raw transcript stream the agent worker + SSE read",
+      "description": "native per-meeting transcript stream the agent worker + terminal SSE read; the collector (meetings) is the single writer (P23)",
       "controls": {
         "ownership": {
           "description": "single writer",
@@ -694,7 +694,7 @@
               "requirement-url": "vexa/controls/single-writer",
               "config": {
                 "writers": [
-                  "agent-api"
+                  "meeting-api"
                 ],
                 "match": "tc:meeting:[^:]*$",
                 "op": "xadd"
@@ -1105,11 +1105,11 @@
       ]
     },
     {
-      "unique-id": "agent-relays-tc",
+      "unique-id": "collector-writes-tc",
       "relationship-type": {
         "connects": {
           "source": {
-            "node": "agent-api"
+            "node": "meeting-api"
           },
           "destination": {
             "node": "tc-stream"
@@ -1119,24 +1119,6 @@
       "metadata": [
         {
           "access": "write"
-        }
-      ]
-    },
-    {
-      "unique-id": "agent-reads-mutable",
-      "relationship-type": {
-        "connects": {
-          "source": {
-            "node": "agent-api"
-          },
-          "destination": {
-            "node": "tc-mutable"
-          }
-        }
-      },
-      "metadata": [
-        {
-          "access": "read"
         }
       ]
     },
@@ -1387,9 +1369,9 @@
           "description": "collector ingests + republishes change-only"
         },
         {
-          "relationship-unique-id": "agent-relays-tc",
+          "relationship-unique-id": "collector-writes-tc",
           "sequence-number": 3,
-          "description": "watcher relays into the per-meeting stream"
+          "description": "collector writes the native per-meeting stream (single writer, P23)"
         },
         {
           "relationship-unique-id": "agent-writes-processed",

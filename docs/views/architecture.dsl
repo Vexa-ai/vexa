@@ -79,11 +79,9 @@ runtime > runtime.v1, schedule.v1
 terminal > terminal-app, terminal-canvas, terminal-contributions, terminal-platform, terminal-surfaces, terminal-ui-kit, terminal-workbench
 
 ## connects  (src -access-> dst [contract])
-agent-api -read-> tc-mutable
 agent-api -read-> tc-stream
 agent-api -write-> out-stream
 agent-api -write-> proc-stream
-agent-api -write-> tc-stream
 bot -write-> recording-blob
 bot -write-> segments-stream
 bot -write-> tc-mutable
@@ -94,6 +92,7 @@ gateway -write-> extension [ws.v1]
 meeting-api -read-> segments-stream
 meeting-api -write-> segments-table
 meeting-api -write-> tc-mutable
+meeting-api -write-> tc-stream
 terminal -read-> out-stream
 terminal -read-> proc-stream
 terminal -read-> tc-stream
@@ -105,12 +104,12 @@ recording-blob <= bot · blob-write · audio
 segments-stream <= bot · xadd · raw
 segments-table <= meeting-api · db-write · raw
 tc-mutable <= bot+meeting-api · publish · raw
-tc-stream <= agent-api · xadd · raw
+tc-stream <= meeting-api · xadd · raw
 
 ## flows  (id: step. edge — description)
 transcript-flow — live transcript
   1. bot-writes-segments-stream — bot confirms raw segments (ASR + LocalAgreement)
   2. collector-publishes-mutable — collector ingests + republishes change-only
-  3. agent-relays-tc — watcher relays into the per-meeting stream
+  3. collector-writes-tc — collector writes the native per-meeting stream (single writer, P23)
   4. agent-writes-processed — worker cleans raw → processed 1:1 (catch-up then live)
   5. terminal-reads-processed — one engine renders raw|processed; no re-derivation

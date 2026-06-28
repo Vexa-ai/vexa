@@ -137,3 +137,9 @@ class RedisBus(Protocol):
     async def ack(self, *, group: str, stream: str, message_ids: list[str]) -> None: ...
 
     async def publish(self, channel: str, data: str) -> Any: ...
+
+    async def xadd(self, stream: str, payload: dict) -> Any:
+        """Append one entry to a redis STREAM (``payload`` is the inner JSON, stored under the
+        ``payload`` field). The collector is the SINGLE writer of the per-meeting native transcript
+        feed ``tc:meeting:{native}`` (P23) — the copilot worker + terminal SSE read it."""
+        ...

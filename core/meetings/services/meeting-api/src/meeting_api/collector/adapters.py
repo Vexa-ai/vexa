@@ -375,6 +375,11 @@ class RedisStreamBus:
     async def publish(self, channel, data):
         return await self._client.publish(channel, data)
 
+    async def xadd(self, stream, payload):
+        """Append one entry to a redis STREAM under the ``payload`` field — the native transcript feed
+        ``tc:meeting:{native}`` the collector owns as single writer (P23)."""
+        return await self._client.xadd(stream, {"payload": json.dumps(payload)})
+
 
 def build_production_app(
     *,
