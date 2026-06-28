@@ -33,6 +33,36 @@ live-capture leg needs `/speak` (see README), currently network-gated.
 Outside the repo by design (audio is large / may carry voices); `~/vexa-test-rig/secrets.env` holds `DG_KEY`.
 The three scripts below are tracked code (`core/meetings/eval/src/`).
 
+## Fixture inventory — what we have today (2026-06-28)
+
+Two complementary shapes cover different stages. **Counting** = stage-1→3 (audio/STT/segments) + the 1..N
+oracle, drives STT + downstream; **`captured-signal.v1`** = stage-1 raw per-speaker PCM, drives the real
+capture/diarization/segmentation.
+
+### Counting fixtures — gitignored store `~/vexa-test-rig/fixtures/google_meet/` (stages 1–3 + truth + manifest)
+| fixture | turns | STT recall (stage 2) | note |
+|---|---|---|---|
+| `count-silence-1to20` | 4 | 1.0 | clean turns, baseline |
+| `count-overlap-1to20` | 4 | 1.0 | boundary overlap |
+| `count-continuation-1to20` | 4 | 1.0 | same speaker across a gap |
+| `count-solo-1to20` | 1 | 1.0 | no-switch control |
+| `count-dynamic-1to20` | 10 | **0.7** | rapid 1–2-number switches — STT drops (real finding) |
+| `count-silence-1to500` | 100 | **0.902** | scale; downstream still LOSSLESS |
+
+Each dir: `1-audio/*.wav · 2-stt.jsonl · 3-segments.jsonl · truth.jsonl · manifest.json`. Gitignored (outside
+the repo); regenerate any time with `counting_fixture.py`.
+
+### In-repo committed fixtures (small, tracked — for offline gates)
+| fixture | shape | drives | gate |
+|---|---|---|---|
+| `eval/replay-fixture/session.captured-signal.jsonl` | **captured-signal.v1** — 36 frames raw per-speaker PCM, Alice→Bob→Alice gmeet | the **real gmeet pipeline** (capture→diarization→segmentation) | `gate:replay` (`services/bot/src/replay.test.ts`) |
+| `eval/replay-fixture/transcript-misattr.json` | transcript.v1 w/ a PLANTED mis-attribution | the O-TEL-3 auto-flagger | `analyze.mjs --flag-issues` |
+| `core/agent/eval/replay/gamestop-allin.jsonl` | stage-3 segments (transcript.v1, real meeting slice) | the copilot offline (notes/cards) | cookbook L3 / `replay_transcript.py` |
+
+### Not present yet
+- **`EVAL_CACHE` (`~/vexa-test-rig/cache`)** — the live-rig TTS clip pool — empty; regen with `FORCE_REGEN=1` (needs DG key).
+- **No zoom/teams fixtures**, and **no `captured-signal.v1` for counting** yet (the reuse that would give counting real capture/diarization coverage — see "Closing the capture gap" below).
+
 ## Scenarios (the speaker-switch knob — same 1..N oracle, different stress)
 `silence` (clean turns, gap) · `overlap` (boundary overlap) · `dynamic` (rapid 1–2-number switches) ·
 `continuation` (same speaker across a brief gap) · `solo` (one speaker, control).
@@ -67,6 +97,13 @@ python3 src/counting_replay.py --fixture ~/vexa-test-rig/fixtures/google_meet/co
 - **Scope:** Google Meet only. Stages 4–6 are platform-agnostic (carry a `platform` string); the per-platform
   capture/diarization modules (`gmeet-/teams-/zoom-capture`) are NOT exercised by the offline path.
 - **Not yet:** the live bot audio-capture leg (needs `/speak` on a reachable deployment), and zoom/teams.
+
+## Closing the capture gap (planned reuse of `captured-signal.v1`)
+The counting fixtures skip the real capture/diarization layer (their speaker labels are the oracle assignment,
+not live diarization). To cover it offline, emit the counting audio in **`captured-signal.v1`** shape — WAV →
+Float32 PCM frames assigned to speaker **channels + glows** per each scenario's switch pattern — and replay
+through the real `@vexa/gmeet-pipeline` (the `gate:replay` path, optionally with real STT). One fixture would
+then cover **capture/diarization + STT + the 1..N oracle**. Not built yet; reuses the committed format + harness.
 
 ## Related
 - Fail-loud relay health (the 90-min-incident fix): `docs/adr/0010-fail-loud-and-attributable.md` (P18),
