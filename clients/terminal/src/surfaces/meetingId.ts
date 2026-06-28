@@ -51,9 +51,15 @@ export function parseMeetingInput(raw: string): ParsedMeeting | null {
       return m ? { platform: "zoom", native_meeting_id: m[0] } : null;
     }
     if (host.includes("teams.microsoft.com") || host.includes("teams.live.com")) {
+      // Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
       const decoded = decodeURIComponent(input);
-      const m = decoded.match(/19:meeting_[^@%\s/]+@thread\.v2/i);
-      return m ? { platform: "teams", native_meeting_id: m[0] } : null;
+      const thread = decoded.match(/19:meeting_[^@%\s/]+@thread\.v2/i);
+      if (thread) return { platform: "teams", native_meeting_id: thread[0] };
+      // New short meeting link: teams.microsoft.com/meet/<id>?p=<passcode> — the native id is the path
+      // segment; the passcode rides along in `meeting_url` (sent verbatim by the Add-bot call).
+      const short = url.pathname.match(/\/meet\/([^/?#]+)/i);
+      if (short) return { platform: "teams", native_meeting_id: short[1] };
+      return null;
     }
     return null;
   }

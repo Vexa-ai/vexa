@@ -224,6 +224,10 @@ async function runMeetingAction(action: Omit<MeetingActionFailure, "message">, r
  *  the correct actions and each fires the correct endpoint+body. */
 export function actionsFor(m: MeetingMock): RowAction[] {
   const native = m.native_id ?? m.id;
+  // The model stores platform DISPLAY-cased ("Google Meet", else the raw API slug like "teams"/"zoom").
+  // Stop targets DELETE /bots/{platform}/{native}, so normalise back to the slug — hardcoding google_meet
+  // 404s ("No active meeting for this bot") for a live Teams/Zoom bot.
+  const platformSlug = m.platform === "Google Meet" ? "google_meet" : m.platform.toLowerCase().replace(/\s+/g, "_");
   const intent = (state: "idle" | "scheduled", at?: string, onFailure?: MeetingActionFailureHandler) =>
     runMeetingAction({ actionId: state === "idle" ? "cancel" : "schedule", actionLabel: state === "idle" ? "Cancel" : "Schedule", native }, fetch(`/api/meetings/google_meet/${encodeURIComponent(native)}/intent`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -233,7 +237,7 @@ export function actionsFor(m: MeetingMock): RowAction[] {
     runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/bots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: "google_meet", native_meeting_id: native, meeting_url: `https://meet.google.com/${native}`, bot_name: "Vexa" }) }), onFailure);
   // Stop = the gateway-backed user-stop route DELETE /bots/{platform}/{native} (meeting-api lifecycle/stop_router).
   const stop = (onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch(`/api/bots/google_meet/${encodeURIComponent(native)}`, { method: "DELETE" }), onFailure);
+    runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch(`/api/bots/${platformSlug}/${encodeURIComponent(native)}`, { method: "DELETE" }), onFailure);
   const schedule = (onFailure?: MeetingActionFailureHandler) => {
     // minimal time picker: prompt for a local datetime, send as ISO. (A richer picker can replace this.)
     const def = new Date(Date.now() + 3600_000).toISOString().slice(0, 16);

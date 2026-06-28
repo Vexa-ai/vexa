@@ -267,8 +267,6 @@ export function Workbench() {
       </div>
 
       <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 10px" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)" }} />bbb · connected</div>
-        <div style={{ padding: "0 10px", color: "var(--t3)" }}>air-gapped</div>
         <div style={{ flex: 1 }} />
         <button onClick={() => layout.resetLayout()} style={{ padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }} title="Reset layout">reset layout</button>
       </footer>

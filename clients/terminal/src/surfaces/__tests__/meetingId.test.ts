@@ -52,6 +52,13 @@ describe("parseMeetingInput", () => {
     });
   });
 
+  it("parses the new short Teams meeting link (teams.microsoft.com/meet/<id>?p=…)", () => {
+    expect(parseMeetingInput("https://teams.microsoft.com/meet/33832851446746?p=Y16HhbYoEs9At3lGtb")).toEqual({
+      platform: "teams",
+      native_meeting_id: "33832851446746",
+    });
+  });
+
   it("returns null for garbage", () => {
     expect(parseMeetingInput("")).toBeNull();
     expect(parseMeetingInput("not a meeting")).toBeNull();

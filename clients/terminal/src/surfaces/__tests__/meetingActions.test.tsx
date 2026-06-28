@@ -81,6 +81,13 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
     expect(init.method).toBe("DELETE");
   });
 
+  it("active→Stop uses the meeting's REAL platform (Teams), not a hardcoded google_meet", () => {
+    actionsFor({ ...row("active"), platform: "teams" }).find((a) => a.id === "stop")!.run();
+    const { url, init } = lastFetch();
+    expect(url).toBe(`/api/bots/teams/${NATIVE}`);
+    expect(init.method).toBe("DELETE");
+  });
+
   it("active→Stop reports network failures instead of throwing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const onFailure = vi.fn();
