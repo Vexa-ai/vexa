@@ -491,7 +491,7 @@ function gateEval() {
     ["scheduling",        /^test_.*schedul.*\.py$/,                     ["core/meetings/services/meeting-api"]],
     ["api-surface",       /^test_api.*\.py$/,                           ["core/gateway/services/conformance"]],
     ["ws-protocol",       /^test_.*ws.*\.py$/,                          ["core/gateway/services/conformance"]],
-    ["agents",            /^test_.*\.py$/,                              ["core/agent/services/agent-api"]],
+    ["agents",            /^test_.*\.py$/,                              ["core/agent/tests"]],
     ["telemetry-tap",     /^telemetry\.test\.ts$/,                      ["core/meetings/services/bot"]],
     ["replay",            /^replay\.test\.ts$/,                         ["core/meetings/services/bot"]],
     ["bug-flag",          /^flag\.test\.mjs$/,                          ["core/meetings/eval"]],
