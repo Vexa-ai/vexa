@@ -1,0 +1,16 @@
+{
+  "name": "@vexa/transcribe-buffer",
+  "version": "0.1.0",
+  "description": "Shared confirmation core — LocalAgreement-2 over a turn's unconfirmed window.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js",
+    "test": "echo '(confirm-loop golden lives in pipeline until the engines move here)'"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}

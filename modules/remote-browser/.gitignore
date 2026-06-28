@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# Persisted browser sessions = LIVE login cookies. Never commit.
+profiles/

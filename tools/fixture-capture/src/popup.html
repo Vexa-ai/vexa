@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 13px -apple-system, system-ui, sans-serif; width: 290px; padding: 12px; margin: 0; }
+    h1 { font-size: 14px; margin: 0 0 2px; }
+    .sub { font-size: 11px; color: #888; margin-bottom: 10px; }
+    label { display: block; font-size: 11px; color: #666; margin-top: 8px; }
+    input { width: 100%; box-sizing: border-box; padding: 5px 6px; border: 1px solid #ccc; border-radius: 4px; }
+    .row { display: flex; gap: 8px; margin-top: 12px; }
+    button { flex: 1; padding: 8px; cursor: pointer; border: 1px solid #bbb; border-radius: 4px; background: #fafafa; }
+    button:disabled { opacity: .45; cursor: default; }
+    #status { margin-top: 12px; padding: 8px; background: #f3f4f6; border-radius: 4px; font-size: 12px; }
+    .hint { font-size: 10px; color: #999; margin-top: 10px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <h1>Vexa Fixture Capture</h1>
+  <div class="sub">capture.v1 → recorder. Nothing else.</div>
+  <label>Recorder WS URL</label>
+  <input id="ingestUrl" placeholder="ws://localhost:9099/ingest">
+  <div class="row">
+    <button id="start">▶ Start</button>
+    <button id="stop" disabled>■ Stop</button>
+  </div>
+  <div id="status">idle</div>
+  <div class="hint">Open this on the meeting tab, hit Start. Captures the tab's audio + speaker hints to the recorder; the fixture is auto-named <code>platform-topology-meetingId</code>. No join, no account.</div>
+  <script src="popup.js"></script>
+</body>
+</html>

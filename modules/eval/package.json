@@ -1,0 +1,13 @@
+{
+  "name": "@vexa/eval",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Synthetic-meeting evaluation harness (any platform): launch speaker bots into a live meeting via the production API, play known TTS speeches on a controlled timeline (length + overlap dials), then score the captured transcript against ground truth.",
+  "scripts": {
+    "launch": "node --env-file=secrets.env src/launch.mjs",
+    "drive": "node --env-file=secrets.env src/drive.mjs",
+    "corpus": "node --env-file=secrets.env src/corpus.mjs",
+    "judge": "bin/eval.sh judge"
+  }
+}

@@ -210,8 +210,27 @@ async function trySelectCameraFromVideoOptions(page: Page): Promise<boolean> {
 }
 
 export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Promise<void> {
-  // Install RTCPeerConnection hook before any Teams scripts run - ensures remote audio tracks
-  // are mirrored into hidden <audio> elements that BrowserAudioService can capture later.
+  // PREFERRED: install the SHARED remote-audio WebRTC hook (vexa-bot/core/src/
+  // browser/webrtc-audio-hook.ts — the same code the extension runs on
+  // Zoom/Teams). Injected pre-navigation from the compiled module on disk.
+  // The inline hook below is the verbatim legacy copy and now acts as the
+  // FALLBACK: it checks __vexaRemoteAudioHookInstalled and no-ops when the
+  // shared hook already installed — the bot must never lose remote audio.
+  try {
+    /* eslint-disable @typescript-eslint/no-var-requires */
+    const fs = require('fs');
+    const path = require('path');
+    const hookSource = fs.readFileSync(path.join(path.dirname(require.resolve('@vexa/capture/package.json')), 'dist', 'webrtc-audio-hook.js'), 'utf8');
+    await page.addInitScript(
+      `(function(){var exports={};var module={exports:exports};(function(exports,module){${hookSource}\n})(exports,module);` +
+      `var f=(module.exports&&module.exports.installRemoteAudioHook)||exports.installRemoteAudioHook;if(f)f({});})();`
+    );
+    log('[Audio Hook] shared webrtc-audio-hook scheduled (pre-navigation)');
+  } catch (e: any) {
+    log(`[Audio Hook] shared hook injection unavailable (${e?.message}) — inline fallback will install`);
+  }
+
+  // FALLBACK: original inline hook (no-ops if the shared module installed).
   await page.addInitScript(() => {
     try {
       const win = window as any;

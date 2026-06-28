@@ -372,11 +372,12 @@ async def ws_authorize_subscribe(
         platform_value = meeting_ref.platform.value if isinstance(meeting_ref.platform, Platform) else str(meeting_ref.platform)
         native_id = meeting_ref.native_meeting_id
 
-        try:
-            constructed = Platform.construct_meeting_url(platform_value, native_id)
-        except Exception:
-            constructed = None
-        if not constructed:
+        # URL-constructibility is advisory only — extension capture sessions use
+        # synthesized native ids (e.g. Teams "cloud-…" where the web client's URL
+        # carries no meeting id) that can't construct a URL but are legitimate
+        # meetings. The DB ownership check below is the actual authorization
+        # boundary (user_id + platform + native id must match).
+        if not native_id or len(native_id) > 255:
             errors.append(f"meetings[{idx}] invalid native_meeting_id for platform '{platform_value}'")
             continue
 

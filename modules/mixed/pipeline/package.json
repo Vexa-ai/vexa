@@ -1,0 +1,23 @@
+{
+  "name": "@vexa/mixed-pipeline",
+  "version": "0.1.0",
+  "description": "Mixed-lane pipeline: pyannote segmenter (cut-only) + shared buffer/whisper + hints namer → transcript.v1. Single mixed audio stream; names from time-windowed hints. No diarization/clustering.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js",
+    "test": "tsx src/confirm-loop.golden.test.ts && tsx src/naming.smoke.test.ts && tsx src/claim.smoke.test.ts && tsx src/priority.smoke.test.ts && tsx src/concurrency.smoke.test.ts && tsx src/flicker.smoke.test.ts"
+  },
+  "dependencies": {
+    "@vexa/transcribe-buffer": "file:../../shared/buffer",
+    "@vexa/transcribe-whisper": "file:../../shared/whisper",
+    "@huggingface/transformers": "^4.2.0",
+    "onnxruntime-node": "^1.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}

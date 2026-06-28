@@ -1,3 +1,7 @@
+// Canonical join launch args live in the join brick (single source of truth — the
+// service consumes them, never re-declares them; see modules/join/src/browser-args.ts).
+import { JOIN_BROWSER_ARGS } from "@vexa/join";
+
 // User Agent — MUST stay consistent with the bundled Chromium's real version AND
 // platform, or Google Meet's anti-abuse flags the UA↔Client-Hints mismatch and serves
 // a reCAPTCHA + "You can't join this video call" (then redirects to
@@ -25,37 +29,11 @@ export const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
 // --disable-blink-features=AutomationControlled (mirrors getAuthenticatedBrowserArgs).
 // Google Meet uses valid TLS certs; the certificate-error flags were never needed
 // for meet.google.com and init-scripts are injected via CDP (unaffected by CSP).
-const baseBrowserArgs = [
-  "--incognito",
-  "--no-sandbox",
-  "--disable-setuid-sandbox",
-  "--disable-features=IsolateOrigins,site-per-process",
-  "--disable-infobars",
-  "--disable-gpu",
-  // Collapse Chromium's gpu-process work into the renderer — no separate
-  // gpu-process at all.
-  //
-  // 2026-04-27 measurement (cycle 260426 Zoom Web): a Zoom Web bot
-  // demanded 4.4 cores; 3.6 of those (= 357% CPU) lived in
-  // --type=gpu-process running SwiftShader software-WebGL + canvas
-  // compositing for Zoom's UI. Software-decoded video frames also flow
-  // through that process. With --in-process-gpu, the work collapses
-  // into the renderer (which already runs the page's JS) and per-bot
-  // demand drops to ~115% — back inside the 1500m budget that matches
-  // the gmeet/teams p95 (780m).
-  //
-  // Earlier iterations on this cycle tried --disable-webgl /
-  // --disable-3d-apis / --disable-accelerated-2d-canvas etc.; all
-  // confirmed inert (gpu-process kept running because it hosts the
-  // software video decoder, not just the compositor).
-  // --in-process-gpu is the only flag that actually killed it.
-  "--in-process-gpu",
-  "--use-fake-ui-for-media-stream",
-  "--use-file-for-fake-video-capture=/dev/null",
-  "--disable-blink-features=AutomationControlled",
-  "--disable-features=VizDisplayCompositor",
-  "--disable-site-isolation-trials"
-];
+// The meeting-launch environment is the join brick's contract (JOIN_BROWSER_ARGS) —
+// consumed here, never duplicated, so the brick's debug harness and this image
+// launch byte-for-byte the same browser (no drift). Bot-only concerns (voice-agent
+// audio, CDP debug) are layered on below.
+const baseBrowserArgs = [...JOIN_BROWSER_ARGS];
 
 /**
  * Get browser launch arguments based on voice agent state.
@@ -75,59 +53,22 @@ const baseBrowserArgs = [
  * - Teams UI: mic muted after join (join.ts)
  * - TTS: unmutes pactl + UI mic before speaking, re-mutes after
  */
-// CDP debug args — shared by EVERY browser launch (meeting + browser-session) so an
-// agent can attach over the gateway /b/{token}/cdp proxy to clear captcha/blocking
-// states. Chrome opens 9222 alongside Playwright's own --remote-debugging-pipe (the
-// pipe is NOT removed — removing it severs Playwright's connection and the bot dies on
-// launch). Chrome still binds 9222 on 127.0.0.1 only; the entrypoint socat relay
-// re-exposes it on 0.0.0.0:9223 for the gateway to reach across the docker network.
-export const CDP_DEBUG_ARGS = [
-  '--remote-debugging-port=9222',
-  '--remote-debugging-address=0.0.0.0',
-  '--remote-allow-origins=*',
-];
-
+// Persistent-context / interactive (VNC) browser args — getAuthenticatedBrowserArgs,
+// getBrowserSessionArgs, CDP_DEBUG_ARGS — now live in @vexa/remote-browser (the
+// browser-as-container brick, single source of truth). The MEETING args below stay
+// here: they are a bot concern, built on the join brick's JOIN_BROWSER_ARGS.
 export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
-  return [...baseBrowserArgs, ...CDP_DEBUG_ARGS];
-}
-
-/**
- * Browser args for authenticated bot mode (persistent context with stored cookies).
- * Uses minimal, clean flags — aggressive flags like --disable-web-security and
- * --ignore-certificate-errors trigger Google's bot detection and cause "You can't
- * join this video call" blocks. Modeled after getBrowserSessionArgs().
- */
-export function getAuthenticatedBrowserArgs(): string[] {
-  return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-blink-features=AutomationControlled',
-    '--disable-infobars',
-    '--disable-gpu',
-    '--use-fake-ui-for-media-stream',
-    '--use-file-for-fake-video-capture=/dev/null',
-    '--disable-features=VizDisplayCompositor',
-    '--password-store=basic',
-  ];
+  const args = [...baseBrowserArgs];
+  // Opt-in CDP exposure for the hot-debug loop. Inert unless BOT_DEBUG_CDP=true.
+  if (process.env.BOT_DEBUG_CDP === 'true') {
+    args.push(
+      '--remote-debugging-port=9222',
+      '--remote-debugging-address=0.0.0.0',
+      '--remote-allow-origins=*'
+    );
+  }
+  return args;
 }
 
 // Default browser args
 export const browserArgs = getBrowserArgs(false);
-
-/**
- * Browser args for interactive browser session mode (VNC + CDP).
- * No incognito, no fake media — human interacts via VNC, agent via CDP.
- */
-export function getBrowserSessionArgs(): string[] {
-  return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-blink-features=AutomationControlled',
-    '--use-fake-ui-for-media-stream',
-    '--start-maximized',
-    '--window-size=1920,1080',
-    '--window-position=0,0',
-    ...CDP_DEBUG_ARGS,
-    '--password-store=basic',
-  ];
-}

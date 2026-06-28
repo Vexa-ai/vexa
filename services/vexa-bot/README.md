@@ -14,6 +14,18 @@ provides different signals, and the bot adapts:
 
 All platforms feed into the same shared transcription pipeline.
 
+### Ingest server (no-bot mode)
+
+The bot's browser-side capture and its Node transcription pipeline are two
+halves joined in-process by Playwright. The pipeline half also runs standalone
+as an **ingest server** (`core/src/ingest-server.ts`, run via `npm run ingest`
+or `Dockerfile.ingest`): a WebSocket front door that receives per-speaker audio
+from the [in-tab extension](../vexa-extension/) instead of from Playwright. No
+browser launch, no join, no admission — the user is already in the meeting.
+Everything downstream (`SpeakerStreamManager` → transcription-service →
+`SegmentPublisher` → Redis) is identical to the bot path. See
+[docs/in-tab-extension](../../docs/in-tab-extension.mdx).
+
 ## What
 
 ### Documentation

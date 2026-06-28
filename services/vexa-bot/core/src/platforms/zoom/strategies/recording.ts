@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
-import { RecordingService } from '../../../services/recording';
+import { RecordingService } from '@vexa/recording';
 import { setActiveRecordingService } from '../../../index';
 import { getSDKManager } from './join';
 import { log } from '../../../utils';

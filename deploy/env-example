@@ -67,3 +67,11 @@ CLAUDE_JSON_PATH=
 
 # Billing hooks (optional — for hosted service)
 # POST_MEETING_HOOKS=https://your-billing-webhook
+
+# API-gateway rate limits (requests/min per key). 0 disables.
+# Keep these generous for dev/self-host — the dashboard polls transcripts/chat
+# every few seconds, so low values (e.g. 6) make it return 429 "Rate limit
+# exceeded". Only set them low deliberately when testing rate-limit behavior.
+RATE_LIMIT_RPM=600
+RATE_LIMIT_ADMIN_RPM=120
+RATE_LIMIT_WS_RPM=120

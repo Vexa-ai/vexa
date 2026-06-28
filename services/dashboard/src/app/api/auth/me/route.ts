@@ -13,6 +13,18 @@ export async function GET() {
     return NextResponse.json({ error: "VEXA_API_URL is required" }, { status: 500 });
   }
 
+  // Vexa Desktop: single local user, no auth backend. Short-circuit with a
+  // synthetic identity so the auth-provider authenticates without ever showing
+  // the login screen. Gated by a flag ONLY the desktop deploy sets — prod and the
+  // hosted dashboard are untouched and fall through to the cookie/gateway chain.
+  if (process.env.VEXA_DESKTOP_SINGLE_USER === "1") {
+    return NextResponse.json({
+      authenticated: true,
+      user: { id: "local", email: process.env.VEXA_DESKTOP_USER_EMAIL || "local@vexa.desktop", name: "Local User" },
+      token: process.env.VEXA_API_KEY || "local",
+    });
+  }
+
   const cookieStore = await cookies();
   const authCookieName = getAuthCookieName();
   const cookieToken = cookieStore.get(authCookieName)?.value;

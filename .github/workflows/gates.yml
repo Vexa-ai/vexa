@@ -14,7 +14,7 @@ jobs:
         run: |
           set -e
           found=0
-          for f in packages/*/scripts/check-isolation*; do
+          for f in modules/*/scripts/check-isolation*; do
             [ -e "$f" ] || continue
             found=1
             echo "== $f"

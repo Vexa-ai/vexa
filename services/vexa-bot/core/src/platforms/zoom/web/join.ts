@@ -143,6 +143,27 @@ export async function joinZoomWebMeeting(page: Page | null, botConfig: BotConfig
   // Fix 2: Propagate JOINING callback failure — bot must NOT proceed if server rejected
   await callJoiningCallback(botConfig);
 
+  // Dismiss the OneTrust cookie-consent banner if present.
+  //
+  // The CLASSIC web client (app.zoom.us/wc/join/<id>) renders a OneTrust
+  // consent banner that overlays the pre-join card — verified via
+  // document.elementFromPoint() over the name field returning
+  // #onetrust-reject-all-handler. Left up, it intercepts pointer events so
+  // the name input can't be focused and Join never enables. Accept (or fall
+  // back to reject) to clear it. Harmless no-op on the React client, which
+  // doesn't render this banner.
+  for (const otSel of ['#onetrust-accept-btn-handler', '#onetrust-reject-all-handler']) {
+    try {
+      const otBtn = page.locator(otSel).first();
+      if (await otBtn.isVisible({ timeout: 1500 })) {
+        await otBtn.click();
+        log(`[Zoom Web] Dismissed cookie-consent banner (${otSel})`);
+        await page.waitForTimeout(400);
+        break;
+      }
+    } catch { /* no banner — continue */ }
+  }
+
   // Handle the "Use microphone and camera" permission dialog(s).
   // Zoom shows this dialog up to twice (camera+mic, then mic-only).
   // ALL bots must click "Allow" to join the audio channel — without it, Zoom
@@ -232,16 +253,37 @@ export async function joinZoomWebMeeting(page: Page | null, botConfig: BotConfig
   await page.keyboard.type(botConfig.botName, { delay: 30 });
   log(`[Zoom Web] Name typed: "${botConfig.botName}"`);
 
-  // Wait for Zoom's React state to enable the Join button (or proceed if
-  // it never enables — the click attempt below will surface the issue).
+  // Wait for Zoom to enable the Join button. The CLASSIC web client gates
+  // #joinBtn behind a Google reCAPTCHA ("I'm not a robot" + image challenge)
+  // that an automated agent cannot clear — a human must solve it via noVNC
+  // (http://localhost:<noVNC>/vnc.html). When a reCAPTCHA frame is present we
+  // extend the wait to 3 minutes and poll for the button to enable; the React
+  // client (no captcha) enables it within a second or two of typing.
+  const captchaPresent = await page.locator('iframe[src*="recaptcha"]').first()
+    .isVisible({ timeout: 500 }).catch(() => false);
+  // Second human gate: some meetings hard-block anonymous bots with a "Sign in to
+  // join / Automated bots aren't allowed … must use Zoom RTMS" modal. Join stays
+  // disabled until a human signs in (e.g. as a real Zoom account) via noVNC.
+  const signInWall = await page.locator(
+    'text=/sign in to join|bots aren.?t allowed|must use Zoom RTMS/i'
+  ).first().isVisible({ timeout: 500 }).catch(() => false);
+  const humanGate = captchaPresent || signInWall;
+  const joinEnableTimeoutMs = humanGate ? 15 * 60 * 1000 : 8000;
+  if (humanGate) {
+    const which = signInWall ? 'sign-in / bots-not-allowed wall' : 'reCAPTCHA';
+    log(`[Zoom Web] ⚠️ ${which} is gating the Join button — a HUMAN must clear it ` +
+        `via noVNC (sign in as a Zoom account / solve the captcha). ` +
+        `Holding the browser open up to 15 min for Join to become enabled...`);
+  }
   await page.waitForFunction(
     (sel: string) => {
       const btn = document.querySelector(sel) as HTMLButtonElement | null;
       return !!btn && !btn.classList.contains('disabled') && !btn.disabled;
     },
     zoomJoinButtonSelector,
-    { timeout: 8000 },
-  ).catch(() => log('[Zoom Web] WARNING: Join button still disabled after typing name; will attempt click anyway'));
+    { timeout: joinEnableTimeoutMs },
+  ).then(() => log('[Zoom Web] Join button enabled — proceeding to click'))
+   .catch(() => log('[Zoom Web] WARNING: Join button still disabled after wait; will attempt click anyway'));
 
   // Ensure mic is muted in preview for recorder bots (they only need to receive audio).
   // Voice agent bots keep mic unmuted so Zoom grants audio access for TTS output.

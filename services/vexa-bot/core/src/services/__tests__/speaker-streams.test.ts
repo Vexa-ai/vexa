@@ -11,7 +11,7 @@
  */
 
 import assert from 'node:assert';
-import { SpeakerStreamManager } from '../speaker-streams';
+import { SpeakerStreamManager } from '@vexa/gmeet-pipeline';
 
 let passed = 0;
 let failed = 0;

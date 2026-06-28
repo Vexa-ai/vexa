@@ -1,0 +1,62 @@
+flowchart LR
+  SCW(["StreamCaptureWriter (done)"]):::done
+  HARN(["e2e + join harness (done)"]):::done
+  ZFIX(["zoom fixture (done)"]):::done
+
+  subgraph L1["Lane 1 - mixed quality"]
+    BENCH["bench:mixed"] --> PIPEGATE["pipeline replay-gate"]
+  end
+  subgraph L2["Lane 2 - prod-dump"]
+    BOTTEE["bot in-proc tee"] --> RETDUMP["retention + dump CLI"]
+    INGTEE["ingest-server tee"] --> RETDUMP
+    RETDUMP --> PRODDUMP["dump real meetings"]
+  end
+  subgraph L3["Lane 3 - deployments"]
+    HELM["Helmify ingest-server"] --> CLUSTER["e2e - cluster staging"]
+    COMPOSE["e2e - Compose"]
+    LITE["e2e - Lite"]
+  end
+  subgraph L4["Lane 4 - teams/gmeet capture"]
+    EXTSET["full extension setup"] --> COLLECT["collect gmeet+teams"]
+    TNAMES["teams names"] --> COLLECT
+    TCHAT["teams chat"] --> COLLECT
+    GCONF["gmeet confirm"] --> COLLECT
+    COLLECT --> SMOKE["live capture smoke"]
+  end
+  subgraph L5["Lane 5 - join"]
+    EGRESS["egress positions"] --> ADMIT["admission matrix"]
+    EGRESS --> RATE["rate-limit ceiling"]
+  end
+  DEDUP["Lane 6 - cluster-binder dedup"]:::solo
+
+  SCW --> BENCH
+  SCW --> BOTTEE
+  SCW --> INGTEE
+  ZFIX --> COMPOSE
+  HARN --> COMPOSE
+  HARN --> LITE
+  HARN --> ADMIT
+
+  DG{{Deepgram key}}:::ext --> BENCH
+  EH{{egress hosts}}:::ext --> EGRESS
+  LM{{live gmeet/teams}}:::ext --> COLLECT
+  LM --> SMOKE
+  LM --> ADMIT
+  CE{{deploy envs}}:::ext --> COMPOSE
+  CE --> LITE
+  CE --> CLUSTER
+
+  PIPEGATE --> CUT([cut 0.11]):::cut
+  PRODDUMP --> CUT
+  COMPOSE --> CUT
+  LITE --> CUT
+  CLUSTER --> CUT
+  SMOKE --> CUT
+  ADMIT --> CUT
+  RATE --> CUT
+  DEDUP --> CUT
+
+  classDef done fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef ext fill:#f3f4f6,stroke:#9ca3af,color:#374151;
+  classDef solo fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+  classDef cut fill:#fef3c7,stroke:#d97706,color:#92400e;

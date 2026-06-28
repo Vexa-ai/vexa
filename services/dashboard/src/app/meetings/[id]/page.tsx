@@ -910,7 +910,8 @@ export default function MeetingDetailPage() {
     return <MeetingDetailSkeleton />;
   }
 
-  const platformConfig = PLATFORM_CONFIG[currentMeeting.platform];
+  const platformConfig = PLATFORM_CONFIG[currentMeeting.platform]
+    ?? { name: currentMeeting.platform, color: "bg-gray-500", textColor: "text-gray-700", bgColor: "bg-gray-50", icon: "monitor", pattern: /.*/, placeholder: "" };
   const statusConfig = getDetailedStatus(currentMeeting.status, currentMeeting.data);
 
   // Safety check: ensure statusConfig is always defined

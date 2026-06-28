@@ -267,6 +267,15 @@ export const PLATFORM_CONFIG = {
     pattern: /^bs-/,
     placeholder: "",
   },
+  note: {
+    name: "Voice note",
+    color: "bg-amber-500",
+    textColor: "text-amber-700",
+    bgColor: "bg-amber-50",
+    icon: "mic",
+    pattern: /^note-/,
+    placeholder: "",
+  },
 } as const;
 
 export const MEETING_STATUS_CONFIG: Record<MeetingStatus, { label: string; color: string; bgColor: string }> = {

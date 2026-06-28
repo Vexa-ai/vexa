@@ -1,0 +1,5 @@
+secrets.env
+cache/
+truth*.jsonl
+node_modules/
+__pycache__/

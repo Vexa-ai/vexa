@@ -154,7 +154,9 @@ check_docker:
 # --- Build ---
 build-bot-image: check_docker
 	@echo "Building $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG)..."
-	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG) -f $(ROOT)/services/vexa-bot/Dockerfile $(ROOT)/services/vexa-bot
+	@# Context is the REPO ROOT (not services/vexa-bot): the bot consumes the
+	@# @vexa/* bricks under modules/ via file: deps, which the Dockerfile vendors.
+	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG) -f $(ROOT)/services/vexa-bot/Dockerfile $(ROOT)
 
 build-lite: check_docker
 	@echo "Building $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG)..."

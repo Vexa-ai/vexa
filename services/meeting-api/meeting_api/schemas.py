@@ -210,7 +210,10 @@ class Platform(str, Enum):
     ZOOM = "zoom"
     TEAMS = "teams"
     BROWSER_SESSION = "browser_session"
-    
+    # Voice notepad — extension mic capture with no meeting at all.
+    # Synthesized native ids (note-<ts>-<rand>), no URL, never dispatches a bot.
+    NOTE = "note"
+
     @property
     def bot_name(self) -> str:
         """
@@ -220,7 +223,8 @@ class Platform(str, Enum):
         mapping = {
             Platform.GOOGLE_MEET: "google_meet",
             Platform.ZOOM: "zoom",
-            Platform.TEAMS: "teams"
+            Platform.TEAMS: "teams",
+            Platform.NOTE: "note"
         }
         return mapping[self]
     

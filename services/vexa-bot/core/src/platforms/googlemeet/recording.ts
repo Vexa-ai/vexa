@@ -1,10 +1,10 @@
 import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
-import { RecordingService } from "../../services/recording";
+import { RecordingService } from '@vexa/recording';
 import { getSegmentPublisher } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
-import { MediaRecorderCapture, UnifiedRecordingPipeline } from "../../services/audio-pipeline";
+import { MediaRecorderCapture, UnifiedRecordingPipeline } from '@vexa/recording';
 import {
   googleParticipantSelectors,
   googleSpeakingClassNames,

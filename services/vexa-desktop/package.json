@@ -1,0 +1,28 @@
+{
+  "name": "@vexa/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Vexa Desktop backend (host) — all-Node ingest WS + gateway over the carved lane modules. Routes capture.v1 frames to @vexa/gmeet-pipeline (channel) and @vexa/mixed-pipeline (segmenter+hints), persists to node:sqlite, broadcasts to the dashboard. No Docker/Postgres/Redis.",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/desktop.ts",
+    "live-stack": "tsx watch --env-file-if-exists=.env src/live-stack.ts",
+    "replay": "tsx src/fixture-replay.ts",
+    "e2e": "tsx src/fixture-feed.ts"
+  },
+  "dependencies": {
+    "@vexa/mixed-pipeline": "file:../../modules/mixed/pipeline",
+    "@vexa/gmeet-pipeline": "file:../../modules/gmeet/pipeline",
+    "@vexa/capture-codec": "file:../../modules/shared/capture-codec",
+    "@vexa/transcribe-whisper": "file:../../modules/shared/whisper",
+    "@vexa/recorder": "file:../../modules/recorder",
+    "@vexa/recording": "file:../../modules/recording",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}

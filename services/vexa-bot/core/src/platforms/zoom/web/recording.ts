@@ -1,12 +1,13 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
-import { RecordingService } from '../../../services/recording';
-import { getRawCaptureService, getSegmentPublisher } from '../../../index';
+import { RecordingService } from '@vexa/recording';
+import { getRawCaptureService, getSegmentPublisher, feedMixedAudio, recordMixedHint, hasMixedChunkedPipeline, disposeMixedChunkedPipeline } from '../../../index';
 import { log } from '../../../utils';
-import { PulseAudioCapture, UnifiedRecordingPipeline } from '../../../services/audio-pipeline';
+import { PulseAudioCapture, UnifiedRecordingPipeline } from '@vexa/recording';
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';
 import { startZoomRichObservation } from './observe';
+import { ensureBrowserUtils } from '../../../utils/injection';
 
 let recordingService: RecordingService | null = null;
 let recordingStopResolver: (() => void) | null = null;
@@ -14,6 +15,9 @@ let pipeline: UnifiedRecordingPipeline | null = null;
 let speakerPollInterval: NodeJS.Timeout | null = null;
 let lastActiveSpeaker: string | null = null;
 let popupDismissInterval: NodeJS.Timeout | null = null;
+let feedingChunked = false;
+let pulseSource: PulseAudioCapture | null = null;
+let ownsPulseSource = false;
 
 /** Current DOM-polled active speaker — used by per-speaker pipeline as fallback name */
 export function getLastActiveSpeaker(): string | null {
@@ -27,6 +31,26 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
     !!botConfig.recordingEnabled &&
     (!Array.isArray(botConfig.captureModes) || botConfig.captureModes.includes('audio'));
   const sessionUid = botConfig.connectionId || `zoom-web-${Date.now()}`;
+
+  // ── Live transcription (ChunkedTranscriber — THE single-channel core) ──
+  // Zoom web delivers ONE mixed remote stream (PulseAudio sink monitor).
+  // Raw PCM goes straight into the core (created by initPerSpeakerPipeline);
+  // the DOM active-speaker poll provides timestamped naming hints. Same
+  // algorithm + host wiring as the in-tab extension's ingest server.
+  if (botConfig.transcribeEnabled !== false && hasMixedChunkedPipeline()) {
+    feedingChunked = true;
+    pulseSource = new PulseAudioCapture();
+    ownsPulseSource = true;
+    pulseSource.on('pcm', (buf: Buffer) => {
+      if (!feedingChunked) return;
+      // s16le mono 16 kHz → Float32 [-1, 1]
+      const n = Math.floor(buf.length / 2);
+      const f32 = new Float32Array(n);
+      for (let i = 0; i < n; i++) f32[i] = buf.readInt16LE(i * 2) / 32768;
+      feedMixedAudio(f32, Date.now());
+    });
+    log('[Zoom Web] ChunkedTranscriber feed ready — live transcription on the mixed stream');
+  }
 
   if (wantsAudioCapture) {
     if (!botConfig.recordingUploadUrl || !botConfig.token) {
@@ -43,7 +67,8 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
       // publisher.resetSessionStart(). Same hook for all 3 platforms;
       // no per-platform handler needed here.)
       recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
-      const source = new PulseAudioCapture();
+      const source = pulseSource ?? new PulseAudioCapture();
+      if (pulseSource) ownsPulseSource = false; // UnifiedRecordingPipeline owns start/stop now
 
       pipeline = new UnifiedRecordingPipeline({
         source,
@@ -55,6 +80,12 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
       await pipeline.start();
       log('[Zoom Web] Unified recording pipeline started (PulseAudio → chunked upload)');
     }
+  }
+
+  // Transcription without recording: nothing else starts parecord — do it here.
+  if (ownsPulseSource && pulseSource) {
+    await pulseSource.start();
+    log('[Zoom Web] PulseAudioCapture started (transcription-only)');
   }
 
   // Start speaker detection polling via DOM
@@ -84,6 +115,20 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
 
 export async function stopZoomWebRecording(): Promise<void> {
   log('[Zoom Web] Stopping recording');
+
+  // Close the single-channel core first — its closing pass publishes the
+  // final turn; this MUST complete before session_end goes out. Bounded so a
+  // wedged transcription service can't hang the leave.
+  feedingChunked = false;
+  try {
+    await Promise.race([
+      disposeMixedChunkedPipeline(),
+      new Promise<void>(r => setTimeout(r, 10_000)),
+    ]);
+  } catch { /* best effort */ }
+  if (ownsPulseSource && pulseSource) { try { await pulseSource.stop(); } catch { /* best effort */ } }
+  pulseSource = null;
+  ownsPulseSource = false;
 
   // Stop speaker polling
   if (speakerPollInterval) {
@@ -130,10 +175,30 @@ export function getZoomWebRecordingService(): RecordingService | null {
 // ---- Speaker detection via DOM polling ----
 
 function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
+  // Install the SHARED zoom-speakers module in-page (the SAME DOM active-speaker
+  // logic the extension runs) — one codebase for the Zoom attribution layer.
+  ensureBrowserUtils(page, require('path').join(__dirname, '../../../browser-utils.global.js'))
+    .then(() => page.evaluate((selfName: string) => {
+      const w = window as any;
+      if (!w.__vexaZoomSpeakers && w.VexaBrowserUtils?.createZoomSpeakers) {
+        w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
+          selfName,
+          log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
+        });
+        w.logBot?.('[Zoom Web] shared zoom-speakers attribution installed');
+      }
+    }, botConfig.botName || 'Vexa').catch(() => { /* best-effort; inline fallback below */ }))
+    .catch(() => { /* bundle inject failed; inline fallback below */ });
+
   speakerPollInterval = setInterval(async () => {
     if (!page || page.isClosed()) return;
     try {
       const speakerName = await page.evaluate((footerSelector: string) => {
+        // Preferred: the shared module's current active speaker (one codebase).
+        const shared = (window as any).__vexaZoomSpeakers;
+        if (shared) return shared.getActiveSpeaker();
+
+        // Fallback (module not yet installed): identical inline DOM read.
         function nameFromContainer(container: Element | null): string | null {
           if (!container) return null;
           const footer = container.querySelector(footerSelector);
@@ -153,6 +218,12 @@ function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
         return null;
       }, zoomParticipantNameSelector);
 
+      // Hint for the cluster↔name binder (single-channel core): the DOM's
+      // current active speaker, timestamped. Null = the open turn ended.
+      if (speakerName !== lastActiveSpeaker) {
+        if (speakerName) recordMixedHint(speakerName, 'dom-active', Date.now());
+        else recordMixedHint('', 'dom-active', Date.now(), true);
+      }
       if (speakerName && speakerName !== lastActiveSpeaker) {
         // Speaker changed — log to raw capture if active
         const rawCapture = getRawCaptureService();

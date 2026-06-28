@@ -1,6 +1,7 @@
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { log } from "./utils";
 import { logJSON, setLogContext } from "./utils/log";
+import { ensureBrowserUtils } from "./utils/injection";
 import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unified-callback";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
@@ -8,10 +9,10 @@ import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
 import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { getZoomSpeakerEvents } from "./platforms/zoom/strategies/recording";
-import { browserArgs, getBrowserArgs, getAuthenticatedBrowserArgs, userAgent } from "./constans";
+import { browserArgs, getBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
-import { RecordingService } from "./services/recording";
-import { VideoRecordingService } from "./services/video-recording";
+import { RecordingService , setLoggers as setRecordingLoggers } from '@vexa/recording';
+import { VideoRecordingService } from '@vexa/recording';
 import { TTSPlaybackService } from "./services/tts-playback";
 import { MicrophoneService } from "./services/microphone";
 import { MeetingChatService, ChatTranscriptConfig } from "./services/chat";
@@ -21,18 +22,24 @@ import { createClient, RedisClientType } from 'redis';
 import { Page, Browser, BrowserContext } from 'playwright-core';
 import { execSync } from 'child_process';
 import * as net from 'net';
-import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR } from './s3-sync';
+import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR, getAuthenticatedBrowserArgs, launchPersistentBrowser } from '@vexa/remote-browser';
 // HTTP imports removed - using unified callback service instead
 
 // Per-speaker transcription pipeline
-import { TranscriptionClient } from './services/transcription-client';
+import { TranscriptionClient } from '@vexa/transcribe-whisper';
+import { setLogger as setPipelineLogger } from '@vexa/gmeet-pipeline';
 import { SegmentPublisher } from './services/segment-publisher';
-import { SpeakerStreamManager } from './services/speaker-streams';
+import { SpeakerStreamManager } from '@vexa/gmeet-pipeline';
+import { ChunkedTranscriber } from '@vexa/mixed-pipeline';
+import { createChunkedHost } from './services/chunked-host';
 import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken, reportTrackAudio, getLockedMapping } from './services/speaker-identity';
-import { SileroVAD } from './services/vad';
-import { isHallucination } from './services/hallucination-filter';
+import { isHallucination } from '@vexa/gmeet-pipeline';
 import { SpeakerStreamHandle } from './services/audio';
-import { RawCaptureService } from './services/raw-capture';
+import { RawCaptureService, uploadCaptureToS3, StreamCaptureWriter, openRetentionWriter, MeetingEvent } from '@vexa/recorder';
+import { setSessionStartProvider , setLoggers as setPipelineLoggers } from '@vexa/recording';
+setPipelineLogger((m: string) => log(m));
+setPipelineLoggers({ log: (m: string) => log(m), logJSON });
+setRecordingLoggers({ log: (m: string) => log(m), logJSON });
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
@@ -65,29 +72,6 @@ let botPaSinkModuleId: string | null = null; // PulseAudio module ID for per-bot
 let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
   activeRecordingService = svc;
-}
-
-/**
- * Feed mixed PulseAudio audio into the per-speaker transcription pipeline.
- * Used by Zoom Web: single mixed stream + DOM speaker polling for attribution.
- * Mirrors handleTeamsAudioData but called from Node.js (not browser).
- */
-export async function feedZoomAudio(speakerName: string, audioData: Float32Array): Promise<void> {
-  if (!speakerManager || !segmentPublisher) return;
-
-  const speakerId = `zoom-${speakerName.replace(/\s+/g, '_')}`;
-
-  if (!speakerManager.hasSpeaker(speakerId)) {
-    log(`[🎙️ ZOOM SPEAKER] "${speakerName}" — first audio received`);
-    speakerManager.addSpeaker(speakerId, speakerName);
-    await segmentPublisher.publishSpeakerEvent({
-      speaker: speakerName,
-      type: 'joined',
-      timestamp: Date.now(),
-    });
-  }
-
-  speakerManager.feedAudio(speakerId, audioData);
 }
 
 /**
@@ -152,19 +136,46 @@ let redisPublisher: RedisClientType | null = null;
 let transcriptionClient: TranscriptionClient | null = null;
 let segmentPublisher: SegmentPublisher | null = null;
 export function getSegmentPublisher(): SegmentPublisher | null { return segmentPublisher; }
+
+// ── Mixed-channel core (Zoom web + MS Teams) — ChunkedTranscriber ──────────
+// THE single validated single-channel algorithm (shared verbatim with the
+// in-tab extension's ingest server): passive ring + segmentation-model cuts,
+// LocalAgreement-2 continuous confirmation, hint-overlap attribution with
+// retroactive renames. Platforms feed raw mixed PCM + timestamped "who's lit"
+// hints; everything else happens inside the core + shared host factory.
+let chunked: ChunkedTranscriber | null = null;
+let chunkStatsTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Raw mixed PCM (16 kHz mono f32), wall-clock ms of the chunk START. */
+export function feedMixedAudio(pcm: Float32Array, tsMs: number): void {
+  retainAudio(999, tsMs, pcm); // faithful tee of the mixed remote channel
+  chunked?.feedAudio(pcm, tsMs);
+}
+
+/** Timestamped platform speaker hint ("who's lit"). */
+export function recordMixedHint(name: string, kind: 'dom-active' | 'caption' | 'dom-outline', tMs: number, isEnd = false): void {
+  retainEvent({ kind: 'active-speaker', ts: retainRelSec(tMs), speaker: name, detail: { hint: kind, isEnd } }); // tee naming hints
+  chunked?.recordHint(name, kind, tMs, isEnd);
+}
+
+export function hasMixedChunkedPipeline(): boolean { return !!chunked; }
+
+/** Idempotent. Resolves after the final turn published — callers on the
+ *  leave path MUST await before session_end goes out. */
+export async function disposeMixedChunkedPipeline(): Promise<void> {
+  if (chunkStatsTimer) { clearInterval(chunkStatsTimer); chunkStatsTimer = null; }
+  const c = chunked;
+  chunked = null;
+  if (c) await c.dispose();
+}
+
 let speakerManager: SpeakerStreamManager | null = null;
-let vadModel: SileroVAD | null = null;
-/** Per-speaker VAD states for streaming mode (GMeet only) */
-import type { VadSpeakerState } from './services/vad';
-const vadSpeakerStates: Map<string, VadSpeakerState> = new Map();
 /** Whitelist of allowed language codes — if set, segments in other languages are discarded */
 let allowedLanguages: string[] | null = null;
 /** Per-speaker last detected language — used in onSegmentConfirmed where Whisper result isn't available */
 const lastDetectedLanguage: Map<string, string> = new Map();
-/** Pipeline telemetry counters — module-level so entry gate VAD can update them */
+/** Pipeline telemetry counters — module-level for the pipeline to update. */
 let pipelineTelemetry: {
-  vadChunksProcessed: number;
-  vadChunksRejected: number;
   [key: string]: any;
 } | null = null;
 let pipelineTelemetryInterval: ReturnType<typeof setInterval> | null = null;
@@ -172,6 +183,23 @@ let activeSpeakerStreamHandles: SpeakerStreamHandle[] = [];
 /** Raw capture service — dumps per-speaker WAVs + events for offline replay (RAW_CAPTURE=true) */
 let rawCaptureService: RawCaptureService | null = null;
 export function getRawCaptureService(): RawCaptureService | null { return rawCaptureService; }
+
+// Rolling fixture retention (no-op unless CAPTURE_RETENTION=1): tee the bot's
+// in-process capture.v1 (the prod seam) to a faithful stream.capture, so a real
+// meeting can be `dump`ed into a replayable fixture later. ts is normalized to
+// seconds-from-first-frame (the replay ring is ts-indexed); both audio funnels
+// and the hint funnel share one clock. Must never break capture.
+let retainWriter: StreamCaptureWriter | null = null;
+let retainT0 = 0;
+function retainRelSec(ms: number): number { if (!retainT0) retainT0 = ms; return (ms - retainT0) / 1000; }
+function retainAudio(speakerIndex: number, ms: number, samples: Float32Array): void {
+  if (!retainWriter) return;
+  try { retainWriter.audio(speakerIndex, retainRelSec(ms), samples); } catch { /* retention must not break capture */ }
+}
+function retainEvent(ev: MeetingEvent): void {
+  if (!retainWriter) return;
+  try { retainWriter.event(ev); } catch { /* retention must not break capture */ }
+}
 /** Per-speaker confirmed segment batches — drained on each draft tick, flushed on cleanup */
 let confirmedBatches = new Map<string, import('./services/segment-publisher').TranscriptionSegment[]>();
 // ------------------------------------------
@@ -1273,6 +1301,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     });
     log('[PerSpeaker] TranscriptionClient created');
 
+    setSessionStartProvider(getSegmentPublisher);
     segmentPublisher = new SegmentPublisher({
       redisUrl: botConfig.redisUrl || process.env.REDIS_URL || 'redis://localhost:6379',
       meetingId: String(meetingId),
@@ -1286,19 +1315,43 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     await segmentPublisher.publishSessionStart();
     log('[PerSpeaker] Session start published');
 
-    try {
-      vadModel = await SileroVAD.create();
-      log('[PerSpeaker] Silero VAD loaded');
-    } catch (err: any) {
-      log(`[PerSpeaker] VAD not available (${err.message}) — will send all audio`);
-      vadModel = null;
+    // Mixed-channel platforms (Zoom web, MS Teams): the validated
+    // ChunkedTranscriber core, wired through the shared host factory —
+    // identical publishing semantics to the in-tab extension's ingest server.
+    if (botConfig.platform === 'zoom' || botConfig.platform === 'teams') {
+      chunked = await ChunkedTranscriber.create(createChunkedHost({
+        transcriptionClient,
+        segmentPublisher,
+        language: () => {
+          const explicit = currentLanguage && currentLanguage !== 'auto' ? currentLanguage : null;
+          const single = !explicit && allowedLanguages && allowedLanguages.length === 1 ? allowedLanguages[0] : null;
+          return explicit || single || undefined;
+        },
+        log: (m) => log(m),
+      }));
+      chunkStatsTimer = setInterval(() => {
+        const st = chunked?.stats();
+        if (st) log(`[ChunkStats] meeting=${meetingId} commits=${st.commits} turns=${st.turns} queued=${st.queued} unresolved=${st.unresolved} hints=${JSON.stringify(st.binder.hintTurns)}`);
+      }, 30000);
+      log('[PerSpeaker] ChunkedTranscriber ready (mixed-channel core)');
     }
 
     // Raw capture: dump per-speaker WAVs + events for offline replay
-    if (process.env.RAW_CAPTURE === 'true') {
-      rawCaptureService = new RawCaptureService(meetingId);
+    // Full telemetry for the TRAINING CORPUS (private S3, operator-governed by ToS):
+    // always-on in prod via TELEMETRY_FULL=on; RAW_CAPTURE=true is the dev debug alias.
+    if (process.env.TELEMETRY_FULL === 'on' || process.env.RAW_CAPTURE === 'true') {
+      rawCaptureService = new RawCaptureService(meetingId, {
+        platform: botConfig.platform,
+        nativeMeetingId: botConfig.nativeMeetingId,
+        language: botConfig.language,
+        task: botConfig.task,
+        botVersion: process.env.BOT_IMAGE_TAG,
+      });
       log(`[PerSpeaker] Raw capture enabled → ${rawCaptureService.outputPath}`);
     }
+    // Rolling fixture retention — independent of TELEMETRY_FULL (no-op unless CAPTURE_RETENTION=1).
+    retainWriter = openRetentionWriter({ platform: botConfig.platform, nativeMeetingId: botConfig.nativeMeetingId, meetingId, language: botConfig.language });
+    if (retainWriter) log(`[Retention] on → ${retainWriter.outDir}`);
 
     const isGoogleMeet = botConfig.platform === 'google_meet';
     speakerManager = new SpeakerStreamManager({
@@ -1309,8 +1362,6 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
       idleTimeoutSec: 15,      // 15s idle → emit + reset
     });
-    // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
-    // SpeakerStreamManager no longer does VAD — it only receives real speech.
 
     // onSegmentReady: transcribe the buffer (called every submitInterval)
     // Does NOT publish — just transcribes and feeds result back for confirmation.
@@ -1326,15 +1377,13 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       totalConfirmLatencyMs: 0,  // time from buffer start to confirmation
       reconfirmations: 0,        // times the same text was confirmed again (wasted work)
       whisperSegmentCounts: [] as number[],  // how many segments Whisper returns per call
-      vadChunksProcessed: 0,     // total audio chunks checked by entry VAD
-      vadChunksRejected: 0,      // chunks rejected as silence by entry VAD
     };
-    pipelineTelemetry = telemetry; // expose to module-level for entry gate VAD
+    pipelineTelemetry = telemetry; // expose to module-level for the pipeline
     pipelineTelemetryInterval = setInterval(() => {
       const avgWhisper = telemetry.whisperCalls > 0 ? (telemetry.totalWhisperMs / telemetry.whisperCalls).toFixed(0) : 'n/a';
       const avgConfirmLatency = telemetry.segmentsConfirmed > 0 ? (telemetry.totalConfirmLatencyMs / telemetry.segmentsConfirmed / 1000).toFixed(1) : 'n/a';
       const avgWhisperSegs = telemetry.whisperSegmentCounts.length > 0 ? (telemetry.whisperSegmentCounts.reduce((a,b) => a+b, 0) / telemetry.whisperSegmentCounts.length).toFixed(1) : 'n/a';
-      log(`[📊 TELEMETRY] whisper=${telemetry.whisperCalls} (${avgWhisper}ms avg, ${telemetry.whisperFailures} failed) | drafts=${telemetry.draftsEmitted} confirmed=${telemetry.segmentsConfirmed} discarded=${telemetry.segmentsDiscarded} | confirm_latency=${avgConfirmLatency}s | whisper_segs/call=${avgWhisperSegs} | reconfirm=${telemetry.reconfirmations} | vad=${telemetry.vadChunksProcessed}/${telemetry.vadChunksRejected} (checked/rejected)`);
+      log(`[📊 TELEMETRY] whisper=${telemetry.whisperCalls} (${avgWhisper}ms avg, ${telemetry.whisperFailures} failed) | drafts=${telemetry.draftsEmitted} confirmed=${telemetry.segmentsConfirmed} discarded=${telemetry.segmentsDiscarded} | confirm_latency=${avgConfirmLatency}s | whisper_segs/call=${avgWhisperSegs} | reconfirm=${telemetry.reconfirmations}`);
       // Flush arrays to prevent unbounded growth during long meetings
       telemetry.whisperSegmentCounts = [];
     }, 30000);
@@ -1504,7 +1553,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       telemetry.segmentsConfirmed++;
       telemetry.totalConfirmLatencyMs += confirmLatencyMs;
       log(`[📝 CONFIRMED] ${speakerName} | ${lang} | ${startSec.toFixed(1)}s-${endSec.toFixed(1)}s (${segDurationSec.toFixed(1)}s, ${wordCount}w, latency=${(confirmLatencyMs/1000).toFixed(1)}s) | ${fullSegmentId} | "${transcript}"`);
-      if (rawCaptureService) rawCaptureService.logSegmentConfirmed(speakerName, transcript);
+      if (rawCaptureService) rawCaptureService.event({ kind: 'segment', ts: Date.now(), speaker: speakerName, text: transcript });
 
       if (!confirmedBatches.has(speakerId)) confirmedBatches.set(speakerId, []);
       confirmedBatches.get(speakerId)!.push({
@@ -1628,9 +1677,17 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
           return 0;
         });
         if (lastParticipantCount > 0 && currentCount !== lastParticipantCount) {
-          log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount}. Invalidating all mappings (including locks).`);
-          clearSpeakerNameCache();
-          locked = false; // Force re-resolve below
+          if (platformKey === 'googlemeet') {
+            // The shared in-page module handles count changes itself (clears
+            // unlocked votes, KEEPS locks — per-tile streams end on leave, so
+            // locked mappings stay valid). Nuking locks here discarded correct
+            // names on every join/leave.
+            log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount} (gmeet: in-page module handles it; locks kept).`);
+          } else {
+            log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount}. Invalidating all mappings (including locks).`);
+            clearSpeakerNameCache();
+            locked = false; // Force re-resolve below
+          }
         }
         lastParticipantCount = currentCount;
       } catch {}
@@ -1652,62 +1709,27 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
         log(`[📡 SPEAKER EVENT] "${newName}" joined → Redis`);
       }
 
-      // Fallback: if unmapped for 15s+ and GMeet, assign by participant list order.
-      // This handles the case where speaking detection is completely broken (stale CSS selectors).
+      // Participant-order fallback REMOVED for gmeet: track index has no
+      // relationship to participant-list order, so it systematically assigned
+      // WRONG names whenever speaking detection was broken — exactly when it
+      // fired. Unmapped ("") is strictly better than misattributed. The shared
+      // in-page module's self-learning indicator detection (gmeet-speakers.ts)
+      // now covers the stale-CSS-selector case the fallback was meant to patch;
+      // its forensic dump is available via __vexaGmeetSpeakers.getState().
       if (!currentName && platformKey === 'googlemeet') {
         const firstAudio = speakerLastAudioMs.get(speakerId) || Date.now();
-        if (Date.now() - firstAudio > 15_000) {
+        if (Date.now() - firstAudio > 15_000 && Math.random() < 0.05) {
           try {
-            const state = await page.evaluate((selfName: string) => {
-              const getNames = (window as any).__vexaGetAllParticipantNames;
-              if (typeof getNames !== 'function') return null;
-              const data = getNames() as { names: Record<string, string>; speaking: string[] };
-              const selfLower = selfName.toLowerCase();
-              return Object.values(data.names).filter(n => {
-                const lower = n.toLowerCase();
-                return !(lower.includes(selfLower) || selfLower.includes(lower));
-              });
-            }, currentBotConfig?.botName || 'Vexa Bot');
-
-            if (state && speakerIndex < state.length) {
-              const fallbackName = state[speakerIndex];
-              if (fallbackName && !isDuplicateSpeakerName(fallbackName, speakerId)) {
-                log(`[🔄 SPEAKER FALLBACK] Track ${speakerIndex}: assigning "${fallbackName}" by participant order (no votes after 15s)`);
-                speakerManager.updateSpeakerName(speakerId, fallbackName);
-                await segmentPublisher.publishSpeakerEvent({
-                  speaker: fallbackName,
-                  type: 'joined',
-                  timestamp: Date.now(),
-                });
-              }
-            }
-          } catch {}
+            const diag = await page.evaluate(() => (window as any).__vexaGmeetSpeakers?.getState?.() ?? null);
+            log(`[SpeakerIdentity] Track ${speakerIndex} unmapped 15s+. Attribution state: ${JSON.stringify(diag)?.slice(0, 600)}`);
+          } catch { /* page gone */ }
         }
       }
     }
   }
 
-  // Per-speaker streaming VAD gate (GMeet only).
-  // Filters ambient noise BEFORE feedAudio() so lastAudioTimestamp only updates
-  // on real speech. This lets the 15s idle timeout fire correctly when a speaker
-  // stops talking but their mic still emits low-level room noise.
-  const isGMeet = currentPlatform === 'google_meet';
-  if (isGMeet && vadModel) {
-    // Get or create per-speaker VAD state
-    if (!vadSpeakerStates.has(speakerId)) {
-      vadSpeakerStates.set(speakerId, vadModel.createSpeakerState());
-    }
-    const vadState = vadSpeakerStates.get(speakerId)!;
-    const isSpeech = await vadModel.isSpeechStreaming(audioData, vadState);
-    if (pipelineTelemetry) pipelineTelemetry.vadChunksProcessed++;
-
-    if (!isSpeech) {
-      if (pipelineTelemetry) pipelineTelemetry.vadChunksRejected++;
-      return; // Skip feedAudio — ambient noise, don't update lastAudioTimestamp
-    }
-  }
-
-  // Track audio arrival for silence monitoring (only reached for real speech)
+  // Track audio arrival for silence monitoring. Capture silence-gates upstream
+  // (gmeet-capture silenceThreshold), so only non-silent chunks reach here.
   const prevMs = speakerLastAudioMs.get(speakerId);
   const nowMs = Date.now();
   if (prevMs && (nowMs - prevMs) > 30000) {
@@ -1716,13 +1738,17 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
   }
   speakerLastAudioMs.set(speakerId, nowMs);
 
-  // Raw capture: dump audio for offline replay
+  // capture.v1 seam: tee the chunk to the recorder (contract port), then feed
+  // the pipeline. The recorder is a CaptureV1Sink — it consumes the contract,
+  // not the bot's internals.
   if (rawCaptureService) {
-    const resolvedName = speakerManager.getSpeakerName(speakerId) || '';
-    rawCaptureService.feedAudio(speakerIndex, audioData, resolvedName);
+    rawCaptureService.audioChunk({
+      speakerId, speakerIndex, samples: audioData, ts: nowMs,
+      speakerName: speakerManager.getSpeakerName(speakerId) || '',
+    });
   }
-
-  speakerManager.feedAudio(speakerId, audioData);
+  retainAudio(speakerIndex, nowMs, audioData); // faithful tee of the per-speaker channel
+  speakerManager.feedAudio(speakerId, audioData); // pipeline (capture.v1 consumer)
 }
 
 /**
@@ -1735,6 +1761,10 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
     pipelineTelemetryInterval = null;
   }
 
+  // Defensive: crash paths can skip the platform leave hooks — close the
+  // mixed-channel core (final turn publishes) before session_end goes out.
+  try { await disposeMixedChunkedPipeline(); } catch { /* best effort */ }
+
   // Stop browser-side audio capture
   for (const handle of activeSpeakerStreamHandles) {
     try {
@@ -1746,22 +1776,33 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
   }
   activeSpeakerStreamHandles = [];
 
-  // Clean up browser-side monitoring intervals
+  // Tear down the shared in-page capture + attribution modules
   if (page && !page.isClosed()) {
     try {
       await page.evaluate(() => {
-        const intervals = (window as any).__vexaPerSpeakerIntervals || [];
+        const w = window as any;
+        try { w.__vexaGmeetCapture?.stop(); } catch { /* ignore */ }
+        try { w.__vexaGmeetSpeakers?.destroy?.(); } catch { /* ignore */ }
+        try { w.__vexaZoomSpeakers?.destroy?.(); } catch { /* ignore */ }
+        w.__vexaGmeetCapture = null;
+        // Legacy: clear any old interval handles if a stale page is in play
+        const intervals = w.__vexaPerSpeakerIntervals || [];
         intervals.forEach((id: any) => clearInterval(id));
-        (window as any).__vexaPerSpeakerIntervals = [];
+        w.__vexaPerSpeakerIntervals = [];
       });
     } catch {}
   }
 
   // Finalize raw capture — flush all tracks to WAV files
   if (rawCaptureService) {
-    const outputPath = rawCaptureService.finalize();
-    log(`[PerSpeaker] Raw capture finalized → ${outputPath}`);
+    const outputPath = await rawCaptureService.finalizeAndUpload(currentBotConfig?.meeting_id ?? 'unknown');
+    log(`[PerSpeaker] capture.v1 recorded + shipped → ${outputPath}`);
     rawCaptureService = null;
+  }
+  if (retainWriter) {
+    try { const dir = await retainWriter.finalize(); log(`[Retention] fixture written → ${dir} (dump with: cd modules/recorder && npm run dump <name>)`); }
+    catch { /* retention must not break teardown */ }
+    retainWriter = null; retainT0 = 0;
   }
 
   // Flush remaining speaker buffers
@@ -1793,80 +1834,33 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
   log('[PerSpeaker] Pipeline cleaned up');
 }
 
-/**
- * Handle audio from Teams' single mixed stream, routed by speaker name.
- * Teams has one audio element; the browser routes chunks based on either:
- *   - Caption-driven routing (primary): captions identify speaker with real speech
- *   - DOM blue squares (fallback): voice-level-stream-outline + vdi-frame-occlusion
- * Speaker name is known from DOM/caption events — no voting/locking needed.
- */
-async function handleTeamsAudioData(speakerName: string, audioDataArray: number[]): Promise<void> {
-  if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
-
-  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
-  const audioData = new Float32Array(audioDataArray);
-
-  // Add speaker if new — name is already known from DOM/caption
-  if (!speakerManager.hasSpeaker(speakerId)) {
-    log(`[🎙️ TEAMS SPEAKER] "${speakerName}" — first audio received`);
-    speakerManager.addSpeaker(speakerId, speakerName);
-    await segmentPublisher.publishSpeakerEvent({
-      speaker: speakerName,
-      type: 'joined',
-      timestamp: Date.now(),
-    });
-  }
-
-  // No VAD for Teams — caption-driven routing already gates audio.
-  // Small ring buffer chunks are too short for Silero VAD to reliably detect speech.
-  speakerManager.feedAudio(speakerId, audioData);
-}
-
-/**
- * Handle caption data from Teams live captions.
- * Captions provide speaker-attributed text directly from Teams' ASR.
- * Used for:
- *   1. Speaker boundary detection (triggers ring buffer lookback)
- *   2. Caption text storage alongside audio transcription
- *   3. Future: fuzzy text matching for segment reconciliation
- */
-let lastCaptionSpeakerId: string | null = null;
-/** Accumulated caption events for speaker-mapper boundaries (Teams only) */
-const captionEventLog: { speaker: string; text: string; timestamp: number }[] = [];
 /** Latest word timestamps from Whisper (replaced on each submission) */
 let latestWhisperWords: { word: string; start: number; end: number; probability: number }[] = [];
 
-async function handleTeamsCaptionData(speakerName: string, captionText: string, timestampMs: number): Promise<void> {
-  if (!segmentPublisher || !page || page.isClosed()) return;
+/**
+ * Teams mixed-channel callbacks (ChunkedTranscriber path).
+ * The browser ships the SINGLE mixed stream continuously plus blue-square
+ * (voice-level-stream-outline) speaker hints — no captions dependency, no
+ * in-page routing. Attribution is the core's hint-overlap + retroactive
+ * renames, exactly like the in-tab extension.
+ */
+let lastHintSpeaker: string | null = null;
+async function handleTeamsMixedAudio(audioDataArray: number[], tsMs: number): Promise<void> {
+  feedMixedAudio(new Float32Array(audioDataArray), tsMs);
+}
 
-  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
-
-  // When caption speaker changes, flush the PREVIOUS speaker's buffer immediately.
-  // This prevents cross-speaker contamination — the old speaker's buffer gets emitted
-  // before any of the new speaker's audio leaks into it.
-  if (lastCaptionSpeakerId && lastCaptionSpeakerId !== speakerId && speakerManager) {
-    log(`[PerSpeaker] Caption speaker change: flushing "${speakerManager.getSpeakerName(lastCaptionSpeakerId) || lastCaptionSpeakerId}" buffer`);
-    await speakerManager.flushSpeaker(lastCaptionSpeakerId);
+async function handleTeamsSpeakerHint(speakerName: string, isEnd: boolean, tsMs: number): Promise<void> {
+  recordMixedHint(speakerName, 'dom-outline', tsMs, isEnd);
+  // Timeline UX feature (speaker_events_relative stream) — independent of
+  // transcription; fire on speaker change only.
+  if (!isEnd && speakerName && speakerName !== lastHintSpeaker && segmentPublisher) {
+    lastHintSpeaker = speakerName;
+    await segmentPublisher.publishSpeakerEvent({
+      speaker: speakerName,
+      type: 'started_speaking',
+      timestamp: tsMs,
+    });
   }
-  lastCaptionSpeakerId = speakerId;
-
-  // Accumulate for speaker-mapper boundaries.
-  // Store timestamp as session-relative seconds to match Whisper word timestamps
-  // (which are offset by bufferStartMs - sessionStartMs). Absolute wall-clock
-  // timestamps would be in a completely different domain (~1.7B vs ~200s).
-  const sessionRelativeSec = segmentPublisher.sessionStartMs
-    ? (timestampMs - segmentPublisher.sessionStartMs) / 1000
-    : timestampMs / 1000;
-  captionEventLog.push({ speaker: speakerName, text: captionText, timestamp: sessionRelativeSec });
-
-  // Publish caption as a speaker event for downstream consumers
-  await segmentPublisher.publishSpeakerEvent({
-    speaker: speakerName,
-    type: 'started_speaking',
-    timestamp: timestampMs,
-  });
-
-  log(`[📝 TEAMS CAPTION] "${speakerName}": ${captionText.substring(0, 80)}${captionText.length > 80 ? '...' : ''}`);
 }
 
 /**
@@ -1886,27 +1880,49 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
   const isTeams = currentPlatform === 'teams';
 
-  // Expose Teams audio callback — browser routes single stream by speaker name
-  // and caption callback for caption-driven speaker detection
+  // Teams: continuous MIXED stream + blue-square speaker hints — the
+  // ChunkedTranscriber core owns segmentation and attribution. No captions,
+  // no in-page routing.
   if (isTeams) {
     try {
-      await pageToCaptureFrom.exposeFunction('__vexaTeamsAudioData', handleTeamsAudioData);
-      log('[PerSpeaker] Teams audio callback exposed — browser-side routing via DOM/caption speaker events');
+      await pageToCaptureFrom.exposeFunction('__vexaTeamsMixedAudio', handleTeamsMixedAudio);
+      log('[PerSpeaker] Teams mixed-audio callback exposed (ChunkedTranscriber)');
     } catch (err: any) {
       if (!err.message.includes('has been already registered')) {
-        log(`[PerSpeaker] Failed to expose Teams audio callback: ${err.message}`);
+        log(`[PerSpeaker] Failed to expose Teams mixed-audio callback: ${err.message}`);
       }
     }
     try {
-      await pageToCaptureFrom.exposeFunction('__vexaTeamsCaptionData', handleTeamsCaptionData);
-      log('[PerSpeaker] Teams caption callback exposed — caption text will be stored for reconciliation');
+      await pageToCaptureFrom.exposeFunction('__vexaTeamsSpeakerHint', handleTeamsSpeakerHint);
+      log('[PerSpeaker] Teams speaker-hint callback exposed (blue squares → dom-outline hints)');
     } catch (err: any) {
       if (!err.message.includes('has been already registered')) {
-        log(`[PerSpeaker] Failed to expose Teams caption callback: ${err.message}`);
+        log(`[PerSpeaker] Failed to expose Teams speaker-hint callback: ${err.message}`);
       }
     }
-    // Teams audio routing + caption observer is set up in recording.ts page.evaluate
+    // The mixed emitter + hint detector are installed in recording.ts page.evaluate
     return;
+  }
+
+  // Google Meet: ensure the shared speaker-attribution module is installed
+  // in-page (browser-utils bundle), then create it idempotently. The same
+  // module (browser/gmeet-speakers.ts) runs in the extension — one codebase.
+  if (currentPlatform === 'google_meet') {
+    try {
+      await ensureBrowserUtils(pageToCaptureFrom, require('path').join(__dirname, 'browser-utils.global.js'));
+      await pageToCaptureFrom.evaluate((selfName: string) => {
+        const w = window as any;
+        if (!w.__vexaGmeetSpeakers && w.VexaBrowserUtils?.createGmeetSpeakers) {
+          w.__vexaGmeetSpeakers = w.VexaBrowserUtils.createGmeetSpeakers({
+            selfName,
+            log: (m: string) => w.logBot?.(m),
+          });
+          w.logBot?.('[PerSpeaker] shared gmeet-speakers attribution installed');
+        }
+      }, currentBotConfig?.botName || 'Vexa Bot');
+    } catch (err: any) {
+      log(`[PerSpeaker] gmeet-speakers install failed (legacy resolution will be used): ${err.message}`);
+    }
   }
 
   // Google Meet: expose per-element callback and set up per-element streams
@@ -1919,12 +1935,33 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     }
   }
 
-  // Set up per-speaker audio streams inside the browser using raw Web Audio API
+  // Set up per-speaker audio streams. PREFERRED: the SHARED vexa-bot/core/src
+  // /browser/gmeet-capture module (the SAME code the extension runs), with
+  // onAudio feeding the Playwright bridge + shared gmeet-speakers attribution.
+  // FALLBACK: if the bundle isn't available in-page for any reason, run the
+  // original inline loop verbatim — the bot must never lose capture.
   const handleCount = await pageToCaptureFrom.evaluate(async () => {
+    const w = window as any;
+
+    // ── Preferred: shared module ───────────────────────────────────────────
+    if (w.VexaBrowserUtils?.createGmeetCapture) {
+      if (w.__vexaGmeetCapture) return w.__vexaGmeetCapture.streamCount();
+      w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
+        log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
+        onAudio: (index: number, pcm: Float32Array) => {
+          w.__vexaGmeetSpeakers?.reportTrackAudio(index);
+          w.__vexaPerSpeakerAudioData(index, Array.from(pcm));
+        },
+      });
+      await w.__vexaGmeetCapture.start();
+      return w.__vexaGmeetCapture.streamCount();
+    }
+
+    // ── Fallback: original inline loop (legacy copy of gmeet-capture.ts) ───
+    w.logBot?.('[PerSpeaker] shared gmeet-capture unavailable — using inline fallback');
     const TARGET_SAMPLE_RATE = 16000;
     const BUFFER_SIZE = 4096;
 
-    // Find active media elements with audio tracks (retry up to 10 times)
     let mediaElements: HTMLMediaElement[] = [];
     for (let attempt = 0; attempt < 10; attempt++) {
       mediaElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
@@ -1934,20 +1971,15 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
       ) as HTMLMediaElement[];
       if (mediaElements.length > 0) break;
       await new Promise(r => setTimeout(r, 2000));
-      (window as any).logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
+      w.logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
     }
-
     if (mediaElements.length === 0) {
-      (window as any).logBot?.('[PerSpeaker] No active media elements with audio found');
+      w.logBot?.('[PerSpeaker] No active media elements with audio found');
       return 0;
     }
+    w.logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
 
-    (window as any).logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
-
-    // Track connected streams by MediaStream ID to avoid double-binding
     const connectedStreamIds = new Set<string>();
-    // Track per-stream audio activity for health monitoring
-    const streamCallCounts = new Map<number, number>();
     const streamLastActive = new Map<number, number>();
     let nextStreamIndex = 0;
 
@@ -1961,36 +1993,27 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
         const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
         const source = ctx.createMediaStreamSource(stream);
         const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
-
-        streamCallCounts.set(index, 0);
         streamLastActive.set(index, Date.now());
 
         processor.onaudioprocess = (e: AudioProcessingEvent) => {
           const data = e.inputBuffer.getChannelData(0);
-          streamCallCounts.set(index, (streamCallCounts.get(index) || 0) + 1);
-          // Only send if there's actual audio (not silence)
           const maxVal = Math.max(...Array.from(data).map(Math.abs));
           if (maxVal > 0.005) {
             streamLastActive.set(index, Date.now());
-            (window as any).__vexaPerSpeakerAudioData(index, Array.from(data));
+            w.__vexaGmeetSpeakers?.reportTrackAudio(index);
+            w.__vexaPerSpeakerAudioData(index, Array.from(data));
           }
         };
 
         source.connect(processor);
         processor.connect(ctx.destination);
         connectedStreamIds.add(streamId);
-
-        // Monitor track ending — log when MediaStreamTrack becomes "ended"
         const track = stream.getAudioTracks()[0];
-        track.addEventListener('ended', () => {
-          (window as any).logBot?.(`[PerSpeaker] Track ${index} ENDED (streamId=${streamId.substring(0, 12)})`);
-          connectedStreamIds.delete(streamId);
-        });
-
-        (window as any).logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)}, streamId: ${streamId.substring(0, 12)})`);
+        track.addEventListener('ended', () => { connectedStreamIds.delete(streamId); });
+        w.logBot?.(`[PerSpeaker] Stream ${index} started (track: ${track.id.substring(0, 12)})`);
         return true;
       } catch (err: any) {
-        (window as any).logBot?.(`[PerSpeaker] Stream ${index} error: ${err.message}`);
+        w.logBot?.(`[PerSpeaker] Stream ${index} error: ${err.message}`);
         return false;
       }
     }
@@ -2001,43 +2024,18 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     }
     nextStreamIndex = mediaElements.length;
 
-    // Periodic re-scan: discover new audio elements (late joiners, element recycling)
     const rescanInterval = setInterval(() => {
       const currentElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
-        !el.paused &&
-        el.srcObject instanceof MediaStream &&
-        el.srcObject.getAudioTracks().length > 0
+        !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0
       ) as HTMLMediaElement[];
-
-      let newStreams = 0;
       for (const el of currentElements) {
         const stream: MediaStream = (el as any).srcObject;
         if (stream && !connectedStreamIds.has(stream.id)) {
-          if (connectElement(el, nextStreamIndex)) {
-            newStreams++;
-            nextStreamIndex++;
-          }
+          if (connectElement(el, nextStreamIndex)) nextStreamIndex++;
         }
-      }
-      if (newStreams > 0) {
-        (window as any).logBot?.(`[PerSpeaker] Re-scan: connected ${newStreams} new stream(s) (total tracked: ${connectedStreamIds.size})`);
       }
     }, 15000);
-
-    // Health monitoring: detect stale streams
-    const healthInterval = setInterval(() => {
-      const now = Date.now();
-      for (const [idx, lastActive] of streamLastActive) {
-        const silentMs = now - lastActive;
-        if (silentMs > 30000) {
-          const calls = streamCallCounts.get(idx) || 0;
-          (window as any).logBot?.(`[PerSpeaker] Stream ${idx} silent for ${(silentMs/1000).toFixed(0)}s (onaudioprocess calls: ${calls})`);
-        }
-      }
-    }, 30000);
-
-    // Store intervals for cleanup
-    (window as any).__vexaPerSpeakerIntervals = [rescanInterval, healthInterval];
+    w.__vexaPerSpeakerIntervals = [rescanInterval];
 
     return streamCount;
   });
@@ -2319,13 +2317,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     syncBrowserDataFromS3(botConfig);
     cleanStaleLocks(BROWSER_DATA_DIR);
 
-    const authArgs = getAuthenticatedBrowserArgs();
-    const context: BrowserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
-      headless: false,
-      ignoreDefaultArgs: ['--enable-automation'],
-      args: authArgs,
-      viewport: null,
-    });
+    const { context, page: authPage } = await launchPersistentBrowser({ dataDir: BROWSER_DATA_DIR, args: getAuthenticatedBrowserArgs() });
 
     log('[Bot] Authenticated persistent context launched');
 
@@ -2351,8 +2343,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       }
     }
 
-    const pages = context.pages();
-    page = pages.length > 0 ? pages[0] : await context.newPage();
+    page = authPage;
   }
   // Simple browser setup like simple-bot.js
   else if (botConfig.platform === "teams") {
@@ -2379,6 +2370,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
     
     // Create context with CSP bypass to allow script injection (like Google Meet)
+    if (!browserInstance) throw new Error('browserInstance not initialized');
     const context = await browserInstance.newContext({
       permissions: ['microphone', 'camera'],
       ignoreHTTPSErrors: true,
@@ -2454,6 +2446,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     });
 
     // Create a new page with permissions and viewport for non-Teams
+    if (!browserInstance) throw new Error('browserInstance not initialized');
     const context = await browserInstance.newContext({
       permissions: ["camera", "microphone"],
       userAgent: userAgent,

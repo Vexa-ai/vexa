@@ -1,0 +1,14 @@
+{
+  "name": "@vexa/record-chunker",
+  "version": "0.1.0",
+  "description": "Shared browser MediaRecorder driver: wraps a MediaRecorder over a combined audio MediaStream and emits base64 chunks (recording.v1 shape) on each timeslice + a final isFinal chunk on stop. Used by both lane recording taps (gmeet, mixed). Pure browser, zero-dep.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
