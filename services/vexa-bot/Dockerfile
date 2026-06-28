@@ -51,31 +51,47 @@ COPY services/vexa-bot/core/package*.json ./core/
 COPY services/vexa-bot/core/tsconfig.json ./core/
 COPY services/vexa-bot/core/build-browser-utils.js ./core/
 
-# Vendor the @vexa/* bricks the bot consumes. The build context is the repo root;
-# core/package.json declares them as `file:../../../modules/*`, which from
-# /app/vexa-bot/core resolves to /modules. Copy each brick's package.json + built
-# dist there (the bricks have no `prepare` script, so npm uses the prebuilt dist;
-# their runtime deps overlap with core's and resolve up the tree). This is what
-# makes the service consume the brick in the image — no in-bot copy, no drift.
-COPY modules/join/package.json                 /modules/join/package.json
-COPY modules/join/dist                         /modules/join/dist
-COPY modules/capture/package.json              /modules/capture/package.json
-COPY modules/capture/dist                      /modules/capture/dist
-COPY modules/pipeline/package.json             /modules/pipeline/package.json
-COPY modules/pipeline/dist                     /modules/pipeline/dist
-COPY modules/recording/package.json            /modules/recording/package.json
-COPY modules/recording/dist                    /modules/recording/dist
-COPY modules/recorder/package.json             /modules/recorder/package.json
-COPY modules/recorder/dist                     /modules/recorder/dist
-COPY modules/speaker-attribution/package.json  /modules/speaker-attribution/package.json
-COPY modules/speaker-attribution/dist          /modules/speaker-attribution/dist
+# Copy and build @vexa/* modules. Build context is the repo root so file: deps
+# in core/package.json (e.g. file:../../../modules/join) resolve correctly.
+# Build order: leaves first (no @vexa deps), then dependents.
+RUN npm install -g typescript
 
-# Install TypeScript dependencies. --install-links COPIES the @vexa/* file: bricks
-# into node_modules (instead of symlinking to /modules), so they survive the
-# node_modules COPY into the runtime stage (no dangling symlinks).
+# Leaf modules (no @vexa deps)
+COPY modules/join/                             /modules/join/
+COPY modules/recording/                        /modules/recording/
+COPY modules/recorder/                         /modules/recorder/
+COPY modules/remote-browser/                   /modules/remote-browser/
+COPY modules/gmeet/capture/                    /modules/gmeet/capture/
+COPY modules/mixed/capture/zoom/               /modules/mixed/capture/zoom/
+COPY modules/mixed/capture/teams/              /modules/mixed/capture/teams/
+COPY modules/shared/whisper/                   /modules/shared/whisper/
+COPY modules/shared/buffer/                    /modules/shared/buffer/
+COPY modules/shared/capture-codec/             /modules/shared/capture-codec/
+COPY modules/shared/record-chunker/            /modules/shared/record-chunker/
+
+RUN cd /modules/join && npm install --ignore-scripts && npm run build
+RUN cd /modules/recording && npm install --ignore-scripts && npm run build
+RUN cd /modules/recorder && npm install --ignore-scripts && npm run build
+RUN cd /modules/remote-browser && npm install --ignore-scripts && npm run build
+RUN cd /modules/gmeet/capture && npm install --ignore-scripts && npm run build
+RUN cd /modules/mixed/capture/zoom && npm install --ignore-scripts && npm run build
+RUN cd /modules/mixed/capture/teams && npm install --ignore-scripts && npm run build
+RUN cd /modules/shared/whisper && npm install --ignore-scripts && npm run build
+RUN cd /modules/shared/buffer && npm install --ignore-scripts && npm run build
+RUN cd /modules/shared/capture-codec && npm install --ignore-scripts && npm run build || true
+RUN cd /modules/shared/record-chunker && npm install --ignore-scripts && npm run build || true
+
+# Dependent modules (require @vexa/transcribe-whisper and @vexa/transcribe-buffer)
+COPY modules/gmeet/pipeline/                   /modules/gmeet/pipeline/
+COPY modules/mixed/pipeline/                   /modules/mixed/pipeline/
+RUN cd /modules/gmeet/pipeline && npm install --install-links --ignore-scripts && npm run build
+RUN cd /modules/mixed/pipeline && npm install --install-links --ignore-scripts && npm run build
+
+# Install bot TypeScript dependencies (--install-links copies file: bricks into
+# node_modules so they survive the COPY to the runtime stage without dangling symlinks).
 WORKDIR /app/vexa-bot/core
 RUN npm install --install-links
-RUN npm install -g typescript
+
 # Pre-bake diarization ONNX models (~32 MB) into the transformers.js cache in
 # node_modules — flows to the runtime stage with the node_modules COPY.
 COPY services/vexa-bot/core/scripts/bake-diarization-models.js ./scripts/
