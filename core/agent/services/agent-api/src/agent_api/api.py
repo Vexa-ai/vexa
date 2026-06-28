@@ -253,6 +253,29 @@ def _sse(events) -> Iterator[str]:
         yield f"{prefix}data: {json.dumps(ev)}\n\n"
 
 
+MEETING_READ_TOOL = "meeting.read_transcript"  # the meeting-scoped transcript tool (tools-seed/)
+
+
+def _meeting_grounding(active: "dict | None", session: str, prompt: str) -> "tuple[dict, list[str], str]":
+    """Cookbook #1 — chat grounding via a meeting-scoped tool. If the terminal's ACTIVE tab is a meeting,
+    return (meeting context, [the transcript tool], a prompt prefixed with "you are in a live meeting …");
+    otherwise the plain (none-context, no tools, prompt). The agent then reads meetings' published
+    ``/transcripts`` through the tool on demand — never a file, never the other domain's internals (P23/P3)."""
+    a = active or {}
+    if a.get("kind") != "meeting":
+        return ({"kind": "none", "session": session}, [], prompt)
+    m = a.get("meeting") or a  # tolerate {kind, meeting:{…}} or a flat {kind, platform, native_id}
+    native = m.get("native_id") or m.get("ref")
+    if not native:
+        return ({"kind": "none", "session": session}, [], prompt)
+    platform = m.get("platform") or "google_meet"
+    ctx = {"kind": "meeting", "session": session,
+           "meeting": {"platform": platform, "native_id": native}}
+    preamble = (f"You are in a live meeting ({platform}/{native}). Use the `{MEETING_READ_TOOL}` tool to "
+                f"read its transcript when you need it.\n\n")
+    return (ctx, [MEETING_READ_TOOL], preamble + prompt)
+
+
 def create_app(
     dispatcher: Dispatcher,
     *,
@@ -408,9 +431,15 @@ def create_app(
         is_new = not any(r["session"] == session for r in sess.list(subject))
         sess.upsert(subject, session,
                     title=_truncate_title(body.prompt) if is_new else None)
+        # Ground the chat in the terminal's ACTIVE meeting (if any) by AUTHORIZING a per-turn,
+        # meeting-scoped tool — the agent reads the transcript through meetings' published /transcripts
+        # contract on demand, never a file (P23/P3). cookbook pattern #1: a tool is granted only when the
+        # context warrants, scoped to the one resource. The scoped token is minted downstream by the
+        # dispatcher from the invocation's `tools` (P15 — the user key never enters the worker).
+        ctx, tools, prompt = _meeting_grounding(body.active, session, body.prompt)
         inv = units.make_dispatch(
             subject=subject, trigger="message",
-            start=units.entrypoint(inline=body.prompt), context={"kind": "none", "session": session},
+            start=units.entrypoint(inline=prompt), context=ctx, tools=tools,
         )
         unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
         return StreamingResponse(

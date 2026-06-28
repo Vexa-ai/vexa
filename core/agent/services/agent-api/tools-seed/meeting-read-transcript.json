@@ -1,0 +1,17 @@
+{
+  "tool": {
+    "name": "meeting.read_transcript",
+    "scope": "read:meeting",
+    "grant": "auto",
+    "transport": "mcp",
+    "mcp_server": "meeting-transcript",
+    "cred_ref": "secret://meeting/scoped-token"
+  },
+  "mcp": {
+    "type": "http",
+    "url": "${VEXA_GATEWAY_URL}/transcripts",
+    "env": {
+      "VEXA_MEETING_TOKEN": "${VEXA_MEETING_TOKEN}"
+    }
+  }
+}

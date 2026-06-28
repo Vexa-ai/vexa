@@ -9,8 +9,13 @@ the plumbing the SoC refactor touches; the per-path behavioural depth still live
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+from agent_api.api import MEETING_READ_TOOL, _meeting_grounding
+from agent_api.tools import ToolRegistry
 from agent_api.worker import serve_meeting
+
+_TOOLS_SEED = Path(__file__).resolve().parents[1] / "tools-seed"
 
 
 class MeetingStream:
@@ -62,3 +67,38 @@ def test_cp4_copilot_turn_byte_identical_across_runs():
     titles = {json.loads(f["event"]).get("card", {}).get("title")
               for _t, f in run1 if json.loads(f["event"]).get("type") == "card"}
     assert {"Raj", "Send SSO docs"} <= titles
+
+
+# ── CP6: chat grounded in a live meeting via a meeting-scoped tool (cookbook #1) ────────────────────
+
+def test_cp6_meeting_grounding_grants_scoped_tool_and_context():
+    """active=meeting → dispatch carries meeting context + the meeting-scoped tool + a 'live meeting'
+    preamble. The agent will read the transcript through the tool (meetings' /transcripts), not a file."""
+    ctx, tools, prompt = _meeting_grounding(
+        {"kind": "meeting", "meeting": {"platform": "google_meet", "native_id": "abc-defg-hij"}},
+        session="main", prompt="who spoke last?")
+    assert ctx == {"kind": "meeting", "session": "main",
+                   "meeting": {"platform": "google_meet", "native_id": "abc-defg-hij"}}
+    assert tools == [MEETING_READ_TOOL]
+    assert prompt.startswith("You are in a live meeting (google_meet/abc-defg-hij).")
+    assert prompt.endswith("who spoke last?")
+
+
+def test_cp6_no_active_meeting_is_plain_chat():
+    """No active meeting → no tool granted, plain none-context, prompt untouched (no leakage)."""
+    ctx, tools, prompt = _meeting_grounding(None, session="main", prompt="hello")
+    assert ctx == {"kind": "none", "session": "main"} and tools == [] and prompt == "hello"
+    # a non-meeting active tab is likewise plain
+    ctx2, tools2, _ = _meeting_grounding({"kind": "file", "ref": "x.md"}, "main", "hi")
+    assert ctx2["kind"] == "none" and tools2 == []
+
+
+def test_cp6_descriptor_resolves_to_mcp_grant_targeting_transcripts():
+    """The tool.v1 descriptor (validated on load) resolves to an auto MCP grant whose server targets
+    meetings' /transcripts — the cred-governed seam the agent calls (cookbook tool-authorization pattern)."""
+    reg = ToolRegistry.from_dir(_TOOLS_SEED)
+    assert MEETING_READ_TOOL in reg.names()
+    grant = reg.resolve([MEETING_READ_TOOL])
+    assert "mcp__meeting-transcript" in grant.allowed_tools          # auto → enters --allowedTools
+    server = grant.mcp_servers["meeting-transcript"]
+    assert "/transcripts" in server["url"]                           # targets the meetings contract

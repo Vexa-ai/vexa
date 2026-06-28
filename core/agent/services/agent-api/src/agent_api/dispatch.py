@@ -69,6 +69,13 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
         if meeting.get("transcript_start_id"):
             env["VEXA_TRANSCRIPT_START_ID"] = str(meeting["transcript_start_id"])
+    elif meeting and meeting.get("native_id"):
+        # Chat GROUNDED in a live meeting (cookbook #1): no numeric meeting_id, but the meeting-scoped
+        # tool needs the native id + platform to target meetings' published /transcripts. (The
+        # serve_meeting path keys on meeting_id above; this is the chat-grounding seam.)
+        env["VEXA_MEETING_NATIVE_ID"] = str(meeting["native_id"])
+        if meeting.get("platform"):
+            env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
     return env
 
 
