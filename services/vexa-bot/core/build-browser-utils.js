@@ -24,6 +24,8 @@ const zoomSpeakersPath = path.join(ZK_DIST, 'zoom-speakers.js');
 const zoomSpeakersContent = fs.readFileSync(zoomSpeakersPath, 'utf8');
 const gmeetCapturePath = path.join(CK_DIST, 'gmeet-capture.js');
 const gmeetCaptureContent = fs.readFileSync(gmeetCapturePath, 'utf8');
+const pcmCapturePath = path.join(CK_DIST, 'pcm-capture.js');
+const pcmCaptureContent = fs.readFileSync(pcmCapturePath, 'utf8');
 const teamsSpeakersPath = path.join(TK_DIST, 'msteams-speakers.js');
 const teamsSpeakersContent = fs.readFileSync(teamsSpeakersPath, 'utf8');
 
@@ -54,11 +56,21 @@ ${gmeetSpeakersContent}
 ${zoomSpeakersContent}
   })(zmExports, zmModule);
 
+  // pcm-capture is a dependency of gmeet-capture — inline it first
+  var pcmExports = {};
+  var pcmModule = { exports: pcmExports };
+  (function(exports, module) {
+${pcmCaptureContent}
+  })(pcmExports, pcmModule);
+
   var gcExports = {};
   var gcModule = { exports: gcExports };
-  (function(exports, module) {
+  (function(exports, module, require) {
 ${gmeetCaptureContent}
-  })(gcExports, gcModule);
+  })(gcExports, gcModule, function(mod) {
+    if (mod === './pcm-capture' || mod === 'pcm-capture') return pcmModule.exports;
+    throw new Error('Unknown require in browser bundle: ' + mod);
+  });
 
   var tsExports = {};
   var tsModule = { exports: tsExports };
