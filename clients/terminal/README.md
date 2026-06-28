@@ -39,7 +39,7 @@ No test suite yet (`tests/` absent). Standalone build + typecheck:
 
 ```bash
 pnpm install && pnpm build      # next build = typecheck + lint (L1/L2)
-pnpm dev                        # next dev -p 3003 — drive surfaces against a live agent-api (L4)
+pnpm dev                        # next dev -p 3000 — drive surfaces against a live agent-api (L4)
 ```
 
 ## Status

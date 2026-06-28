@@ -4,16 +4,16 @@
   "private": true,
   "description": "Vexa Terminal — an AI-first knowledge-worker terminal (Claude Code × Outlook) on the Vexa meeting-bot + agentic-runtime backend. Self-hostable (VPC / air-gapped) with BYO inference. Scaffolded from public/prototype.html.",
   "scripts": {
-    "dev": "PORT=3003 node server.mjs",
+    "dev": "PORT=3000 node server.mjs",
     "build": "next build",
-    "start": "PORT=3003 NODE_ENV=production node server.mjs",
+    "start": "PORT=3000 NODE_ENV=production node server.mjs",
     "lint": "next lint",
     "test": "vitest run"
   },
   "dependencies": {
-    "allotment": "^1.20.5",
     "acorn": "^8.17.0",
     "acorn-walk": "^8.3.5",
+    "allotment": "^1.20.5",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "dockview": "^7.0.2",
@@ -21,6 +21,7 @@
     "geist": "^1.3.1",
     "lucide-react": "^0.556.0",
     "next": "15.5.19",
+    "next-auth": "^4.24.14",
     "next-themes": "^0.4.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

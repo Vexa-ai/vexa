@@ -22,7 +22,7 @@ const dev = process.env.NODE_ENV !== "production";
 const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd(), dev);
 
-const port = parseInt(process.env.PORT || "3003", 10);
+const port = parseInt(process.env.PORT || "3000", 10);
 const hostname = process.env.HOST || "0.0.0.0";
 
 const GATEWAY_URL = (process.env.GATEWAY_URL || "ws://127.0.0.1:18056")

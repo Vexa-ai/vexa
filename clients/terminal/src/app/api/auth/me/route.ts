@@ -19,13 +19,17 @@ export async function GET() {
   }
 
   let email: string | undefined;
+  let name: string | undefined;
   if (info) {
     try {
-      email = (JSON.parse(info) as { email?: string }).email;
+      ({ email, name } = JSON.parse(info) as { email?: string; name?: string });
     } catch {
       /* malformed cookie — still authenticated by the token, just no email to show */
     }
   }
 
-  return NextResponse.json({ authenticated: true, user: { email: email ?? null } }, { headers: NO_STORE });
+  return NextResponse.json(
+    { authenticated: true, user: { email: email ?? null, name: name ?? null } },
+    { headers: NO_STORE },
+  );
 }

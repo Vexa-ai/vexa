@@ -36,7 +36,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push(`${init?.method || "GET"} ${url}`);
         if (url.includes("/admin/users/email/")) {
-          return new Response(JSON.stringify({ id: 42, email: "a@b.com", name: "A" }), { status: 200 });
+          return new Response(JSON.stringify({ id: 42, email: "test-a@b.com", name: "A" }), { status: 200 });
         }
         if (url.includes("/tokens")) {
           return new Response(JSON.stringify({ token: "minted-tok" }), { status: 200 });
@@ -45,7 +45,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
       }),
     );
 
-    const res = await login(makeReq({ email: "a@b.com" }));
+    const res = await login(makeReq({ email: "test-a@b.com" }));
     expect(res.status).toBe(200);
 
     // No create call — user already existed.
@@ -56,8 +56,16 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     const tok = setCookies.find((c) => c.name === "vexa-token");
     const info = setCookies.find((c) => c.name === "vexa-user-info");
     expect(tok?.value).toBe("minted-tok");
-    expect(JSON.parse(info!.value)).toEqual({ email: "a@b.com" });
+    expect(JSON.parse(info!.value)).toEqual({ email: "test-a@b.com", name: "A" });
     expect((tok?.opts as { httpOnly?: boolean })?.httpOnly).toBe(true);
+  });
+
+  it("rejects a non-test email (debug-only path) without calling admin-api", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await login(makeReq({ email: "real@company.com" }));
+    expect(res.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("creates the user when admin-api returns 404, then mints a token", async () => {
@@ -68,14 +76,14 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
         calls.push(`${init?.method || "GET"} ${url}`);
         if (url.includes("/admin/users/email/")) return new Response("not found", { status: 404 });
         if (init?.method === "POST" && url.endsWith("/admin/users")) {
-          return new Response(JSON.stringify({ id: 7, email: "new@b.com" }), { status: 201 });
+          return new Response(JSON.stringify({ id: 7, email: "test-new@b.com" }), { status: 201 });
         }
         if (url.includes("/tokens")) return new Response(JSON.stringify({ token: "tok-7" }), { status: 200 });
         return new Response("nope", { status: 500 });
       }),
     );
 
-    const res = await login(makeReq({ email: "new@b.com" }));
+    const res = await login(makeReq({ email: "test-new@b.com" }));
     expect(res.status).toBe(200);
     expect(calls.some((c) => c.startsWith("POST") && c.endsWith("/admin/users"))).toBe(true);
     expect(setCookies.find((c) => c.name === "vexa-token")?.value).toBe("tok-7");

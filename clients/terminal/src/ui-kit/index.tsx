@@ -30,6 +30,7 @@ const PATHS: Record<string, string> = {
   folder: "M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6",
   eyeOff: "M2 12s3.5-7 10-7a11 11 0 0 1 4 .7M22 12s-3.5 7-10 7a11 11 0 0 1-4-.7M3 3l18 18",
+  logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
 };
 
 export function Icon({ name, size = 18, style }: { name: string; size?: number; style?: CSSProperties }) {

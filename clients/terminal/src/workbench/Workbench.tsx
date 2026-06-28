@@ -119,8 +119,9 @@ function LeftPane() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--sidebar)", borderRight: "1px solid var(--line)", minHeight: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "12px 14px 8px", flex: "none" }}>
-        <div style={{ width: 24, height: 24, borderRadius: 7, background: "var(--accent)", color: "#241008", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 600, fontSize: 12 }}>V</div>
-        <div><b style={{ fontSize: 13, fontWeight: 500, display: "block", lineHeight: 1.2 }}>Vexa EI</b><span style={{ fontSize: 11, color: "var(--t3)" }}>terminal</span></div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} style={{ borderRadius: 7, display: "block", flex: "none" }} />
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)" }}>Vexa <span style={{ fontWeight: 400, color: "var(--t3)" }}>terminal</span></span>
       </div>
       <div style={{ display: "flex", gap: 3, flexWrap: "wrap", padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
         {lists.map((l) => (
@@ -130,19 +131,48 @@ function LeftPane() {
         ))}
       </div>
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>{Comp && <Comp />}</div>
-      <div style={{ padding: "8px 14px", borderTop: "1px solid var(--line)", fontSize: 11.5, color: "var(--t2)", display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)" }} />Self-hosted · air-gapped
-        <button type="button" title="Sign out"
-          onClick={() => { void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
-            // Wipe ALL client state on logout (dockview layout/tabs, chat focus, expanded trees, onboarding
-            // flags) so the next user never inherits the previous one's tabs/docs/focus.
-            try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
-            window.location.reload();
-          }); }}
-          style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer" }}>
-          Sign out
-        </button>
+      <UserProfile />
+    </div>
+  );
+}
+
+// ── LEFT pane footer: the signed-in user's profile (replaces the old "Self-hosted · air-gapped" label).
+//    Identity comes from /api/auth/me (the vexa-user-info cookie). The avatar shows initials; the sign-out
+//    control stays here so logout is always reachable. Wiping client state on logout keeps the next user
+//    from inheriting this one's tabs/docs/focus.
+function UserProfile() {
+  const [user, setUser] = useState<{ email?: string | null; name?: string | null } | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => active && setUser((d?.user as { email?: string; name?: string } | undefined) ?? null))
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  const email = user?.email ?? "";
+  const name = (user?.name || (email ? email.split("@")[0] : "") || "Account").trim();
+  const initials = (name.match(/\b[a-z0-9]/gi) || []).slice(0, 2).join("").toUpperCase() || "?";
+
+  const signOut = () => {
+    void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+      try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
+      window.location.reload();
+    });
+  };
+
+  return (
+    <div style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 9, flex: "none" }}>
+      <div style={{ width: 26, height: 26, borderRadius: "50%", background: "var(--panel2)", color: "var(--t1)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 600, fontSize: 11, flex: "none" }}>{initials}</div>
+      <div style={{ minWidth: 0, flex: 1, lineHeight: 1.25 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+        {email && <div style={{ fontSize: 11, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>}
       </div>
+      <button type="button" title="Sign out" onClick={signOut}
+        style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>
+        <Icon name="logout" size={15} />
+      </button>
     </div>
   );
 }
@@ -205,13 +235,7 @@ export function Workbench() {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)" }}>
       <div style={{ height: 38, display: "flex", alignItems: "center", gap: 12, padding: "0 12px", borderBottom: "1px solid var(--line)", background: "var(--sidebar)", flex: "none" }}>
-        <div style={{ display: "flex", gap: 8 }}>
-          <i style={{ width: 12, height: 12, borderRadius: "50%", background: "#ec6a5e" }} />
-          <i style={{ width: 12, height: 12, borderRadius: "50%", background: "#f4bf4f" }} />
-          <i style={{ width: 12, height: 12, borderRadius: "50%", background: "#61c554" }} />
-        </div>
         <button aria-label="Toggle left" onClick={() => layout.toggleLeft()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="panel" size={16} /></button>
-        <div style={{ fontSize: 13, color: "var(--t1)", fontWeight: 500 }}>Vexa EI · Terminal</div>
         <div style={{ flex: 1 }} />
         <button aria-label="Toggle right" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
       </div>

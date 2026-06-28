@@ -10,11 +10,14 @@ import { formatElapsed, meetingHealth, STALE_MS, type MeetingHealthKind } from "
 // Live statuses (mirrors the meeting surface header) — a feed we should watch for staleness/drops.
 const LIVE_STATUSES = new Set(["active", "live", "requested", "joining", "awaiting_admission", "needs_help", "stopping"]);
 
+// Only a real error is LOUD (red). A reconnect or a quiet meeting (no new lines) is benign — often just
+// silence, not a failure — so those get a muted, informational tone instead of the alarming red box.
 const TONE: Record<Exclude<MeetingHealthKind, "ok">, { color: string; bg: string }> = {
   ended: { color: "var(--t2)", bg: "var(--panel2)" },
-  disconnected: { color: "var(--live)", bg: "var(--livebg)" },
-  stalled: { color: "var(--live)", bg: "var(--livebg)" },
-  error: { color: "var(--live)", bg: "var(--livebg)" },
+  disconnected: { color: "var(--t2)", bg: "var(--panel2)" },
+  stalled: { color: "var(--t2)", bg: "var(--panel2)" },
+  // Warm amber (brand accent) — noticeable but not the alarming blood-red of a fatal failure.
+  error: { color: "var(--accent)", bg: "var(--accentbg)" },
 };
 
 function issueLabel(kind: "stream" | "model" | "parse"): string {
@@ -61,10 +64,10 @@ export function MeetingHealthBanner() {
       dot = false;
       break;
     case "disconnected":
-      headline = `Live stream disconnected — reconnecting…${health.reconnects ? ` (${health.reconnects} ${health.reconnects === 1 ? "retry" : "retries"})` : ""}`;
+      headline = "Reconnecting to live stream…";
       break;
     case "stalled":
-      headline = `Transcript stalled — no new lines${elapsed ? ` for ${elapsed}` : ""}`;
+      headline = `Waiting for transcript${elapsed ? ` — no new lines for ${elapsed}` : ""}`;
       break;
     case "error":
     default:
@@ -85,7 +88,7 @@ export function MeetingHealthBanner() {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {dot && <span style={{ width: 7, height: 7, borderRadius: "50%", background: tone.color, flex: "none", boxShadow: `0 0 0 3px ${tone.bg}` }} />}
-        <span style={{ fontWeight: 700 }}>{headline}</span>
+        <span style={{ fontWeight: health.kind === "error" ? 700 : 600 }}>{headline}</span>
       </div>
 
       {/* For stalled/disconnected, still surface the most recent underlying issue if there is one. */}
