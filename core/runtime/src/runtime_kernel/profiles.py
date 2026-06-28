@@ -16,7 +16,8 @@ a real image."""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import shlex
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 
@@ -124,3 +125,29 @@ def default_registry() -> ProfileRegistry:
             ),
         }
     )
+
+
+# Per-deployment command overrides: env var → the profile whose Runnable.command it replaces. The
+# default commands (above) are the container-IMAGE entrypoints the docker/k8s backends exec; a
+# process-backend deployment (single-host `lite`) instead points these at in-container launchers
+# that wire the right venv/PYTHONPATH/cwd before exec'ing the same workload.
+_COMMAND_OVERRIDE_ENV = {
+    "meeting-bot": "BOT_COMMAND",
+    "agent": "AGENT_WORKER_COMMAND",
+}
+
+
+def apply_command_overrides(registry: ProfileRegistry) -> ProfileRegistry:
+    """Return a registry whose profile commands honor the env overrides in ``_COMMAND_OVERRIDE_ENV``.
+    Additive + opt-in: a profile is rebuilt ONLY when its env var is set to a non-empty value (parsed
+    shlex-style, so `/usr/local/bin/foo --flag` → the argv list Popen needs); with no overrides set
+    (docker/k8s default) the registry is returned with every profile's original command intact."""
+    rebuilt: dict[str, Profile] = {}
+    for name in registry.names():
+        profile = registry.get(name)
+        env_name = _COMMAND_OVERRIDE_ENV.get(name)
+        raw = os.environ.get(env_name, "").strip() if env_name else ""
+        if raw:
+            profile = replace(profile, runnable=replace(profile.runnable, command=shlex.split(raw)))
+        rebuilt[name] = profile
+    return ProfileRegistry(rebuilt)

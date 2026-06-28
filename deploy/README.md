@@ -28,6 +28,14 @@ host/user-specific execution-target & resource registry (sealed in
 runtime/schedule schemas indirectly (each service vendors and validates its own by path); deploy
 itself reads no `*.v1`.
 
+## Lite — the single-container shape
+
+[`deploy/lite`](lite/) is the all-in-one alternative to this compose stack: the SAME service code
+in ONE container, with the runtime on the **process backend** (`RUNTIME_BACKEND=process`) so bots
+and agent workers run as child processes instead of socket-spawned containers. `make lite` (root)
+provisions postgres + minio sidecars and runs the rest in a single image — quick evaluation /
+small teams; use this compose stack for dev / production. See [`deploy/lite/README.md`](lite/README.md).
+
 ## Isolated evaluation
 
 `deploy/compose/tests/` — `stack_test.py` (the **`gate:compose`** proof) brings up the real

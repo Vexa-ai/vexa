@@ -1,9 +1,10 @@
 """``python -m runtime_kernel`` — the production runtime API (P4 compose CMD).
 
-Serves ``runtime_kernel.api.create_app(Runtime(backend=DockerBackend(), profiles=default_registry()))``
-— the runtime.v1 operation surface that spawns bot/agent containers via the host Docker socket. The
-``DockerBackend`` shells out to the ``docker`` CLI, so the image bundles the docker client and the
-compose mounts ``/var/run/docker.sock``. Images come from env (BROWSER_IMAGE / AGENT_IMAGE).
+Serves ``runtime_kernel.api.create_app(Runtime(backend=<env-selected>, profiles=default_registry()))``
+— the runtime.v1 operation surface that spawns bot/agent workloads. The backend is chosen by
+``RUNTIME_BACKEND`` (default ``docker``): ``docker`` talks to the host socket API (compose mounts
+``/var/run/docker.sock``), ``k8s`` spawns Pods via kubectl under the runtime's ServiceAccount/RBAC
+(deploy/helm), ``process`` runs child processes. Images come from env (BROWSER_IMAGE / AGENT_IMAGE).
 
 Exposed via ``app`` (PEP 562, built on first access) so ``uvicorn runtime_kernel.api:app`` /
 ``python -m runtime_kernel`` both resolve it without constructing the app at mere import time.
@@ -84,34 +85,61 @@ def _start_ticker(scheduler) -> None:
     threading.Thread(target=_loop, name="scheduler-tick", daemon=True).start()
 
 
-def build_production_app():
-    """Wire the runtime API with the real Docker backend + the env-driven profile registry, plus the
-    durable cron scheduler (REDIS_URL) with a background tick loop."""
-    from .api import create_app
-    from .docker_backend import DockerBackend
-    from .kernel import Runtime
-    from .profiles import default_registry, worker_image_for
+def _build_backend():
+    """Select the spawn backend from ``RUNTIME_BACKEND`` (default ``docker``). compose/desktop run
+    ``docker`` (host socket API); a k8s deployment runs ``k8s`` (spawns Pods via kubectl under the
+    runtime's ServiceAccount/RBAC — see deploy/helm runtime RBAC). ``process`` is the no-container
+    fallback. Same Backend port across all three, so the runtime.v1 lifecycle is identical."""
+    kind = os.getenv("RUNTIME_BACKEND", "docker").strip().lower()
+    if kind == "k8s":
+        from .k8s_backend import K8sBackend
 
-    backend = DockerBackend()
-    # Workers run the agent-api BYTES under a distinct image NAME. Ensure that name exists as a local
-    # TAG ALIAS of AGENT_IMAGE up front (rebuild-free, no pull). On any failure ensure_image_alias
-    # returns AGENT_IMAGE, which we then pin as AGENT_WORKER_IMAGE so the registry resolves to it —
-    # dispatch falls back to the agent-api image and never breaks.
+        # Namespace is injected via the downward API (POD_NAMESPACE); None ⇒ kubectl's current ns.
+        return K8sBackend(namespace=os.getenv("POD_NAMESPACE") or None)
+    if kind == "process":
+        from .process_backend import ProcessBackend
+
+        return ProcessBackend()
+    from .docker_backend import DockerBackend
+
+    return DockerBackend()
+
+
+def build_production_app():
+    """Wire the runtime API with the env-selected spawn backend + the env-driven profile registry,
+    plus the durable cron scheduler (REDIS_URL) with a background tick loop."""
+    from .api import create_app
+    from .kernel import Runtime
+    from .profiles import apply_command_overrides, default_registry, worker_image_for
+
+    backend = _build_backend()
+    # Workers run the agent-api BYTES under a distinct image NAME. With the Docker backend we ensure
+    # that name exists as a local TAG ALIAS of AGENT_IMAGE up front (rebuild-free, no pull). On any
+    # failure ensure_image_alias returns AGENT_IMAGE, which we then pin as AGENT_WORKER_IMAGE so the
+    # registry resolves to it — dispatch falls back to the agent-api image and never breaks. Other
+    # backends (k8s/process) pull the worker image from a registry by its full ref, so there is no
+    # local alias to make: we set AGENT_WORKER_IMAGE from worker_image_for(AGENT_IMAGE) directly.
     agent_image = os.getenv("AGENT_IMAGE", "")
     if agent_image:
-        try:
-            target = worker_image_for(agent_image)
-            resolved = backend.ensure_image_alias(target, agent_image)
-            os.environ["AGENT_WORKER_IMAGE"] = resolved
-        except Exception as e:  # noqa: BLE001 — startup aliasing must never crash the boot
-            logger.warning("worker image alias setup failed: %s; using AGENT_IMAGE", e)
-            os.environ["AGENT_WORKER_IMAGE"] = agent_image
+        if hasattr(backend, "ensure_image_alias"):
+            try:
+                target = worker_image_for(agent_image)
+                resolved = backend.ensure_image_alias(target, agent_image)
+                os.environ["AGENT_WORKER_IMAGE"] = resolved
+            except Exception as e:  # noqa: BLE001 — startup aliasing must never crash the boot
+                logger.warning("worker image alias setup failed: %s; using AGENT_IMAGE", e)
+                os.environ["AGENT_WORKER_IMAGE"] = agent_image
+        else:
+            os.environ.setdefault("AGENT_WORKER_IMAGE", worker_image_for(agent_image))
 
     scheduler = _build_scheduler()
     if scheduler is not None:
         _start_ticker(scheduler)
+    # apply_command_overrides is a no-op unless BOT_COMMAND / AGENT_WORKER_COMMAND are set (the
+    # process-backend / `lite` case) — docker/k8s keep the image entrypoints unchanged.
+    profiles = apply_command_overrides(default_registry())
     return create_app(
-        Runtime(backend=backend, profiles=default_registry()),
+        Runtime(backend=backend, profiles=profiles),
         scheduler=scheduler,
     )
 

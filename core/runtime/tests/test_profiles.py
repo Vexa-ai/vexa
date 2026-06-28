@@ -15,7 +15,7 @@ import jsonschema
 from referencing import Registry, Resource
 
 from runtime_kernel import default_registry
-from runtime_kernel.profiles import Runnable, worker_image_for
+from runtime_kernel.profiles import Runnable, apply_command_overrides, worker_image_for
 
 V012 = Path(__file__).resolve().parents[2]  # …/v0.12
 INVOCATION_SCHEMA = json.loads(
@@ -142,3 +142,24 @@ def test_agent_profile_honors_worker_image_override(monkeypatch):
     monkeypatch.setenv("AGENT_WORKER_IMAGE", "vexaai/v012-agent-api:dev")  # simulated fallback
     reg = default_registry()
     assert reg.get("agent").runnable.image == "vexaai/v012-agent-api:dev"
+
+
+# ── command overrides (process-backend / lite) ────────────────────────────────────────────────────
+def test_command_overrides_noop_without_env(monkeypatch):
+    """No BOT_COMMAND / AGENT_WORKER_COMMAND set ⇒ the image entrypoints are untouched (docker/k8s)."""
+    monkeypatch.delenv("BOT_COMMAND", raising=False)
+    monkeypatch.delenv("AGENT_WORKER_COMMAND", raising=False)
+    reg = apply_command_overrides(default_registry())
+    assert reg.resolve("meeting-bot").command == ["/app/vexa-bot/entrypoint.sh"]
+    assert reg.resolve("agent").command == ["python", "-m", "worker"]
+
+
+def test_command_overrides_replace_commands(monkeypatch):
+    """A process-backend deployment points the commands at in-container launchers (shlex-parsed);
+    images + timeouts are preserved (only the command is replaced)."""
+    monkeypatch.setenv("BOT_COMMAND", "/usr/local/bin/vexa-bot-launch")
+    monkeypatch.setenv("AGENT_WORKER_COMMAND", "/usr/local/bin/vexa-agent-worker --flag")
+    reg = apply_command_overrides(default_registry())
+    assert reg.resolve("meeting-bot").command == ["/usr/local/bin/vexa-bot-launch"]
+    assert reg.resolve("agent").command == ["/usr/local/bin/vexa-agent-worker", "--flag"]
+    assert reg.get("agent").idle_timeout_sec == 300  # untouched
