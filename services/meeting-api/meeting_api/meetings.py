@@ -1255,16 +1255,26 @@ async def request_bot(
     if meeting_data.get("capture_modes"):
         bot_config["captureModes"] = meeting_data["capture_modes"]
     if req.authenticated:
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-        minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
-        s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
-        s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
         bot_config["authenticated"] = True
-        bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
-        bot_config["s3Endpoint"] = s3_endpoint_url
-        bot_config["s3Bucket"] = s3_bucket
-        bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
-        bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
+        cookie_backend = os.environ.get("COOKIE_STORAGE_BACKEND", "s3")
+        if cookie_backend == "http":
+            cookie_service_url = os.environ.get("COOKIE_SERVICE_URL", "http://kioku-cookie-service:8099")
+            cookie_service_token = os.environ.get("COOKIE_SERVICE_TOKEN", "")
+            bot_config["cookieStorageBackend"] = "http"
+            bot_config["cookieServiceUrl"] = cookie_service_url
+            if cookie_service_token:
+                bot_config["cookieServiceToken"] = cookie_service_token
+            bot_config["userId"] = str(current_user.id)
+        else:
+            minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+            minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
+            s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
+            s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
+            bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
+            bot_config["s3Endpoint"] = s3_endpoint_url
+            bot_config["s3Bucket"] = s3_bucket
+            bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
+            bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
     # Remove None values
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
 

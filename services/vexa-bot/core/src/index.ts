@@ -23,7 +23,7 @@ import { Page, Browser, BrowserContext } from 'playwright-core';
 import { execSync } from 'child_process';
 import * as net from 'net';
 import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR, getAuthenticatedBrowserArgs, launchPersistentBrowser } from '@vexa/remote-browser';
-// HTTP imports removed - using unified callback service instead
+import { verifyCookieServiceContract, downloadCookiesFromHttp, uploadCookiesToHttp } from './cookie-http';
 
 // Per-speaker transcription pipeline
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
@@ -837,14 +837,28 @@ async function performGracefulLeave(
     }
   }
 
-  // Sync browser data back to S3 for authenticated bots (preserves cookies/sessions)
-  if (currentBotConfig?.authenticated && currentBotConfig?.userdataS3Path) {
-    try {
-      log("[Graceful Leave] Syncing browser data to S3 (authenticated bot)...");
-      syncBrowserDataToS3(currentBotConfig);
-      log("[Graceful Leave] Browser data synced to S3.");
-    } catch (syncErr: any) {
-      log(`[Graceful Leave] Browser data S3 sync failed: ${syncErr.message}`);
+  // Sync browser data back for authenticated bots (preserves cookies/sessions)
+  if (currentBotConfig?.authenticated) {
+    if (currentBotConfig.cookieStorageBackend === 'http' && currentBotConfig.cookieServiceUrl && currentBotConfig.userId) {
+      try {
+        log("[Graceful Leave] Uploading cookies to HTTP cookie service...");
+        await uploadCookiesToHttp({
+          cookieServiceUrl: currentBotConfig.cookieServiceUrl,
+          cookieServiceToken: currentBotConfig.cookieServiceToken,
+          userId: currentBotConfig.userId,
+        });
+        log("[Graceful Leave] Cookies uploaded to HTTP service.");
+      } catch (e: any) {
+        log(`[Graceful Leave] HTTP cookie upload failed: ${e.message}`);
+      }
+    } else if (currentBotConfig.userdataS3Path) {
+      try {
+        log("[Graceful Leave] Syncing browser data to S3 (authenticated bot)...");
+        syncBrowserDataToS3(currentBotConfig);
+        log("[Graceful Leave] Browser data synced to S3.");
+      } catch (syncErr: any) {
+        log(`[Graceful Leave] Browser data S3 sync failed: ${syncErr.message}`);
+      }
     }
   }
 
@@ -2310,12 +2324,18 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
   }
 
-  // --- Authenticated bot: use persistent context with userdata from S3 ---
-  if (botConfig.authenticated && botConfig.userdataS3Path) {
-    log('[Bot] Authenticated mode: downloading userdata from S3...');
+  // --- Authenticated bot: use persistent context with userdata from S3 or HTTP ---
+  if (botConfig.authenticated && (botConfig.userdataS3Path || (botConfig.cookieStorageBackend === 'http' && botConfig.cookieServiceUrl))) {
     ensureBrowserDataDir();
-    syncBrowserDataFromS3(botConfig);
     cleanStaleLocks(BROWSER_DATA_DIR);
+    if (botConfig.cookieStorageBackend === 'http' && botConfig.cookieServiceUrl && botConfig.userId) {
+      log('[Bot] Authenticated mode: downloading cookies from HTTP cookie service...');
+      await verifyCookieServiceContract({ cookieServiceUrl: botConfig.cookieServiceUrl, cookieServiceToken: botConfig.cookieServiceToken, userId: botConfig.userId });
+      await downloadCookiesFromHttp({ cookieServiceUrl: botConfig.cookieServiceUrl, cookieServiceToken: botConfig.cookieServiceToken, userId: botConfig.userId });
+    } else if (botConfig.userdataS3Path) {
+      log('[Bot] Authenticated mode: downloading userdata from S3...');
+      syncBrowserDataFromS3(botConfig);
+    }
 
     const { context, page: authPage } = await launchPersistentBrowser({ dataDir: BROWSER_DATA_DIR, args: getAuthenticatedBrowserArgs() });
 
