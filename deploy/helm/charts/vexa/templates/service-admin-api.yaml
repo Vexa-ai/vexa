@@ -1,0 +1,17 @@
+{{- if .Values.adminApi.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "admin-api") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.adminApi.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.adminApi.service.port }}
+      targetPort: http
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-api
+{{- end }}

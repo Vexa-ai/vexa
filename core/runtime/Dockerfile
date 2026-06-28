@@ -1,10 +1,21 @@
 # syntax=docker/dockerfile:1
-# Runtime kernel (v0.12 P5.1) — realizes runtime.v1; spawns bot/agent containers via the host
-# Docker socket. The DockerBackend talks to /var/run/docker.sock over the SOCKET API
-# (requests_unixsocket), exactly like main's runtime-api — so the image needs NO docker CLI and
-# NO daemon. The compose mounts /var/run/docker.sock + sets DOCKER_NETWORK.
+# Runtime kernel (v0.12 P5.1) — realizes runtime.v1; spawns bot/agent workloads. The DockerBackend
+# (default) talks to /var/run/docker.sock over the SOCKET API (requests_unixsocket), exactly like
+# main's runtime-api — so it needs NO docker CLI and NO daemon; the compose mounts the socket + sets
+# DOCKER_NETWORK. The K8sBackend (RUNTIME_BACKEND=k8s, used by deploy/helm) shells out to `kubectl`,
+# which is why the static binary below is bundled — inert for the docker/process paths.
 # Build context: runtime/ (pyproject.toml + uv.lock + src/).
 FROM python:3.12-slim
+
+# kubectl — only invoked by the K8sBackend (RUNTIME_BACKEND=k8s). Pinned static binary; harmless for
+# the default docker/process backends. Arch-aware so the image builds on amd64 and arm64 hosts.
+ARG KUBECTL_VERSION=v1.31.4
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl; \
+    arch="$(dpkg --print-architecture)"; case "$arch" in amd64) karch=amd64;; arm64) karch=arm64;; *) karch="$arch";; esac; \
+    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl" -o /usr/local/bin/kubectl; \
+    chmod +x /usr/local/bin/kubectl; \
+    apt-get purge -y curl; apt-get autoremove -y; rm -rf /var/lib/apt/lists/*
 
 # uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
 RUN pip install --no-cache-dir uv==0.9.22

@@ -1,0 +1,17 @@
+{{- if .Values.pgbouncer.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "pgbouncer") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.pgbouncer.service.port | default 5432 }}
+      targetPort: pgbouncer
+      name: pgbouncer
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer
+{{- end }}

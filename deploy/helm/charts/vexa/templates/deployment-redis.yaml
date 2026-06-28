@@ -1,0 +1,101 @@
+{{- if .Values.redis.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "redis") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Redis uses Recreate (not the default RollingUpdate) because a single PVC
+  # cannot be mounted by two pods; a maxSurge > 0 rollout would stall.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
+      # See deployment-minio.yaml header for the full rationale.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, minio, tts-service]
+                topologyKey: kubernetes.io/hostname
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image }}"
+          imagePullPolicy: IfNotPresent
+          {{- /* v0.10.5 Pack C.5 — paired-durability invariant guard */}}
+          {{- include "vexa.validateRedisDurability" . }}
+          args:
+            - "--appendonly"
+            - {{ .Values.redis.durability.appendonly | default "yes" | quote }}
+            - "--appendfsync"
+            - {{ .Values.redis.durability.appendfsync | default "everysec" | quote }}
+            - "--stop-writes-on-bgsave-error"
+            - {{ .Values.redis.durability.stopWritesOnBgsaveError | default "no" | quote }}
+            {{- with .Values.redis.maxmemory }}
+            - "--maxmemory"
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.redis.maxmemoryPolicy }}
+            - "--maxmemory-policy"
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.redis.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "vexa.componentName" (list . "redis-data") }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- /* v0.10.5 Pack A.1 — restore tolerations/nodeSelector/affinity dropped in 0.10.4 (#272 issue 2). On any cluster with NoSchedule taints, redis pod stays Pending forever without these. */}}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

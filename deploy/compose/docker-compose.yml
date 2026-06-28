@@ -323,6 +323,39 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # The user-facing web UI (Next.js custom server). Proxies /ws → gateway and REST → agent-api/admin-api.
+  # The terminal is the front door for humans; the gateway remains the API front door for programmatic use.
+  terminal:
+    build:
+      context: ../../clients/terminal
+      dockerfile: Dockerfile
+    image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"
+    environment:
+      - NODE_ENV=production
+      - GATEWAY_URL=ws://gateway:8000
+      - AGENT_API_URL=http://agent-api:8100
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_API_URL=http://gateway:8000
+      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
+      - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    init: true
+    depends_on:
+      gateway:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
 volumes:
   redis-data:
   postgres-data:

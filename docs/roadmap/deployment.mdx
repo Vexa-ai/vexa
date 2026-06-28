@@ -32,6 +32,7 @@ the transcription service on a GPU for a fully air-gapped install. The API is th
 | **meeting-api** | bots, transcripts, **recordings** (to object storage) |
 | **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
 | **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
+| **terminal** (`:3000`) | the web UI — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
 | redis · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
 
 The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
@@ -52,7 +53,24 @@ Everything runs in-VPC: gateway + services + redis/postgres/minio in your cluste
 own GPU, **BYO inference**, recordings in your object storage. **Zero egress** — the posture the regulated
 verticals require.
 
-## Kubernetes
+## Kubernetes (Helm)
 
-Production runs on **Helm** (`deploy/helm`) with built images and `global.imageTag`. The
-[runtime](/core/runtime) is orchestration-agnostic — the same container model, scheduled by Kubernetes.
+Production runs on **Helm** (`deploy/helm/charts/vexa`) — the same five services + infra, built once
+and pinned via `global.imageTag`. On Kubernetes the [runtime](/core/runtime) spawns the bot and
+agent-worker as **Pods** (`runtime.backend=k8s`, via `kubectl` under a chart-provided
+ServiceAccount/RBAC) instead of through the Docker socket — same container model, scheduled by k8s.
+
+```bash
+helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --create-namespace \
+  --set global.imageTag=YYMMDD-HHMM \
+  --set secrets.adminApiToken=$ADMIN_TOKEN \
+  --set secrets.internalApiSecret=$INTERNAL_API_SECRET \
+  --set secrets.transcriptionServiceToken=$STT_TOKEN \
+  --wait
+kubectl -n vexa port-forward svc/vexa-vexa-gateway 8000:8000 &
+curl -sf localhost:8000/health
+```
+
+Use managed backing by setting `postgres.enabled=false` / `redis.enabled=false` (+ `database.*` /
+`redisConfig.*`), front the gateway with `ingress.enabled=true`, and pool managed Postgres with
+`pgbouncer.enabled=true`. Full cookbook + values table: [`deploy/helm/README.md`](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md).

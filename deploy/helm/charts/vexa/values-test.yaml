@@ -1,0 +1,69 @@
+# Smoke overlay for a single-node cluster (local k3s). Locally-built images imported into the node's
+# containerd, so never pull; everything single-replica; PDBs off (a PDB minAvailable:1 on a single
+# replica blocks drains); gateway + MinIO via NodePort; dummy secrets.
+#
+#   helm install vexa deploy/helm/charts/vexa -n vexa --create-namespace -f values-test.yaml
+#
+# Proves the control plane stands up + /health is green. Does NOT exercise live bot/agent spawn
+# (needs the bot image present on the node + RWX workspace storage — see README).
+
+global:
+  imagePullPolicy: IfNotPresent
+
+secrets:
+  adminApiToken: "test-admin-token"
+  internalApiSecret: "vexa-internal-secret"
+  transcriptionServiceToken: ""
+  dispatchSigningKey: "dev-dispatch-signing-key"
+
+gateway:
+  replicaCount: 1
+  service:
+    type: NodePort
+    nodePort: 30056
+
+adminApi:
+  replicaCount: 1
+
+meetingApi:
+  replicaCount: 1
+
+runtime:
+  replicaCount: 1
+  backend: "k8s"          # exercise the real cloud spawn path (SA + RBAC + kubectl in-image)
+
+agentApi:
+  replicaCount: 1
+  workspaces:
+    size: 1Gi
+
+postgres:
+  persistence:
+    size: 2Gi
+
+redis:
+  persistence:
+    size: 1Gi
+
+minio:
+  service:
+    type: NodePort
+    nodePort: 30900
+  persistence:
+    size: 2Gi
+
+ingress:
+  enabled: false
+
+# Single replica everywhere ⇒ no PDBs (they'd block node drains on one node).
+podDisruptionBudgets:
+  gateway:
+    enabled: false
+  adminApi:
+    enabled: false
+  meetingApi:
+    enabled: false
+  runtime:
+    enabled: false
+  agentApi:
+    enabled: false
