@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc && cp -r src/hallucinations dist/hallucinations",
+    "build": "tsc",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
