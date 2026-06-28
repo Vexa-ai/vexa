@@ -10,11 +10,16 @@ Agents never run in the control plane; isolation *is* the enforcement of governa
 
 ## Boundary (SoC)
 **This domain is about:** the copilot lifecycle, chat, the user's `workspace.v1`, notes/cards, and agent
-config. **It is never about:** bot lifecycle, the meeting row, or the **transcript carrier** — it *reads*
-the transcript only via meetings' `transcript.v1` (or the meeting-scoped read tool), and never writes or
-re-derives it (P23). `meetings ⊥ agent`: the two domains never call each other; they meet **only at the
-gateway**. Cross-domain composition ("agent on a meeting") lives in the cookbook layer *above* both
-domains, never inside this one. See [`docs/CONTROL-PLANE.md`](../../docs/CONTROL-PLANE.md).
+config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.
+
+The agent **may hold, compose, and serve meeting data downstream** — *once it has acquired it legally*,
+through a **published contract**: the gateway's `/transcripts` API (e.g. the meeting-scoped read tool) or
+the `transcript.v1` carrier on the bus. What is forbidden is **owning/writing** the transcript carrier,
+**re-deriving** a producer's data into a competing copy (P23), or reaching into meetings **internals**
+(P3). `meetings ⊥ agent`: the two domains never call each other's internals; they meet only through
+published contracts (at the gateway, or a `.v1` carrier). Cross-domain composition ("agent on a meeting")
+lives in the cookbook layer *above* both domains, never inside this one. See
+[`docs/CONTROL-PLANE.md`](../../docs/CONTROL-PLANE.md).
 
 ## Seams
 | Direction | Neighbour | Via | What crosses |

@@ -13,9 +13,18 @@
 | **API** | each domain's published, gateway-fronted endpoints | meetings-control (`/bots`, `/meetings`, `/transcripts`, `/intent`, `/ws` status). agent-control (`/api/meeting/process`, `/api/chat`, `/api/workspace/*`, `/api/models`) | hold business logic in the gateway; let a client reach a domain backend directly |
 | **Top-level wiring (cookbook)** | composed operations + tool-authorization patterns that deliver *state* | "agent listening on a meeting" (compose bot-spawn + copilot-enable); per-turn meeting-scoped tool grants | live *inside* a domain (that re-merges `meetings ⊥ agent`); compose over anything but published contracts |
 
-**The rule:** the two domains never talk to each other directly. They meet **only at the gateway edge**,
-over published contracts (`transcript.v1`, `api.v1`, `tool.v1`). Composition that spans both domains lives
-**above** them in the cookbook layer — never folded into either domain.
+**The rule:** the two domains never reach into each other's internals. They meet only through **published
+contracts** — the gateway's `api.v1` HTTP surface, or a `.v1`-governed bus carrier (`transcript.v1`,
+`tool.v1`). Composition that spans both domains lives **above** them in the cookbook layer — never folded
+into either domain.
+
+**Legal acquisition, not "never touch."** The boundary is about *write-ownership* and *how data is
+acquired*, not about forbidding possession. The agent **may hold, compose, and serve meeting data
+downstream** once it has acquired it **legally** through a published contract (e.g. reading `/transcripts`
+via the gateway, or the `transcript.v1` carrier). What's forbidden is **owning/writing** another domain's
+carrier, **re-deriving** a producer's data into a competing copy (P23), or reaching into **internals**
+(P3). So the agent's live-view composition and its chat-grounding tool are both fine — each legally
+acquires the transcript, then uses its own downstream copy.
 
 `send bot ≠ start copilot` — two toggles, two domains. The bot (meetings) makes the transcript *flow*; the
 copilot (agent, the `proc:on` toggle) *processes* it. The cookbook layer is where a single high-level op
