@@ -74,8 +74,12 @@ export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
         let maxVal = 0;
         for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
         if (maxVal > SILENCE) opts.onAudio(index, data); // worklet already yields a fresh copy
-      }).then((node) => { source.connect(node); node.connect(ctx.destination); })
-        .catch((err: any) => console.log(`[gmeet-capture] worklet init failed: ${err?.message}`));
+      }).then((node) => {
+        // AudioContext starts suspended in headless Chrome — resume before wiring
+        ctx.resume().catch(() => { /* best effort */ });
+        source.connect(node);
+        node.connect(ctx.destination);
+      }).catch((err: any) => console.log(`[gmeet-capture] worklet init failed: ${err?.message}`));
       connectedStreamIds.add(streamId);
       contexts.push(ctx);
 
