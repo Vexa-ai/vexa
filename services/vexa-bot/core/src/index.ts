@@ -2518,7 +2518,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   // Also capture getUserMedia and RTC-related messages for diagnostics
   page.on('console', (msg) => {
     const text = msg.text();
-    if (text.includes('[Vexa]') || text.includes('getUserMedia') || text.includes('RTCPeerConnection') || text.includes('enumerateDevices')) {
+    if (text.includes('[Vexa]') || text.includes('[gmeet-capture]') || text.includes('[PerSpeaker]') || text.includes('getUserMedia') || text.includes('RTCPeerConnection') || text.includes('enumerateDevices')) {
       log(`[BrowserConsole] ${text}`);
     }
   });

@@ -69,17 +69,31 @@ export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
       // AudioWorklet (audio-thread) instead of the deprecated ScriptProcessor,
       // which duplicates/drops buffers under main-thread load — the captured-audio
       // stutter. connectElement is sync, so wire the node when addModule resolves.
-      createPcmCaptureNode(ctx, (data) => {
+      const onChunk = (data: Float32Array) => {
         if (!running) return;
         let maxVal = 0;
         for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
-        if (maxVal > SILENCE) opts.onAudio(index, data); // worklet already yields a fresh copy
-      }).then((node) => {
+        if (maxVal > SILENCE) opts.onAudio(index, data);
+      };
+      createPcmCaptureNode(ctx, onChunk).then((node) => {
         // AudioContext starts suspended in headless Chrome — resume before wiring
         ctx.resume().catch(() => { /* best effort */ });
         source.connect(node);
         node.connect(ctx.destination);
-      }).catch((err: any) => console.log(`[gmeet-capture] worklet init failed: ${err?.message}`));
+        console.log(`[gmeet-capture] stream ${index} worklet wired`);
+      }).catch((err: any) => {
+        console.log(`[gmeet-capture] worklet init failed for stream ${index}: ${err?.message} — falling back to ScriptProcessor`);
+        try {
+          // Fallback: ScriptProcessorNode (deprecated but reliable in headless Chrome)
+          const proc = ctx.createScriptProcessor(4096, 1, 1);
+          proc.onaudioprocess = (e: AudioProcessingEvent) => onChunk(e.inputBuffer.getChannelData(0).slice());
+          ctx.resume().catch(() => {});
+          source.connect(proc);
+          proc.connect(ctx.destination);
+        } catch (fe: any) {
+          console.log(`[gmeet-capture] ScriptProcessor fallback also failed for stream ${index}: ${fe?.message}`);
+        }
+      });
       connectedStreamIds.add(streamId);
       contexts.push(ctx);
 
