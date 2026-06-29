@@ -54,7 +54,7 @@ for C in "${COMMITS[@]}"; do
   AUTHOR="$(git -c mailmap.file="$CARVE_MAILMAP" -C "$MONO" show -s --format='%aN <%aE>' --use-mailmap "$C")"
   ADATE="$(git -C "$MONO" show -s --format='%aI' "$C")"
   MSG="$(git -C "$MONO" show -s --format='%B' "$C")"
-  GIT_COMMITTER_NAME="Dmitry Grankin" GIT_COMMITTER_EMAIL="dmitry@vexa.ai" \
+  GIT_COMMITTER_NAME="Dmitry Grankin" GIT_COMMITTER_EMAIL="39370484+DmitriyG228@users.noreply.github.com" \
     git commit -q -s --author="$AUTHOR" --date="$ADATE" -m "$MSG"
   replayed=$((replayed+1))
 done
@@ -63,7 +63,7 @@ done
 echo "$HEAD_SHA" > .carve/checkpoint
 git add .carve/checkpoint
 git commit -q -s -m "carve: advance checkpoint → $SHORT" \
-  --author="Dmitry Grankin <dmitry@vexa.ai>"
+  --author="Dmitry Grankin <39370484+DmitriyG228@users.noreply.github.com>"
 echo "✓ replayed $replayed commit(s); checkpoint → $SHORT"
 
 if [ "${1:-}" = "--push" ]; then

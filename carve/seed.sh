@@ -36,13 +36,13 @@ EXCLUDE_ARGS=(); for p in "${CARVE_EXCLUDE[@]}"; do EXCLUDE_ARGS+=(--path "$p");
 # --- final commit: overrides + transforms + docs -----------------------------
 "$HERE/_apply_layer.sh" "$WORK"
 git add -A
-git -c user.name="Dmitry Grankin" -c user.email=dmitry@vexa.ai commit -s -q \
+git -c user.name="Dmitry Grankin" -c user.email=39370484+DmitriyG228@users.noreply.github.com commit -s -q \
   -m "carve: apply open-core overrides (compose-only Makefile, transforms, docs)" || true
 
 # --- checkpoint = the mono SHA this seed represents --------------------------
 mkdir -p "$WORK/.carve"; git -C "$MONO" rev-parse "$SRC_BRANCH" > "$WORK/.carve/checkpoint"
 git add .carve/checkpoint
-git -c user.name="Dmitry Grankin" -c user.email=dmitry@vexa.ai commit -s -q \
+git -c user.name="Dmitry Grankin" -c user.email=39370484+DmitriyG228@users.noreply.github.com commit -s -q \
   -m "carve: checkpoint $(git -C "$MONO" rev-parse --short "$SRC_BRANCH")"
 
 echo "── seed result ──"; git shortlog -sne HEAD
