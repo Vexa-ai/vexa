@@ -30,6 +30,7 @@ export CARVE_INCLUDE=(
   tsconfig.base.json
   README.md
   architecture.calm.json
+  calm
   .gitignore
   .dockerignore
 )
