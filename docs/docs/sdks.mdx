@@ -8,15 +8,28 @@ the same surface whether you self-host or use the hosted service. Any HTTP clien
 
 ## What ships today
 
-The open-core ships two ways to drive Vexa:
+The open-core ships three ways to drive Vexa:
 
 - **The HTTP API** — the canonical interface. Every capability is reachable over plain REST + WebSocket;
   see the [API reference](/api/agent).
+- **`vexa-slim`** — a minimal **Python** client ([`clients/slim`](https://github.com/Vexa-ai/vexa-core/tree/main/clients/slim)).
+  Gateway-only (it speaks `api.v1` and holds no domain internals), with two peer sub-clients
+  (`slim.agent.*`, `slim.meetings.*`) and a high-level cookbook (`listen_to_meeting`, `agent_on_meeting`,
+  `harvest`). Doubles as the living proof that the `meetings ⊥ agent` boundary holds.
+
+  ```python
+  from vexa_slim import Slim, listen_to_meeting
+  from vexa_slim.config import api_key, gateway_url, load_env
+  load_env()
+  slim = Slim(gateway_url(), api_key())
+  harvest, doc = await listen_to_meeting(slim, "ety-jhht-nek", seconds=20)
+  print(harvest.counts())   # e.g. {"transcript": 80, "note": 99, "card": 33}
+  ```
 - **The terminal** — the bundled browser-based [workbench](/architecture/modules) (Next.js), a thin
   client over the same API. It comes up with `make all` at `http://localhost:13000`.
 
-Language SDKs (typed clients / CLI wrappers) are **on the roadmap** — until then, call the API directly
-or generate a client from the OpenAPI surface.
+Other typed clients / CLI wrappers are **on the roadmap** — until then, use `vexa-slim`, call the API
+directly, or generate a client from the OpenAPI surface.
 
 ## Prefer raw HTTP?
 

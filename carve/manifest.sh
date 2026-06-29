@@ -21,6 +21,7 @@ export CARVE_INCLUDE=(
   deploy/compose
   deploy/transcription
   clients/terminal
+  clients/slim
   docs/docs
   package.json
   pnpm-workspace.yaml
@@ -51,11 +52,8 @@ export CARVE_EXCLUDE=(
   core/meetings/eval/src/read-redis-transcript.mjs
   core/meetings/services/bot/eval/README.md
   core/meetings/services/bot/eval/RUNBOOK.md
-  # [approved B] local-rig driver: reads /home/dima/.env.local + imports removed clients/slim
+  # [approved B] local-rig driver: reads /home/dima/.env.local (personal rig path) — personal-infra, no external value
   core/meetings/eval/src/counting_replay.py
-  # [approved C] integration tests for the removed clients/slim component (would fail in carve)
-  core/agent/tests/test_cookbook_l2.py
-  core/agent/tests/test_cookbook_l3.py
 )
 
 # --- FLAG: patterns that mark a candidate file as "needs human+AI review" -----
@@ -63,7 +61,7 @@ export CARVE_EXCLUDE=(
 # never auto-removing. The human approves: sanitize (keep) or add to CARVE_EXCLUDE.
 # High-signal only: personal paths/hosts, internal hostnames, refs to dropped dirs.
 # Deliberately NOT flagging 127.0.0.1/0.0.0.0/169.254/private-CIDR bind+test IPs (legit).
-export CARVE_FLAG_PATTERNS='/home/dima|ssh bbb|\.env\.local|transcription\.vexa\.ai|clients/(slim|dashboard)'
+export CARVE_FLAG_PATTERNS='/home/dima|ssh bbb|\.env\.local|transcription\.vexa\.ai|clients/dashboard'
 
 # --- Identity normalization (placeholder authors → real identities) ----------
 export CARVE_MAILMAP="$MONO/carve/mailmap.txt"

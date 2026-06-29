@@ -30,6 +30,7 @@ the services that honour them.
 | ↳ admin-api | [`core/identity/services/admin-api`](https://github.com/Vexa-ai/vexa-core/tree/main/core/identity/services/admin-api) | The live DB-backed auth oracle (`/internal/validate`). |
 | ↳ identity_core | [`core/identity/src`](https://github.com/Vexa-ai/vexa-core/tree/main/core/identity/src) | The pure, DB-free reference library honouring `identity.v1`. |
 | **clients/terminal** | [`clients/terminal`](https://github.com/Vexa-ai/vexa-core/tree/main/clients/terminal/README.md) | The browser-CLI **workbench** (Next.js) — a dockview over a registry of surfaces (chat · meeting · workspace · routines · sessions · tasks). Owns no business logic; thin `/api/*` proxies to agent-api. |
+| **clients/slim** | [`clients/slim`](https://github.com/Vexa-ai/vexa-core/tree/main/clients/slim/README.md) | **`vexa-slim`** — a minimal **Python** client/SDK that drives the control plane through the gateway (`api.v1`) only: peer `slim.agent.*` / `slim.meetings.*` sub-clients + a high-level cookbook. Holds no redis URL or domain internals, so it doubles as a `meetings ⊥ agent` SoC validator. |
 | **deploy** | [`deploy`](https://github.com/Vexa-ai/vexa-core/tree/main/deploy/README.md) | The **composition** layer (Compose) — `deploy/compose` brings up the whole v0.12 control plane as one ordered, health-gated stack (postgres · redis · minio + the Python services), GPU-free. `deploy/transcription` is the **separate GPU unit** for the STT service (own compose, GPU or CPU). Owns `execution-targets.v1`. |
 
 ## Contract registry

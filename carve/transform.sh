@@ -3,12 +3,13 @@
 set -euo pipefail
 
 # Prune the CALM model to the carve: drop nodes pointing at dropped client dirs
-# (clients/slim, clients/dashboard) + any relationships referencing those nodes,
-# so architecture.calm.json reflects the contributed tree (load-bearing for FINOS).
+# (clients/dashboard — the commercial UI; clients/slim IS carved) + any relationships
+# referencing those nodes, so architecture.calm.json reflects the contributed tree
+# (load-bearing for FINOS).
 if [ -f architecture.calm.json ]; then
   python3 - <<'PY'
 import json
-DROP_PATHS = ("clients/slim", "clients/dashboard")
+DROP_PATHS = ("clients/dashboard",)
 d = json.load(open("architecture.calm.json"))
 nodes = d.get("nodes", [])
 dropped = set()
