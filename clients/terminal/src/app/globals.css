@@ -32,6 +32,35 @@
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
 }
 
+/*
+ * Day mode — the light counterpart of the dark tokens above. Same variable names so every surface
+ * (which paints from var(--*)) switches with no per-component changes. Toggled via the footer control,
+ * which sets data-theme="light" on <html>.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --sidebar: #f6f6f7;
+  --panel: #ffffff;
+  --panel2: #ebebee;
+  --rail: #f6f6f7;
+  --line: rgba(0, 0, 0, 0.09);
+  --line2: rgba(0, 0, 0, 0.14);
+  --t1: #1a1a1f;
+  --t2: #5c5c66;
+  --t3: #8a8a94;
+  --accent: #c06a3f;
+  --accentbg: rgba(192, 106, 63, 0.12);
+  --live: #e0453f;
+  --livebg: rgba(224, 69, 63, 0.12);
+  --green: #2f9e72;
+  --greenbg: rgba(47, 158, 114, 0.12);
+  --blue: #3b73d6;
+  --bluebg: rgba(59, 115, 214, 0.12);
+  --violet: #8b5fd6;
+  --violetbg: rgba(139, 95, 214, 0.12);
+}
+
 html,
 body {
   height: 100%;
@@ -46,14 +75,17 @@ body {
  * dockview — map the docking engine's theme variables onto our palette so panels/tabs/sashes match
  * the prototype. (theme={themeAbyss} applies .dockview-theme-abyss; we override its --dv-* vars.)
  */
-.dockview-theme-abyss {
+.dockview-theme-abyss.dockview-theme-abyss {
   --dv-background-color: var(--bg);
   --dv-group-view-background-color: var(--bg);
   --dv-tabs-and-actions-container-background-color: var(--sidebar);
   --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
   --dv-activegroup-visiblepanel-tab-color: var(--t1);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--sidebar);
+  --dv-activegroup-hiddenpanel-tab-color: var(--t3);
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--sidebar);
   --dv-inactivegroup-visiblepanel-tab-color: var(--t3);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--sidebar);
   --dv-inactivegroup-hiddenpanel-tab-color: var(--t3);
   --dv-separator-border: var(--line);
   --dv-tab-divider-color: var(--line);

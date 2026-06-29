@@ -22,6 +22,19 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
 import { listWorkspaceTree } from "../surfaces/workspaceApi";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { useTheme } from "../app/theme";
+
+// ── footer theme toggle: dark ⇄ day mode, sitting at the bottom-left of the shell ──
+function ThemeToggle() {
+  const [theme, toggle] = useTheme();
+  const day = theme === "light";
+  return (
+    <button onClick={toggle} title={day ? "Switch to dark mode" : "Switch to day mode"}
+      style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }}>
+      <Icon name={day ? "moon" : "sun"} size={14} />{day ? "dark" : "day"}
+    </button>
+  );
+}
 
 const entitySlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -267,6 +280,7 @@ export function Workbench() {
       </div>
 
       <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
+        <ThemeToggle />
         <div style={{ flex: 1 }} />
         <button onClick={() => layout.resetLayout()} style={{ padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }} title="Reset layout">reset layout</button>
       </footer>
