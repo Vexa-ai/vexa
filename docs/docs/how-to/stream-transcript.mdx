@@ -1,0 +1,78 @@
+---
+title: "Stream a transcript over WebSocket"
+description: "Live, per-segment transcript push instead of polling."
+---
+
+Polling `GET /transcripts/...` works, but for a live UI you want segments **pushed** as they're produced.
+The gateway exposes a multiplexed WebSocket at **`/ws`** that fans transcripts out in real time.
+
+## Connect and authenticate
+
+Connect to `/ws` on the gateway and authenticate with your API key — as a header, or as an `api_key`
+query parameter when the client can't set headers:
+
+```
+ws://localhost:18056/ws          # header:  X-API-Key: <API_KEY>
+ws://localhost:18056/ws?api_key=<API_KEY>
+```
+
+A missing key gets a `missing_api_key` error frame; an invalid key is rejected with close code **4401**.
+
+## Subscribe
+
+Send a `subscribe` action naming the meetings you want. The socket multiplexes — subscribe to several at
+once:
+
+```json
+{ "action": "subscribe",
+  "meetings": [ { "platform": "google_meet", "native_id": "abc-defg-hij" } ] }
+```
+
+The gateway authorizes each meeting against your key and acks with what you're now subscribed to:
+
+```json
+{ "type": "subscribed", "meetings": [ { "platform": "google_meet", "native_id": "abc-defg-hij" } ] }
+```
+
+Transcript segments then stream in as frames. **Live drafts arrive as `completed: false`** and are
+replaced by `completed: true` confirmations — render the draft, then overwrite it when the confirmation
+lands. `health` frames surface engine/no-signal faults in-band.
+
+## Unsubscribe and keepalive
+
+```json
+{ "action": "unsubscribe", "meetings": [ { "platform": "google_meet", "native_id": "abc-defg-hij" } ] }
+{ "action": "ping" }     // → { "type": "pong" }
+```
+
+## Example (Node)
+
+```js
+import { WebSocket } from "ws";
+
+const ws = new WebSocket("ws://localhost:18056/ws", { headers: { "X-API-Key": process.env.API_KEY } });
+
+ws.on("open", () => ws.send(JSON.stringify({
+  action: "subscribe",
+  meetings: [{ platform: "google_meet", native_id: "abc-defg-hij" }],
+})));
+
+ws.on("message", (raw) => {
+  const msg = JSON.parse(raw);
+  if (msg.type === "subscribed") return console.log("subscribed", msg.meetings);
+  if (msg.segments) for (const s of msg.segments)
+    console.log(s.completed ? "✓" : "…", s.speaker, s.text);
+});
+```
+
+## Error frames
+
+| `error` | Meaning |
+|---|---|
+| `missing_api_key` | no key supplied |
+| `invalid_api_key` | key rejected (socket closes 4401) |
+| `invalid_json` | payload wasn't a JSON object |
+| `invalid_subscribe_payload` | `meetings` missing, empty, or has no valid `{platform, native_id}` |
+| `unknown_action` | `action` wasn't `subscribe` / `unsubscribe` / `ping` |
+
+Prefer pull-based? Stick with [polling the transcript endpoint](/how-to/send-a-bot#2-read-the-transcript).

@@ -1,0 +1,43 @@
+---
+title: "SDKs & clients"
+description: "The canonical interface is the REST API; published libraries wrap it."
+---
+
+Vexa's contract is its **HTTP API** — the [Meetings API](/api/meetings) and [Agent API](/api/agent) are
+the same surface whether you self-host or use the hosted service. Any HTTP client works.
+
+## What ships today
+
+The open-core ships two ways to drive Vexa:
+
+- **The HTTP API** — the canonical interface. Every capability is reachable over plain REST + WebSocket;
+  see the [API reference](/api/agent).
+- **The terminal** — the bundled browser-based [workbench](/architecture/modules) (Next.js), a thin
+  client over the same API. It comes up with `make all` at `http://localhost:13000`.
+
+Language SDKs (typed clients / CLI wrappers) are **on the roadmap** — until then, call the API directly
+or generate a client from the OpenAPI surface.
+
+## Prefer raw HTTP?
+
+Every guide in these docs uses plain `curl`, so you can port any example to your language directly. The
+only invariant is the auth header:
+
+```bash
+-H "X-API-Key: $API_KEY"
+```
+
+Identity is **server-derived** from the key — you never send a user id or subject. See
+[Authentication](/authentication).
+
+## Building your own client
+
+The API is stable and self-describing:
+
+- **Meetings** — `POST /bots`, `GET /transcripts/{platform}/{id}` (poll or WebSocket), `GET /recordings`.
+- **Agent** — `POST /agent/api/chat` (SSE), `POST /agent/api/routines`, `POST /agent/invocations`,
+  `POST /agent/events`, and the `/agent/api/workspace/*` reads.
+- **Errors** — conventional status codes with a JSON `detail`; see the [error reference](/api/errors).
+
+Streamed endpoints emit typed frames (SSE / WebSocket) documented per endpoint in the
+[Agent API](/api/agent).

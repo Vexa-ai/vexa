@@ -11,7 +11,7 @@ API — the same surface whether you use the hosted service or self-host.
 | | |
 |---|---|
 | Hosted | `https://api.cloud.vexa.ai` |
-| Self-hosted | `http://localhost:8056` (the gateway) |
+| Self-hosted | `http://localhost:18056` (the gateway; `API_GATEWAY_HOST_PORT`, default `18056`) |
 
 Every request carries your key:
 
@@ -89,8 +89,18 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY
 curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 ```
 
+```bash Make the bot speak — POST /bots/{platform}/{native_meeting_id}/speak
+curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"text":"Thanks everyone, wrapping up."}'
+```
+
 ```bash List meetings — GET /meetings
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
+```
+
+```bash Single meeting — GET /meetings/{meeting_id}
+curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
 ```
 
 ## Speaker-attributed transcripts
@@ -109,6 +119,21 @@ runs.
 The meeting's **audio recording** is uploaded to object storage — on a self-host, your own MinIO bucket,
 so it never leaves your environment. This is the meeting audio, stored separately from the diarized
 transcript above (there is no "per-speaker audio" — speaker separation lives in the transcript as text).
+
+```bash List recordings — GET /recordings
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings"
+```
+
+```bash Recording detail — GET /recordings/{recording_id}
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
+```
+
+```bash Master metadata (finalize-on-read) — GET /recordings/{recording_id}/master?type=audio
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"
+```
+
+The master metadata returns a `raw_url` pointing at the byte stream
+`GET /recordings/{recording_id}/media/{media_file_id}/raw`, which the player loads.
 
 ---
 

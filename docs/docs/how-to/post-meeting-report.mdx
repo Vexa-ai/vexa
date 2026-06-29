@@ -1,0 +1,67 @@
+---
+title: "Report after every meeting"
+description: "When a call ends, an agent writes notes, decisions, and follow-ups into your workspace."
+---
+
+Once a meeting produces a transcript, an [agent](/core/agents) can read it **through your
+[workspace](/concepts#workspace)** — grounding the write-up in what you already know about the people and
+the deal — and commit a report. Because the transcript is trusted input, the agent both reads and writes;
+git is the undo.
+
+## Option A — dispatch a report when the meeting ends
+
+Fire a one-shot [dispatch](/core/agents) the moment a call wraps (e.g. from your own meeting-end hook):
+
+```bash
+curl -X POST "$API_BASE/agent/invocations" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "runner":"claude-code",
+    "workspaces":[{"id":"u_jane","mode":"rw"}],
+    "trigger":"scheduled",
+    "start":{"entrypoint":{"inline":"Write a report for the meeting that just ended: summary, decisions, action items with owners, and links to the people and companies involved. File it in the workspace."}}
+  }'
+# → 202 {"workload_id":"agent-..."}
+```
+
+The agent reads the latest transcript and existing entities, then commits the report. Retrieve it from the
+workspace:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/workspace/tree"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/workspace/file?path=meetings/2026-06-29-acme.md"
+```
+
+## Option B — a standing routine
+
+If you'd rather not wire a hook, run it on a schedule that sweeps recent meetings:
+
+```bash
+curl -X POST "$API_BASE/agent/api/routines" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "name":"Meeting reports",
+    "cron":"0 * * * *",
+    "prompt":"For any meeting that ended in the last hour and has no report yet, write one: summary, decisions, action items with owners. File each in the workspace.",
+    "run_now":true
+  }'
+# → 201 {"routine":{...},"job_id":"job_...","ran_now":true}
+```
+
+## What you get
+
+The report is **grounded**, not a bare summary — it's anchored in the accumulated context the workspace
+already holds, and each run leaves the workspace more complete (people, companies, decisions linked). See
+[Knowledge agent](/how-to/chat-workspace).
+
+## Going live instead
+
+To surface decisions and action items **during** the call rather than after, run the live copilot —
+`POST /api/meeting/start` then stream cards from `GET /api/meeting/stream`. See
+[Meeting copilot](/how-to/live-copilot) and the [Agent API](/api/agent#live-meeting-copilot).
+
+<Note>
+Routines and dispatches are workspace writes, so they need a **trusted** trigger (`message`/`scheduled`),
+which mounts the workspace `rw`. Untrusted triggers are propose-only — see
+[Governance](/architecture/governance).
+</Note>

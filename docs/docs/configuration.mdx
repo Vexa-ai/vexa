@@ -1,0 +1,89 @@
+---
+title: "Configuration"
+description: "Every environment variable the stack reads — what it does and its default."
+---
+
+Vexa is configured by environment variables, set in `deploy/compose/.env` for Docker Compose (seeded
+from `.env.example` on first `make all`). Defaults below are what the stack falls back to when the
+variable is unset — fine for local evaluation, **not** for anything exposed.
+
+<Warning>
+Change every secret (`ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB and MinIO credentials,
+`VEXA_DISPATCH_SIGNING_KEY`, `NEXTAUTH_SECRET`) before putting the stack on a network. The defaults
+are public.
+</Warning>
+
+## Transcription (STT)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TRANSCRIPTION_SERVICE_URL` | — | STT service **base URL** (the client appends `/v1/audio/transcriptions`), e.g. `http://<gpu-host>:8083`. Point it at the bundled service you deploy separately (`deploy/transcription`) or a hosted endpoint. Unset → bots join and record but produce no transcript. |
+| `TRANSCRIPTION_SERVICE_TOKEN` | — | STT auth token — must match the `API_TOKEN` of your `deploy/transcription` unit, or a token from `vexa.ai/account`. |
+
+The STT service is the **GPU workload, deployed separately** from this stack — see
+[Deployment → Transcription](/deployment#transcription-the-separate-gpu-unit). The main stack
+stays GPU-free and reaches it over the network via the two variables above.
+
+## Secrets & identity
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ADMIN_TOKEN` | `changeme` | Admin API key (`X-Admin-API-Key`) — mints users and tokens. |
+| `INTERNAL_API_SECRET` | `vexa-internal-secret` | Shared secret for service-to-service calls. |
+| `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
+| `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
+| `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
+
+## Database & storage
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `vexa` / `postgres` / `postgres` | Postgres credentials (metadata). |
+| `POSTGRES_HOST_PORT` | `5458` | Host port mapped to Postgres. |
+| `MINIO_ENDPOINT` | `minio:9000` | Object storage endpoint (recordings + workspaces). |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | MinIO credentials. |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `vexa-access-key` / `vexa-secret-key` | MinIO root credentials. |
+| `MINIO_BUCKET` | `vexa` | Bucket holding recordings and agent workspaces. |
+| `MINIO_SECURE` | `false` | Use TLS to reach MinIO. |
+
+## Agent inference (bring your own)
+
+Point the agent at your own model so no inference leaves the network.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_AGENT_MODEL` | — | Model the agent runner uses. |
+| `VEXA_MEETING_MODEL` | — | Model for meeting-time processing. |
+| `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
+| `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
+| `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers. |
+| `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
+
+## Images & runtime
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `IMAGE_TAG` | `dev` | Tag for the built service images. |
+| `BROWSER_IMAGE` | `vexaai/vexa-bot:dev` | Browser/bot container the runtime spawns per meeting. |
+| `AGENT_IMAGE` / `AGENT_WORKER_IMAGE` | `vexaai/v012-agent-*` | Agent container the runtime spawns per dispatch. |
+| `DOCKER_GID` | `0` | Host docker group id, so the runtime can use the Docker socket. |
+| `LOG_LEVEL` | `info` | Log verbosity. |
+
+## Ports
+
+Host ports the compose stack publishes on `127.0.0.1` (override any of them in `.env`):
+
+| Variable | Default | Service |
+|---|---|---|
+| `API_GATEWAY_HOST_PORT` | `18056` | gateway (the one front door) |
+| `ADMIN_API_PORT` | `18057` | admin-api |
+| `MEETING_API_PORT` | `18080` | meeting-api |
+| `RUNTIME_API_PORT` | `18090` | runtime |
+| `AGENT_API_PORT` | `18100` | agent-api |
+| `TERMINAL_PORT` | `13000` | web UI / terminal |
+| `MINIO_HOST_PORT` / `MINIO_CONSOLE_HOST_PORT` | `9000` / `9001` | MinIO API / console |
+
+<Note>
+The gateway (`:18056`) is the one front door; the terminal web workbench is at `:13000`. The other host
+ports above are bound to `127.0.0.1` for local inspection and aren't needed for day-to-day use.
+</Note>

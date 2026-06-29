@@ -1,0 +1,74 @@
+---
+title: "Run a live meeting copilot"
+description: "Surface people, action items, and decisions as a call happens — approve them into the workspace."
+---
+
+A **meeting copilot** rides the live transcript: a dispatch stays non-idle on
+the stream and emits **proactive cards** — a new person, an action item, a decision — as they come up.
+Approving a card commits it to your [workspace](/concepts#workspace). Same agent and governance as
+everything else; only the trigger (the transcript stream) differs.
+
+## 1. Start the copilot
+
+The id invariant is `meeting_id == session_uid == native_id`.
+
+```bash
+curl -X POST "$API_BASE/agent/api/meeting/start" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"native_id":"abc-defg-hij","platform":"google_meet","title":"Acme renewal"}'
+# → 202, the live-meeting record
+```
+
+## 2. Turn processing on
+
+Processing is opt-in. Toggle it on to start consuming the transcript:
+
+```bash
+curl -X POST "$API_BASE/agent/api/meeting/process" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"native_id":"abc-defg-hij","platform":"google_meet","on":true}'
+# → { ..., "processing": true, "resumed_from": "<cursor-id>" }
+```
+
+## 3. Stream the merged feed
+
+Subscribe to the SSE stream that merges transcript and copilot output:
+
+```bash
+curl -N -H "X-API-Key: $API_KEY" \
+  "$API_BASE/agent/api/meeting/stream?meeting_id=abc-defg-hij&session_uid=abc-defg-hij"
+```
+
+Event types on the stream: `transcript`, `card` (a proposal), `message-delta`, `tool-call`, `ping`,
+`meeting-end`. Every event carries an SSE `id:` — on reconnect, echo it as `Last-Event-ID` to **resume
+gaplessly**.
+
+Approving a `card` commits it to the workspace (a person, an action item, a decision).
+
+## Pause and resume mid-call
+
+Toggle processing off to stop consuming without ending the meeting; the per-meeting **cursor freezes**.
+Turn it back on and it resumes from exactly where it stopped:
+
+```bash
+# pause — clears the flag, freezes the cursor
+curl -X POST "$API_BASE/agent/api/meeting/process" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"native_id":"abc-defg-hij","platform":"google_meet","on":false}'
+# → { ..., "processing": false }
+```
+
+`on:true` later resumes from the saved cursor (`"resumed_from":"<id>"`) — no re-processing, no gap.
+
+## Health
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/meeting/relay-health"
+```
+
+A stale bot key surfaces as `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air.
+
+## After the call
+
+To write the durable record once the meeting ends — notes, decisions, follow-ups linked to people and
+companies — see [Report after every meeting](/how-to/post-meeting-report).

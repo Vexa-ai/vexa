@@ -1,6 +1,6 @@
 ---
 title: "Runtime"
-description: "Isolated, ephemeral containers — the execution substrate, already proven by the meeting bots."
+description: "Isolated, ephemeral containers — the execution layer."
 ---
 
 The **runtime** spawns, reuses, and reaps the [containers](/concepts#container) that agents (and meeting
@@ -18,9 +18,20 @@ advisory — which is why agents never run in the control plane.
 
 - **TTL-on-idle** — a container lives while it works and is reaped when idle. No warm/oneshot
   bookkeeping; continuity is the [session file in the workspace](/concepts#workspace).
-- **Orchestration-agnostic** — Docker for dev, Kubernetes for production, behind one interface.
 - **Sub-second, ephemeral, thousands in parallel** — the single-machine coding-agent model, made
   multi-tenant and cheap.
+
+## Where it runs
+
+The runtime is **orchestration-agnostic** — the same control plane and `unit.v1` dispatch drive it
+regardless of how workloads are spawned; only the pluggable backend differs:
+
+- **Process** — agents and bots are spawned as **child processes**, no Docker socket required.
+- **Docker** — each workload is spawned as its own container via the Docker socket. This is what the
+  open core ships, brought up with **Docker Compose** (`make all`).
+- **Kubernetes** — the same workload model scheduled as Pods across a cluster (`runtime.backend=k8s`).
+
+The open-core self-host path is **Docker Compose** — see [Deployment](/deployment).
 
 ## Already in production
 

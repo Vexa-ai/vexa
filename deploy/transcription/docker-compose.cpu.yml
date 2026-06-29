@@ -1,0 +1,40 @@
+# =============================================================================
+# Transcription service — CPU-only variant (no GPU). For dev/testing.
+# =============================================================================
+#   docker compose -f docker-compose.cpu.yml up -d
+# Slower + lower accuracy than GPU; use a smaller MODEL_SIZE (e.g. base/small/medium).
+services:
+  transcription-api:
+    image: nginx:alpine
+    ports:
+      - "${TRANSCRIPTION_LB_PORT:-8083}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - transcription-worker-1
+    restart: unless-stopped
+    networks: [transcription-net]
+
+  transcription-worker-1:
+    build:
+      context: ../..
+      dockerfile: core/meetings/services/transcription/Dockerfile.cpu
+    image: vexaai/v012-transcription-cpu:${IMAGE_TAG:-dev}
+    environment:
+      - WORKER_ID=1
+      - MODEL_SIZE=${MODEL_SIZE:-medium}
+      - DEVICE=cpu
+      - COMPUTE_TYPE=int8
+      - CPU_THREADS=${CPU_THREADS:-0}
+      - API_TOKEN=${API_TOKEN:-}
+    volumes:
+      - transcription-models:/app/models
+    restart: unless-stopped
+    networks: [transcription-net]
+
+networks:
+  transcription-net:
+    driver: bridge
+
+volumes:
+  transcription-models:

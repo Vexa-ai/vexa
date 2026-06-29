@@ -62,6 +62,7 @@ terminal-ui-kit [module] @clients/terminal/src/ui-kit
 terminal-workbench [module] @clients/terminal/src/workbench
 tool.v1 [contract] @core/agent/contracts/tool.v1
 transcript.v1 [contract] @core/meetings/contracts/transcript.v1
+transcription [service] @core/meetings/services/transcription
 unit.v1 [contract] @core/agent/contracts/unit.v1
 webhook.v1 [contract] @core/meetings/contracts/webhook.v1
 whisper [module] @core/meetings/modules/whisper
@@ -82,6 +83,7 @@ terminal > terminal-app, terminal-canvas, terminal-contributions, terminal-platf
 agent-api -read-> tc-stream
 agent-api -write-> out-stream
 agent-api -write-> proc-stream
+bot -request-> transcription
 bot -write-> recording-blob
 bot -write-> segments-stream
 bot -write-> tc-mutable

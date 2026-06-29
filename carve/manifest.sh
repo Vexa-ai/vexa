@@ -19,6 +19,7 @@ export CARVE_REMOTE="${CARVE_REMOTE:-https://github.com/Vexa-ai/vexa-core.git}"
 export CARVE_INCLUDE=(
   core
   deploy/compose
+  deploy/transcription
   clients/terminal
   docs/docs
   package.json

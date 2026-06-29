@@ -343,6 +343,9 @@ services:
       - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
+      # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 10s

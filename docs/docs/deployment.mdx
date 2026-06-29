@@ -1,6 +1,6 @@
 ---
 title: "Deployment"
-description: "Self-host Vexa with Docker Compose or Helm — air-gapped, with bring-your-own inference."
+description: "Self-host Vexa with Docker Compose — air-gapped, with bring-your-own inference."
 ---
 
 Vexa runs **in your own environment** — open-source, self-hostable, air-gappable. Data, recordings, and
@@ -12,27 +12,27 @@ Prerequisites: a Linux host (Ubuntu 24.04), Docker, `git`, `curl`.
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa
 
-make lite     # single container, all services — quick evaluation / small teams
-# or
-make all      # full stack, each service in its own container — dev / production
+make all      # full stack via Docker Compose — each service in its own container
 ```
 
-Both prompt on first run for a **transcription (STT) token** — get one at `vexa.ai/account`, or self-host
-the transcription service on a GPU for a fully air-gapped install. The API is then at
-`http://localhost:8056` (the gateway); mint an API key via the admin API.
+`make all` seeds `.env` from `.env.example`, brings the stack up, and **prints an API key plus the
+service URLs** when it's done. For a transcript, set a **transcription (STT) token** in `.env`
+(`TRANSCRIPTION_SERVICE_TOKEN`) — get one at `vexa.ai/account`, or self-host the transcription service on
+a GPU for a fully air-gapped install. The API is then at `http://localhost:18056` (the gateway) and the
+terminal web workbench at `http://localhost:13000`.
 
 ## The stack
 
 | Service | Role |
 |---|---|
-| **gateway** (`:8056`) | the one front door — auth, scopes, routing |
+| **gateway** (`:18056`) | the one front door — auth, scopes, routing |
 | **admin-api** | users + API keys |
 | **meeting-api** | bots, transcripts, **recordings** (to object storage) |
 | **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
 | **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
-| **terminal** (`:3000`) | the web UI — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
+| **terminal** (`:13000`) | the web workbench — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
 | redis · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
 
 The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
@@ -47,30 +47,38 @@ meeting (`BROWSER_IMAGE`) and an agent container per dispatch (`AGENT_IMAGE`), t
   network (`VEXA_AGENT_MODEL` / mounted credentials).
 - **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB credentials. Set real values before exposing.
 
-## Air-gapped
+## Transcription (the separate GPU unit)
 
-Everything runs in-VPC: gateway + services + redis/postgres/minio in your cluster, transcription on your
-own GPU, **BYO inference**, recordings in your object storage. **Zero egress** — the posture the regulated
-verticals require.
+Speech-to-text is the one **GPU workload**, so it is **carved out** of the main stack: `make all`
+runs GPU-free and anywhere, and the STT service is its own deploy unit at
+[`deploy/transcription`](https://github.com/Vexa-ai/vexa-core/tree/main/deploy/transcription)
+([`core/meetings/services/transcription`](https://github.com/Vexa-ai/vexa-core/tree/main/core/meetings/services/transcription)
+is the brick — faster-whisper / CTranslate2 behind an OpenAI-compatible `/v1/audio/transcriptions`).
 
-## Kubernetes (Helm)
-
-Production runs on **Helm** (`deploy/helm/charts/vexa`) — the same five services + infra, built once
-and pinned via `global.imageTag`. On Kubernetes the [runtime](/core/runtime) spawns the bot and
-agent-worker as **Pods** (`runtime.backend=k8s`, via `kubectl` under a chart-provided
-ServiceAccount/RBAC) instead of through the Docker socket — same container model, scheduled by k8s.
+Stand it up wherever a GPU lives (the same host or a dedicated GPU box):
 
 ```bash
-helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --create-namespace \
-  --set global.imageTag=YYMMDD-HHMM \
-  --set secrets.adminApiToken=$ADMIN_TOKEN \
-  --set secrets.internalApiSecret=$INTERNAL_API_SECRET \
-  --set secrets.transcriptionServiceToken=$STT_TOKEN \
-  --wait
-kubectl -n vexa port-forward svc/vexa-vexa-gateway 8000:8000 &
-curl -sf localhost:8000/health
+cd deploy/transcription
+cp .env.example .env          # set MODEL_SIZE, API_TOKEN, TRANSCRIPTION_LB_PORT
+docker compose up -d          # GPU (needs nvidia-container-toolkit)
+# no GPU? CPU variant (slower, use a smaller model):
+docker compose -f docker-compose.cpu.yml up -d
+curl http://localhost:8083/health   # waits on the model load
 ```
 
-Use managed backing by setting `postgres.enabled=false` / `redis.enabled=false` (+ `database.*` /
-`redisConfig.*`), front the gateway with `ingress.enabled=true`, and pool managed Postgres with
-`pgbouncer.enabled=true`. Full cookbook + values table: [`deploy/helm/README.md`](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md).
+Then point the main stack at it in `deploy/compose/.env`:
+
+```bash
+TRANSCRIPTION_SERVICE_URL=http://<gpu-host>:8083   # base URL; client appends /v1/audio/transcriptions
+TRANSCRIPTION_SERVICE_TOKEN=<same as the unit's API_TOKEN>
+```
+
+Now bots transcribe end-to-end: **bot → transcription service → segments → meeting-api `collector`
+→ live fan-out**. Scale by adding workers (one GPU each) in the unit's `docker-compose.yml` +
+`nginx.conf`.
+
+## Air-gapped
+
+Everything runs in-VPC: gateway + services + redis/postgres/minio on your host, the
+[transcription unit](#transcription-the-separate-gpu-unit) on your own GPU, **BYO inference**,
+recordings in your object storage. **Zero egress** — the posture the regulated verticals require.

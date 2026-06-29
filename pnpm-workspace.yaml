@@ -1,5 +1,7 @@
 # Workspace packages. Globs match dirs that have a package.json; empty dirs are ignored
 # (so this is green-on-empty and fills in as domains are populated, contract-first).
+# Open-core scope: core/ services + modules, packages/, and the terminal client. (The full
+# product's integrations/, sdks/, tools/, and dashboard clients are not part of this repo.)
 packages:
   - "core/runtime"
   - "core/gateway"
@@ -9,14 +11,7 @@ packages:
   - "core/agent/modules/*"
   - "core/identity/services/*"
   - "core/identity/modules/*"
-  - "integrations/in/*"
-  - "integrations/out/*"
-  - "clients/*"
-  - "!clients/dashboard" # vendored full Next.js app (own npm); refactor pending
-  - "!clients/dashboard_new" # fresh modular dashboard — its own npm workspace (modules/*), not pnpm
-  - "sdks/*"
-  - "schemas/*"
-  - "tools/*"
+  - "clients/terminal"
 # Build scripts pnpm may run (pnpm ≥10 blocks postinstall by default). esbuild
 # ships the native binary our TS test runner (tsx) needs; onnxruntime-node (+ its
 # transitive sharp/protobufjs, via @huggingface/transformers in @vexa/mixed-pipeline)

@@ -8,28 +8,54 @@ their output; it does no execution itself — it validates and hands off to the 
 Endpoints are fronted by the gateway, which carries authentication and per-route scopes; the service
 itself is internal.
 
+<Note>
+**Identity is server-derived.** Public clients reach these routes through the gateway under the
+canonical prefix **`/agent/*`** (the legacy **`/api/*`** alias still resolves). The gateway resolves your
+`X-API-Key` → user and injects `X-User-Id`; agent-api derives the workspace/chat/quota **`subject`** from
+that header (P20). A `subject` in a request body or query string is **ignored** — never trust the client
+for identity. The `$AGENT_API/api/...` paths below address the internal service directly (which requires
+`X-User-Id`); through the gateway the same routes are `$API_BASE/agent/...` with `X-API-Key`.
+</Note>
+
 ## Health
 
 ```bash GET /health
-curl "$AGENT_API/health"   # → {"status":"ok","checks":{"dispatcher":true}}
+curl "$AGENT_API/health"   # → {"status":"ok","service":"agent-api","checks":{"dispatcher":true}}
+```
+
+## Models
+
+`GET /api/models` → the resolved model names for this subject:
+
+```json
+{ "chat_model": "...", "agent_model": "...", "streaming_model": "...", "meeting_model": "..." }
 ```
 
 ## Dispatch a unit
 
-`POST /invocations` — the sink every trigger funnels through. Body is a `unit.v1` Invocation; it is
-validated and dispatched to the runtime. `400` if the envelope is non-conformant.
+`POST /invocations` — the sink every trigger funnels through. Body is a conformant `unit.v1` Invocation
+(the same envelope `units.make_dispatch` builds); it is validated and dispatched to the runtime. `400` if
+the envelope is non-conformant.
 
 ```bash POST /invocations  → 202
 curl -X POST "$AGENT_API/invocations" -H "Content-Type: application/json" -d '{
-  "trigger":"scheduled","subject":"u_jane","workspace_repo":"local:u_jane",
-  "context":{"kind":"generic"},"plan":{"prompt":"Summarize overnight activity."}
+  "identity":{"subject":"u_jane","launcher":"schedule:u_jane"},
+  "runner":"claude-code",
+  "workspaces":[{"id":"u_jane","mode":"rw"}],
+  "trigger":"scheduled",
+  "start":{"entrypoint":{"inline":"Summarize overnight activity."}}
 }'   # → {"workload_id":"agent-..."}
 ```
 
+The shape is: `identity.subject` + `identity.launcher`, `runner`, a `workspaces` list (`mode` is
+`rw` for trusted triggers — `message`/`scheduled` — else `ro`), the `trigger`, and a `start` that is
+either `{"entrypoint":{"inline":"..."}}`, `{"entrypoint":{"path":"..."}}`, or `{"session":{"ref":"..."}}`.
+There is **no** top-level `subject`, `workspace_repo`, or `plan` field.
+
 ## Chat (streamed)
 
-`POST /api/chat` — body `{ prompt, subject, session? }`. Returns **Server-Sent Events**; each `data:`
-line is one frame:
+`POST /api/chat` — body `{ prompt, session?, active? }` (`subject` is server-derived, not sent).
+Returns **Server-Sent Events**; each `data:` line is one frame:
 
 | frame | fields |
 |---|---|
@@ -42,23 +68,27 @@ line is one frame:
 
 ```bash POST /api/chat  (SSE)
 curl -N -X POST "$AGENT_API/api/chat" -H "Content-Type: application/json" \
-  -d '{"prompt":"Record that Acme renewed.","subject":"u_jane"}'
+  -H "X-User-Id: u_jane" \
+  -d '{"prompt":"Record that Acme renewed."}'
 ```
 
-`POST /api/chat/reset` `{ subject, session }` → `{ "ok": true }` · `GET /api/sessions?subject=` →
-`{ "sessions": [...] }`.
+`POST /api/chat/reset` `{ session? }` → `{ "ok": true }` · `GET /api/sessions` →
+`{ "sessions": [...] }` · `GET /api/sessions/{session}/history` → `{ "turns": [...] }` (tolerant — a
+missing transcript returns `{ "turns": [] }`).
 
 ## Routines
 
 ```bash POST /api/routines  → 201
-curl -X POST "$AGENT_API/api/routines" -H "Content-Type: application/json" -d '{
-  "subject":"u_jane","name":"Morning brief","cron":"0 8 * * 1-5",
+curl -X POST "$AGENT_API/api/routines" -H "Content-Type: application/json" \
+  -H "X-User-Id: u_jane" -d '{
+  "name":"Morning brief","cron":"0 8 * * 1-5",
   "prompt":"Brief me from overnight activity.","run_now":true
 }'   # → {"routine":{...},"job_id":"job_...","ran_now":true}
 ```
 
-`GET /api/routines?subject=` → `{ "routines": [...] }` ·
-`DELETE /api/routines/{routine_id}?subject=` → `{ "ok": true, "routine_id": "..." }`.
+`GET /api/routines` → `{ "routines": [...] }` ·
+`PATCH /api/routines/{name}/enabled` `{ enabled }` → `{ "ok": true, "name", "enabled", "reconcile" }` ·
+`DELETE /api/routines/{routine_id}` → `{ "ok": true, "routine_id": "..." }`.
 
 ## Events
 
@@ -73,7 +103,30 @@ curl -X POST "$AGENT_API/events" -H "Content-Type: application/json" -d '{
 }'   # → {"workload_id":"agent-...","trigger":"event"}
 ```
 
-## Workspace (read)
+## Live meeting copilot
 
-`GET /api/workspace/tree?subject=` → `{ "files": ["kg/entities/..."] }` ·
-`GET /api/workspace/file?subject=&path=` → `{ "path": "...", "content": "..." }` (`404` if absent).
+A live-meeting copilot is itself driven through `make_dispatch`; the id invariant is
+`meeting_id == session_uid == native_id`.
+
+- `POST /api/meeting/start` `{ native_id, platform, title? }` → `202`, returns the live-meeting record.
+- `POST /api/meeting/process` `{ native_id, platform, on }` → toggle opt-in processing. `on:true` resumes
+  from the per-meeting cursor (`{ ..., "processing":true, "resumed_from":"<id>" }`); `on:false` clears the
+  flag and freezes the cursor (`{ ..., "processing":false }`).
+- `GET /api/meeting/relay-health` → typed transcript-relay health (a stale bot key surfaces as
+  `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air).
+- `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE) → the merged transcript + copilot-output feed.
+  Resumable: every event carries an SSE `id:`; on reconnect echo it as `Last-Event-ID` to resume
+  gaplessly. Event types: `transcript`, `card`, `message-delta`, `tool-call`, `ping`, `meeting-end`.
+
+## Workspace
+
+`GET /api/workspace/tree?hidden=` → `{ "files": ["kg/entities/..."] }` ·
+`GET /api/workspace/file?path=` → `{ "path": "...", "content": "..." }` (`404` if absent) ·
+`GET /api/workspace/git` → `{ branch, changes, commits }` ·
+`POST /api/workspace/upload` (multipart `files`, ≤25 MB each) → `{ "files": [{ name, path }] }` ·
+`POST /api/workspace/init` → `201` `{ workspace, seeded, already_initialized }` (idempotent) ·
+`GET /api/workspace/attached` → `{ active, parked }` ·
+`POST /api/workspace/swap` `{ repo?, ref?, token? }` → attach an external git repo as the active
+workspace (parks the current one; omit `repo` to swap back to the seed).
+
+(All workspace routes derive `subject` from `X-User-Id` — no `subject` query parameter.)

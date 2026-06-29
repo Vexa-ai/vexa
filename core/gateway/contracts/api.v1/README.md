@@ -24,8 +24,22 @@ tale — it must be reconciled to the shapes below).
 | Consumer | How |
 |---|---|
 | `meetings/services/meeting-api` | its routes + response models MUST match these paths/shapes (rough cut owes reconciliation) |
-| `clients/dashboard` | proxies `/bots`,`/meetings`,`/transcripts`,`/recordings` — the shapes here |
+| `clients/terminal` | proxies `/bots`,`/meetings`,`/transcripts`,`/recordings` — the shapes here |
 | `meetings/eval` | polls `GET /bots` (`meetings[].status`), reads `GET /transcripts/{p}/{n}` |
+
+## Auth error contract
+The gateway authenticates `X-API-Key` against admin-api and **fails closed**. The exact statuses:
+
+| Condition | Status | Body `detail` |
+|---|---|---|
+| Missing `X-API-Key` header | `401` | `Missing API key` |
+| Invalid / unknown / revoked key | `401` | `Invalid API key` |
+| Valid key, scope not permitted for the route | `403` | `Insufficient scope for this endpoint` |
+| Expired key | `401` | `Invalid API key` |
+| Admin route, missing/invalid `X-Admin-API-Key` | `403` | `Invalid or missing admin token.` |
+
+Clients should treat **401 = re-authenticate** (key bad/absent/expired) and **403 = authorized but not
+permitted** (wrong scope, or admin route). The stack-test conformance suite asserts these.
 
 ## Re-verify / re-capture
 The frozen doc was captured from the deployed main (`api.cloud.vexa.ai/openapi.json`,

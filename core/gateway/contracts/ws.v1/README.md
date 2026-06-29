@@ -35,9 +35,9 @@ SDKs, and any client build against.
 ## The seam (what conforms to this)
 | Consumer | How |
 |---|---|
-| `clients/dashboard_new` | proxies `/ws`; renders `transcript` live + `meeting.status`/`chat_message` |
+| `clients/terminal` | proxies `/ws` server-side; renders `transcript` live + `meeting.status`/`chat_message` |
 | `meetings/services/meeting-api` (+ collector) | publishes the data shapes to the redis channels above |
-| SDKs / any client | subscribe + consume the type-tagged stream |
+| any client | subscribe + consume the type-tagged stream |
 
 ## Re-verify / re-seal
 Shapes are pinned by main's gate test. To re-verify: `node gateway/contracts/ws.v1/validate.mjs`

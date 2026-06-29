@@ -1,5 +1,7 @@
 # vexa 0.12
 
+Turn meetings and docs into knowledge that sandboxed agents act on.
+
 The clean reimplementation. **Microservices, each internally a modular monolith — contract-bounded at
 two scales** (published schemas between services, ports within). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):
 the constitution (P1–P21), the gate suite, and the development process.

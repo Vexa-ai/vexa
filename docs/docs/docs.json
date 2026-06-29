@@ -7,14 +7,40 @@
     "groups": [
       {
         "group": "Start here",
-        "pages": ["index"]
+        "pages": ["index", "quickstart", "authentication"]
+      },
+      {
+        "group": "How-to: Meetings",
+        "pages": [
+          "how-to/overview",
+          "how-to/send-a-bot",
+          "how-to/stream-transcript",
+          "how-to/recordings"
+        ]
+      },
+      {
+        "group": "How-to: Agents",
+        "pages": [
+          "how-to/chat-workspace",
+          "how-to/workspace-files",
+          "how-to/daily-brief",
+          "how-to/email-triage"
+        ]
+      },
+      {
+        "group": "How-to: Meetings + agents",
+        "pages": [
+          "how-to/live-copilot",
+          "how-to/post-meeting-report"
+        ]
       },
       {
         "group": "Core",
         "pages": [
           "core/meetings",
           "core/agents",
-          "core/runtime"
+          "core/runtime",
+          "core/identity"
         ]
       },
       {
@@ -33,20 +59,12 @@
         ]
       },
       {
-        "group": "Capabilities",
-        "pages": [
-          "capabilities/knowledge-agent",
-          "capabilities/meeting-copilot",
-          "capabilities/ai-routines"
-        ]
-      },
-      {
         "group": "API reference",
-        "pages": ["api/meetings", "api/agent"]
+        "pages": ["api/meetings", "api/agent", "api/errors"]
       },
       {
-        "group": "Deployment",
-        "pages": ["deployment"]
+        "group": "Deployment & operations",
+        "pages": ["deployment", "configuration", "troubleshooting", "sdks", "changelog"]
       },
       {
         "group": "Roadmap",

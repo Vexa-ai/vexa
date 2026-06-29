@@ -1,0 +1,89 @@
+---
+title: "Authentication"
+description: "Mint an API key, send it on every request, scope it, and rotate it."
+---
+
+Every public request carries an API key in the **`X-API-Key`** header. The gateway resolves the key
+to a user and injects identity downstream — you never pass a user id or subject yourself; the server
+derives it from the key.
+
+```bash
+-H "X-API-Key: <API_KEY>"
+```
+
+## Base URL
+
+| Deployment | API base |
+|---|---|
+| Self-hosted (`make all` / compose) | `http://localhost:18056` (`API_GATEWAY_HOST_PORT`) |
+| Hosted | `https://api.cloud.vexa.ai` |
+
+## Getting a key
+
+`make all` mints a key as part of bring-up and **prints it** (along with the service URLs) when the
+stack is ready — copy it from the `make all` output and use it as your `X-API-Key`.
+
+### Minting more keys
+
+To mint additional keys, use the `provision-token` make target with your `ADMIN_TOKEN` (it's set in
+`.env`, default `dev-admin-token` — **change it before exposing anything**):
+
+```bash
+make -s provision-token ADMIN_TOKEN=dev-admin-token
+# → prints a freshly minted vxa_... API key
+```
+
+Under the hood the **admin API** mints keys. It listens on `http://localhost:18057` by default
+(`ADMIN_API_PORT`) and is protected by `ADMIN_TOKEN` via the `X-Admin-API-Key` header — you can call it
+directly for finer control over users and scopes:
+
+```bash
+export ADMIN=http://localhost:18057
+export ADMIN_TOKEN=dev-admin-token        # your ADMIN_TOKEN from .env
+
+# 1. create (or find) a user
+curl -X POST "$ADMIN/admin/users" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"email":"jane@acme.com","name":"Jane","max_concurrent_bots":2}'
+# → {"id":1,"email":"jane@acme.com","name":"Jane","max_concurrent_bots":2}
+
+# 2. mint a key for that user id
+curl -X POST "$ADMIN/admin/users/1/tokens?scopes=bot,tx" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN"
+# → {"id":7,"token":"vxa_bot_...","user_id":1,"scopes":["bot","tx"]}
+```
+
+The returned `token` is your `X-API-Key`. **It is shown once** — store it.
+
+## Scopes
+
+A key carries one or more scopes. Pass `scope=<one>` or `scopes=<a>,<b>` when minting.
+
+| Scope | Grants |
+|---|---|
+| `bot` | send and manage meeting bots, read transcripts |
+| `tx` | transcription / transcript access |
+| `browser` | browser-tool capabilities |
+
+Keys are prefixed by their primary scope — `vxa_bot_…`, `vxa_tx_…`, `vxa_browser_…`. A key without a
+recognized scope is rejected.
+
+## Rotating and revoking
+
+Mint a new key, switch your clients over, then delete the old one by its token id:
+
+```bash
+curl -X DELETE "$ADMIN/admin/tokens/7" -H "X-Admin-API-Key: $ADMIN_TOKEN"   # → 204
+```
+
+Set an expiry at mint time with `expires_in=<seconds>`; expired keys are rejected automatically.
+
+## What can go wrong
+
+| Status | `detail` | Meaning |
+|---|---|---|
+| `401` | `Missing API key` | no `X-API-Key` header |
+| `401` | `Invalid API key` | unknown or revoked key |
+| `403` | `Token scope not authorized` | key lacks the scope this route needs |
+
+See the full [error reference](/api/errors).

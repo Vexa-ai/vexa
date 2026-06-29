@@ -9,6 +9,8 @@ __pycache__/
 .DS_Store
 .env
 .env.*
+!.env.example
+!**/.env.example
 .recordings/
 deploy/execution-targets.json
 # local test/debug artifacts (Playwright MCP screenshots + snapshots)
@@ -21,3 +23,6 @@ docs/views/*
 !docs/views/README.md
 # the concise DSL projection IS committed — it's the always-in-context LLM index (gate:dataflow keeps it current)
 !docs/views/architecture.dsl
+
+# transcription service downloaded model weights (runtime cache)
+deploy/transcription/models/

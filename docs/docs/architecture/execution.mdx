@@ -3,20 +3,20 @@ title: "Execution"
 description: "The agent runs in a runtime-spawned container, over a mounted workspace folder, resuming from a session file."
 ---
 
-1. The [Scheduler](/primitives/scheduler) fires; agent-api asks the [Runtime](/primitives/runtime) to
+1. The [Scheduler](/concepts#scheduler) fires; agent-api asks the [Runtime](/core/runtime) to
    spawn (it touches **no docker** itself).
-2. The container mounts the granted [workspaces](/primitives/workspace) at `/workspace` (no clone) + brokers
+2. The container mounts the granted [workspaces](/concepts#workspace) at `/workspace` (no clone) + brokers
    creds.
 3. The agent **resumes from the session file** in the rw folder (continuity is a file), runs the
-   [runner](/primitives/agent), and **commits freeform** changes.
-4. It emits events on its [Stream](/primitives/stream); the container is **reaped when idle**.
+   [runner](/concepts#agent), and **commits freeform** changes.
+4. It emits events on its [Stream](/architecture/streaming); the container is **reaped when idle**.
 
 The workspace folder (+ its session file) is the only durable state; the container is disposable.
 
 ## Implemented — the live path
 
 A dispatch **is** the in-container worker `agent_api.worker`. The Runtime injects everything it needs as
-env + a bind-mount, and the worker drives the [runner](/primitives/agent) over the mounted folder:
+env + a bind-mount, and the worker drives the [runner](/concepts#agent) over the mounted folder:
 
 ```text
 trigger → Scheduler → Runtime spawns the `agent` container  (CMD: python -m agent_api.worker)
@@ -30,7 +30,7 @@ worker → one governed turn:  runner → workspace.v1 re-validate → git commi
 
 **Continuity is files in the workspace.** Both the session id (`.claude/.session`) **and the chat
 transcript** are saved in the folder — claude-code's transcript dir is symlinked into
-`<workspace>/.claude/projects` — so a fresh container [resumes](/primitives/workspace) the same
+`<workspace>/.claude/projects` — so a fresh container [resumes](/concepts#workspace) the same
 conversation from the durable git folder, no warm container needed.
 
 <Note>Proven end-to-end on docker: a `unit.v1` dispatch → isolated `vexa-agent-<id>` container → a real

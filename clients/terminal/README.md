@@ -51,7 +51,7 @@ pnpm dev                        # next dev -p 3000 — drive surfaces against a 
 - ✅ delivered — live meeting surface: `/meetings` + `/ws` status (no poll) + `/api/meeting/stream` SSE + bot start/stop via `/bots`
 - ✅ delivered — generic event ingress proxy (`/api/events` → `event.v1`)
 - 🟡 partial — hardcoded `subject` per surface (`u_jane` / `u_live`), no real identity
-- ⬜ planned — login (Google + dev type-any-email, mirroring `clients/dashboard`) → drop the hardcoded subject
+- ⬜ planned — login (Google + dev type-any-email) → replace the hardcoded `subject` with the authenticated user
 - ⬜ planned — real meetings list (live + past) with a recorded view
 - ⬜ planned — routines type-toggle (agent | meeting)
 - ⬜ planned — meeting ↔ doc cross-links

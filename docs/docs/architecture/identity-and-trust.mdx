@@ -3,6 +3,9 @@ title: "Identity & trust"
 description: "Chain of custody — authenticity of the launcher, a signed token through every hop, verified at the boundaries."
 ---
 
+This is the cross-cutting **trust flow**. For the identity *domain* — accounts, the access-control model,
+what's built, and the roadmap — see [Identity](/core/identity).
+
 A dispatch is often launched by a **non-human** (a 3am schedule entry, a Gmail webhook). We cannot trust
 the launcher by virtue of it running — it must **prove** it was authorized, and that proof must survive
 every hop to the tool that finally sends an email. The agent is **untrusted** and carries proof but never

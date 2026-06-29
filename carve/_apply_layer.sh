@@ -20,5 +20,5 @@ done
 # 3. docs from worktree (temporary, until docs/docs is committed upstream)
 if [ "${CARVE_DOCS_FROM_WORKTREE:-0}" = "1" ] && [ -d "$MONO/docs/docs" ]; then
   mkdir -p "$DEST/docs"
-  rsync -a --delete --exclude '.git' "$MONO/docs/docs" "$DEST/docs/"
+  rsync -a --delete --exclude '.git' --exclude '*.log' "$MONO/docs/docs" "$DEST/docs/"
 fi

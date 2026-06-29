@@ -10,6 +10,6 @@ shared broker — **redis**:
 Agent (container) ──XADD unit:<id>:out──▶ redis Stream ──XREAD──▶ agent-api/gateway ──ws──▶ terminal
 ```
 
-Because it is a **Stream** (not pub/sub) it is durable + replayable — live for [chat](/capabilities/chat)
-and [cards](/capabilities/live-meetings), and after-the-fact for background dispatches. This reuses the
-exact mechanism Vexa already runs for [meeting transcripts](/capabilities/meetings).
+Because it is a **Stream** (not pub/sub) it is durable + replayable — live for [chat](/how-to/chat-workspace)
+and [cards](/how-to/live-copilot), and after-the-fact for background dispatches. This reuses the
+exact mechanism Vexa already runs for [meeting transcripts](/core/meetings).
