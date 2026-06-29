@@ -1,0 +1,1344 @@
+{
+  "$schema": "https://calm.finos.org/release/1.0/meta/calm.json",
+  "nodes": [
+    {
+      "unique-id": "meetings",
+      "node-type": "system",
+      "name": "meetings",
+      "description": "capture -> transcribe -> record; owns the raw transcript"
+    },
+    {
+      "unique-id": "agent",
+      "node-type": "system",
+      "name": "agent",
+      "description": "copilot; transcript -> governed action; owns processed transcript + signals"
+    },
+    {
+      "unique-id": "identity",
+      "node-type": "system",
+      "name": "identity",
+      "description": "access - accounts - tokens - audit"
+    },
+    {
+      "unique-id": "runtime-system",
+      "node-type": "system",
+      "name": "runtime",
+      "description": "workload kernel; spawns bot + agent-worker containers"
+    },
+    {
+      "unique-id": "gateway-system",
+      "node-type": "system",
+      "name": "gateway",
+      "description": "the one public edge (api.v1, ws.v1)"
+    },
+    {
+      "unique-id": "platform",
+      "node-type": "system",
+      "name": "platform",
+      "description": "shared infra backing the services"
+    },
+    {
+      "unique-id": "bot",
+      "node-type": "service",
+      "name": "bot",
+      "description": "spawned-per-meeting worker: join -> capture -> STT -> transcript.v1",
+      "interfaces": [
+        {
+          "unique-id": "bot-commands-sub",
+          "type": "consumer"
+        }
+      ]
+    },
+    {
+      "unique-id": "meeting-api",
+      "node-type": "service",
+      "name": "meeting-api",
+      "description": "collector + bot-spawn + recordings + sessions (the hub)",
+      "interfaces": [
+        {
+          "unique-id": "meeting-api-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "desktop",
+      "node-type": "service",
+      "name": "desktop",
+      "description": "all-in-one dev host: bot+collector+gateway in one process",
+      "interfaces": [
+        {
+          "unique-id": "desktop-rest",
+          "type": "api"
+        },
+        {
+          "unique-id": "desktop-ingest-ws",
+          "type": "websocket"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-api",
+      "node-type": "service",
+      "name": "agent-api",
+      "description": "unit control-plane; dispatch -> runtime spawn; meeting copilot",
+      "interfaces": [
+        {
+          "unique-id": "agent-api-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "agent-worker",
+      "node-type": "service",
+      "name": "agent-worker",
+      "description": "spawned claude-in-container worker; one dispatch turn / meeting copilot"
+    },
+    {
+      "unique-id": "runtime",
+      "node-type": "service",
+      "name": "runtime",
+      "description": "runtime.v1 kernel: POST /workloads spawns containers (docker/k8s/process)",
+      "interfaces": [
+        {
+          "unique-id": "runtime-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "gateway",
+      "node-type": "service",
+      "name": "gateway",
+      "description": "edge: auth (scopes) + REST routing + WS fan-out",
+      "interfaces": [
+        {
+          "unique-id": "gateway-rest",
+          "type": "api"
+        },
+        {
+          "unique-id": "gateway-ws",
+          "type": "websocket"
+        }
+      ]
+    },
+    {
+      "unique-id": "admin-api",
+      "node-type": "service",
+      "name": "admin-api",
+      "description": "identity: token mint/validate, users, webhooks",
+      "interfaces": [
+        {
+          "unique-id": "admin-api-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "terminal",
+      "node-type": "webclient",
+      "name": "terminal",
+      "description": "Next.js client; proxies all traffic via the gateway; render-only",
+      "controls": {
+        "render-only": {
+          "description": "the terminal renders transcript/cards; it never re-derives a producer's data",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/render-only.json",
+              "config": {
+                "mode": "render-only"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "extension",
+      "node-type": "webclient",
+      "name": "extension",
+      "description": "browser extension client"
+    },
+    {
+      "unique-id": "redis",
+      "node-type": "service",
+      "name": "redis",
+      "description": "stream + pub/sub broker for the live + durable transcript planes"
+    },
+    {
+      "unique-id": "postgres",
+      "node-type": "database",
+      "name": "postgres",
+      "description": "durable relational store"
+    },
+    {
+      "unique-id": "minio",
+      "node-type": "service",
+      "name": "minio",
+      "description": "S3-compatible object store for recordings"
+    },
+    {
+      "unique-id": "stt",
+      "node-type": "service",
+      "name": "transcription",
+      "description": "first-party STT (GPU) - separate deploy unit deploy/transcription (nginx LB :8083, CPU variant); reached via TRANSCRIPTION_SERVICE_URL. Self-hostable - audio stays in-tenant.",
+      "interfaces": [
+        {
+          "unique-id": "stt-endpoint",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "transcription-segments",
+      "node-type": "data-asset",
+      "name": "transcription_segments",
+      "description": "durable raw segment stream; bot XADDs, collector + agent-api consume",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "bot"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "tc-native",
+      "node-type": "data-asset",
+      "name": "tc:meeting:native",
+      "description": "native per-meeting transcript stream; agent-worker + terminal read",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "meeting-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "tc-mutable",
+      "node-type": "data-asset",
+      "name": "tc:meeting:id:mutable",
+      "description": "live change-only deltas the gateway fans out; TWO writers (bot live + collector durable) - P23 tension",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "bot",
+                  "meeting-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "bm-status",
+      "node-type": "data-asset",
+      "name": "bm:meeting:id:status",
+      "description": "bot/meeting status pub/sub",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "meeting-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "u-meetings",
+      "node-type": "data-asset",
+      "name": "u:user:meetings",
+      "description": "per-user meeting-status pub/sub",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "meeting-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "va-chat",
+      "node-type": "data-asset",
+      "name": "va:meeting:id:chat",
+      "description": "in-meeting chat pub/sub",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "agent-worker"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "bot-commands",
+      "node-type": "data-asset",
+      "name": "bot_commands:meeting:id",
+      "description": "acts.v1 commands (leave/speak) to the bot",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "meeting-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "unit-out",
+      "node-type": "data-asset",
+      "name": "unit:id:out",
+      "description": "agent-worker output stream (cards/notes/deltas)",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "agent-worker"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "unit-in",
+      "node-type": "data-asset",
+      "name": "unit:id:in",
+      "description": "interactive input stream for warm chat units",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "terminal"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "proc-meeting",
+      "node-type": "data-asset",
+      "name": "proc:meeting:native",
+      "description": "cleaned 1:1 processed transcript",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "agent-worker"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "transcripts-db",
+      "node-type": "data-asset",
+      "name": "transcripts (meetings/transcriptions/meeting_sessions)",
+      "description": "persisted meetings + transcript rows + sessions",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "meeting-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "identity-db",
+      "node-type": "data-asset",
+      "name": "identity (users/api_tokens)",
+      "description": "users + scoped API tokens",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "admin-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "recording-blob",
+      "node-type": "data-asset",
+      "name": "recordings bucket",
+      "description": "chunked meeting recordings (master blobs)",
+      "controls": {
+        "ownership": {
+          "description": "P23 single-writer ownership of this data carrier",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "meeting-api"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "meetings-c",
+      "relationship-type": {
+        "composed-of": {
+          "container": "meetings",
+          "nodes": [
+            "bot",
+            "meeting-api",
+            "desktop",
+            "transcription-segments",
+            "tc-native",
+            "tc-mutable",
+            "bm-status",
+            "u-meetings",
+            "bot-commands",
+            "transcripts-db",
+            "recording-blob",
+            "stt"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "agent-c",
+      "relationship-type": {
+        "composed-of": {
+          "container": "agent",
+          "nodes": [
+            "agent-api",
+            "agent-worker",
+            "unit-out",
+            "unit-in",
+            "proc-meeting",
+            "va-chat"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "identity-c",
+      "relationship-type": {
+        "composed-of": {
+          "container": "identity",
+          "nodes": [
+            "admin-api",
+            "identity-db"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "runtime-c",
+      "relationship-type": {
+        "composed-of": {
+          "container": "runtime-system",
+          "nodes": [
+            "runtime"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "gateway-c",
+      "relationship-type": {
+        "composed-of": {
+          "container": "gateway-system",
+          "nodes": [
+            "gateway"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "platform-c",
+      "relationship-type": {
+        "composed-of": {
+          "container": "platform",
+          "nodes": [
+            "redis",
+            "postgres",
+            "minio"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "workers-d",
+      "description": "bot + agent-worker are runtime.v1 workloads",
+      "relationship-type": {
+        "deployed-in": {
+          "container": "runtime",
+          "nodes": [
+            "bot",
+            "agent-worker"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "bot-stt",
+      "description": "audio -> first-party transcription service (tenant-hosted by default)",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "stt",
+            "interface": "stt-endpoint"
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "access": "call"
+        }
+      ],
+      "controls": {
+        "data-egress": {
+          "description": "STT is first-party and self-hostable; default destination is tenant-hosted, so audio need not leave the tenant",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+              "config": {
+                "dataClass": "audio",
+                "destination": "tenant-hosted",
+                "egressApproved": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "bot-segments",
+      "description": "XADD raw segments",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "transcription-segments"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "bot-mutable",
+      "description": "PUBLISH live delta (fast path)",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "tc-mutable"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "bot-commands-read",
+      "description": "SUBSCRIBE acts.v1 commands",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "bot-commands"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-reads-segments",
+      "description": "XREADGROUP collector_group",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "transcription-segments"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-tc-native",
+      "description": "XADD native stream (single writer)",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "tc-native"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-mutable",
+      "description": "PUBLISH durable republish (2nd writer)",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "tc-mutable"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-status",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "bm-status"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-umeetings",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "u-meetings"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-commands",
+      "description": "PUBLISH leave/speak",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "bot-commands"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-db",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "transcripts-db"
+          }
+        }
+      },
+      "protocol": "JDBC",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-recording",
+      "description": "S3 PUT master",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "recording-blob"
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-pg",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "postgres"
+          }
+        }
+      },
+      "protocol": "JDBC",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-minio",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "minio"
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-redis",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "redis"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ma-runtime",
+      "description": "POST /workloads spawn bot",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "meeting-api"
+          },
+          "destination": {
+            "node": "runtime",
+            "interface": "runtime-rest"
+          }
+        }
+      },
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "aa-watch",
+      "description": "watcher consumer group agent_copilot",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "transcription-segments"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "aa-runtime",
+      "description": "POST /workloads spawn agent-worker",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "runtime",
+            "interface": "runtime-rest"
+          }
+        }
+      },
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "aa-unitout",
+      "description": "SSE relay",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "unit-out"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "aa-tcnative",
+      "description": "/api/meeting/stream merges tc + cards",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "tc-native"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "aw-tcnative",
+      "description": "copilot tails transcript",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-worker"
+          },
+          "destination": {
+            "node": "tc-native"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "aw-unitout",
+      "description": "XADD cards/notes/deltas",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-worker"
+          },
+          "destination": {
+            "node": "unit-out"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "aw-proc",
+      "description": "XADD cleaned 1:1 notes",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-worker"
+          },
+          "destination": {
+            "node": "proc-meeting"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "aw-unitin",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-worker"
+          },
+          "destination": {
+            "node": "unit-in"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "aw-chat",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-worker"
+          },
+          "destination": {
+            "node": "va-chat"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "gw-ma",
+      "description": "proxy /bots /transcripts /meetings /recordings",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "meeting-api",
+            "interface": "meeting-api-rest"
+          }
+        }
+      },
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "gw-aa",
+      "description": "proxy /api/*",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "agent-api",
+            "interface": "agent-api-rest"
+          }
+        }
+      },
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "gw-admin",
+      "description": "POST /internal/validate (authz oracle)",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "admin-api",
+            "interface": "admin-api-rest"
+          }
+        }
+      },
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "gw-mutable",
+      "description": "WS fan-out",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "tc-mutable"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "gw-status",
+      "description": "WS fan-out",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "bm-status"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "gw-umeetings",
+      "description": "WS auto-subscribe",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "u-meetings"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "gw-chat",
+      "description": "WS fan-out",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "gateway"
+          },
+          "destination": {
+            "node": "va-chat"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "admin-db",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "admin-api"
+          },
+          "destination": {
+            "node": "identity-db"
+          }
+        }
+      },
+      "protocol": "JDBC",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "admin-pg",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "admin-api"
+          },
+          "destination": {
+            "node": "postgres"
+          }
+        }
+      },
+      "protocol": "JDBC",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "term-gw-rest",
+      "description": "all REST via gateway",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "terminal"
+          },
+          "destination": {
+            "node": "gateway",
+            "interface": "gateway-rest"
+          }
+        }
+      },
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "term-gw-ws",
+      "description": "live WS via gateway",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "terminal"
+          },
+          "destination": {
+            "node": "gateway",
+            "interface": "gateway-ws"
+          }
+        }
+      },
+      "protocol": "WebSocket"
+    },
+    {
+      "unique-id": "term-unitin",
+      "description": "interactive chat input (via gateway)",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "terminal"
+          },
+          "destination": {
+            "node": "unit-in"
+          }
+        }
+      },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "ext-gw",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "extension"
+          },
+          "destination": {
+            "node": "gateway",
+            "interface": "gateway-ws"
+          }
+        }
+      },
+      "protocol": "WebSocket"
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "live-transcript-flow",
+      "name": "live transcript",
+      "description": "raw -> durable collector -> native stream -> copilot clean -> render. One render engine; terminal never re-derives.",
+      "transitions": [
+        {
+          "relationship-unique-id": "bot-segments",
+          "sequence-number": 1,
+          "description": "bot XADDs raw ASR segments"
+        },
+        {
+          "relationship-unique-id": "ma-reads-segments",
+          "sequence-number": 2,
+          "description": "collector consumes (XREADGROUP)"
+        },
+        {
+          "relationship-unique-id": "ma-tc-native",
+          "sequence-number": 3,
+          "description": "collector writes native stream (single writer)"
+        },
+        {
+          "relationship-unique-id": "aw-tcnative",
+          "sequence-number": 4,
+          "description": "copilot tails the native stream"
+        },
+        {
+          "relationship-unique-id": "aw-proc",
+          "sequence-number": 5,
+          "description": "copilot writes cleaned 1:1 transcript"
+        },
+        {
+          "relationship-unique-id": "aa-tcnative",
+          "sequence-number": 6,
+          "description": "agent-api merges tc + cards to SSE"
+        }
+      ]
+    },
+    {
+      "unique-id": "dispatch-flow",
+      "name": "agent dispatch",
+      "description": "a trigger spawns an isolated agent-worker via the runtime kernel; output streams back to the client.",
+      "transitions": [
+        {
+          "relationship-unique-id": "aa-runtime",
+          "sequence-number": 1,
+          "description": "agent-api POST /workloads"
+        },
+        {
+          "relationship-unique-id": "workers-d",
+          "sequence-number": 2,
+          "description": "runtime spawns agent-worker container"
+        },
+        {
+          "relationship-unique-id": "aw-unitout",
+          "sequence-number": 3,
+          "description": "worker XADDs output"
+        },
+        {
+          "relationship-unique-id": "aa-unitout",
+          "sequence-number": 4,
+          "description": "agent-api relays as SSE"
+        }
+      ]
+    }
+  ]
+}

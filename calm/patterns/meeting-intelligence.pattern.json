@@ -1,0 +1,32 @@
+{
+  "$schema": "https://calm.finos.org/release/1.0/meta/calm.json",
+  "$id": "https://vexa.ai/calm/patterns/meeting-intelligence.pattern.json",
+  "title": "Vexa Meeting-Intelligence Pattern",
+  "description": "A self-hostable meeting-intelligence runtime: a single authenticated edge, a capture worker, a collector, a copilot, a render-only client, and a declared external-STT egress boundary.",
+  "type": "object",
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "allOf": [
+        { "contains": { "type": "object", "properties": { "unique-id": { "const": "gateway" }, "node-type": { "const": "service" } }, "required": ["unique-id", "node-type"] } },
+        { "contains": { "type": "object", "properties": { "unique-id": { "const": "meeting-api" } }, "required": ["unique-id"] } },
+        { "contains": { "type": "object", "properties": { "unique-id": { "const": "agent-api" } }, "required": ["unique-id"] } },
+        { "contains": { "type": "object", "properties": { "unique-id": { "const": "bot" } }, "required": ["unique-id"] } },
+        { "contains": { "type": "object", "properties": { "unique-id": { "const": "terminal" }, "node-type": { "const": "webclient" }, "controls": { "type": "object", "required": ["render-only"] } }, "required": ["unique-id", "controls"] } },
+        { "contains": { "type": "object", "properties": { "unique-id": { "const": "stt" } }, "required": ["unique-id"] } }
+      ]
+    },
+    "relationships": {
+      "type": "array",
+      "contains": {
+        "type": "object",
+        "properties": {
+          "unique-id": { "const": "bot-stt" },
+          "controls": { "type": "object", "required": ["data-egress"] }
+        },
+        "required": ["unique-id", "controls"]
+      }
+    }
+  },
+  "required": ["nodes", "relationships"]
+}
