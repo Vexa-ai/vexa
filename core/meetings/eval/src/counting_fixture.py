@@ -27,7 +27,8 @@ import urllib.request
 from pathlib import Path
 
 DG_TTS = "https://api.deepgram.com/v1/speak"
-STT = "https://transcription.vexa.ai/v1/audio/transcriptions"
+# STT endpoint is configurable; point VEXA_TX_URL at any OpenAI-compatible /audio/transcriptions.
+STT = os.environ.get("VEXA_TX_URL", "http://127.0.0.1:18056/v1/audio/transcriptions")
 # A few Deepgram Aura voices, one per speaker (matches the eval roster).
 VOICES = {"A": "aura-asteria-en", "B": "aura-orion-en", "V": "aura-luna-en", "C": "aura-stella-en"}
 _W = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
