@@ -70,7 +70,9 @@ if [ "${1:-}" = "--push" ]; then
   git push -u origin "$BR"
   gh pr create --repo Vexa-ai/vexa-core --base main --head "$BR" \
     --title "carve: sync open-core to vexa-0.12@$SHORT" \
-    --body "Append-only carve sync via \`carve/sync.sh\`. $replayed commit(s) replayed with original authorship; checkpoint advanced to \`$SHORT\`. Reproducible from \`carve/manifest.sh\`."
+    --body "Append-only carve sync via \`carve/sync.sh\`. $replayed commit(s) replayed with original authorship; checkpoint advanced to \`$SHORT\`. Reproducible from \`carve/manifest.sh\`.
+
+⚠️ **Merge with a MERGE COMMIT, not squash/rebase** — squashing collapses the replayed commits into one and re-attributes them to the merger, erasing original contributor authorship. Use \`gh pr merge --merge\`."
   echo "✓ branch pushed + PR opened"
 else
   echo "ℹ dry run at $WORK — re-run with --push to open the PR"
