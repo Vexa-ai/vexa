@@ -55,7 +55,8 @@
           "architecture/dispatch",
           "architecture/streaming",
           "architecture/identity-and-trust",
-          "architecture/governance"
+          "architecture/governance",
+          "architecture/architecture-as-code"
         ]
       },
       {
