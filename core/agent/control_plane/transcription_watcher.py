@@ -202,7 +202,11 @@ def _stream_tail_id(r, stream: str) -> str:
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
     """Spawn the watcher (the ARM daemon thread) and return it (tests/introspection). ``keymap``
-    (numeric meeting_id → frozen native routing key) is the arm thread's own state."""
+    (numeric meeting_id → frozen native routing key) is the arm thread's own state.
+
+    ``subject`` is a PRE-M2 placeholder (defaults to ``u_live``): every armed copilot is attributed to
+    this one subject. Live-meeting dispatch (M2) must resolve and pass the real meeting OWNER instead —
+    until then the copilot's meeting doc lands in the placeholder workspace, not the owner's."""
     keymap: dict[str, str] = {}
     t = threading.Thread(
         target=_run_arm, args=(redis_url, dispatcher, live, subject, keymap),

@@ -33,7 +33,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
-        "VEXA_AGENT_IDENTITY_TOKEN": token,                      # the per-dispatch SIGNED token (verified at boundaries)
+        "VEXA_AGENT_IDENTITY_TOKEN": token,                      # the per-dispatch SIGNED token (minted now; boundary verification lands in Stage 2)
         "VEXA_RUNNER": invocation.get("runner", "claude-code"),
         "VEXA_UNIT_ID": unit_id,
         "VEXA_UNIT_TRIGGER": invocation["trigger"],

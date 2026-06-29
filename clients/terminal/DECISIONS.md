@@ -88,5 +88,7 @@ A pass to make the first-run + workspace experience real (no mocks, no dead UI):
   the visible chat.
 - **Logout wipes all client state** (dock layout/tabs, chat focus, onboarding flags) so a new user never
   inherits the previous one's tabs.
-- **Meeting-grounded chat** answers from the notes file via the Read tool instead of the unwired P5
-  `meeting.read_transcript` tool (which hung the worker and emitted nothing).
+- **Meeting-grounded chat** sends `active={kind:meeting, platform, native_id}` on the chat POST; agent-api
+  folds the meeting's live transcript (redis `tc:meeting:{native}`) into the prompt server-side, fresh each
+  turn. The client adds no prompt preamble and points at no notes file. (Replaced the earlier notes-file
+  workaround, itself a stand-in for the unwired `meeting.read_transcript` MCP tool that hung the worker.)

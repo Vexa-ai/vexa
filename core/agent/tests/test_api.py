@@ -581,3 +581,46 @@ def test_workspace_init_seeds_from_template(tmp_path, monkeypatch):
 
     r2 = c.post("/api/workspace/init", headers={"X-User-Id": "u_jane"})   # idempotent
     assert r2.json()["already_initialized"] is True
+
+
+def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatch):
+    """POST /api/workspace/swap clones a custom external git repo as the subject's active workspace
+    (parking the seed), then swapping back to seed restores the parked tree. The store dir never
+    surfaces as a subject. Real git over a local repo — no network."""
+    import subprocess
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
+    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    (origin / "MARK").write_text("CUSTOM\n"); (origin / "CLAUDE.md").write_text("CUSTOM ROOT\n")
+    run("add", "-A"); run("commit", "-q", "-m", "x")
+
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)                      # seed the active workspace first
+
+    r = c.post("/api/workspace/swap", headers=h, json={"repo": str(origin)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["swapped"] is True and body["cloned"] is True and body["parked"] == "seed"
+    assert (workspaces / "u_jane" / "MARK").read_text() == "CUSTOM\n"
+
+    # the custom repo file is now visible in the workspace tree; the store dir is NOT a subject
+    files = c.get("/api/workspace/tree", headers=h).json()["files"]
+    assert "MARK" in files
+    assert workspaces / ".attached"                                # parked under the dot-store
+
+    back = c.post("/api/workspace/swap", headers=h, json={})       # repo omitted → swap back to seed
+    assert back.json()["active"] == "seed" and back.json()["cloned"] is False
+    assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"

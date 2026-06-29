@@ -11,7 +11,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Markdown } from "../ui-kit/Markdown";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, type GitState } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, type GitState, type AttachedWorkspaces } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path } });
 
@@ -95,6 +95,7 @@ function FilesList() {
   const [tree, setTree] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);  // fail-loud (P18): a tree-load failure is shown, not hidden as "empty"
   const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);  // bumped after a workspace swap → re-fetch the tree
   // Knowledge view defaults to ONLY the knowledge graph (kg/); the eye toggle reveals the rest of the
   // workspace scaffold (CLAUDE.md, agents/, skills/, views/, …). Default ON = kg-only.
   const [kgOnly, setKgOnly] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
@@ -107,7 +108,7 @@ function FilesList() {
     void listWorkspaceTree({ hidden: false })
       .then((t) => { setTree(t); setError(null); })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
+  }, [reloadKey]);
   const nodes = buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree);
   // default expansion: top-level folders open, deeper folders collapsed (only when no saved state yet)
   useEffect(() => {
@@ -143,7 +144,80 @@ function FilesList() {
           { id: "copy-path", label: "Copy path", detail: menu.path, onSelect: () => copyText(menu.path) },
         ]} />
       )}
+      <WorkspaceSwitcher onSwapped={() => setReloadKey((k) => k + 1)} />
       <GitSection />
+    </div>
+  );
+}
+
+// ── Workspaces (attach/swap a custom git repo) — over /api/workspace/swap + /attached ──────────────
+const SS_WS_OPEN = "ws.attach.open";
+function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
+  const [open, setOpen] = useState<boolean>(() => readSS(SS_WS_OPEN) === "1");  // default collapsed
+  const [view, setView] = useState<AttachedWorkspaces>({ active: null, slots: {} });
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState<{ repo: string; ref: string; token: string } | null>(null);  // non-null = attach form shown
+  const load = () => { void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e))); };
+  useEffect(() => { if (open) load(); }, [open]);
+  const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_WS_OPEN, n ? "1" : "0"); return n; });
+
+  const doSwap = async (repo: string | undefined, ref?: string, token?: string) => {
+    setBusy(true); setErr(null);
+    try { await swapWorkspace(repo, ref, token); load(); onSwapped(); setForm(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  // The slots, with the seed always offered (so you can always swap back to the default).
+  const slots = Object.entries(view.slots);
+  if (!slots.some(([s]) => s === "seed")) slots.unshift(["seed", { repo: null, ref: null }]);
+  const label = (slug: string, repo: string | null) => (slug === "seed" ? "default (seed)" : repo ?? slug);
+
+  return (
+    <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+      <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+        <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+        <Icon name="folder" size={12} />workspaces
+      </div>
+      {open && (<>
+        {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ {err}</div>}
+        {slots.map(([slug, meta]) => {
+          const active = view.active === slug;
+          return (
+            <div key={slug} onClick={() => !active && !busy && doSwap(slug === "seed" ? undefined : meta.repo ?? undefined, meta.ref ?? undefined)}
+              title={active ? "Active workspace" : "Swap to this workspace"}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderRadius: 6, cursor: active ? "default" : "pointer", fontSize: 12, opacity: busy ? 0.6 : 1 }}
+              onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              <span style={{ width: 14, flex: "none", color: active ? "var(--green)" : "var(--t3)" }}>{active ? "●" : "○"}</span>
+              <span style={{ color: active ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label(slug, meta.repo)}</span>
+            </div>
+          );
+        })}
+        {form === null ? (
+          <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <Icon name="plus" size={12} /> Attach repo…
+          </div>
+        ) : (
+          <div style={{ padding: "6px 9px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <input autoFocus value={form.repo} placeholder="git repo URL" disabled={busy}
+              onChange={(e) => setForm({ ...form, repo: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Enter" && form.repo.trim()) void doSwap(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined); if (e.key === "Escape") setForm(null); }}
+              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+            <input value={form.ref} placeholder="ref (optional, default main)" disabled={busy}
+              onChange={(e) => setForm({ ...form, ref: e.target.value })}
+              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+            <input type="password" value={form.token} placeholder="access token (optional, for private repos)" disabled={busy}
+              onChange={(e) => setForm({ ...form, token: e.target.value })}
+              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button disabled={busy || !form.repo.trim()} onClick={() => void doSwap(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined)}
+                style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
+              <button disabled={busy} onClick={() => setForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </>)}
     </div>
   );
 }

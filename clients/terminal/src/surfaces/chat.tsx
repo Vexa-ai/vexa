@@ -398,14 +398,16 @@ function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock |
     return `Active context: the user is viewing the workspace file ${ref.value}. Read it with your Read tool if relevant.`;
   }
 
-  const native = meeting?.native_id ?? meeting?.id ?? ref.value;
-  const platform = meeting?.platform === "Google Meet" || meeting?.platform === "google_meet" ? "google_meet" : (meeting?.platform ?? "google_meet");
-  const notesPath = `kg/entities/meeting/${native}.md`;
-  return [
-    `Active meeting reference: @meeting:${native}`,
-    `Notes workspace path: ${notesPath}`,
-    `Instruction: answer from the meeting notes — Read ${notesPath} with your Read tool. If it doesn't exist yet, say the meeting hasn't been processed yet. Do not paste the full notes into the chat.`,
-  ].join("\n");
+  // Meeting grounding now happens SERVER-SIDE: agent-api folds the live transcript from the meeting's
+  // redis stream into the prompt (see _meeting_grounding). The client only flags the active meeting via
+  // `active` on the POST body — no prompt preamble, so we never point the agent at a notes file.
+  return "";
+}
+
+/** The meetings platform as the api slug agent-api keys the transcript stream on. */
+function meetingPlatformSlug(meeting: MeetingMock | undefined): string {
+  const p = meeting?.platform;
+  return p === "Google Meet" || p === "google_meet" ? "google_meet" : (p ?? "google_meet");
 }
 
 function promptWithActiveContext(prompt: string, ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
@@ -634,10 +636,13 @@ export function Chat({ params = {} }: ChatProps) {
     }));
     try {
       const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
-      // Meeting questions ground on the notes path injected into the prompt (the agent's Read tool), NOT
-      // the server `meeting.read_transcript` tool — that P5 HTTP tool isn't wired and the agent hangs on it
-      // (a meeting-focused turn ran 134s and emitted nothing). Files still pass `active` (harmless, no tool).
-      const active = ground && contextRef && contextRef.kind !== "meeting" ? { kind: contextRef.kind, ref: contextRef.raw } : undefined;
+      // The active center tab grounds the turn: a meeting passes {kind, platform, native_id} so agent-api
+      // folds its live transcript (tc:meeting:{native}) into the prompt server-side; a file passes {kind, ref}.
+      const active = !ground || !contextRef
+        ? undefined
+        : contextRef.kind === "meeting"
+          ? { kind: "meeting", native_id: contextRef.value, platform: meetingPlatformSlug(activeMeeting) }
+          : { kind: contextRef.kind, ref: contextRef.raw };
       const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, session: sessionForSend, active }), signal: ctrl.signal });
       if (!r.ok) throw new Error(`Chat request failed (${r.status})`);
       const reader = r.body?.getReader();

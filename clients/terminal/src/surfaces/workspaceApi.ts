@@ -25,6 +25,26 @@ export async function initWorkspace(): Promise<{ workspace: string; seeded: bool
   return getJson(`/api/workspace/init`, { method: "POST" });
 }
 
+export interface AttachedWorkspaces { active: string | null; slots: Record<string, { repo: string | null; ref: string | null }> }
+export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null; nested: boolean }
+
+/** The subject's attachment view: which workspace is active + the parked ones available to swap back to. */
+export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
+  return getJson(`/api/workspace/attached`);
+}
+
+/** Attach a custom external git repo as the active workspace (swap). The current workspace is PARKED
+ *  (kept, never destroyed) so it can be swapped back to. Omit `repo` to swap back to the seeded default.
+ *  `token` (optional) authenticates a PRIVATE repo's clone — used server-side for the clone only, never
+ *  stored (P15). */
+export async function swapWorkspace(repo?: string, ref?: string, token?: string): Promise<SwapResult> {
+  return getJson(`/api/workspace/swap`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: repo ?? null, ref: ref ?? null, token: token ?? null }),
+  });
+}
+
 export async function listWorkspaceTree(opts?: { hidden?: boolean }): Promise<string[]> {
   const data = await getJson<{ files?: string[] }>(`/api/workspace/tree${opts?.hidden ? "?hidden=1" : ""}`);
   return data.files ?? [];

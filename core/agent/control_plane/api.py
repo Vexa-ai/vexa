@@ -34,6 +34,7 @@ from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import DEFAULT_MEETING_MODEL, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
+from control_plane.workspace_attach import CloneError, attached_workspaces, swap_workspace
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from shared.ports import SchedulerPort, StreamReader
@@ -204,6 +205,14 @@ class RoutineEnabledPatch(BaseModel):
     enabled: bool
 
 
+class WorkspaceSwapBody(BaseModel):
+    """Attach a custom external git repo as the subject's workspace. Omit ``repo`` to swap back to seed."""
+    model_config = {"extra": "forbid"}
+    repo: Optional[str] = None   # git URL to clone (None → swap back to the seeded default)
+    ref: Optional[str] = None    # branch/tag/sha to check out (defaults to main)
+    token: Optional[str] = None  # access token for a PRIVATE repo — used for the clone only, never stored (P15)
+
+
 class MeetingStart(BaseModel):
     """Launch a live-meeting copilot for a REAL meeting. The vexa-cloud bridge POSTs this once it has a
     bot in the meeting; the dispatch then tails ``tc:meeting:{native_id}`` (the stream the bridge feeds)."""
@@ -254,14 +263,55 @@ def _sse(events) -> Iterator[str]:
         yield f"{prefix}data: {json.dumps(ev)}\n\n"
 
 
-MEETING_READ_TOOL = "meeting.read_transcript"  # the meeting-scoped transcript tool (tools-seed/)
+MEETING_CHAT_TRANSCRIPT_SEGMENTS = 400  # bound the live transcript folded into a meeting-chat prompt
 
 
-def _meeting_grounding(active: "dict | None", session: str, prompt: str) -> "tuple[dict, list[str], str]":
-    """Cookbook #1 — chat grounding via a meeting-scoped tool. If the terminal's ACTIVE tab is a meeting,
-    return (meeting context, [the transcript tool], a prompt prefixed with "you are in a live meeting …");
-    otherwise the plain (none-context, no tools, prompt). The agent then reads meetings' published
-    ``/transcripts`` through the tool on demand — never a file, never the other domain's internals (P23/P3)."""
+def _fold_meeting_transcript(redis_url: "str | None", native_id: str, *, limit: int) -> str:
+    """Fold the live transcript Stream ``tc:meeting:{native}`` — the SAME stream the meeting copilot
+    tails (worker/meeting.py) and the terminal renders — into ordered ``speaker: text`` lines for chat
+    grounding. Refining live drafts are upserted by ``segment_id`` (latest text wins, no duplicate),
+    arrival order preserved, bounded to the last ``limit`` segments. Best-effort: returns "" when redis
+    is unwired or the stream is empty/unreadable (the caller treats that as 'no transcript yet')."""
+    if not redis_url:
+        return ""
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        rows = r.xrange(f"tc:meeting:{native_id}")
+    except Exception as exc:  # noqa: BLE001 — grounding is best-effort; never fail the chat turn
+        logger.warning("could not read transcript for %s: %s", native_id, exc)
+        return ""
+    order: list[str] = []
+    seg_by_id: dict[str, dict] = {}
+    for entry_id, fields in rows:
+        payload = json.loads(fields.get("payload", "{}"))
+        if payload.get("type") == "session_end":
+            continue
+        for i, seg in enumerate(payload.get("segments", [])):
+            sid = str(seg.get("segment_id") or f"{entry_id}:{i}")
+            if sid not in seg_by_id:
+                order.append(sid)
+            seg_by_id[sid] = seg
+    lines: list[str] = []
+    for sid in order[-limit:]:
+        seg = seg_by_id[sid]
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        speaker = (seg.get("speaker") or "Speaker").strip()
+        lines.append(f"{speaker}: {text}")
+    return "\n".join(lines)
+
+
+def _meeting_grounding(
+    active: "dict | None", session: str, prompt: str, redis_url: "str | None"
+) -> "tuple[dict, list[str], str]":
+    """Cookbook #1 — chat grounding in the terminal's ACTIVE meeting. The transcript reaches the agent
+    the SAME way the live copilot gets it: the meeting's redis Stream ``tc:meeting:{native}`` (the
+    meetings⊥agent seam) — NOT a file, NOT a cross-domain HTTP call, NO token. agent-api folds the
+    transcript-so-far and grounds the prompt with it, fresh on EVERY turn (so a follow-up re-reads the
+    latest lines). Returns the plain (none-context, no tools, prompt) when the active tab isn't a meeting."""
     a = active or {}
     if a.get("kind") != "meeting":
         return ({"kind": "none", "session": session}, [], prompt)
@@ -270,11 +320,20 @@ def _meeting_grounding(active: "dict | None", session: str, prompt: str) -> "tup
     if not native:
         return ({"kind": "none", "session": session}, [], prompt)
     platform = m.get("platform") or "google_meet"
-    ctx = {"kind": "meeting", "session": session,
-           "meeting": {"platform": platform, "native_id": native}}
-    preamble = (f"You are in a live meeting ({platform}/{native}). Use the `{MEETING_READ_TOOL}` tool to "
-                f"read its transcript when you need it.\n\n")
-    return (ctx, [MEETING_READ_TOOL], preamble + prompt)
+    # A chat turn (trigger "message"), not a live-meeting serve — the transcript travels in the prompt,
+    # so the dispatch context stays plain (no meeting env / serve path is engaged for a chat).
+    ctx = {"kind": "none", "session": session}
+    transcript = _fold_meeting_transcript(redis_url, native, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+    if transcript:
+        preamble = (
+            f"You are assisting in a live meeting ({platform}/{native}). Its live transcript so far is "
+            f"below — answer the user's question from it. Don't paste the transcript back verbatim.\n\n"
+            f"<transcript>\n{transcript}\n</transcript>\n\n")
+    else:
+        preamble = (
+            f"You are assisting in a live meeting ({platform}/{native}), but no transcript has been "
+            f"captured yet. Tell the user the meeting has no transcript yet.\n\n")
+    return (ctx, [], preamble + prompt)
 
 
 def create_app(
@@ -440,12 +499,11 @@ def create_app(
         is_new = not any(r["session"] == session for r in sess.list(subject))
         sess.upsert(subject, session,
                     title=_truncate_title(body.prompt) if is_new else None)
-        # Ground the chat in the terminal's ACTIVE meeting (if any) by AUTHORIZING a per-turn,
-        # meeting-scoped tool — the agent reads the transcript through meetings' published /transcripts
-        # contract on demand, never a file (P23/P3). cookbook pattern #1: a tool is granted only when the
-        # context warrants, scoped to the one resource. The scoped token is minted downstream by the
-        # dispatcher from the invocation's `tools` (P15 — the user key never enters the worker).
-        ctx, tools, prompt = _meeting_grounding(body.active, session, body.prompt)
+        # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
+        # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the copilot tails) into
+        # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
+        # rides the prompt to the worker — no file, no cross-domain HTTP, no user key in the worker (P15).
+        ctx, tools, prompt = _meeting_grounding(body.active, session, body.prompt, redis_url)
         inv = units.make_dispatch(
             subject=subject, trigger="message",
             start=units.entrypoint(inline=prompt), context=ctx, tools=tools,
@@ -657,12 +715,40 @@ def create_app(
         seed_workspace(ws, seed_dir)
         return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed}
 
-    @app.post("/api/workspace/swap", status_code=501)
-    def ws_swap(request: Request):
-        """Select which validated workspace/template the next dispatch MOUNTS (carry VEXA_WORKSPACE_REPO/REF).
-        TODO(phase-6): the selection seam exists in dispatch.py/spawn.py (and bridge resolves per-meeting);
-        surfacing it as a control needs the dispatch to accept + thread a per-subject workspace selection."""
-        raise HTTPException(status_code=501, detail="workspace swap not wired yet — needs dispatch selection (Phase 6)")
+    @app.get("/api/workspace/attached")
+    def ws_attached(request: Request):
+        """The subject's attachment view: the active slug + the parked workspaces available to swap back to."""
+        try:
+            return attached_workspaces(wsr.root, subject_of(request))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+
+    @app.post("/api/workspace/swap")
+    def ws_swap(request: Request, body: WorkspaceSwapBody = Body(default=WorkspaceSwapBody())):
+        """Attach a CUSTOM external git repo as this subject's active workspace (swap). The currently
+        active workspace is PARKED (kept, never destroyed) so it can be swapped back to; the requested
+        repo is restored from a prior park or cloned fresh. Omit ``repo`` to swap back to the seed.
+
+        Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
+        tree takes effect on the subject's next turn — no dispatch change needed."""
+        subject = subject_of(request)
+        try:
+            result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main", token=body.token or None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        except CloneError as exc:
+            # message is already token-redacted (P15); private repo without/with a bad token lands here.
+            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+        return {
+            "subject": result.subject,
+            "active": result.active_slug,
+            "repo": result.repo,
+            "ref": result.ref,
+            "swapped": result.swapped,
+            "cloned": result.cloned,
+            "parked": result.parked_slug,
+            "nested": result.nested,
+        }
 
     @app.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):
@@ -790,6 +876,8 @@ def _build_production_app() -> FastAPI:
 
     # The in-process meetings Integration (replaces the standalone bridge container): a daemon thread
     # tails transcription_segments → fans tc:meeting:{uid} + arms the copilot dispatch on activity.
+    # NOTE: no `subject=` → the watcher uses its PRE-M2 `u_live` placeholder; live-meeting dispatch (M2)
+    # must pass the real meeting owner here (see transcription_watcher.start).
     from control_plane import transcription_watcher
     transcription_watcher.start(settings.redis_url, dispatcher, app.state.live_meetings)
     return app
