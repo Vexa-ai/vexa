@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from runtime_api import state
+from runtime_api import config, state
 from runtime_api.backends import Backend, ContainerSpec
 from runtime_api.lifecycle import _fire_exit_callback
 from runtime_api.profiles import get_profile, get_all_profiles
@@ -226,6 +226,12 @@ async def create_container(req: CreateContainerRequest, request: Request):
     user_mounts = req.config.get("mounts", [])
     if user_mounts:
         mounts.extend(user_mounts)
+    if config.BOT_MODEL_CACHE_DIR:
+        mounts.append(f"{config.BOT_MODEL_CACHE_DIR}:/app/models")
+
+    # Inject whisper model if not already set by profile or user config
+    if config.BOT_WHISPER_MODEL and "MODEL_SIZE" not in env:
+        env["MODEL_SIZE"] = config.BOT_WHISPER_MODEL
 
     # Build ports from profile
     ports = dict(profile_def.get("ports", {}))

@@ -1241,7 +1241,7 @@ async def request_bot(
         "transcribeEnabled": transcribe,
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
         "recordingUploadUrl": f"{BOT_MEETING_API_URL}/internal/recordings/upload",
-        "transcriptionServiceUrl": os.getenv("TRANSCRIPTION_SERVICE_URL"),
+        "transcriptionServiceUrl": os.getenv("BOT_TRANSCRIPTION_SERVICE_URL") or os.getenv("TRANSCRIPTION_SERVICE_URL"),
         "transcriptionServiceToken": os.getenv("TRANSCRIPTION_SERVICE_TOKEN"),
     }
     if req.recording_enabled is not None:

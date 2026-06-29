@@ -58,3 +58,7 @@ SCHEDULER_POLL_INTERVAL = int(os.getenv("SCHEDULER_POLL_INTERVAL", "5"))
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8090"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Bot container defaults (injected into every spawned bot container when set)
+BOT_MODEL_CACHE_DIR = os.getenv("BOT_MODEL_CACHE_DIR", "")  # host path → /app/models inside bot
+BOT_WHISPER_MODEL = os.getenv("BOT_WHISPER_MODEL", "")      # e.g. large-v3-turbo

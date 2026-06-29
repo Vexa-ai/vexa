@@ -170,6 +170,8 @@ export async function disposeMixedChunkedPipeline(): Promise<void> {
 }
 
 let speakerManager: SpeakerStreamManager | null = null;
+/** Poller that drains window.__vexaAudioQueue into handlePerSpeakerAudioData */
+let audioQueuePoller: ReturnType<typeof setInterval> | null = null;
 /** Whitelist of allowed language codes — if set, segments in other languages are discarded */
 let allowedLanguages: string[] | null = null;
 /** Per-speaker last detected language — used in onSegmentConfirmed where Whisper result isn't available */
@@ -1819,6 +1821,12 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
     retainWriter = null; retainT0 = 0;
   }
 
+  // Stop audio queue poller
+  if (audioQueuePoller !== null) {
+    clearInterval(audioQueuePoller);
+    audioQueuePoller = null;
+  }
+
   // Flush remaining speaker buffers
   if (speakerManager) {
     speakerManager.removeAll();
@@ -1939,49 +1947,59 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     }
   }
 
-  // Google Meet: expose per-element callback and set up per-element streams
-  try {
-    await pageToCaptureFrom.exposeFunction('__vexaPerSpeakerAudioData', handlePerSpeakerAudioData);
-  } catch (err: any) {
-    if (!err.message.includes('has been already registered')) {
-      log(`[PerSpeaker] Failed to expose audio callback: ${err.message}`);
-      return;
-    }
-  }
-
-  // Set up per-speaker audio streams. PREFERRED: the SHARED vexa-bot/core/src
-  // /browser/gmeet-capture module (the SAME code the extension runs), with
-  // onAudio feeding the Playwright bridge + shared gmeet-speakers attribution.
-  // FALLBACK: if the bundle isn't available in-page for any reason, run the
-  // original inline loop verbatim — the bot must never lose capture.
+  // Audio data flows through a shared browser-side queue (window.__vexaAudioQueue)
+  // polled by Node.js every 100ms. This bypasses Playwright's exposeFunction / CDP
+  // binding bridge, which silently drops calls from AudioWorklet message handlers
+  // and ScriptProcessor onaudioprocess in headless Chrome.
   const handleCount = await pageToCaptureFrom.evaluate(async () => {
     const w = window as any;
+    if (w.__vexaPerSpeakerIntervals !== undefined) return w.__vexaPerSpeakerActiveStreams ?? 0;
 
-    // ── Preferred: shared module ───────────────────────────────────────────
+    w.__vexaAudioQueue = [];
+
+    // Preferred: AudioWorklet via shared module (confirmed to process real audio in headless Chrome)
     if (w.VexaBrowserUtils?.createGmeetCapture) {
-      if (w.__vexaGmeetCapture) return w.__vexaGmeetCapture.streamCount();
       w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
         log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
         onAudio: (index: number, pcm: Float32Array) => {
-          w.__vexaGmeetSpeakers?.reportTrackAudio(index);
-          w.__vexaPerSpeakerAudioData(index, Array.from(pcm));
+          try {
+            w.__vexaGmeetSpeakers?.reportTrackAudio?.(index);
+            w.__vexaOnAudioCallCount = (w.__vexaOnAudioCallCount || 0) + 1;
+            const cnt = w.__vexaOnAudioCallCount;
+            if (cnt <= 3 || cnt % 50 === 0) {
+              const qLen = w.__vexaAudioQueue ? w.__vexaAudioQueue.length : -1;
+              console.log(`[PerSpeaker] onAudio #${cnt} idx=${index} len=${pcm.length} q=${qLen}`);
+              w.logBot?.(`[PerSpeaker] onAudio #${cnt} idx=${index} len=${pcm.length} q=${qLen}`);
+            }
+            if (!w.__vexaAudioQueue) {
+              console.error('[PerSpeaker] onAudio: __vexaAudioQueue missing, reinit');
+              w.__vexaAudioQueue = [];
+            }
+            if (w.__vexaAudioQueue.length < 300) {
+              w.__vexaAudioQueue.push({ i: index, d: Array.from(pcm) });
+            }
+          } catch (e: any) {
+            console.error('[PerSpeaker] onAudio ERROR:', e && e.message);
+          }
         },
       });
       await w.__vexaGmeetCapture.start();
-      return w.__vexaGmeetCapture.streamCount();
+      const count = w.__vexaGmeetCapture.streamCount();
+      w.__vexaPerSpeakerActiveStreams = count;
+      w.__vexaPerSpeakerIntervals = [];
+      w.logBot?.(`[PerSpeaker] AudioWorklet capture started with ${count} stream(s)`);
+      return count;
     }
 
-    // ── Fallback: original inline loop (legacy copy of gmeet-capture.ts) ───
-    w.logBot?.('[PerSpeaker] shared gmeet-capture unavailable — using inline fallback');
+    // Fallback: inline ScriptProcessor
+    w.logBot?.('[PerSpeaker] VexaBrowserUtils unavailable — using inline ScriptProcessor fallback');
     const TARGET_SAMPLE_RATE = 16000;
     const BUFFER_SIZE = 4096;
 
     let mediaElements: HTMLMediaElement[] = [];
     for (let attempt = 0; attempt < 10; attempt++) {
       mediaElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
-        !el.paused &&
-        el.srcObject instanceof MediaStream &&
-        el.srcObject.getAudioTracks().length > 0
+        !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0
       ) as HTMLMediaElement[];
       if (mediaElements.length > 0) break;
       await new Promise(r => setTimeout(r, 2000));
@@ -1989,12 +2007,12 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     }
     if (mediaElements.length === 0) {
       w.logBot?.('[PerSpeaker] No active media elements with audio found');
+      w.__vexaPerSpeakerIntervals = [];
       return 0;
     }
     w.logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
 
     const connectedStreamIds = new Set<string>();
-    const streamLastActive = new Map<number, number>();
     let nextStreamIndex = 0;
 
     function connectElement(el: HTMLMediaElement, index: number): boolean {
@@ -2005,17 +2023,17 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
         if (connectedStreamIds.has(streamId)) return false;
 
         const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+        ctx.resume().catch(() => {});
         const source = ctx.createMediaStreamSource(stream);
         const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
-        streamLastActive.set(index, Date.now());
 
         processor.onaudioprocess = (e: AudioProcessingEvent) => {
           const data = e.inputBuffer.getChannelData(0);
-          const maxVal = Math.max(...Array.from(data).map(Math.abs));
-          if (maxVal > 0.005) {
-            streamLastActive.set(index, Date.now());
-            w.__vexaGmeetSpeakers?.reportTrackAudio(index);
-            w.__vexaPerSpeakerAudioData(index, Array.from(data));
+          let maxVal = 0;
+          for (let k = 0; k < data.length; k++) { const a = Math.abs(data[k]); if (a > maxVal) maxVal = a; }
+          if (maxVal > 0.005 && w.__vexaAudioQueue.length < 300) {
+            w.__vexaGmeetSpeakers?.reportTrackAudio?.(index);
+            w.__vexaAudioQueue.push({ i: index, d: Array.from(data) });
           }
         };
 
@@ -2037,6 +2055,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
       if (connectElement(mediaElements[i], i)) streamCount++;
     }
     nextStreamIndex = mediaElements.length;
+    w.__vexaPerSpeakerActiveStreams = streamCount;
 
     const rescanInterval = setInterval(() => {
       const currentElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
@@ -2045,7 +2064,10 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
       for (const el of currentElements) {
         const stream: MediaStream = (el as any).srcObject;
         if (stream && !connectedStreamIds.has(stream.id)) {
-          if (connectElement(el, nextStreamIndex)) nextStreamIndex++;
+          if (connectElement(el, nextStreamIndex)) {
+            nextStreamIndex++;
+            w.__vexaPerSpeakerActiveStreams = (w.__vexaPerSpeakerActiveStreams ?? 0) + 1;
+          }
         }
       }
     }, 15000);
@@ -2055,6 +2077,32 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
   });
 
   log(`[PerSpeaker] Browser-side audio capture started with ${handleCount} streams`);
+
+  // Drain window.__vexaAudioQueue into handlePerSpeakerAudioData every 100ms.
+  // Polling sidesteps the CDP binding size/rate limits that silently drop exposeFunction calls.
+  if (audioQueuePoller !== null) clearInterval(audioQueuePoller);
+  audioQueuePoller = setInterval(async () => {
+    if (!page || page.isClosed() || !speakerManager) {
+      if (audioQueuePoller !== null) { clearInterval(audioQueuePoller); audioQueuePoller = null; }
+      return;
+    }
+    let chunks: Array<{ i: number; d: number[] }>;
+    try {
+      chunks = await pageToCaptureFrom.evaluate(() => {
+        const w = window as any;
+        if (!w.__vexaAudioQueue?.length) return [];
+        return (w.__vexaAudioQueue as any[]).splice(0, 30);
+      });
+    } catch (err: any) {
+      log(`[PerSpeaker] queue poll error: ${err?.message}`);
+      return;
+    }
+    if (chunks.length > 0) log(`[PerSpeaker] drained ${chunks.length} chunks from queue`);
+    for (const chunk of chunks) {
+      handlePerSpeakerAudioData(chunk.i, chunk.d).catch(() => {});
+    }
+  }, 100);
+  log('[PerSpeaker] queue poller started');
 }
 
 // ==================================================================
@@ -2632,6 +2680,49 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       const pipelineReady = await initPerSpeakerPipeline(botConfig);
       if (pipelineReady) {
         log('[Bot] Per-speaker transcription pipeline initialized');
+      }
+
+      // FAKE_AUDIO_FILE: feed a WAV file directly through the pipeline without a meeting.
+      // Bypasses browser/AudioWorklet entirely — tests speakerManager → whisper → dashboard.
+      const fakeAudioFile = process.env.FAKE_AUDIO_FILE;
+      if (fakeAudioFile && pipelineReady && speakerManager) {
+        const fs = require('fs') as typeof import('fs');
+        log(`[FAKE_AUDIO] Pipeline test mode: feeding ${fakeAudioFile}`);
+        try {
+          // Wait for transcription service to be ready before feeding audio
+          const transUrl = botConfig.transcriptionServiceUrl || process.env.TRANSCRIPTION_SERVICE_URL || 'http://localhost:8000';
+          log(`[FAKE_AUDIO] Waiting for transcription service at ${transUrl}...`);
+          let ready = false;
+          for (let attempt = 0; attempt < 45; attempt++) {
+            try {
+              const r = await fetch(`${transUrl}/health`);
+              if (r.ok) { ready = true; log('[FAKE_AUDIO] Transcription service ready'); break; }
+            } catch { /* not up yet */ }
+            await new Promise(r => setTimeout(r, 2000));
+          }
+          if (!ready) { log('[FAKE_AUDIO] Transcription service never became ready — aborting'); throw new Error('transcription service timeout'); }
+
+          const buf = fs.readFileSync(fakeAudioFile);
+          const dataOffset = 44;
+          const BLOCK = 4096;
+          const numSamples = Math.floor((buf.length - dataOffset) / 2);
+          const speakerId = 'speaker-0';
+          speakerManager.addSpeaker(speakerId, 'Test Speaker');
+          log(`[FAKE_AUDIO] Feeding ${numSamples} samples (${(numSamples / 16000).toFixed(1)}s)...`);
+          for (let offset = 0; offset + BLOCK <= numSamples; offset += BLOCK) {
+            const chunk = new Float32Array(BLOCK);
+            for (let k = 0; k < BLOCK; k++) chunk[k] = buf.readInt16LE(dataOffset + (offset + k) * 2) / 32768.0;
+            speakerManager.feedAudio(speakerId, chunk);
+            await new Promise(r => setTimeout(r, 25));
+          }
+          log('[FAKE_AUDIO] All audio fed, waiting 20s for transcription flush...');
+          await new Promise(r => setTimeout(r, 20000));
+          log('[FAKE_AUDIO] Done — check dashboard for transcripts');
+        } catch (err: any) {
+          log(`[FAKE_AUDIO] Error: ${err.message}`);
+        }
+        await performGracefulLeave(page, 0, 'fake_audio_test_complete');
+        return;
       }
     } catch (err: any) {
       log(`[Bot] Per-speaker pipeline init failed (non-fatal): ${err.message}`);
