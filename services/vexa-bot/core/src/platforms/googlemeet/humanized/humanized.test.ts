@@ -11,11 +11,14 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import { MocapEngine, type Rect } from "./mocapEngine";
 import { X11Input } from "./x11Input";
 import { HumanizedInteractor } from "./humanizedInteraction";
 import { MOCAP_LIBRARY } from "./mocap-data";
 import { googleJoinButtonSelectors, googleNameInputSelectors } from "../selectors";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let passed = 0;
 let failed = 0;
