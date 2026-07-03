@@ -4,6 +4,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   service bot
   service desktop
   service meeting-api
+  service mcp
   module buffer
   module capture-codec
   module gmeet-capture
@@ -68,6 +69,7 @@ system runtime-system  # workload spawn (bot/agent containers)
   service runtime
 
 system deploy  # deployment + execution-target registry
+  contract execution-targets.v1
 
 system platform  # shared infra backing the services
   service redis
@@ -104,6 +106,7 @@ edges:
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
   agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
+  mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)
@@ -115,6 +118,8 @@ edges:
   terminal -req-> gateway  # all REST via gateway
   terminal -req-> gateway  # live WS via gateway
   slim -req-> gateway  # Python client; REST via gateway
+  dashboard -req-> gateway  # dashboard client; live WS via gateway
+  extension -req-> gateway  # browser extension client; live WS via gateway
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 

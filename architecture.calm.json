@@ -214,6 +214,23 @@
       ]
     },
     {
+      "unique-id": "mcp",
+      "node-type": "service",
+      "name": "mcp",
+      "description": "MCP tools + prompts over the public API (stateless FastAPI, /mcp mount)",
+      "metadata": [
+        {
+          "path": "core/meetings/services/mcp"
+        }
+      ],
+      "interfaces": [
+        {
+          "unique-id": "mcp-http",
+          "type": "api"
+        }
+      ]
+    },
+    {
       "unique-id": "buffer",
       "node-type": "module",
       "name": "buffer",
@@ -609,6 +626,18 @@
       ]
     },
     {
+      "unique-id": "execution-targets.v1",
+      "node-type": "contract",
+      "name": "execution-targets.v1",
+      "description": "execution-targets.v1 — sealed/published contract (deploy)",
+      "metadata": [
+        {
+          "path": "deploy/contracts/execution-targets.v1",
+          "domain": "deploy"
+        }
+      ]
+    },
+    {
       "unique-id": "slim",
       "node-type": "webclient",
       "name": "slim",
@@ -616,6 +645,28 @@
       "metadata": [
         {
           "path": "clients/slim"
+        }
+      ]
+    },
+    {
+      "unique-id": "dashboard",
+      "node-type": "webclient",
+      "name": "dashboard",
+      "description": "dashboard — client",
+      "metadata": [
+        {
+          "path": "clients/dashboard"
+        }
+      ]
+    },
+    {
+      "unique-id": "extension",
+      "node-type": "webclient",
+      "name": "extension",
+      "description": "extension — client",
+      "metadata": [
+        {
+          "path": "clients/extension"
         }
       ]
     },
@@ -1153,6 +1204,7 @@
             "bot",
             "desktop",
             "meeting-api",
+            "mcp",
             "buffer",
             "capture-codec",
             "gmeet-capture",
@@ -1793,6 +1845,22 @@
       ]
     },
     {
+      "unique-id": "mcp-gw",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "mcp"
+          },
+          "destination": {
+            "node": "gateway",
+            "interface": "gateway-rest"
+          }
+        }
+      },
+      "description": "every MCP tool forwards the caller's X-API-Key to the public REST surface",
+      "protocol": "HTTPS"
+    },
+    {
       "unique-id": "gw-ma",
       "relationship-type": {
         "connects": {
@@ -1982,6 +2050,49 @@
         }
       },
       "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "deploy-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "deploy",
+          "nodes": [
+            "execution-targets.v1"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "dashboard-gw",
+      "description": "dashboard client; live WS via gateway",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "dashboard"
+          },
+          "destination": {
+            "node": "gateway",
+            "interface": "gateway-ws"
+          }
+        }
+      },
+      "protocol": "WebSocket"
+    },
+    {
+      "unique-id": "extension-gw",
+      "description": "browser extension client; live WS via gateway",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "extension"
+          },
+          "destination": {
+            "node": "gateway",
+            "interface": "gateway-ws"
+          }
+        }
+      },
+      "protocol": "WebSocket"
     },
     {
       "unique-id": "stack-deployed",

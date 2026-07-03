@@ -40,6 +40,15 @@ export interface LayoutService {
   /** open the tab in a SPLIT next to the active panel (link-from-doc semantics: never
    *  replace the doc the user clicked in). Reuses the other group when one exists. */
   openTabBeside(d: TabDescriptor): void;
+  /** swap WHAT an existing panel shows in place (Obsidian-style in-pane navigation):
+   *  update its params + title without opening a new tab. `panelId` is the dockview
+   *  panel id (may be the preview slot). */
+  retargetTab(panelId: string, d: TabDescriptor): void;
+  /** Chrome-style tab pin: a pinned tab cannot be closed until unpinned. Stored in the
+   *  panel params, so it persists reloads with the dock layout. Pinning the preview slot
+   *  promotes it to a real panel first. */
+  pinTab(panelId: string): void;
+  unpinTab(panelId: string): void;
   /** restore the UI state (dock layout + active list) from before the last navigation.
    *  Returns false when the history is empty. */
   goBack(): boolean;
@@ -190,6 +199,32 @@ export function createLayoutService(defaultList: string): LayoutService {
             : undefined,
       });
     },
+    retargetTab(panelId, d) {
+      const panel = api?.getPanel(panelId);
+      if (!panel) return;
+      histPush();  // Escape / Alt+Left also undoes in-pane navigation
+      const pinned = Boolean((panel.params as { pinned?: boolean } | undefined)?.pinned);
+      panel.api.updateParameters({ ...panelParams(d, panelId === PREVIEW_PANEL), pinned });
+      panel.api.setTitle(d.title);
+      if (panelId === PREVIEW_PANEL) previewLogicalId = d.id;
+    },
+    pinTab(panelId) {
+      const panel = api?.getPanel(panelId);
+      if (!panel) return;
+      const cur = (panel.params ?? {}) as { kind: string; p: Record<string, unknown>; ctx: RightContext | null };
+      if (panelId === PREVIEW_PANEL) {
+        // the preview slot must stay reusable — promote its content to a real panel, pinned
+        const d: TabDescriptor = { id: previewLogicalId ?? `${cur.kind}:pinned`, title: panel.title ?? "", kind: cur.kind, params: cur.p, context: cur.ctx };
+        panel.api.close(); forgetPreview();
+        addPanelSafe({ id: d.id, component: "tab", title: d.title, params: { ...panelParams(d, false), pinned: true } });
+        return;
+      }
+      panel.api.updateParameters({ ...cur, preview: false, pinned: true });
+    },
+    unpinTab(panelId) {
+      const panel = api?.getPanel(panelId);
+      if (panel) panel.api.updateParameters({ ...(panel.params ?? {}), pinned: false });
+    },
     openPreview(d) {
       if (!api) return;
       histPush();
@@ -213,7 +248,12 @@ export function createLayoutService(defaultList: string): LayoutService {
       }
       previewLogicalId = d.id;
     },
-    closeTab(id) { if (api?.getPanel(id)) { histPush(); api.getPanel(id)?.api.close(); } },
+    closeTab(id) {
+      const panel = api?.getPanel(id);
+      if (!panel || (panel.params as { pinned?: boolean } | undefined)?.pinned) return;  // pinned tabs stay until unpinned
+      histPush();
+      panel.api.close();
+    },
     setActiveList(id) {
       if (store.getState().activeList !== id) histPush();
       store.set((s) => ({ ...s, activeList: id })); writeLS(LS_LIST, id);

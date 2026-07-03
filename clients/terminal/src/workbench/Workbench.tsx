@@ -24,14 +24,14 @@ import { listWorkspaceTree } from "../surfaces/workspaceApi";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
 
-// ── footer theme toggle: dark ⇄ day mode, sitting at the bottom-left of the shell ──
+// ── theme toggle: dark ⇄ day mode, icon button in the profile row ──
 function ThemeToggle() {
   const [theme, toggle] = useTheme();
   const day = theme === "light";
   return (
     <button onClick={toggle} title={day ? "Switch to dark mode" : "Switch to day mode"}
-      style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }}>
-      <Icon name={day ? "moon" : "sun"} size={14} />{day ? "dark" : "day"}
+      style={{ flex: "none", display: "flex", alignItems: "center", padding: 4, borderRadius: 6, background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }}>
+      <Icon name={day ? "moon" : "sun"} size={15} />
     </button>
   );
 }
@@ -64,8 +64,15 @@ const dvComponents = { tab: TabHost };
 
 // ── custom tab header: VS Code-style — PREVIEW tabs render their title in italic ──
 function TabHeader(props: IDockviewPanelHeaderProps) {
-  const params = props.params as { kind?: string; p?: { path?: unknown; meetingId?: unknown }; preview?: boolean };
+  const layout = useService(LayoutServiceId);
+  // params change in place (preview swaps, in-pane navigation, pin/unpin) — subscribe like TabHost does
+  const [params, setParams] = useState(props.params as { kind?: string; p?: { path?: unknown; meetingId?: unknown }; preview?: boolean; pinned?: boolean });
+  useEffect(() => {
+    const d = props.api.onDidParametersChange((next) => { if (next && Object.keys(next).length) setParams(next as typeof params); });
+    return () => d.dispose();
+  }, [props.api]);
   const preview = Boolean(params.preview);
+  const pinned = Boolean(params.pinned);
   const [title, setTitle] = useState<string>(props.api.title ?? "");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
@@ -74,6 +81,9 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
   }, [props.api]);
   const path = typeof params.p?.path === "string" ? params.p.path : null;
   const meetingId = typeof params.p?.meetingId === "string" ? params.p.meetingId : null;
+  const pinItem = pinned
+    ? { id: "unpin-tab", label: "Unpin tab", onSelect: () => layout.unpinTab(props.api.id) }
+    : { id: "pin-tab", label: "Pin tab", detail: "keep open until unpinned", onSelect: () => layout.pinTab(props.api.id) };
   const copyItems = params.kind === "doc" && path
     ? [
       { id: "copy-reference", label: "Copy reference", detail: `@file:${path}`, onSelect: () => copyText(`@file:${path}`) },
@@ -89,7 +99,7 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
         if (e.button !== 1) return;
         e.preventDefault();
         e.stopPropagation();
-        props.api.close();
+        if (!pinned) props.api.close();
       }}
       onAuxClick={(e) => {
         if (e.button !== 1) return;
@@ -99,23 +109,33 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (copyItems.length === 0) {
-          setMenu(null);
-          return;
-        }
         setMenu({ x: e.clientX, y: e.clientY });
       }}
       style={{ display: "flex", alignItems: "center", height: "100%" }}
     >
-      <span className="dv-default-tab-content" style={{ fontStyle: preview ? "italic" : "normal" }}>{title}</span>
-      <span
-        className="dv-default-tab-action"
-        role="button"
-        aria-label="Close tab"
+      {/* left-click pin toggle: always visible so pinning is one click (pinned = solid accent) */}
+      <span role="button" aria-label={pinned ? "Unpin tab" : "Pin tab"}
+        title={pinned ? "Pinned — click to unpin" : "Pin tab (keeps it open until unpinned)"}
         onPointerDown={(e) => e.preventDefault()}
-        onClick={(e) => { e.stopPropagation(); props.api.close(); }}
-      >×</span>
-      {menu && copyItems.length > 0 && <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={copyItems} />}
+        onClick={(e) => { e.stopPropagation(); if (pinned) layout.unpinTab(props.api.id); else layout.pinTab(props.api.id); }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.opacity = pinned ? "1" : "0.45"; }}
+        style={{ display: "flex", alignItems: "center", marginRight: 5, cursor: "pointer",
+          color: pinned ? "var(--blue)" : "var(--t3)", opacity: pinned ? 1 : 0.45 }}>
+        <Icon name="pin" size={11} />
+      </span>
+      <span className="dv-default-tab-content" style={{ fontStyle: preview ? "italic" : "normal" }}>{title}</span>
+      {/* Chrome semantics: a pinned tab has no close affordance until unpinned */}
+      {!pinned && (
+        <span
+          className="dv-default-tab-action"
+          role="button"
+          aria-label="Close tab"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={(e) => { e.stopPropagation(); props.api.close(); }}
+        >×</span>
+      )}
+      {menu && <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[pinItem, ...copyItems]} />}
     </div>
   );
 }
@@ -136,9 +156,9 @@ function LeftPane() {
         <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} style={{ borderRadius: 7, display: "block", flex: "none" }} />
         <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)" }}>Vexa <span style={{ fontWeight: 400, color: "var(--t3)" }}>terminal</span></span>
       </div>
-      {/* one non-wrapping row at every sidebar width — overflow scrolls (hidden scrollbar)
-          instead of reflowing into a different-looking two-row layout */}
-      <div className="vx-hscroll" style={{ display: "flex", gap: 3, padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
+      {/* stacked vertically — every list is visible at any sidebar width (no horizontal
+          overflow/scroll), matching the file-tree rows below */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
         {lists.map((l) => (
           <button key={l.id} style={seg(l.id === active?.id)} onClick={() => layout.setActiveList(l.id)} title={l.label}>
             <Icon name={l.icon} size={13} />{l.label}
@@ -184,6 +204,7 @@ function UserProfile() {
         <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
         {email && <div style={{ fontSize: 11, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>}
       </div>
+      <ThemeToggle />
       <button type="button" title="Sign out" onClick={signOut}
         style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>
         <Icon name="logout" size={15} />
@@ -306,7 +327,6 @@ export function Workbench() {
       </div>
 
       <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
-        <ThemeToggle />
         <div style={{ flex: 1 }} />
         <button onClick={() => layout.resetLayout()} style={{ padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }} title="Reset layout">reset layout</button>
       </footer>

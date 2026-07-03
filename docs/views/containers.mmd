@@ -4,6 +4,7 @@ flowchart LR
     bot["bot"]
     desktop["desktop"]
     meeting_api["meeting-api"]
+    mcp["mcp"]
     transcription["transcription"]
     segments_table["transcription_segments (table)"]
   end
@@ -27,6 +28,8 @@ flowchart LR
     minio["minio"]
   end
   slim["slim"]
+  dashboard["dashboard"]
+  extension["extension"]
   terminal["terminal"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
@@ -34,6 +37,7 @@ flowchart LR
   meeting_api -->|"HTTPS"| minio
   meeting_api -->|"HTTPS"| runtime
   agent_api -->|"HTTPS"| runtime
+  mcp -->|"HTTPS"| gateway
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
   gateway -->|"HTTPS"| admin_api
@@ -41,3 +45,5 @@ flowchart LR
   terminal -->|"HTTPS"| gateway
   terminal -->|"WebSocket"| gateway
   slim -->|"HTTPS"| gateway
+  dashboard -->|"WebSocket"| gateway
+  extension -->|"WebSocket"| gateway
