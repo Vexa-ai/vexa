@@ -12,6 +12,9 @@ dependencies = [
     "referencing>=0.30,<0.40",
     "PyYAML>=6,<7",
     "redis>=5,<6",
+    # llm/ completion adapters (openai-compat + anthropic) speak raw HTTP; the worker image installs
+    # base deps only, so the LLM port's client must live here, not in a group.
+    "httpx>=0.27,<1",
 ]
 
 [dependency-groups]
@@ -25,7 +28,7 @@ control-plane = [
 worker = []
 # tests (run with the ambient interpreter, not in either image). Tests exercise the control-plane
 # surface (FastAPI app), so the test env pulls in the control-plane group too.
-dev = ["pytest>=8,<9", "pytest-asyncio>=0.23,<1", "fakeredis>=2.20,<3", "httpx>=0.27,<1", {include-group = "control-plane"}]
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.23,<1", "fakeredis>=2.20,<3", {include-group = "control-plane"}]
 
 [tool.uv]
 package = false

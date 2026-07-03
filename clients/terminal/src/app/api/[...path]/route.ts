@@ -4,7 +4,7 @@
  *  Path-based routing (the architecture seam — two domains behind ONE authenticated edge, the gateway):
  *    • meetings · transcripts · bots  → the gateway ROOT paths (/meetings, /transcripts/{…}, /bots),
  *      where meeting-api is fronted.
- *    • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /api/*
+ *    • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
  *      prefix, where agent-api is fronted.
  *  BOTH carry the per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY). The gateway
  *  resolves it → user and injects X-User-Id downstream, so agent-api derives `subject` from identity
@@ -23,7 +23,7 @@ const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replac
 
 // Two domains behind ONE authenticated edge (the gateway):
 //   • meetings · transcripts · bots  → the gateway ROOT (/meetings, …) — meeting-api behind it.
-//   • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /api/*
+//   • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
 //     prefix — agent-api behind it.
 // BOTH carry the per-user X-API-Key; the gateway resolves it → user and injects X-User-Id downstream,
 // so the client never sends a `subject` (scope is server-derived — P20). agent-api is never reached directly.
@@ -32,7 +32,7 @@ const MEETINGS_DOMAIN = /^(meetings|transcripts|bots)(\/|$)/;
 /** Resolve the upstream URL + headers for a captured /api/<path...> request. Every call carries the
  *  per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY) to the single gateway edge. */
 async function upstreamFor(path: string, search: string): Promise<{ url: string; headers: HeadersInit }> {
-  const base = MEETINGS_DOMAIN.test(path) ? `${GATEWAY_URL}/${path}` : `${GATEWAY_URL}/api/${path}`;
+  const base = MEETINGS_DOMAIN.test(path) ? `${GATEWAY_URL}/${path}` : `${GATEWAY_URL}/agent/${path}`;
   return { url: `${base}${search}`, headers: { "X-API-Key": await resolveApiKey() } };
 }
 
@@ -80,4 +80,6 @@ type Ctx = { params: Promise<{ path: string[] }> };
 
 export const GET = (req: NextRequest, ctx: Ctx) => forward(req, ctx.params);
 export const POST = (req: NextRequest, ctx: Ctx) => forward(req, ctx.params);
+export const PUT = (req: NextRequest, ctx: Ctx) => forward(req, ctx.params);
+export const PATCH = (req: NextRequest, ctx: Ctx) => forward(req, ctx.params);
 export const DELETE = (req: NextRequest, ctx: Ctx) => forward(req, ctx.params);

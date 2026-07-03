@@ -129,7 +129,7 @@ services:
     env_file:
       - .env
     environment:
-      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
+      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:v012}
       # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
@@ -329,6 +329,10 @@ services:
     build:
       context: ../../clients/terminal
       dockerfile: Dockerfile
+      args:
+        # Google Analytics 4 measurement id, baked into the client bundle at build time (NEXT_PUBLIC_*).
+        # Set GA_MEASUREMENT_ID in .env, then rebuild the terminal image. Empty → GA stays off.
+        NEXT_PUBLIC_GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
     image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"
@@ -346,6 +350,17 @@ services:
       # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
       # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
+      # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
+      # secret to expose that sign-in button on the login page; leave empty to hide it (the dev
+      # type-any-email login still works). Register the redirect URI in the provider console:
+      #   Google    → ${NEXTAUTH_URL}/api/auth/callback/google
+      #   Microsoft → ${NEXTAUTH_URL}/api/auth/callback/microsoft
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      # Microsoft tenant: "common" = work/school + personal accounts; or a specific tenant id for org-only.
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 10s

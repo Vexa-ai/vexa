@@ -777,6 +777,7 @@ name = "vexa-agent"
 version = "0.12.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -794,7 +795,6 @@ control-plane = [
 dev = [
     { name = "fakeredis" },
     { name = "fastapi" },
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "python-multipart" },
@@ -803,6 +803,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "jsonschema", specifier = ">=4,<5" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pydantic-settings", specifier = ">=2,<3" },
@@ -820,7 +821,6 @@ control-plane = [
 dev = [
     { name = "fakeredis", specifier = ">=2.20,<3" },
     { name = "fastapi", specifier = ">=0.110,<1" },
-    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "pytest", specifier = ">=8,<9" },
     { name = "pytest-asyncio", specifier = ">=0.23,<1" },
     { name = "python-multipart", specifier = ">=0.0.31,<1" },

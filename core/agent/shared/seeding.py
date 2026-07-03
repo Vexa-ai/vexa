@@ -20,9 +20,11 @@ from pathlib import Path
 REQUIRED_SEED_PATHS = ("CLAUDE.md",)
 
 # The seeds ROOT is a registry of named templates — one validated seed per subdir
-# (``workspace-seeds/<name>/``). Today only ``default`` ships; adding a flavor (e.g. a business
-# workspace) is a new subdir, no code change. ``resolve_seed_dir`` is the single selection seam.
-DEFAULT_TEMPLATE = "default"
+# (``workspace-seeds/<name>/``). Flavors today: ``finos`` (the default — a FINOS-ecosystem knowledge
+# graph) and ``default`` (a bare scaffold, still selectable via ``VEXA_DEFAULT_TEMPLATE=default`` or an
+# explicit ``VEXA_WORKSPACE_SEED_DIR``). Adding a flavor is a new subdir, no code change.
+# ``resolve_seed_dir`` is the single selection seam.
+DEFAULT_TEMPLATE = "finos"
 DEFAULT_SEEDS_ROOT = "/app/workspace-seeds"
 
 

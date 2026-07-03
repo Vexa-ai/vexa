@@ -11,7 +11,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ seg: string
   const { seg } = await ctx.params;
   try {
     const apiKey = await resolveApiKey();
-    const upstream = await fetch(`${GATEWAY_URL}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
+    const upstream = await fetch(`${GATEWAY_URL}/agent/workspace/${seg.join("/")}${req.nextUrl.search}`, {
       headers: apiKey ? { "X-API-Key": apiKey } : {},
     });
     return new Response(await upstream.text(), {
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ seg: strin
   const { seg } = await ctx.params;
   try {
     const apiKey = await resolveApiKey();
-    const upstream = await fetch(`${GATEWAY_URL}/api/workspace/${seg.join("/")}${req.nextUrl.search}`, {
+    const upstream = await fetch(`${GATEWAY_URL}/agent/workspace/${seg.join("/")}${req.nextUrl.search}`, {
       method: "POST",
       body: req.body,
       headers: {

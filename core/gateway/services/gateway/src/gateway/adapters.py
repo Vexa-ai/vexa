@@ -85,7 +85,7 @@ class AdminApiAuthorizer:
         if user_data:
             auth_headers["x-user-id"] = str(user_data["user_id"])
             auth_headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-            auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
+            auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
         try:
             resp = await self._client.post(
                 f"{self._meeting_api_url}/ws/authorize-subscribe",

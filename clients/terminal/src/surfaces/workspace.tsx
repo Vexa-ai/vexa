@@ -11,7 +11,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Markdown } from "../ui-kit/Markdown";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, type GitState, type AttachedWorkspaces } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, type GitState, type AttachedWorkspaces } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path } });
 
@@ -158,14 +158,32 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<{ repo: string; ref: string; token: string } | null>(null);  // non-null = attach form shown
+  const [renaming, setRenaming] = useState<string | null>(null);  // slug whose name is being edited inline
+  const cancelled = useRef(false);  // Escape vs Enter/blur on the rename input (blur fires for both)
   const load = () => { void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e))); };
   useEffect(() => { if (open) load(); }, [open]);
   const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_WS_OPEN, n ? "1" : "0"); return n; });
 
-  const doSwap = async (repo: string | undefined, ref?: string, token?: string) => {
+  const doSwap = async (repo: string | undefined, ref?: string, token?: string, fresh?: boolean) => {
     setBusy(true); setErr(null);
-    try { await swapWorkspace(repo, ref, token); load(); onSwapped(); setForm(null); }
+    try { await swapWorkspace(repo, ref, token, fresh); load(); onSwapped(); setForm(null); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  // Swap to an existing slot by SLUG (restores the parked tree, no re-clone — reaches no-repo slots like
+  // the seed and the 'start fresh' backup). `fresh` (seed only) rebuilds the default from the template.
+  const swapToSlot = async (slug: string, fresh?: boolean) => {
+    setBusy(true); setErr(null);
+    try { await swapWorkspace(undefined, undefined, undefined, fresh, slug); load(); onSwapped(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const doRename = async (slug: string, name: string) => {
+    setBusy(true); setErr(null);
+    try { setView(await renameWorkspace(slug, name.trim())); setRenaming(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); setRenaming(null); }
     finally { setBusy(false); }
   };
 
@@ -183,14 +201,36 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
       {open && (<>
         {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
-          const active = view.active === slug;
+          // A never-swapped subject (view.active === null) is already ON the seed, so the seed row is
+          // the ACTIVE one — render it active + non-clickable. Without this it shows as ○ and clicking
+          // it triggers a destructive swap that parks the live workspace and swaps in a blank re-seed.
+          const active = view.active === slug || (!view.active && slug === "seed");
+          const isRenaming = renaming === slug;
+          const display = meta.name || label(slug, meta.repo);
           return (
-            <div key={slug} onClick={() => !active && !busy && doSwap(slug === "seed" ? undefined : meta.repo ?? undefined, meta.ref ?? undefined)}
-              title={active ? "Active workspace" : "Swap to this workspace"}
-              style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderRadius: 6, cursor: active ? "default" : "pointer", fontSize: 12, opacity: busy ? 0.6 : 1 }}
-              onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+            <div key={slug}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
+              onMouseEnter={(e) => { if (!active && !isRenaming) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               <span style={{ width: 14, flex: "none", color: active ? "var(--green)" : "var(--t3)" }}>{active ? "●" : "○"}</span>
-              <span style={{ color: active ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label(slug, meta.repo)}</span>
+              {isRenaming ? (
+                <input autoFocus defaultValue={meta.name ?? ""} placeholder="display name" disabled={busy}
+                  onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
+                  onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(null); } else { void doRename(slug, e.currentTarget.value); } }}
+                  style={{ flex: 1, fontSize: 12, padding: "3px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, color: "var(--t1)" }} />
+              ) : (
+                <span onClick={() => !active && !busy && swapToSlot(slug)}
+                  title={active ? "Active workspace" : "Swap to this workspace"}
+                  style={{ flex: 1, color: active ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: active ? "default" : "pointer" }}>{display}</span>
+              )}
+              {!isRenaming && (
+                <span onClick={() => setRenaming(slug)} title="Rename (display label only)"
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 11 }}>✎</span>
+              )}
+              {!isRenaming && slug === "seed" && !busy && (
+                <span onClick={() => { if (window.confirm("Start fresh? The default workspace is rebuilt from the template. Your current default is kept under a recoverable backup ('default (previous)').")) void swapToSlot("seed", true); }}
+                  title="Start fresh — rebuild the default from the template (current default kept as a backup)"
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 12 }}>↻</span>
+              )}
             </div>
           );
         })}

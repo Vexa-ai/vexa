@@ -2,11 +2,12 @@
  *  error throws, a malformed git body throws (never reaches GitSection as a fake GitState), and a 404
  *  file read is the one legit "empty" → null. */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit } from "../workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, swapWorkspace, renameWorkspace } from "../workspaceApi";
 import { ApiError } from "../apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 const lastUrl = () => String(fetchMock.mock.calls.at(-1)![0]);
+const lastBody = () => JSON.parse(String((fetchMock.mock.calls.at(-1)![1] as RequestInit).body));
 function mock(ok: boolean, status: number, body: unknown) {
   fetchMock = vi.fn(async () => ({ ok, status, json: async () => body }) as unknown as Response);
   globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -48,5 +49,19 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
   it("readWorkspaceFile: a NON-404 error throws (loud)", async () => {
     mock(false, 500, { detail: "boom" });
     await expect(readWorkspaceFile("x.md")).rejects.toBeInstanceOf(ApiError);
+  });
+  it("swapWorkspace POSTs repo/ref/token + slug + fresh (start-fresh & slug-targeting reach the body)", async () => {
+    mock(true, 200, { swapped: true });
+    await swapWorkspace(undefined, undefined, undefined, true, "seed");   // start fresh, by slug
+    expect(lastUrl()).toBe("/api/workspace/swap");
+    expect(lastBody()).toEqual({ repo: null, ref: null, slug: "seed", token: null, fresh: true });
+    await swapWorkspace("https://h/r.git", "dev", "TOK");                 // attach a repo
+    expect(lastBody()).toEqual({ repo: "https://h/r.git", ref: "dev", slug: null, token: "TOK", fresh: false });
+  });
+  it("renameWorkspace POSTs {slug,name} to /api/workspace/rename", async () => {
+    mock(true, 200, { active: "seed", slots: {} });
+    await renameWorkspace("seed", "Home");
+    expect(lastUrl()).toBe("/api/workspace/rename");
+    expect(lastBody()).toEqual({ slug: "seed", name: "Home" });
   });
 });

@@ -51,6 +51,14 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
     if settings.meeting_model:
         env["VEXA_MEETING_MODEL"] = settings.meeting_model
+    # llm-module dials (non-secret): completion provider + deployment-default model + the optional
+    # operator model gate. The SECRETS (VEXA_LLM_API_KEY/BASE_URL) are brokered by the runtime.
+    if settings.llm_provider:
+        env["VEXA_LLM_PROVIDER"] = settings.llm_provider
+    if settings.llm_model:
+        env["VEXA_LLM_MODEL"] = settings.llm_model
+    if settings.model_allowlist:
+        env["VEXA_MODEL_ALLOWLIST"] = settings.model_allowlist
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":

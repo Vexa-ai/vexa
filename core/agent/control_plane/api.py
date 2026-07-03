@@ -32,9 +32,9 @@ from pydantic import BaseModel
 from control_plane import routines as routines_mod
 from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
-from shared.agent_config import DEFAULT_MEETING_MODEL, load_meeting_config
+from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
-from control_plane.workspace_attach import CloneError, attached_workspaces, swap_workspace
+from control_plane.workspace_attach import CloneError, attached_workspaces, rename_workspace, swap_workspace
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from shared.ports import SchedulerPort, StreamReader
@@ -190,6 +190,17 @@ class ChatBody(BaseModel):
     active: Optional[dict] = None
 
 
+class ResetBody(BaseModel):
+    """Body for POST /api/chat/reset — the docs (api/agent.mdx) say it's just ``{session?}``. reset only
+    needs the session; ``prompt``/``subject``/``active`` are accepted-and-ignored so a client reusing the
+    chat-body shape doesn't 422 (reset must NOT require a prompt the way the chat turn does)."""
+    model_config = {"extra": "forbid"}
+    session: Optional[str] = None
+    subject: Optional[str] = None
+    prompt: Optional[str] = None
+    active: Optional[dict] = None
+
+
 class RoutineCreate(BaseModel):
     """The Routines surface / ``/routine`` create form — compiles to a routine.v1 + a schedule.v1 job."""
     model_config = {"extra": "forbid"}
@@ -210,7 +221,16 @@ class WorkspaceSwapBody(BaseModel):
     model_config = {"extra": "forbid"}
     repo: Optional[str] = None   # git URL to clone (None → swap back to the seeded default)
     ref: Optional[str] = None    # branch/tag/sha to check out (defaults to main)
+    slug: Optional[str] = None   # target a parked slot DIRECTLY (e.g. a no-repo backup) — restores, no re-clone
+    fresh: bool = False          # swap-to-seed only: rebuild the default from template (start fresh) vs restore the park
     token: Optional[str] = None  # access token for a PRIVATE repo — used for the clone only, never stored (P15)
+
+
+class WorkspaceRenameBody(BaseModel):
+    """Set a workspace slot's DISPLAY name (label only — the slug/parked dir are unchanged). Empty clears it."""
+    model_config = {"extra": "forbid"}
+    slug: str
+    name: Optional[str] = None
 
 
 class MeetingStart(BaseModel):
@@ -387,9 +407,13 @@ def create_app(
     @app.get("/api/models")
     def models(request: Request):
         subject = subject_of(request)
-        streaming_model = settings.meeting_model or DEFAULT_MEETING_MODEL
+        streaming_model = settings.meeting_model or default_meeting_model() or "default"
         try:
-            streaming_model = load_meeting_config(wsr.workspace_dir(subject)).model
+            # A workspace-pinned model (free string) wins; an unpinned workspace ("" — deployment
+            # default) must NOT blank the label out.
+            workspace_model = load_meeting_config(wsr.workspace_dir(subject)).model
+            if workspace_model:
+                streaming_model = workspace_model
         except ValueError:
             pass
         chat_model = settings.agent_model or "default"
@@ -517,7 +541,7 @@ def create_app(
         )
 
     @app.post("/api/chat/reset")
-    def chat_reset(body: ChatBody, request: Request):
+    def chat_reset(body: ResetBody, request: Request):
         """Drop a conversation thread: remove it from the index AND delete its continuity file so a
         future turn on the same name starts a fresh conversation (not a resume of the old one)."""
         subject = subject_of(request)
@@ -733,9 +757,12 @@ def create_app(
         tree takes effect on the subject's next turn — no dispatch change needed."""
         subject = subject_of(request)
         try:
-            result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main", token=body.token or None)
+            result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                    slug=body.slug or None, fresh=body.fresh, token=body.token or None)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown workspace")
         except CloneError as exc:
             # message is already token-redacted (P15); private repo without/with a bad token lands here.
             raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
@@ -749,6 +776,18 @@ def create_app(
             "parked": result.parked_slug,
             "nested": result.nested,
         }
+
+    @app.post("/api/workspace/rename")
+    def ws_rename(request: Request, body: WorkspaceRenameBody = Body(...)):
+        """Rename a workspace slot — a DISPLAY label only. The slug and the parked tree are unchanged, so
+        swap-back and repo re-attach keep matching. Pass an empty ``name`` to clear the label."""
+        subject = subject_of(request)
+        try:
+            return rename_workspace(wsr.root, subject, body.slug, body.name)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown workspace")
 
     @app.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):

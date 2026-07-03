@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.text();
     const apiKey = await resolveApiKey();
-    const upstream = await fetch(`${GATEWAY_URL}/api/chat`, {
+    const upstream = await fetch(`${GATEWAY_URL}/agent/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(apiKey ? { "X-API-Key": apiKey } : {}) },
       body,

@@ -3,7 +3,7 @@ title: "Meetings API"
 description: "Send a bot to a meeting, get the real-time transcript, manage the bot, retrieve per-speaker audio."
 ---
 
-The Meetings API sends a bot into a call and returns its transcript in real time. It is the public Vexa
+The Meetings API sends a bot into a call and returns its transcript in real time. It is the public Vexum
 API — the same surface whether you use the hosted service or self-host.
 
 ## Base URL & auth
@@ -95,6 +95,12 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
   -d '{"text":"Thanks everyone, wrapping up."}'
 ```
 
+<Note>
+**Config** (`PUT …/config`, change language/task mid-call) and **speak** (`POST …/speak`, TTS into the
+call) ride the live bot-control plane and are not yet wired in the v0.12 open-core stack — they currently
+return `404`. Send-a-bot, stop, **running bots** (`GET /bots/status`), list, and transcripts are live.
+</Note>
+
 ```bash List meetings — GET /meetings
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
 ```
@@ -137,6 +143,6 @@ The master metadata returns a `raw_url` pointing at the byte stream
 
 ---
 
-In Vexa's [runtime](/core/runtime) terms, a bot is a browser [container](/concepts#container); the
+In Vexum's [runtime](/core/runtime) terms, a bot is a browser [container](/concepts#container); the
 transcript it produces compiles into the [workspace](/concepts#workspace), where
 [agents](/core/agents) act on it. See [Meetings](/core/meetings).

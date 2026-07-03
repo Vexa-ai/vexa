@@ -109,7 +109,7 @@ def create_app(
             "user_id": user_data["user_id"],
             "email": user_data.get("email", ""),
             "scopes": user_data.get("scopes", []),
-            "max_concurrent": user_data.get("max_concurrent", 1),
+            "max_concurrent": user_data.get("max_concurrent", 3),
         }
 
     # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy
@@ -191,7 +191,7 @@ def create_app(
         headers["x-api-key"] = client_key
         headers["x-user-id"] = str(user_id)
         headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-        headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
+        headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
         # Per-user webhook config (identity owns it; /internal/validate returns it from user.data).
         # Forwarded so bot_spawn persists it into meeting.data → the lifecycle callback delivers from
         # there, with NO cross-domain users-table read (the carve's principled path; main read the user
@@ -310,9 +310,18 @@ def create_app(
     async def meeting(meeting_id: int, request: Request):
         return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)
 
-    # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under /api/* so the SAME edge
-    # resolves key → user and injects X-User-Id; agent-api derives `subject` from it (never the client).
-    # The terminal therefore talks ONLY to the gateway (one authenticated edge, clean SoC).
+    # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
+    # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
+    @app.put("/meetings/{platform}/{native_meeting_id}/intent")
+    async def set_meeting_intent(platform: str, native_meeting_id: str, request: Request):
+        return await _forward(
+            "PUT", _meeting(f"/meetings/{platform}/{native_meeting_id}/intent"), request
+        )
+
+    # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under the canonical /agent/*
+    # prefix so the SAME edge resolves key → user and injects X-User-Id; agent-api derives `subject`
+    # from it (never the client). The terminal therefore talks ONLY to the gateway (one authenticated
+    # edge, clean SoC). _agent() maps the public /agent/<path> to agent-api's internal /api/<path>.
     def _agent(path: str) -> str:
         return f"{agent_api_url}/api/{path}"
 
@@ -334,34 +343,21 @@ def create_app(
 
         return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)
 
-    @app.post("/api/chat")
+    # The agent domain lives under the canonical /agent/* prefix (peer to the meetings domain). The SSE
+    # routes (chat turn · live meeting feed) are STREAMED and declared BEFORE the catch-all so they win;
+    # everything else (sessions · history · routines · workspace tree/file/git/upload · models) is
+    # request/response JSON → the buffered _forward, with X-User-Id injected. All carry the path/method/
+    # query/body verbatim to agent-api's matching /api/<path> via _agent().
+    @app.post("/agent/chat")
     async def agent_chat(request: Request):
         return await _forward_stream("POST", _agent("chat"), request)
 
-    @app.get("/api/meeting/stream")
+    @app.get("/agent/meeting/stream")
     async def agent_meeting_stream(request: Request):
         return await _forward_stream("GET", _agent("meeting/stream"), request)
 
-    # Everything else in the agent domain (sessions · history · routines · workspace tree/file/git/upload ·
-    # models) is request/response JSON → the buffered _forward, with X-User-Id injected. The catch-all
-    # carries the path + method + query + body verbatim to agent-api's matching /api/<path>.
-    @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+    @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def agent_proxy(path: str, request: Request):
-        return await _forward(request.method, _agent(path), request)
-
-    # ---- symmetric domain namespace (peer to the meetings domain): /agent/* is the canonical agent
-    # prefix. /api/* above is kept as a DEPRECATED alias so existing clients don't break; new clients
-    # use /agent/*. Both resolve to the SAME agent-api /api/<path> target via _agent().
-    @app.post("/agent/chat")
-    async def agent_chat_v2(request: Request):
-        return await _forward_stream("POST", _agent("chat"), request)
-
-    @app.get("/agent/meeting/stream")
-    async def agent_meeting_stream_v2(request: Request):
-        return await _forward_stream("GET", _agent("meeting/stream"), request)
-
-    @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-    async def agent_proxy_v2(path: str, request: Request):
         return await _forward(request.method, _agent(path), request)
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----

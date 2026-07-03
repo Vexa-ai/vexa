@@ -11,6 +11,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# Google Analytics measurement id (G-XXXXXXXXXX). NEXT_PUBLIC_* is inlined into the client bundle at
+# BUILD time, so it must be present BEFORE `next build` (pass via --build-arg / compose build.args).
+# Empty → GA renders nothing (opt-in). Changing it requires a rebuild.
+ARG NEXT_PUBLIC_GA_MEASUREMENT_ID=""
+ENV NEXT_PUBLIC_GA_MEASUREMENT_ID=$NEXT_PUBLIC_GA_MEASUREMENT_ID
 # Regular build (not standalone): produces .next served by the custom server in production.
 RUN npm run build
 

@@ -37,3 +37,12 @@ conversation from the durable git folder, no warm container needed.
 claude turn → a `workspace.v1`-governed commit → events on `unit:<id>:out`. Code:
 `core/agent/services/agent-api/src/agent_api/worker.py` (the harness),
 `core/runtime/src/runtime_kernel/docker_backend.py` (mount + credential brokering).</Note>
+
+## The same run, any substrate
+
+The flow above is the **Docker** path (the open-core default). agent-api never spawns anything itself —
+it hands the [Runtime](/core/runtime) a `runtime.v1` workload, and the kernel's pluggable backend turns
+that *same* workload into a child process, a container, or a **Kubernetes Pod** (`RUNTIME_BACKEND=k8s`)
+— same lifecycle, same dispatch, same worker. Only *how* the container is created changes; the run does
+not. The per-backend mechanics — and what the k8s path does and does **not** wire
+up yet — are in [Runtime → Where it runs](/core/runtime#where-it-runs).

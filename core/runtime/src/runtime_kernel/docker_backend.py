@@ -142,8 +142,9 @@ class DockerBackend:
         if mount_src and mount_tgt:
             binds.append(f"{mount_src}:{mount_tgt}")
 
-        # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only; API-style
-        # Anthropic/OpenRouter env is copied from the trusted runtime service into spawned workers.
+        # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only;
+        # API-style provider env (the VEXA_LLM_* completion dials + the claude-code runner's
+        # ANTHROPIC_*) is copied from the trusted runtime service into spawned workers.
         creds = os.getenv("HOST_CLAUDE_CREDENTIALS")
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
@@ -158,6 +159,16 @@ class DockerBackend:
 
         spawn_env = dict(env)
         for key in (
+            # llm-module dials (provider-agnostic): completion endpoint/credential/model + the
+            # harness runner selection. Dispatch-stamped values win (`key not in spawn_env`).
+            "VEXA_LLM_PROVIDER",
+            "VEXA_LLM_BASE_URL",
+            "VEXA_LLM_API_KEY",
+            "VEXA_LLM_MODEL",
+            "VEXA_LLM_MAX_TOKENS",
+            "VEXA_MODEL_ALLOWLIST",
+            "VEXA_RUNNER",
+            # claude-code harness credentials (that adapter's concern only)
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL",

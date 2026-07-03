@@ -80,7 +80,7 @@ def test_rate_limit_does_not_apply_when_unconfigured():
 
 
 @pytest.mark.xfail(
-    reason="FINDING terminal-p20-complete-mediation: GET /api/meeting/stream forwards WITHOUT a "
+    reason="FINDING terminal-p20-complete-mediation: GET /agent/meeting/stream forwards WITHOUT a "
     "per-meeting ownership check (gateway app.py agent_meeting_stream → _forward_stream). Any "
     "authenticated user can stream any meeting's live transcript by passing its native id — the "
     "WS /ws path authorizes via authorize_subscribe, the SSE path does not. Fix is lane:contract "
@@ -93,7 +93,7 @@ def test_meeting_stream_denies_a_meeting_the_user_does_not_own():
     own must be denied (403), not silently forwarded. auth_map is EMPTY → the user owns no meeting."""
     client, _ = _client(authorizer=FakeAuthorizer(auth_map={}))
     r = client.get(
-        "/api/meeting/stream",
+        "/agent/meeting/stream",
         headers=AUTH,
         params={"meeting_id": "someone-elses-native", "platform": "google_meet",
                 "session_uid": "someone-elses-native"},
@@ -111,6 +111,18 @@ def test_identity_headers_injected_and_spoof_stripped():
     assert fwd["x-user-id"] == "7", "must reflect the resolved user, not the spoofed header"
     assert fwd["x-user-scopes"] == "bot,tx,browser"
     assert fwd["x-api-key"] == VALID_KEY
+
+
+def test_meeting_intent_put_forwards_to_meeting_api():
+    """The Meetings surface's Schedule/Cancel action PUTs the user-owned intent; the gateway must
+    forward it verbatim to meeting-api's PUT /meetings/{platform}/{native}/intent. Regression: this
+    route was missing, so the action 404'd at the gateway (and 405'd at the terminal proxy)."""
+    client, downstream = _client()
+    r = client.put("/meetings/google_meet/abc/intent", headers=AUTH, json={"intent": "scheduled"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "PUT"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc/intent")
+    assert "meeting-api" in downstream.last["url"]
 
 
 def test_downstream_target_url_matches_route_table():

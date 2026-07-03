@@ -75,7 +75,7 @@ async def get_current_user(api_key: str = Security(USER_KEY_HEADER),
 class UserCreate(BaseModel):
     email: str
     name: Optional[str] = None
-    max_concurrent_bots: int = 1
+    max_concurrent_bots: int = 3
 
 
 class UserResponse(BaseModel):

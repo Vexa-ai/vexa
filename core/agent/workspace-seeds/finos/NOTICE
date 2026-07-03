@@ -1,0 +1,25 @@
+Vexa FINOS Knowledge Graph (workspace seed)
+Copyright 2026 Vexa AI
+
+This product includes a curated knowledge graph of the FINOS (Fintech Open Source
+Foundation) ecosystem, assembled from publicly available FINOS sources. FINOS and
+the FINOS projects referenced here are projects of the Fintech Open Source Foundation
+(a Linux Foundation project); their source repositories are published under their own
+open-source licenses (predominantly Apache-2.0). See SOURCES.md for the per-entity
+provenance (every entity carries its own `Source:` citation).
+
+"FINOS" and the names of FINOS projects, companies, and individuals referenced in this
+knowledge graph are the property of their respective owners. They are used here for
+factual, descriptive purposes only; this project is not affiliated with or endorsed by
+FINOS or the Linux Foundation.
+
+Licensing of this distribution:
+  - Code and scaffolding (CLAUDE.md, agents/, skills/, views/, routines/, config):
+      Apache License 2.0 — see LICENSE.
+  - Knowledge-graph content under kg/ (the factual entity notes):
+      Creative Commons Attribution 4.0 International (CC BY 4.0) —
+      https://creativecommons.org/licenses/by/4.0/
+    Attribute to "Vexa AI — FINOS Knowledge Graph" and preserve the per-entity
+    `Source:` citations.
+
+Personal data: see the "Privacy / personal data" section of SOURCES.md.

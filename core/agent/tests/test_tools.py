@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import contracts
-from worker.decision_claude import build_argv
+from llm.claude_code import build_argv
 from shared.tools import ToolRegistry, apply_tool_grant
 
 _EMAIL_TOOL = {

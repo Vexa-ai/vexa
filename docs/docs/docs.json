@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "Vexa",
+  "name": "Vexum",
   "theme": "mint",
   "colors": { "primary": "#0d9488", "light": "#2dd4bf", "dark": "#0f766e" },
   "navigation": {

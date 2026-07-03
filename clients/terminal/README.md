@@ -15,11 +15,11 @@ same-origin server runtime (SSE relay, no CORS).
 |---|---|---|---|
 | calls | agent-api | `POST /api/chat` (SSE proxy → `${AGENT_API}/api/chat`) | a chat now-dispatch; SSE relay of the agent's output stream |
 | calls | agent-api | `GET /api/sessions?subject=` | a subject's chat-session list (resume) |
-| calls | agent-api | `GET/POST /api/routines`, `DELETE /api/routines/{id}` | list / create / delete a `routine.v1` cron job |
+| calls | agent-api | `GET/POST /api/routines`, `PATCH /api/routines/{name}/enabled`, `DELETE /api/routines/{id}` | list / create / enable·disable / delete a `routine.v1` cron job |
 | produces | agent-api | `POST /api/events` (→ `${AGENT_API}/events`) | an `event.v1` Event → a `unit.v1` Invocation → Dispatcher |
 | calls | meeting-api (via gateway) | `GET /meetings` + `WS /ws` (`u:{user}:meetings`) | the user's meetings (live + past); live status deltas over the socket (no poll) |
 | calls | agent-api | `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE, `EventSource`) | live transcript + copilot output wire |
-| calls | meeting-api (via gateway) | `POST /bots`, `DELETE /bots/{platform}/{native}` | launch / stop a self-hosted meeting bot |
+| calls | meeting-api (via gateway) | `POST /bots`, `DELETE /bots/{platform}/{native}`, `PUT /meetings/{platform}/{native}/intent` | launch / stop a self-hosted meeting bot; schedule·cancel its scheduling intent |
 | calls | agent-api | `GET /api/workspace/{tree,file,git}?subject=` (git polled 5s) | workspace tree, file content, the agent's real git state |
 | consumes | browser | dockview workbench + surfaces registry (`src/surfaces/index.tsx`) | LEFT lists, CENTER tab-kinds, RIGHT context-kinds, `/`-skill commands |
 

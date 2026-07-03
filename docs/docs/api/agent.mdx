@@ -3,14 +3,14 @@ title: "Agent API"
 description: "The control plane — dispatch a unit, stream a chat turn, manage routines, read the workspace."
 ---
 
-The agent API is Vexa's **control plane**. It turns triggers into [dispatches](/core/agents) and streams
+The agent API is Vexum's **control plane**. It turns triggers into [dispatches](/core/agents) and streams
 their output; it does no execution itself — it validates and hands off to the [runtime](/core/runtime).
 Endpoints are fronted by the gateway, which carries authentication and per-route scopes; the service
 itself is internal.
 
 <Note>
 **Identity is server-derived.** Public clients reach these routes through the gateway under the
-canonical prefix **`/agent/*`** (the legacy **`/api/*`** alias still resolves). The gateway resolves your
+canonical prefix **`/agent/*`**. The gateway resolves your
 `X-API-Key` → user and injects `X-User-Id`; agent-api derives the workspace/chat/quota **`subject`** from
 that header (P20). A `subject` in a request body or query string is **ignored** — never trust the client
 for identity. The `$AGENT_API/api/...` paths below address the internal service directly (which requires

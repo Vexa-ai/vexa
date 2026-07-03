@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 STORE_DIRNAME = ".attached"
 STATE_FILENAME = "state.json"
 SEED_SLOT = "seed"  # the reserved slug for the original template-seeded workspace
+SEED_BACKUP_SLOT = "seed-prev"  # where 'start fresh' tucks the displaced default so it stays recoverable
 
 # Inject the actual clone for tests (a local file repo, no network). Signature: (repo_url, ref, dest, token).
 CloneFn = Callable[[str, str, Path, Optional[str]], None]
@@ -161,6 +162,8 @@ def swap_workspace(
     repo_url: Optional[str],
     ref: str = "main",
     *,
+    slug: Optional[str] = None,
+    fresh: bool = False,
     token: Optional[str] = None,
     clone: CloneFn = _git_clone,
 ) -> SwapResult:
@@ -169,16 +172,31 @@ def swap_workspace(
     Parks the currently-active workspace under its slug (kept available), then restores the requested
     repo's parked tree if present, else clones it fresh. ``token`` (optional) authenticates the clone of a
     PRIVATE repo — used only for the network op, never persisted/stored (P15). Idempotent: requesting the
-    already-active repo is a no-op (``swapped=False``)."""
+    already-active repo is a no-op (``swapped=False``).
+
+    ``fresh=True`` (only meaningful when swapping to the seed) is the **start-fresh** path: rebuild the
+    default from the template instead of restoring the parked seed. It is NEVER a no-op — the displaced
+    default (the live tree if we're on it, else the previously-parked seed) is tucked under
+    ``SEED_BACKUP_SLOT`` so it stays recoverable; nothing is destroyed.
+
+    ``slug`` targets a parked slot DIRECTLY (overriding the repo→slug derivation) — the way to swap back
+    to a slot that carries no repo URL (the seed, or a ``SEED_BACKUP_SLOT`` backup). A parked tree is
+    restored (no re-clone); an unknown slug with no repo to clone raises ``KeyError``."""
     rootp = Path(root)
     active_dir = _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
     state = _load_state(store)
 
-    target_slug = SEED_SLOT if not repo_url else _slug(repo_url)
+    target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
+    fresh_seed = bool(fresh) and target_slug == SEED_SLOT  # 'start fresh' only applies to the default
 
-    # No-op: the requested repo is already mounted (and really present on disk).
-    if state.get("active") == target_slug and (active_dir / ".git").exists():
+    # No-op: the requested repo is already mounted (and really present on disk). A never-swapped subject
+    # (state.active is None) is already ON the seed, so swapping to the seed is ALSO a no-op. Without this
+    # guard the live (init-seeded) workspace gets parked under the "seed" slug and replaced by a blank
+    # re-seed — and since the park slug equals the now-active slug, the subject's real data is orphaned.
+    # A 'start fresh' is an explicit rebuild, so it bypasses the no-op (and keeps a recoverable backup).
+    already_on_seed = target_slug == SEED_SLOT and state.get("active") is None
+    if not fresh_seed and (state.get("active") == target_slug or already_on_seed) and (active_dir / ".git").exists():
         slot = state["slots"].get(target_slug, {})
         return SwapResult(subject, target_slug, slot.get("repo"), slot.get("ref"),
                           swapped=False, cloned=False, parked_slug=None)
@@ -189,37 +207,52 @@ def swap_workspace(
     cloned = nested = False
     staged: Path                       # the ready-to-activate tree we'll move into active_dir
     restore = False                    # True == staged is the parked slot itself (swap-back; move, don't rebuild)
-    if parked_target.exists():
+    if not fresh_seed and parked_target.exists():
         staged, restore = parked_target, True
-    elif target_slug == SEED_SLOT:
+    elif target_slug == SEED_SLOT:     # fresh start, or first-ever seed with nothing parked → reseed
         staged = store / ".staging-seed"
         if staged.exists():
             shutil.rmtree(staged)
         _reseed(staged)
-    else:
+    elif repo_url:                     # first attach of this repo → clone it fresh
         staged = store / f".staging-{target_slug}"
         if staged.exists():
             shutil.rmtree(staged)
         cloned, nested = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
+    else:
+        raise KeyError(target_slug)    # asked to restore a slot that isn't parked and has no repo to clone
 
     # ── PHASE 2: COMMIT the swap — only local moves now (low failure risk). Park the live workspace so it
     # stays available to swap back to, then activate the staged tree. ───────────────────────────────────
     parked_slug: Optional[str] = None
     has_active = (active_dir / ".git").exists() or (active_dir.exists() and any(active_dir.iterdir()))
-    if has_active:
+
+    if fresh_seed:
+        # The displaced default goes to SEED_BACKUP_SLOT (recoverable). If we're leaving an attached repo,
+        # that repo is parked under its own slug and the previously-parked seed is what we back up.
+        if has_active and state.get("active") not in (None, SEED_SLOT):
+            parked_slug = state["active"]
+            _park(store, parked_slug, active_dir)
+            state["slots"].setdefault(parked_slug, {"repo": None, "ref": None})
+            _backup_default(store, parked_target, state)   # store/seed → seed-prev (if present)
+        elif has_active:                                    # we're ON the default — the live tree IS it
+            _backup_default(store, active_dir, state)       # active_dir → seed-prev
+        else:
+            _backup_default(store, parked_target, state)    # store/seed → seed-prev (if present)
+            if active_dir.exists():
+                shutil.rmtree(active_dir)                    # empty husk
+    elif has_active:
         parked_slug = state.get("active") or SEED_SLOT  # (never equals target here — that's the no-op above)
-        parked_dir = store / parked_slug
-        if parked_dir.exists():
-            shutil.rmtree(parked_dir)  # supersede a stale park (its live copy was the active one)
-        parked_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(active_dir), str(parked_dir))
+        _park(store, parked_slug, active_dir)
         state["slots"].setdefault(parked_slug, {"repo": None, "ref": None})
     elif active_dir.exists():
         shutil.rmtree(active_dir)  # empty husk — clear the way for the attach
 
     shutil.move(str(staged), str(active_dir))
     if not restore:
-        state["slots"][target_slug] = {"repo": repo_url, "ref": ref, "nested": nested}
+        slot = state["slots"].get(target_slug, {})   # preserve a display name across a content rebuild
+        slot.update({"repo": repo_url, "ref": ref, "nested": nested})
+        state["slots"][target_slug] = slot
 
     state["active"] = target_slug
     _save_state(store, state)
@@ -274,3 +307,52 @@ def _reseed(active_dir: Path) -> None:
         log.warning("seed template %s invalid — seeding a bare workspace", seed_dir)
         seed_dir = None
     seed_workspace(active_dir, seed_dir)
+
+
+def _park(store: Path, slug: str, src: Path) -> None:
+    """Move the live tree ``src`` into its parking slot ``store/slug`` (superseding a stale park there)."""
+    dst = store / slug
+    if dst.exists():
+        shutil.rmtree(dst)  # supersede a stale park (its live copy was the active one)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+
+
+def _backup_default(store: Path, src: Path, state: dict) -> None:
+    """Tuck the displaced default tree ``src`` under ``SEED_BACKUP_SLOT`` so 'start fresh' stays
+    recoverable (one level — a second start-fresh supersedes the prior backup). No-op if ``src`` is
+    missing/empty. The current seed's display name (if any) carries onto the backup."""
+    has_content = src.exists() and ((src / ".git").exists() or any(src.iterdir()))
+    if not has_content:
+        return
+    backup = store / SEED_BACKUP_SLOT
+    if backup.exists():
+        shutil.rmtree(backup)
+    prev_name = state["slots"].get(SEED_SLOT, {}).get("name")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(backup))
+    state["slots"][SEED_BACKUP_SLOT] = {
+        "repo": None, "ref": None,
+        "name": f"{prev_name} (previous)" if prev_name else "default (previous)",
+    }
+
+
+def rename_workspace(root: str | Path, subject: str, slug: str, name: Optional[str]) -> dict:
+    """Set a slot's DISPLAY name — a label only. The slug and the parked directory are unchanged, so
+    swap-back and repo re-attach keep matching by URL. An empty/whitespace ``name`` clears the label
+    (reverting to the default). The reserved seed slot may be named too. Returns the updated view."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    slug = (slug or "").strip()
+    label = (name or "").strip()[:80]
+    if slug != SEED_SLOT and slug not in state["slots"]:
+        raise KeyError(slug)  # unknown workspace
+    slot = state["slots"].setdefault(slug, {"repo": None, "ref": None})
+    if label:
+        slot["name"] = label
+    else:
+        slot.pop("name", None)
+    _save_state(store, state)
+    return state

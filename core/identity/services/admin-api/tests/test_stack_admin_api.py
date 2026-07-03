@@ -104,6 +104,19 @@ def test_golden_identity_flow(client):
     assert r.status_code == 401
 
 
+def test_new_user_defaults_to_3_bots(client):
+    """A user created without an explicit limit gets the product default of 3
+    (raised from 1 — see schema/MIGRATION-0003). /internal/validate surfaces it."""
+    r = client.post("/admin/users", headers=_admin(), json={"email": "default-limit@vexa.ai"})
+    assert r.status_code in (200, 201), r.text
+    assert r.json()["max_concurrent_bots"] == 3
+    token = client.post(f"/admin/users/{r.json()['id']}/tokens?scope=bot",
+                        headers=_admin()).json()["token"]
+    v = client.post("/internal/validate", headers={"X-Internal-Secret": INTERNAL_SECRET},
+                    json={"token": token}).json()
+    assert v["max_concurrent"] == 3
+
+
 def test_internal_validate_requires_secret(client):
     """HMAC internal-secret REQUIRED — a missing/wrong X-Internal-Secret is rejected 403."""
     # Mint a token to validate.

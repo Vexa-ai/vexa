@@ -1,4 +1,4 @@
-/** Home — the workbench. (The prototype remains at /prototype.html as the design SSOT.) */
+/** Home — the workbench. */
 import { App } from "./App";
 
 export default function Page() {

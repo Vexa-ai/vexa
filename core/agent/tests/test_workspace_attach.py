@@ -17,8 +17,17 @@ from control_plane.workspace_attach import (
     _authenticated_url,
     _git_clone,
     attached_workspaces,
+    rename_workspace,
     swap_workspace,
 )
+
+
+def _template(tmp_path: Path, marker: str = "TEMPLATE ROOT") -> Path:
+    """A minimal VALID seed template (carries a governance root) for the reseed/start-fresh path."""
+    t = tmp_path / "template"
+    t.mkdir()
+    (t / "CLAUDE.md").write_text(marker)
+    return t
 
 
 def _make_repo(path: Path, marker: str, *, compliant: bool = True) -> str:
@@ -101,6 +110,23 @@ def test_swap_back_to_custom_restores_without_recloning(tmp_path):
     assert calls == []                                   # restored the parked tree, no re-clone
     assert (root / "u1" / "MARK").read_text() == "CUSTOM"
     assert (root / "u1" / "LOCAL").read_text() == "edit"  # detached edits persisted
+
+
+def test_swap_to_seed_on_never_swapped_workspace_is_noop(tmp_path):
+    """Regression (the workspace-reset bug): a freshly-init'd subject has NO attach state (active is None)
+    and is already ON the seed. Clicking 'default (seed)' must be a NO-OP — it must NOT park the live
+    workspace under the 'seed' slug and swap in a blank re-seed, which orphaned the subject's real data."""
+    root = tmp_path / "workspaces"
+    ws = _seed_active(root, "u1")
+    (ws / "kg").mkdir(exist_ok=True)
+    (ws / "kg" / "real-note.md").write_text("MY REAL WORK")          # the subject's actual work, in-place
+    assert attached_workspaces(root, "u1")["active"] is None          # never swapped
+
+    res = swap_workspace(root, "u1", None)                            # click "default (seed)"
+
+    assert res.swapped is False and res.parked_slug is None           # no-op, nothing parked
+    assert (ws / "kg" / "real-note.md").read_text() == "MY REAL WORK"  # live workspace untouched
+    assert not (root / ".attached" / "u1" / "seed").exists()          # no destructive park created
 
 
 def test_compliant_repo_is_used_as_is(tmp_path):
@@ -226,3 +252,125 @@ def test_invalid_subject_rejected(tmp_path):
         swap_workspace(root, "../escape", "x")
     with pytest.raises(ValueError):
         swap_workspace(root, ".attached", "x")  # reserved store namespace
+
+
+# ── start fresh (rebuild the default from the template) ───────────────────────────────────────────────
+def test_start_fresh_reseeds_the_default_and_keeps_a_recoverable_backup(tmp_path, monkeypatch):
+    """'start fresh' on a never-swapped workspace rebuilds the default from the template. The live tree
+    (the subject's real work) is NOT destroyed — it is tucked under the recoverable backup slot."""
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(_template(tmp_path)))
+    root = tmp_path / "workspaces"
+    ws = _seed_active(root, "u1", "OLD-DEFAULT")
+    (ws / "kg").mkdir(exist_ok=True)
+    (ws / "kg" / "real.md").write_text("MY REAL WORK")
+    assert attached_workspaces(root, "u1")["active"] is None          # never swapped
+
+    res = swap_workspace(root, "u1", None, fresh=True)                # 'start fresh'
+
+    assert res.swapped is True and res.active_slug == "seed"
+    assert (ws / "CLAUDE.md").read_text() == "TEMPLATE ROOT"          # default rebuilt from the template
+    assert not (ws / "kg" / "real.md").exists()                       # blank — none of the old work
+    backup = root / ".attached" / "u1" / "seed-prev"
+    assert (backup / "kg" / "real.md").read_text() == "MY REAL WORK"  # old default kept, recoverable
+    view = attached_workspaces(root, "u1")
+    assert view["active"] == "seed" and view["slots"]["seed-prev"]["name"] == "default (previous)"
+
+
+def test_start_fresh_from_an_attached_repo_resets_the_default_and_parks_the_repo(tmp_path, monkeypatch):
+    """Starting fresh while on an attached repo: the repo is parked (recoverable), the previously-parked
+    default is moved to the backup, and the active default becomes a blank template."""
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(_template(tmp_path)))
+    root = tmp_path / "workspaces"
+    _seed_active(root, "u1", "OLD-DEFAULT")
+    origin = _make_repo(tmp_path / "origin", "CUSTOM")
+    swap_workspace(root, "u1", origin, "main")                        # attach repo → old default parked
+    repo_slug = attached_workspaces(root, "u1")["active"]
+
+    res = swap_workspace(root, "u1", None, fresh=True)
+
+    assert res.active_slug == "seed"
+    assert (root / "u1" / "CLAUDE.md").read_text() == "TEMPLATE ROOT"             # blank template default
+    assert (root / ".attached" / "u1" / repo_slug / "MARK").read_text() == "CUSTOM"     # repo parked
+    assert (root / ".attached" / "u1" / "seed-prev" / "CLAUDE.md").read_text() == "OLD-DEFAULT"
+
+
+def test_start_fresh_backup_is_recoverable_via_slug(tmp_path, monkeypatch):
+    """The start-fresh backup is a normal parked slot — swapping to it BY SLUG restores the old default."""
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(_template(tmp_path)))
+    root = tmp_path / "workspaces"
+    ws = _seed_active(root, "u1", "OLD-DEFAULT")
+    (ws / "kg").mkdir(exist_ok=True)
+    (ws / "kg" / "real.md").write_text("MY REAL WORK")
+    swap_workspace(root, "u1", None, fresh=True)                      # backup at seed-prev, active=blank
+
+    res = swap_workspace(root, "u1", None, slug="seed-prev")          # swap back to the backup by slug
+
+    assert res.swapped is True and res.active_slug == "seed-prev"
+    assert (ws / "kg" / "real.md").read_text() == "MY REAL WORK"      # old default restored intact
+
+
+def test_start_fresh_carries_the_seed_name_onto_the_backup(tmp_path, monkeypatch):
+    """A renamed default's label persists across the rebuild and tags the backup, so it stays identifiable."""
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(_template(tmp_path)))
+    root = tmp_path / "workspaces"
+    ws = _seed_active(root, "u1")
+    (ws / "kg").mkdir(exist_ok=True)
+    (ws / "kg" / "real.md").write_text("WORK")
+    rename_workspace(root, "u1", "seed", "Workbench")
+
+    swap_workspace(root, "u1", None, fresh=True)
+
+    view = attached_workspaces(root, "u1")
+    assert view["slots"]["seed"]["name"] == "Workbench"              # label persists onto the fresh default
+    assert view["slots"]["seed-prev"]["name"] == "Workbench (previous)"
+
+
+# ── swap by slug · rename ─────────────────────────────────────────────────────────────────────────────
+def test_swap_by_slug_restores_a_parked_repo_without_recloning(tmp_path):
+    root = tmp_path / "workspaces"
+    _seed_active(root, "u1")
+    origin = _make_repo(tmp_path / "origin", "CUSTOM")
+    slug = swap_workspace(root, "u1", origin, "main").active_slug
+    swap_workspace(root, "u1", None)                                 # → seed (repo now parked)
+
+    calls: list = []
+    back = swap_workspace(root, "u1", None, slug=slug, clone=lambda *a, **k: calls.append(a))
+
+    assert back.active_slug == slug and back.cloned is False and calls == []
+    assert (root / "u1" / "MARK").read_text() == "CUSTOM"
+
+
+def test_swap_unknown_slug_with_no_repo_raises(tmp_path):
+    root = tmp_path / "workspaces"
+    _seed_active(root, "u1")
+    with pytest.raises(KeyError):
+        swap_workspace(root, "u1", None, slug="never-parked")        # nothing to restore, nothing to clone
+
+
+def test_rename_sets_a_display_name_without_touching_the_slug(tmp_path):
+    """Rename is a label only: the slug + repo are unchanged, so swap-back / repo re-attach keep matching."""
+    root = tmp_path / "workspaces"
+    _seed_active(root, "u1")
+    origin = _make_repo(tmp_path / "origin", "CUSTOM")
+    slug = swap_workspace(root, "u1", origin, "main").active_slug
+
+    view = rename_workspace(root, "u1", slug, "My Project")
+    assert view["slots"][slug]["name"] == "My Project"
+    assert view["slots"][slug]["repo"] == origin                     # slug/repo intact
+    assert attached_workspaces(root, "u1")["slots"][slug]["name"] == "My Project"  # persisted
+
+    swap_workspace(root, "u1", None)                                 # → seed
+    calls: list = []
+    again = swap_workspace(root, "u1", origin, "main", clone=lambda *a, **k: calls.append(a))
+    assert again.cloned is False and calls == [] and again.active_slug == slug   # rename didn't break matching
+
+
+def test_rename_clears_label_and_rejects_unknown_slug(tmp_path):
+    root = tmp_path / "workspaces"
+    _seed_active(root, "u1")
+    rename_workspace(root, "u1", "seed", "Home")                     # the reserved seed can be named
+    assert attached_workspaces(root, "u1")["slots"]["seed"]["name"] == "Home"
+    rename_workspace(root, "u1", "seed", "")                         # empty clears it
+    assert "name" not in attached_workspaces(root, "u1")["slots"]["seed"]
+    with pytest.raises(KeyError):
+        rename_workspace(root, "u1", "does-not-exist", "X")

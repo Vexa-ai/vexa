@@ -23,6 +23,8 @@ docs/views/*
 !docs/views/README.md
 # the concise DSL projection IS committed — it's the always-in-context LLM index (gate:dataflow keeps it current)
 !docs/views/architecture.dsl
+# the Mermaid views are committed too — deterministic projections of the chart (pnpm arch:dsl --write; gate:dataflow checks staleness)
+!docs/views/*.mmd
 
 # transcription service downloaded model weights (runtime cache)
 deploy/transcription/models/

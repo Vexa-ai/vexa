@@ -3,7 +3,7 @@ title: "Configuration"
 description: "Every environment variable the stack reads — what it does and its default."
 ---
 
-Vexa is configured by environment variables, set in `deploy/compose/.env` for Docker Compose (seeded
+Vexum is configured by environment variables, set in `deploy/compose/.env` for Docker Compose (seeded
 from `.env.example` on first `make all`). Defaults below are what the stack falls back to when the
 variable is unset — fine for local evaluation, **not** for anything exposed.
 
@@ -64,7 +64,7 @@ Point the agent at your own model so no inference leaves the network.
 | Variable | Default | Purpose |
 |---|---|---|
 | `IMAGE_TAG` | `dev` | Tag for the built service images. |
-| `BROWSER_IMAGE` | `vexaai/vexa-bot:dev` | Browser/bot container the runtime spawns per meeting. |
+| `BROWSER_IMAGE` | `vexaai/vexa-bot:v012` | Browser/bot container the runtime spawns per meeting. **Built from source** (`make bot`), spawned without pulling — the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. |
 | `AGENT_IMAGE` / `AGENT_WORKER_IMAGE` | `vexaai/v012-agent-*` | Agent container the runtime spawns per dispatch. |
 | `DOCKER_GID` | `0` | Host docker group id, so the runtime can use the Docker socket. |
 | `LOG_LEVEL` | `info` | Log verbosity. |
