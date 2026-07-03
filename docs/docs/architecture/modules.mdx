@@ -114,16 +114,14 @@ The eval levels are *enforced*, not aspirational: **an artifact "exists" only wh
 
 ### The gate
 
-In this open-core tree the runnable bar is `pnpm typecheck build test`, the compose stack-readiness
-proof — `make -C deploy/compose stack-test` (it stands the whole stack up, proves it, and tears it
-down) — and `pnpm gate:calm` ([Architecture as Code](/architecture/architecture-as-code)). The full P9
-suite (readme · isolation · exports · graph · schema, plus contract/arch **sealing**) runs in the
-upstream product.
-
-<Note>The gate **runner** that orchestrates the full suite (`scripts/gates.mjs`, invoked as `pnpm gates`
-/ `pnpm gate:*`) ships with the upstream product, not this open-core checkout. What is runnable here:
-`pnpm typecheck build test`, the compose stack proof (`make -C deploy/compose stack-test`), `pnpm
-gate:calm`, and each contract's `validate.mjs` / each brick's `check-isolation.js` run directly.</Note>
+In this tree the runnable bar is `pnpm typecheck build test`, the compose stack-readiness proof —
+`make -C deploy/compose stack-test` (it stands the whole stack up, proves it, and tears it down) —
+and the gate suite (`scripts/gates.mjs`, invoked as `pnpm gates` / `pnpm gate:*`): readme · isolation ·
+exports · graph · schema · contract-version · python · licenses in CI, plus the two architecture gates —
+`pnpm gate:dataflow` (model↔disk completeness, single-writer / render-only ownership, a reality diff
+against the code, and view staleness) and `pnpm gate:calm`
+([Architecture as Code](/architecture/architecture-as-code)). Contracts **and** the architecture chart
+are sealed (`pnpm seal:contracts` / `pnpm seal:arch`) — drift from a seal is deliberate-only.
 
 ### The harness — three tiers
 
