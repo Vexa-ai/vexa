@@ -72,7 +72,8 @@
         "pages": [
           "roadmap/approach",
           "roadmap/stages",
-          "roadmap/status"
+          "roadmap/status",
+          "roadmap/swarm"
         ]
       }
     ]
