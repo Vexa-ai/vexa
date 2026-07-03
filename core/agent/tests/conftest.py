@@ -6,9 +6,22 @@ never by importing meetings code — the same ``meetings ⊥ agent`` boundary th
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
+
+from shared.gitenv import GIT_REPO_DISCOVERY_VARS
+
+# The suite runs under `pnpm gates`, which the pre-push HOOK runs — and git exports GIT_DIR (and
+# friends) into hook descendants. Any test git subprocess inheriting those operates on the REAL
+# repo with its tmp cwd as the work tree: `git add -A && git commit` then REWRITES THE BRANCH BEING
+# PUSHED (this destroyed a feature branch once — see shared/gitenv.py). Library code scrubs its own
+# child envs; this session-level scrub protects the tests' OWN git helpers (the `subprocess.run
+# (["git", ...])` lambdas) wholesale. Tests that need one of these vars set it explicitly
+# (monkeypatch.setenv), which happens after this runs at import time.
+for _var in GIT_REPO_DISCOVERY_VARS:
+    os.environ.pop(_var, None)
 
 
 def _repo_root() -> Path:

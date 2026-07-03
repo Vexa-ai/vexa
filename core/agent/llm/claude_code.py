@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 from llm.errors import preflight_provider_guard
-from llm.ports import HarnessExec
+from llm.ports import HarnessExec, scrubbed_git_env
 
 
 def _short(content: object, n: int = 80) -> str:
@@ -122,7 +122,10 @@ def build_argv(
 
 
 def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
-    proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    # scrubbed_git_env: the harness runs git inside the workspace; a hook-exported GIT_DIR would
+    # re-point those ops (and the workspace's own repo discovery) at the hook's repo.
+    proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            env=scrubbed_git_env())
     assert proc.stdout is not None
     try:
         yield from proc.stdout

@@ -21,7 +21,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -29,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared.gitenv import scrubbed_git_env
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 
 log = logging.getLogger(__name__)
@@ -96,7 +96,9 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None)
     disabled so a missing/invalid credential FAILS LOUD instead of hanging on a terminal prompt. Any
     failure raises ``CloneError`` with the token redacted from the message."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0"}
+    # scrubbed env: a hook-exported GIT_DIR would re-point every op below at the hook's repo
+    # (see shared/gitenv.py); prompts stay disabled so a bad credential fails loud.
+    env = scrubbed_git_env(GIT_ASKPASS="true", GIT_TERMINAL_PROMPT="0")
     url = _authenticated_url(repo_url, token)
 
     def redact(text: str) -> str:
@@ -107,7 +109,7 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None)
                        check=True, capture_output=True, text=True, env=env)
         if token:  # never persist the credential in the cloned repo's origin (P15)
             subprocess.run(["git", "-C", str(dest), "remote", "set-url", "origin", repo_url],
-                           check=True, capture_output=True, text=True)
+                           check=True, capture_output=True, text=True, env=env)
         if ref:
             subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ref],
                            check=True, capture_output=True, text=True, env=env)
@@ -293,10 +295,12 @@ def _build_attached(dest: Path, repo_url: str, ref: str, token: Optional[str], c
 
 def _git_commit_all(ws: Path, message: str) -> None:
     """Stage + commit everything in the workspace repo (the nested-import commit). Best-effort no-op on
-    an empty diff."""
-    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True, capture_output=True, text=True)
+    an empty diff. Scrubbed env — a hook-exported GIT_DIR must never make this commit land on the
+    hook's repo (see shared/gitenv.py)."""
+    env = scrubbed_git_env()
+    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True, capture_output=True, text=True, env=env)
     subprocess.run(["git", "-C", str(ws), "commit", "-q", "-m", message, "--allow-empty"],
-                   check=True, capture_output=True, text=True)
+                   check=True, capture_output=True, text=True, env=env)
 
 
 def _reseed(active_dir: Path) -> None:

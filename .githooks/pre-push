@@ -5,6 +5,13 @@
 # not husky. Emergency bypass: `git push --no-verify` (then fix it).
 root="$(git rev-parse --show-toplevel)" || exit 1
 cd "$root" || exit 1
+# Git exports GIT_DIR (and sometimes GIT_WORK_TREE/GIT_INDEX_FILE) into hook processes. Anything
+# the gates run that shells out to git — pytest's workspace helpers above all — would inherit them
+# and operate on THIS repo with its own tmp cwd as the work tree: a test's `git add -A && git
+# commit` then REWRITES THE BRANCH BEING PUSHED (this once shredded a feature branch with ~180
+# junk commits). The library scrubs its own git envs (core/agent/shared/gitenv.py); this unset is
+# the belt-and-braces hook layer.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_ALTERNATE_OBJECT_DIRECTORIES
 echo "▶ pre-push → pnpm gates (full suite)…"
 pnpm gates || {
   echo "✗ pre-push: gates FAILED — push aborted (fix the gate above, or bypass with: git push --no-verify)."
