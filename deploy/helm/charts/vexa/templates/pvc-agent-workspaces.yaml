@@ -1,0 +1,21 @@
+{{- if .Values.agentApi.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vexa.componentName" (list . "agent-workspaces") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-workspaces
+spec:
+  accessModes:
+    # RWO suits agent-api alone (k3s local-path). Full agent-worker dispatch on k8s needs RWX
+    # (NFS/Longhorn) so the spawned worker Pod shares this store — set accessMode: ReadWriteMany
+    # + a storageClassName that supports it. See deploy/helm/README.md.
+    - {{ .Values.agentApi.workspaces.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ .Values.agentApi.workspaces.size | default "5Gi" }}
+  {{- if .Values.agentApi.workspaces.storageClassName }}
+  storageClassName: {{ .Values.agentApi.workspaces.storageClassName | quote }}
+  {{- end }}
+{{- end }}

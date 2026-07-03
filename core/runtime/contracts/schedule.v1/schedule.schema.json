@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/schedule.v1",
+  "title": "schedule.v1",
+  "description": "The job-spec contract for the runtime scheduler: an HTTP-call request scheduled for future (one-shot or cron) execution, with retry/backoff and idempotency. Derived from 0.11 runtime-api's real job shape.",
+  "$defs": {
+    "Request": {
+      "description": "The HTTP call the scheduler fires when the job is due.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "method": { "type": "string", "default": "POST", "description": "HTTP method" },
+        "url": { "type": "string", "format": "uri", "description": "target URL" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "description": "request body (object → JSON, or a raw string)" },
+        "timeout": { "type": "integer", "minimum": 1, "default": 30, "description": "seconds" }
+      }
+    },
+    "Retry": {
+      "description": "Exponential-backoff retry policy for a failed dispatch.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "default": 3 },
+        "backoff": {
+          "type": "array",
+          "items": { "type": "number", "minimum": 0 },
+          "description": "per-attempt delay seconds; the last entry is reused past its length"
+        },
+        "attempt": { "type": "integer", "minimum": 0, "default": 0, "description": "attempts so far" }
+      }
+    },
+    "ScheduleJob": {
+      "description": "The schedule() input. Exactly one of execute_at | cron sets the first run; cron also re-arms.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request"],
+      "oneOf": [
+        { "required": ["execute_at"] },
+        { "required": ["cron"] }
+      ],
+      "properties": {
+        "execute_at": {
+          "type": ["number", "string"],
+          "description": "one-shot fire time — unix epoch seconds (number) or ISO-8601 (string)"
+        },
+        "cron": { "type": "string", "description": "5-field cron expression; re-arms after each run" },
+        "request": { "$ref": "#/$defs/Request" },
+        "retry": { "$ref": "#/$defs/Retry" },
+        "idempotency_key": { "type": "string", "description": "dedup key — a duplicate returns the existing job" },
+        "metadata": { "type": "object", "description": "opaque caller tags (e.g. source)" }
+      }
+    }
+  }
+}

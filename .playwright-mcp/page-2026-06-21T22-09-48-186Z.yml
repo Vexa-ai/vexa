@@ -1,0 +1,130 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - link "Vexa Logo vexa" [ref=e6] [cursor=pointer]:
+            - /url: /
+            - img "Vexa Logo" [ref=e8]
+            - generic [ref=e9]: vexa
+          - link "0.12.0" [ref=e10] [cursor=pointer]:
+            - /url: https://github.com/Vexa-ai/vexa/releases/tag/v0.12.0
+            - generic [ref=e11]: 0.12.0
+        - generic [ref=e12]:
+          - link "Full Documentation" [ref=e13] [cursor=pointer]:
+            - /url: https://docs.vexa.ai/
+            - img
+            - generic [ref=e14]: Full Documentation
+          - button "Toggle theme" [ref=e15]:
+            - img
+            - generic [ref=e16]: Toggle theme
+          - button "User menu" [ref=e17]:
+            - img
+            - generic [ref=e18]: User menu
+    - generic [ref=e19]:
+      - complementary [ref=e20]:
+        - generic [ref=e21]:
+          - navigation [ref=e25]:
+            - link "Meetings" [ref=e26] [cursor=pointer]:
+              - /url: /meetings
+              - img [ref=e27]
+              - text: Meetings
+            - button "Join Meeting" [ref=e30]:
+              - img [ref=e31]
+              - text: Join Meeting
+            - generic [ref=e32]:
+              - link "Webhooks" [ref=e33] [cursor=pointer]:
+                - /url: /webhooks
+                - img [ref=e34]
+                - text: Webhooks
+              - link "MCP MCP Setup" [ref=e38] [cursor=pointer]:
+                - /url: /mcp
+                - img "MCP" [ref=e40]
+                - text: MCP Setup
+              - link "Profile" [ref=e41] [cursor=pointer]:
+                - /url: /profile
+                - img [ref=e42]
+                - text: Profile
+            - generic [ref=e45]:
+              - generic [ref=e47]:
+                - img [ref=e48]
+                - generic [ref=e50]: Admin
+              - button "Unlock Admin" [ref=e51]:
+                - img [ref=e52]
+                - generic [ref=e55]: Unlock Admin
+          - generic [ref=e56]:
+            - link "API Docs" [ref=e57] [cursor=pointer]:
+              - /url: https://docs.vexa.ai/
+              - img [ref=e58]
+              - text: API Docs
+            - link "Report a Bug" [ref=e60] [cursor=pointer]:
+              - /url: https://github.com/Vexa-ai/vexa/issues/new?labels=bug,hosted&title=[Hosted]%20&body=%23%23%20Environment%0AHosted%20service%20(dashboard.vexa.ai)%0A%0A%23%23%20Description%0A%0A%23%23%20Steps%20to%20reproduce%0A1.%20%0A%0A%23%23%20Expected%20behavior%0A%0A%23%23%20Actual%20behavior%0A
+              - img [ref=e61]
+              - text: Report a Bug
+            - generic [ref=e71]:
+              - generic [ref=e72]: vexa
+              - link "0.12.0" [ref=e73] [cursor=pointer]:
+                - /url: https://github.com/Vexa-ai/vexa/releases/tag/v0.12.0
+                - generic [ref=e74]: 0.12.0
+      - main [ref=e75]:
+        - generic [ref=e76]:
+          - generic [ref=e78]:
+            - link [ref=e79] [cursor=pointer]:
+              - /url: /meetings
+              - img
+            - generic [ref=e80]:
+              - generic [ref=e81]:
+                - heading "xyz-defg-hij" [level=1] [ref=e82]
+                - button [ref=e83]:
+                  - img
+              - generic [ref=e84]: Stopped
+          - generic [ref=e85]:
+            - generic [ref=e89]: Transcript
+            - generic [ref=e118]:
+              - generic [ref=e119]:
+                - generic [ref=e121]:
+                  - img [ref=e122]
+                  - text: Meeting Info
+                - generic [ref=e125]:
+                  - generic [ref=e126]:
+                    - img "Google Meet" [ref=e128]
+                    - generic [ref=e129]:
+                      - paragraph [ref=e130]: Google Meet
+                      - paragraph [ref=e131]: xyz-defg-hij
+                  - generic [ref=e132]:
+                    - img [ref=e133]
+                    - generic [ref=e135]:
+                      - paragraph [ref=e136]: Date
+                      - paragraph [ref=e137]: June 21st, 2026 at 11:05 PM
+                  - text: "0"
+              - generic [ref=e138]:
+                - generic [ref=e140]: Details
+                - generic [ref=e141]:
+                  - generic [ref=e142]:
+                    - generic [ref=e143]: Status
+                    - generic [ref=e144]:
+                      - text: Stopped
+                      - paragraph [ref=e145]: Manually stopped by user
+                  - generic [ref=e146]:
+                    - generic [ref=e147]: Speakers
+                    - generic [ref=e148]: "0"
+                  - generic [ref=e149]:
+                    - generic [ref=e150]: Words
+                    - generic [ref=e151]: "0"
+                  - button "Status History 4" [ref=e153]:
+                    - generic [ref=e154] [cursor=pointer]:
+                      - generic [ref=e155]:
+                        - img [ref=e156]
+                        - generic [ref=e159]: Status History
+                        - generic [ref=e160]: "4"
+                      - img [ref=e162]
+              - generic [ref=e164]:
+                - generic [ref=e168]:
+                  - img [ref=e169]
+                  - text: Notes
+                - generic [ref=e173]: Click here to add notes...
+              - button "Delete meeting" [ref=e176]:
+                - img
+                - text: Delete meeting
+    - region "Notifications alt+T"
+  - alert [ref=e177]

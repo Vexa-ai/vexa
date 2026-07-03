@@ -1,0 +1,18 @@
+#!/bin/bash
+# =============================================================================
+# Vexa Lite — meeting-bot launcher (process backend)
+# =============================================================================
+# The runtime kernel (RUNTIME_BACKEND=process) execs this once per meeting via the
+# meeting-bot profile (BOT_COMMAND). Unlike the bot's own container entrypoint, it does
+# NOT bring up Xvfb / PulseAudio — supervisord already owns those for the whole container
+# (one shared display, like 0.10.6 lite). The bot's full constructor arrives in the
+# inherited env as VEXA_BOT_CONFIG (invocation.v1); we just run the worker.
+set -u
+
+export DISPLAY="${DISPLAY:-:99}"
+
+# Run from the bot package dir so its relative schema path (src→../../../contracts) and the
+# pnpm-linked workspace deps resolve, exactly like the bot's container entrypoint does. The
+# page-side capture bundle is at /app/browser-utils.global.js (capture-bridge injects that path).
+cd /app/core/meetings/services/bot
+exec node dist/index.js

@@ -1,0 +1,103 @@
+---
+title: "Vexum"
+sidebarTitle: "Overview"
+description: "Sandboxed AI agents that grow corporate knowledge from your meetings and docs — open-source, self-hosted, air-gappable."
+---
+
+<div style={{ fontSize: "2rem", fontWeight: 600, lineHeight: 1.25, margin: "0.5rem 0 1.5rem" }}>
+  Sandboxed agents that grow corporate knowledge from your meetings and docs.
+</div>
+
+Real-time transcripts from Google Meet, Zoom, and Teams (Whisper included), fed to agents that build knowledge as code — fully self-hosted.
+
+<Note>
+  **▶ Try the live demo: [core.vexa.ai](https://core.vexa.ai)** — the Vexum Terminal workbench, running the full stack. No install. Or [self-host it](#try-it) below.
+</Note>
+
+Vexum tightens the loop every organization runs on: **sense → think → act**. Meetings and docs are
+the data; agents turn data into signal, and signal into action that changes the world. The faster that
+loop turns, the smarter the org gets.
+
+## Why
+
+<CardGroup cols={3}>
+  <Card title="Knowledge as code" icon="file-code" href="/concepts">
+    Meetings and docs become Markdown in a versioned workspace.
+  </Card>
+  <Card title="Meetings: rich but uncaptured" icon="microphone" href="/core/meetings">
+    The richest context in any org, captured before it's lost.
+  </Card>
+  <Card title="CLI agents proved the pattern" icon="terminal" href="/concepts">
+    Claude Code's proven pattern, made safe and scalable.
+  </Card>
+</CardGroup>
+
+## Two domains, together or apart
+
+Meetings and agents are **separate domains**, each with its own API — run either on its own, or compose
+them.
+
+<CardGroup cols={2}>
+  <Card title="Meetings" icon="video" href="/core/meetings">
+    Capture, store, and access meetings — real-time transcripts from Google Meet, Zoom, and Teams. Usable
+    standalone as a meeting-capture API.
+  </Card>
+  <Card title="Agents" icon="robot" href="/core/agents">
+    Sandboxed, scalable agents over your workspace. Put them to work on any knowledge — with or without
+    meetings.
+  </Card>
+</CardGroup>
+
+## Explore
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/deployment">
+    Self-host the full stack with one `make all`. Up in minutes on a single Linux host.
+  </Card>
+  <Card title="Concepts" icon="cube" href="/concepts">
+    The five primitives everything composes from — workspace, agent, container, identity, scheduler.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/agent">
+    Dispatch agents, stream meetings, manage routines over HTTP.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture/execution">
+    How dispatch, execution, streaming, and trust actually work.
+  </Card>
+</CardGroup>
+
+## What it does
+
+- **Captures meetings natively** — real-time transcripts from [Google Meet, Zoom, and Teams](/core/meetings), no plugins or recorders. **Whisper included**.
+- **Turns knowledge into code** — meetings and emails become a living, Markdown [workspace](/concepts#workspace) that agents treat as their working directory.
+- **Runs agents safely** — every [agent](/core/agents) executes in an isolated, ephemeral [container](/concepts#container): no egress except through brokered tools, thousands in parallel, no lateral movement.
+- **Cloud-native deployment** — self-host the whole stack with [Docker Compose](/deployment) on a single Linux host.
+- **Stays in your environment** — open-source, self-hostable, air-gappable, with [bring-your-own inference](/deployment#air-gapped). Recordings and agent state never leave infrastructure you control.
+
+## Try it
+
+```bash
+git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa-core
+make all      # full stack via Docker Compose — seeds .env, brings everything up, prints your API key + URLs
+make bot      # build the meeting bot from source — needed before a bot can join a meeting
+```
+
+The API comes up at `http://localhost:18056` (gateway) and the terminal web
+workbench at `http://localhost:13000`. Full options — air-gapped, bring-your-own
+inference — in [Deployment](/deployment).
+
+**Prefer to look before you build?** The same stack runs hosted at **[core.vexa.ai](https://core.vexa.ai)** — no install.
+
+## Why Vexum
+
+AI reshaped software development: a CLI agent on a Linux box is now enough to build
+software. Vexum scales that same execution model to knowledge work — meetings and emails
+as the source, agents as the workers, your infrastructure as the sandbox.
+
+<CardGroup cols={3}>
+  <Card title="Knowledge agent" icon="brain" href="/how-to/chat-workspace" horizontal />
+  <Card title="Meeting copilot" icon="video" href="/how-to/live-copilot" horizontal />
+  <Card title="AI routines" icon="clock" href="/how-to/daily-brief" horizontal />
+  <Card title="Knowledge chat" icon="comments" href="/how-to/chat-workspace" horizontal />
+  <Card title="Integrations" icon="plug" href="/how-to/email-triage" horizontal />
+  <Card title="Enterprise" icon="building" href="/how-to/workspace-files" horizontal />
+</CardGroup>

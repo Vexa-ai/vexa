@@ -1,0 +1,28 @@
+---
+title: "Identity & trust"
+description: "Chain of custody — authenticity of the launcher, a signed token through every hop, verified at the boundaries."
+---
+
+This is the cross-cutting **trust flow**. For the identity *domain* — accounts, the access-control model,
+what's built, and the roadmap — see [Identity](/core/identity).
+
+A dispatch is often launched by a **non-human** (a 3am schedule entry, a Gmail webhook). We cannot trust
+the launcher by virtue of it running — it must **prove** it was authorized, and that proof must survive
+every hop to the tool that finally sends an email. The agent is **untrusted** and carries proof but never
+enforces it.
+
+The flow — authenticate the launcher (OIDC session, or a **signed delegation grant**) → the identity
+service **mints a short-lived signed dispatch token** → the runtime **attests the workload** → every
+**boundary verifies**:
+
+- **Workspace store** mounts only granted workspaces, `rw` only where the token says.
+- **Tool calls** route through the **MCP Gateway**, which does an **RFC 8693 token exchange** (the agent's
+  SPIFFE identity → a token scoped to that one tool's audience) and acts with brokered creds — the agent
+  never holds the credential.
+- **Stream** tags every event with `dispatch_id`; audit resolves it to `(subject · launcher · scope)`.
+
+We adopt **[kagenti](https://github.com/kagenti/kagenti)**: **SPIRE** (workload identity) + **Keycloak**
+(RFC 8693) + Envoy **MCP Gateway**. Dev uses a token-bound secret behind the same interface; k8s uses SPIRE.
+
+<Note>The agent (LLM) is outside the trust boundary. Compromise it via prompt injection and it still
+cannot exceed the token's scope — the boundaries enforce, not the model.</Note>

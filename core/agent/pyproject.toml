@@ -1,0 +1,39 @@
+[project]
+name = "vexa-agent"
+version = "0.12.0"
+description = "The agent domain — a control-plane (uvicorn) and a per-dispatch worker (claude-in-container) over a shared core. Turns a transcript.v1 input into a governed action committed to a user workspace (workspace.v1)."
+requires-python = ">=3.11"
+# Base = what BOTH images need (the shared core + redis streams). Image-specific deps live in the
+# dependency-groups below so each Dockerfile installs ONLY its own (control-plane ⊥ worker, D1).
+dependencies = [
+    "pydantic>=2,<3",
+    "pydantic-settings>=2,<3",
+    "jsonschema>=4,<5",
+    "referencing>=0.30,<0.40",
+    "PyYAML>=6,<7",
+    "redis>=5,<6",
+    # llm/ completion adapters (openai-compat + anthropic) speak raw HTTP; the worker image installs
+    # base deps only, so the LLM port's client must live here, not in a group.
+    "httpx>=0.27,<1",
+]
+
+[dependency-groups]
+# control-plane image (uvicorn HTTP front door) — `uv sync --group control-plane`.
+control-plane = [
+    "fastapi>=0.110,<1",
+    "python-multipart>=0.0.31,<1",
+    "uvicorn[standard]>=0.29,<1",
+]
+# worker image (claude-in-container) — base only; claude-code is an npm global, not a pip dep.
+worker = []
+# tests (run with the ambient interpreter, not in either image). Tests exercise the control-plane
+# surface (FastAPI app), so the test env pulls in the control-plane group too.
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.23,<1", "fakeredis>=2.20,<3", {include-group = "control-plane"}]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "strict"

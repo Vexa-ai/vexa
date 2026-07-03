@@ -1,0 +1,9 @@
+{
+  "identity": { "subject": "u_jane", "launcher": "integration:gmail" },
+  "runner": "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "ro" } ],
+  "tools": ["gmail.read"],
+  "trigger": "event",
+  "context": { "kind": "email", "ref": { "uri": "mailbox://jane/INBOX/AAMkAGI2", "etag": "W/\"123\"" } },
+  "start": { "entrypoint": { "path": "plan/inbox-triage.md" } }
+}

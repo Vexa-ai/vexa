@@ -1,0 +1,19 @@
+{
+  "name": "audio-named",
+  "kind": "audio",
+  "description": "gmeet-lane frame: speakerName present (high-bit flag), 16-byte header + zero-padded UTF-8 name + Float32 PCM",
+  "speakerIndex": 7,
+  "ts": 1718000000456,
+  "samples": [
+    -0.4609375,
+    -0.44921875,
+    -0.4375,
+    -0.42578125,
+    -0.4140625,
+    -0.40234375
+  ],
+  "speakerName": "Alice",
+  "len": 48,
+  "sha256": "3865e915e19414ce0057a301cf46299f235c2c2ce5382c9474886a149a73b005",
+  "bytes_b64": "BwAAgACA3HkMAHlCBQAAAEFsaWNlAAAAAADsvgAA5r4AAOC+AADavgAA1L4AAM6+"
+}

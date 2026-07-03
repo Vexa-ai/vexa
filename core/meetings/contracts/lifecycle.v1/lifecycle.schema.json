@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/lifecycle.v1",
+  "title": "lifecycle.v1",
+  "description": "The bot's DOMAIN status (distinct from runtime.v1's container lifecycle). The bot emits these to its control-plane callback; the legal transitions are the state machine in the README.",
+  "$defs": {
+    "BotStatus": {
+      "enum": ["joining", "awaiting_admission", "active", "needs_help", "completed", "failed"]
+    },
+    "CompletionReason": {
+      "description": "Why a `completed` run ended (operator-facing).",
+      "enum": ["stopped", "left_alone", "startup_alone", "evicted", "awaiting_admission_timeout", "awaiting_admission_rejected", "join_failure", "validation_error", "max_bot_time_exceeded"]
+    },
+    "FailureStage": {
+      "description": "Furthest stage reached, for `failed` attribution.",
+      "enum": ["requested", "joining", "awaiting_admission", "active"]
+    },
+    "LifecycleEvent": {
+      "description": "One status report. connection_id + status always present; the rest are state-dependent (forensics on terminal states). LIBERAL ingestion (additionalProperties:true): the control plane validates the core shape but TOLERATES extra fields the real bot emits, matching main's pydantic ignore-extras — the carve's earlier additionalProperties:false rejected the bot's real callbacks.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["connection_id", "status"],
+      "properties": {
+        "connection_id": { "type": "string", "description": "the session uid" },
+        "container_id": { "type": "string" },
+        "status": { "$ref": "#/$defs/BotStatus" },
+        "reason": { "type": "string" },
+        "exit_code": { "type": "integer", "description": "terminal only" },
+        "completion_reason": { "$ref": "#/$defs/CompletionReason" },
+        "failure_stage": { "$ref": "#/$defs/FailureStage" },
+        "bot_logs": { "type": "array", "items": { "type": "string" }, "description": "terminal: ring buffer of log lines" },
+        "bot_resources": {
+          "type": "object",
+          "description": "terminal: cgroup snapshot",
+          "properties": {
+            "peak_memory_bytes": { "type": "integer" },
+            "cpu_usage_usec": { "type": "integer" }
+          }
+        },
+        "speaker_events": { "type": "array" },
+        "timestamp": { "type": "string", "description": "ISO8601 emit time — the real bot sends it on every callback" },
+        "error_details": { "type": "string", "description": "terminal: free-text error context from the bot" }
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+---
+title: "Status"
+description: "Where we are — honestly."
+---
+
+<Note>This page is the honest, current state — updated as we go, never aspirational.</Note>
+
+**Proven in production (pre-existing Vexum):** the [Runtime](/core/runtime) (meeting bots are browser
+workloads), transcription → `transcript.v1`, redis [streaming](/architecture/streaming).
+
+**Built & proven live — the dispatch core (M1):** a [`unit.v1` dispatch](/concepts) runs in a
+**runtime-spawned, isolated container** (the generic-agent worker), over a **bind-mounted
+[workspace](/concepts#workspace)**, carrying a **per-dispatch signed [identity](/architecture/identity-and-trust)
+token**, streaming UnitEvents on `unit:<id>:out` → SSE. The **in-process path is retired** (agents never
+run in the control plane). **Chat memory is durable** — session + transcript are saved in the workspace,
+so a fresh container resumes the conversation. Verified end-to-end on docker and through the terminal
+chat. See [Execution](/architecture/execution).
+
+**Designed & frozen (this site):** the [seven primitives](/concepts), the
+[identity layer](/architecture/identity-and-trust) (kagenti-aligned), the
+[governance model](/architecture/governance).
+
+**Sound and kept:** the terminal workbench + surfaces, the generic event ingress, the generic tool
+mechanism, the redis scheduler.
+
+**Next:** finish M1 — the bucket-backed (minio) [workspace](/concepts#workspace) store + warm-reuse
+(`touch` / idle-enforcer). Then M2 — the [live meeting](/how-to/live-copilot) dispatch.
+
+## Delivery tracker
+
+The planned features, the [modules](/architecture/modules) each touches, and status. The
+core features are **⬜ planned**; Calendar is **deferred**. See [Identity](/core/identity) for the auth and
+encryption detail.
+
+| Feature | Status | Module(s) it touches |
+|---|---|---|
+| **Auth spine** — opaque token → `User` → scoped access end-to-end | ⬜ planned | core/identity (admin-api), core/gateway |
+| **Owner-check adoption** — wire `OwnerOnlyPolicy` / `can_access` onto every meeting path (chat · stream · start · process) | ⬜ planned | core/agent, core/meetings, core/identity |
+| **Real meetings list** — the live, persisted list of a user's meetings on the surface | ⬜ planned | core/meetings (meeting-api), core/gateway, clients/terminal |
+| **Routines: scheduled meetings** — a `routine.v1` / `schedule.v1` job that joins on a cron | ⬜ planned | core/runtime (scheduler), core/agent, core/meetings |
+| **Docs ↔ meetings binding** — bind a workspace doc to a meeting (capture → governed action) | ⬜ planned | core/agent (workspace.v1), core/meetings, clients/terminal |
+| **WebSocket coverage** — the `/ws` multiplex fanning transcripts · bot status · chat | ⬜ planned | core/gateway (ws.v1), core/meetings, clients/terminal |
+| **Bucket encryption** — per-workspace envelope encryption; keys brokered, decrypted only in-container | ⬜ planned | core/identity, core/agent (workspace.v1), core/runtime |
+| **Transcript encryption** — encrypt transcripts at rest in the meetings database (the SSOT); protect the redis carrier (auth/TLS/ACLs) | ⬜ planned | core/meetings, core/identity |
+| **User-token encryption** — store API tokens hashed/encrypted at rest, not cleartext | ⬜ planned | core/identity (admin-api) |
+| **Calendar** _(deferred)_ — calendar-driven auto-join | 🟦 deferred | core/runtime, core/meetings |

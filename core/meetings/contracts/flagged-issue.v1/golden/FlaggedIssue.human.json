@@ -1,0 +1,23 @@
+{
+  "issue_id": "issue-003",
+  "platform": "teams",
+  "native_meeting_id": "19:meeting_abc123",
+  "session_start_time": "2026-06-21T11:00:00.000Z",
+  "segment_id": "ch-999:3:12000",
+  "speaker": "Vera",
+  "text": "[inaudible]",
+  "start": 12.0,
+  "end": 13.5,
+  "issue_type": "lost-content",
+  "severity": "critical",
+  "description": "user reports a whole sentence was dropped from the transcript here",
+  "signal": {
+    "captured_signal": "captures/teams-19meeting_abc123.captured-signal.jsonl",
+    "frame_seq_start": 60,
+    "frame_seq_end": 75
+  },
+  "ground_truth": "we need to finalize the budget by Friday",
+  "flagged_by": "human",
+  "status": "open",
+  "created_at": "2026-06-21T11:20:00.000Z"
+}

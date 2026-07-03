@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/tool.v1",
+  "title": "tool.v1",
+  "description": "A tool descriptor — the cred-governance spine. Declares a capability the unit may use, the credential it needs (as a SecretsPort REFERENCE, never a value), how it attaches (MCP or builtin), whether the unit may call it freely (auto) or only with per-call human approval (gate), and the governance barriers it carries. The unit's scoped toolbelt (unit.v1.tools) is the allow-set; auto tools enter --allowedTools, gate tools hold the turn for an approval surfaced as a proactive-card.v1 action. Governance (MNPI/info-barrier/air-gap) is enforced HERE + the sandbox layer, not in the model.",
+  "$defs": {
+    "Tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "scope", "grant", "transport"],
+      "properties": {
+        "name": { "type": "string", "description": "the tool id, e.g. gmail.send" },
+        "scope": { "type": "string", "description": "capability string → maps to --allowedTools, e.g. send:self" },
+        "grant": { "enum": ["auto", "gate"], "description": "auto = call freely; gate = per-call human approval" },
+        "cred_ref": { "type": "string", "description": "a SecretsPort reference, e.g. secret://gmail/oauth — NEVER a value (P15)" },
+        "transport": { "enum": ["mcp", "builtin"], "description": "MCP = the tool-attachment mechanism" },
+        "mcp_server": { "type": "string", "description": "the MCP server id when transport=mcp" },
+        "barriers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "governance tags enforced at the cred+sandbox layer, e.g. mnpi, info-barrier"
+        }
+      }
+    }
+  }
+}

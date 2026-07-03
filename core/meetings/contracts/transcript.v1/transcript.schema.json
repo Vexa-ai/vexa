@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/transcript.v1",
+  "title": "transcript.v1",
+  "description": "The transcript contract: speaker-attributed segments + the session envelopes carried over the bus (bot[TS] → collector[Py]) and the live mutable bundle (gateway → dashboard).",
+  "$defs": {
+    "Source": {
+      "description": "How the speaker was attributed.",
+      "enum": ["glow-bound", "provisional-cluster-id", "caption", "merged"]
+    },
+    "Word": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["word", "start", "end"],
+      "properties": {
+        "word": { "type": "string" },
+        "start": { "type": "number" },
+        "end": { "type": "number" },
+        "probability": { "type": "number" }
+      }
+    },
+    "TranscriptSegment": {
+      "description": "One speaker-attributed utterance. Times are seconds relative to session start.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["segment_id", "speaker", "text", "start", "end", "completed"],
+      "properties": {
+        "segment_id": { "type": "string", "description": "stable id: {session_uid}:{speaker_key}:{startMs}" },
+        "speaker": { "type": "string", "description": "display name (glow-bound or a provisional label)" },
+        "speaker_key": { "type": "string", "description": "per-channel turn key" },
+        "text": { "type": "string" },
+        "start": { "type": "number" },
+        "end": { "type": "number" },
+        "language": { "type": ["string", "null"] },
+        "completed": { "type": "boolean", "description": "true = confirmed, false = live draft/pending" },
+        "absolute_start_time": { "type": "string", "format": "date-time" },
+        "absolute_end_time": { "type": "string", "format": "date-time" },
+        "source": { "$ref": "#/$defs/Source" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "words": { "type": "array", "items": { "$ref": "#/$defs/Word" } }
+      }
+    },
+    "SessionStart": {
+      "description": "Opens a transcript session on the bus. Auth is transport-layer (not a field here); tenant/owner/visibility are deferred — added additively to this object when sharing lands (ADR-0003).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "session_uid", "meeting_id", "platform", "start_time"],
+      "properties": {
+        "type": { "const": "session_start" },
+        "session_uid": { "type": "string" },
+        "meeting_id": { "type": "string" },
+        "platform": { "type": "string" },
+        "start_time": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Transcription": {
+      "description": "A batch of persisted (confirmed) segments → the collector stream.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "session_uid", "meeting_id", "segments"],
+      "properties": {
+        "type": { "const": "transcription" },
+        "session_uid": { "type": "string" },
+        "meeting_id": { "type": "string" },
+        "segments": { "type": "array", "items": { "$ref": "#/$defs/TranscriptSegment" } }
+      }
+    },
+    "SessionEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "session_uid"],
+      "properties": {
+        "type": { "const": "session_end" },
+        "session_uid": { "type": "string" }
+      }
+    },
+    "MutableBundle": {
+      "description": "The live confirmed+pending bundle the gateway forwards verbatim to the dashboard.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "meeting", "speaker", "confirmed", "pending", "ts"],
+      "properties": {
+        "type": { "const": "transcript" },
+        "meeting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id"],
+          "properties": { "id": { "type": "integer" } }
+        },
+        "speaker": { "type": "string" },
+        "confirmed": { "type": "array", "items": { "$ref": "#/$defs/TranscriptSegment" } },
+        "pending": { "type": "array", "items": { "$ref": "#/$defs/TranscriptSegment" } },
+        "ts": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

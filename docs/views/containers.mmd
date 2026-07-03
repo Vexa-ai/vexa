@@ -1,0 +1,47 @@
+%% GENERATED — pnpm arch:dsl --write
+flowchart LR
+  subgraph meetings["meetings"]
+    bot["bot"]
+    desktop["desktop"]
+    meeting_api["meeting-api"]
+    transcription["transcription"]
+    segments_table["transcription_segments (table)"]
+  end
+  subgraph agent["agent"]
+    agent_api["agent-api"]
+    agent_worker["agent-worker"]
+  end
+  subgraph gateway_system["gateway"]
+    conformance["conformance"]
+    gateway["gateway"]
+  end
+  subgraph identity["identity"]
+    admin_api["admin-api"]
+  end
+  subgraph runtime_system["runtime"]
+    runtime["runtime"]
+  end
+  subgraph platform["platform"]
+    redis["redis"]
+    postgres["postgres"]
+    minio["minio"]
+  end
+  slim["slim"]
+  dashboard["dashboard"]
+  extension["extension"]
+  terminal["terminal"]
+  meeting_api -->|"write"| segments_table
+  bot -->|"HTTPS"| transcription
+  meeting_api -->|"JDBC"| postgres
+  meeting_api -->|"HTTPS"| minio
+  meeting_api -->|"HTTPS"| runtime
+  agent_api -->|"HTTPS"| runtime
+  gateway -->|"HTTPS"| meeting_api
+  gateway -->|"HTTPS"| agent_api
+  gateway -->|"HTTPS"| admin_api
+  admin_api -->|"JDBC"| postgres
+  terminal -->|"HTTPS"| gateway
+  terminal -->|"WebSocket"| gateway
+  slim -->|"HTTPS"| gateway
+  dashboard -->|"WebSocket"| gateway
+  extension -->|"WebSocket"| gateway

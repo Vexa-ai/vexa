@@ -1,0 +1,55 @@
+# docker-compose.dev.yml — DEV-CONTAINER overrides: hot code connection to the running images.
+#
+# Each service mounts its SOURCE from the on-host checkout over the image's baked copy and runs under a
+# file-watcher that restarts the process on change. So the loop is: edit (or `git pull`) on the host →
+# the watcher restarts the service → the change is live, with NO image rebuild.
+#
+# Layer it LAST, on the same project:
+#   docker compose -p vexa-dash \
+#     -f docker-compose.yml -f docker-compose.dashboard.yml -f docker-compose.stt.yml \
+#     -f docker-compose.dev.yml up -d --no-build --no-deps admin-api runtime meeting-api gateway
+#
+# The four control-plane services are interpreted Python (`python -m <pkg>`, src on PYTHONPATH=/app/src)
+# and `uvicorn[standard]` ships `watchfiles`, so a process-RESTART watcher fits — these entrypoints do
+# async adapter wiring before uvicorn.run (no importable module-level app, so uvicorn --reload doesn't
+# apply). Paths are relative to this file (deploy/compose/) → ../../core/... is the repo source.
+#
+# The BOT is NOT here: it is a compiled `node dist/index.js` + an esbuild browser bundle, spawned
+# per-meeting by the runtime kernel — its hot loop is the runtime docker_backend dev-mount + a host
+# watch-build, set up separately.
+services:
+  admin-api:
+    volumes:
+      - ../../core/identity/services/admin-api/src:/app/src
+    command: ["python", "-m", "watchfiles", "python -m admin_api", "/app/src"]
+
+  runtime:
+    volumes:
+      - ../../core/runtime/src:/app/src
+    # the HOST path of the agent_api source → dev-mounted into SPAWNED workers so worker.py hot-reloads
+    # too (no image rebuild). Per-host: set VEXA_AGENT_SRC_MOUNT in deploy/compose/.env to the checkout.
+    environment:
+      - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
+    command: ["python", "-m", "watchfiles", "python -m runtime_kernel", "/app/src"]
+
+  meeting-api:
+    volumes:
+      - ../../core/meetings/services/meeting-api/src:/app/src
+    command: ["python", "-m", "watchfiles", "python -m meeting_api", "/app/src"]
+
+  gateway:
+    volumes:
+      - ../../core/gateway/services/gateway/src:/app/src
+    command: ["python", "-m", "watchfiles", "python -m gateway", "/app/src"]
+
+  # The agent code is four top-level packages under /app (PYTHONPATH=/app): shared / control_plane /
+  # worker / contracts. Mount each so edits hot-reload (no image rebuild).
+  agent-api:
+    volumes:
+      - ../../core/agent/shared:/app/shared
+      - ../../core/agent/control_plane:/app/control_plane
+      - ../../core/agent/worker:/app/worker
+      - ../../core/agent/contracts:/app/contracts
+      # hot seed: new workspaces are seeded from the live repo template (no image rebuild)
+      - ../../core/agent/workspace-seed:/app/workspace-seed
+    command: ["python", "-m", "watchfiles", "uvicorn control_plane.api:app --host 0.0.0.0 --port 8100", "/app/shared", "/app/control_plane", "/app/worker", "/app/contracts"]

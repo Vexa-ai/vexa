@@ -1,0 +1,107 @@
+{{- if .Values.minio.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vexa.componentName" (list . "minio") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "vexa.componentName" (list . "minio") }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-4 fix).
+      #
+      # Linode LKE g6-standard-* nodes cap at 7 attached block volumes
+      # per instance (boot disk + system + user PVCs). When all four
+      # stateful pods (postgres + redis + minio + tts) co-locate on one
+      # node, the 4th PVC fails to attach with:
+      #   "max number of volumes (7) already attached to instance"
+      # MinIO is typically the sufferer (StatefulSet ordering + larger
+      # readiness probe + scheduler picks first-available-node first).
+      #
+      # Soft anti-affinity (preferredDuringSchedulingIgnoredDuringExecution)
+      # spreads stateful pods across nodes when ≥2 nodes are available
+      # without breaking single-node test deployments. Aligns with the
+      # Pack I (chart availability defaults) shape — robustness defaults
+      # should be safe-by-default, not require operator opt-in.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, redis, tts-service]
+                topologyKey: kubernetes.io/hostname
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: minio
+          image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - minio
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.minio.accessKey | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              value: {{ .Values.minio.secretKey | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.minio.persistence.size }}
+        {{- if .Values.minio.persistence.storageClassName }}
+        storageClassName: {{ .Values.minio.persistence.storageClassName | quote }}
+        {{- end }}
+{{- end }}

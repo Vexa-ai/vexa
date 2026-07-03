@@ -1,0 +1,8 @@
+{
+  "identity": { "subject": "u_jane", "launcher": "user:u_jane" },
+  "runner": "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "rw" } ],
+  "trigger": "message",
+  "context": { "kind": "none" },
+  "start": { "entrypoint": { "inline": "Summarize my open tasks and draft the Acme follow-up." } }
+}

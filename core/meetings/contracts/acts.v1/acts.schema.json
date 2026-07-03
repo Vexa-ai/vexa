@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/acts.v1",
+  "title": "acts.v1",
+  "description": "Control-plane → bot command bus over redis pub/sub (channel `bot_commands:meeting:{meeting_id}`). One JSON message per command, discriminated by `action`. Unknown actions are ignored.",
+  "$defs": {
+    "ActAction": {
+      "enum": ["leave", "reconfigure", "speak", "speak_audio", "speak_stop", "chat_send", "chat_read", "screen_show", "screen_stop", "avatar_set", "avatar_reset"]
+    },
+    "Leave": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "leave" } } },
+    "Reconfigure": {
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "reconfigure" }, "language": { "type": ["string", "null"] }, "task": { "type": ["string", "null"] }, "allowedLanguages": { "type": "array", "items": { "type": "string" } } }
+    },
+    "Speak": { "type": "object", "additionalProperties": false, "required": ["action", "text"], "properties": { "action": { "const": "speak" }, "text": { "type": "string" }, "voice": { "type": "string" } } },
+    "SpeakAudio": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "speak_audio" }, "url": { "type": "string" }, "audioBase64": { "type": "string" } } },
+    "SpeakStop": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "speak_stop" } } },
+    "ChatSend": { "type": "object", "additionalProperties": false, "required": ["action", "text"], "properties": { "action": { "const": "chat_send" }, "text": { "type": "string" } } },
+    "ChatRead": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "chat_read" } } },
+    "ScreenShow": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "screen_show" }, "imageUrl": { "type": "string" }, "text": { "type": "string" } } },
+    "ScreenStop": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "screen_stop" } } },
+    "AvatarSet": { "type": "object", "additionalProperties": false, "required": ["action", "url"], "properties": { "action": { "const": "avatar_set" }, "url": { "type": "string" } } },
+    "AvatarReset": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "avatar_reset" } } },
+    "Act": {
+      "description": "Any one command.",
+      "oneOf": [
+        { "$ref": "#/$defs/Leave" }, { "$ref": "#/$defs/Reconfigure" },
+        { "$ref": "#/$defs/Speak" }, { "$ref": "#/$defs/SpeakAudio" }, { "$ref": "#/$defs/SpeakStop" },
+        { "$ref": "#/$defs/ChatSend" }, { "$ref": "#/$defs/ChatRead" },
+        { "$ref": "#/$defs/ScreenShow" }, { "$ref": "#/$defs/ScreenStop" },
+        { "$ref": "#/$defs/AvatarSet" }, { "$ref": "#/$defs/AvatarReset" }
+      ]
+    }
+  }
+}

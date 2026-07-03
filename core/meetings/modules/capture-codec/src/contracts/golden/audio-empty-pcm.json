@@ -1,0 +1,11 @@
+{
+  "name": "audio-empty-pcm",
+  "kind": "audio",
+  "description": "unnamed frame with zero PCM samples (header only)",
+  "speakerIndex": 999,
+  "ts": 1718000001000,
+  "samples": [],
+  "len": 12,
+  "sha256": "8cbd1ae37102a5e806fd482b86b7b99522b5bfba60468580d9089a000034efc2",
+  "bytes_b64": "5wMAAACA/nkMAHlC"
+}

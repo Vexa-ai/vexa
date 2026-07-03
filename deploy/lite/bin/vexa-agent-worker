@@ -1,0 +1,15 @@
+#!/bin/bash
+# =============================================================================
+# Vexa Lite — agent-worker launcher (process backend)
+# =============================================================================
+# The runtime kernel (RUNTIME_BACKEND=process) execs this once per agent dispatch via the
+# agent profile (AGENT_WORKER_COMMAND). It runs the claude-in-process worker turn under the
+# agent venv with the agent packages on PYTHONPATH. The dispatch (scoped token, workspace
+# path, redis stream, model creds) arrives in the inherited env; the worker reads its
+# workspace from /workspaces (the shared dir agent-api also reads — no volume bind in
+# process mode, both processes share the container filesystem).
+set -u
+
+cd /app/agent
+export PYTHONPATH="/app/agent${PYTHONPATH:+:${PYTHONPATH}}"
+exec /opt/venvs/agent/bin/python -m worker

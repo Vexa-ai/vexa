@@ -1,0 +1,11 @@
+{
+  "type": "captured_signal_header",
+  "v": 1,
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "trace_id": "7f3a1c9e2b8d4a6f5e0c1d2b3a4f5e6d",
+  "language": "en",
+  "lane": "gmeet",
+  "sample_rate": 16000,
+  "started_at": "2026-06-21T10:00:00.000Z"
+}

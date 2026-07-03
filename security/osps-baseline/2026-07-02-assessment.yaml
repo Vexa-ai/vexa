@@ -1,0 +1,2420 @@
+service-name: vexa-core
+plugin-name: github-repo
+plugin-uri: https://github.com/ossf/pvtr-github-repo-scanner
+plugin-version: 0.24.0
+evaluation-suites:
+- name: vexa-core_osps-baseline-2026-02
+  result: Needs Review
+  catalog-id: osps-baseline-2026-02
+  start-time: 2026-07-02 18:26:05.066053 +0100 WEST m=+4.536125626
+  end-time: 2026-07-02 18:26:09.877044 +0100 WEST m=+9.347093751
+  corrupted-state: false
+  control-evaluations:
+    metadata:
+      id: ''
+      type: Invalid
+      gemara-version: ''
+      description: ''
+      author:
+        id: ''
+        name: github-repo
+        type: Invalid
+        version: 0.24.0
+        uri: https://github.com/ossf/pvtr-github-repo-scanner
+    result: Not Run
+    evaluations:
+    - name: 'The project''s version control system MUST require multi-factor
+
+        authentication for users modifying the project repository
+
+        settings or accessing sensitive data.
+
+        '
+      result: Passed
+      message: This control is enforced by GitHub for all projects
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-AC-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-AC-01.01
+        description: 'Reduce the risk of account compromise or insider threats by
+          requiring
+
+          multi-factor authentication for collaborators modifying the project
+
+          repository settings or accessing sensitive data.
+
+          '
+        result: Passed
+        message: This control is enforced by GitHub for all projects
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:05+01:00'
+        end: '2026-07-02T18:26:05+01:00'
+        recommendation: 'Enforce multi-factor authentication for the project''s version
+
+          control system, requiring collaborators to provide a second form of
+
+          authentication when accessing sensitive data or modifying repository
+
+          settings. Passkeys are acceptable for this control.
+
+          '
+    - name: 'The project''s version control system MUST restrict collaborator
+
+        permissions to the lowest available privileges by default.
+
+        '
+      result: Passed
+      message: This control is enforced by GitHub for all projects
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-AC-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-AC-02.01
+        description: 'Reduce the risk of unauthorized access to the project''s repository
+          by
+
+          limiting the permissions granted to new collaborators.
+
+          '
+        result: Passed
+        message: This control is enforced by GitHub for all projects
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:05+01:00'
+        end: '2026-07-02T18:26:05+01:00'
+        recommendation: 'Most public version control systems are configured in this
+          manner.
+
+          Ensure the project''s version control system always assigns the lowest
+
+          available permissions to collaborators by default when added, granting
+
+          additional permissions only when necessary.
+
+          '
+    - name: 'The project''s version control system MUST prevent unintentional
+
+        modification of the primary branch.
+
+        '
+      result: Passed
+      message: Default branch is protected from deletions by branch protection rules
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-AC-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-AC-03.01
+        description: 'Reduce the risk of accidental changes or deletion of the primary
+          branch
+
+          of the project''s repository by preventing unintentional modification.
+
+          '
+        result: Passed
+        message: Branch protection rule requires approving reviews
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:05+01:00'
+        end: '2026-07-02T18:26:05+01:00'
+        recommendation: 'If the VCS is centralized, set branch protection on the primary
+          branch
+
+          in the project''s VCS. Alternatively, use a decentralized approach,
+
+          like the Linux kernel''s, where changes are first proposed in another
+
+          repository, and merging changes into the primary repository requires a
+
+          specific separate act.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-AC-03.02
+        description: 'Reduce the risk of accidental changes or deletion of the primary
+          branch
+
+          of the project''s repository by preventing unintentional modification.
+
+          '
+        result: Passed
+        message: Default branch is protected from deletions by branch protection rules
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:05+01:00'
+        end: '2026-07-02T18:26:05+01:00'
+        recommendation: 'Set branch protection on the primary branch in the project''s
+          version
+
+          control system to prevent deletion.
+
+          '
+    - name: 'The project''s permissions in CI/CD pipelines MUST follow the principle
+
+        of least privilege.
+
+        '
+      result: Needs Review
+      message: GitHub Actions is disabled for this repository; manual review required.
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-AC-04
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-AC-04.01
+        description: 'Reduce the risk of unauthorized access to the project''s build
+          and release
+
+          processes by limiting the permissions granted to steps within the CI/CD
+
+          pipelines.
+
+          '
+        result: Needs Review
+        message: GitHub Actions is disabled for this repository; manual review required.
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:05+01:00'
+        end: '2026-07-02T18:26:05+01:00'
+        recommendation: 'Configure the project''s settings to assign the lowest available
+
+          permissions to new pipelines by default, granting additional
+
+          permissions only when necessary for specific tasks.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-AC-04.02
+        description: 'Reduce the risk of unauthorized access to the project''s build
+          and release
+
+          processes by limiting the permissions granted to steps within the CI/CD
+
+          pipelines.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Configure the project''s CI/CD pipelines to assign the lowest
+          available
+
+          permissions to users and services by default, elevating permissions
+
+          only when necessary for specific tasks. In some version control
+
+          systems, this may be possible at the organizational or repository
+
+          level. If not, set permissions at the top level of the pipeline.
+
+          '
+    - name: 'The project''s build and release pipelines MUST NOT permit untrusted
+
+        input that allows access to privileged resources.
+
+        '
+      result: Passed
+      message: GitHub Workflows do not use unsanitized branch names in run steps
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-BR-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-01.01
+        description: 'Reduce the risk of code injection or other security vulnerabilities
+          in the
+
+          project''s build and release pipelines by preventing untrusted input from
+
+          accessing privileged resources.
+
+          '
+        result: Passed
+        message: GitHub Workflows variables do not contain untrusted inputs
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:05+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-01.02
+        description: 'Reduce the risk of code injection or other security vulnerabilities
+          in the
+
+          project''s build and release pipelines by preventing untrusted input from
+
+          accessing privileged resources.
+
+          '
+        result: Passed
+        message: GitHub Workflows do not use unsanitized branch names in run steps
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+    - name: 'All releases and released software assets MUST be assigned a unique
+
+        version identifier for each release intended to be used by users.
+
+        '
+      result: Passed
+      message: All releases found have a unique name
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-BR-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-02.01
+        description: 'Ensure that each software asset produced by the project is uniquely
+
+          identified, enabling users to track changes and updates to the project
+
+          over time.
+
+          '
+        result: Passed
+        message: All releases found have a unique name
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Assign a unique version identifier to each release produced
+          by the
+
+          project, following a consistent naming convention or numbering scheme.
+
+          Examples include SemVer, CalVer, or git commit id.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-02.02
+        description: 'Ensure that each software asset produced by the project is uniquely
+
+          identified, enabling users to track changes and updates to the project
+
+          over time.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Assign a unique version identifier to each software asset
+          produced by
+
+          the project, following a consistent naming convention or numbering
+
+          scheme. Examples include SemVer, CalVer, or git commit id.
+
+          '
+    - name: 'All official project URIs MUST be delivered using encrypted channels.
+
+        '
+      result: Passed
+      message: All distribution points use HTTPS
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-BR-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-03.01
+        description: 'Protect the confidentiality and integrity of project source
+          code during
+
+          development, reducing the risk of eavesdropping or data tampering.
+
+          '
+        result: Passed
+        message: All links use HTTPS
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Configure the project''s websites and version control systems
+          to use
+
+          encrypted channels such as SSH or HTTPS for data transmission.
+
+          Ensure all tools and domains referenced in project documentation can
+
+          only be accessed via encrypted channels.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-03.02
+        description: 'Protect the confidentiality and integrity of project source
+          code during
+
+          development, reducing the risk of eavesdropping or data tampering.
+
+          '
+        result: Passed
+        message: All distribution points use HTTPS
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Configure the project''s release pipeline to only fetch data
+          from
+
+          websites, API responses, and other services which use encrypted
+
+          channels such as SSH or HTTPS for data transmission.
+
+          '
+    - name: 'All releases MUST provide a descriptive log of functional and security
+
+        modifications.
+
+        '
+      result: Passed
+      message: Mention of a changelog found in the latest release
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-BR-04
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-04.01
+        description: 'Provide transparency and accountability for changes made to
+          the project''s
+
+          software releases, enabling users to understand the modifications and
+
+          improvements included in each release.
+
+          '
+        result: Passed
+        message: Mention of a changelog found in the latest release
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Ensure that all releases include a descriptive change log.
+          It is
+
+          recommended to ensure that the change log is human-readable and
+
+          includes details beyond commit messages, such as descriptions of the
+
+          security impact or relevance to different use cases. To ensure
+
+          machine readability, place the content under a markdown header
+
+          such as "## Changelog".
+
+          '
+    - name: 'All build and release pipelines MUST use standardized tooling where
+
+        available to ingest dependencies at build time.
+
+        '
+      result: Not Run
+      message: Not implemented
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-BR-05
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-05.01
+        description: 'Ensure that the project''s build and release pipelines use standardized
+          tools
+
+          and processes to manage dependencies, reducing the risk of compatibility
+
+          issues or security vulnerabilities in the software.
+
+          '
+        result: Not Run
+        message: Not implemented
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Use a common tooling for your ecosystem, such as package
+          managers or
+
+          dependency management tools to ingest dependencies at build time. This
+
+          may include using a dependency file, lock file, or manifest to specify
+
+          the required dependencies, which are then pulled in by the build
+
+          system.
+
+          '
+    - name: 'Produce all released software assets with signatures and hashes.
+
+        '
+      result: Passed
+      message: Found SLSA attestation in security insights
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-BR-06
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-06.01
+        description: 'All released software assets MUST be signed or accounted for
+          in a
+
+          signed manifest including each asset''s cryptographic hashes.
+
+          '
+        result: Passed
+        message: Found SLSA attestation in security insights
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 3
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Sign all released software assets at build time with a cryptographic
+
+          signature or attestations, such as GPG or PGP signature, Sigstore
+
+          signatures, SLSA provenance, or SLSA VSAs. Include the cryptographic
+
+          hashes of each asset in a signed manifest or metadata file.
+
+          '
+    - name: 'The project MUST store and manage all secrets and credentials used by
+        the project in a secure manner.
+
+        '
+      result: Passed
+      message: Secret scanning is enabled and prevents pushing secrets
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-BR-07
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-07.01
+        description: 'Ensure that sensitive data is not disclosed, compromised or
+          misused leading to security vulnerabilities or supply chain compromise.
+
+          '
+        result: Passed
+        message: Secret scanning is enabled and prevents pushing secrets
+        applicability:
+        - Maturity Level 1
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Configure .gitignore or equivalent to exclude files that
+          may contain sensitive information. Use pre-commit hooks and automated scanning
+          tools to detect and prevent the inclusion of sensitive data in commits.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-BR-07.02
+        description: 'Ensure that sensitive data is not disclosed, compromised or
+          misused leading to security vulnerabilities or supply chain compromise.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Document how secrets and credentials are managed and used
+          within the project. This should include details on how secrets are stored
+          (e.g., using a secrets management tool), how access is controlled, and how
+          secrets are rotated or updated. Ensure that sensitive information is not
+          hard-coded in the source code or stored in version control systems.
+
+          '
+    - name: 'The project documentation MUST provide user guides for all basic
+
+        functionality.
+
+        '
+      result: Passed
+      message: User guide was specified in Security Insights data
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-DO-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-DO-01.01
+        description: 'Ensure that users have a clear and comprehensive understanding
+          of the
+
+          project''s current features in order to prevent damage from misuse or
+
+          misconfiguration.
+
+          '
+        result: Passed
+        message: User guide was specified in Security Insights data
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 3
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Create user guides or documentation for all basic functionality
+          of the
+
+          project, explaining how to install, configure, and use the project''s
+
+          features. If there are any known dangerous or destructive actions
+
+          available, include highly-visible warnings.
+
+          '
+    - name: 'The project MUST provide a mechanism for reporting defects.
+
+        '
+      result: Passed
+      message: Repository accepts vulnerability reports
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-DO-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-DO-02.01
+        description: 'Enable users and contributors to report defects or issues with
+          the
+
+          released software assets, facilitating communication and collaboration on
+
+          defect fixes and improvements.
+
+          '
+        result: Passed
+        message: Repository accepts vulnerability reports
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 3
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'It is recommended that projects use their VCS default issue
+          tracker.
+
+          If an external source is used, ensure that the project documentation
+
+          and contributing guide clearly and visibly explain how to use the
+
+          reporting system. It is recommended that project documentation also
+
+          sets expectations for how defects will be triaged and resolved.
+
+          '
+    - name: 'The project documentation MUST contain instructions to verify the
+
+        integrity and authenticity of the release assets, including the
+
+        expected identity of the person or process authoring the software
+
+        release.
+
+        '
+      result: Not Run
+      message: ''
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-DO-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-DO-03.01
+        description: 'Enable users to verify the authenticity and integrity of the
+          project''s
+
+          released software assets, reducing the risk of using tampered or
+
+          unauthorized versions of the software.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Instructions in the project should contain information about
+          the
+
+          technology used, the commands to run, and the expected output.
+
+          When possible, avoid storing this documentation in the same location
+
+          as the build and release pipeline to avoid a single breach
+
+          compromising both the software and the documentation for verifying the
+
+          integrity of the software.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-DO-03.02
+        description: 'Enable users to verify the authenticity and integrity of the
+          project''s
+
+          released software assets, reducing the risk of using tampered or
+
+          unauthorized versions of the software.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'The expected identity may be in the form of key IDs used
+          to sign,
+
+          issuer and identity from a sigstore certificate, or other similar
+
+          forms.
+
+          When possible, avoid storing this documentation in the same location
+
+          as the build and release pipeline to avoid a single breach
+
+          compromising both the software and the documentation for verifying the
+
+          integrity of the software.
+
+          '
+    - name: 'The project documentation MUST include a descriptive statement about
+
+        the scope and duration of support.
+
+        '
+      result: Not Run
+      message: ''
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-DO-04
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-DO-04.01
+        description: 'Provide users with clear expectations regarding the project''s
+          support
+
+          lifecycle. This allows downstream consumers to take relevant actions to
+
+          ensure the continued functionality and security of their systems.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'In order to communicate the scope and duration of support
+          for the
+
+          project''s released software assets, the project should have a
+
+          SUPPORT.md file, a "Support" section in SECURITY.md, or
+
+          other documentation explaining the support lifecycle,
+
+          including the expected duration of support for each release, the
+
+          types of support provided (e.g., bug fixes, security updates), and
+
+          any relevant policies or procedures for obtaining support.
+
+          '
+    - name: 'The project documentation MUST provide a descriptive statement when
+
+        releases or versions will no longer receive security updates.
+
+        '
+      result: Not Run
+      message: ''
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-DO-05
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-DO-05.01
+        description: 'Communicating when the project maintainers will no longer fix
+          defects or
+
+          security vulnerabilities is crucial for downstream consumers to find
+
+          alternative solutions or alternative means of support for the project.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'In order to communicate the scope and duration of support
+          for security
+
+          fixes, the project should have a SUPPORT.md or other documentation
+
+          explaining the project''s policy for security updates.
+
+          '
+    - name: 'The project documentation MUST include a description of how the
+
+        project selects, obtains, and tracks its dependencies.
+
+        '
+      result: Passed
+      message: Dependency management policy was specified in Security Insights data
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-DO-06
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-DO-06.01
+        description: 'Provide information about how the project selects, obtains,
+          and tracks
+
+          dependencies, libraries, frameworks, etc. to help downstream consumers
+
+          understand how the project operates in regards to third-party components
+
+          that are required necessary for the software to function.
+
+          '
+        result: Passed
+        message: Dependency management policy was specified in Security Insights data
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 4
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'It is recommended to publish this information alongside the
+          project''s
+
+          technical & design documentation on a publicly viewable resource such
+
+          as the source code repository, project website, or other channel.
+
+          '
+    - name: 'The project documentation MUST include the roles and responsibilities
+
+        for members of the project.
+
+        '
+      result: Passed
+      message: Roles and responsibilities were specified in Security Insights data
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-GV-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-GV-01.01
+        description: 'Documenting project roles and responsibilities helps project
+          participants,
+
+          potential contributors, and downstream consumers have an accurate
+
+          understanding of who is working on the project and what areas of authority
+
+          they may have.
+
+          '
+        result: Passed
+        message: Project admins were specified in Security Insights data
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 4
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Document project participants and their roles through such
+          artifacts
+
+          as members.md, governance.md, maintainers.md, or similar file within
+
+          the source code repository of the project.
+
+          This may be as simple as including names or account handles in a list
+
+          of maintainers, or more complex depending on the project''s governance.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-GV-01.02
+        description: 'Documenting project roles and responsibilities helps project
+          participants,
+
+          potential contributors, and downstream consumers have an accurate
+
+          understanding of who is working on the project and what areas of authority
+
+          they may have.
+
+          '
+        result: Passed
+        message: Roles and responsibilities were specified in Security Insights data
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Document project participants and their roles through such
+          artifacts
+
+          as members.md, governance.md, maintainers.md, or similar file within
+
+          the source code repository of the project.
+
+          '
+    - name: 'The project MUST have one or more mechanisms for public discussions
+
+        about proposed changes and usage obstacles.
+
+        '
+      result: Passed
+      message: Issues are enabled for the repository
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-GV-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-GV-02.01
+        description: 'Encourages open communication and collaboration within the project
+
+          community, enabling users to provide feedback and discuss proposed changes
+
+          or usage challenges.
+
+          '
+        result: Passed
+        message: Issues are enabled for the repository
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Establish one or more mechanisms for public discussions within
+          the
+
+          project, such as mailing lists, instant messaging, or issue trackers,
+
+          to facilitate open communication and feedback.
+
+          '
+    - name: 'The project documentation MUST include an explanation of the
+
+        contribution process.
+
+        '
+      result: Passed
+      message: Code review guide was specified in Security Insights data
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-GV-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-GV-03.01
+        description: 'Provide guidance to new contributors on how to participate in
+          the project,
+
+          outlining the steps required to submit changes or enhancements to the
+
+          project''s codebase.
+
+          '
+        result: Passed
+        message: 'Contributing guide specified in Security Insights data (Bonus: code
+          of conduct location also specified)'
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Create a CONTRIBUTING.md or CONTRIBUTING/ directory to outline
+          the
+
+          contribution process including the steps for submitting changes, and
+
+          engaging with the project maintainers.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-GV-03.02
+        description: 'Provide guidance to new contributors on how to participate in
+          the project,
+
+          outlining the steps required to submit changes or enhancements to the
+
+          project''s codebase.
+
+          '
+        result: Passed
+        message: Code review guide was specified in Security Insights data
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 4
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Extend the CONTRIBUTING.md or CONTRIBUTING/ contents in the
+          project
+
+          documentation to outline the requirements for acceptable
+
+          contributions, including coding standards, testing requirements, and
+
+          submission guidelines for code contributors. It is recommended that
+
+          this guide is the source of truth for both contributors and approvers.
+
+          '
+    - name: 'The project documentation MUST have a policy that code contributors
+
+        are reviewed prior to granting escalated permissions to sensitive
+
+        resources.
+
+        '
+      result: Not Run
+      message: ''
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-GV-04
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-GV-04.01
+        description: 'Ensure that code contributors are vetted and reviewed before
+          being granted
+
+          elevated permissions to sensitive resources within the project, reducing
+
+          the risk of unauthorized access or misuse.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Publish an enforceable policy in the project documentation
+          that
+
+          requires code collaborators to be reviewed and approved before being
+
+          granted escalated permissions to sensitive resources, such as merge
+
+          approval or access to secrets. It is recommended that vetting includes
+
+          establishing a justifiable lineage of identity such as confirming the
+
+          contributor''s association with a known trusted organization.
+
+          '
+    - name: 'The version control system MUST require all code contributors to assert
+
+        that they are legally authorized to make the associated contributions
+
+        on every commit.
+
+        '
+      result: Passed
+      message: This control is satisfied by the GitHub Terms of Service
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-LE-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-LE-01.01
+        description: 'Ensure that code contributors are aware of and acknowledge their
+          legal
+
+          responsibility for the contributions they make to the project, reducing
+
+          the risk of intellectual property disputes against the project.
+
+          '
+        result: Passed
+        message: This control is satisfied by the GitHub Terms of Service
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Include a DCO in the project''s repository, requiring code
+
+          contributors to assert that they are legally authorized to commit the
+
+          associated contributions on every commit. Use a status check to ensure
+
+          the assertion is made. A CLA also satisfies this requirement.
+
+          Some version control systems, such as GitHub, may include this in the
+
+          platform terms of service.
+
+
+          It is understood that projects with a lengthy history prior to
+
+          adopting OSPS Baseline may not be able to retroactively enforce this
+
+          requirement.
+
+          '
+    - name: 'All licenses for the project MUST meet the OSI Open Source Definition
+
+        or the FSF Free Software Definition.
+
+        '
+      result: Passed
+      message: All license found are OSI or FSF approved
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-LE-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-LE-02.01
+        description: 'Ensure that the project''s source code is distributed under
+          a recognized
+
+          and legally enforceable open source software license, providing clarity
+          on
+
+          how the code can be used and shared by others.
+
+          '
+        result: Passed
+        message: All license found are OSI or FSF approved
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Add a LICENSE file to the project''s repo with a license
+          that is an
+
+          approved license by the Open Source Initiative (OSI), or a free
+
+          license as approved by the Free Software Foundation (FSF). Examples of
+
+          such licenses include the MIT, BSD 2-clause, BSD 3-clause revised,
+
+          Apache 2.0, Lesser GNU General Public License (LGPL), and the GNU
+
+          General Public License (GPL). Releasing to the public domain meets
+
+          this control if there are no other encumbrances such as patents.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-LE-02.02
+        description: 'Ensure that the project''s source code is distributed under
+          a recognized
+
+          and legally enforceable open source software license, providing clarity
+          on
+
+          how the code can be used and shared by others.
+
+          '
+        result: Passed
+        message: All license found are OSI or FSF approved
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'If a different license is included with released software
+          assets,
+
+          ensure it is an approved license by the Open Source Initiative (OSI),
+
+          or a free license as approved by the Free Software Foundation (FSF).
+
+          Examples of such licenses include the MIT, BSD 2-clause, BSD 3-clause
+
+          revised, Apache 2.0, Lesser GNU General Public License (LGPL), and the
+
+          GNU General Public License (GPL). Note that the license for the
+
+          released software assets may be different than the source code.
+
+          '
+    - name: 'All licenses for the project''s source code MUST be maintained in a
+
+        standard location within the corresponding repository.
+
+        '
+      result: Passed
+      message: GitHub releases include the license(s) in the released source code.
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-LE-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-LE-03.01
+        description: 'Ensure that the project''s source code and released software
+          assets are
+
+          distributed with the appropriate license terms, making it clear to users
+
+          and contributors how each can be used and shared.
+
+          '
+        result: Passed
+        message: License was found in a well known location via the GitHub API
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Include the project''s source code license in the project''s
+          LICENSE
+
+          file, COPYING file, or LICENSE/ directory to provide visibility and
+
+          clarity on the licensing terms. The filename MAY have an extension.
+
+          If the project has multiple repositories, ensure that each repository
+
+          includes the license file.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-LE-03.02
+        description: 'Ensure that the project''s source code and released software
+          assets are
+
+          distributed with the appropriate license terms, making it clear to users
+
+          and contributors how each can be used and shared.
+
+          '
+        result: Passed
+        message: GitHub releases include the license(s) in the released source code.
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Include the project''s released software assets license in
+          the released
+
+          source code, or in a LICENSE file, COPYING file, or LICENSE/ directory
+
+          alongside the corresponding release assets to provide visibility and
+
+          clarity on the licensing terms. The filename MAY have an extension.
+
+          If the project has multiple repositories, ensure that each repository
+
+          includes the license file.
+
+          '
+    - name: 'The project''s source code and change history MUST be publicly readable
+        at
+
+        a static URL.
+
+        '
+      result: Passed
+      message: This control is enforced by GitHub for all projects
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-QA-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-01.01
+        description: 'Enable users to access and review the project''s source code
+          and history,
+
+          promoting transparency and collaboration within the project community.
+
+          '
+        result: Passed
+        message: Repository is public
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Use a common VCS such as GitHub, GitLab, or Bitbucket. Ensure
+          the
+
+          repository is publicly readable. Avoid duplication or mirroring of
+
+          repositories unless highly visible documentation clarifies the primary
+
+          source. Avoid frequent changes to the repository that would impact the
+
+          repository URL. Ensure the repository is public.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-01.02
+        description: 'Enable users to access and review the project''s source code
+          and history,
+
+          promoting transparency and collaboration within the project community.
+
+          '
+        result: Passed
+        message: This control is enforced by GitHub for all projects
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Use a common VCS such as GitHub, GitLab, or Bitbucket to
+          maintain a
+
+          publicly readable commit history. Avoid squashing or rewriting commits
+
+          in a way that would obscure the author of any commits.
+
+          '
+    - name: 'The project MUST provide a list of dependencies used in the software.
+
+        '
+      result: Passed
+      message: Found 26 dependency manifests from GitHub API
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-QA-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-02.01
+        description: 'Provide transparency and accountability for the project''s dependencies
+
+          while enabling users and contributors to understand the software''s direct
+
+          dependencies.
+
+          '
+        result: Passed
+        message: Found 26 dependency manifests from GitHub API
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'This may take the form of a package manager or language dependency
+          file
+
+          that enumerates all direct dependencies such as package.json, Gemfile,
+
+          or go.mod.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-02.02
+        description: 'Provide transparency and accountability for the project''s dependencies
+
+          while enabling users and contributors to understand the software''s direct
+
+          dependencies.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'It is recommended to auto-generate SBOMs at build time using
+          a tool
+
+          that has been vetted for accuracy. This enables users to ingest this
+
+          data in a standardized approach alongside other projects in their
+
+          environment.
+
+          '
+    - name: 'Any automated status checks for commits MUST pass or require manual
+
+        acknowledgement prior to merge.
+
+        '
+      result: Passed
+      message: No status checks were run that are not required by branch protection
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-QA-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-03.01
+        description: 'Ensure that the project''s approvers do not become accustomed
+          to tolerating
+
+          failing status checks, even if arbitrary, because it increases the risk
+          of
+
+          overlooking security vulnerabilities or defects identified by automated
+
+          checks.
+
+          '
+        result: Passed
+        message: No status checks were run that are not required by branch protection
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Configure the project''s version control system to require
+          that all
+
+          automated status checks pass or require manual acknowledgement before a
+
+          commit can be merged into the primary branch. It is recommended that
+
+          any optional status checks are NOT configured as a pass or fail
+
+          requirement that approvers may be tempted to bypass.
+
+          '
+    - name: 'Any additional subproject code repositories produced by the project
+
+        and compiled into a release MUST enforce security requirements as
+
+        applicable to the status and intent of the respective codebase.
+
+        '
+      result: Passed
+      message: Insights contains a list of repositories
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-QA-04
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-04.01
+        description: 'Ensure that additional code repositories or subprojects produced
+          by the
+
+          project are held to a standard that is clear and appropriate for that
+
+          codebase.
+
+          '
+        result: Passed
+        message: Insights contains a list of repositories
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 4
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:06+01:00'
+        recommendation: 'Document any additional subproject code repositories produced
+          by the
+
+          project and compiled into a release. This documentation should include
+
+          the status and intent of the respective codebase.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-04.02
+        description: 'Ensure that additional code repositories or subprojects produced
+          by the
+
+          project are held to a standard that is clear and appropriate for that
+
+          codebase.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Any additional subproject code repositories produced by the
+          project
+
+          and compiled into a release must enforce security requirements as
+
+          applicable to the status and intent of the respective codebase.
+
+          In addition to following the corresponding OSPS Baseline requirements,
+
+          this may include requiring a security review, ensuring that it is
+
+          free of vulnerabilities, and ensuring that it is free of known
+
+          security issues.
+
+          '
+    - name: 'The version control system MUST NOT contain generated executable
+
+        artifacts.
+
+        '
+      result: Passed
+      message: No unreviewable binary artifacts were found in the repository
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-QA-05
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-05.01
+        description: 'Reduce the risk of including generated executable artifacts
+          in the
+
+          project''s version control system, ensuring that only source code and
+
+          necessary files are stored in the repository.
+
+          '
+        result: Passed
+        message: No common binary file extensions were found in the repository
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:06+01:00'
+        end: '2026-07-02T18:26:08+01:00'
+        recommendation: 'Remove generated executable artifacts in the project''s version
+          control
+
+          system. It is recommended that any scenario where a generated
+
+          executable artifact appears critical to a process such as testing, it
+
+          should be instead be generated at build time or stored separately and
+
+          fetched during a specific well-documented pipeline step.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-05.02
+        description: 'Reduce the risk of including generated executable artifacts
+          in the
+
+          project''s version control system, ensuring that only source code and
+
+          necessary files are stored in the repository.
+
+          '
+        result: Passed
+        message: No unreviewable binary artifacts were found in the repository
+        applicability:
+        - Maturity Level 1
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:08+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Do not add any unreviewable binary artifacts to the project''s
+          version
+
+          control system. This includes executable application binaries, library
+
+          files, and similar artifacts. It does not include assets such as
+
+          graphical images, sound or music files, and similar content typically
+
+          stored in a binary format.
+
+          '
+    - name: 'The project MUST use at least one automated test suite for the source
+
+        code repository.
+
+        '
+      result: Passed
+      message: 4 status checks were run
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-QA-06
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-06.01
+        description: 'Ensure that the project uses at least one automated test suite
+          for the
+
+          source code repository and clearly documents when and how tests are run.
+
+          '
+        result: Passed
+        message: 4 status checks were run
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Automated tests should be run prior to every merge into the
+          primary
+
+          branch. The test suite should be run in a CI/CD pipeline and the
+
+          results should be visible to all contributors. The test suite should
+
+          be run in a consistent environment and should be run in a way that
+
+          allows contributors to run the tests locally.
+
+          Examples of test suites include unit tests, integration tests, and
+
+          end-to-end tests.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-06.02
+        description: 'Ensure that the project uses at least one automated test suite
+          for the
+
+          source code repository and clearly documents when and how tests are run.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Add a section to the contributing documentation that explains
+          how to
+
+          run the tests locally and how to run the tests in the CI/CD pipeline.
+
+          The documentation should explain what the tests are testing and how to
+
+          interpret the results.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-06.03
+        description: 'Ensure that the project uses at least one automated test suite
+          for the
+
+          source code repository and clearly documents when and how tests are run.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Add a section to the contributing documentation that explains
+          the
+
+          policy for adding or updating tests. The policy should explain what
+
+          constitutes a major change and what tests should be added or updated.
+
+          '
+    - name: 'The project''s version control system MUST require at least one
+
+        non-author human approval of changes to the primary branch.
+
+        '
+      result: Not Run
+      message: ''
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-QA-07
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-QA-07.01
+        description: 'Ensure that the project''s version control system requires at
+          least one
+
+          non-author human approval of changes before merging into the release or
+          primary
+
+          branch.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Configure the project''s version control system to require
+          at least one
+
+          non-author human approval of changes before merging into the release or
+
+          primary branch. This can be achieved by requiring a pull request to be
+
+          reviewed and approved by at least one other collaborator before it can
+
+          be merged.
+
+          '
+    - name: 'The project documentation MUST provide design documentation demonstrating
+
+        all actions and actors within the system.
+
+        '
+      result: Passed
+      message: 'Design documentation found: ARCHITECTURE.md'
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-SA-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-SA-01.01
+        description: 'Provide an overview of the project''s design and architecture,
+          illustrating
+
+          the interactions and components of the system to help contributors and
+
+          security reviewers understand the internal logic of the released software
+
+          assets.
+
+          '
+        result: Passed
+        message: 'Design documentation found: ARCHITECTURE.md'
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Include designs in the project documentation that explains
+          the actions
+
+          and actors. Actors include any subsystem or entity that can influence
+
+          another segment in the system.
+
+          Ensure this is updated for new features or breaking changes.
+
+          '
+    - name: 'The project documentation MUST include descriptions of all external
+
+        software interfaces of the released software assets.
+
+        '
+      result: Not Run
+      message: Not implemented
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-SA-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-SA-02.01
+        description: 'Provide users and developers with an understanding of how to
+          interact with
+
+          the project''s software and integrate it with other systems, enabling them
+
+          to use the software effectively.
+
+          '
+        result: Not Run
+        message: Not implemented
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Document all software interfaces (APIs) of the released software
+
+          assets, explaining how users can interact with the software and what
+
+          data is expected or produced.
+
+          Ensure this is updated for new features or breaking changes.
+
+          '
+    - name: 'The project MUST assess the security posture of all software assets.
+
+        '
+      result: Not Run
+      message: Not implemented
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-SA-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-SA-03.01
+        description: 'Provide project maintainers an understanding of how the software
+          can be
+
+          misused or broken allows them to plan mitigations to close off the potential
+
+          of those threats from occurring.
+
+          '
+        result: Not Run
+        message: Not implemented
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Performing a security assessment informs both project members
+          as well
+
+          as downstream consumers that the project understands what problems
+
+          could arise within the software. Understanding what threats could be
+
+          realized helps the project manage and address risk. This information
+
+          is useful to downstream consumers to demonstrate the security acumen
+
+          and practices of the project.
+
+          Ensure this is updated for new features or breaking changes.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-SA-03.02
+        description: 'Provide project maintainers an understanding of how the software
+          can be
+
+          misused or broken allows them to plan mitigations to close off the potential
+
+          of those threats from occurring.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Threat modeling is an activity where the project looks at
+          the
+
+          codebase, associated processes and infrastructure, interfaces, key
+
+          components and "thinks like a hacker" and brainstorms how the system
+
+          be be broken or compromised. Each identified threat is listed out so
+
+          the project can then think about how to proactively avoid or close off
+
+          any gaps/vulnerabilities that could arise.
+
+          Ensure this is updated for new features or breaking changes.
+
+          '
+    - name: 'The project documentation MUST include a policy for coordinated
+
+        vulnerability disclosure, with a clear timeframe for response.
+
+        '
+      result: Passed
+      message: Vulnerability disclosure policy was specified in Security Insights
+        data
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-VM-01
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-01.01
+        description: 'Establish a process for reporting and addressing vulnerabilities
+          in the
+
+          project, ensuring that security issues are handled promptly and
+
+          transparently.
+
+          '
+        result: Passed
+        message: Vulnerability disclosure policy was specified in Security Insights
+          data
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 3
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Create a SECURITY.md file at the root of the directory, outlining
+          the
+
+          project''s policy for coordinated vulnerability disclosure. Include a
+
+          method for reporting vulnerabilities. Set expectations for how the
+
+          project will respond and address reported issues.
+
+          '
+    - name: 'The project MUST publish contacts and process for reporting
+
+        vulnerabilities.
+
+        '
+      result: Passed
+      message: Security contacts were specified in Security Insights data
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-VM-02
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-02.01
+        description: 'Reports from researchers and users are an important source for
+          identifying
+
+          vulnerabilities in a project. People with vulnerabilities to report should
+
+          have a clear understanding of the process so that they can quickly submit
+
+          the report to the project.
+
+          '
+        result: Passed
+        message: Security contacts were specified in Security Insights data
+        applicability:
+        - Maturity Level 1
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 2
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Create a security.md (or similarly-named) file that contains
+          security
+
+          contacts for the project.
+
+          '
+    - name: 'The project MUST provide a means for reporting security
+
+        vulnerabilities privately to the security contacts within the project.
+
+        '
+      result: Passed
+      message: Private vulnerability reporting available via dedicated contact email
+        in Security Insights data
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-VM-03
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-03.01
+        description: 'Security vulnerabilities should not be shared with the public
+          until such
+
+          time the project has been provided time to analyze and prepare
+
+          remediations to protect users of the project.
+
+          '
+        result: Passed
+        message: Private vulnerability reporting available via dedicated contact email
+          in Security Insights data
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 3
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Provide a means for security researchers to report vulnerabilities
+
+          privately to the project. This may be a dedicated email address, a
+
+          web form, VCS specialized tools, email addresses for security
+
+          contacts, or other methods.
+
+          '
+    - name: 'The project MUST publicly publish data about discovered vulnerabilities.
+
+        '
+      result: Not Run
+      message: Not implemented
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-VM-04
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-04.01
+        description: 'Consumers of the project must be informed about known vulnerabilities
+
+          found within the project.
+
+          '
+        result: Not Run
+        message: Not implemented
+        applicability:
+        - Maturity Level 2
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        steps-executed: 1
+        start: '2026-07-02T18:26:09+01:00'
+        end: '2026-07-02T18:26:09+01:00'
+        recommendation: 'Provide information about known vulnerabilities in a predictable
+
+          public channel, such as a CVE entry, blog post, or other medium.
+
+          To the degree possible, this information should include affected
+
+          version(s), how a consumer can determine if they are vulnerable, and
+
+          instructions for mitigation or remediation.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-04.02
+        description: 'Consumers of the project must be informed about known vulnerabilities
+
+          found within the project.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Establish a VEX feed communicating the exploitability status
+          of
+
+          known vulnerabilities, including assessment details or any
+
+          mitigations in place preventing vulnerable code from being
+
+          executed.
+
+          '
+    - name: 'The project MUST enforce a policy for addressing SCA findings.
+
+        '
+      result: Not Run
+      message: ''
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-VM-05
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-05.01
+        description: 'Ensure that the project clearly communicates the threshold for
+          remediation
+
+          of SCA findings, including vulnerabilities and license issues in software
+
+          dependencies.
+
+          Ensure that violations of your SCA policy are addressed before software
+
+          is merged as well as before it releases, reducing the risk of compromised
+
+          delivery mechanisms or released software assets that are vulnerable or
+
+          malicious.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Document a policy in the project that defines a threshold
+          for
+
+          remediation of SCA findings related to vulnerabilities and licenses.
+
+          Include the process for identifying, prioritizing, and remediating
+
+          these findings.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-05.02
+        description: 'Ensure that the project clearly communicates the threshold for
+          remediation
+
+          of SCA findings, including vulnerabilities and license issues in software
+
+          dependencies.
+
+          Ensure that violations of your SCA policy are addressed before software
+
+          is merged as well as before it releases, reducing the risk of compromised
+
+          delivery mechanisms or released software assets that are vulnerable or
+
+          malicious.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Document a policy in the project to address applicable Software
+
+          Composition Analysis results before any release, and add status checks
+
+          that verify compliance with that policy prior to release.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-05.03
+        description: 'Ensure that the project clearly communicates the threshold for
+          remediation
+
+          of SCA findings, including vulnerabilities and license issues in software
+
+          dependencies.
+
+          Ensure that violations of your SCA policy are addressed before software
+
+          is merged as well as before it releases, reducing the risk of compromised
+
+          delivery mechanisms or released software assets that are vulnerable or
+
+          malicious.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Create a status check in the project''s version control system
+          that
+
+          runs a Software Composition Analysis tool on all changes
+
+          to the codebase. Require that the status check passes before changes
+
+          can be merged.
+
+          '
+    - name: 'The project documentation MUST enforce a policy that defines a
+
+        threshold for remediation of SAST findings.
+
+        '
+      result: Not Run
+      message: ''
+      control:
+        reference-id: osps-baseline-2026-02
+        entry-id: OSPS-VM-06
+      assessment-logs:
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-06.01
+        description: 'Identify and address defects and security weaknesses in the
+          project''s
+
+          codebase early in the development process, reducing the risk of shipping
+
+          insecure software.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Document a policy in the project that defines a threshold
+          for
+
+          remediation of Static Application Security Testing (SAST) findings.
+
+          Include the process for identifying, prioritizing, and remediating
+
+          these findings.
+
+          '
+      - requirement:
+          reference-id: ''
+          entry-id: OSPS-VM-06.02
+        description: 'Identify and address defects and security weaknesses in the
+          project''s
+
+          codebase early in the development process, reducing the risk of shipping
+
+          insecure software.
+
+          '
+        result: Not Run
+        message: ''
+        applicability:
+        - Maturity Level 3
+        steps:
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        - main.main.AllSteps.TypedStep.AsAssessmentStep.func1
+        start: ''
+        recommendation: 'Create a status check in the project''s version control system
+          that
+
+          runs a Static Application Security Testing (SAST) tool on all changes
+
+          to the codebase. Require that the status check passes before changes
+
+          can be merged.
+
+          '
+    target:
+      id: ''
+      name: ''
+      type: Invalid

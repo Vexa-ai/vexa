@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/identity.v1",
+  "title": "identity.v1",
+  "description": "The identity contract: a scoped API token (subject + scopes + expiry, derived from the admin-api APIToken/`/internal/validate` shape) and an access decision (the canAccess verdict over a resource). Auth itself is transport-layer; these are the data shapes the identity core mints, validates, and decides over.",
+  "$defs": {
+    "Scope": {
+      "description": "A capability a token carries. Mirrors admin-models VALID_SCOPES: bot (spawn/control bots), tx (read transcripts), browser (browser sessions).",
+      "enum": ["bot", "tx", "browser"]
+    },
+    "ResourceKind": {
+      "description": "The kind of resource an access decision is made over. The three guarded read paths: a meeting's transcript, a recording, and the WS subscribe / agent read.",
+      "enum": ["meeting_transcript", "recording", "ws_subscribe"]
+    },
+    "Action": {
+      "description": "The action attempted on a resource. Reads are what canAccess guards today; write/admin reserved for additive growth.",
+      "enum": ["read", "write", "admin"]
+    },
+    "ScopedToken": {
+      "description": "A minted, scope-bounded credential. `subject` is the owning user id (admin-api User.id). The DB scopes column is authoritative upstream; here scopes[] is the sealed shape. `expires_at` null = non-expiring.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "scopes", "expires_at"],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "Owning principal — the user id the token authenticates as."
+        },
+        "scopes": {
+          "type": "array",
+          "description": "Capabilities granted. Non-empty; each member is a Scope.",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Scope" }
+        },
+        "expires_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "RFC3339 instant after which the token is rejected. null = never expires."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Optional human identity carried for audit/attribution (admin-api User.email)."
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional mint instant (RFC3339)."
+        }
+      }
+    },
+    "WorkspaceGrant": {
+      "description": "One workspace a dispatch may mount, at a mode (the write-access source of truth).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mode"],
+      "properties": {
+        "id": { "type": "string" },
+        "mode": { "enum": ["ro", "rw"] }
+      }
+    },
+    "DispatchClaims": {
+      "description": "The verified claims of a per-dispatch SIGNED token — the chain of custody. Minted per dispatch by the Identity service (subject + launcher + workspace/tool grants), attested by the Runtime, verified at every boundary — never by the agent. The wire form is an opaque signed compact token; this is its decoded payload. Authority is re-derived from these claims, not from the (tamperable) request.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sub", "lch", "ws", "iat", "exp"],
+      "properties": {
+        "sub": { "type": "string", "description": "subject — the principal acted on behalf of" },
+        "lch": { "type": "string", "description": "launcher — who/what triggered the dispatch (holds a delegation grant)" },
+        "ws": { "type": "array", "items": { "$ref": "#/$defs/WorkspaceGrant" }, "description": "workspace grants the workspace-store boundary enforces" },
+        "tools": { "type": "array", "items": { "type": "string" }, "description": "tool grants the MCP-gateway boundary enforces" },
+        "iat": { "type": "integer", "description": "issued-at (unix seconds)" },
+        "exp": { "type": "integer", "description": "expiry (unix seconds) — short-lived" }
+      }
+    },
+    "AccessDecision": {
+      "description": "The verdict canAccess(subject, resource, action) returns. Default-deny: `allow=false` unless a policy explicitly grants. `reason` is a stable machine code, not free text.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow", "subject", "resource_kind", "resource_id", "action", "reason"],
+      "properties": {
+        "allow": { "type": "boolean" },
+        "subject": { "type": "string" },
+        "resource_kind": { "$ref": "#/$defs/ResourceKind" },
+        "resource_id": { "type": "string" },
+        "action": { "$ref": "#/$defs/Action" },
+        "reason": {
+          "description": "Stable decision code.",
+          "enum": ["owner", "not-owner", "default-deny", "missing-scope", "token-expired"]
+        }
+      }
+    }
+  }
+}

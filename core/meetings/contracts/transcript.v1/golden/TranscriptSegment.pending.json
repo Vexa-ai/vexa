@@ -1,0 +1,11 @@
+{
+  "segment_id": "sess-uid:ch-1:1:pending",
+  "speaker": "Bob",
+  "speaker_key": "ch-1:1",
+  "text": "and then we",
+  "start": 3.0,
+  "end": 3.4,
+  "completed": false,
+  "source": "provisional-cluster-id",
+  "confidence": 0
+}

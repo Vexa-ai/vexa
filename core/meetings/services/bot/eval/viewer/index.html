@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>bot eval — live</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #c9d1d9; --dim: #8b949e;
+    --green: #3fb950; --red: #f85149; --amber: #d29922; --blue: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--bg); color: var(--fg); }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; }
+  header h1 { font-size: 13px; font-weight: 600; margin: 0; color: var(--dim); letter-spacing: .04em; }
+  #verdict { margin-left: auto; padding: 4px 12px; border-radius: 6px; font-weight: 700; background: #21262d; color: var(--dim); }
+  #verdict.pass { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid var(--green); }
+  #verdict.fail { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid var(--red); }
+  #verdict .line { font-weight: 400; font-size: 11px; color: var(--dim); margin-left: 8px; }
+  main { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 49px); }
+  .col { overflow-y: auto; padding: 12px 16px; }
+  .col.life { border-right: 1px solid var(--border); background: var(--panel); }
+  .col h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  .ev { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid #21262d; }
+  .ev .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 5px; background: var(--dim); }
+  .ev.joining .dot, .ev.awaiting_admission .dot, .ev.needs_help .dot { background: var(--amber); }
+  .ev.active .dot, .ev.completed .dot { background: var(--green); }
+  .ev.failed .dot { background: var(--red); }
+  .ev .st { font-weight: 600; }
+  .ev .meta { color: var(--dim); font-size: 11px; }
+  .ev .t { color: var(--dim); font-size: 10px; margin-left: auto; flex: none; }
+  .turn { margin: 0 0 10px; }
+  .turn .who { font-weight: 700; }
+  .turn .seg { color: var(--fg); }
+  .turn .seg.pending { color: var(--dim); font-style: italic; }
+  .empty { color: var(--dim); padding: 30px 0; text-align: center; }
+  .count { color: var(--dim); font-weight: 400; }
+  footer { position: fixed; bottom: 0; right: 0; padding: 4px 10px; font-size: 10px; color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>BOT EVAL · LIVE</h1>
+  <span id="conn" class="count">connecting…</span>
+  <div id="verdict">verdict pending</div>
+</header>
+<main>
+  <div class="col life">
+    <h2>Lifecycle</h2>
+    <div id="life"><div class="empty">waiting for the bot…</div></div>
+  </div>
+  <div class="col feed">
+    <h2>Transcript <span id="segcount" class="count"></span></h2>
+    <div id="feed"><div class="empty">no segments yet</div></div>
+  </div>
+</main>
+<footer id="foot"></footer>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const segs = new Map();           // segment_id → segment
+  const life = [];                  // lifecycle events
+  let stick = true;                 // auto-scroll the feed unless the user scrolled up
+
+  const feedEl = $('feed');
+  feedEl.parentElement.addEventListener('scroll', (e) => {
+    const el = e.target; stick = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  });
+
+  // Deterministic speaker color.
+  function color(name) {
+    let h = 0; for (const c of (name || '?')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return `hsl(${h % 360} 70% 65%)`;
+  }
+  const fmt = (ts) => new Date(ts).toLocaleTimeString();
+
+  function renderLife() {
+    if (!life.length) { $('life').innerHTML = '<div class="empty">waiting for the bot…</div>'; return; }
+    $('life').innerHTML = life.map((e) => `
+      <div class="ev ${e.status}">
+        <span class="dot"></span>
+        <span><span class="st">${e.status}</span>${e.completion_reason ? ` <span class="meta">(${e.completion_reason})</span>` : ''}${e.failure_stage ? ` <span class="meta">@${e.failure_stage}</span>` : ''}${e.reason ? `<div class="meta">${esc(e.reason)}</div>` : ''}</span>
+        <span class="t">${fmt(e.ts)}</span>
+      </div>`).join('');
+  }
+
+  function renderFeed() {
+    const list = [...segs.values()].sort((a, b) => (a.start || 0) - (b.start || 0) || String(a.segment_id).localeCompare(String(b.segment_id)));
+    $('segcount').textContent = list.length ? `(${list.length})` : '';
+    if (!list.length) { feedEl.innerHTML = '<div class="empty">no segments yet</div>'; return; }
+    // Group consecutive same-speaker segments into one turn block.
+    const turns = []; let cur = null;
+    for (const s of list) {
+      const who = s.speaker || 'Speaker';
+      if (!cur || cur.who !== who) { cur = { who, segs: [] }; turns.push(cur); }
+      cur.segs.push(s);
+    }
+    feedEl.innerHTML = turns.map((t) => `
+      <div class="turn">
+        <span class="who" style="color:${color(t.who)}">${esc(t.who)}</span>
+        ${t.segs.map((s) => `<span class="seg ${s.completed ? '' : 'pending'}"> ${esc(s.text)}</span>`).join('')}
+      </div>`).join('');
+    if (stick) feedEl.parentElement.scrollTop = feedEl.parentElement.scrollHeight;
+  }
+
+  function renderVerdict(v) {
+    const el = $('verdict');
+    if (!v) { el.className = ''; el.textContent = 'verdict pending'; return; }
+    el.className = v.pass ? 'pass' : 'fail';
+    el.innerHTML = `${v.pass ? 'PASS' : 'FAIL'}${v.line ? `<span class="line">${esc(v.line)}</span>` : ''}`;
+  }
+
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  function apply(ev) {
+    if (ev.kind === 'snapshot') {
+      segs.clear(); for (const s of ev.segments || []) segs.set(String(s.segment_id), s);
+      life.length = 0; for (const e of ev.lifecycle || []) life.push(e);
+      renderLife(); renderFeed(); renderVerdict(ev.verdict);
+    } else if (ev.kind === 'lifecycle') {
+      life.push(ev.event); renderLife();
+    } else if (ev.kind === 'transcript') {
+      segs.set(String(ev.segment.segment_id), ev.segment); renderFeed();
+    } else if (ev.kind === 'verdict') {
+      renderVerdict(ev.verdict);
+    }
+  }
+
+  function connect() {
+    const es = new EventSource('/feed');
+    es.onopen = () => { $('conn').textContent = 'live'; };
+    es.onerror = () => { $('conn').textContent = 'reconnecting…'; };
+    es.onmessage = (m) => { try { apply(JSON.parse(m.data)); } catch (e) { console.error(e); } };
+  }
+  connect();
+  $('foot').textContent = location.host;
+</script>
+</body>
+</html>

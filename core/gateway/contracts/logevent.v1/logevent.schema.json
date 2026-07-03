@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/logevent.v1",
+  "title": "logevent.v1",
+  "description": "The structured log envelope every control-plane service emits — one JSON object per log line, carrying a DISTRIBUTED trace_id so a single request can be followed across services, and an `audience` split (user-facing vs system/operator). This is the SHARED SSOT for observability: each service ships its own ~20-line emitter conforming to THIS contract (the contract is the seam, not shared code).",
+  "$defs": {
+    "Level": {
+      "description": "Syslog-style severity. `debug`/`info` are normal flow; `warning`/`error`/`critical` mark trouble.",
+      "enum": ["debug", "info", "warning", "error", "critical"]
+    },
+    "Audience": {
+      "description": "Who the event is FOR. `user` — surfaced to the end user / their account timeline (a meeting joined, a transcript ready). `system` — operator/debug only (proxy hops, retries, internal state).",
+      "enum": ["user", "system"]
+    },
+    "LogEvent": {
+      "description": "One structured log line. `trace_id` is the correlation key threaded edge→downstream via X-Trace-Id; every line emitted while serving one request carries the SAME trace_id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ts", "level", "service", "trace_id", "audience", "event"],
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp the line was emitted."
+        },
+        "level": { "$ref": "#/$defs/Level" },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Emitting service, e.g. gateway | meeting-api | runtime."
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The distributed correlation id. Minted at the edge if the request arrives without X-Trace-Id, then forwarded downstream verbatim so every hop shares it."
+        },
+        "span": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional per-hop/operation id within the trace (e.g. the route handler or unit of work)."
+        },
+        "user_id": {
+          "type": ["string", "integer"],
+          "description": "The end user the request acts for, when known (post-auth)."
+        },
+        "meeting_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The meeting/session the event concerns, when applicable."
+        },
+        "audience": { "$ref": "#/$defs/Audience" },
+        "event": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A stable, low-cardinality event name (snake_case), e.g. request_received | downstream_forwarded | bot_join_failed."
+        },
+        "fields": {
+          "type": "object",
+          "description": "Optional structured context for this event (method, path, status, attempt, error, …). Free-form keys; values are JSON.",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

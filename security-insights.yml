@@ -1,0 +1,102 @@
+# OpenSSF Security Insights (https://security-insights.openssf.org)
+# Machine-readable security metadata for the Vexum Core repository.
+# Consumed by tooling such as the OSPS Baseline scanner (ossf/pvtr-github-repo-scanner).
+header:
+  schema-version: 2.2.0
+  last-updated: '2026-07-02'
+  last-reviewed: '2026-07-02'
+  url: https://raw.githubusercontent.com/Vexa-ai/vexa-core/main/security-insights.yml
+  comment: |
+    Single-repository security-insights file for Vexum Core, the neutral,
+    self-hostable meeting-intelligence runtime proposed to FINOS
+    (finos/community#420). Fields reflect the project's state today; CI-based
+    scanning and a formal self-assessment are committed ahead of incubation.
+
+project:
+  name: Vexum
+  homepage: https://core.vexa.ai
+  roadmap: https://docs.core.vexa.ai/roadmap/status
+  administrators:
+    - name: Dmitry Grankin
+      affiliation: Vexa
+      email: dmitry@vexa.ai
+      social: https://github.com/DmitriyG228
+      primary: true
+    - name: Peter Smulovics
+      affiliation: Morgan Stanley
+      email: Peter.Smulovics@morganstanley.com
+      social: https://github.com/psmulovics
+      primary: false
+  documentation:
+    quickstart-guide: https://github.com/Vexa-ai/vexa-core#quickstart
+    detailed-guide: https://docs.core.vexa.ai
+    code-of-conduct: https://github.com/Vexa-ai/vexa-core/blob/main/CODE_OF_CONDUCT.md
+  repositories:
+    - name: vexa-core
+      url: https://github.com/Vexa-ai/vexa-core
+      comment: |
+        Core repository for Vexum: the self-hostable Meetings + Agents runtime.
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    contact:
+      name: Vexum Core maintainers
+      email: dmitry@vexa.ai
+      primary: true
+    policy: https://github.com/Vexa-ai/vexa-core/blob/main/SECURITY.md
+    comment: |
+      Report vulnerabilities privately by email to dmitry@vexa.ai (you may copy
+      help@finos.org). Do not use public issues, discussions, or pull requests.
+      Reports are acknowledged within 5 business days and handled under a
+      coordinated-disclosure process. See SECURITY.md for details.
+
+repository:
+  url: https://github.com/Vexa-ai/vexa-core
+  status: active
+  accepts-change-request: true
+  accepts-automated-change-request: false
+  core-team:
+    - name: Dmitry Grankin
+      affiliation: Vexa
+      email: dmitry@vexa.ai
+      social: https://github.com/DmitriyG228
+      primary: true
+    - name: Peter Smulovics
+      affiliation: Morgan Stanley
+      email: Peter.Smulovics@morganstanley.com
+      social: https://github.com/psmulovics
+      primary: false
+  license:
+    url: https://github.com/Vexa-ai/vexa-core/blob/main/LICENSE
+    expression: Apache-2.0
+  documentation:
+    contributing-guide: https://github.com/Vexa-ai/vexa-core/blob/main/CONTRIBUTING.md
+    review-policy: https://github.com/Vexa-ai/vexa-core/blob/main/CONTRIBUTING.md#how-to-contribute
+    security-policy: https://github.com/Vexa-ai/vexa-core/blob/main/SECURITY.md
+    governance: https://github.com/Vexa-ai/vexa-core/blob/main/CONTRIBUTING.md#governance
+    dependency-management-policy: https://github.com/Vexa-ai/vexa-core/blob/main/CONTRIBUTING.md#dependency-management
+  release:
+    distribution-points:
+      - uri: https://github.com/Vexa-ai/vexa-core/releases
+        comment: GitHub Releases is the only official distribution point (source archives).
+    attestations:
+      - name: SLSA build provenance
+        predicate-uri: https://slsa.dev/provenance/v1
+        location: https://github.com/Vexa-ai/vexa-core/attestations
+        comment: |
+          Each release's source archive is attested with GitHub Artifact
+          Attestations (actions/attest-build-provenance, SLSA provenance v1) by
+          the release-attest workflow; verify with
+          `gh attestation verify <artifact> --repo Vexa-ai/vexa-core`.
+  security:
+    assessments:
+      self:
+        evidence: https://github.com/Vexa-ai/vexa-core/blob/main/security/osps-baseline/2026-07-02-assessment.yaml
+        date: '2026-07-02'
+        comment: |
+          OSPS Baseline self-assessment (ossf/pvtr-github-repo-scanner v0.24.0,
+          catalog osps-baseline-2026-02, Maturity Levels 1+2): 28 passed,
+          0 failed, 1 warning (a scanner false-positive; GitHub Actions is
+          enabled and the gates workflow runs on every push/PR). Dated results
+          are committed under security/osps-baseline/. The project targets
+          OSPS Baseline Maturity Level 2 for FINOS incubation.

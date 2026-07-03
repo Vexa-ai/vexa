@@ -1,0 +1,25 @@
+[project]
+name = "vexa-transcription"
+version = "0.12.0"
+description = "The transcription service (P-meetings) — faster-whisper / CTranslate2 behind an OpenAI-compatible audio API (/v1/audio/transcriptions). A standalone, GPU-or-CPU STT worker the bot's whisper client streams audio windows to; deployed SEPARATELY from the main compose stack (the GPU workload is carved out) and reached via TRANSCRIPTION_SERVICE_URL. Self-contained: imports only third-party + its own module (no cross-brick edges)."
+requires-python = ">=3.11"   # faster-whisper's onnxruntime (Silero VAD) ships wheels for cp311+
+dependencies = [
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "faster-whisper>=1.0.0",
+    "soundfile>=0.12.0",
+    "numpy>=1.22.0,<2.0.0",
+    "h11>=0.16.0",                # CVE-2025-43859 (uvicorn transitive)
+    "httpx>=0.27,<1",            # test client
+    "pytest>=8",
+    "pytest-asyncio>=0.23,<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+asyncio_mode = "auto"

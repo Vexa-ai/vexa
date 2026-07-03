@@ -1,0 +1,28 @@
+{
+  "type": "transcript",
+  "meeting": { "id": 42 },
+  "speaker": "Alice",
+  "confirmed": [
+    {
+      "segment_id": "sess-uid:ch-0:1:1500",
+      "speaker": "Alice",
+      "speaker_key": "ch-0:1",
+      "text": "hello world",
+      "start": 1.5,
+      "end": 2.5,
+      "completed": true
+    }
+  ],
+  "pending": [
+    {
+      "segment_id": "sess-uid:ch-1:1:pending",
+      "speaker": "Bob",
+      "speaker_key": "ch-1:1",
+      "text": "and then we",
+      "start": 3.0,
+      "end": 3.4,
+      "completed": false
+    }
+  ],
+  "ts": "2026-06-18T10:00:03.400Z"
+}

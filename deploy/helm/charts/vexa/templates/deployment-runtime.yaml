@@ -1,0 +1,145 @@
+{{- if .Values.runtime.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "runtime") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.runtime.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: runtime
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: runtime
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if eq .Values.runtime.backend "k8s" }}
+      # The runtime spawns bot/agent Pods via kubectl — bind the SA carrying the pod-spawn RBAC.
+      serviceAccountName: {{ include "vexa.componentName" (list . "runtime") }}
+      {{- end }}
+      containers:
+        - name: runtime
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8090
+          env:
+            - name: RUNTIME_BACKEND
+              value: {{ .Values.runtime.backend | quote }}
+            {{- if eq .Values.runtime.backend "k8s" }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- end }}
+            {{- if eq .Values.runtime.backend "docker" }}
+            # The spawned bot/worker join the runtime's namespace network. On k8s the kernel resolves
+            # services by DNS; DOCKER_NETWORK only matters for the docker backend (single-node fallback).
+            - name: DOCKER_NETWORK
+              value: {{ .Values.runtime.dockerNetwork | default "" | quote }}
+            {{- end }}
+            - name: REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
+            - name: BROWSER_IMAGE
+              value: {{ include "vexa.botImage" . | quote }}
+            - name: AGENT_IMAGE
+              value: {{ include "vexa.agentImage" . | quote }}
+            - name: AGENT_WORKER_IMAGE
+              value: {{ include "vexa.agentWorkerImage" . | quote }}
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: INTERNAL_API_SECRET
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: ANTHROPIC_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ANTHROPIC_AUTH_TOKEN
+                  optional: true
+            - name: ANTHROPIC_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ANTHROPIC_BASE_URL
+                  optional: true
+            - name: ANTHROPIC_MODEL
+              value: {{ .Values.models.anthropicModel | default "" | quote }}
+            - name: ANTHROPIC_DEFAULT_OPUS_MODEL
+              value: {{ .Values.models.anthropicOpusModel | default "" | quote }}
+            - name: ANTHROPIC_DEFAULT_SONNET_MODEL
+              value: {{ .Values.models.anthropicSonnetModel | default "" | quote }}
+            - name: ANTHROPIC_DEFAULT_HAIKU_MODEL
+              value: {{ .Values.models.anthropicHaikuModel | default "" | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.runtime.logLevel | default "info" | quote }}
+            {{- with .Values.runtime.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if eq .Values.runtime.backend "docker" }}
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.runtime.resources | nindent 12 }}
+      {{- if eq .Values.runtime.backend "docker" }}
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+      {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

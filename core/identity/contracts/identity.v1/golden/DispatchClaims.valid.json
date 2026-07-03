@@ -1,0 +1,8 @@
+{
+  "sub": "u_jane",
+  "lch": "user:u_jane",
+  "ws": [ { "id": "u_jane", "mode": "rw" }, { "id": "system", "mode": "ro" } ],
+  "tools": ["gmail.read"],
+  "iat": 1000,
+  "exp": 1900
+}

@@ -1,0 +1,11 @@
+{
+  "name": "wav-multi",
+  "format": "wav",
+  "description": "strip per-chunk headers, sum pcm, one master header",
+  "chunks": [
+    "UklGRiwAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQgAAAB8g4qRmJ+mrQ==",
+    "UklGRioAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQYAAACboqmwt74="
+  ],
+  "master_sha256": "cdcbcce3ba36e88262eb5329aaf7d2388d48eb857873ebecbe3c41fa13a8df15",
+  "master_len": 58
+}

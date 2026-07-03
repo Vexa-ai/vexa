@@ -1,0 +1,34 @@
+name: gates
+on: [push, pull_request]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
+      - uses: astral-sh/setup-uv@v5
+      # CI runners have no GPU: skip onnxruntime-node's postinstall CUDA EP download — it is
+      # large, raced across the two resolved onnxruntime versions, and flaked main's first run
+      # (ENOENT in /tmp cleanup). The CPU binaries tests use are bundled in the package itself.
+      - run: pnpm install --frozen-lockfile
+        env: { ONNXRUNTIME_NODE_INSTALL: skip }
+      # the compliance bar — each gate is its own step so a failure is unambiguous
+      - run: pnpm gate:readme
+      - run: pnpm gate:isolation
+      - run: pnpm gate:exports
+      - run: pnpm gate:graph
+      - run: pnpm gate:schema
+      - run: pnpm gate:contract-version
+      - run: pnpm gate:dataflow
+      - run: pnpm gate:calm
+      # the runtime docker-backend lifecycle test creates containers via the docker socket API,
+      # which (unlike `docker run`) does NOT implicit-pull — pre-pull its fixture image
+      - run: docker pull alpine
+      - run: pnpm gate:python
+      - run: pnpm gate:licenses
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test

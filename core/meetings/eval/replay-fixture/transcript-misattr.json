@@ -1,0 +1,10 @@
+{
+  "platform": "zoom",
+  "native_meeting_id": "flag-fixture-001",
+  "start_time": "2026-06-21T10:00:00.000Z",
+  "segments": [
+    { "segment_id": "ch-0:1:1000", "speaker": "spk-vera", "text": "Okay let's get started with the agenda.", "start": 1.0, "end": 3.0, "completed": true },
+    { "segment_id": "ch-1:1:4200", "speaker": "spk-anna", "text": "This is Boris and I think we should ship it on Friday.", "start": 4.2, "end": 7.1, "completed": true },
+    { "segment_id": "ch-0:2:8000", "speaker": "spk-vera", "text": "Sounds good to me, thanks Boris.", "start": 8.0, "end": 9.5, "completed": true }
+  ]
+}

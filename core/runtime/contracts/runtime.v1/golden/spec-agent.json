@@ -1,0 +1,14 @@
+{
+  "workloadId": "agent-def456",
+  "profile": "agent",
+  "env": {
+    "VEXA_AGENT_IDENTITY_TOKEN": "scoped-jwt-token",
+    "VEXA_WORKSPACE_REPO": "https://git.example.com/acme/company-memory.git",
+    "VEXA_WORKSPACE_REF": "main",
+    "VEXA_WORKSPACE_PATH": "/workspace"
+  },
+  "callbackUrl": "http://agent-api:8100/runtime/callback",
+  "idleTimeoutSec": 600,
+  "maxLifetimeSec": 3600,
+  "backend": "k8s"
+}

@@ -1,0 +1,23 @@
+# Root .dockerignore — used by the meeting-api build (compose `context: ../..`). The other three
+# services build from their own narrow contexts. Keep the context light: exclude vendored/build
+# trees + venvs; the Dockerfile COPYs only the meeting-api src/, its pyproject+lock, and the five
+# sealed contract files it loads by path.
+node_modules/
+**/node_modules/
+**/.venv/
+.venv/
+**/dist/
+**/__pycache__/
+**/.pytest_cache/
+.turbo/
+**/.turbo/
+*.egg-info/
+*.log
+.DS_Store
+.git/
+.env
+.env.*
+.recordings/
+clients/
+sdks/
+docs/

@@ -1,0 +1,25 @@
+{
+  "name": "@vexa/gmeet-capture",
+  "version": "0.1.0",
+  "description": "The gmeet capture layer (browser): Google Meet per-channel audio + the glow name bound at the source → capture.v1. Hosted by the extension (live) and the bot (container).",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx src/gmeet-capture.test.ts && tsx src/gmeet-speakers.test.ts && tsx src/gmeet-channel-binder.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {
+    "@vexa/capture-codec": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

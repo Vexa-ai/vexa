@@ -1,0 +1,60 @@
+{
+  "version": "v1",
+  "default_target": "bbb",
+  "targets": [
+    {
+      "name": "bbb",
+      "kind": "ssh",
+      "host": "bbb",
+      "arch": "amd64",
+      "caps": ["docker", "compose", "amd64-bot", "redis", "multicore"],
+      "notes": "amd64 Linux docker host (the proven O6/eval venue). Authoritative for gate:compose + stress/chaos + the real bot (Lane B)."
+    },
+    {
+      "name": "ci",
+      "kind": "ci",
+      "arch": "amd64",
+      "caps": ["green-or-skip-gates"],
+      "notes": "GitHub Actions; runs the green-or-skip gate suite (docker-compose gates self-skip without a docker runner)."
+    }
+  ],
+  "resources": [
+    {
+      "name": "prod-cloud",
+      "kind": "service",
+      "endpoint": "https://api.cloud.vexa.ai",
+      "notes": "production Vexa stack that launches + drives the speaking bots (Lane B / L4 meeting eval)."
+    },
+    {
+      "name": "speaker-tokens",
+      "kind": "credential-set",
+      "secret_ref": "vexa-secrets:throwaway/test-users.enc.env",
+      "env": ["TOK_A", "TOK_B", "TOK_V", "TOK_C", "TOK_D"],
+      "notes": "one test-account token per synthetic speaker; N tokens ⇒ an N-speaker meeting. Decrypt at run-time from the secret store; NEVER paste values here."
+    },
+    {
+      "name": "stt",
+      "kind": "service",
+      "endpoint": "https://transcription.vexa.ai",
+      "secret_ref": "vexa-secrets:prod/transcription.enc.env#TRANSCRIPTION_SERVICE_TOKEN",
+      "env": ["TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"],
+      "validate": "GET https://transcription.vexa.ai/balance with the token → require HTTP 200 AND balance_minutes > 0. STT tokens are PER-USER (the response carries the account email + balance). Preflight EVERY live run; it caught the 0-balance + the 403 wrong-key-type before any audio.",
+      "notes": "the bot's STT at transcription.vexa.ai (OpenAI-compatible /v1/audio/transcriptions; /balance·/purchase·/admin/user-tokens). prod/transcription.enc.env#TRANSCRIPTION_SERVICE_TOKEN = internal@vexa.ai's reusable token. CURRENT BALANCE = 0 min → /purchase (or auto-topup) before a live transcript (Learning #28)."
+    },
+    {
+      "name": "minio",
+      "kind": "storage",
+      "notes": "recording master object store (in-stack on compose for Lane A)."
+    },
+    {
+      "name": "meeting",
+      "kind": "meeting",
+      "notes": "a live Google Meet (per-run NATIVE_ID) the bot + speakers join (Lane B)."
+    },
+    {
+      "name": "admit",
+      "kind": "human-gate",
+      "notes": "the one human step for Lane B: admit the bot in the Meet UI."
+    }
+  ]
+}

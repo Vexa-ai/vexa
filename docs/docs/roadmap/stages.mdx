@@ -1,0 +1,105 @@
+---
+title: "Stages"
+description: "The build, in dependency order. Each stage names what it delivers and the proof that closes it."
+---
+
+Derived from the [approach](/roadmap/approach): the execution core before features, dependency order, and
+**every stage proven end-to-end, not declared**. This is the page we validate and refine together.
+
+<Note>
+Format per stage — **Goal** · **Derives from** (a [principle](/concepts)) · **Delivers** ·
+**Depends on** · **Done when** (the proof). A stage is closed only when its proof holds in a real browser
+against the live stack *and* an eval asserts the claim.
+</Note>
+
+---
+
+## Stage 0 — Freeze & contracts
+
+- **Goal.** Turn the [seven primitives](/concepts) into sealed, versioned schemas before any
+  code.
+- **Derives from.** *Contracts are the seams.*
+- **Delivers.**
+  - reshape `unit.v1` → the **dispatch** shape (`identity`, `runner`, `workspaces[+mode]`, `tools`,
+    `start: entrypoint|session`);
+  - **new** `agent-runner.v1` (image · argv template · stream format · session path);
+  - `workspace.v1` → **bucket + id + mode + encryption** (no content/layout schema);
+  - `tool.v1` — finish the **gate** (→ `proactive-card.v1`);
+  - keep `schedule.v1`, `runtime.v1`, `transcript.v1`, `identity.v1`; evolve `ws.v1` (per-dispatch topic);
+  - **retire** `event.v1` (an event is an Integration firing the Scheduler) and `task.v1` (tasks are files)
+    and the `workspace.v1` governance gate.
+- **Depends on.** Nothing — this is the base.
+- **Done when.** Contracts sealed; goldens validate; `schema` + `contract-version` gates green; the
+  [model](/concepts) and this site reference only these shapes.
+
+---
+
+## Stage 1 — Execution core
+
+- **Goal.** One dispatch = one **isolated, short-lived container, spawned through the runtime**, running a
+  **generic agent**, resuming from a **session file**, streaming on its topic. **Delete** in-process
+  execution and any docker-from-agent-api.
+- **Derives from.** *The agent is untrusted* · *isolation is the enforcement* · *one primitive*.
+- **Delivers.** the agent worker entrypoint (generic over the [runner](/concepts#agent)); agent-api →
+  [Runtime](/core/runtime) `POST /workloads` for **every** dispatch; the
+  [workspace mount](/architecture/execution); the [Stream](/architecture/streaming) relay (chat over
+  `unit:<id>:out`).
+- **Depends on.** Stage 0.
+- **Done when.** Opening Chat **creates a container** — `docker ps` shows an ephemeral `vexa-agent`
+  workload that exits on idle; a second turn **resumes from the session file**; the reply streams over the
+  unit topic; agent-api touches no docker. Browser-tested + an eval that the in-process path is gone.
+
+---
+
+## Stage 2 — Trust
+
+- **Goal.** Every dispatch is attributable + scoped; the proof survives to the tool.
+- **Derives from.** *Identity is a chain of custody.*
+- **Delivers.** [Identity & trust](/architecture/identity-and-trust): workload identity (token-bound
+  secret in dev, **SPIRE** in k8s), **Keycloak** + **RFC 8693** token exchange, the Envoy **MCP Gateway**,
+  signed dispatch tokens, launcher **delegation grants**.
+- **Depends on.** Stage 1 (something to attest).
+- **Done when.** A tool call routes through the gateway with an **exchanged, audience-scoped** token; an
+  **unauthorized launcher is rejected**; the audit log resolves every effect to `(subject · launcher ·
+  scope)`. Eval: a forged/expired token is refused at the boundary.
+
+---
+
+## Stage 3 — Triggers
+
+- **Goal.** Non-human launchers dispatch agents under signed grants.
+- **Derives from.** *One primitive* (a cron/email dispatch is the same unit).
+- **Delivers.** the [Scheduler](/concepts#scheduler) (redis; schedule entry + event + now) and
+  [Integrations](/how-to/email-triage) (inbound watcher → fire; outbound MCP tool). Post-meeting rides
+  the same path (`transcript.completed`).
+- **Depends on.** Stages 1–2.
+- **Done when.** A **schedule entry fires unattended** and commits; a **Gmail event with a bound routine**
+  fires a [propose-only](/architecture/governance) triage that emits cards (never auto-sends). FakeClock +
+  fake-mailbox evals + browser test.
+
+---
+
+## Stage 4 — Capabilities
+
+- **Goal.** The product surfaces — each a thin composition, none special.
+- **Derives from.** *Everything is files* · *generic over tools*.
+- **Delivers.** [Chat](/how-to/chat-workspace), [Routines](/how-to/daily-brief),
+  [Knowledge](/how-to/workspace-files) views, [Integrations](/how-to/email-triage) (email/calendar),
+  [Browser](/core/runtime), [Live meetings](/how-to/live-copilot),
+  [Org knowledge](/how-to/workspace-files).
+- **Depends on.** Stages 1–3.
+- **Done when.** Each capability has a browser + backend proof at the altitude of its claim (e.g. live
+  meeting: replay a golden transcript → cards + commit-on-approve).
+
+---
+
+## Stage 5 — Enterprise
+
+- **Goal.** Self-host GA for the regulated verticals.
+- **Derives from.** *Self-host & air-gap by default.*
+- **Delivers.** SSO (Okta/Entra) + SCIM; **Keycloak + MCP Gateway in-cluster**; BYO inference; the
+  org-graph triage + review UI.
+- **Depends on.** Stages 1–4.
+- **Done when.** A **fully air-gapped** stack runs with **zero egress** and BYO inference; SCIM least
+  privilege; two conflicting person-folder updates produce a reviewable merge proposal (sign → org trunk
+  updated).

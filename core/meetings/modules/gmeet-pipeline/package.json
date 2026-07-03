@@ -1,0 +1,28 @@
+{
+  "name": "@vexa/gmeet-pipeline",
+  "version": "0.1.0",
+  "description": "The gmeet lane: channel-routed transcription. gmeet-capture.v1 (named per-channel audio) → transcript.v1 (named segments). Overlap-safe, names bound at capture — no diarizer.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc && rm -rf dist/hallucinations && cp -R src/hallucinations dist/hallucinations",
+    "test": "tsx src/hallucination-filter.test.ts && tsx src/pipeline-conformance.test.ts && tsx src/fault-surfacing.test.ts && tsx src/confirm-loop.golden.test.ts && tsx src/count-channelswitch.test.ts && tsx src/pipeline-realstt.live.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {
+    "@vexa/transcribe-buffer": "workspace:*",
+    "@vexa/transcribe-whisper": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

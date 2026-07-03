@@ -1,0 +1,91 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vexa.componentName" (list . "migrations") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+  # v0.10.5 Pack A.2 — Helm hook annotations (#272 issue 3 / #247).
+  # Without these, every `helm upgrade` that bumps any image tag fails with
+  # `Job.batch is invalid: spec.template: field is immutable` because Helm
+  # tries to patch the existing Job. Hook annotations tell Helm to delete-
+  # and-recreate at the right point in the lifecycle.
+  #
+  # NOTE: pre-upgrade ONLY, NOT pre-install. On first install, secrets
+  # (including postgres-credentials) are not yet created when pre-install
+  # hooks run — migrations would crash with "secret postgres-credentials
+  # not found." Discovered during v0.10.5 helm-mode validate (this cycle).
+  # On first install, the Job runs as a regular managed resource AFTER
+  # secrets are deployed; on upgrade, the hook prevents the immutable-
+  # patch error. This is the standard Helm idiom for migration Jobs that
+  # depend on chart-managed secrets.
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrations
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          image: "{{ default .Values.meetingApi.image.repository .Values.migrations.image.repository }}:{{ default .Values.meetingApi.image.tag .Values.migrations.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Running idempotent schema sync..."
+              python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db()); print('Schema sync complete.')"
+          env:
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+      {{- /* v0.10.5 Pack A.1 — restore tolerations/nodeSelector/affinity (#272 issue 2; was never on Job spec). */}}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

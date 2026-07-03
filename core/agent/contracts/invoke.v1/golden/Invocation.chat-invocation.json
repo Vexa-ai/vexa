@@ -1,0 +1,11 @@
+{
+  "on": "chat_invocation",
+  "meeting": {
+    "meeting_id": "42",
+    "session_uid": "sess-uid",
+    "platform": "google_meet"
+  },
+  "workspace_repo": "https://git.example.com/acme/company-memory.git",
+  "workspace_ref": "main",
+  "prompt": "Summarize the action items from this meeting into the project entity."
+}

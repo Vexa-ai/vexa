@@ -1,0 +1,17 @@
+[project]
+name = "vexa-identity-core"
+version = "0.12.0"
+description = "Identity domain CORE — scoped tokens, the canAccess authz port (default-deny owner-only), and the SecretsPort broker. Conforms to identity.v1."
+requires-python = ">=3.11"
+dependencies = [
+    "jsonschema>=4.21,<5",
+    "referencing>=0.31",
+    "pytest>=8,<9",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

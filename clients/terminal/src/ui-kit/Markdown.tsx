@@ -1,0 +1,264 @@
+/** Markdown — a compact, self-contained markdown renderer (no npm dependency).
+ *  Parses a markdown string into React nodes, styled with the terminal's dark tokens
+ *  (--t1/--t2/--t3, --accent, --blue, --mono, --line, --panel, --panel2). Supports:
+ *  headings (#..####), bold, italic, inline code, fenced ```code```, bullet + numbered
+ *  lists, links (new tab, rel noreferrer), [[wikilinks]], blockquotes, horizontal rules,
+ *  GFM pipe tables, paragraphs and line breaks. Intentionally a small subset — robust,
+ *  not spec-complete. */
+import { Fragment, type ReactNode } from "react";
+import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+
+// An entity-doc path (e.g. kg/entities/person/dmitry-grankin.md) → clickable to open the doc.
+const ENTITY_PATH = /^[\w./-]*kg\/entities\/[\w./-]+\.md$/;
+function openEntity(detail: { path?: string; wikilink?: string }): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail }));
+}
+
+// ── inline span parsing: code, bold, italic, links, wikilinks ──────────────────────
+// Order matters — `code` is tokenized first so emphasis markers inside it are left literal.
+function inline(text: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  // split on inline code first; odd indices are code content
+  const codeParts = text.split(/(`[^`]+`)/g);
+  codeParts.forEach((seg, ci) => {
+    if (seg.startsWith("`") && seg.endsWith("`") && seg.length >= 2) {
+      const code = seg.slice(1, -1);
+      const isPath = ENTITY_PATH.test(code);
+      out.push(
+        <code key={`c${ci}`} onClick={isPath ? () => openEntity({ path: code }) : undefined}
+          style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: isPath ? "var(--blue)" : "var(--t1)", cursor: isPath ? "pointer" : undefined }}>
+          {code}
+        </code>,
+      );
+    } else {
+      emphasis(seg, `${ci}`, out);
+    }
+  });
+  return out;
+}
+
+// bold / italic / links / wikilinks within a non-code segment
+function emphasis(text: string, key: string, out: ReactNode[]): void {
+  const re = /(\[\[[^\]]+\]\])|(\[[^\]]*\]\([^)]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*]+\*|_[^_]+_)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let i = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(<Fragment key={`${key}-t${i}`}>{text.slice(last, m.index)}</Fragment>);
+    const tok = m[0];
+    if (m[1]) {
+      // [[wikilink]] — clickable: resolve the title to its entity doc
+      out.push(<span key={`${key}-w${i}`} onClick={() => openEntity({ wikilink: tok.slice(2, -2) })} style={{ color: "var(--blue)", cursor: "pointer" }}>{tok}</span>);
+    } else if (m[2]) {
+      // [text](url)
+      const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;
+      out.push(
+        <a key={`${key}-l${i}`} href={lm[2]} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>
+          {lm[1] || lm[2]}
+        </a>,
+      );
+    } else if (m[3]) {
+      // **bold** / __bold__
+      out.push(<strong key={`${key}-b${i}`} style={{ fontWeight: 600, color: "var(--t1)" }}>{tok.slice(2, -2)}</strong>);
+    } else if (m[4]) {
+      // *italic* / _italic_
+      out.push(<em key={`${key}-i${i}`} style={{ fontStyle: "italic" }}>{tok.slice(1, -1)}</em>);
+    }
+    last = re.lastIndex;
+    i++;
+  }
+  if (last < text.length) out.push(<Fragment key={`${key}-t${i}`}>{text.slice(last)}</Fragment>);
+}
+
+const HEADING_SIZE: Record<number, number> = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 };
+type TableAlign = "left" | "center" | "right";
+
+function splitTableRow(line: string): string[] | null {
+  let body = line.trim();
+  if (!body.includes("|")) return null;
+  if (body.startsWith("|")) body = body.slice(1);
+  if (body.endsWith("|")) body = body.slice(0, -1);
+
+  const cells: string[] = [];
+  let cell = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "\\" && body[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (ch === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += ch;
+    }
+  }
+  cells.push(cell.trim());
+
+  return cells.length >= 2 ? cells : null;
+}
+
+function parseTableSeparator(line: string): TableAlign[] | null {
+  const cells = splitTableRow(line);
+  if (!cells) return null;
+
+  const aligns: TableAlign[] = [];
+  for (const cell of cells) {
+    const marker = cell.replace(/\s+/g, "");
+    if (!/^:?-{3,}:?$/.test(marker)) return null;
+    const left = marker.startsWith(":");
+    const right = marker.endsWith(":");
+    aligns.push(left && right ? "center" : right ? "right" : "left");
+  }
+  return aligns;
+}
+
+function tableStart(lines: string[], index: number): { header: string[]; align: TableAlign[] } | null {
+  if (index + 1 >= lines.length) return null;
+  const header = splitTableRow(lines[index]);
+  const align = parseTableSeparator(lines[index + 1]);
+  if (!header || !align) return null;
+
+  const columns = Math.max(header.length, align.length);
+  return {
+    header: Array.from({ length: columns }, (_, col) => header[col] ?? ""),
+    align: Array.from({ length: columns }, (_, col) => align[col] ?? "left"),
+  };
+}
+
+// ── block parser: split lines into headings, lists, code fences, quotes, rules, paras ──
+export function Markdown({ children, style }: { children: string; style?: React.CSSProperties }): ReactNode {
+  const src = children ?? "";
+  const lines = src.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+
+  const flushList = (items: string[], ordered: boolean) => {
+    const Tag = ordered ? "ol" : "ul";
+    blocks.push(
+      <Tag key={key++} style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>
+        {items.map((it, j) => <li key={j} style={{ lineHeight: 1.55 }}>{inline(it)}</li>)}
+      </Tag>,
+    );
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // fenced code block ```
+    const fence = line.match(/^\s*```(.*)$/);
+    if (fence) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; // closing fence
+      blocks.push(
+        <pre key={key++} style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>
+          <code>{buf.join("\n")}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    // blank line
+    if (/^\s*$/.test(line)) { i++; continue; }
+
+    // horizontal rule
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      blocks.push(<hr key={key++} style={{ border: "none", borderTop: "1px solid var(--line)", margin: "12px 0" }} />);
+      i++; continue;
+    }
+
+    // heading
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) {
+      const lvl = h[1].length;
+      blocks.push(
+        <div key={key++} style={{ fontSize: HEADING_SIZE[lvl], fontWeight: 600, color: "var(--t1)", lineHeight: 1.3, margin: lvl <= 2 ? "12px 0 6px" : "10px 0 4px" }}>
+          {inline(h[2])}
+        </div>,
+      );
+      i++; continue;
+    }
+
+    // blockquote (consume consecutive > lines)
+    if (/^\s*>/.test(line)) {
+      const buf: string[] = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+      blocks.push(
+        <blockquote key={key++} style={{ borderLeft: "3px solid var(--line2)", paddingLeft: 12, margin: "6px 0 8px", color: "var(--t2)", lineHeight: 1.55 }}>
+          {inline(buf.join("\n"))}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    // bullet list
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*]\s+/, "")); i++; }
+      flushList(items, false);
+      continue;
+    }
+
+    // numbered list
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+[.)]\s+/, "")); i++; }
+      flushList(items, true);
+      continue;
+    }
+
+    // GFM pipe table
+    const table = tableStart(lines, i);
+    if (table) {
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length) {
+        const row = splitTableRow(lines[i]);
+        if (!row) break;
+        rows.push(Array.from({ length: table.header.length }, (_, col) => row[col] ?? ""));
+        i++;
+      }
+      blocks.push(
+        <table key={key++} style={{ width: "100%", borderCollapse: "collapse", margin: "6px 0 10px", color: "var(--t1)", fontSize: "inherit", lineHeight: 1.45 }}>
+          <thead>
+            <tr>
+              {table.header.map((cell, col) => (
+                <th key={col} style={{ background: "var(--panel)", border: "1px solid var(--line2)", padding: "6px 9px", textAlign: table.align[col], color: "var(--t1)", fontWeight: 600 }}>
+                  {inline(cell)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, col) => (
+                  <td key={col} style={{ border: "1px solid var(--line)", padding: "6px 9px", textAlign: table.align[col], color: "var(--t2)", verticalAlign: "top" }}>
+                    {inline(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>,
+      );
+      continue;
+    }
+
+    // paragraph — gather consecutive plain lines until a blank or a block starter
+    const para: string[] = [];
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !tableStart(lines, i)) {
+      para.push(lines[i]); i++;
+    }
+    blocks.push(
+      <p key={key++} style={{ margin: "0 0 8px", lineHeight: 1.6 }}>
+        {para.map((pl, j) => <Fragment key={j}>{j > 0 && <br />}{inline(pl)}</Fragment>)}
+      </p>,
+    );
+  }
+
+  return <div style={{ color: "var(--t1)", ...style }}>{blocks}</div>;
+}

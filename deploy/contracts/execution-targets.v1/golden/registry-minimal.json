@@ -1,0 +1,7 @@
+{
+  "version": "v1",
+  "default_target": "local",
+  "targets": [
+    { "name": "local", "kind": "local", "arch": "multi", "caps": ["docker", "compose"] }
+  ]
+}

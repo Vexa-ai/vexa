@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/task.v1",
+  "title": "task.v1",
+  "description": "A task — a unit of work a unit produces or consumes (a to-do with state). Tasks live in the per-person workspace as a kg/entities/task/<slug>.md (a workspace.v1 entity) AND have this wire shape for the event bus (a task transition is itself an `event` trigger source). Created from meetings, email, routines, or chat.",
+  "$defs": {
+    "Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner", "title", "state"],
+      "properties": {
+        "id": { "type": "string" },
+        "owner": { "type": "string", "description": "identity.v1 subject = the person" },
+        "title": { "type": "string" },
+        "state": { "enum": ["open", "doing", "done", "blocked"] },
+        "plan_ref": { "type": "string", "description": "optional workspace plan/doc the task is about" },
+        "due": { "type": "string", "description": "optional ISO date" },
+        "source": { "type": "string", "description": "where it came from: meeting | email | routine | chat" },
+        "links": { "type": "array", "items": { "type": "string" }, "description": "related entity uris/wikilinks" }
+      }
+    }
+  }
+}

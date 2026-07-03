@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+/*
+ * Terminal design tokens — ported verbatim from public/prototype.html so the React shell and the
+ * prototype stay pixel-identical as views are extracted. Dark is the primary theme.
+ */
+:root {
+  color-scheme: dark;
+  /* Contrast model (Dmitry 2026-07-03): the CENTER (tabs/canvas) is the dark well; BOTH
+   * sidebars (left + chat rail) sit on the same LIGHTER tone so they read as one frame
+   * around the work area. Panels/cards lift a step above whatever they sit on; borders
+   * stay lighter than any fill. */
+  --bg: #0e0e11;
+  --sidebar: #1a1b20;
+  --panel: #222329;
+  --panel2: #2b2c34;
+  --rail: #1a1b20;
+  --line: rgba(255, 255, 255, 0.09);
+  --line2: rgba(255, 255, 255, 0.16);
+  --t1: #ededf0;
+  --t2: #9a9aa4;
+  --t3: #65656f;
+  --accent: #d8855c;
+  --accentbg: rgba(216, 133, 92, 0.14);
+  --live: #ef5b56;
+  --livebg: rgba(239, 91, 86, 0.14);
+  --green: #48b787;
+  --greenbg: rgba(72, 183, 135, 0.14);
+  --blue: #6ea8fe;
+  --bluebg: rgba(110, 168, 254, 0.14);
+  --violet: #b08cf0;
+  --violetbg: rgba(176, 140, 240, 0.14);
+  --r: 8px;
+  --r2: 12px;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+}
+
+/*
+ * Day mode — the light counterpart of the dark tokens above. Same variable names so every surface
+ * (which paints from var(--*)) switches with no per-component changes. Toggled via the footer control,
+ * which sets data-theme="light" on <html>.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+  /* Light mirrors the contrast model: white work area framed by gray sidebars. */
+  --bg: #ffffff;
+  --sidebar: #eeeef2;
+  --panel: #f7f7f9;
+  --panel2: #e6e6eb;
+  --rail: #eeeef2;
+  --line: rgba(0, 0, 0, 0.10);
+  --line2: rgba(0, 0, 0, 0.16);
+  --t1: #1a1a1f;
+  --t2: #5c5c66;
+  --t3: #8a8a94;
+  --accent: #c06a3f;
+  --accentbg: rgba(192, 106, 63, 0.12);
+  --live: #e0453f;
+  --livebg: rgba(224, 69, 63, 0.12);
+  --green: #2f9e72;
+  --greenbg: rgba(47, 158, 114, 0.12);
+  --blue: #3b73d6;
+  --bluebg: rgba(59, 115, 214, 0.12);
+  --violet: #8b5fd6;
+  --violetbg: rgba(139, 95, 214, 0.12);
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--t1);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * dockview — map the docking engine's theme variables onto our palette so panels/tabs/sashes match
+ * the prototype. (theme={themeAbyss} applies .dockview-theme-abyss; we override its --dv-* vars.)
+ */
+.dockview-theme-abyss.dockview-theme-abyss {
+  --dv-background-color: var(--bg);
+  --dv-group-view-background-color: var(--bg);
+  --dv-tabs-and-actions-container-background-color: var(--sidebar);
+  /* the tab strip sits on the lighter sidebar tone; the ACTIVE tab drops to the dark
+   * canvas it belongs to — strongest possible active cue */
+  --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--t1);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--sidebar);
+  --dv-activegroup-hiddenpanel-tab-color: var(--t3);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--sidebar);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--t3);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--sidebar);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--t3);
+  --dv-separator-border: var(--line);
+  --dv-tab-divider-color: var(--line);
+  --dv-active-sash-color: var(--accent);
+  --dv-icon-hover-background-color: var(--panel2);
+  --dv-context-menu-background-color: var(--panel);
+  --dv-floating-titlebar-background-color: var(--panel);
+  --dv-drag-over-background-color: var(--accentbg);
+  --dv-tabs-container-scrollbar-color: var(--line2);
+}
+
+/* cmdk command palette (headless — we style its data-attributes) */
+[cmdk-input] {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--t1);
+  font-size: 15px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+[cmdk-input]::placeholder { color: var(--t3); }
+[cmdk-list] { max-height: 360px; overflow: auto; padding: 6px; }
+[cmdk-group-heading] {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--t3);
+  padding: 10px 10px 4px;
+}
+[cmdk-item] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  color: var(--t1);
+  font-size: 13.5px;
+  cursor: pointer;
+  user-select: none;
+}
+[cmdk-item][data-selected="true"] { background: var(--panel2); }
+[cmdk-empty] { padding: 18px; color: var(--t3); font-size: 13px; text-align: center; }
+.pal-skill { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
+
+/* allotment — match the split sash to our palette */
+:root {
+  --separator-border: var(--line);
+  --focus-border: var(--accent);
+}
+
+/* agent-window — operation step spinner (a tool call "in works") */
+@keyframes vx-op-spin { to { transform: rotate(360deg); } }
+.vx-op-spin { animation: vx-op-spin 0.7s linear infinite; }
+
+/* entity list — a quiet row: hover-only secondary action, type-color rail revealed on hover */
+.vx-row { position: relative; }
+.vx-row .vx-row-act { opacity: 0; transform: translateX(2px); transition: opacity .12s ease, transform .12s ease; }
+.vx-row:hover .vx-row-act,
+.vx-row:focus-within .vx-row-act { opacity: 1; transform: none; }
+.vx-row .vx-row-rail { opacity: 0; transition: opacity .12s ease; }
+.vx-row:hover .vx-row-rail { opacity: 1; }
+
+/* a clean, single-line scroller for the suggested-actions row (no visible scrollbar) */
+.vx-hscroll { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.vx-hscroll::-webkit-scrollbar { display: none; }
+
+/* a soft entrance for the conversation as it first appears */
+@keyframes vx-fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.vx-fade-up { animation: vx-fade-up .22s ease both; }

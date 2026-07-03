@@ -1,0 +1,20 @@
+{{- if .Values.terminal.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "terminal") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.terminal.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.terminal.service.port }}
+      targetPort: http
+      {{- if .Values.terminal.service.nodePort }}
+      nodePort: {{ .Values.terminal.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: terminal
+{{- end }}

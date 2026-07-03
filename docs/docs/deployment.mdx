@@ -1,0 +1,129 @@
+---
+title: "Deployment"
+description: "Self-host Vexum with Docker Compose — air-gapped, with bring-your-own inference."
+---
+
+Vexum runs **in your own environment** — open-source, self-hostable, air-gappable. Data, recordings, and
+agent state stay on infrastructure you control.
+
+## Quick start (Docker Compose)
+
+Prerequisites: a Linux host (Ubuntu 24.04), Docker, `git`, `curl`.
+
+```bash
+curl -fsSL https://get.docker.com | sh
+git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa-core
+
+make all      # full stack via Docker Compose — each service in its own container
+make bot      # build the meeting bot FROM SOURCE — required before a bot can join a meeting
+```
+
+`make all` seeds `.env` from `.env.example`, brings the stack up, and **prints an API key plus the
+service URLs** when it's done. The **meeting bot is built from source** (`make bot`), **not pulled** —
+the published `vexaai/vexa-bot:dev` on Docker Hub is the older 0.10 line and is **not compatible** with
+this stack's `lifecycle.v1` (bots reach `joining` then fail). `make all` warns loudly if the bot image
+is missing. For a transcript, set a **transcription (STT) token** in `.env`
+(`TRANSCRIPTION_SERVICE_TOKEN`) — get one at `vexa.ai/account`, or self-host the transcription service on
+a GPU for a fully air-gapped install. The API is then at `http://localhost:18056` (the gateway) and the
+terminal web workbench at `http://localhost:13000`.
+
+## The stack
+
+| Service | Role |
+|---|---|
+| **gateway** (`:18056`) | the one front door — auth, scopes, routing |
+| **admin-api** | users + API keys |
+| **meeting-api** | bots, transcripts, **recordings** (to object storage) |
+| **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
+| **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
+| **terminal** (`:13000`) | the web workbench — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
+| redis · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
+
+The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
+meeting (`BROWSER_IMAGE`) and an agent container per dispatch (`AGENT_IMAGE`), then reaps them. The
+`BROWSER_IMAGE` is **built from source** here (`make bot`) and the runtime spawns it **without pulling**
+— so it must exist locally before any bot can join (build it once; `make all` checks and warns if it's
+absent).
+
+## Configuration
+
+- **Transcription (STT)** — `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Unset → bots
+  join and capture, but produce no transcript.
+- **Object storage** — MinIO (`MINIO_*`): meeting recordings and agent workspaces live in your bucket.
+  The default `MINIO_HOST_PORT=9000` is a common port — if it's already taken on your host
+  (`make all` fails with `bind … 127.0.0.1:9000 … address already in use`), set a free port in `.env`.
+- **Agent inference** — bring your own: point the agent at your endpoint so no inference leaves the
+  network (`VEXA_AGENT_MODEL` / mounted credentials).
+- **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB credentials. Set real values before exposing.
+
+## Transcription (the separate GPU unit)
+
+Speech-to-text is the one **GPU workload**, so it is **carved out** of the main stack: `make all`
+runs GPU-free and anywhere, and the STT service is its own deploy unit at
+[`deploy/transcription`](https://github.com/Vexa-ai/vexa-core/tree/main/deploy/transcription)
+([`core/meetings/services/transcription`](https://github.com/Vexa-ai/vexa-core/tree/main/core/meetings/services/transcription)
+is the brick — faster-whisper / CTranslate2 behind an OpenAI-compatible `/v1/audio/transcriptions`).
+
+Stand it up wherever a GPU lives (the same host or a dedicated GPU box):
+
+```bash
+cd deploy/transcription
+cp .env.example .env          # set MODEL_SIZE, API_TOKEN, TRANSCRIPTION_LB_PORT
+docker compose up -d          # GPU (needs nvidia-container-toolkit)
+# no GPU? CPU variant (slower, use a smaller model):
+docker compose -f docker-compose.cpu.yml up -d
+curl http://localhost:8083/health   # waits on the model load
+```
+
+Then point the main stack at it in `deploy/compose/.env`:
+
+```bash
+TRANSCRIPTION_SERVICE_URL=http://<gpu-host>:8083   # base URL; client appends /v1/audio/transcriptions
+TRANSCRIPTION_SERVICE_TOKEN=<same as the unit's API_TOKEN>
+```
+
+Now bots transcribe end-to-end: **bot → transcription service → segments → meeting-api `collector`
+→ live fan-out**. Scale by adding workers (one GPU each) in the unit's `docker-compose.yml` +
+`nginx.conf`.
+
+## Publishing behind a reverse proxy
+
+`make all` binds every service to `127.0.0.1` (loopback only). To expose the **terminal** at a public
+hostname, put a TLS-terminating reverse proxy in front of the terminal port (`TERMINAL_PORT`, default
+`13000`) and tell the terminal its public origin so auth cookies and OAuth callbacks are correct:
+
+```bash
+# deploy/compose/.env
+NEXTAUTH_URL=https://your-host.example.com
+NEXTAUTH_SECRET=<a strong random secret>   # don't ship the dev default
+```
+
+An nginx vhost (the terminal proxies `/ws` to the gateway itself, so the proxy only needs standard
+WebSocket-upgrade headers):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name your-host.example.com;
+    ssl_certificate     /etc/letsencrypt/live/your-host.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-host.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:13000;       # TERMINAL_PORT
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;   # terminal /ws → gateway
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;
+    }
+}
+```
+
+The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no auth of its own.
+
+## Air-gapped
+
+Everything runs in-VPC: gateway + services + redis/postgres/minio on your host, the
+[transcription unit](#transcription-the-separate-gpu-unit) on your own GPU, **BYO inference**,
+recordings in your object storage. **Zero egress** — the posture the regulated verticals require.

@@ -1,0 +1,41 @@
+---
+title: "Meetings"
+description: "A standalone service that captures, stores, and serves meeting data in real time — usable on its own or with agents."
+---
+
+**Meetings is a separate, self-contained service** — a detached domain with its own
+[API](/api/meetings). It does one job end to end: **capture, store, and access** meeting data, delivered
+in real time from the platforms. Run it entirely on its own as a meeting-capture backend — no agents
+required.
+
+A bot joins the call and captures it natively in real time; the transcript is stored and served over the
+API as it happens — live and historical, speaker-attributed, from
+[Google Meet, Zoom, and Teams](/api/meetings#platforms). That is the whole product on its own.
+
+It also **composes** with the [agent domain](/core/agents) — the transcript becomes knowledge agents act
+on — but that is a composition, not a dependency: meetings stands alone. How the two connect (the
+`transcript.v1` → agent bridge) lives in one place: [Modules & seams](/architecture/modules).
+
+Mechanically, the bot is a **browser [container](/concepts#container) spawned by the
+[runtime](/core/runtime)** — the same runtime an agent runs in.
+
+## Platforms
+
+Vexum joins natively, in real time, with no plugins or host configuration — the bot attends like any
+participant:
+
+- [**Google Meet**](/api/meetings#platforms)
+- [**Zoom**](/api/meetings#platforms)
+- [**Microsoft Teams**](/api/meetings#platforms)
+
+Drive it programmatically with the [**Meetings API**](/api/meetings) — send a bot, then stream the
+speaker-attributed (diarized) transcript.
+
+## From transcript to knowledge
+
+1. The bot captures audio; transcription produces a real-time `transcript.v1` stream.
+2. The transcript compiles into the person's [workspace](/concepts#workspace) as Markdown.
+3. Agents read it like any other file — and act on it:
+   - **After the meeting** — a dispatch writes notes, decisions, and action items as workspace files.
+   - **During the meeting** — a live dispatch surfaces proactive cards (new person, action item,
+     decision); see [Meeting copilot](/how-to/live-copilot).

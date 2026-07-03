@@ -1,0 +1,76 @@
+---
+title: "Troubleshooting"
+description: "The common failures, what causes them, and how to fix them."
+---
+
+## Bot won't join the meeting
+
+A `POST /bots` returns success once the bot is **dispatched**, not once it's in the call — a join can
+still fail. Check the bot's live state:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
+```
+
+- **Bot image not built (self-host)** — the meeting bot is **built from source** (`make bot`), not
+  pulled. If it's missing, the bot can't spawn and the meeting sticks at `requested`; if you're on the
+  stale published `vexaai/vexa-bot:dev` (the old 0.10 line) the bot reaches `joining` then fails the
+  `lifecycle.v1` handshake. Fix: `make bot`, and point `BROWSER_IMAGE` at the built tag.
+- **Bad meeting id** — `native_meeting_id` is the id *inside* the join URL (e.g. `abc-defg-hij`), not the
+  whole URL. Wrong platform value also fails: use `google_meet`, `zoom`, or `teams`.
+- **Waiting room / admission** — on Meet and Teams the bot may be parked in a lobby until a host admits
+  it. Admit it like any guest.
+- **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
+  created). Stop an existing bot or raise the cap.
+
+## Bot joins but there's no transcript
+
+The bot is capturing audio, but transcription isn't configured.
+
+- Confirm `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` are set (see
+  [Configuration](/configuration#transcription-stt)). Unset → audio is recorded, no text is produced.
+- Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
+  normal, not a failure.
+- A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
+  `GET /api/meeting/relay-health` rather than as silent dead air.
+
+## Authentication failures
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `401 Missing API key` | no `X-API-Key` header | add the header |
+| `401 Invalid API key` | unknown or revoked key | mint a fresh one ([Authentication](/authentication)) |
+| `403 Token scope not authorized` | key lacks the route's scope | mint with the right `scopes=` |
+| `403 Invalid or missing admin token.` on `/admin/*` | missing or wrong `ADMIN_TOKEN` | use the `X-Admin-API-Key` matching your `ADMIN_TOKEN` |
+
+## Containers don't spawn (self-host)
+
+The [runtime](/core/runtime) spawns bot and agent containers via the Docker socket.
+
+- The runtime needs access to the host Docker socket and the right group — set `DOCKER_GID` to the host's
+  docker group id.
+- The meeting bot (`BROWSER_IMAGE`) is **built from source** (`make bot`) and the runtime spawns it
+  **without pulling** — it must exist locally first. Confirm it's there (`docker image inspect "$BROWSER_IMAGE"`);
+  the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by
+  `make all` — confirm it resolves and `IMAGE_TAG` matches what you built.
+
+## Agent write was rejected
+
+A streamed turn can end with a `rejected` frame carrying `violations`. This is governance, not a bug:
+**untrusted input** (email, web) runs [propose-only](/architecture/governance) and cannot write directly —
+it emits proposal cards a human approves. Trusted input (your chat) may write. If a legitimate trusted
+write is rejected, check that the dispatch's trigger is `message`/`scheduled` (which mount the workspace
+`rw`), not an untrusted event.
+
+## The stack won't come up
+
+- `make all` brings the compose stack up health-gated; tail the logs with `make logs` or
+  `docker compose -p vexa-v012 logs -f` to see which service is wedged.
+- Port already in use → override the host port (e.g. `API_GATEWAY_HOST_PORT`) in `deploy/compose/.env`.
+- Wipe and restart from clean: `make down` (or `docker compose -p vexa-v012 down -v` to drop the
+  postgres + minio volumes too), then `make all`.
+
+## Still stuck?
+
+Open an issue or ask on the [GitHub repo](https://github.com/Vexa-ai/vexa-core). Include the failing request,
+the response (status + `detail`), and the relevant `docker logs`.

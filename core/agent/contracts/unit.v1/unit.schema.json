@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/unit.v1",
+  "title": "unit.v1",
+  "description": "The DISPATCH — the one backend object (one run of an agent), composed of the seven primitives. The Scheduler fires it; the Runtime spawns an isolated container, mounts the granted workspace LIST + brokers creds; the Agent (runner) runs from a start point and streams on its derived Stream `unit:<id>:out`. The envelope carries WHO it acts for and who launched it (identity: subject · launcher · signed token), WHICH agent runs (runner), WHICH workspaces it mounts at what access (workspaces[{id,mode}] — mode is the write-access source of truth), WHICH tools it may call (tools — each auto|gate per its tool.v1 descriptor), WHY it fired (trigger — informs the DERIVED input-trust), what it is grounded in (context), and WHAT to do (start: an entry point or a resumed session). `trust` (all-ro && irreversible-gated) and `output` (`unit:<id>:out`) are DERIVED, never stored. There is no `lifecycle` — the Runtime reaps on idle and continuity is the session file in the workspace. No tenancy beyond subject (ADR-0003). Supersedes the flat MVP shape and the meeting-only invoke.v1.",
+  "$defs": {
+    "Trigger": {
+      "description": "Why the dispatch fired — an input to the Scheduler, recorded for provenance + to DERIVE input-trust (message = you, in chat ⇒ trusted ⇒ rw; event/transcription from an external source ⇒ untrusted ⇒ propose-only). message = a user turn (chat, now); scheduled = a schedule entry fired (routine); event = an Integration published an event (e.g. email.received); transcription = a live transcript stream beat / session start (the in-meeting agent).",
+      "enum": ["message", "scheduled", "event", "transcription"]
+    },
+    "Mode": {
+      "description": "Workspace access mode — the SOURCE OF TRUTH for write access (governance). ro = materialized read-only; rw = synced back to the bucket on commit.",
+      "enum": ["ro", "rw"]
+    },
+    "Workspace": {
+      "description": "One granted workspace mount: a workspace.v1 git-folder `id` (the store resolves it to a bucket location) + the access `mode`. A dispatch mounts a LIST — typically system (ro) + company (ro) + user (rw).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mode"],
+      "properties": {
+        "id": { "type": "string", "description": "the workspace.v1 id (e.g. the subject for the personal workspace, or `system`/`company`)" },
+        "mode": { "$ref": "#/$defs/Mode" }
+      }
+    },
+    "Identity": {
+      "description": "The chain of custody. subject = the principal the agent acts ON BEHALF OF (data + quota owner). launcher = WHAT triggered this dispatch (the user, a schedule entry, or an Integration) — it must hold a signed delegation grant to act as the subject. token = the short-lived signed dispatch token (subject + launcher + scope) the Identity service mints; absent at author time, injected by the Runtime at spawn; every boundary verifies it, never the agent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "launcher"],
+      "properties": {
+        "subject": { "type": "string", "description": "identity.v1 subject = the PERSON = quota owner + cred-brokerage key (e.g. u_jane)" },
+        "launcher": { "type": "string", "description": "who/what triggered the dispatch, e.g. user:u_jane | schedule:<id> | integration:meetings" },
+        "token": { "type": ["string", "null"], "description": "the minted short-lived signed dispatch token; injected at spawn, verified at every boundary" }
+      }
+    },
+    "MeetingRef": {
+      "description": "Which meeting this dispatch is grounded in (context.kind=meeting) — referenced by id, never by importing meetings code (the meetings⊥agent boundary). The ids match transcript.v1; the agent consumes transcript.v1 by schema off `tc:meeting:{id}:mutable`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "session_uid"],
+      "properties": {
+        "meeting_id": { "type": "string" },
+        "session_uid": { "type": "string" },
+        "platform": { "type": "string", "description": "e.g. google_meet | zoom | teams" }
+      }
+    },
+    "SourceRef": {
+      "description": "An OPAQUE reference to a non-meeting context source (an email, a doc, a generic uri) that a tool resolves — never the bytes. Keeps email/calendar/tasks as Integrations, not platform domains.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri"],
+      "properties": {
+        "uri": { "type": "string", "description": "an opaque source uri, e.g. mailbox://user/INBOX/<id>" },
+        "etag": { "type": "string", "description": "optional version/etag for the source" }
+      }
+    },
+    "Context": {
+      "description": "What the dispatch is grounded in. `kind` is the discriminator; `none` is a bare chat with no external context. For a live meeting, `meeting` carries the ids the agent uses to consume the transcript stream.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["none", "meeting", "email", "generic"] },
+        "meeting": { "$ref": "#/$defs/MeetingRef" },
+        "ref": { "$ref": "#/$defs/SourceRef" }
+      }
+    },
+    "EntryPoint": {
+      "description": "A fresh start: an inline ask (chat message / inline plan) and/or a workspace path to a plan doc. At least one of `inline` | `path`.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "inline": { "type": ["string", "null"], "description": "free-text ask (chat) or inline plan" },
+        "path": { "type": "string", "description": "a workspace path to a plan doc, e.g. plan/morning-brief.md" }
+      }
+    },
+    "SessionRef": {
+      "description": "A resumed start: a path to the agent's session file in the (rw) workspace. A fresh container resumes instantly from it — continuity is a file, not a warm container.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref"],
+      "properties": {
+        "ref": { "type": "string", "description": "a workspace path to the session file, e.g. .claude/.session" }
+      }
+    },
+    "Start": {
+      "description": "What to do: EXACTLY ONE of an `entrypoint` (a fresh task) or a `session` (a resumed conversation).",
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["entrypoint"] },
+        { "required": ["session"] }
+      ],
+      "properties": {
+        "entrypoint": { "$ref": "#/$defs/EntryPoint" },
+        "session": { "$ref": "#/$defs/SessionRef" }
+      }
+    },
+    "Invocation": {
+      "description": "One dispatch. The dispatcher emits it (from any trigger source); the Scheduler fires it; the Runtime spawns it. `output` (= unit:<id>:out) and `trust` are derived, not stored.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "runner", "workspaces", "trigger", "start"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/Identity" },
+        "runner": { "type": "string", "default": "claude-code", "description": "which agent CLI runner drives the turn (claude-code is the first; aider/others plug in)" },
+        "workspaces": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Workspace" },
+          "description": "the granted workspace mounts (id + mode); mode is the write-access source of truth"
+        },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "the scoped toolbelt (tool.v1 names); each resolves to auto|gate via its descriptor — the --allowedTools allow-set + the gate set"
+        },
+        "trigger": { "$ref": "#/$defs/Trigger" },
+        "context": { "$ref": "#/$defs/Context" },
+        "start": { "$ref": "#/$defs/Start" }
+      }
+    }
+  }
+}

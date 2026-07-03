@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+  "title": "Single-writer ownership (P23)",
+  "description": "A data carrier must declare exactly one producer. Readers never re-derive a producer's data.",
+  "type": "object",
+  "properties": {
+    "writers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "maxItems": 1,
+      "description": "The single owning producer of this carrier."
+    }
+  },
+  "required": ["writers"]
+}

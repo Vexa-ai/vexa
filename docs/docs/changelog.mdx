@@ -1,0 +1,44 @@
+---
+title: "Changelog & migration"
+description: "Release notes and what changes between major versions."
+---
+
+The authoritative, per-release changelog is on **GitHub Releases**:
+[github.com/Vexa-ai/vexa-core/releases](https://github.com/Vexa-ai/vexa-core/releases). This page summarizes the
+notable line and the migration notes between majors.
+
+## 0.12 — control-plane carve
+
+0.12 reorganizes the backend around a single front door and server-derived identity.
+
+- **One gateway.** All public traffic enters through the gateway (`API_GATEWAY_HOST_PORT`, default
+  `18056`); it carries authentication and per-route scopes and routes to the internal services.
+- **Server-derived identity.** The gateway resolves your `X-API-Key` → user and injects identity
+  downstream. A `subject` in a request body or query is **ignored** — the server never trusts the client
+  for identity. See [Authentication](/authentication) and [Identity & trust](/architecture/identity-and-trust).
+- **Agent control plane.** Dispatch, chat, routines, events, and workspace reads are unified under the
+  [Agent API](/api/agent) at the `/agent/*` prefix (the legacy `/api/*` alias still resolves).
+- **Compose-based self-host.** The open core brings the whole control plane up with `make all` (Docker
+  Compose) on a single Linux host. See [Deployment](/deployment).
+- **Open Knowledge Format workspaces.** The workspace knowledge graph (`kg/`) is an
+  [OKF v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) bundle: the
+  entity frontmatter contract is a strict superset of OKF, seeds ship generated `index.md` listings,
+  and the whole knowledge base is portable to any OKF consumer. See
+  [Browse the workspace](/how-to/workspace-files#the-knowledge-graph-is-an-okf-bundle).
+
+### Migrating from 0.10
+
+- **Route through the gateway.** Point clients at the gateway base URL and send `X-API-Key`; stop calling
+  internal services directly.
+- **Drop client-supplied identity.** Remove any `subject` / user id you sent in bodies or query
+  strings — it's now derived from the key.
+- **Use the `/agent/*` prefix** for control-plane routes (the old `/api/*` alias still works during
+  transition).
+- **Re-check your secrets.** Set real values for `ADMIN_TOKEN`, `INTERNAL_API_SECRET`,
+  `VEXA_DISPATCH_SIGNING_KEY`, and DB/MinIO credentials — see [Configuration](/configuration).
+
+## Versioning
+
+Vexum follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
+GitHub release notes and mirrored in the migration section above. Pin a specific image with `IMAGE_TAG`
+so deploys are reproducible.

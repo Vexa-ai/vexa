@@ -1,0 +1,391 @@
+name: vexa-v012
+# v0.12 control plane (P4). The carved analog of deploy/compose/docker-compose.yml (0.11):
+# postgres:17 + redis:7 + minio + minio-init infra, then the four long-running Python services —
+# admin-api · runtime · meeting-api · gateway — each building its own slim uv-based image.
+# Improvement over 0.11: EVERY service carries a healthcheck and depends_on waits on
+# `condition: service_healthy` so the bring-up is ordered + observable.
+#
+# Bot is NOT a compose service: runtime spawns vexaai/vexa-bot:dev (BROWSER_IMAGE) on demand via the
+# mounted /var/run/docker.sock. That published ~3.6GB image is a REFERENCE here, never built.
+
+services:
+  # ─── Infrastructure ───────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redis-data:/data
+    networks: [vexa]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
+    environment:
+      - POSTGRES_DB=${DB_NAME:-vexa}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      # The backend operates only UTC time. Pin the DB clock to UTC so func.now()/server_default/
+      # onupdate (the naive timestamp columns' server-side values, main's pattern) are guaranteed UTC.
+      - TZ=UTC
+      - PGTZ=UTC
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5458}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vexa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [vexa]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    ports:
+      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - minio-data:/data
+    networks: [vexa]
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key}
+        mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa}
+        exit 0
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    networks: [vexa]
+
+  # ─── Core services ────────────────────────────────────────────────────────────────────────────
+  admin-api:
+    build:
+      context: ../../core/identity/services/admin-api
+      dockerfile: Dockerfile
+    image: vexaai/v012-admin-api:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${ADMIN_API_PORT:-18057}:8001"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  runtime:
+    build:
+      context: ../../core/runtime
+      dockerfile: Dockerfile
+    image: vexaai/v012-runtime:${IMAGE_TAG:-dev}
+    # The runtime spawns bot containers via the host Docker socket (DockerBackend → socket API,
+    # requests_unixsocket — no docker CLI in the image, like main).
+    group_add:
+      - "${DOCKER_GID:-0}"
+    ports:
+      - "127.0.0.1:${RUNTIME_API_PORT:-18090}:8090"
+    # Provider auth (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL) is sourced from .env via env_file so the
+    # token/endpoint pair is a SINGLE SOURCE OF TRUTH the ambient shell cannot shadow. The runtime brokers
+    # these into spawned agent containers, so a shell-shadowed base_url here would poison every agent.
+    env_file:
+      - .env
+    environment:
+      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:v012}
+      # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
+      # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
+      - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/v012-agent-worker:${IMAGE_TAG:-dev}}
+      - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
+      - REDIS_URL=redis://redis:6379/0
+      # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
+      # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
+      - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL now come from env_file (above), NOT environment: — an
+      # `environment:` ${VAR} entry interpolates the AMBIENT SHELL first and silently shadowed .env (prod 401).
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
+      - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
+      - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
+      # + redis. Must equal the project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_vexa
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  # Build-only: the per-dispatch WORKER image the runtime spawns (claude-in-container; NOT a long-running
+  # service). Built via `docker compose build agent-worker`; the runtime references it by AGENT_WORKER_IMAGE.
+  # `profiles` keeps it out of `up`; `command: true` makes an accidental start a no-op.
+  agent-worker:
+    build:
+      context: ../..
+      dockerfile: core/agent/worker/Dockerfile
+    image: vexaai/v012-agent-worker:${IMAGE_TAG:-dev}
+    profiles: ["build-only"]
+    command: ["true"]
+
+  agent-api:
+    # The unit control plane — POST /invocations (dispatch → runtime.v1 agent spawn), /api/chat (SSE),
+    # /api/sessions, /health. Wider build context (the carve root) to vendor the sealed schemas it
+    # validates by path. The unit WORKER is a separate runtime.v1 `agent` workload (claude-in-container).
+    build:
+      context: ../..
+      dockerfile: core/agent/services/agent-api/Dockerfile
+    image: vexaai/v012-agent-api:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${AGENT_API_PORT:-18100}:8100"
+    # Provider auth (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL) is sourced from .env via env_file so it is
+    # a SINGLE SOURCE OF TRUTH that the ambient shell cannot shadow. env_file values are NOT interpolated
+    # through the host shell (unlike `environment:` ${VAR} entries), which is exactly the prod-401 fix.
+    env_file:
+      - .env
+    environment:
+      - VEXA_AGENT_API_PORT=8100
+      - VEXA_RUNTIME_API_URL=http://runtime:8090
+      # How the runtime's scheduler reaches this service's /invocations sink when a routine fires (MVP2).
+      - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
+      - VEXA_AGENT_PROFILE=agent
+      - VEXA_WORKSPACES_DIR=/workspaces
+      # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
+      # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
+      # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
+      # agent-api and X-User-Id is always present — then a missing header fails closed (401).
+      - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}
+      - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
+      - VEXA_MEETING_MODEL=${VEXA_MEETING_MODEL:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL come from env_file (below), NOT environment: — an
+      # `environment:` entry interpolates the AMBIENT SHELL first, so a host `export ANTHROPIC_BASE_URL`
+      # silently shadowed deploy/compose/.env and a prod 401 followed (OpenRouter token → api.anthropic.com).
+      # env_file reads the value literally from .env; the shell can no longer override it (single source of truth).
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
+      - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
+      - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
+      - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
+      # Stream primitive — the per-dispatch redis Streams the control plane relays (unit:<id>:out → SSE).
+      - VEXA_REDIS_URL=redis://redis:6379/0
+      # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
+      - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
+      # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
+      - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
+      # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
+      - VEXA_GATEWAY_URL=http://gateway:8000
+      - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+    volumes:
+      # The Workspace store backing (dev): the worker mounts the subject's subdir; agent-api reads the tree.
+      - agent-workspaces:/workspaces
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      runtime:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  meeting-api:
+    build:
+      # Wider context (the v0.12 carve root) than the other services: meeting_api validates at the
+      # seam and loads the sealed invocation/lifecycle/webhook/runtime/schedule schemas BY PATH, so
+      # those frozen contract files are vendored into the image (see the Dockerfile).
+      context: ../..
+      dockerfile: core/meetings/services/meeting-api/Dockerfile
+    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${MEETING_API_PORT:-18080}:8080"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - REDIS_URL=redis://redis:6379/0
+      - RUNTIME_API_URL=http://runtime:8090
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      # MeetingToken is signed (mint) AND verified (recordings upload) with ADMIN_TOKEN — the SAME
+      # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like
+      # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
+      # STT the spawned bot transcribes with — bot_spawn threads these into the invocation (registry
+      # `stt` resource; the funded internal@vexa.ai token). Unset → bot joins+captures but no transcript.
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      runtime:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks: [vexa]
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ../../core/gateway/services/gateway
+      dockerfile: Dockerfile
+    image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${API_GATEWAY_HOST_PORT:-18056}:8000"
+    environment:
+      - ADMIN_API_URL=http://admin-api:8001
+      - MEETING_API_URL=http://meeting-api:8080
+      - REDIS_URL=redis://redis:6379/0
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      admin-api:
+        condition: service_healthy
+      meeting-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  # The user-facing web UI (Next.js custom server). Proxies /ws → gateway and REST → agent-api/admin-api.
+  # The terminal is the front door for humans; the gateway remains the API front door for programmatic use.
+  terminal:
+    build:
+      context: ../../clients/terminal
+      dockerfile: Dockerfile
+      args:
+        # Google Analytics 4 measurement id, baked into the client bundle at build time (NEXT_PUBLIC_*).
+        # Set GA_MEASUREMENT_ID in .env, then rebuild the terminal image. Empty → GA stays off.
+        NEXT_PUBLIC_GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
+    image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"
+    environment:
+      - NODE_ENV=production
+      # HTTP scheme: the terminal's REST proxy fetches GATEWAY_URL as http; server.mjs converts it to
+      # ws:// itself for the /ws upgrade. ws:// here would break the REST proxy (502 fetch failed).
+      - GATEWAY_URL=http://gateway:8000
+      - AGENT_API_URL=http://agent-api:8100
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_API_URL=http://gateway:8000
+      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
+      - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      # Composer mic dictation (/api/stt) — same STT service the meeting pipeline uses; token stays
+      # server-side. Empty → the mic button reports "not configured" instead of failing silently.
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
+      # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-}
+      # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
+      # secret to expose that sign-in button on the login page; leave empty to hide it (the dev
+      # type-any-email login still works). Register the redirect URI in the provider console:
+      #   Google    → ${NEXTAUTH_URL}/api/auth/callback/google
+      #   Microsoft → ${NEXTAUTH_URL}/api/auth/callback/microsoft
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      # Microsoft tenant: "common" = work/school + personal accounts; or a specific tenant id for org-only.
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    init: true
+    depends_on:
+      gateway:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:
+  minio-data:
+  agent-workspaces:
+
+networks:
+  vexa:
+    driver: bridge

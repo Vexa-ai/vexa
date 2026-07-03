@@ -1,0 +1,112 @@
+---
+title: "Quickstart"
+description: "From zero to your first transcript and your first agent — in about five minutes."
+---
+
+This walkthrough takes you from a clean machine to **two first wins**: a bot capturing a live
+meeting transcript, and an agent answering from your workspace. You'll self-host the whole stack
+with one command.
+
+## Prerequisites
+
+- A Linux host (Ubuntu 24.04 recommended), `git`, and Docker.
+- A **transcription (STT) token** — get one free at [`vexa.ai/account`](https://vexa.ai/account), or
+  [self-host transcription](/deployment#air-gapped) on a GPU. Without it, bots join and record but
+  produce no transcript.
+
+## 1. Install and start
+
+```bash
+curl -fsSL https://get.docker.com | sh
+git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa-core
+make all          # full Docker Compose stack — seeds .env, builds, and prints your API key
+make bot          # build the meeting bot from source — needed before a bot can join (§2′)
+```
+
+`make all` brings up the whole stack and **prints an API key + your URLs** when it finishes:
+
+```text
+  Vexum is up.
+    Terminal UI : http://localhost:13000
+    API gateway : http://localhost:18056
+    API key     : vxa_…
+```
+
+| Surface | URL |
+|---|---|
+| **Terminal** (web workbench UI) | `http://localhost:13000` |
+| **API gateway** | `http://localhost:18056` |
+
+<Note>
+`make all` seeds `.env` from `.env.example` on first run and mints a self-host API key for you
+(via `deploy/compose/bin/provision-token`). To add transcription (STT) and an LLM provider, fill the
+credentials block in `.env`. To mint additional scoped keys yourself, see [Authentication](/authentication).
+</Note>
+
+## 2. First win — capture a meeting (UI)
+
+<Steps>
+  <Step title="Open the terminal">
+    Go to `http://localhost:13000`. You're already signed in to a self-host account.
+  </Step>
+  <Step title="Send a bot to a meeting">
+    Start a Google Meet, Zoom, or Teams call, copy the join URL, and add it from the UI. A bot joins
+    the call as a participant — no plugin, no host setup.
+  </Step>
+  <Step title="Watch the transcript stream">
+    Speak. Speaker-attributed segments appear live, draft-then-confirmed, as the meeting runs.
+  </Step>
+</Steps>
+
+## 2′. Same thing over the API
+
+Use the key `make all` printed, then send a bot and read the transcript:
+
+```bash
+# the key make all printed (or: make -s provision-token ADMIN_TOKEN=<your ADMIN_TOKEN>)
+export API_KEY=vxa_...
+export API_BASE=http://localhost:18056
+
+# send a bot — native_meeting_id is the id from the join URL (e.g. abc-defg-hij)
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa"}'
+
+# read the transcript (poll while the meeting runs)
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/transcripts/google_meet/abc-defg-hij"
+```
+
+Full surface — translation, WebSocket streaming, recordings, stopping the bot — in the
+[Meetings API](/api/meetings).
+
+## 3. Second win — ask your workspace a question
+
+Every captured meeting compiles into your **workspace** — a Markdown knowledge base an agent reads
+and writes like a developer in a repo. Chat with it:
+
+```bash
+curl -N -X POST "$API_BASE/agent/chat" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"prompt":"What did we decide in my last meeting?"}'
+```
+
+The response streams back as Server-Sent Events — `message-delta` frames carry the reply, `commit`
+frames mark anything the agent recorded. See the [Agent API](/api/agent).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Get a report after every meeting" icon="file-lines" href="/how-to/post-meeting-report">
+    A routine that writes notes, decisions, and follow-ups when a call ends.
+  </Card>
+  <Card title="Brief me every morning" icon="sun" href="/how-to/daily-brief">
+    An unattended agent on a cron schedule.
+  </Card>
+  <Card title="Authentication" icon="key" href="/authentication">
+    Mint, scope, and rotate API keys for the full stack.
+  </Card>
+  <Card title="Deploy to production" icon="server" href="/deployment">
+    Docker Compose self-host, configuration, and air-gapped transcription.
+  </Card>
+</CardGroup>
