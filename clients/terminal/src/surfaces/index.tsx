@@ -5,12 +5,18 @@
  * (`registerTab`), and /-skill commands (`registerCommand`).
  * The structured shell renders from those registries — adding a surface is a new file + a barrel import,
  * never a shell edit (P2/P6).
+ *
+ * Meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings — see ../app/mode.ts): the agent surfaces
+ * (chat, sessions, workspace, routines, tasks) gate their OWN register* calls on `!meetingsOnly()`,
+ * so in that mode only meetings + canvas + tokens contribute lists/tabs/commands. The imports stay
+ * unconditional (ESM imports are static); a gated module simply registers nothing.
  */
-import "./chat";       // right-rail Chat export + /-skills
-import "./sessions";   // list "sessions" (→ focuses right-rail chat)
+import "./chat";       // right-rail Chat export + /-skills          (commands gated in meetings mode)
+import "./sessions";   // list "sessions" (→ focuses right-rail chat) (gated in meetings mode)
 import "./entities";   // EntityList helpers
 import "./meeting";    // list "meetings" + tab-kind "meeting"
 import "./canvas";     // tab-kind "canvas" + command "Open Meeting Canvas"
-import "./workspace";  // list "files" (+ git) + tab-kind "doc"
-import "./routines";   // list "routines" + tab-kind "routines" (the board)
+import "./workspace";  // list "files" (+ git) + tab-kind "doc"       (gated in meetings mode)
+import "./routines";   // list "routines" + tab-kind "routines"       (gated in meetings mode)
+import "./tokens";     // list "tokens" — API-token self-serve (registers in EVERY mode)
 // tasks deferred — surfaces as quick-action cards in chat later (see roadmap)

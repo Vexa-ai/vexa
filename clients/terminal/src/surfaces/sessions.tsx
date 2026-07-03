@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useService, useStore } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList } from "../contributions";
+import { meetingsOnly } from "../app/mode";
 import { Icon } from "../ui-kit";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by sessionsApi.test.ts.
@@ -74,4 +75,7 @@ function SessionRow({ session, active, onOpen }: { session: SessionSummary; acti
   );
 }
 
-registerList({ id: "sessions", label: "Sessions", icon: "msg", order: 10, component: SessionsList });
+// Agent surface — absent in meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings).
+if (!meetingsOnly()) {
+  registerList({ id: "sessions", label: "Sessions", icon: "msg", order: 10, component: SessionsList });
+}

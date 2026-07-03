@@ -96,6 +96,19 @@ class TokenResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TokenInfo(BaseModel):
+    """A token as listed — metadata only, NEVER the secret value (mint is the only place it crosses)."""
+    id: int
+    user_id: int
+    scopes: List[str]
+    name: Optional[str] = None
+    created_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 class WebhookUpdate(BaseModel):
     webhook_url: str
     webhook_secret: Optional[str] = None
@@ -167,6 +180,20 @@ def create_app() -> FastAPI:
         await db.commit()
         await db.refresh(tok)
         return TokenResponse.model_validate(tok)
+
+    # --- GET /admin/users/{user_id}/tokens → the user's tokens, metadata only (no secret values).
+    # Added for the terminal's token self-serve surface: it lists on the user's behalf (admin tier,
+    # scoped server-side to the logged-in user) and verifies ownership before forwarding a revoke.
+    @app.get("/admin/users/{user_id}/tokens", response_model=List[TokenInfo],
+             dependencies=[Depends(verify_admin_token)])
+    async def list_tokens_for_user(user_id: int, db: AsyncSession = Depends(get_db)):
+        user = await db.get(User, user_id)
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        rows = (await db.execute(
+            select(APIToken).where(APIToken.user_id == user_id).order_by(APIToken.id)
+        )).scalars().all()
+        return [TokenInfo.model_validate(t) for t in rows]
 
     @app.delete("/admin/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT,
                 dependencies=[Depends(verify_admin_token)])

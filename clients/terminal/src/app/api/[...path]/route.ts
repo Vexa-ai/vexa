@@ -16,6 +16,7 @@
  */
 import type { NextRequest } from "next/server";
 import { resolveApiKey } from "../proxyAuth";
+import { MEETINGS_DOMAIN, refusedInMeetingsMode } from "../proxyMode";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,7 @@ const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replac
 //     prefix — agent-api behind it.
 // BOTH carry the per-user X-API-Key; the gateway resolves it → user and injects X-User-Id downstream,
 // so the client never sends a `subject` (scope is server-derived — P20). agent-api is never reached directly.
-const MEETINGS_DOMAIN = /^(meetings|transcripts|bots)(\/|$)/;
+// MEETINGS_DOMAIN (the meetings-vs-agent split) lives in ../proxyMode — shared with the meetings-only gate.
 
 /** Resolve the upstream URL + headers for a captured /api/<path...> request. Every call carries the
  *  per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY) to the single gateway edge. */
@@ -38,7 +39,13 @@ async function upstreamFor(path: string, search: string): Promise<{ url: string;
 
 async function forward(req: NextRequest, params: Promise<{ path: string[] }>): Promise<Response> {
   const { path } = await params;
-  const { url, headers } = await upstreamFor(path.join("/"), req.nextUrl.search);
+  const joined = path.join("/");
+  // Meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings): the agent branch is refused at the edge —
+  // hiding the surfaces client-side is not enough, a hand-crafted request must not reach agent-api.
+  if (refusedInMeetingsMode(joined)) {
+    return new Response(JSON.stringify({ error: "not_found", detail: "agent endpoints are disabled in meetings mode" }), { status: 404, headers: { "Content-Type": "application/json" } });
+  }
+  const { url, headers } = await upstreamFor(joined, req.nextUrl.search);
 
   const init: RequestInit = { method: req.method, headers: { ...headers }, cache: "no-store" };
   if (req.method !== "GET" && req.method !== "DELETE") {
