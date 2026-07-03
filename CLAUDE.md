@@ -1,1 +1,1 @@
-root
+template root
