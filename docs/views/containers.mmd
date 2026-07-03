@@ -27,6 +27,8 @@ flowchart LR
     minio["minio"]
   end
   slim["slim"]
+  dashboard["dashboard"]
+  extension["extension"]
   terminal["terminal"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
@@ -41,3 +43,5 @@ flowchart LR
   terminal -->|"HTTPS"| gateway
   terminal -->|"WebSocket"| gateway
   slim -->|"HTTPS"| gateway
+  dashboard -->|"WebSocket"| gateway
+  extension -->|"WebSocket"| gateway
