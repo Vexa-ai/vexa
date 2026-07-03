@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from referencing import Registry, Resource
 
 from .machine import IllegalTransition, LifecycleSink, MeetingStore, TransitionSource
-from .webhook import build_status_change_envelope
+from .webhook import build_status_change_envelope, build_typed_envelope
 from ..obs import TraceMiddleware, log_event
 
 
@@ -68,7 +68,8 @@ def create_app(
     sink = LifecycleSink(store=store if store is not None else MeetingStore())
     app.state.sink = sink
     app.state.store = sink.store
-    app.state.status_change_webhooks = []  # every emitted envelope, for the eval
+    app.state.status_change_webhooks = []  # every emitted status_change envelope, for the eval
+    app.state.typed_webhooks = []  # every emitted TYPED envelope (started/completed/failed)
     # Bind the upstream gateway's X-Trace-Id for each request so this hop's structured logs
     # (logevent.v1) correlate with the gateway's on the same trace_id.
     app.add_middleware(TraceMiddleware)
@@ -115,13 +116,20 @@ def create_app(
             )
         rec = change.record
 
-        # 3. Emit the meeting.status_change webhook (sealed webhook.v1 envelope).
+        # 3. Emit the meeting.status_change webhook (sealed webhook.v1 envelope), plus the TYPED
+        #    event the transition maps to (meeting.started / meeting.completed / bot.failed) —
+        #    additive: status_change always fires; the typed event rides alongside (recorded on
+        #    app.state.typed_webhooks so the status_change log keeps its 1:1-per-advance invariant).
         envelope = build_status_change_envelope(change)
         app.state.status_change_webhooks.append(envelope)
-        if on_status_change is not None:
-            maybe = on_status_change(envelope)
-            if hasattr(maybe, "__await__"):
-                await maybe
+        typed = build_typed_envelope(change)
+        if typed is not None:
+            app.state.typed_webhooks.append(typed)
+        for env in (envelope, typed) if typed is not None else (envelope,):
+            if on_status_change is not None:
+                maybe = on_status_change(env)
+                if hasattr(maybe, "__await__"):
+                    await maybe
 
         # USER-facing: the meeting's lifecycle advanced (surfaced on the user's timeline).
         log_event(

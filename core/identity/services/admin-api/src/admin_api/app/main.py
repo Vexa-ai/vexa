@@ -197,6 +197,23 @@ def create_app() -> FastAPI:
         await db.refresh(user)
         return UserResponse.model_validate(user)
 
+    @app.get("/user/webhook")
+    async def get_user_webhook(user: User = Depends(get_current_user)):
+        """Read back the caller's webhook config. The secret NEVER leaves in the clear —
+        it is masked to its last 4 chars (`********abcd`), enough to recognize which secret
+        is set without disclosing it."""
+        data = user.data if isinstance(user.data, dict) else {}
+        secret = data.get("webhook_secret")
+        masked = None
+        if secret:
+            masked = "********" + (secret[-4:] if len(secret) > 8 else "")
+        return {
+            "webhook_url": data.get("webhook_url"),
+            "webhook_secret_set": bool(secret),
+            "webhook_secret": masked,
+            "webhook_events": data.get("webhook_events"),
+        }
+
     # --- internal tier: the gateway's authz oracle (FAIL-CLOSED) ---
     @app.post("/internal/validate", include_in_schema=False)
     async def validate_token(request: Request, payload: dict, db: AsyncSession = Depends(get_db)):

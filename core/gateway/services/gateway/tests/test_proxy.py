@@ -125,6 +125,43 @@ def test_meeting_intent_put_forwards_to_meeting_api():
     assert "meeting-api" in downstream.last["url"]
 
 
+def test_user_webhook_put_forwards_to_admin_api():
+    """Self-serve webhook config: PUT /user/webhook proxies to admin-api (0.10.6 main.py:1080
+    set_user_webhook_proxy) with the same auth + identity-injection idiom as every proxied route."""
+    client, downstream = _client()
+    r = client.put("/user/webhook", headers=AUTH,
+                   json={"webhook_url": "https://hook.example/x", "webhook_secret": "shh"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "PUT"
+    assert downstream.last["url"] == "http://admin-api/user/webhook"
+    fwd = downstream.last["headers"]
+    assert fwd["x-user-id"] == "7"
+    assert fwd["x-api-key"] == VALID_KEY
+
+
+def test_user_webhook_get_forwards_to_admin_api():
+    """Read-back of the self-serve config: GET /user/webhook proxies to admin-api (which masks
+    the secret) and returns the downstream body verbatim."""
+    downstream = FakeDownstream(status_code=200, body={
+        "webhook_url": "https://hook.example/x", "webhook_secret_set": True,
+        "webhook_secret": "********", "webhook_events": None,
+    })
+    client, _ = _client(downstream=downstream)
+    r = client.get("/user/webhook", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"] == "http://admin-api/user/webhook"
+    assert r.json()["webhook_secret"] == "********"
+
+
+def test_user_webhook_requires_api_key():
+    """Fail-closed like every proxied route: no x-api-key → 401 before any downstream call."""
+    client, downstream = _client()
+    assert client.put("/user/webhook", json={"webhook_url": "https://x"}).status_code == 401
+    assert client.get("/user/webhook").status_code == 401
+    assert downstream.last is None
+
+
 def test_downstream_target_url_matches_route_table():
     """v0.12 P2: the transcription-collector is folded INTO meeting-api (one modular monolith), so
     /transcripts + /meetings forward to the SAME meeting-api base as /bots — there is no longer a
