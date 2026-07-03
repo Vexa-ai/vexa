@@ -1,7 +1,0 @@
-{
-  "workloadId": "agent-def456",
-  "state": "stopped",
-  "at": "2026-06-18T10:10:05.000Z",
-  "exitCode": 0,
-  "stopReason": "idle_timeout"
-}

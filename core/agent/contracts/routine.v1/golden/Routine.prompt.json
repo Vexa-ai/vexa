@@ -1,9 +1,0 @@
-{
-  "id": "rt_inbox_triage",
-  "owner": "u_jane",
-  "name": "Inbox triage",
-  "trigger": { "kind": "scheduled", "cron": "*/15 9-18 * * 1-5" },
-  "plan": { "prompt": "Review new emails since the last run and record any commitments, decisions, or follow-ups as task entities linked to the relevant people and companies." },
-  "lifecycle": "oneshot",
-  "enabled": true
-}

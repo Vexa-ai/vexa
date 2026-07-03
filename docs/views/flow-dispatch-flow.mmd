@@ -1,7 +1,0 @@
-%% GENERATED — pnpm arch:dsl --write
-sequenceDiagram
-  autonumber
-  agent_api->>runtime: agent-api POST /workloads
-  runtime->>bot: runtime spawns agent-worker container
-  agent_worker->>out_stream: worker XADDs output
-  agent_api->>out_stream: agent-api relays as SSE

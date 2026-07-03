@@ -1,1 +1,0 @@
-{ "type": "error", "error": "authorization_service_error", "status": 503, "detail": "transcription-collector unavailable" }

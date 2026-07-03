@@ -1,9 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vexa.ai/calm/controls/render-only.requirement.json",
-  "title": "Render-only consumer",
-  "description": "A client that consumes a producer's data must only render it, never re-derive or republish it (P23).",
-  "type": "object",
-  "properties": { "mode": { "const": "render-only" } },
-  "required": ["mode"]
-}

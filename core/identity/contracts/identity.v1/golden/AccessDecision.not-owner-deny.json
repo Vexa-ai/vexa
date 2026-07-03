@@ -1,8 +1,0 @@
-{
-  "allow": false,
-  "subject": "99",
-  "resource_kind": "recording",
-  "resource_id": "rec-2002",
-  "action": "read",
-  "reason": "not-owner"
-}

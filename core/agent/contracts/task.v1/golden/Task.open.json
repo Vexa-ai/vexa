@@ -1,9 +1,0 @@
-{
-  "id": "tk_send_pricing",
-  "owner": "u_jane",
-  "title": "Send annual pricing to Jane Liu",
-  "state": "open",
-  "due": "2026-06-27",
-  "source": "meeting",
-  "links": ["kg/entities/company/acme-corp.md", "kg/entities/person/jane-liu.md"]
-}

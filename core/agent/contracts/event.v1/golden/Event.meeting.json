@@ -1,6 +1,0 @@
-{
-  "name": "meeting.completed",
-  "subject": "u_jane",
-  "meeting": { "meeting_id": "mtg_4417", "session_uid": "sess_9c2a", "platform": "google_meet" },
-  "plan": { "prompt": "Summarize the meeting and record decisions and action items as entities linked to the attendees." }
-}

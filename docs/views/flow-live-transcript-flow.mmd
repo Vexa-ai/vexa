@@ -1,9 +1,0 @@
-%% GENERATED — pnpm arch:dsl --write
-sequenceDiagram
-  autonumber
-  bot->>segments_stream: bot XADDs raw ASR segments
-  meeting_api->>segments_stream: collector consumes (XREADGROUP collector_group)
-  meeting_api->>tc_stream: collector writes the native stream (single writer, P23)
-  agent_worker->>tc_stream: copilot tails the native stream
-  agent_worker->>proc_stream: copilot writes cleaned 1:1 transcript
-  terminal->>proc_stream: one engine renders raw|processed; no re-derivation

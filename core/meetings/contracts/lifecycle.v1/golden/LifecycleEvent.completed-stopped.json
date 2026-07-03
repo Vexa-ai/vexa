@@ -1,7 +1,0 @@
-{
-  "connection_id": "sess-uid",
-  "status": "completed",
-  "exit_code": 0,
-  "completion_reason": "stopped",
-  "bot_logs": ["[JOIN-STATE] admitted", "[ACT] leave received"]
-}

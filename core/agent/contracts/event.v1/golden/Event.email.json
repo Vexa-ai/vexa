@@ -1,6 +1,0 @@
-{
-  "name": "email.received",
-  "subject": "u_jane",
-  "occurred_at": "2026-06-24T09:14:00Z",
-  "source": { "uri": "mailbox://u_jane/INBOX/AB12CD", "etag": "W/\"3a1\"" }
-}

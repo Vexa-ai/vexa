@@ -1,9 +1,0 @@
-{
-  "name": "gmail.send",
-  "scope": "send:self",
-  "grant": "gate",
-  "cred_ref": "secret://gmail/oauth",
-  "transport": "mcp",
-  "mcp_server": "vexa-gmail",
-  "barriers": ["info-barrier"]
-}

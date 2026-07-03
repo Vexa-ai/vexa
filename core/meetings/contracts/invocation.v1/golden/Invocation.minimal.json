@@ -1,6 +1,0 @@
-{
-  "platform": "google_meet",
-  "meetingUrl": "https://meet.google.com/xxx-xxxx-xxx",
-  "botName": "Vexa",
-  "redisUrl": "redis://redis:6379"
-}

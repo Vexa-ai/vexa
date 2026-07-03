@@ -1,9 +1,0 @@
-{
-  "workloadId": "mtg-abc123-bot",
-  "profile": "meeting-bot",
-  "state": "running",
-  "ports": { "vnc": 6080 },
-  "startedAt": "2026-06-18T10:00:00.000Z",
-  "backend": "docker",
-  "node": "worker-3"
-}

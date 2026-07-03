@@ -1,8 +1,0 @@
-node_modules
-.next
-.turbo
-.git
-.env*.local
-*.log
-.pytest_cache
-tsconfig.tsbuildinfo

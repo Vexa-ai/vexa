@@ -1,9 +1,0 @@
-{
-  "id": "rt_morning_brief",
-  "owner": "u_jane",
-  "name": "Morning brief",
-  "trigger": { "kind": "scheduled", "cron": "0 8 * * *" },
-  "plan": { "ref": "plan/morning-brief.md" },
-  "lifecycle": "oneshot",
-  "enabled": true
-}

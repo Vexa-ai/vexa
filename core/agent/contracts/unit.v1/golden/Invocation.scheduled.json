@@ -1,8 +1,0 @@
-{
-  "identity": { "subject": "u_jane", "launcher": "schedule:morning-brief" },
-  "runner": "claude-code",
-  "workspaces": [ { "id": "u_jane", "mode": "rw" } ],
-  "trigger": "scheduled",
-  "context": { "kind": "none" },
-  "start": { "entrypoint": { "path": "plan/morning-brief.md" } }
-}

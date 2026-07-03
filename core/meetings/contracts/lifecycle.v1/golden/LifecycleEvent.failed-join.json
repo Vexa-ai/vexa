@@ -1,8 +1,0 @@
-{
-  "connection_id": "sess-uid",
-  "status": "failed",
-  "exit_code": 1,
-  "failure_stage": "awaiting_admission",
-  "completion_reason": "awaiting_admission_rejected",
-  "reason": "host denied admission"
-}
