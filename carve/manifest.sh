@@ -29,6 +29,9 @@ export CARVE_INCLUDE=(
   turbo.json
   tsconfig.base.json
   README.md
+  SECURITY.md
+  security-insights.yml
+  security
   architecture.calm.json
   calm
   .gitignore
