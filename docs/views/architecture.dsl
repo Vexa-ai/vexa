@@ -68,6 +68,7 @@ system runtime-system  # workload spawn (bot/agent containers)
   service runtime
 
 system deploy  # deployment + execution-target registry
+  contract execution-targets.v1
 
 system platform  # shared infra backing the services
   service redis
@@ -115,6 +116,8 @@ edges:
   terminal -req-> gateway  # all REST via gateway
   terminal -req-> gateway  # live WS via gateway
   slim -req-> gateway  # Python client; REST via gateway
+  dashboard -req-> gateway  # dashboard client; live WS via gateway
+  extension -req-> gateway  # browser extension client; live WS via gateway
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 

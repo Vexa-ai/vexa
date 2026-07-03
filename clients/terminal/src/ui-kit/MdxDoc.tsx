@@ -11,7 +11,7 @@
  *  so the doc always displays — worst case it loses interactivity, never the page.
  */
 "use client";
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
@@ -19,10 +19,17 @@ import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { Markdown } from "./Markdown";
 import { Icon } from "./index";
 
-function openEntity(detail: { path?: string; wikilink?: string }): void {
-  // beside: links clicked INSIDE a doc must never replace the doc being read — the
-  // workbench opens the target in a split group next to it.
-  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { ...detail, beside: true } }));
+export type DocNavigate = (detail: { path?: string; wikilink?: string }) => void;
+/** Obsidian-style in-place navigation: the hosting doc pane provides a navigate fn so
+ *  links replace the pane's content (with its own back/forward history). Outside a doc
+ *  pane (chat, demo page) links fall back to opening a workbench tab. */
+export const DocNavContext = createContext<DocNavigate | null>(null);
+
+function useOpenEntity(): DocNavigate {
+  const nav = useContext(DocNavContext);
+  return nav ?? ((detail) => {
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail }));
+  });
 }
 
 // ── component registry (closed vocabulary — mirrors Mintlify tag names) ─────────
@@ -68,6 +75,7 @@ function Wikilink({ title }: { title: string }) {
     return () => { on = false; };
   }, [title]);
   const c = (type && ENTITY_CHIP[type]) || DEFAULT_ENTITY_CHIP;
+  const openEntity = useOpenEntity();
   return (
     <span onClick={() => openEntity({ wikilink: title })}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
@@ -97,6 +105,7 @@ const Warning = ({ children }: { children?: ReactNode }) => <Callout tone="accen
 function Card({ title, icon, href, children }: { title?: string; icon?: string; href?: string; children?: ReactNode }) {
   const [hover, setHover] = useState(false);
   const clickable = Boolean(href);
+  const openEntity = useOpenEntity();
   const open = () => {
     if (!href) return;
     // scheme allowlist: http(s) opens externally, scheme-less opens in-workspace,
@@ -175,8 +184,10 @@ const htmlComponents = {
   h1: h(1), h2: h(2), h3: h(3), h4: h(4),
   p: ({ children }: { children?: ReactNode }) => <p style={{ margin: "0 0 8px", lineHeight: 1.6 }}>{children}</p>,
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
-    // Workspace-internal link (no scheme, not an anchor) → open the file as a NEW pinned doc tab,
-    // same OPEN_ENTITY_EVENT path the Wikilink chip uses. External links open a browser tab.
+    // Workspace-internal link (no scheme, not an anchor) → navigate the doc pane in place
+    // (or open a tab outside a doc pane), same path the Wikilink chip uses. External links
+    // open a browser tab.
+    const openEntity = useOpenEntity();
     const internal = Boolean(href) && !/^[a-z][a-z0-9+.-]*:/i.test(href!) && !href!.startsWith("#") && !href!.startsWith("//");
     if (internal) {
       const path = href!.replace(/^\.\//, "");

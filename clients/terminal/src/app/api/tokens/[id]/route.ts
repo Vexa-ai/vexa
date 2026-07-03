@@ -2,7 +2,7 @@
  *
  *  admin-api's DELETE /admin/tokens/{id} is admin-tier and unscoped, so ownership is enforced HERE:
  *  the id must appear in the user's own token list (resolved from the auth cookies) before the revoke
- *  is forwarded — otherwise 404, indistinguishable from "no such token" (no cross-user probing).
+ *  is forwarded — otherwise 404, indistinguishable from a nonexistent token (no cross-user probing).
  */
 import { NextResponse } from "next/server";
 import { listUserTokens, revokeToken } from "../../auth/adminApi";

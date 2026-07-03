@@ -2,14 +2,14 @@
 /** Workspace — the git knowledge graph as: a "Files" LIST (left), a "doc" center TAB-kind (renders an
  *  entity: frontmatter + wikilinked body). Clicking a file opens a Doc tab; the chat rail references the
  *  active file from the center tab. Reuses /api/workspace/*. */
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { Icon } from "../ui-kit";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
-import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP } from "../ui-kit/MdxDoc";
+import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocNavContext, type DocNavigate } from "../ui-kit/MdxDoc";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
@@ -25,12 +25,23 @@ function parseEntity(text: string): { fm: [string, string][]; body: string } {
   for (const l of m[1].split("\n")) { const i = l.indexOf(":"); if (i > 0) fm.push([l.slice(0, i).trim(), l.slice(i + 1).trim()]); }
   return { fm, body: m[2] };
 }
-function wikilinks(text: string): ReactNode[] {
-  // Frontmatter [[wikilinks]] are clickable: resolve + open via the same OPEN_ENTITY_EVENT the body uses.
+function wikilinks(text: string, navigate?: DocNavigate | null): ReactNode[] {
+  // Frontmatter [[wikilinks]] are clickable: navigate the doc pane in place when it provides
+  // a navigator (Obsidian-style), else fall back to the OPEN_ENTITY_EVENT tab path.
+  const open = (wikilink: string) => navigate
+    ? navigate({ wikilink })
+    : window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { wikilink } }));
   return text.split(/(\[\[[^\]]+\]\])/).map((part, i) => part.startsWith("[[")
-    ? <span key={i} onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { wikilink: part.slice(2, -2), beside: true } }))}
+    ? <span key={i} onClick={() => open(part.slice(2, -2))}
         style={{ color: "var(--blue)", cursor: "pointer" }}>{part}</span>
     : <span key={i}>{part}</span>);
+}
+
+// [[Title]] → kg/entities/<type>/<slug>.md (same resolution the workbench uses for chat links)
+const entitySlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+async function resolveWikilink(title: string): Promise<string | undefined> {
+  const tree = await listWorkspaceTree().catch(() => [] as string[]);
+  return tree.find((p) => p.startsWith("kg/entities/") && p.endsWith(`/${entitySlug(title)}.md`));
 }
 
 // ── reveal-in-tree: breadcrumb segments ask the Files list to expand down to a folder ──
@@ -127,9 +138,17 @@ function FilesList() {
   useEffect(() => {
     // Never request dotfiles (hidden:false) — the `.git`/`.claude` listing 500s; the toggle is a client-side
     // kg-only vs full-workspace filter, not a dotfile switch.
-    void listWorkspaceTree({ hidden: false })
-      .then((t) => { setTree(t); setError(null); })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    // The agent writes files continuously, so the tree self-refreshes: poll while the tab is
+    // visible + re-fetch on window focus. setTree only on change so React skips no-op renders.
+    const load = () => {
+      void listWorkspaceTree({ hidden: false })
+        .then((t) => { setTree((prev) => (JSON.stringify(prev) === JSON.stringify(t) ? prev : t)); setError(null); })
+        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    };
+    load();
+    const id = setInterval(() => { if (!document.hidden) load(); }, 5000);
+    window.addEventListener("focus", load);
+    return () => { clearInterval(id); window.removeEventListener("focus", load); };
   }, [reloadKey]);
   const nodes = buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree);
   // default expansion: top-level folders open, deeper folders collapsed (only when no saved state yet)
@@ -190,8 +209,12 @@ function FilesList() {
     <div style={{ padding: "6px 8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 8px", display: "flex", alignItems: "center", gap: 6 }}>
         <span>knowledge</span>
+        <span onClick={() => setReloadKey((k) => k + 1)} title="Refresh the file list"
+          style={{ marginLeft: "auto", display: "flex", cursor: "pointer", color: "var(--t3)" }}>
+          <Icon name="refresh" size={13} />
+        </span>
         <span onClick={toggleKgOnly} title={kgOnly ? "Show all workspace files" : "Show only the knowledge graph"}
-          style={{ marginLeft: "auto", display: "flex", cursor: "pointer", color: kgOnly ? "var(--accent)" : "var(--t3)" }}>
+          style={{ display: "flex", cursor: "pointer", color: kgOnly ? "var(--accent)" : "var(--t3)" }}>
           <Icon name={kgOnly ? "eye" : "eyeOff"} size={13} />
         </span>
       </div>
@@ -416,7 +439,7 @@ function PathBreadcrumb({ path }: { path: string }) {
     revealInTree(target);
   };
   return (
-    <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t3)", marginBottom: 12, display: "flex", flexWrap: "wrap", alignItems: "center" }}>
+    <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t3)", display: "flex", flexWrap: "wrap", alignItems: "center" }}>
       {parts.map((name, i) => {
         const isFile = i === parts.length - 1;
         const prefix = parts.slice(0, i + 1).join("/");
@@ -452,6 +475,7 @@ const pill = (color: string, bg: string): CSSProperties => ({
  *  pills; URLs/domains → external links; dates → mono; booleans → check; [[wikilinks]] and
  *  plain text → the existing clickable-wikilink path. */
 function FmValue({ k, v }: { k: string; v: string }) {
+  const navigate = useContext(DocNavContext);
   if (k === "type") {
     const c = ENTITY_CHIP[v] ?? DEFAULT_ENTITY_CHIP;
     return <span style={pill(c.color, c.bg)}><Icon name={c.icon} size={11} />{v}</span>;
@@ -476,8 +500,8 @@ function FmValue({ k, v }: { k: string; v: string }) {
   if (/^\d{4}-\d{2}-\d{2}/.test(v)) return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t2)" }}>{v}</span>;
   if (v === "true" || v === "false") return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: v === "true" ? "var(--green)" : "var(--t3)" }}>{v === "true" ? "✓ true" : "✗ false"}</span>;
   if (k === "id") return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t2)" }}>{v}</span>;
-  if (k === "title") return <span style={{ color: "var(--t1)", fontWeight: 600 }}>{wikilinks(v)}</span>;
-  return <span style={{ color: "var(--t1)" }}>{wikilinks(v)}</span>;
+  if (k === "title") return <span style={{ color: "var(--t1)", fontWeight: 600 }}>{wikilinks(v, navigate)}</span>;
+  return <span style={{ color: "var(--t1)" }}>{wikilinks(v, navigate)}</span>;
 }
 
 function FrontmatterCard({ fm }: { fm: [string, string][] }) {
@@ -493,19 +517,70 @@ function FrontmatterCard({ fm }: { fm: [string, string][] }) {
   );
 }
 
-function DocTab({ params }: TabProps) {
-  const path = params.path as string;
+/** ‹ › nav arrow, Obsidian-style: enabled only when the pane history has somewhere to go. */
+function NavArrow({ dir, enabled, onGo }: { dir: -1 | 1; enabled: boolean; onGo: () => void }) {
+  return (
+    <button aria-label={dir === -1 ? "Back" : "Forward"} title={dir === -1 ? "Back" : "Forward"}
+      onClick={onGo} disabled={!enabled}
+      style={{ background: "none", border: "none", padding: 3, display: "flex", borderRadius: 6,
+        color: enabled ? "var(--t1)" : "var(--t3)", opacity: enabled ? 1 : 0.35,
+        cursor: enabled ? "pointer" : "default" }}
+      onMouseEnter={(e) => { if (enabled) e.currentTarget.style.background = "var(--panel2)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>
+      <Icon name="arrowR" size={15} style={dir === -1 ? { transform: "scaleX(-1)" } : undefined} />
+    </button>
+  );
+}
+
+function DocTab({ id, params }: TabProps) {
+  const layout = useService(LayoutServiceId);
+  const docked = params.path as string;
+  // Obsidian-style per-pane history: links inside the doc navigate THIS pane in place
+  // (layout.retargetTab keeps the dockview panel's params/title in sync); the ‹ › arrows
+  // walk the pane's own back/forward stack.
+  const [nav, setNav] = useState<{ stack: string[]; idx: number }>({ stack: [docked], idx: 0 });
+  const path = nav.stack[nav.idx];
+  // retargeted from OUTSIDE (preview swap, layout restore) → a different doc: reset history
+  useEffect(() => { setNav((n) => (n.stack[n.idx] === docked ? n : { stack: [docked], idx: 0 })); }, [docked]);
   const [content, setContent] = useState<string | null>(null);
-  useEffect(() => { void readFile(path).then(setContent); }, [path]);
+  const scroller = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    setContent(null);
+    scroller.current?.scrollTo(0, 0);
+    void readFile(path).then(setContent);
+  }, [path]);
+  const show = (p: string) => layout.retargetTab(id, docTab(p));
+  const navigate: DocNavigate = (detail) => {
+    void (async () => {
+      const p = detail.path ?? (detail.wikilink ? await resolveWikilink(detail.wikilink) : undefined);
+      if (!p || p === path) return;
+      setNav((n) => ({ stack: [...n.stack.slice(0, n.idx + 1), p], idx: n.idx + 1 }));
+      show(p);
+    })();
+  };
+  const go = (dir: -1 | 1) => {
+    const i = nav.idx + dir;
+    if (i < 0 || i >= nav.stack.length) return;
+    setNav({ ...nav, idx: i });
+    show(nav.stack[i]);
+  };
   const { fm, body } = parseEntity(content ?? "");
   return (
-    <div style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
-      <div style={{ maxWidth: 760, margin: "0 auto", padding: "22px 24px" }}>
-        <PathBreadcrumb path={path} />
-        {fm.length > 0 && <FrontmatterCard fm={fm} />}
-        <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <MdxDoc>{body}</MdxDoc>}</div>
+    <DocNavContext.Provider value={navigate}>
+      <div ref={scroller} style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto", padding: "22px 24px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+            <span style={{ display: "inline-flex", gap: 0, flex: "none" }}>
+              <NavArrow dir={-1} enabled={nav.idx > 0} onGo={() => go(-1)} />
+              <NavArrow dir={1} enabled={nav.idx < nav.stack.length - 1} onGo={() => go(1)} />
+            </span>
+            <div style={{ minWidth: 0, flex: 1 }}><PathBreadcrumb path={path} /></div>
+          </div>
+          {fm.length > 0 && <FrontmatterCard fm={fm} />}
+          <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <MdxDoc>{body}</MdxDoc>}</div>
+        </div>
       </div>
-    </div>
+    </DocNavContext.Provider>
   );
 }
 
