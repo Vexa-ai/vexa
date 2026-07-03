@@ -1,4 +1,0 @@
-# The harness continuity store (chat transcripts, session pointers, skills symlink) persists on the
-# workspace VOLUME, never in git history — a turn's commit-all must not sweep conversation content
-# into the repo (it syncs to the workspace store).
-.claude/
