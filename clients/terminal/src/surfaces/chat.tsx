@@ -8,6 +8,7 @@ import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
+import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
 import { useLiveMeetings } from "./liveMeetings";
@@ -250,7 +251,7 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
       setOpen(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") { e.stopPropagation(); setOpen(false); }  // consume: close-topmost beats nav.back
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -502,10 +503,62 @@ export function Chat({ params = {} }: ChatProps) {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Follow the stream ONLY while the user is pinned to the bottom. Scrolling up to read
+  // detaches (streaming updates no longer yank the view); scrolling back down re-attaches.
+  // Sending a message always re-attaches — that's a human action asking for the reply.
+  const stickToBottomRef = useRef(true);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => { stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeqRef = useRef(0);
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
+  // ── mic dictation — STREAMING, meeting-pipeline style (sliding window + LocalAgreement
+  //    via ui-kit/micDictation): confirmed + pending text land in the composer LIVE while
+  //    speaking; stop flushes the final window. STT is proxied via /api/stt.
+  const [mic, setMic] = useState<"idle" | "rec" | "stt">("idle");
+  const [micError, setMicError] = useState<string | null>(null);
+  const micRef = useRef<StreamingDictation | null>(null);
+  const micBaseRef = useRef("");     // composer text at record start — dictation appends after it
+  const micStartRef = useRef(0);
+  useEffect(() => () => { micRef.current?.cancel(); }, []);  // release the mic on unmount
+  const micCompose = (base: string, confirmed: string, pending: string) => {
+    const dictated = pending ? (confirmed ? `${confirmed} ${pending}` : pending) : confirmed;
+    return base ? (dictated ? `${base} ${dictated}` : base) : dictated;
+  };
+  const toggleMic = async () => {
+    if (mic === "stt") return;
+    if (mic === "rec") {
+      const d = micRef.current;
+      micRef.current = null;
+      if (!d) { setMic("idle"); return; }
+      if (Date.now() - micStartRef.current < 300) { d.cancel(); setMic("idle"); return; }  // accidental tap
+      setMic("stt");
+      try {
+        const final = await d.stop();
+        setValue(micCompose(micBaseRef.current, final, ""));
+        window.setTimeout(() => inputRef.current?.focus(), 0);
+      } catch (e) {
+        setMicError(e instanceof Error ? e.message : "Transcription failed");
+      } finally { setMic("idle"); }
+      return;
+    }
+    try {
+      setMicError(null);
+      micBaseRef.current = value.trim();
+      micStartRef.current = Date.now();
+      micRef.current = await startStreamingDictation({
+        onUpdate: (confirmed, pending) => setValue(micCompose(micBaseRef.current, confirmed, pending)),
+        onError: () => { /* transient mid-stream faults retry on the next window — stay quiet */ },
+      });
+      setMic("rec");
+    } catch { setMicError("Microphone unavailable — check browser permissions."); }
+  };
 
   useEffect(() => {
     const focus = () => inputRef.current?.focus();
@@ -677,7 +730,7 @@ export function Chat({ params = {} }: ChatProps) {
             }));
           }
         }
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+        if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
       }
       if (!sawVisibleOutput) {
         patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") || "No chat output arrived before the stream closed." }));
@@ -737,6 +790,8 @@ export function Chat({ params = {} }: ChatProps) {
     const v = value.trim();
     const hasAttachments = attachments.length > 0;
     if ((!v && !hasAttachments) || busy || uploading) return;
+    stickToBottomRef.current = true;  // sending re-attaches follow-the-stream
+    window.setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }), 0);
     if (!hasAttachments && isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }
     if (!hasAttachments && v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); setValue(""); return; } }
     let prompt = isRoutineCommand(v) ? routineCreationPrompt(v) : v;
@@ -809,6 +864,7 @@ export function Chat({ params = {} }: ChatProps) {
         <ComposerReferences text={value} />
         <AttachmentChips attachments={attachments} onRemove={removeAttachment} />
         {uploadError && <div style={{ color: "var(--danger, #ff8b8b)", fontSize: 12, lineHeight: 1.35 }}>{uploadError}</div>}
+        {micError && <div style={{ color: "var(--danger, #ff8b8b)", fontSize: 12, lineHeight: 1.35 }}>{micError}</div>}
         <input
           ref={fileInputRef}
           type="file"
@@ -838,6 +894,22 @@ export function Chat({ params = {} }: ChatProps) {
           <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
             style={{ background: "transparent", color: "var(--t3)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
             <Icon name="paperclip" size={15} />
+          </button>
+          <button type="button"
+            aria-label={mic === "rec" ? "Stop recording" : "Dictate"}
+            title={mic === "rec" ? "Stop recording (transcribes into the composer)" : mic === "stt" ? "Transcribing…" : "Dictate"}
+            disabled={uploading || mic === "stt"}
+            onClick={() => void toggleMic()}
+            style={{
+              background: mic === "rec" ? "var(--livebg)" : "transparent",
+              color: mic === "rec" ? "var(--live)" : "var(--t3)",
+              border: `1px solid ${mic === "rec" ? "var(--live)" : "var(--line2)"}`,
+              width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: uploading || mic === "stt" ? "default" : "pointer", flex: "none", opacity: mic === "stt" ? 0.6 : 1,
+            }}>
+            {mic === "stt"
+              ? <span className="vx-op-spin" style={{ width: 12, height: 12, border: "2px solid var(--line2)", borderTopColor: "var(--t2)", borderRadius: "50%", display: "block" }} />
+              : <Icon name="mic" size={15} />}
           </button>
           {busy
             ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>

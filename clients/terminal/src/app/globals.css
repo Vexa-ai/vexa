@@ -6,13 +6,17 @@
  */
 :root {
   color-scheme: dark;
-  --bg: #0d0d0f;
-  --sidebar: #141417;
-  --panel: #191a1e;
-  --panel2: #1f2025;
-  --rail: #141417;
-  --line: rgba(255, 255, 255, 0.07);
-  --line2: rgba(255, 255, 255, 0.12);
+  /* Contrast model (Dmitry 2026-07-03): the CENTER (tabs/canvas) is the dark well; BOTH
+   * sidebars (left + chat rail) sit on the same LIGHTER tone so they read as one frame
+   * around the work area. Panels/cards lift a step above whatever they sit on; borders
+   * stay lighter than any fill. */
+  --bg: #0e0e11;
+  --sidebar: #1a1b20;
+  --panel: #222329;
+  --panel2: #2b2c34;
+  --rail: #1a1b20;
+  --line: rgba(255, 255, 255, 0.09);
+  --line2: rgba(255, 255, 255, 0.16);
   --t1: #ededf0;
   --t2: #9a9aa4;
   --t3: #65656f;
@@ -39,13 +43,14 @@
  */
 :root[data-theme="light"] {
   color-scheme: light;
+  /* Light mirrors the contrast model: white work area framed by gray sidebars. */
   --bg: #ffffff;
-  --sidebar: #f6f6f7;
-  --panel: #ffffff;
-  --panel2: #ebebee;
-  --rail: #f6f6f7;
-  --line: rgba(0, 0, 0, 0.09);
-  --line2: rgba(0, 0, 0, 0.14);
+  --sidebar: #eeeef2;
+  --panel: #f7f7f9;
+  --panel2: #e6e6eb;
+  --rail: #eeeef2;
+  --line: rgba(0, 0, 0, 0.10);
+  --line2: rgba(0, 0, 0, 0.16);
   --t1: #1a1a1f;
   --t2: #5c5c66;
   --t3: #8a8a94;
@@ -79,6 +84,8 @@ body {
   --dv-background-color: var(--bg);
   --dv-group-view-background-color: var(--bg);
   --dv-tabs-and-actions-container-background-color: var(--sidebar);
+  /* the tab strip sits on the lighter sidebar tone; the ACTIVE tab drops to the dark
+   * canvas it belongs to — strongest possible active cue */
   --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
   --dv-activegroup-visiblepanel-tab-color: var(--t1);
   --dv-activegroup-hiddenpanel-tab-background-color: var(--sidebar);

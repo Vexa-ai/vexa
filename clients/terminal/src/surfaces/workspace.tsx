@@ -2,13 +2,15 @@
 /** Workspace — the git knowledge graph as: a "Files" LIST (left), a "doc" center TAB-kind (renders an
  *  entity: frontmatter + wikilinked body). Clicking a file opens a Doc tab; the chat rail references the
  *  active file from the center tab. Reuses /api/workspace/*. */
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { Icon } from "../ui-kit";
+import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP } from "../ui-kit/MdxDoc";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
-import { Markdown } from "../ui-kit/Markdown";
+import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
 import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, type GitState, type AttachedWorkspaces } from "./workspaceApi";
@@ -23,7 +25,25 @@ function parseEntity(text: string): { fm: [string, string][]; body: string } {
   return { fm, body: m[2] };
 }
 function wikilinks(text: string): ReactNode[] {
-  return text.split(/(\[\[[^\]]+\]\])/).map((part, i) => part.startsWith("[[") ? <span key={i} style={{ color: "var(--blue)" }}>{part}</span> : <span key={i}>{part}</span>);
+  // Frontmatter [[wikilinks]] are clickable: resolve + open via the same OPEN_ENTITY_EVENT the body uses.
+  return text.split(/(\[\[[^\]]+\]\])/).map((part, i) => part.startsWith("[[")
+    ? <span key={i} onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { wikilink: part.slice(2, -2), beside: true } }))}
+        style={{ color: "var(--blue)", cursor: "pointer" }}>{part}</span>
+    : <span key={i}>{part}</span>);
+}
+
+// ── reveal-in-tree: breadcrumb segments ask the Files list to expand down to a folder ──
+const REVEAL_PATH_EVENT = "vexa:terminal:reveal-path";
+/** All ancestor dir paths of `dir` (inclusive), e.g. "kg/entities/org" → [kg, kg/entities, kg/entities/org]. */
+const ancestorDirs = (dir: string): string[] => dir.split("/").filter(Boolean).map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+function revealInTree(dir: string): void {
+  // Persist first so a not-yet-mounted FilesList picks it up on mount; the event covers the mounted case.
+  try {
+    const cur = JSON.parse(readSS(SS_EXPANDED) ?? "[]") as string[];
+    writeSS(SS_EXPANDED, JSON.stringify([...new Set([...(Array.isArray(cur) ? cur : []), ...ancestorDirs(dir)])]));
+  } catch { writeSS(SS_EXPANDED, JSON.stringify(ancestorDirs(dir))); }
+  if (!dir.startsWith("kg")) writeSS(SS_HIDDEN, "0");  // target hidden by the kg-only filter → reveal all
+  window.dispatchEvent(new CustomEvent(REVEAL_PATH_EVENT, { detail: { dir } }));
 }
 async function readFile(path: string): Promise<string> {
   return (await readWorkspaceFile(path)) ?? "(not found)";
@@ -64,6 +84,7 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile, openMenu }:
   if (!node.isDir) {
     return (
       <div
+        data-tree-path={node.path}
         onClick={() => openFile(node.path)}
         onDoubleClick={() => pinFile(node.path)}
         onContextMenu={(e) => openMenu(e, node.path)}
@@ -77,7 +98,7 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile, openMenu }:
   const open = expanded.has(node.path);
   return (
     <>
-      <div onClick={() => toggle(node.path)} {...hover}
+      <div data-tree-path={node.path} onClick={() => toggle(node.path)} {...hover}
         style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 9px", paddingLeft: pad, borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t1)" }}>
         <Icon name="chevR" size={13} style={{ color: "var(--t3)", transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <Icon name="folder" size={13} style={{ color: "var(--accent)" }} />
@@ -116,6 +137,28 @@ function FilesList() {
     const top = new Set(nodes.filter((n) => n.isDir).map((n) => n.path));
     setExpanded(top); writeSS(SS_EXPANDED, JSON.stringify([...top]));
   }, [tree]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Breadcrumb "reveal in tree": expand every ancestor of the requested folder (and leave the
+  // kg-only filter if the target lives outside kg/). sessionStorage was already updated by the sender.
+  useEffect(() => {
+    const onReveal = (e: Event) => {
+      const dir = (e as CustomEvent<{ dir?: string }>).detail?.dir;
+      if (!dir) return;
+      if (!dir.startsWith("kg")) setKgOnly(false);
+      setQuery("");  // a live search hides the tree — clear it so the reveal is visible
+      setExpanded((prev) => new Set([...prev, ...ancestorDirs(dir)]));
+      // after the expansion renders, bring the revealed row into view and flash it
+      window.setTimeout(() => {
+        const row = document.querySelector<HTMLElement>(`[data-tree-path="${CSS.escape(dir)}"]`);
+        if (!row) return;
+        row.scrollIntoView({ block: "nearest" });
+        row.style.transition = "background .5s";
+        row.style.background = "var(--panel2)";
+        window.setTimeout(() => { row.style.background = "transparent"; }, 700);
+      }, 80);
+    };
+    window.addEventListener(REVEAL_PATH_EVENT, onReveal);
+    return () => window.removeEventListener(REVEAL_PATH_EVENT, onReveal);
+  }, []);
   const toggle = (p: string) => setExpanded((prev) => {
     const next = new Set(prev); next.has(p) ? next.delete(p) : next.add(p);
     writeSS(SS_EXPANDED, JSON.stringify([...next])); return next;
@@ -126,6 +169,22 @@ function FilesList() {
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, path });
   };
+  // ── instant file-name search: pure client-side filter over the already-loaded tree ──
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const scoped = kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree;
+  // filename match ranks above path match, shorter names first — the exact file you typed floats up
+  const matches = q
+    ? scoped
+        .map((p) => ({ p, name: base(p).toLowerCase() }))
+        .filter(({ p, name }) => name.includes(q) || p.toLowerCase().includes(q))
+        .sort((a, b) => {
+          const an = a.name.includes(q) ? 0 : 1, bn = b.name.includes(q) ? 0 : 1;
+          return an !== bn ? an - bn : a.name.length - b.name.length || a.p.localeCompare(b.p);
+        })
+        .slice(0, 60)
+        .map(({ p }) => p)
+    : [];
   return (
     <div style={{ padding: "6px 8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 8px", display: "flex", alignItems: "center", gap: 6 }}>
@@ -135,9 +194,36 @@ function FilesList() {
           <Icon name={kgOnly ? "eye" : "eyeOff"} size={13} />
         </span>
       </div>
+      <div style={{ padding: "0 4px 8px", position: "relative" }}>
+        <Icon name="search" size={12} style={{ position: "absolute", left: 13, top: 8, color: "var(--t3)", pointerEvents: "none" }} />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { e.stopPropagation(); setQuery(""); e.currentTarget.blur(); }
+            if (e.key === "Enter" && matches[0]) layout.openPreview(docTab(matches[0]));
+          }}
+          placeholder="Find file…"
+          spellCheck={false}
+          style={{ width: "100%", boxSizing: "border-box", fontSize: 12.5, padding: "5px 8px 5px 26px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t1)", outline: "none" }}
+        />
+      </div>
       {error && <div role="alert" style={{ margin: "0 8px 8px", fontSize: 12, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 10px" }}>⚠ Couldn’t load the workspace — {error}</div>}
-      {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} openMenu={openMenu} />)}
-      {!error && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+      {q ? (<>
+        {matches.map((p) => (
+          <div key={p} onClick={() => layout.openPreview(docTab(p))} onDoubleClick={() => layout.openTab(docTab(p))} onContextMenu={(e) => openMenu(e, p)}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            style={{ padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <Icon name="file" size={13} style={{ color: "var(--t3)", flex: "none" }} />
+            <span style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "none", maxWidth: "60%" }}>{base(p)}</span>
+            <span style={{ color: "var(--t3)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", direction: "rtl" }}>{p.slice(0, -base(p).length).replace(/\/$/, "")}</span>
+          </div>
+        ))}
+        {matches.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No files match “{query.trim()}”.</div>}
+      </>) : (<>
+        {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} openMenu={openMenu} />)}
+        {!error && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+      </>)}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           { id: "copy-reference", label: "Copy reference", detail: `@file:${menu.path}`, onSelect: () => copyText(`@file:${menu.path}`) },
@@ -309,6 +395,103 @@ function GitSection() {
 }
 
 // ── Doc TAB (center, kind "doc") ─────────────────────────────────────────────────
+/** The doc header path, clickable per segment: folder segments reveal that folder in the
+ *  Files tree; the file segment pins the (possibly preview) tab. */
+function PathBreadcrumb({ path }: { path: string }) {
+  const layout = useService(LayoutServiceId);
+  const parts = path.split("/").filter(Boolean);
+  // right-click a segment → the same copy-reference menu as the sidebar rows
+  const [menu, setMenu] = useState<{ x: number; y: number; target: string } | null>(null);
+  const seg = { cursor: "pointer" } as const;
+  const hover = {
+    onMouseEnter: (e: MouseEvent<HTMLSpanElement>) => { e.currentTarget.style.color = "var(--t1)"; e.currentTarget.style.textDecoration = "underline"; },
+    onMouseLeave: (e: MouseEvent<HTMLSpanElement>) => { e.currentTarget.style.color = ""; e.currentTarget.style.textDecoration = "none"; },
+  };
+  // any segment surfaces the tree in the LEFT SIDEBAR: un-collapse it, switch to the
+  // Knowledge list, expand down to the clicked folder (or the file itself) and flash it.
+  const reveal = (target: string) => {
+    layout.showLeft();
+    layout.setActiveList("files");
+    revealInTree(target);
+  };
+  return (
+    <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t3)", marginBottom: 12, display: "flex", flexWrap: "wrap", alignItems: "center" }}>
+      {parts.map((name, i) => {
+        const isFile = i === parts.length - 1;
+        const prefix = parts.slice(0, i + 1).join("/");
+        return (
+          <span key={prefix} style={{ display: "inline-flex", alignItems: "center" }}>
+            {i > 0 && <span style={{ padding: "0 2px", userSelect: "none" }}>/</span>}
+            <span {...hover} style={seg}
+              title={`Reveal ${prefix}${isFile ? "" : "/"} in the sidebar · right-click to copy a reference`}
+              onClick={() => reveal(prefix)}
+              onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, target: prefix }); }}>
+              {name}
+            </span>
+          </span>
+        );
+      })}
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+          { id: "copy-reference", label: "Copy reference", detail: `@file:${menu.target}`, onSelect: () => copyText(`@file:${menu.target}`) },
+          { id: "copy-path", label: "Copy path", detail: menu.target, onSelect: () => copyText(menu.target) },
+        ]} />
+      )}
+    </div>
+  );
+}
+
+// ── frontmatter card: the file head is STRUCTURED data — render it as such, not raw strings ──
+const pill = (color: string, bg: string): CSSProperties => ({
+  display: "inline-flex", alignItems: "center", gap: 5, background: bg, border: `1px solid ${color}`,
+  borderRadius: 999, padding: "1px 9px", color, fontSize: 12, fontWeight: 500, lineHeight: 1.6, whiteSpace: "nowrap",
+});
+
+/** One frontmatter value, rendered by SHAPE: type → colored entity chip; [a, b] lists → tag
+ *  pills; URLs/domains → external links; dates → mono; booleans → check; [[wikilinks]] and
+ *  plain text → the existing clickable-wikilink path. */
+function FmValue({ k, v }: { k: string; v: string }) {
+  if (k === "type") {
+    const c = ENTITY_CHIP[v] ?? DEFAULT_ENTITY_CHIP;
+    return <span style={pill(c.color, c.bg)}><Icon name={c.icon} size={11} />{v}</span>;
+  }
+  const list = v.match(/^\[(.*)\]$/);
+  if (list) {
+    const items = list[1].split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+    return (
+      <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 5 }}>
+        {items.map((t) => <span key={t} style={{ background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 999, padding: "1px 9px", color: "var(--t2)", fontSize: 12, lineHeight: 1.6, whiteSpace: "nowrap" }}>{t}</span>)}
+      </span>
+    );
+  }
+  if (/^https?:\/\/\S+$/.test(v)) {
+    return <a href={v} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "none" }}
+      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗</a>;
+  }
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(v)) {
+    return <a href={`https://${v}`} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "none" }}
+      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v} ↗</a>;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t2)" }}>{v}</span>;
+  if (v === "true" || v === "false") return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: v === "true" ? "var(--green)" : "var(--t3)" }}>{v === "true" ? "✓ true" : "✗ false"}</span>;
+  if (k === "id") return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t2)" }}>{v}</span>;
+  if (k === "title") return <span style={{ color: "var(--t1)", fontWeight: 600 }}>{wikilinks(v)}</span>;
+  return <span style={{ color: "var(--t1)" }}>{wikilinks(v)}</span>;
+}
+
+function FrontmatterCard({ fm }: { fm: [string, string][] }) {
+  return (
+    <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "11px 13px", marginBottom: 14, fontSize: 13, display: "flex", flexDirection: "column", gap: 6 }}>
+      {fm.map(([k, v]) => (
+        <div key={k} style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+          <span style={{ color: "var(--t3)", width: 96, flex: "none", fontSize: 12 }}>{k}</span>
+          <span style={{ minWidth: 0, lineHeight: 1.55 }}><FmValue k={k} v={v} /></span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DocTab({ params }: TabProps) {
   const path = params.path as string;
   const [content, setContent] = useState<string | null>(null);
@@ -317,13 +500,9 @@ function DocTab({ params }: TabProps) {
   return (
     <div style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "22px 24px" }}>
-        <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t3)", marginBottom: 12 }}>{path}</div>
-        {fm.length > 0 && (
-          <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "10px 13px", marginBottom: 14, fontSize: 13 }}>
-            {fm.map(([k, v]) => <div key={k} style={{ display: "flex", gap: 10 }}><span style={{ color: "var(--t3)", width: 96 }}>{k}</span><span style={{ color: "var(--t1)" }}>{wikilinks(v)}</span></div>)}
-          </div>
-        )}
-        <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <Markdown>{body}</Markdown>}</div>
+        <PathBreadcrumb path={path} />
+        {fm.length > 0 && <FrontmatterCard fm={fm} />}
+        <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <MdxDoc>{body}</MdxDoc>}</div>
       </div>
     </div>
   );

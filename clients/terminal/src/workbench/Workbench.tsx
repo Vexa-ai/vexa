@@ -128,7 +128,7 @@ function LeftPane() {
   const lists = registry.lists();
   const active = registry.list(activeList) ?? lists[0];
   const Comp = active?.component;
-  const seg = (on: boolean): CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 7, fontSize: 12.5, cursor: "pointer", border: "none", color: on ? "var(--t1)" : "var(--t2)", background: on ? "var(--panel2)" : "transparent" });
+  const seg = (on: boolean): CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 7, fontSize: 12.5, cursor: "pointer", border: "none", color: on ? "var(--t1)" : "var(--t2)", background: on ? "var(--panel2)" : "transparent", flex: "none", whiteSpace: "nowrap" });
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--sidebar)", borderRight: "1px solid var(--line)", minHeight: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "12px 14px 8px", flex: "none" }}>
@@ -136,9 +136,11 @@ function LeftPane() {
         <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} style={{ borderRadius: 7, display: "block", flex: "none" }} />
         <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)" }}>Vexa <span style={{ fontWeight: 400, color: "var(--t3)" }}>terminal</span></span>
       </div>
-      <div style={{ display: "flex", gap: 3, flexWrap: "wrap", padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
+      {/* one non-wrapping row at every sidebar width — overflow scrolls (hidden scrollbar)
+          instead of reflowing into a different-looking two-row layout */}
+      <div className="vx-hscroll" style={{ display: "flex", gap: 3, padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
         {lists.map((l) => (
-          <button key={l.id} style={seg(l.id === active?.id)} onClick={() => layout.setActiveList(l.id)}>
+          <button key={l.id} style={seg(l.id === active?.id)} onClick={() => layout.setActiveList(l.id)} title={l.label}>
             <Icon name={l.icon} size={13} />{l.label}
           </button>
         ))}
@@ -205,7 +207,18 @@ function RightPane() {
 export function Workbench() {
   const layout = useService(LayoutServiceId);
   const keybindings = useService(KeybindingServiceId);
-  const { leftCollapsed, rightCollapsed, activeList } = useStore(layout.store);
+  const { leftCollapsed, rightCollapsed, activeList, activeTab } = useStore(layout.store);
+  // ── responsive tiers — derived from window width, never mutating the user's saved
+  //    collapse state (widening the window restores exactly what was there).
+  //    full ≥900: three panes · narrow <900: left sidebar hides · single <560 (≈¼ screen):
+  //    ONE pane — the center when something is open there (meeting/doc), otherwise chat.
+  const [winW, setWinW] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
+  useEffect(() => {
+    const on = () => setWinW(window.innerWidth);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  const tier = winW < 560 ? "single" : winW < 900 ? "narrow" : "full";
   // CHAT-ONLY mode: the Sessions view is left-sidebar + chat, no center canvas. New users land here
   // (default list = "sessions") so onboarding is just the conversation; Meetings/Files/Routines reveal
   // the full 3-pane interface.
@@ -217,7 +230,7 @@ export function Workbench() {
   // resolve a [[wikilink]] title to its kg/entities/*.md path, then open the doc tab.
   useEffect(() => {
     const onOpenEntity = async (e: Event) => {
-      const detail = (e as CustomEvent<{ path?: string; wikilink?: string }>).detail || {};
+      const detail = (e as CustomEvent<{ path?: string; wikilink?: string; beside?: boolean }>).detail || {};
       let path = detail.path;
       if (!path && detail.wikilink) {
         const slug = entitySlug(detail.wikilink);
@@ -226,7 +239,9 @@ export function Workbench() {
       }
       if (!path) return;
       if (layout.store.getState().activeList === "sessions") layout.setActiveList("files");  // reveal the center
-      layout.openTab({ id: `doc:${path}`, title: path.split("/").pop() ?? path, kind: "doc", params: { path } });
+      const d = { id: `doc:${path}`, title: path.split("/").pop() ?? path, kind: "doc", params: { path } };
+      // beside = clicked inside a doc → split, keep the source visible; otherwise plain tab.
+      if (detail.beside) layout.openTabBeside(d); else layout.openTab(d);
     };
     window.addEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
     return () => window.removeEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
@@ -256,27 +271,38 @@ export function Workbench() {
       <div style={{ flex: 1, minHeight: 0 }}>
         {/* chat-only (Sessions) gets its own sizes — the freed center space goes to the CHAT (right), with a
             narrow left sidebar; full mode keeps the user's saved 3-pane sizes. The `key` re-lays-out on switch. */}
-        <Allotment
-          key={chatOnly ? "chat-only" : "full"}
-          onChange={(s) => { if (!chatOnly) persistSizes(s); }}
-          defaultSizes={chatOnly ? [20, 80] : (savedSizes() ?? [15, 55, 30])}
-        >
-          <Allotment.Pane visible={!leftCollapsed} minSize={180} preferredSize={chatOnly ? "20%" : "15%"}>
-            <LeftPane />
-          </Allotment.Pane>
-          {!chatOnly && (
-            <Allotment.Pane minSize={360} preferredSize="55%">
-              <div style={{ height: "100%", position: "relative" }}>
-                <div style={{ position: "absolute", inset: 0 }}>
-                  <DockviewReact onReady={onReady} components={dvComponents} tabComponents={dvTabComponents} defaultTabComponent={TabHeader} theme={themeAbyss} />
-                </div>
-              </div>
-            </Allotment.Pane>
-          )}
-          <Allotment.Pane visible={chatOnly || !rightCollapsed} minSize={300} preferredSize={chatOnly ? "80%" : "30%"}>
-            <RightPane />
-          </Allotment.Pane>
-        </Allotment>
+        {(() => {
+          // single-pane resolution: center wins when it has content, else chat.
+          const centerHasContent = !chatOnly && activeTab != null;
+          const showLeft = !leftCollapsed && tier === "full";
+          const showCenter = !chatOnly && (tier !== "single" || centerHasContent);
+          const showRight = tier === "single"
+            ? !(showCenter)                                   // ¼-width: exactly one pane
+            : (chatOnly || !rightCollapsed);
+          return (
+            <Allotment
+              key={`${chatOnly ? "chat-only" : "full"}-${tier}`}
+              onChange={(s) => { if (!chatOnly && tier === "full") persistSizes(s); }}
+              defaultSizes={chatOnly ? [20, 80] : (savedSizes() ?? [15, 55, 30])}
+            >
+              <Allotment.Pane visible={showLeft} minSize={180} preferredSize={chatOnly ? "20%" : "15%"}>
+                <LeftPane />
+              </Allotment.Pane>
+              {!chatOnly && (
+                <Allotment.Pane visible={showCenter} minSize={tier === "full" ? 360 : 200} preferredSize="55%">
+                  <div style={{ height: "100%", position: "relative" }}>
+                    <div style={{ position: "absolute", inset: 0 }}>
+                      <DockviewReact onReady={onReady} components={dvComponents} tabComponents={dvTabComponents} defaultTabComponent={TabHeader} theme={themeAbyss} />
+                    </div>
+                  </div>
+                </Allotment.Pane>
+              )}
+              <Allotment.Pane visible={showRight} minSize={tier === "full" ? 300 : 200} preferredSize={chatOnly ? "80%" : "30%"}>
+                <RightPane />
+              </Allotment.Pane>
+            </Allotment>
+          );
+        })()}
       </div>
 
       <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
