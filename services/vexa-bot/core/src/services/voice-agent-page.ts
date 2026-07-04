@@ -500,7 +500,10 @@ export class VoiceAgentPageService {
 
     try {
       const parentUrl = this.parentPage.url();
-      if (!parentUrl.includes("meet.google.com")) {
+      // Hostname check, not substring: "meet.google.com.evil.example" must not match.
+      let parentHost = "";
+      try { parentHost = new URL(parentUrl).hostname; } catch { /* about:blank etc. */ }
+      if (parentHost !== "meet.google.com") {
         return true;
       }
 
