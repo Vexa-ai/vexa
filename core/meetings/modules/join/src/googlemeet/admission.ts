@@ -5,7 +5,8 @@ import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "..
 import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
-  googleRejectionIndicators
+  googleRejectionIndicators,
+  googleConsentPromptIndicators
 } from "./selectors";
 
 /**
@@ -26,10 +27,11 @@ export class AdmissionError extends Error {
 }
 
 // Detect an active reCAPTCHA (enterprise) challenge. Google renders it in iframes whose
-// URL contains "/recaptcha/"; it can sit on the same screen as a "Return to home screen"
-// button, which otherwise reads exactly like an admin rejection. Used to keep the bot ON
-// the page (instead of quitting) so the challenge can be solved by a human over VNC or an
-// agent over CDP — after which the normal admission poll proceeds into the meeting.
+// URL contains "/recaptcha/"; it can sit on the same screen as error affordances
+// ("Try again", "Go back") that otherwise read exactly like an admin rejection. Used to
+// keep the bot ON the page (instead of quitting) so the challenge can be solved by a
+// human over VNC or an agent over CDP — after which the normal admission poll proceeds
+// into the meeting.
 export async function hasRecaptchaChallenge(page: Page): Promise<boolean> {
   try {
     for (const frame of page.frames()) {
@@ -50,11 +52,12 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
       try {
         const element = await page.locator(selector).first();
         if (await element.isVisible()) {
-          // A reCAPTCHA challenge renders the SAME "Return to home screen" affordance as
-          // an admin rejection. If a captcha is on screen, this is Google bot-detection,
-          // NOT a host denial — classifying it as a rejection makes the bot quit before
-          // the captcha can be solved. Stay instead; the admission poll keeps running so a
-          // solve (human via VNC / agent via CDP) leads straight into admission.
+          // A reCAPTCHA challenge renders the same error affordances ("Try again",
+          // "Go back") as an admin rejection. If a captcha is on screen, this is Google
+          // bot-detection, NOT a host denial — classifying it as a rejection makes the
+          // bot quit before the captcha can be solved. Stay instead; the admission poll
+          // keeps running so a solve (human via VNC / agent via CDP) leads straight into
+          // admission.
           if (await hasRecaptchaChallenge(page)) {
             log(`🤖 reCAPTCHA present alongside rejection indicator "${selector}" — treating as bot-detection, NOT admin rejection. Staying for manual/agent solve.`);
             return false;
@@ -129,6 +132,16 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
   const inWaitingRoom = await checkForWaitingRoomIndicators(page);
   if (inWaitingRoom) {
     log(`⚠️ Waiting room indicator visible — suppressing admission (lobby buttons are false positives)`);
+    return false;
+  }
+
+  // 1b. NEGATIVE GUARD: a Gemini "take notes" consent prompt is a pre-admission
+  // consent gate. Meeting controls can be visible behind it, but the bot is not
+  // truly participating until a human accepts/declines — reporting admitted here
+  // yields "status active, 0 transcriptions" (Vexa-ai/vexa#429). Suppress admission.
+  const consentPending = await hasConsentPrompt(page);
+  if (consentPending) {
+    log(`⚠️ Gemini consent prompt visible — suppressing admission (consent pending; bot not truly in the call)`);
     return false;
   }
 
@@ -214,6 +227,25 @@ export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean
   return false;
 }
 
+// Detect Google's Gemini "take notes for me" in-call consent prompt — a consent
+// gate where the bot isn't truly participating until a human accepts/declines
+// (Vexa-ai/vexa#429). Mirrors checkForWaitingRoomIndicators: a pre-admission
+// state that suppresses the "admitted" signal. Consent must be a human decision,
+// so callers escalate to needs_human_help rather than auto-clicking it.
+export async function hasConsentPrompt(page: Page): Promise<boolean> {
+  for (const selector of googleConsentPromptIndicators) {
+    try {
+      const element = await page.locator(selector).first();
+      if (await element.isVisible()) {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 async function throwIfGoogleAdmissionRejected(page: Page, context: string): Promise<void> {
   const isRejected = await checkForGoogleRejection(page);
   if (isRejected) {
@@ -260,7 +292,18 @@ export async function waitForGoogleMeetingAdmission(
       log("Successfully admitted to the Google Meet meeting - no waiting room required");
       return true;
     }
-    
+
+    // Consent gate: if Google's Gemini "take notes" consent prompt is present,
+    // the bot is held behind a human decision (accept/decline) — not admitted.
+    // Do NOT auto-click it; consent is the user's choice (Vexa-ai/vexa#429).
+    // Summon a human via needs_human_help and keep polling, so admission
+    // proceeds once consent is granted (mirrors the reCAPTCHA "stay for human
+    // solve" handling).
+    if (await hasConsentPrompt(page)) {
+      log("🧑‍⚖️ Gemini consent prompt detected — bot is behind a consent gate (not admitted). Escalating to needs_human_help; not auto-consenting.");
+      await triggerEscalation(botConfig, "consent_required");
+    }
+
     log("Bot not yet admitted - checking for Google Meet waiting room indicators...");
     
     // Check for waiting room indicators using visibility checks

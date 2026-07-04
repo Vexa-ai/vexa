@@ -26,6 +26,37 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting room"]',
   '[aria-label*="Asking to be let in"]',
   '[aria-label*="waiting for admission"]',
+
+  // FIX (Vexa-ai/vexa#471, @priitvimberg): the "Asking to be let in" waiting
+  // screen shows a "Return to home screen" button. It was listed in
+  // googleRejectionIndicators, so the bot false-rejected in ~4s
+  // (awaiting_admission_rejected) instead of waiting for the host to admit it.
+  // Reclassified as a WAITING indicator; genuine denials are still caught by
+  // the "denied your request" text patterns in googleRejectionIndicators.
+  'button:has-text("Return to home screen")',
+];
+
+// Google's Gemini "take notes for me" in-call consent prompt (Vexa-ai/vexa#454,
+// @thatditsyboy; issue #429). This is a consent gate, not mere chrome: until a
+// human accepts or declines, the bot is not truly participating, yet the
+// surrounding meeting controls can read as "admitted" (status active, 0
+// transcriptions). Detected so the bot routes to needs_human_help instead of
+// false-reporting ACTIVE.
+//
+// Targeted at the prompt's distinctive copy ("take notes for me" / "taking
+// notes") so it does NOT match the always-present Gemini toolbar button.
+//
+// NOTE: these selectors are best-effort and SHOULD be confirmed against the
+// live prompt DOM (the upstream PR flags its selectors as best-effort) —
+// reproduce with a live meeting that has Gemini notes enabled and adjust if
+// Google changes the copy.
+export const googleConsentPromptIndicators: string[] = [
+  'text*="take notes for me"',
+  'text*="Take notes for me"',
+  'text*="taking notes"',
+  '[role="dialog"]:has-text("take notes for me")',
+  '[role="alertdialog"]:has-text("take notes for me")',
+  'button:has-text("take notes for me")',
 ];
 
 export const googleRejectionIndicators: string[] = [
@@ -43,7 +74,6 @@ export const googleRejectionIndicators: string[] = [
   'text*="cannot join this call"',
   'text*="Ask to join again"',
   'button:has-text("Ask to join again")',
-  'button:has-text("Return to home screen")',
 
   // Meeting not found or access denied patterns
   'text="Meeting not found"',
