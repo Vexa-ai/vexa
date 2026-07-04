@@ -12,4 +12,10 @@ set -u
 
 cd /app/agent
 export PYTHONPATH="/app/agent${PYTHONPATH:+:${PYTHONPATH}}"
+# The lite image roots the agent tree at /app/agent (the worker image roots it at /app), so the
+# code defaults for the seed registries (/app/workspace-seeds, /app/tools-seed —
+# shared/seeding.DEFAULT_SEEDS_ROOT + shared/config.Settings) point one level too high here.
+# Re-root them at the lite layout; an operator/dispatch-provided value still wins (:-).
+export VEXA_WORKSPACE_SEEDS_DIR="${VEXA_WORKSPACE_SEEDS_DIR:-/app/agent/workspace-seeds}"
+export VEXA_TOOLS_SEED_DIR="${VEXA_TOOLS_SEED_DIR:-/app/agent/tools-seed}"
 exec /opt/venvs/agent/bin/python -m worker
