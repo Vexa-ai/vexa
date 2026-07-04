@@ -22,7 +22,7 @@ ALWAYS-ON (the routine `gate:compose` subset):
                       P3 test_join_retry.py (deterministic forcing of a transient failure on a LIVE
                       bot is slow/flaky — split documented in the README).
 
-COMPOSE_BOT=1 (opt-in; real bot lifecycle — slow + needs the ~7GB vexaai/vexa-bot:dev image):
+COMPOSE_BOT=1 (opt-in; real bot lifecycle — slow + needs the ~7GB vexaai/vexa-bot:v012 image):
   3  bot spawn      — POST /bots → meeting-api spawns via runtime → a real `vexa-mtg-…` container
      → joining        appears in `docker ps` AND the bot's first lifecycle callback advances the
                       meeting to `joining`; then the bot is stopped + cleaned.

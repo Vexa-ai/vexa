@@ -5,7 +5,7 @@ name: vexa-v012
 # Improvement over 0.11: EVERY service carries a healthcheck and depends_on waits on
 # `condition: service_healthy` so the bring-up is ordered + observable.
 #
-# Bot is NOT a compose service: runtime spawns vexaai/vexa-bot:dev (BROWSER_IMAGE) on demand via the
+# Bot is NOT a compose service: runtime spawns vexaai/vexa-bot:v012 (BROWSER_IMAGE) on demand via the
 # mounted /var/run/docker.sock. That published ~3.6GB image is a REFERENCE here, never built.
 
 services:

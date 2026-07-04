@@ -1,0 +1,2 @@
+# Keep gate:readme docs out of the template renderer.
+templates/README.md

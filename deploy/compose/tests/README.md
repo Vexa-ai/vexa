@@ -35,9 +35,10 @@ beside them with `COMPOSE_DYNAMIC_PORTS=1` so the gate binds free random host po
 
 ### Always-on vs `COMPOSE_BOT`-gated — why
 
-Steps 3 and 6a drive a **real bot container** (Playwright browser, ~7GB) through its lifecycle —
-point `BROWSER_IMAGE` at the **source-built** bot (`make -C deploy/compose bot`, the `lifecycle.v1`-
-compatible v0.12 bot); the published `vexaai/vexa-bot:dev` is the old 0.10 line and fails the handshake. That is slow and inherently flaky for a routine gate (browser boot, a dummy
+Steps 3 and 6a drive a **real `vexaai/vexa-bot:v012` container** (Playwright browser, ~7GB image)
+through its lifecycle (the published `vexaai/vexa-bot:dev` is the old 0.10 line and fails the
+`lifecycle.v1` handshake; a source-built bot from `make -C deploy/compose bot` also works). That
+is slow and inherently flaky for a routine gate (browser boot, a dummy
 meeting URL, callback timing). The fast steps (1·2·4·5·6c·6d·6b) exercise the entire control plane —
 auth, the transcript bus, recordings→object-store, and the lifecycle/scheduling wiring — with no real
 bot, deterministically, so they are the always-on `gate:compose`. The bot-spawn proof is **runnable**

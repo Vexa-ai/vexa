@@ -130,11 +130,11 @@ init-db:
 
 ## test — probe the published front doors.
 test:
-	@for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_DASHBOARD_PORT):dashboard" "$(HOST_TERMINAL_PORT):terminal"; do \
+	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_DASHBOARD_PORT):dashboard" "$(HOST_TERMINAL_PORT):terminal"; do \
 		PORT=$${ep%%:*}; NAME=$${ep##*:}; \
 		if curl -sf -o /dev/null http://localhost:$$PORT/ 2>/dev/null || curl -sf -o /dev/null http://localhost:$$PORT/health 2>/dev/null; then \
-			echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding (:$$PORT)"; fi; \
-	done
+			echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding (:$$PORT)"; FAIL=1; fi; \
+	done; exit $$FAIL
 
 ## down — stop + remove app + sidecars + network (volumes persist; `docker volume rm vexa-lite-pgdata vexa-lite-miniodata` to wipe).
 down:

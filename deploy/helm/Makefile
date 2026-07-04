@@ -9,7 +9,7 @@ VALUES       ?= $(CHART)/values-test.yaml
 KUBECONFIG   ?= /etc/rancher/k3s/k3s.yaml
 COMPOSE      ?= ../compose/docker-compose.yml
 IMAGES        = vexaai/v012-gateway vexaai/v012-admin-api vexaai/v012-meeting-api \
-                vexaai/v012-runtime vexaai/v012-agent-api
+                vexaai/v012-runtime vexaai/v012-agent-api vexaai/v012-terminal
 
 ## lint — helm lint (default + values-test)
 lint:

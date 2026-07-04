@@ -32,7 +32,7 @@ dashboard-harness:
 stack-test:
 	./bin/stack-test
 
-## stack-test-bot — + the real bot-spawn proof (COMPOSE_BOT=1; slow, needs vexaai/vexa-bot:dev).
+## stack-test-bot — + the real bot-spawn proof (COMPOSE_BOT=1; slow, needs vexaai/vexa-bot:v012).
 stack-test-bot:
 	COMPOSE_BOT=1 ./bin/stack-test
 
