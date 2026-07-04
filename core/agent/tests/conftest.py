@@ -36,3 +36,15 @@ def _default_subject(monkeypatch):
     (``VEXA_AGENT_DEFAULT_SUBJECT``) — agent-api derives the subject from it when ``X-User-Id`` is absent.
     Tests that assert per-user *isolation* pass an explicit ``X-User-Id`` header, which always wins (P20)."""
     monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path_factory):
+    """Point HOME at a per-test temp dir. The claude-code harness rewires ``$HOME/.claude/projects``
+    into the workspace (``_link_chat_into_workspace``) — designed for the disposable per-turn
+    container HOME. Run on a host, it operated on the developer's real ``~/.claude`` and once
+    destroyed every Claude Code session transcript. No test may ever see the real HOME.
+
+    (Git is unaffected: workspaces set ``user.name``/``user.email`` per-repo, never globally.)"""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))

@@ -4,6 +4,7 @@ adapter with a fake exec, and the transcript-size accounting behind resume ids."
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -157,3 +158,52 @@ def test_transcript_bytes_sums_matching_session_files(tmp_path: Path):
     h = ClaudeCodeHarness()
     assert h.transcript_bytes(tmp_path, "sid-1") == 123
     assert h.transcript_bytes(tmp_path, "missing") == 0
+
+
+# ── ~/.claude/projects linking — must NEVER destroy real transcripts ─────────
+
+def _prepare_with_home(monkeypatch, home: Path, work: Path) -> Path:
+    """Run prepare() against an explicit fake HOME; returns the ``~/.claude/projects`` path."""
+    monkeypatch.setenv("HOME", str(home))
+    ClaudeCodeHarness().prepare(work)
+    return home / ".claude" / "projects"
+
+
+def test_prepare_refuses_to_delete_real_transcripts(tmp_path: Path, monkeypatch):
+    # Regression for the 2026-07-03 incident: a host test run pointed prepare() at the developer's
+    # real HOME and rmtree'd every Claude Code transcript. A non-empty projects dir was not created
+    # by this adapter — it must survive prepare() byte-for-byte, with the link skipped.
+    home = tmp_path / "home"
+    transcript = home / ".claude" / "projects" / "-real-project" / "s1.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"precious": true}')
+    link = _prepare_with_home(monkeypatch, home, work=tmp_path / "ws")
+    assert link.is_dir() and not link.is_symlink()  # still the real dir, not a link
+    assert transcript.read_text() == '{"precious": true}'
+
+
+def test_prepare_links_fresh_and_empty_homes(tmp_path: Path, monkeypatch):
+    ws = tmp_path / "ws"
+    target = str(ws / ".claude" / "projects")
+    # fresh container HOME (no projects dir at all) → link created
+    link = _prepare_with_home(monkeypatch, tmp_path / "h1", ws)
+    assert link.is_symlink() and os.readlink(link) == target
+    # an EMPTY dir (the CLI pre-creates one) holds nothing → safe to replace with the link
+    home2 = tmp_path / "h2"
+    (home2 / ".claude" / "projects").mkdir(parents=True)
+    link = _prepare_with_home(monkeypatch, home2, ws)
+    assert link.is_symlink() and os.readlink(link) == target
+
+
+def test_prepare_repoints_stale_symlink_and_is_idempotent(tmp_path: Path, monkeypatch):
+    ws = tmp_path / "ws"
+    target = str(ws / ".claude" / "projects")
+    home = tmp_path / "home"
+    old_ws = tmp_path / "old"
+    (old_ws / ".claude" / "projects").mkdir(parents=True)
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "projects").symlink_to(old_ws / ".claude" / "projects")
+    link = _prepare_with_home(monkeypatch, home, ws)  # stale link from a previous workspace → repointed
+    assert os.readlink(link) == target
+    link = _prepare_with_home(monkeypatch, home, ws)  # second turn, already correct → no-op
+    assert os.readlink(link) == target
