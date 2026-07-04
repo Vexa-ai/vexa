@@ -58,6 +58,10 @@ class MeetingRepo(Protocol):
     ) -> dict:
         """ATOMIC dedup + cap-check + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
 
+        A ``max_concurrent <= 0`` means the user's quota is DEPLETED (0 = no bots, never
+        "unlimited"): raise ``MaxBotsExceeded`` immediately, before any of the steps below.
+        Only ``max_concurrent=None`` (no cap provided) skips the cap gate.
+
         Performs, in a SINGLE transaction with NO yield point between the checks and the insert:
           1. dedup — if the user already has an ACTIVE row for ``(platform, native_meeting_id)``,
              raise ``DuplicateMeeting`` (→ HTTP 409);

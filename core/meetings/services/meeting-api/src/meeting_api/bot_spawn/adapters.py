@@ -321,6 +321,11 @@ class SqlAlchemyMeetingRepo:
 
         from ..sessions.models import Meeting
 
+        # 0. depleted — a cap <= 0 means NO bots allowed (0 is "depleted", never "unlimited");
+        #    reject before touching the DB. Only ``None`` (no cap provided) skips the gate.
+        if max_concurrent is not None and max_concurrent <= 0:
+            raise MaxBotsExceeded(user_id, max_concurrent)
+
         active = ["requested", "joining", "awaiting_admission", "active"]
         async with self._session_factory() as db:
             # Per-user serialization: hold the advisory lock for the whole transaction. asyncpg needs a
@@ -344,7 +349,8 @@ class SqlAlchemyMeetingRepo:
                     f"An active meeting already exists for {platform}/{native_meeting_id}"
                 )
             # 2. cap — count the user's active bots (browser_session excluded); reject the N+1th.
-            if max_concurrent is not None and max_concurrent > 0:
+            #    (cap <= 0 was already rejected as depleted above.)
+            if max_concurrent is not None:
                 count_stmt = (
                     select(func.count())
                     .select_from(Meeting)

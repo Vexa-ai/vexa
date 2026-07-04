@@ -71,7 +71,8 @@ def _resolve_max_concurrent(x_user_limits: Optional[str]) -> Optional[int]:
 
     The gateway resolves the user via ``/internal/validate`` (identity.v1) and forwards the limit as
     a header (the parent's ``auth.validate_request`` reads ``X-User-Limits`` as a bare int or a JSON
-    ``{"max_concurrent_bots"|"max_concurrent": …}``). Absent/unparseable → ``None`` (no pre-check)."""
+    ``{"max_concurrent_bots"|"max_concurrent": …}``). Absent/unparseable → ``None`` (no pre-check).
+    ``0`` is a REAL value (quota depleted — every spawn rejected), not absence."""
     if not x_user_limits:
         return None
     raw = x_user_limits.strip()
