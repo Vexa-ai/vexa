@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { BotConfig } from "../../types";
 import { log, callStartupCallback } from "../../utils";
-import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat, startVideoRecordingIfNeeded, enterBrowserFullscreen } from "../../index";
+import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat, triggerPostAdmissionVoiceAgentAudio, startVideoRecordingIfNeeded, enterBrowserFullscreen } from "../../index";
 import { enableTeamsLiveCaptions } from "../msteams/captions";
 
 export type AdmissionDecision = {
@@ -91,6 +91,9 @@ export async function runMeetingFlow(
           if (msg.includes("rejected by meeting admin")) {
             return { admitted: false, rejected: true, reason: "admission_rejected_by_admin" } as AdmissionDecision;
           }
+          if (msg.includes("never_admitted") || msg.includes("not admitted to the meeting after lobby timeout")) {
+            return { admitted: false, rejected: false, reason: "admission_never_admitted" } as AdmissionDecision;
+          }
           return { admitted: false, rejected: false, reason: "admission_timeout" } as AdmissionDecision;
         }),
       strategies.prepare(page, botConfig),
@@ -144,6 +147,10 @@ export async function runMeetingFlow(
         return;
       }
       log("✅ Bot verified to be in meeting after ACTIVE callback");
+
+      triggerPostAdmissionVoiceAgentAudio().catch((err: any) => {
+        log(`[VoiceAgent] Post-admission audio bridge error (non-fatal): ${err?.message || err}`);
+      });
 
       // Re-enable virtual camera after admission. Google Meet may re-negotiate
       // WebRTC tracks during the waiting-room → meeting transition, killing

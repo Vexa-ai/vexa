@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import get_db
-from .schemas import Platform, MeetingStatus
+from .schemas import Platform, MeetingStatus, VoiceAgentSettingsUpdate
 
 from .auth import get_user_and_token
 from .meetings import _find_active_meeting, _find_meeting_any_status, get_redis
@@ -314,3 +314,48 @@ async def bot_events(
                 pass
 
     return {"events": events, "meeting_id": meeting.id, "count": len(events)}
+
+
+@router.patch(
+    "/bots/{platform}/{native_meeting_id}/voice-agent-settings",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Update voice agent settings for an active meeting",
+    dependencies=[Depends(get_user_and_token)],
+)
+async def bot_voice_agent_settings_update(
+    platform: Platform,
+    native_meeting_id: str,
+    req: VoiceAgentSettingsUpdate,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    _, current_user = auth_data
+    redis_client = get_redis()
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+
+    meeting = await _find_active_meeting(db, current_user.id, platform.value, native_meeting_id)
+    channel = f"bot_commands:meeting:{meeting.id}"
+    meeting_data = dict(meeting.data or {})
+
+    if req.url:
+        meeting_data["voice_agent_enabled"] = True
+        meeting_data["camera_enabled"] = True
+        meeting_data["voice_agent_settings"] = {"url": req.url}
+        command = {
+            "action": "voice_agent_set_url",
+            "meeting_id": meeting.id,
+            "url": req.url,
+        }
+    else:
+        meeting_data["voice_agent_enabled"] = False
+        meeting_data.pop("voice_agent_settings", None)
+        command = {
+            "action": "voice_agent_stop",
+            "meeting_id": meeting.id,
+        }
+
+    meeting.data = meeting_data
+    await db.commit()
+    await redis_client.publish(channel, json.dumps(command))
+    return {"message": "Voice agent settings command sent", "meeting_id": meeting.id}

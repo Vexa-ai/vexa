@@ -472,13 +472,17 @@ export class ScreenContentService {
         ctx.putImageData(pixel, 0, 0);
       }
 
-      // Always create a fresh captureStream to get a live track.
-      // Google Meet's camera toggle can kill previous tracks.
+      // Always create a fresh canvas stream so avatar/image mode still has a live
+      // fallback track, but prefer the dedicated streamer track when available.
       const freshStream = canvas.captureStream(30);
       (window as any).__vexa_canvas_stream = freshStream;
       const canvasTrack = freshStream.getVideoTracks()[0];
-      if (!canvasTrack) return { success: false, reason: 'failed to get canvas track from fresh stream' };
-      console.log('[Vexa] Fresh canvas track created: id=' + canvasTrack.id + ' readyState=' + canvasTrack.readyState);
+      const preferredTrack =
+        (typeof (window as any).__vexaGetPreferredVideoTrack === 'function'
+          ? (window as any).__vexaGetPreferredVideoTrack()
+          : null) || canvasTrack;
+      if (!preferredTrack) return { success: false, reason: 'failed to get preferred track' };
+      console.log('[Vexa] Preferred video track selected: id=' + preferredTrack.id + ' readyState=' + preferredTrack.readyState);
 
       const pcs = (window as any).__vexa_peer_connections as RTCPeerConnection[] || [];
       let replaced = 0;
@@ -503,7 +507,7 @@ export class ScreenContentService {
 
             if (isSendVideo) {
               try {
-                await t.sender.replaceTrack(canvasTrack);
+                await t.sender.replaceTrack(preferredTrack);
                 replaced++;
                 details.push('pc' + i + ':mid=' + t.mid + ':dir=' + t.direction);
               } catch (e: any) {
@@ -521,7 +525,7 @@ export class ScreenContentService {
           for (const s of senders) {
             if (s.track === null || (s.track && s.track.kind === 'video')) {
               try {
-                await s.replaceTrack(canvasTrack);
+                await s.replaceTrack(preferredTrack);
                 replaced++;
                 details.push('pc' + i + ':sender(trackWas=' + (s.track?.kind || 'null') + ')');
               } catch (e: any) {
@@ -542,7 +546,8 @@ export class ScreenContentService {
             verification.push({
               pc: i,
               trackId: s.track.id,
-              isCanvas: s.track.id === canvasTrack.id,
+              isCanvas: canvasTrack ? s.track.id === canvasTrack.id : false,
+              isPreferred: s.track.id === preferredTrack.id,
               label: s.track.label,
               enabled: s.track.enabled,
               readyState: s.track.readyState,
@@ -729,20 +734,18 @@ export class ScreenContentService {
   }
 
   /**
-   * Display an image on the virtual camera feed.
-   * @param imageSource URL or base64 data URI for the image
+   * Draw an image onto the virtual camera canvas.
+   * Shared by both one-shot images and high-frequency webpage frame updates.
    */
-  async showImage(imageSource: string): Promise<void> {
+  private async drawImageOnCanvas(imageSource: string): Promise<boolean> {
     if (!this._initialized) await this.initialize();
 
-    // Handle base64 images
     let src = imageSource;
     if (!imageSource.startsWith('http') && !imageSource.startsWith('data:')) {
       src = `data:image/png;base64,${imageSource}`;
     }
 
-    // Draw the image onto the canvas
-    const success = await this.page.evaluate(async (imgSrc: string) => {
+    return this.page.evaluate(async (imgSrc: string) => {
       const canvas = (window as any).__vexa_canvas as HTMLCanvasElement;
       const ctx = (window as any).__vexa_canvas_ctx as CanvasRenderingContext2D;
       if (!canvas || !ctx) return false;
@@ -754,6 +757,8 @@ export class ScreenContentService {
           // Clear canvas to black
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
 
           // Calculate centered fit (contain)
           const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
@@ -766,7 +771,6 @@ export class ScreenContentService {
           resolve(true);
         };
         img.onerror = () => {
-          // Draw error text
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.fillStyle = '#ff0000';
@@ -778,6 +782,26 @@ export class ScreenContentService {
         img.src = imgSrc;
       });
     }, src);
+  }
+
+  /**
+   * Update the virtual camera with a high-frequency frame stream.
+   * This skips repeated logging and camera-toggle work used by one-shot images.
+   */
+  async showImageFrame(imageSource: string): Promise<void> {
+    const success = await this.drawImageOnCanvas(imageSource);
+    if (success) {
+      this._currentContentType = 'stream';
+      this._currentUrl = null;
+    }
+  }
+
+  /**
+   * Display an image on the virtual camera feed.
+   * @param imageSource URL or base64 data URI for the image
+   */
+  async showImage(imageSource: string): Promise<void> {
+    const success = await this.drawImageOnCanvas(imageSource);
 
     if (success) {
       this._currentContentType = 'image';
@@ -1010,6 +1034,345 @@ export function getVirtualCameraInitScript(): string {
       window.__vexa_canvas = canvas;
       window.__vexa_canvas_ctx = ctx;
       window.__vexa_canvas_stream = canvasStream;
+      window.__vexaBotOutputPeerConnection = null;
+      window.__vexaBotOutputMediaStream = new MediaStream();
+      window.__vexaBotOutputDestination = null;
+      window.__vexaBotOutputMeetingAudioCtx = null;
+      window.__vexaBotOutputMeetingAudioStream = null;
+
+      const waitForIce = async (pc, timeoutMs = 2500) => {
+        if (!pc || pc.iceGatheringState === 'complete') return;
+        await new Promise((resolve) => {
+          const onChange = () => {
+            if (pc.iceGatheringState === 'complete') {
+              pc.removeEventListener('icegatheringstatechange', onChange);
+              resolve();
+            }
+          };
+          pc.addEventListener('icegatheringstatechange', onChange);
+          setTimeout(() => {
+            pc.removeEventListener('icegatheringstatechange', onChange);
+            resolve();
+          }, timeoutMs);
+        });
+      };
+
+      const closeMeetingAudioCapture = () => {
+        const existingCtx = window.__vexaBotOutputMeetingAudioCtx;
+        if (existingCtx) {
+          try {
+            void existingCtx.close().catch(() => undefined);
+          } catch {}
+        }
+        window.__vexaBotOutputMeetingAudioCtx = null;
+        window.__vexaBotOutputMeetingAudioStream = null;
+      };
+
+      const ensureMeetingAudioStream = () => {
+        const existing = window.__vexaBotOutputMeetingAudioStream;
+        if (existing instanceof MediaStream && existing.getAudioTracks().some((track) => track.readyState === 'live')) {
+          return existing;
+        }
+
+        closeMeetingAudioCapture();
+
+        const botOutputStream = window.__vexaBotOutputMediaStream;
+        const botOutputTrackIds = botOutputStream instanceof MediaStream
+          ? new Set(botOutputStream.getAudioTracks().map((track) => track.id))
+          : new Set();
+        const mediaEls = Array.from(document.querySelectorAll('audio, video'));
+        const uniqueTrackIds = new Set();
+        const meetingAudioStreams = [];
+        for (const el of mediaEls) {
+          const src = el.srcObject;
+          if (!(src instanceof MediaStream)) continue;
+          if (el.paused || el.muted) continue;
+          if (typeof el.volume === 'number' && el.volume <= 0) continue;
+
+          const liveTracks = src.getAudioTracks().filter((track) => {
+            if (track.readyState !== 'live') return false;
+            return !botOutputTrackIds.has(track.id);
+          });
+          if (liveTracks.length === 0) continue;
+
+          const dedupedTracks = liveTracks.filter((track) => {
+            if (uniqueTrackIds.has(track.id)) return false;
+            uniqueTrackIds.add(track.id);
+            return true;
+          });
+          if (dedupedTracks.length === 0) continue;
+
+          meetingAudioStreams.push(
+            new MediaStream(
+              dedupedTracks.map((track) =>
+                typeof track.clone === 'function' ? track.clone() : track
+              )
+            )
+          );
+        }
+        if (meetingAudioStreams.length === 0) return null;
+
+        if (meetingAudioStreams.length === 1) {
+          const directTrack = meetingAudioStreams[0].getAudioTracks()[0];
+          if (!directTrack) return null;
+          try {
+            directTrack.contentHint = 'speech';
+          } catch {}
+          const directStream = new MediaStream([directTrack]);
+          window.__vexaBotOutputMeetingAudioStream = directStream;
+          return directStream;
+        }
+
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return null;
+
+        const audioCtx = new AudioCtx({ latencyHint: 'interactive' });
+        void audioCtx.resume().catch(() => undefined);
+        const destination = audioCtx.createMediaStreamDestination();
+        const masterGain = audioCtx.createGain();
+        masterGain.gain.value = 1.0;
+        masterGain.connect(destination);
+        for (const stream of meetingAudioStreams) {
+          try {
+            const node = audioCtx.createMediaStreamSource(stream);
+            const sourceGain = audioCtx.createGain();
+            sourceGain.gain.value = 1.0;
+            node.connect(sourceGain);
+            sourceGain.connect(masterGain);
+          } catch {}
+        }
+
+        const audioTrack = destination.stream.getAudioTracks()[0];
+        if (!audioTrack) {
+          try {
+            void audioCtx.close().catch(() => undefined);
+          } catch {}
+          return null;
+        }
+        try {
+          audioTrack.contentHint = 'speech';
+        } catch {}
+
+        window.__vexaBotOutputMeetingAudioCtx = audioCtx;
+        window.__vexaBotOutputMeetingAudioStream = destination.stream;
+        return destination.stream;
+      };
+
+      const getPreferredVideoTrack = () => {
+        const botOutputStream = window.__vexaBotOutputMediaStream;
+        const botOutputTrack = botOutputStream instanceof MediaStream
+          ? botOutputStream.getVideoTracks().find((track) => track.readyState === 'live')
+          : null;
+        if (botOutputTrack) {
+          return botOutputTrack;
+        }
+
+        const currentStream = window.__vexa_canvas_stream || canvasStream;
+        return currentStream?.getVideoTracks?.()[0] || null;
+      };
+
+      window.__vexaGetMeetingAudioStream = ensureMeetingAudioStream;
+      window.__vexaGetPreferredVideoTrack = getPreferredVideoTrack;
+      window.__vexaCloseBotOutputPeerConnection = () => {
+        const pc = window.__vexaBotOutputPeerConnection;
+        if (pc) {
+          try {
+            pc.close();
+          } catch {}
+        }
+        window.__vexaBotOutputPeerConnection = null;
+        window.__vexaBotOutputMediaStream = new MediaStream();
+        window.__vexaBotOutputDestination = null;
+        closeMeetingAudioCapture();
+      };
+      window.__vexaApplyPreferredVideoTrack = async () => {
+        const preferredTrack = getPreferredVideoTrack();
+        if (!preferredTrack) {
+          return { success: false, replaced: 0, reason: 'no preferred video track' };
+        }
+        try {
+          preferredTrack.contentHint = 'detail';
+        } catch {}
+
+        const pcs = window.__vexa_peer_connections || [];
+        let replaced = 0;
+        const details = [];
+        const errors = [];
+
+        for (let i = 0; i < pcs.length; i++) {
+          const pc = pcs[i];
+          if (!pc || pc.connectionState === 'closed') continue;
+
+          try {
+            const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+            for (const t of transceivers) {
+              const senderTrack = t.sender?.track;
+              const receiverKind = t.receiver?.track?.kind;
+              const isVideoTransceiver =
+                receiverKind === 'video' ||
+                senderTrack?.kind === 'video' ||
+                (senderTrack === null && (t.direction === 'sendonly' || t.direction === 'sendrecv'));
+              if (!isVideoTransceiver || !t.sender) continue;
+
+              try {
+                await t.sender.replaceTrack(preferredTrack);
+                if (typeof t.sender.getParameters === 'function' && typeof t.sender.setParameters === 'function') {
+                  const params = t.sender.getParameters() || {};
+                  const encodings = Array.isArray(params.encodings) && params.encodings.length > 0
+                    ? params.encodings
+                    : [{}];
+                  for (const encoding of encodings) {
+                    encoding.maxBitrate = Math.max(encoding.maxBitrate || 0, 2500000);
+                    encoding.maxFramerate = Math.max(encoding.maxFramerate || 0, 15);
+                    encoding.scaleResolutionDownBy = 1;
+                  }
+                  params.encodings = encodings;
+                  params.degradationPreference = 'maintain-resolution';
+                  await t.sender.setParameters(params);
+                }
+                replaced++;
+                details.push('pc' + i + ':mid=' + (t.mid || 'null'));
+              } catch (err) {
+                errors.push('pc' + i + ':mid=' + (t.mid || 'null') + ':' + (err?.message || err));
+              }
+            }
+          } catch (err) {
+            errors.push('pc' + i + ':transceivers:' + (err?.message || err));
+          }
+
+          if (replaced === 0) {
+            try {
+              const senders = pc.getSenders ? pc.getSenders() : [];
+              for (const sender of senders) {
+                if (!sender || (sender.track && sender.track.kind !== 'video')) continue;
+                try {
+                  await sender.replaceTrack(preferredTrack);
+                  if (typeof sender.getParameters === 'function' && typeof sender.setParameters === 'function') {
+                    const params = sender.getParameters() || {};
+                    const encodings = Array.isArray(params.encodings) && params.encodings.length > 0
+                      ? params.encodings
+                      : [{}];
+                    for (const encoding of encodings) {
+                      encoding.maxBitrate = Math.max(encoding.maxBitrate || 0, 2500000);
+                      encoding.maxFramerate = Math.max(encoding.maxFramerate || 0, 15);
+                      encoding.scaleResolutionDownBy = 1;
+                    }
+                    params.encodings = encodings;
+                    params.degradationPreference = 'maintain-resolution';
+                    await sender.setParameters(params);
+                  }
+                  replaced++;
+                  details.push('pc' + i + ':sender');
+                } catch (err) {
+                  errors.push('pc' + i + ':sender:' + (err?.message || err));
+                }
+              }
+            } catch (err) {
+              errors.push('pc' + i + ':senders:' + (err?.message || err));
+            }
+          }
+        }
+
+        return {
+          success: replaced > 0,
+          replaced,
+          details,
+          errors,
+          trackId: preferredTrack.id,
+        };
+      };
+      window.__vexaIsReadyForWebpageStreamer = () => {
+        const stream = ensureMeetingAudioStream();
+        return !!(stream && stream.getAudioTracks().length > 0);
+      };
+      window.__vexaGetBotOutputPeerConnectionOffer = async () => {
+        try {
+          const closePeerConnection = window.__vexaCloseBotOutputPeerConnection;
+          if (typeof closePeerConnection === 'function') {
+            closePeerConnection();
+          }
+
+          const meetingAudioStream = ensureMeetingAudioStream();
+          if (!meetingAudioStream || meetingAudioStream.getAudioTracks().length === 0) {
+            return null;
+          }
+
+          const pc = new OrigRTC();
+          const remoteStream = new MediaStream();
+          window.__vexaBotOutputPeerConnection = pc;
+          window.__vexaBotOutputMediaStream = remoteStream;
+
+          pc.addEventListener('track', (event) => {
+            const track = event.track;
+            if (!track) return;
+            if (track.kind === 'video') {
+              try {
+                track.contentHint = 'detail';
+              } catch {}
+            }
+            if (!remoteStream.getTracks().some((existingTrack) => existingTrack.id === track.id)) {
+              remoteStream.addTrack(track);
+            }
+            if (track.kind === 'video' && window.__vexaBotOutputDestination) {
+              setTimeout(() => {
+                const applyPreferredVideoTrack = window.__vexaApplyPreferredVideoTrack;
+                if (typeof applyPreferredVideoTrack === 'function') {
+                  void applyPreferredVideoTrack();
+                }
+              }, 0);
+            }
+          });
+
+          pc.addEventListener('connectionstatechange', () => {
+            if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {
+              if (window.__vexaBotOutputPeerConnection === pc) {
+                window.__vexaBotOutputPeerConnection = null;
+              }
+            }
+          });
+
+          pc.addTransceiver('video', { direction: 'recvonly' });
+          for (const track of meetingAudioStream.getAudioTracks()) {
+            pc.addTrack(track, meetingAudioStream);
+          }
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await waitForIce(pc);
+          if (!pc.localDescription) {
+            return null;
+          }
+          return {
+            sdp: pc.localDescription.sdp,
+            type: pc.localDescription.type,
+          };
+        } catch (err) {
+          return { error: err?.message || String(err) };
+        }
+      };
+      window.__vexaStartBotOutputPeerConnection = async (answer) => {
+        const pc = window.__vexaBotOutputPeerConnection;
+        if (!pc) {
+          throw new Error('Bot output peer connection is not initialized');
+        }
+        await pc.setRemoteDescription(answer);
+      };
+      window.__vexaPlayBotOutputMediaStream = async (outputDestination) => {
+        window.__vexaBotOutputDestination = outputDestination || 'webcam';
+        const applyPreferredVideoTrack = window.__vexaApplyPreferredVideoTrack;
+        if (typeof applyPreferredVideoTrack === 'function') {
+          return applyPreferredVideoTrack();
+        }
+        return { success: false, replaced: 0, reason: 'apply helper unavailable' };
+      };
+      window.__vexaStopBotOutputMediaStream = async () => {
+        window.__vexaBotOutputDestination = null;
+        const applyPreferredVideoTrack = window.__vexaApplyPreferredVideoTrack;
+        if (typeof applyPreferredVideoTrack === 'function') {
+          return applyPreferredVideoTrack();
+        }
+        return { success: false, replaced: 0, reason: 'apply helper unavailable' };
+      };
 
       // Counters for diagnostics
       window.__vexa_gum_call_count = 0;
@@ -1044,16 +1407,18 @@ export function getVirtualCameraInitScript(): string {
           window.__vexa_gum_video_intercepted = (window.__vexa_gum_video_intercepted || 0) + 1;
           console.log('[Vexa] Intercepting video — returning canvas stream');
 
-          // Get canvas video track from the GLOBAL (may have been refreshed by enableCamera)
-          const currentStream = window.__vexa_canvas_stream || canvasStream;
-          const canvasVideoTrack = currentStream.getVideoTracks()[0];
+          const preferredVideoTrack =
+            (typeof window.__vexaGetPreferredVideoTrack === 'function'
+              ? window.__vexaGetPreferredVideoTrack()
+              : null) ||
+            (window.__vexa_canvas_stream || canvasStream).getVideoTracks()[0];
 
           if (wantsAudio) {
             // Need both video (from canvas) and audio (real mic)
             try {
               const audioStream = await origGetUserMedia({ audio: constraints.audio });
               const combinedStream = new MediaStream();
-              combinedStream.addTrack(canvasVideoTrack.clone());
+              combinedStream.addTrack(preferredVideoTrack.clone());
               for (const audioTrack of audioStream.getAudioTracks()) {
                 combinedStream.addTrack(audioTrack);
               }
@@ -1063,13 +1428,13 @@ export function getVirtualCameraInitScript(): string {
               // If audio fails, return just the canvas video
               console.warn('[Vexa] Audio getUserMedia failed, returning canvas video only:', audioErr);
               const videoOnlyStream = new MediaStream();
-              videoOnlyStream.addTrack(canvasVideoTrack.clone());
+              videoOnlyStream.addTrack(preferredVideoTrack.clone());
               return videoOnlyStream;
             }
           } else {
             // Video only request — return canvas stream
             const videoOnlyStream = new MediaStream();
-            videoOnlyStream.addTrack(canvasVideoTrack.clone());
+            videoOnlyStream.addTrack(preferredVideoTrack.clone());
             console.log('[Vexa] Returning canvas video only stream');
             return videoOnlyStream;
           }
@@ -1093,17 +1458,14 @@ export function getVirtualCameraInitScript(): string {
       // it enters the WebRTC pipeline.
       const origAddTrack = OrigRTC.prototype.addTrack;
       OrigRTC.prototype.addTrack = function(track, ...streams) {
-        // IMPORTANT: Read from window.__vexa_canvas_stream (the GLOBAL), not the
-        // closure variable. enableCamera() may create a fresh captureStream(30)
-        // with a new track ID, and we need to use whatever is current.
-        const currentStream = window.__vexa_canvas_stream;
-        if (track && track.kind === 'video' && currentStream) {
-          const canvasTrack = currentStream.getVideoTracks()[0];
-          if (canvasTrack) {
+        const preferredTrack =
+          track && track.kind === 'video' && typeof window.__vexaGetPreferredVideoTrack === 'function'
+            ? window.__vexaGetPreferredVideoTrack()
+            : null;
+        if (track && track.kind === 'video' && preferredTrack) {
             window.__vexa_addtrack_intercepted = (window.__vexa_addtrack_intercepted || 0) + 1;
             console.log('[Vexa] addTrack intercepted: swapping video track for canvas track (original: ' + track.label + ')');
-            return origAddTrack.call(this, canvasTrack, ...streams);
-          }
+            return origAddTrack.call(this, preferredTrack, ...streams);
         }
         return origAddTrack.call(this, track, ...streams);
       };
@@ -1113,17 +1475,17 @@ export function getVirtualCameraInitScript(): string {
       // When Meet tries to set a video track, we substitute our canvas track.
       const origReplaceTrack = RTCRtpSender.prototype.replaceTrack;
       RTCRtpSender.prototype.replaceTrack = function(newTrack) {
-        // IMPORTANT: Read from window.__vexa_canvas_stream (the GLOBAL), not the
-        // closure variable. enableCamera() may create a fresh captureStream(30).
-        const currentStream = window.__vexa_canvas_stream;
-        if (newTrack && newTrack.kind === 'video' && currentStream) {
-          const canvasTrack = currentStream.getVideoTracks()[0];
+        const preferredTrack =
+          newTrack && newTrack.kind === 'video' && typeof window.__vexaGetPreferredVideoTrack === 'function'
+            ? window.__vexaGetPreferredVideoTrack()
+            : null;
+        if (newTrack && newTrack.kind === 'video' && preferredTrack) {
           // Only swap if the incoming track is NOT our canvas track
-          if (canvasTrack && newTrack.id !== canvasTrack.id) {
+          if (newTrack.id !== preferredTrack.id) {
             console.log('[Vexa] replaceTrack intercepted: substituting canvas track (blocked: ' + newTrack.label + ')');
             // CRITICAL: Don't just block — actually set our canvas track!
             // Returning Promise.resolve() would leave the sender with a null track.
-            return origReplaceTrack.call(this, canvasTrack);
+            return origReplaceTrack.call(this, preferredTrack);
           }
         }
         return origReplaceTrack.call(this, newTrack);
@@ -1136,9 +1498,11 @@ export function getVirtualCameraInitScript(): string {
       const origCreateOffer = OrigRTC.prototype.createOffer;
       OrigRTC.prototype.createOffer = async function(...offerArgs) {
         try {
-          const currentStream = window.__vexa_canvas_stream;
-          const canvasTrack = currentStream?.getVideoTracks?.()[0];
-          if (canvasTrack) {
+          const preferredTrack =
+            typeof window.__vexaGetPreferredVideoTrack === 'function'
+              ? window.__vexaGetPreferredVideoTrack()
+              : null;
+          if (preferredTrack) {
             const transceivers = this.getTransceivers ? this.getTransceivers() : [];
             let hasVideoSender = false;
             let attachedToExisting = false;
@@ -1163,7 +1527,7 @@ export function getVirtualCameraInitScript(): string {
 
               if (!t.sender?.track) {
                 try {
-                  await t.sender.replaceTrack(canvasTrack.clone());
+                  await t.sender.replaceTrack(preferredTrack.clone ? preferredTrack.clone() : preferredTrack);
                   attachedToExisting = true;
                   hasVideoSender = true;
                   console.log('[Vexa] createOffer pre-hook: attached canvas track to existing video transceiver (mid=' + (t.mid || 'null') + ')');
@@ -1174,7 +1538,7 @@ export function getVirtualCameraInitScript(): string {
             // If Teams did not keep a send-capable video transceiver, inject one.
             if (!hasVideoSender) {
               try {
-                const tx = this.addTransceiver(canvasTrack.clone(), { direction: 'sendrecv' });
+                const tx = this.addTransceiver(preferredTrack.clone ? preferredTrack.clone() : preferredTrack, { direction: 'sendrecv' });
                 window.__vexa_offer_video_forced = (window.__vexa_offer_video_forced || 0) + 1;
                 console.log('[Vexa] createOffer pre-hook: added canvas video transceiver (mid=' + (tx?.mid || 'null') + ', attachedExisting=' + attachedToExisting + ')');
               } catch (addErr) {
@@ -1225,7 +1589,7 @@ export function getVirtualCameraInitScript(): string {
         //
         // Conclusion: track.enabled=false is sufficient. Don't mutate
         // transceiver.direction here.
-        if (!window.__vexa_voice_agent_enabled) {
+        if (!window.__vexa_voice_agent_enabled || window.__vexa_video_receive_enabled === false) {
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
               const trackId = event.track.id;

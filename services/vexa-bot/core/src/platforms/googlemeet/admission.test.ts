@@ -9,6 +9,13 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
+
+// __dirname is undefined when this file runs in ESM scope (Node 24 + tsx treats
+// the TS source as ESM despite "type": "commonjs"). Resolve the module directory
+// in an ESM-safe way so the test works on a contributor laptop, not only inside
+// the Docker toolchain (issue #440).
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 let passed = 0;
 let failed = 0;
@@ -50,8 +57,8 @@ function expectOrder(
   failed++;
 }
 
-const ADMISSION_TS = path.join(__dirname, 'admission.ts');
-const SELECTORS_TS = path.join(__dirname, 'selectors.ts');
+const ADMISSION_TS = path.join(moduleDir, 'admission.ts');
+const SELECTORS_TS = path.join(moduleDir, 'selectors.ts');
 const admissionBody = fs.readFileSync(ADMISSION_TS, 'utf-8');
 
 console.log('\n=== Google Meet admission rejection handling ===');
@@ -86,6 +93,63 @@ expectFileContains(
   'selectors include retry affordance after denial',
   SELECTORS_TS,
   'Ask to join again',
+);
+
+expectFileContains(
+  'admission.ts exports never_admitted outcome',
+  ADMISSION_TS,
+  '"never_admitted"',
+);
+
+expectFileContains(
+  'admission.ts has classifyRejectionOutcome',
+  ADMISSION_TS,
+  'classifyRejectionOutcome',
+);
+
+expectFileContains(
+  'admission.ts has explicit deny text check',
+  ADMISSION_TS,
+  'hasExplicitDenyText',
+);
+
+console.log('\n=== Google Meet Gemini consent-gate handling (#429) ===');
+
+expectFileContains(
+  'selectors define a consent-prompt indicator list',
+  SELECTORS_TS,
+  'googleConsentPromptIndicators',
+);
+
+expectFileContains(
+  'consent selectors target the take-notes prompt copy',
+  SELECTORS_TS,
+  'take notes for me',
+);
+
+expectFileContains(
+  'admission.ts has a consent-prompt detector',
+  ADMISSION_TS,
+  'export async function hasConsentPrompt',
+);
+
+expectOrder(
+  'admission suppresses ACTIVE when a consent prompt is present',
+  admissionBody,
+  'const consentPending = await hasConsentPrompt(page)',
+  'return false',
+);
+
+expectFileContains(
+  'consent gate escalates to needs_human_help (consent_required)',
+  ADMISSION_TS,
+  'triggerEscalation(botConfig, "consent_required")',
+);
+
+expectFileContains(
+  'consent is escalated, not auto-clicked (human decision)',
+  ADMISSION_TS,
+  'not auto-consenting',
 );
 
 console.log(`\n=== googlemeet admission summary: ${passed} passed, ${failed} failed ===`);

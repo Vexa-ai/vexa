@@ -142,6 +142,33 @@ preflight:
 		echo "  ⚠ Transcription unreachable ($$TX_URL). Continuing..."; \
 	else \
 		echo "  ⚠ Transcription HTTP $$HTTP. Continuing..."; \
+	fi; \
+	COOKIE_BACKEND=$$(grep -E '^COOKIE_STORAGE_BACKEND=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	COOKIE_BACKEND=$${COOKIE_BACKEND:-s3}; \
+	if [ "$$COOKIE_BACKEND" != "http" ]; then exit 0; fi; \
+	COOKIE_URL=$$(grep -E '^COOKIE_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	COOKIE_TOKEN=$$(grep -E '^COOKIE_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if [ -z "$$COOKIE_URL" ]; then \
+		echo "  ✗ COOKIE_STORAGE_BACKEND=http but COOKIE_SERVICE_URL not set in .env"; exit 1; \
+	fi; \
+	HEALTH=$$(curl -s -o /dev/null -w '%{http_code}' "$$COOKIE_URL/health" --max-time 5 2>/dev/null); \
+	if [ "$$HEALTH" != "200" ]; then \
+		echo "  ✗ Cookie service unreachable at $$COOKIE_URL/health (HTTP $$HEALTH)"; exit 1; \
+	fi; \
+	if [ -n "$$COOKIE_TOKEN" ]; then \
+		PROBE=$$(curl -s -o /dev/null -w '%{http_code}' \
+			-H "Authorization: Bearer $$COOKIE_TOKEN" \
+			"$$COOKIE_URL/userdata/__contract_probe__" --max-time 5 2>/dev/null); \
+	else \
+		PROBE=$$(curl -s -o /dev/null -w '%{http_code}' \
+			"$$COOKIE_URL/userdata/__contract_probe__" --max-time 5 2>/dev/null); \
+	fi; \
+	if [ "$$PROBE" = "200" ] || [ "$$PROBE" = "404" ]; then \
+		echo "  ✓ Cookie service contract valid ($$COOKIE_URL)"; \
+	elif [ "$$PROBE" = "401" ]; then \
+		echo "  ✗ Cookie service returned 401 — check COOKIE_SERVICE_TOKEN in .env"; exit 1; \
+	else \
+		echo "  ✗ Cookie service contract violation at $$COOKIE_URL (HTTP $$PROBE)"; exit 1; \
 	fi
 
 # --- Docker check ---
@@ -189,10 +216,14 @@ build: check_docker build-bot-image build-transcript-rendering build-lite
 up: check_docker preflight
 	@if [ -f $(LAST_TAG_FILE) ]; then \
 		export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
+		export BROWSER_IMAGE="$(DOCKERHUB_USER)/$(BOT_IMAGE):$$IMAGE_TAG"; \
 		echo "Using locally-built images (IMAGE_TAG=$$IMAGE_TAG from .last-tag)"; \
+		echo "Using bot image $$BROWSER_IMAGE"; \
 	else \
 		export IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "dev"); \
+		export BROWSER_IMAGE=$$(grep -E '^BROWSER_IMAGE=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 		echo "Using images (IMAGE_TAG=$$IMAGE_TAG from .env)"; \
+		if [ -n "$$BROWSER_IMAGE" ]; then echo "Using bot image $$BROWSER_IMAGE"; fi; \
 	fi; \
 	if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
@@ -347,9 +378,10 @@ test-transcription:
 		-F "model=large-v3-turbo" \
 		-w "\n%{http_code}" 2>&1); \
 	HTTP=$$(echo "$$RESP" | tail -1); \
-	BODY=$$(echo "$$RESP" | head -n -1); \
+	BODY=$$(echo "$$RESP" | sed '$d'); \
+        echo "$$BODY"; \
 	if [ "$$HTTP" = "200" ]; then \
-		TEXT=$$(echo "$$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('text','')[:80])" 2>/dev/null); \
+                TEXT=$$(printf "%s\n" "$$BODY" | jq -r 'select(type=="object") | (.text // .data.text // .output // "")' | head -c 80); \
 		if [ -n "$$TEXT" ]; then \
 			echo "  ✓ Transcription works: \"$$TEXT\""; \
 		else \

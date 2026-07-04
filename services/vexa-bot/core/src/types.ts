@@ -4,6 +4,7 @@ export type BotConfig = {
   botName: string,
   token: string,  // MeetingToken (HS256 JWT)
   obfToken?: string,
+  zakToken?: string,
   connectionId: string,
   nativeMeetingId: string,
   language?: string | null,
@@ -34,6 +35,9 @@ export type BotConfig = {
   voiceAgentEnabled?: boolean;  // Enable TTS, chat, screen share capabilities
   defaultAvatarUrl?: string;   // Custom default avatar image URL for virtual camera
   showAvatar?: boolean;        // If false, skip virtual camera / avatar entirely (default true)
+  voiceAgentSettings?: {
+    url?: string;
+  };
 
   // Independent capability flags
   videoReceiveEnabled?: boolean;  // Receive+decode video from participants (default: false)
@@ -51,6 +55,10 @@ export type BotConfig = {
   s3Bucket?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  cookieStorageBackend?: 'http';
+  cookieServiceUrl?: string;
+  cookieServiceToken?: string;
+  userId?: string;
 }
 
 export type BrowserSessionConfig = {
@@ -64,6 +72,10 @@ export type BrowserSessionConfig = {
   s3AccessKey?: string;
   s3SecretKey?: string;
   userdataS3Path?: string; // e.g. "users/123/browser-userdata"
+  cookieStorageBackend?: 'http';
+  cookieServiceUrl?: string;
+  cookieServiceToken?: string;
+  userId?: string;
   // Git-based workspace (optional — if set, workspace syncs via git instead of S3)
   workspaceGitRepo?: string;  // e.g. "https://github.com/user/bot-workspace.git"
   workspaceGitToken?: string; // PAT for private repos

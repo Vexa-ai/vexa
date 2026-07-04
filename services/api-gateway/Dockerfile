@@ -4,6 +4,12 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel jaraco.context
+
 # Install meeting-api (schemas, security headers)
 COPY ./services/meeting-api /app/services/meeting-api
 RUN pip install --no-cache-dir /app/services/meeting-api

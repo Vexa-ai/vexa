@@ -26,6 +26,8 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "redis": "^4.7.1",
     "uuid": "^11.1.0",
+    "tar": "^6.2.1",
+    "@types/tar": "^6.1.13",
     "zod": "^3.24.2"
   },
   "devDependencies": {

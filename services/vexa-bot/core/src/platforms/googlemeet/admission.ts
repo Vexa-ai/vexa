@@ -5,16 +5,19 @@ import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "..
 import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
-  googleRejectionIndicators
+  googleRejectionIndicators,
+  googleConsentPromptIndicators
 } from "./selectors";
 
 /**
  * Distinct admission outcomes emitted by the detector.
  * denial        — host explicitly rejected the bot from the waiting room.
+ * never_admitted — bot waited full lobby timeout (~10 min) without explicit
+ *                  denial text; "Return to home screen" appeared after timeout.
  * lobby_timeout — bot stayed in the waiting room past the admission timeout.
  * join_failure  — bot never reached the lobby / no admission indicators appeared.
  */
-export type AdmissionOutcome = "denial" | "lobby_timeout" | "join_failure";
+export type AdmissionOutcome = "denial" | "never_admitted" | "lobby_timeout" | "join_failure";
 
 export class AdmissionError extends Error {
   readonly outcome: AdmissionOutcome;
@@ -37,6 +40,56 @@ export async function hasRecaptchaChallenge(page: Page): Promise<boolean> {
     }
     const iframe = page.locator('iframe[src*="recaptcha"]').first();
     return await iframe.isVisible().catch(() => false);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Explicit denial-text selectors — when ANY of these are visible the host
+ * deliberately rejected the bot.  Separated from UI affordances ("Return to
+ * home screen", "Ask to join again") that appear both on explicit denial AND
+ * on lobby timeout.
+ */
+const EXPLICIT_DENY_SELECTORS: string[] = [
+  'text*="denied your request"',
+  'text*="denied your request to join"',
+  'text*="Your request to join was denied"',
+  'text*="You were denied"',
+  'text*="weren\'t allowed to join"',
+  'text*="not allowed to join"',
+  'text*="not admitted"',
+  'text*="can\'t join this call"',
+  'text*="cannot join this call"',
+];
+
+/**
+ * UI affordance selectors that signal the bot is no longer in the waiting
+ * room but do NOT, on their own, prove an explicit host denial.  These also
+ * appear after a ~10-min lobby timeout when the host never acted.
+ */
+const TIMEOUT_OR_DENY_SELECTORS: string[] = [
+  'text*="Ask to join again"',
+  'button:has-text("Ask to join again")',
+  'button:has-text("Return to home screen")',
+];
+
+/**
+ * Check whether explicit deny text is visible on the page.  Returns true
+ * only when a linguistic denial indicator (e.g. "denied your request") is
+ * present — "Return to home screen" alone does NOT count.
+ */
+async function hasExplicitDenyText(page: Page): Promise<boolean> {
+  try {
+    for (const selector of EXPLICIT_DENY_SELECTORS) {
+      try {
+        const element = page.locator(selector).first();
+        if (await element.isVisible().catch(() => false)) {
+          return true;
+        }
+      } catch { continue; }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -74,6 +127,39 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
   }
 }
 
+/**
+ * Classify a detected rejection into the right AdmissionOutcome.
+ *
+ * When "Return to home screen" or "Ask to join again" is visible:
+ *   - If explicit deny text is ALSO visible → "denial" (host deliberately rejected).
+ *   - If no explicit deny text AND the bot waited ≥ MIN_LOBBY_TIMEOUT_MS → "never_admitted".
+ *   - Otherwise → "denial" (conservative; treat ambiguous early rejection as denial).
+ */
+export function classifyRejectionOutcome(
+  pageHasExplicitDeny: boolean,
+  waitingRoomElapsedMs: number,
+): AdmissionOutcome {
+  // 590 s gives a 10 s margin below the ~600 s Google Meet lobby timeout.
+  const MIN_LOBBY_TIMEOUT_MS = 590_000;
+
+  if (pageHasExplicitDeny) {
+    log("🚨 Explicit deny text found — classifying as host denial.");
+    return "denial";
+  }
+
+  if (waitingRoomElapsedMs >= MIN_LOBBY_TIMEOUT_MS) {
+    log(
+      `⏰ No explicit deny text and waited ${Math.round(waitingRoomElapsedMs / 1000)}s ≥ ${MIN_LOBBY_TIMEOUT_MS / 1000}s — classifying as lobby timeout (never_admitted).`,
+    );
+    return "never_admitted";
+  }
+
+  log(
+    `⚠️ No explicit deny text but only waited ${Math.round(waitingRoomElapsedMs / 1000)}s — classifying conservatively as denial.`,
+  );
+  return "denial";
+}
+
 // Helper function to check for any visible and enabled admission indicators
 export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boolean> {
   // 1. NEGATIVE GUARD: If any waiting room indicator is visible,
@@ -81,6 +167,16 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
   const inWaitingRoom = await checkForWaitingRoomIndicators(page);
   if (inWaitingRoom) {
     log(`⚠️ Waiting room indicator visible — suppressing admission (lobby buttons are false positives)`);
+    return false;
+  }
+
+  // 1b. NEGATIVE GUARD: a Gemini "take notes" consent prompt is a pre-admission
+  // consent gate. Meeting controls can be visible behind it, but the bot is not
+  // truly participating until a human accepts/declines — reporting admitted here
+  // yields "status active, 0 transcriptions" (issue #429). Suppress admission.
+  const consentPending = await hasConsentPrompt(page);
+  if (consentPending) {
+    log(`⚠️ Gemini consent prompt visible — suppressing admission (consent pending; bot not truly in the call)`);
     return false;
   }
 
@@ -156,6 +252,25 @@ export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean
   return false;
 }
 
+// Detect Google's Gemini "take notes for me" in-call consent prompt — a consent
+// gate where the bot isn't truly participating until a human accepts/declines
+// (issue #429). Mirrors checkForWaitingRoomIndicators: a pre-admission state that
+// suppresses the "admitted" signal. Consent must be a human decision, so callers
+// escalate to needs_human_help rather than auto-clicking it.
+export async function hasConsentPrompt(page: Page): Promise<boolean> {
+  for (const selector of googleConsentPromptIndicators) {
+    try {
+      const element = await page.locator(selector).first();
+      if (await element.isVisible()) {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 async function throwIfGoogleAdmissionRejected(page: Page, context: string): Promise<void> {
   const isRejected = await checkForGoogleRejection(page);
   if (isRejected) {
@@ -202,7 +317,17 @@ export async function waitForGoogleMeetingAdmission(
       log("Successfully admitted to the Google Meet meeting - no waiting room required");
       return true;
     }
-    
+
+    // Consent gate: if Google's Gemini "take notes" consent prompt is present,
+    // the bot is held behind a human decision (accept/decline) — not admitted.
+    // Do NOT auto-click it; consent is the user's choice (issue #429). Summon a
+    // human via needs_human_help and keep polling, so admission proceeds once
+    // consent is granted (mirrors the reCAPTCHA "stay for human solve" handling).
+    if (await hasConsentPrompt(page)) {
+      log("🧑‍⚖️ Gemini consent prompt detected — bot is behind a consent gate (not admitted). Escalating to needs_human_help; not auto-consenting.");
+      await triggerEscalation(botConfig, "consent_required");
+    }
+
     log("Bot not yet admitted - checking for Google Meet waiting room indicators...");
     
     // Check for waiting room indicators using visibility checks
@@ -228,6 +353,10 @@ export async function waitForGoogleMeetingAdmission(
       stillInWaitingRoom = true;
     }
     
+    // Track when the bot first entered the waiting room (or started polling).
+    // Used by the final rejection check to distinguish lobby timeout from denial.
+    let waitingRoomEnterTime = Date.now();
+
     // If we're in waiting room, wait for the full timeout period for admission
     if (stillInWaitingRoom) {
       log(`Bot is in Google Meet waiting room. Waiting for ${timeout}ms for admission...`);
@@ -365,6 +494,21 @@ export async function waitForGoogleMeetingAdmission(
     log("No admission indicators after timeout - checking rejection one last time...");
     const finalRejected = await checkForGoogleRejection(page);
     if (finalRejected) {
+      // Distinguish explicit host denial from lobby timeout.
+      // "Return to home screen" appears in both cases; explicit deny text
+      // ("denied your request") proves deliberate rejection.
+      const explicitDeny = await hasExplicitDenyText(page);
+      const waitingRoomElapsed = Date.now() - waitingRoomEnterTime;
+      const outcome = classifyRejectionOutcome(explicitDeny, waitingRoomElapsed);
+      if (outcome === "never_admitted") {
+        log(
+          `⏰ Bot waited ${Math.round(waitingRoomElapsed / 1000)}s in lobby but was never admitted — no explicit deny text found.`,
+        );
+        throw new AdmissionError(
+          "never_admitted",
+          "Bot was not admitted to the meeting after lobby timeout — host did not explicitly deny",
+        );
+      }
       throw new AdmissionError("denial", "Bot admission was rejected by meeting admin");
     }
 

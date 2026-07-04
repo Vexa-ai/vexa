@@ -6,14 +6,17 @@ message recreates it seamlessly.
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -353,6 +356,52 @@ async def write_workspace_template_file(name: str, req: FileWriteRequest):
     return {"path": req.path, "status": "written"}
 
 
+def _is_blocked_callback_ip(address: str) -> bool:
+    ip = ipaddress.ip_address(address)
+    return any((
+        ip.is_private,
+        ip.is_loopback,
+        ip.is_link_local,
+        ip.is_multicast,
+        ip.is_reserved,
+        ip.is_unspecified,
+    ))
+
+
+def _validate_public_http_url(url: str) -> str:
+    """Validate scheduler callback URL against internal-network SSRF targets."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "Only http and https callback URLs are allowed")
+    if parsed.username or parsed.password:
+        raise HTTPException(400, "Callback URLs cannot include userinfo")
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        raise HTTPException(400, "Callback URL host is required")
+    if hostname.endswith(".internal") or "." not in hostname:
+        raise HTTPException(400, "Cannot schedule requests to internal service names")
+
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        addr_infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except (OSError, ValueError):
+        raise HTTPException(400, "Callback URL host could not be resolved")
+
+    addresses = {info[4][0] for info in addr_infos if info and info[4]}
+    if not addresses:
+        raise HTTPException(400, "Callback URL host could not be resolved")
+
+    for address in addresses:
+        try:
+            if _is_blocked_callback_ip(str(address)):
+                raise HTTPException(400, "Cannot schedule requests to private or internal network URLs")
+        except ValueError:
+            raise HTTPException(400, "Callback URL resolved to an invalid address")
+
+    return url
+
+
 # ── Schedule bridge ───────────────────────────────────────────────────────
 
 
@@ -382,19 +431,9 @@ async def schedule_bridge(req: ScheduleRequest):
     elif req.action == "http":
         if not req.url:
             raise HTTPException(400, "url required for action=http")
-        # SSRF protection: reject internal/private URLs
-        from urllib.parse import urlparse
-        parsed = urlparse(req.url)
-        hostname = parsed.hostname or ""
-        if hostname in ("localhost", "127.0.0.1", "0.0.0.0") or hostname.endswith(".internal"):
-            raise HTTPException(400, "Cannot schedule requests to internal URLs")
-        if any(hostname.startswith(prefix) for prefix in ("10.", "172.", "192.168.")):
-            raise HTTPException(400, "Cannot schedule requests to private network URLs")
-        if "." not in hostname:
-            raise HTTPException(400, "Cannot schedule requests to internal service names")
         target_request = {
             "method": req.method or "POST",
-            "url": req.url,
+            "url": _validate_public_http_url(req.url),
         }
     else:
         raise HTTPException(400, f"Unknown action: {req.action}")

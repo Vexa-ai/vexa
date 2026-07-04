@@ -26,6 +26,33 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting room"]',
   '[aria-label*="Asking to be let in"]',
   '[aria-label*="waiting for admission"]',
+  // FIX (2026-07-03, Unseen Dynamics): the Google Meet 'Asking to be let in' waiting
+  // screen shows a 'Return to home screen' button. It was a googleRejectionIndicator,
+  // so the bot false-rejected in ~4s (admission_rejected_by_admin) and never waited for
+  // the host to admit it. Reclassified as a WAITING indicator; genuine denials are still
+  // caught by the 'denied your request' text patterns above.
+  'button:has-text("Return to home screen")',
+];
+
+// Google's Gemini "take notes for me" in-call consent prompt. This is a consent
+// gate, not mere chrome: until a human accepts or declines, the bot is not truly
+// participating, yet the surrounding meeting controls can read as "admitted"
+// (issue #429: status active, 0 transcriptions). Detected so the bot routes to
+// needs_human_help instead of false-reporting ACTIVE.
+//
+// Targeted at the prompt's distinctive copy ("take notes for me" / "taking
+// notes") so it does NOT match the always-present Gemini toolbar button.
+//
+// NOTE: these selectors are best-effort and SHOULD be confirmed against the live
+// prompt DOM — reproduce per #429 (packages/meet-join standalone runner) and
+// adjust if Google changes the copy.
+export const googleConsentPromptIndicators: string[] = [
+  'text*="take notes for me"',
+  'text*="Take notes for me"',
+  'text*="taking notes"',
+  '[role="dialog"]:has-text("take notes for me")',
+  '[role="alertdialog"]:has-text("take notes for me")',
+  'button:has-text("take notes for me")',
 ];
 
 export const googleRejectionIndicators: string[] = [
@@ -43,7 +70,6 @@ export const googleRejectionIndicators: string[] = [
   'text*="cannot join this call"',
   'text*="Ask to join again"',
   'button:has-text("Ask to join again")',
-  'button:has-text("Return to home screen")',
 
   // Meeting not found or access denied patterns
   'text="Meeting not found"',

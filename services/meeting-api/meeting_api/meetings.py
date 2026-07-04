@@ -33,6 +33,8 @@ from .schemas import (
     MeetingResponse,
     Platform,
     BotStatusResponse,
+    ParticipantInfo,
+    ParticipantsResponse,
     MeetingConfigUpdate,
     MeetingStatus,
     MeetingCompletionReason,
@@ -305,6 +307,66 @@ async def publish_meeting_status_change(
         logger.info(f"Published status '{new_status}' to '{channel}'")
     except Exception as e:
         logger.error(f"Failed to publish status for meeting {meeting_id}: {e}")
+
+
+async def _publish_startup_voice_agent_url_with_retries(
+    meeting_id: int,
+    voice_agent_url: str,
+    retries: int = 4,
+    delay_seconds: float = 1.0,
+) -> None:
+    """Best-effort startup fallback: push voice_agent_set_url to bot command channel.
+
+    This protects fresh starts when BOT_CONFIG drops voiceAgentSettings.url in any
+    upstream hop (request mapping, runtime launch, env propagation).
+    """
+    if not redis_client or not voice_agent_url:
+        return
+
+    command_channel = f"bot_commands:meeting:{meeting_id}"
+    command_payload = json.dumps({"action": "voice_agent_set_url", "url": voice_agent_url})
+    for attempt in range(1, retries + 1):
+        try:
+            listeners = await redis_client.publish(command_channel, command_payload)
+            logger.info(
+                "[VoiceAgentStartupFallback] Published voice_agent_set_url "
+                f"for meeting={meeting_id} attempt={attempt}/{retries} listeners={listeners}"
+            )
+        except Exception as e:
+            logger.warning(
+                "[VoiceAgentStartupFallback] publish failed "
+                f"for meeting={meeting_id} attempt={attempt}/{retries}: {e}"
+            )
+        if attempt < retries:
+            await asyncio.sleep(delay_seconds)
+
+
+def _extract_voice_agent_url(req: MeetingCreate) -> str:
+    """Resolve voice-agent URL from all supported request shapes."""
+    candidates = []
+
+    settings = req.voice_agent_settings
+    if isinstance(settings, dict):
+        candidates.extend(
+            [
+                settings.get("url"),
+                settings.get("voice_agent_url"),
+                settings.get("voiceAgentUrl"),
+            ]
+        )
+
+    candidates.extend(
+        [
+            req.voice_agent_url,
+        ]
+    )
+
+    for value in candidates:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned
+    return ""
 
 
 async def schedule_status_webhook_task(
@@ -712,6 +774,56 @@ async def _find_meeting_any_status(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+async def _enforce_bot_concurrency_limit(
+    db: AsyncSession,
+    user: Any,
+    *,
+    exclude_browser_session: bool,
+) -> None:
+    """Enforce the per-user concurrent bot quota before launching a bot.
+
+    A limit of 0 (or less) means the user's quota is **depleted** — no launches
+    are allowed. Unlimited access is represented by a large positive limit, not 0
+    (the dashboard renders ``max_concurrent_bots == 0`` as "depleted"). Treating
+    0 as "unlimited" — by only checking ``limit > 0`` — let 0-quota users (the
+    admin-api default) launch unlimited bots; see issue #402.
+
+    Raises HTTP 403 when the quota is depleted or already fully in use.
+    """
+    user_limit = int(getattr(user, "max_concurrent_bots", 0) or 0)
+    if user_limit <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Concurrent bot quota is depleted (limit is 0). Contact your administrator to increase it.",
+        )
+
+    active_statuses = [
+        s.value
+        for s in (
+            MeetingStatus.REQUESTED,
+            MeetingStatus.JOINING,
+            MeetingStatus.AWAITING_ADMISSION,
+            MeetingStatus.ACTIVE,
+        )
+    ]
+    conditions = [
+        Meeting.user_id == user.id,
+        Meeting.status.in_(active_statuses),
+    ]
+    if exclude_browser_session:
+        # Exclude non-bot platforms from the count — browser_session is
+        # infrastructure and discord is external ingest; neither spawns a Vexa bot.
+        conditions.append(Meeting.platform.notin_(["browser_session", "discord"]))
+
+    count_stmt = select(func.count()).select_from(Meeting).where(and_(*conditions))
+    active_count = int((await db.execute(count_stmt)).scalar() or 0)
+    if active_count >= user_limit:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Concurrent bot limit reached ({active_count}/{user_limit}).",
+        )
+
+
 @router.post(
     "/bots",
     response_model=MeetingResponse,
@@ -762,18 +874,8 @@ async def request_bot(
 
     # --- Browser session mode ---
     if req.mode == "browser_session":
-        # Concurrency check
-        user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
-        if user_limit > 0:
-            count_stmt = select(func.count()).select_from(Meeting).where(
-                and_(
-                    Meeting.user_id == current_user.id,
-                    Meeting.status.in_([s.value for s in (MeetingStatus.REQUESTED, MeetingStatus.JOINING, MeetingStatus.AWAITING_ADMISSION, MeetingStatus.ACTIVE)]),
-                )
-            )
-            active_count = int((await db.execute(count_stmt)).scalar() or 0)
-            if active_count >= user_limit:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Concurrent bot limit reached ({active_count}/{user_limit})")
+        # Concurrency check (counts browser sessions too).
+        await _enforce_bot_concurrency_limit(db, current_user, exclude_browser_session=False)
 
         session_token = secrets.token_urlsafe(24)
         new_meeting = Meeting(
@@ -949,19 +1051,9 @@ async def request_bot(
             detail=f"An active or requested meeting already exists for this platform and meeting ID",
         )
 
-    # Concurrency limit (exclude browser_session from count — they are infrastructure, not bots)
-    user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
-    if user_limit > 0:
-        count_stmt = select(func.count()).select_from(Meeting).where(
-            and_(
-                Meeting.user_id == current_user.id,
-                Meeting.status.in_([s.value for s in (MeetingStatus.REQUESTED, MeetingStatus.JOINING, MeetingStatus.AWAITING_ADMISSION, MeetingStatus.ACTIVE)]),
-                Meeting.platform != "browser_session",
-            )
-        )
-        active_count = int((await db.execute(count_stmt)).scalar() or 0)
-        if active_count >= user_limit:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"User has reached the maximum concurrent bot limit ({user_limit}).")
+    # Concurrency limit (exclude non-bot platforms from the count — browser_session is
+    # infrastructure and discord is external ingest; neither spawns a Vexa bot)
+    await _enforce_bot_concurrency_limit(db, current_user, exclude_browser_session=True)
 
     # Create meeting record
     meeting_data: Dict[str, Any] = {}
@@ -1107,23 +1199,90 @@ async def request_bot(
         bot_config["recordingEnabled"] = bool(req.recording_enabled)
     if req.voice_agent_enabled is not None:
         bot_config["voiceAgentEnabled"] = bool(req.voice_agent_enabled)
+    if req.camera_enabled is not None:
+        bot_config["cameraEnabled"] = bool(req.camera_enabled)
     if req.default_avatar_url:
         bot_config["defaultAvatarUrl"] = req.default_avatar_url
+    voice_agent_url = _extract_voice_agent_url(req)
+    if req.voice_agent_enabled is not None:
+        meeting_data["voice_agent_enabled"] = bool(req.voice_agent_enabled)
+    if req.camera_enabled is not None:
+        meeting_data["camera_enabled"] = bool(req.camera_enabled)
+    raw_voice_agent_url = ""
+    raw_body: Dict[str, Any] = {}
+    try:
+        raw_body = await request.json()
+    except Exception:
+        raw_body = {}
+    if isinstance(raw_body, dict):
+        raw_settings = raw_body.get("voice_agent_settings") or raw_body.get("voiceAgentSettings")
+        if isinstance(raw_settings, dict):
+            for key in ("url", "voice_agent_url", "voiceAgentUrl"):
+                val = raw_settings.get(key)
+                if isinstance(val, str) and val.strip():
+                    raw_voice_agent_url = val.strip()
+                    break
+        if not raw_voice_agent_url:
+            for key in ("voice_agent_url", "voiceAgentUrl"):
+                val = raw_body.get(key)
+                if isinstance(val, str) and val.strip():
+                    raw_voice_agent_url = val.strip()
+                    break
+    if not voice_agent_url and raw_voice_agent_url:
+        voice_agent_url = raw_voice_agent_url
+    logger.info(
+        "[VoiceAgentStartup] meeting_id=%s enabled=%s camera_enabled=%s "
+        "settings_type=%s resolved_url_present=%s raw_url_present=%s",
+        meeting_id,
+        req.voice_agent_enabled,
+        req.camera_enabled,
+        type(req.voice_agent_settings).__name__,
+        bool(voice_agent_url),
+        bool(raw_voice_agent_url),
+    )
+    if voice_agent_url:
+        bot_config["voiceAgentEnabled"] = True
+        meeting_data["voice_agent_enabled"] = True
+        bot_config["voiceAgentSettings"] = {"url": voice_agent_url}
+        meeting_data["voice_agent_settings"] = {"url": voice_agent_url}
+        # Voice-agent webpage rendering requires the virtual camera pipeline.
+        if req.camera_enabled is None:
+            bot_config["cameraEnabled"] = True
+            meeting_data["camera_enabled"] = True
     if os.getenv("SHOW_AVATAR", "true").lower() == "false":
         bot_config["showAvatar"] = False
+    if req.zoom_obf_token:
+        bot_config["obfToken"] = req.zoom_obf_token
+    if req.zoom_zak_token:
+        bot_config["zakToken"] = req.zoom_zak_token
     if meeting_data.get("capture_modes"):
         bot_config["captureModes"] = meeting_data["capture_modes"]
     if req.authenticated:
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-        minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
-        s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
-        s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
         bot_config["authenticated"] = True
-        bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
-        bot_config["s3Endpoint"] = s3_endpoint_url
-        bot_config["s3Bucket"] = s3_bucket
-        bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
-        bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
+        cookie_backend = os.environ.get("COOKIE_STORAGE_BACKEND", "s3")
+        if cookie_backend == "http":
+            cookie_service_url = os.environ.get("COOKIE_SERVICE_URL", "").strip()
+            if not cookie_service_url:
+                raise HTTPException(
+                    status_code=500,
+                    detail="COOKIE_STORAGE_BACKEND=http but COOKIE_SERVICE_URL is not configured",
+                )
+            bot_config["cookieStorageBackend"] = "http"
+            bot_config["cookieServiceUrl"] = cookie_service_url
+            cookie_service_token = os.environ.get("COOKIE_SERVICE_TOKEN", "").strip()
+            if cookie_service_token:
+                bot_config["cookieServiceToken"] = cookie_service_token
+            bot_config["userId"] = str(current_user.id)
+        else:
+            minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+            minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
+            s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
+            s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
+            bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
+            bot_config["s3Endpoint"] = s3_endpoint_url
+            bot_config["s3Bucket"] = s3_bucket
+            bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
+            bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
     # Remove None values
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
 
@@ -1245,6 +1404,15 @@ async def request_bot(
         sess_val = json.dumps({"container_name": container_name, "meeting_id": meeting_id, "user_id": current_user.id})
         await redis_client.set(f"browser_session:{session_token}", sess_val, ex=86400)
         await redis_client.set(f"browser_session:{meeting_id}", sess_val, ex=86400)
+    if voice_agent_url:
+        # Startup safety net: re-send URL command after container launch.
+        # Fire-and-forget so meeting creation response is not blocked.
+        asyncio.create_task(
+            _publish_startup_voice_agent_url_with_retries(
+                meeting_id=meeting_id,
+                voice_agent_url=voice_agent_url,
+            )
+        )
 
     # Schedule bot timeout job (max_bot_time enforcement via scheduler)
     scheduler_job_id = await _schedule_bot_timeout(
@@ -1325,7 +1493,28 @@ async def save_browser_session(token: str):
 
 @router.delete("/internal/browser-sessions/{user_id}/storage")
 async def delete_browser_storage(user_id: int):
-    """Delete stored browser data from S3 for a user via MinIO API."""
+    """Delete stored browser data for a user (S3/MinIO or HTTP cookie service)."""
+    cookie_backend = os.environ.get("COOKIE_STORAGE_BACKEND", "s3")
+
+    if cookie_backend == "http":
+        cookie_service_url = os.environ.get("COOKIE_SERVICE_URL", "").strip()
+        if not cookie_service_url:
+            raise HTTPException(status_code=500, detail="COOKIE_STORAGE_BACKEND=http but COOKIE_SERVICE_URL is not configured")
+        headers: dict = {}
+        token = os.environ.get("COOKIE_SERVICE_TOKEN", "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                res = await client.delete(f"{cookie_service_url}/userdata/{user_id}", headers=headers)
+            if res.status_code == 404:
+                return {"message": f"No browser data found for user {user_id}"}
+            if not res.is_success:
+                raise HTTPException(status_code=500, detail=f"Cookie service DELETE failed: {res.status_code}")
+            return {"message": f"Deleted browser data for user {user_id} via HTTP cookie service"}
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=500, detail=f"Cookie service unreachable: {e}")
+
     import boto3
     from botocore.config import Config as BotoConfig
 
@@ -1345,7 +1534,6 @@ async def delete_browser_storage(user_id: int):
             region_name="us-east-1",
         )
 
-        # List and delete all objects under the prefix
         deleted = 0
         paginator = s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=s3_bucket, Prefix=prefix):
@@ -1496,6 +1684,70 @@ async def get_user_bots_status(
     except Exception as e:
         logger.error(f"Error fetching bot status for user {current_user.id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve bot status")
+
+
+@router.get(
+    "/bots/{platform}/{native_meeting_id}/participants",
+    response_model=ParticipantsResponse,
+    summary="Get the participants (speakers) detected in a meeting",
+    dependencies=[Depends(get_user_and_token)],
+)
+async def get_meeting_participants(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the distinct participants detected in a meeting.
+
+    Participants are aggregated from the meeting's transcript segments (which
+    carry the speaker attribution produced by the bot's speaker tracking): for
+    each distinct speaker we report the segment count, first/last seen times,
+    and total speaking time. Scoped to the authenticated user; resolves the
+    most recent meeting for the given platform + native meeting id.
+    """
+    from .models import Transcription
+
+    _, current_user = auth_data
+    meeting = await _find_meeting_any_status(
+        db, current_user.id, platform.value, native_meeting_id
+    )
+
+    stmt = (
+        select(
+            Transcription.speaker,
+            func.count(Transcription.id),
+            func.min(Transcription.created_at),
+            func.max(Transcription.created_at),
+            func.coalesce(
+                func.sum(Transcription.end_time - Transcription.start_time), 0.0
+            ),
+        )
+        .where(Transcription.meeting_id == meeting.id)
+        .group_by(Transcription.speaker)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    participants = [
+        ParticipantInfo(
+            name=speaker if speaker else "Unknown",
+            segment_count=count,
+            first_seen=first_seen,
+            last_seen=last_seen,
+            speaking_time_seconds=round(float(duration or 0.0), 3),
+        )
+        for speaker, count, first_seen, last_seen, duration in rows
+    ]
+    # Most active speakers first, then by name for stable ordering.
+    participants.sort(key=lambda p: (-p.segment_count, p.name))
+
+    return ParticipantsResponse(
+        id=meeting.id,
+        platform=meeting.platform,
+        native_meeting_id=meeting.platform_specific_id,
+        participant_count=len(participants),
+        participants=participants,
+    )
 
 
 @router.put(
@@ -2027,7 +2279,7 @@ async def transcribe_meeting(
     # 2. Download audio from storage
     try:
         storage = create_storage_client()
-        audio_data = storage.download_file(storage_path)
+        audio_data = await asyncio.to_thread(storage.download_file, storage_path)
     except Exception as e:
         logger.error(f"Failed to download recording for meeting {meeting_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to download recording: {e}")

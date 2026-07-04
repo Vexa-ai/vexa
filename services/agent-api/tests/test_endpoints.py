@@ -225,10 +225,69 @@ class TestWorkspaceEndpoints:
 
 
 # ---------------------------------------------------------------------------
+# Schedule SSRF protection
+# ---------------------------------------------------------------------------
+class TestScheduleSsrfProtection:
+    @pytest.mark.parametrize("url", [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://127.1/",
+        "http://[::1]/",
+        "http://[fe80::1]/",
+    ])
+    def test_schedule_http_rejects_non_public_ip_literals(self, client, url):
+        from agent_api.main import cm
+
+        cm._http = MagicMock()
+        cm._http.post = AsyncMock(return_value=MagicMock(status_code=201, json=lambda: {"ok": True}))
+
+        resp = client.post(
+            "/api/schedule",
+            json={"user_id": "test-user", "action": "http", "url": url, "method": "GET"},
+        )
+
+        assert resp.status_code == 400
+        cm._http.post.assert_not_called()
+
+    def test_schedule_http_rejects_dns_that_resolves_to_private_address(self, client, monkeypatch):
+        from agent_api.main import cm
+        import socket
+
+        cm._http = MagicMock()
+        cm._http.post = AsyncMock(return_value=MagicMock(status_code=201, json=lambda: {"ok": True}))
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", 443))],
+        )
+
+        resp = client.post(
+            "/api/schedule",
+            json={"user_id": "test-user", "action": "http", "url": "https://callback.example.test/hook"},
+        )
+
+        assert resp.status_code == 400
+        cm._http.post.assert_not_called()
+
+    def test_schedule_http_rejects_malformed_ports_without_scheduler_call(self, client):
+        from agent_api.main import cm
+
+        cm._http = MagicMock()
+        cm._http.post = AsyncMock(return_value=MagicMock(status_code=201, json=lambda: {"ok": True}))
+
+        resp = client.post(
+            "/api/schedule",
+            json={"user_id": "test-user", "action": "http", "url": "https://callback.example.test:bad/hook"},
+        )
+
+        assert resp.status_code == 400
+        cm._http.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Internal endpoints
 # ---------------------------------------------------------------------------
-
 class TestInternalEndpoints:
+
     def test_workspace_save_no_container(self, client):
         resp = client.post(
             "/internal/workspace/save",

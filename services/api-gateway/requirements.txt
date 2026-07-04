@@ -12,3 +12,6 @@ python-multipart>=0.0.20
 email-validator==2.0.0
 redis==5.0.6
 websockets>=12.0
+# fastapi-guard: per-IP rate limiting, IP allow/deny + auto-ban, and (staged)
+# suspicious-request detection at the public ingress. See main.py guard block.
+fastapi-guard>=7.2,<8.0

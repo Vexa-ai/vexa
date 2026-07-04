@@ -15,13 +15,16 @@ import { VideoRecordingService } from "./services/video-recording";
 import { TTSPlaybackService } from "./services/tts-playback";
 import { MicrophoneService } from "./services/microphone";
 import { MeetingChatService, ChatTranscriptConfig } from "./services/chat";
-import { ScreenContentService, getVirtualCameraInitScript, getVideoBlockInitScript } from "./services/screen-content";
+import { ScreenContentService, getVirtualCameraInitScript } from "./services/screen-content";
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
+import { VoiceAgentPageService } from "./services/voice-agent-page";
+import { MeetingVideoInjectorService } from "./services/meeting-video-injector";
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser, BrowserContext } from 'playwright-core';
 import { execSync } from 'child_process';
 import * as net from 'net';
 import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR } from './s3-sync';
+import { verifyCookieServiceContract, downloadCookiesFromHttp, uploadCookiesToHttp } from './cookie-http';
 // HTTP imports removed - using unified callback service instead
 
 // Per-speaker transcription pipeline
@@ -73,21 +76,23 @@ export function setActiveRecordingService(svc: RecordingService | null): void {
  * Mirrors handleTeamsAudioData but called from Node.js (not browser).
  */
 export async function feedZoomAudio(speakerName: string, audioData: Float32Array): Promise<void> {
-  if (!speakerManager || !segmentPublisher) return;
+  const manager = perSpeakerPipelineActive ? speakerManager : null;
+  const publisher = perSpeakerPipelineActive ? segmentPublisher : null;
+  if (!manager || !publisher) return;
 
   const speakerId = `zoom-${speakerName.replace(/\s+/g, '_')}`;
 
-  if (!speakerManager.hasSpeaker(speakerId)) {
+  if (!manager.hasSpeaker(speakerId)) {
     log(`[🎙️ ZOOM SPEAKER] "${speakerName}" — first audio received`);
-    speakerManager.addSpeaker(speakerId, speakerName);
-    await segmentPublisher.publishSpeakerEvent({
+    manager.addSpeaker(speakerId, speakerName);
+    await publisher.publishSpeakerEvent({
       speaker: speakerName,
       type: 'joined',
       timestamp: Date.now(),
     });
   }
 
-  speakerManager.feedAudio(speakerId, audioData);
+  manager.feedAudio(speakerId, audioData);
 }
 
 /**
@@ -145,6 +150,8 @@ let microphoneService: MicrophoneService | null = null;
 let chatService: MeetingChatService | null = null;
 let screenContentService: ScreenContentService | null = null;
 let screenShareService: ScreenShareService | null = null;
+let voiceAgentPageService: VoiceAgentPageService | null = null;
+let meetingVideoInjectorService: MeetingVideoInjectorService | null = null;
 let redisPublisher: RedisClientType | null = null;
 // -------------------------------------------------
 
@@ -153,6 +160,7 @@ let transcriptionClient: TranscriptionClient | null = null;
 let segmentPublisher: SegmentPublisher | null = null;
 export function getSegmentPublisher(): SegmentPublisher | null { return segmentPublisher; }
 let speakerManager: SpeakerStreamManager | null = null;
+let perSpeakerPipelineActive = false;
 let vadModel: SileroVAD | null = null;
 /** Per-speaker VAD states for streaming mode (GMeet only) */
 import type { VadSpeakerState } from './services/vad';
@@ -183,188 +191,9 @@ export function hasStopSignalReceived(): boolean {
 }
 // -----------------------------------
 
-// --- Post-admission camera re-enablement ---
-// Google Meet may re-negotiate WebRTC tracks when the bot transitions from
-// waiting room to the actual meeting, killing our initial canvas track.
-// Teams "light meetings" (anonymous/guest) may set video to `inactive` in the
-// initial SDP answer, requiring a camera toggle to force SDP renegotiation.
-// This function is called by meetingFlow.ts after admission is confirmed
-// to ensure the virtual camera is active in the meeting.
-
-async function checkVideoFramesSent(): Promise<number> {
-  if (!page || page.isClosed()) return 0;
-  return page.evaluate(async () => {
-    const pcs = (window as any).__vexa_peer_connections as RTCPeerConnection[] || [];
-    for (const pc of pcs) {
-      if (pc.connectionState === 'closed') continue;
-      try {
-        const stats = await pc.getStats();
-        let frames = 0;
-        stats.forEach((report: any) => {
-          if (report.type === 'outbound-rtp' && report.kind === 'video') {
-            frames = report.framesSent || 0;
-          }
-        });
-        if (frames > 0) return frames;
-      } catch {}
-    }
-    return 0;
-  });
-}
-
 export async function triggerPostAdmissionCamera(): Promise<void> {
-  if (!screenContentService || !page || page.isClosed()) return;
-
-  log('[VoiceAgent] Post-admission: re-enabling virtual camera...');
-
-  // Quick diagnostic
-  try {
-    const deepDiag = await page.evaluate(() => {
-      const win = window as any;
-      return {
-        canvasExists: !!(win.__vexa_canvas),
-        canvasStreamExists: !!(win.__vexa_canvas_stream),
-        gumCallCount: win.__vexa_gum_call_count || 0,
-        peerConnections: (win.__vexa_peer_connections || []).length,
-        injectedAudioElements: (win.__vexaInjectedAudioElements || []).length,
-      };
-    });
-    log(`[VoiceAgent] Deep diagnostic: ${JSON.stringify(deepDiag)}`);
-  } catch (diagErr: any) {
-    log(`[VoiceAgent] Diagnostic error: ${diagErr.message}`);
-  }
-
-  // Phase 1: Try standard enableCamera (works for Google Meet and some Teams scenarios)
-  const PHASE1_ATTEMPTS = 2;
-  for (let attempt = 1; attempt <= PHASE1_ATTEMPTS; attempt++) {
-    try {
-      await screenContentService.enableCamera();
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      const framesSent = await checkVideoFramesSent();
-      if (framesSent > 0) {
-        log(`[VoiceAgent] ✅ Post-admission camera active! framesSent=${framesSent} (phase1, attempt ${attempt})`);
-        return;
-      }
-      log(`[VoiceAgent] Post-admission framesSent=0 (phase1, attempt ${attempt})`);
-    } catch (err: any) {
-      log(`[VoiceAgent] Post-admission camera phase1 attempt ${attempt} failed: ${err.message}`);
-    }
-    if (attempt < PHASE1_ATTEMPTS) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-  }
-
-  // Phase 2: Camera toggle to force SDP renegotiation
-  // Teams light meetings (anonymous/guest) may reject video in the initial SDP.
-  // Toggling camera off→on forces Teams to issue a new SDP offer with video.
-  log('[VoiceAgent] Phase 1 failed — attempting camera toggle for SDP renegotiation...');
-  const PHASE2_ATTEMPTS = 3;
-  const PHASE2_INTERVALS = [3000, 5000, 8000];
-
-  for (let attempt = 1; attempt <= PHASE2_ATTEMPTS; attempt++) {
-    try {
-      const toggled = await screenContentService.toggleCameraForRenegotiation();
-      if (!toggled) {
-        log(`[VoiceAgent] Camera toggle attempt ${attempt}: could not find toggle buttons`);
-        // Fallback even on intermediate attempts — Teams may have no usable
-        // camera toggles in guest/light mode but still allow transceiver track injection.
-        await tryAddTrackFallback();
-        continue;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      const framesSent = await checkVideoFramesSent();
-      if (framesSent > 0) {
-        log(`[VoiceAgent] ✅ Post-admission camera active after toggle! framesSent=${framesSent} (phase2, attempt ${attempt})`);
-        return;
-      }
-      log(`[VoiceAgent] Post-admission framesSent=0 after toggle (phase2, attempt ${attempt})`);
-
-      // Toggle succeeded but no frames are being published. Force a direct
-      // transceiver/addTrack fallback to trigger fresh negotiation.
-      await tryAddTrackFallback();
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const fallbackFrames = await checkVideoFramesSent();
-      if (fallbackFrames > 0) {
-        log(`[VoiceAgent] ✅ Post-admission camera active after addTrack fallback! framesSent=${fallbackFrames} (phase2, attempt ${attempt})`);
-        return;
-      }
-      log(`[VoiceAgent] addTrack fallback still framesSent=0 (phase2, attempt ${attempt})`);
-    } catch (err: any) {
-      log(`[VoiceAgent] Post-admission camera phase2 attempt ${attempt} failed: ${err.message}`);
-    }
-    if (attempt < PHASE2_ATTEMPTS) {
-      await new Promise(resolve => setTimeout(resolve, PHASE2_INTERVALS[attempt - 1]));
-    }
-  }
-
-  log('[VoiceAgent] ⚠️ Post-admission camera failed all retries (both phases)');
-}
-
-// Last resort: directly call pc.addTrack() to inject our canvas track into the
-// active PeerConnection. This triggers negotiationneeded which forces a new
-// SDP offer/answer exchange with the video track included.
-async function tryAddTrackFallback(): Promise<void> {
-  if (!page || page.isClosed()) return;
-  log('[VoiceAgent] Trying addTrack fallback to force video negotiation...');
-  try {
-    const result = await page.evaluate(() => {
-      const win = window as any;
-      const pcs = (win.__vexa_peer_connections || []) as RTCPeerConnection[];
-      const canvasStream = win.__vexa_canvas_stream as MediaStream;
-      if (!canvasStream) return { success: false, reason: 'no canvas stream' };
-
-      const canvasTrack = canvasStream.getVideoTracks()[0];
-      if (!canvasTrack) return { success: false, reason: 'no canvas video track' };
-
-      for (const pc of pcs) {
-        if (pc.connectionState === 'closed') continue;
-        const transceivers = pc.getTransceivers();
-
-        // Try to set video on an existing video-capable transceiver first.
-        for (const t of transceivers) {
-          const receiverKind = t.receiver?.track?.kind;
-          const senderKind = t.sender?.track?.kind;
-          const isVideoTransceiver = receiverKind === 'video' || senderKind === 'video';
-          if (isVideoTransceiver) {
-            try {
-              t.direction = 'sendrecv';
-              t.sender.replaceTrack(canvasTrack);
-              return { success: true, method: 'transceiver-replace', mid: t.mid, pcState: pc.connectionState };
-            } catch (e) {
-              // Continue to next transceiver/fallback path.
-            }
-          }
-        }
-
-        // If no suitable transceiver exists, create one explicitly.
-        try {
-          const transceiver = pc.addTransceiver(canvasTrack, { direction: 'sendrecv' });
-          return {
-            success: true,
-            method: 'addTransceiver',
-            mid: transceiver?.mid ?? null,
-            pcState: pc.connectionState
-          };
-        } catch (e) {
-          // Fall back to addTrack below.
-        }
-
-        // Last resort: addTrack triggers negotiationneeded.
-        try {
-          pc.addTrack(canvasTrack, canvasStream);
-          return { success: true, method: 'addTrack', pcState: pc.connectionState };
-        } catch (e) {
-          return { success: false, reason: 'addTrack failed: ' + (e as Error).message };
-        }
-      }
-      return { success: false, reason: 'no suitable PC found' };
-    });
-    log(`[VoiceAgent] addTrack fallback result: ${JSON.stringify(result)}`);
-  } catch (err: any) {
-    log(`[VoiceAgent] addTrack fallback error: ${err.message}`);
-  }
+  if (!meetingVideoInjectorService) return;
+  await meetingVideoInjectorService.recoverAfterAdmission();
 }
 // -------------------------------------------
 
@@ -380,6 +209,19 @@ export async function triggerPostAdmissionChat(): Promise<void> {
     log('[Chat] ✅ Post-admission chat observer started');
   } catch (err: any) {
     log(`[Chat] Post-admission observer failed (non-fatal): ${err.message}`);
+  }
+}
+// -------------------------------------------
+
+// --- Post-admission voice-agent audio bridge refresh ---
+export async function triggerPostAdmissionVoiceAgentAudio(): Promise<void> {
+  if (!voiceAgentPageService) return;
+  try {
+    log('[VoiceAgent] Post-admission: refreshing meeting audio bridge...');
+    await voiceAgentPageService.handleMeetingAdmitted();
+    log('[VoiceAgent] ✅ Post-admission meeting audio bridge refresh requested');
+  } catch (err: any) {
+    log(`[VoiceAgent] Post-admission audio bridge refresh failed (non-fatal): ${err.message}`);
   }
 }
 // -------------------------------------------
@@ -605,23 +447,57 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
       } else if (command.action === 'screen_stop') {
         // Clear camera feed content (reverts to avatar/black)
         log('Processing screen_stop command');
-        if (screenContentService) await screenContentService.clearScreen();
-        await publishVoiceEvent('screen.content_cleared');
+        if (!screenContentService && page) {
+          await ensureVisualServices(page);
+        }
+        if (screenContentService) {
+          await screenContentService.clearScreen();
+          await publishVoiceEvent('screen.content_cleared');
+        } else {
+          log('[Screen] Screen content service not initialized');
+        }
 
       } else if (command.action === 'avatar_set') {
         // Set custom avatar image (shown when no screen content is active)
         log(`Processing avatar_set command`);
+        if (!screenContentService && page) {
+          await ensureVisualServices(page);
+        }
         if (screenContentService) {
           await screenContentService.setAvatar(command.url || command.image_base64 || '');
           await publishVoiceEvent('avatar.set');
+        } else {
+          log('[Screen] Screen content service not initialized');
         }
 
       } else if (command.action === 'avatar_reset') {
         // Reset avatar to the default Vexa logo
         log('Processing avatar_reset command');
+        if (!screenContentService && page) {
+          await ensureVisualServices(page);
+        }
         if (screenContentService) {
           await screenContentService.resetAvatar();
           await publishVoiceEvent('avatar.reset');
+        } else {
+          log('[Screen] Screen content service not initialized');
+        }
+      } else if (command.action === 'voice_agent_set_url') {
+        log(`Processing voice_agent_set_url command: ${command.url || ''}`);
+        if (!voiceAgentPageService && page && command.url) {
+          await ensureVisualServices(page);
+        }
+        if (voiceAgentPageService && command.url) {
+          await voiceAgentPageService.setUrl(command.url);
+          await publishVoiceEvent('voice_agent.url_set', { url: command.url });
+        } else if (!voiceAgentPageService) {
+          log('[VoiceAgentPage] Voice-agent visual services not initialized');
+        }
+      } else if (command.action === 'voice_agent_stop') {
+        log('Processing voice_agent_stop command');
+        if (voiceAgentPageService) {
+          await voiceAgentPageService.stop();
+          await publishVoiceEvent('voice_agent.stopped');
         }
       }
   } catch (e: any) {
@@ -713,6 +589,8 @@ async function performGracefulLeave(
     if (ttsPlaybackService) { ttsPlaybackService.stop(); ttsPlaybackService = null; }
     if (microphoneService) { microphoneService.clearMuteTimer(); microphoneService = null; }
     if (chatService) { await chatService.cleanup(); chatService = null; }
+    if (voiceAgentPageService) { await voiceAgentPageService.close(); voiceAgentPageService = null; }
+    meetingVideoInjectorService = null;
     if (screenContentService) { await screenContentService.close(); screenContentService = null; }
     if (screenShareService) { screenShareService = null; }
     if (redisPublisher && redisPublisher.isOpen) {
@@ -809,14 +687,24 @@ async function performGracefulLeave(
     }
   }
 
-  // Sync browser data back to S3 for authenticated bots (preserves cookies/sessions)
-  if (currentBotConfig?.authenticated && currentBotConfig?.userdataS3Path) {
+  // Sync browser data back for authenticated bots (preserves cookies/sessions)
+  if (currentBotConfig?.authenticated) {
     try {
-      log("[Graceful Leave] Syncing browser data to S3 (authenticated bot)...");
-      syncBrowserDataToS3(currentBotConfig);
-      log("[Graceful Leave] Browser data synced to S3.");
+      if (currentBotConfig.cookieStorageBackend === 'http' && currentBotConfig.cookieServiceUrl) {
+        log("[Graceful Leave] Uploading browser data to HTTP service...");
+        await uploadCookiesToHttp({
+          cookieServiceUrl: currentBotConfig.cookieServiceUrl,
+          cookieServiceToken: currentBotConfig.cookieServiceToken,
+          userId: currentBotConfig.userId!,
+        });
+        log("[Graceful Leave] Browser data uploaded to HTTP service.");
+      } else if (currentBotConfig.userdataS3Path) {
+        log("[Graceful Leave] Syncing browser data to S3 (authenticated bot)...");
+        syncBrowserDataToS3(currentBotConfig);
+        log("[Graceful Leave] Browser data synced to S3.");
+      }
     } catch (syncErr: any) {
-      log(`[Graceful Leave] Browser data S3 sync failed: ${syncErr.message}`);
+      log(`[Graceful Leave] Browser data sync failed: ${syncErr.message}`);
     }
   }
 
@@ -1081,20 +969,40 @@ async function handleSpeakAudioCommand(command: any): Promise<void> {
  * the bot's camera track via RTCPeerConnection.replaceTrack().
  */
 async function handleScreenShowCommand(command: any, page: Page | null): Promise<void> {
-  if (!screenContentService) {
-    log('[Screen] Screen content service not initialized');
+  if (!page) {
+    log('[Screen] Page not available for screen_show');
     return;
   }
 
   try {
+    const visualsReady = await ensureVisualServices(page);
+    if (!visualsReady || !screenContentService) {
+      log('[Screen] Screen content service not initialized');
+      return;
+    }
+
     const contentType = command.type || 'image';
 
     if (contentType === 'image') {
       await screenContentService.showImage(command.url);
     } else if (contentType === 'text') {
       await screenContentService.showText(command.text || command.url);
+    } else if (contentType === 'url' || contentType === 'video') {
+      if (!voiceAgentPageService || !command.url) {
+        log(`[Screen] ${contentType} content requires a valid url`);
+        return;
+      }
+      await voiceAgentPageService.setUrl(command.url);
+    } else if (contentType === 'html') {
+      if (!voiceAgentPageService) {
+        log('[Screen] HTML content service unavailable');
+        return;
+      }
+      const html = String(command.html || '');
+      const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+      await voiceAgentPageService.setUrl(dataUrl);
     } else {
-      log(`[Screen] Unsupported content type for camera feed: ${contentType}. Only 'image' and 'text' are supported.`);
+      log(`[Screen] Unsupported content type for camera feed: ${contentType}.`);
       return;
     }
 
@@ -1103,6 +1011,33 @@ async function handleScreenShowCommand(command: any, page: Page | null): Promise
     log(`[Screen] Show failed: ${err.message}`);
     await publishVoiceEvent('screen.error', { message: err.message });
   }
+}
+
+async function ensureVisualServices(page: Page): Promise<boolean> {
+  if (!screenContentService) {
+    const defaultAvatarUrl = currentBotConfig?.defaultAvatarUrl;
+    screenContentService = new ScreenContentService(page, defaultAvatarUrl);
+    screenShareService = new ScreenShareService(page, currentBotConfig?.platform || 'google_meet');
+    log('[Screen] Lazy-initialized visual services');
+  }
+
+  if (!screenShareService) {
+    screenShareService = new ScreenShareService(page, currentBotConfig?.platform || 'google_meet');
+  }
+  if (!voiceAgentPageService && screenContentService) {
+    voiceAgentPageService = new VoiceAgentPageService(page, screenContentService);
+  }
+  if (!meetingVideoInjectorService && screenContentService) {
+    meetingVideoInjectorService = new MeetingVideoInjectorService(page, screenContentService);
+  }
+
+  try {
+    await screenContentService.enableCamera();
+  } catch (err: any) {
+    log(`[Screen] Failed to enable camera during lazy init: ${err.message}`);
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -1118,6 +1053,8 @@ async function initVirtualCamera(
   // Screen content (virtual camera feed via canvas)
   screenContentService = new ScreenContentService(page, botConfig.defaultAvatarUrl);
   screenShareService = new ScreenShareService(page, botConfig.platform);
+  voiceAgentPageService = new VoiceAgentPageService(page, screenContentService);
+  meetingVideoInjectorService = new MeetingVideoInjectorService(page, screenContentService);
   log('[Bot] Screen content service ready');
 
   // Auto-enable virtual camera so the default avatar shows from the start.
@@ -1179,6 +1116,21 @@ async function initVirtualCamera(
       }
     }
   })();
+
+  const startupVoiceAgentUrl =
+    botConfig.voiceAgentSettings?.url ||
+    (botConfig as any)?.voice_agent_settings?.url;
+  if (startupVoiceAgentUrl) {
+    try {
+      log(`[VoiceAgentPage] Startup URL detected: ${startupVoiceAgentUrl}`);
+      await voiceAgentPageService.setUrl(startupVoiceAgentUrl);
+      await publishVoiceEvent('voice_agent.url_set', { url: startupVoiceAgentUrl });
+    } catch (err: any) {
+      log(`[VoiceAgentPage] Initial URL setup failed: ${err.message}`);
+    }
+  } else {
+    log('[VoiceAgentPage] No startup URL found in bot config (voiceAgentSettings.url)');
+  }
 
   log('[Bot] Virtual camera initialization complete');
 }
@@ -1263,13 +1215,25 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
   }
 
   const meetingId = botConfig.meeting_id;
+  const voiceAgentLowLatency =
+    botConfig.voiceAgentEnabled === true || !!botConfig.voiceAgentSettings?.url;
+  const maxSpeechDurationSec = process.env.MAX_SPEECH_DURATION_SEC
+    ? Number.parseFloat(process.env.MAX_SPEECH_DURATION_SEC)
+    : voiceAgentLowLatency
+      ? 6
+      : undefined;
+  const minSilenceDurationMs = process.env.MIN_SILENCE_DURATION_MS
+    ? Number.parseInt(process.env.MIN_SILENCE_DURATION_MS, 10)
+    : voiceAgentLowLatency
+      ? 80
+      : 100;
 
   try {
     transcriptionClient = new TranscriptionClient({
       serviceUrl: transcriptionServiceUrl,
       apiToken: botConfig.transcriptionServiceToken || process.env.TRANSCRIPTION_SERVICE_TOKEN,
-      maxSpeechDurationSec: process.env.MAX_SPEECH_DURATION_SEC ? parseFloat(process.env.MAX_SPEECH_DURATION_SEC) : undefined,
-      minSilenceDurationMs: process.env.MIN_SILENCE_DURATION_MS ? parseInt(process.env.MIN_SILENCE_DURATION_MS) : 100,
+      maxSpeechDurationSec,
+      minSilenceDurationMs,
     });
     log('[PerSpeaker] TranscriptionClient created');
 
@@ -1300,15 +1264,28 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       log(`[PerSpeaker] Raw capture enabled → ${rawCaptureService.outputPath}`);
     }
 
-    const isGoogleMeet = botConfig.platform === 'google_meet';
-    speakerManager = new SpeakerStreamManager({
-      sampleRate: 16000,
-      minAudioDuration: 3,     // 3s of unconfirmed audio before submission
-      submitInterval: 2,       // submit every 2s — lower latency
-      confirmThreshold: 2,     // 2 consecutive matches — faster confirmation
-      maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
-      idleTimeoutSec: 15,      // 15s idle → emit + reset
-    });
+    const speakerStreamConfig = voiceAgentLowLatency
+      ? {
+          sampleRate: 16000,
+          minAudioDuration: 1.5,
+          submitInterval: 1,
+          confirmThreshold: 1,
+          maxBufferDuration: 12,
+          idleTimeoutSec: 4,
+        }
+      : {
+          sampleRate: 16000,
+          minAudioDuration: process.env.MIN_AUDIO_DURATION_SEC ? parseFloat(process.env.MIN_AUDIO_DURATION_SEC) : 3,  // s of unconfirmed audio before submission
+          submitInterval: process.env.SUBMIT_INTERVAL_SEC ? parseFloat(process.env.SUBMIT_INTERVAL_SEC) : 2,          // submit every Ns
+          confirmThreshold: 2,     // 2 consecutive matches — faster confirmation
+          maxBufferDuration: 30,   // force-flush at 30s — matches Whisper training window
+          idleTimeoutSec: process.env.IDLE_TIMEOUT_SEC ? parseFloat(process.env.IDLE_TIMEOUT_SEC) : 15,                // Ns idle → emit + reset
+        };
+    speakerManager = new SpeakerStreamManager(speakerStreamConfig);
+    log(
+      `[PerSpeaker] Speaker stream latency profile: ${voiceAgentLowLatency ? 'voice-agent-low-latency' : 'default'}`
+    );
+    perSpeakerPipelineActive = true;
     // VAD gating moved to handlePerSpeakerAudioData entry (per-speaker streaming).
     // SpeakerStreamManager no longer does VAD — it only receives real speech.
 
@@ -1340,7 +1317,8 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     }, 30000);
 
     speakerManager.onSegmentReady = async (speakerId: string, speakerName: string, audioBuffer: Float32Array) => {
-      if (!transcriptionClient) return;
+      if (!transcriptionClient || !perSpeakerPipelineActive || !speakerManager) return;
+      const manager = speakerManager;
 
       // Language strategy:
       // - If user explicitly set a language → always use it (respect the choice)
@@ -1352,8 +1330,9 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
       const whisperStartMs = Date.now();
       try {
-        const contextPrompt = speakerManager!.getLastConfirmedText(speakerId);
+        const contextPrompt = manager.getLastConfirmedText(speakerId);
         const result = await transcriptionClient.transcribe(audioBuffer, lang || undefined, contextPrompt || undefined);
+        if (!perSpeakerPipelineActive || speakerManager !== manager) return;
         telemetry.whisperCalls++;
         telemetry.totalWhisperMs += Date.now() - whisperStartMs;
         if (result && result.text) {
@@ -1369,7 +1348,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           if (!lang && prob > 0 && prob < 0.3) {
             telemetry.segmentsDiscarded++;
             log(`[🚫 LOW CONFIDENCE] ${speakerName} | lang_prob=${prob.toFixed(2)} | "${result.text}" — discarded`);
-            speakerManager!.handleTranscriptionResult(speakerId, '');
+            manager.handleTranscriptionResult(speakerId, '');
             return;
           }
 
@@ -1385,7 +1364,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             if (noSpeech > 0.5 && logProb < -0.7) {
               telemetry.segmentsDiscarded++;
               log(`[🚫 NO SPEECH] ${speakerName} | no_speech=${noSpeech.toFixed(2)} logprob=${logProb.toFixed(2)} | "${result.text}" — discarded`);
-              speakerManager!.handleTranscriptionResult(speakerId, '');
+              manager.handleTranscriptionResult(speakerId, '');
               return;
             }
 
@@ -1393,7 +1372,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             if (logProb < -0.8 && duration < 2.0) {
               telemetry.segmentsDiscarded++;
               log(`[🚫 LOW QUALITY] ${speakerName} | logprob=${logProb.toFixed(2)} dur=${duration.toFixed(1)}s | "${result.text}" — discarded`);
-              speakerManager!.handleTranscriptionResult(speakerId, '');
+              manager.handleTranscriptionResult(speakerId, '');
               return;
             }
 
@@ -1401,7 +1380,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             if (compression > 2.4) {
               telemetry.segmentsDiscarded++;
               log(`[🚫 REPETITIVE] ${speakerName} | compression=${compression.toFixed(1)} | "${result.text}" — discarded`);
-              speakerManager!.handleTranscriptionResult(speakerId, '');
+              manager.handleTranscriptionResult(speakerId, '');
               return;
             }
           }
@@ -1409,7 +1388,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           // 3. Phrase-based hallucination filter
           if (isHallucination(result.text)) {
             log(`[🚫 HALLUCINATION] ${speakerName} | "${result.text}"`);
-            speakerManager!.handleTranscriptionResult(speakerId, '');
+            manager.handleTranscriptionResult(speakerId, '');
             return;
           }
 
@@ -1430,15 +1409,17 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           const whisperSegs = result.segments?.map(s => ({
             text: s.text, start: s.start, end: s.end
           }));
-          speakerManager!.handleTranscriptionResult(speakerId, result.text, segEndSec, whisperSegs);
+          manager.handleTranscriptionResult(speakerId, result.text, segEndSec, whisperSegs);
 
           // Publish batch: confirmed (collected by onSegmentConfirmed) + pending (current draft)
           if (segmentPublisher && result.text) {
+            if (!perSpeakerPipelineActive || speakerManager !== manager) return;
+            const publisher = segmentPublisher;
             const lang = explicitLang || result.language || 'en';
-            const bufStart = speakerManager!.getBufferStartMs(speakerId);
+            const bufStart = manager.getBufferStartMs(speakerId);
             const nowMs = Date.now();
-            const startSec = (bufStart - segmentPublisher.sessionStartMs) / 1000;
-            const endSec = (nowMs - segmentPublisher.sessionStartMs) / 1000;
+            const startSec = (bufStart - publisher.sessionStartMs) / 1000;
+            const endSec = (nowMs - publisher.sessionStartMs) / 1000;
 
             // Pending: one entry per Whisper segment (preserves sentence boundaries)
             const whisperSegments = result.segments || [{ text: result.text, start: 0, end: 0 }];
@@ -1468,17 +1449,19 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
               return !confirmedTextList.some(ct => pt === ct || pt.startsWith(ct) || ct.startsWith(pt));
             });
             log(`[📡 PUBLISH] ${speakerName} | ${speakerConfirmed.length}C ${pending.length}P`);
-            await segmentPublisher.publishTranscript(speakerName, speakerConfirmed, pending);
+            await publisher.publishTranscript(speakerName, speakerConfirmed, pending);
           }
         } else {
-          speakerManager!.handleTranscriptionResult(speakerId, '');
+          if (!perSpeakerPipelineActive || speakerManager !== manager) return;
+          manager.handleTranscriptionResult(speakerId, '');
         }
       } catch (err: any) {
         telemetry.whisperCalls++;
         telemetry.whisperFailures++;
         telemetry.totalWhisperMs += Date.now() - whisperStartMs;
         log(`[❌ FAILED] ${speakerName}: ${err.message}`);
-        speakerManager!.handleTranscriptionResult(speakerId, '');
+        if (!perSpeakerPipelineActive || speakerManager !== manager) return;
+        manager.handleTranscriptionResult(speakerId, '');
       }
     };
 
@@ -1518,6 +1501,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     log('[PerSpeaker] SpeakerStreamManager created and wired');
     return true;
   } catch (err: any) {
+    perSpeakerPipelineActive = false;
     log(`[PerSpeaker] Pipeline initialization failed: ${err.message}`);
     return false;
   }
@@ -1547,7 +1531,16 @@ function isDuplicateSpeakerName(name: string, excludeSpeakerId: string): boolean
 }
 
 async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: number[]): Promise<void> {
-  if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
+  const manager = perSpeakerPipelineActive ? speakerManager : null;
+  const publisher = perSpeakerPipelineActive ? segmentPublisher : null;
+  const activePage = page;
+  if (!manager || !publisher || !activePage || activePage.isClosed()) return;
+  const pipelineStillActive = () =>
+    perSpeakerPipelineActive &&
+    speakerManager === manager &&
+    segmentPublisher === publisher &&
+    page === activePage &&
+    !activePage.isClosed();
 
   // Report audio activity for Zoom active-speaker disambiguation
   reportTrackAudio(speakerIndex);
@@ -1570,16 +1563,17 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
   // captured at first connectElement() per stream_id and never changes for
   // that stream — equivalent to gmeet's stable per-tile track. Vote-and-lock
   // works correctly here; PR #181's per-chunk DOM-poll override was the bug.
-  if (!speakerManager.hasSpeaker(speakerId)) {
+  if (!manager.hasSpeaker(speakerId)) {
     log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio received, resolving name...`);
-    const name = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
+    const name = await resolveSpeakerName(activePage, speakerIndex, platformKey, currentBotConfig?.botName);
+    if (!pipelineStillActive()) return;
     // Start unmapped — only assign if name is genuinely unique
     const safeName = (name && !isDuplicateSpeakerName(name, speakerId)) ? name : '';
     log(`[🎙️ SPEAKER ACTIVE] Track ${speakerIndex} → "${safeName || '(unmapped)'}" — streaming audio`);
-    speakerManager.addSpeaker(speakerId, safeName);
+    manager.addSpeaker(speakerId, safeName);
     lastReResolveTime.set(speakerId, Date.now());
     if (safeName) {
-      await segmentPublisher.publishSpeakerEvent({
+      await publisher.publishSpeakerEvent({
         speaker: safeName,
         type: 'joined',
         timestamp: Date.now(),
@@ -1587,7 +1581,7 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
       log(`[📡 SPEAKER EVENT] "${safeName}" joined → Redis`);
     }
   } else {
-    const currentName = speakerManager.getSpeakerName(speakerId) || '';
+    const currentName = manager.getSpeakerName(speakerId) || '';
     let locked = isTrackLocked(speakerIndex);
 
     // Sync locked name → speaker-streams buffer. Once a track is locked, the
@@ -1599,9 +1593,9 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
       const lockedName = getLockedMapping(speakerIndex);
       if (lockedName && lockedName !== currentName) {
         log(`[🔒 LOCK SYNC] Track ${speakerIndex}: "${currentName}" → "${lockedName}" (syncing locked name to buffer)`);
-        speakerManager.updateSpeakerName(speakerId, lockedName);
+        manager.updateSpeakerName(speakerId, lockedName);
         if (!currentName) {
-          await segmentPublisher.publishSpeakerEvent({
+          await publisher.publishSpeakerEvent({
             speaker: lockedName,
             type: 'joined',
             timestamp: Date.now(),
@@ -1619,7 +1613,7 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
       lastReResolveTime.set(speakerId, Date.now());
 
       try {
-        const currentCount = await page.evaluate(() => {
+        const currentCount = await activePage.evaluate(() => {
           if (typeof (window as any).getGoogleMeetActiveParticipantsCount === 'function') {
             return (window as any).getGoogleMeetActiveParticipantsCount();
           }
@@ -1627,6 +1621,7 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
           if (teamsTiles.length > 0) return teamsTiles.length;
           return 0;
         });
+        if (!pipelineStillActive()) return;
         if (lastParticipantCount > 0 && currentCount !== lastParticipantCount) {
           log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount}. Invalidating all mappings (including locks).`);
           clearSpeakerNameCache();
@@ -1640,11 +1635,12 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
     if (!locked && Date.now() - lastResolve > reResolveInterval) {
       lastReResolveTime.set(speakerId, Date.now());
 
-      const newName = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
+      const newName = await resolveSpeakerName(activePage, speakerIndex, platformKey, currentBotConfig?.botName);
+      if (!pipelineStillActive()) return;
       if (newName && newName !== currentName && !isDuplicateSpeakerName(newName, speakerId)) {
         log(`[🔄 SPEAKER MAPPED] Track ${speakerIndex}: "${currentName}" → "${newName}"`);
-        speakerManager.updateSpeakerName(speakerId, newName);
-        await segmentPublisher.publishSpeakerEvent({
+        manager.updateSpeakerName(speakerId, newName);
+        await publisher.publishSpeakerEvent({
           speaker: newName,
           type: 'joined',
           timestamp: Date.now(),
@@ -1658,7 +1654,7 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
         const firstAudio = speakerLastAudioMs.get(speakerId) || Date.now();
         if (Date.now() - firstAudio > 15_000) {
           try {
-            const state = await page.evaluate((selfName: string) => {
+            const state = await activePage.evaluate((selfName: string) => {
               const getNames = (window as any).__vexaGetAllParticipantNames;
               if (typeof getNames !== 'function') return null;
               const data = getNames() as { names: Record<string, string>; speaking: string[] };
@@ -1668,13 +1664,14 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
                 return !(lower.includes(selfLower) || selfLower.includes(lower));
               });
             }, currentBotConfig?.botName || 'Vexa Bot');
+            if (!pipelineStillActive()) return;
 
             if (state && speakerIndex < state.length) {
               const fallbackName = state[speakerIndex];
               if (fallbackName && !isDuplicateSpeakerName(fallbackName, speakerId)) {
                 log(`[🔄 SPEAKER FALLBACK] Track ${speakerIndex}: assigning "${fallbackName}" by participant order (no votes after 15s)`);
-                speakerManager.updateSpeakerName(speakerId, fallbackName);
-                await segmentPublisher.publishSpeakerEvent({
+                manager.updateSpeakerName(speakerId, fallbackName);
+                await publisher.publishSpeakerEvent({
                   speaker: fallbackName,
                   type: 'joined',
                   timestamp: Date.now(),
@@ -1706,29 +1703,31 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
       return; // Skip feedAudio — ambient noise, don't update lastAudioTimestamp
     }
   }
+  if (!pipelineStillActive()) return;
 
   // Track audio arrival for silence monitoring (only reached for real speech)
   const prevMs = speakerLastAudioMs.get(speakerId);
   const nowMs = Date.now();
   if (prevMs && (nowMs - prevMs) > 30000) {
-    const speakerName = speakerManager.getSpeakerName(speakerId) || speakerId;
+    const speakerName = manager.getSpeakerName(speakerId) || speakerId;
     log(`[🔊 AUDIO RESUMED] ${speakerName} — audio arrived after ${((nowMs - prevMs) / 1000).toFixed(0)}s silence`);
   }
   speakerLastAudioMs.set(speakerId, nowMs);
 
   // Raw capture: dump audio for offline replay
   if (rawCaptureService) {
-    const resolvedName = speakerManager.getSpeakerName(speakerId) || '';
+    const resolvedName = manager.getSpeakerName(speakerId) || '';
     rawCaptureService.feedAudio(speakerIndex, audioData, resolvedName);
   }
 
-  speakerManager.feedAudio(speakerId, audioData);
+  manager.feedAudio(speakerId, audioData);
 }
 
 /**
  * Tear down the per-speaker transcription pipeline and release resources.
  */
 async function cleanupPerSpeakerPipeline(): Promise<void> {
+  perSpeakerPipelineActive = false;
   // Clear telemetry interval
   if (pipelineTelemetryInterval) {
     clearInterval(pipelineTelemetryInterval);
@@ -2160,7 +2159,7 @@ function startBotResourceSampler(): BotResourceSampler {
 //     was missing → gateway CDP proxy hit a dead :9223 and returned 502.
 // A pure-Node TCP proxy (no socat dependency) works identically in both.
 let __cdpRelayStarted = false;
-function startCdpRelay(listenPort = 9223, targetPort = 9222): void {
+function startCdpRelay(listenPort = (Number(process.env.VEXA_RELAY_PORT) || 9223), targetPort = (Number(process.env.VEXA_CDP_PORT) || 9222)): void {
   if (__cdpRelayStarted) return;
   __cdpRelayStarted = true;
   try {
@@ -2312,12 +2311,23 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
   }
 
-  // --- Authenticated bot: use persistent context with userdata from S3 ---
-  if (botConfig.authenticated && botConfig.userdataS3Path) {
-    log('[Bot] Authenticated mode: downloading userdata from S3...');
+  // --- Authenticated bot: use persistent context with userdata from S3 or HTTP ---
+  if (botConfig.authenticated) {
     ensureBrowserDataDir();
-    syncBrowserDataFromS3(botConfig);
     cleanStaleLocks(BROWSER_DATA_DIR);
+    if (botConfig.cookieStorageBackend === 'http' && botConfig.cookieServiceUrl) {
+      log('[Bot] Authenticated mode: downloading cookies from HTTP service...');
+      const cookieCfg = {
+        cookieServiceUrl: botConfig.cookieServiceUrl,
+        cookieServiceToken: botConfig.cookieServiceToken,
+        userId: botConfig.userId!,
+      };
+      await verifyCookieServiceContract(cookieCfg);
+      await downloadCookiesFromHttp(cookieCfg);
+    } else if (botConfig.userdataS3Path) {
+      log('[Bot] Authenticated mode: downloading userdata from S3...');
+      syncBrowserDataFromS3(botConfig);
+    }
 
     const authArgs = getAuthenticatedBrowserArgs();
     const context: BrowserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
@@ -2331,24 +2341,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
     // Apply init scripts to the persistent context
     const isVoiceAgent = !!botConfig.voiceAgentEnabled;
-    await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgent};`);
-
-    if (botConfig.cameraEnabled) {
-      try {
-        await context.addInitScript(getVirtualCameraInitScript());
-        log('[Bot] Video OUT: virtual camera init script injected (authenticated)');
-      } catch (e: any) {
-        log(`[Bot] Warning: virtual camera addInitScript failed (authenticated): ${e.message}`);
-      }
-    }
-
-    if (!botConfig.videoReceiveEnabled) {
-      try {
-        await context.addInitScript(getVideoBlockInitScript());
-        log('[Bot] Video IN: blocked (authenticated, saving CPU)');
-      } catch (e: any) {
-        log(`[Bot] Warning: video block addInitScript failed (authenticated): ${e.message}`);
-      }
+    const videoReceiveEnabled = botConfig.videoReceiveEnabled !== false;
+    await context.addInitScript(
+      `window.__vexa_voice_agent_enabled = ${isVoiceAgent}; window.__vexa_video_receive_enabled = ${videoReceiveEnabled};`
+    );
+    try {
+      await context.addInitScript(getVirtualCameraInitScript());
+      log('[Bot] Video hooks: virtual camera init script injected (authenticated)');
+    } catch (e: any) {
+      log(`[Bot] Warning: virtual camera addInitScript failed (authenticated): ${e.message}`);
     }
 
     const pages = context.pages();
@@ -2406,27 +2407,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     // Set voice agent flag before virtual camera script so it knows
     // whether to disable incoming video tracks (saves ~87% CPU per bot).
     const isVoiceAgentTeams = !!botConfig.voiceAgentEnabled;
-    await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgentTeams};`);
-
-    // Video OUT (avatar/camera): controlled by cameraEnabled (default off)
-    if (botConfig.cameraEnabled) {
-      try {
-        await context.addInitScript(getVirtualCameraInitScript());
-        log('[Bot] Video OUT: virtual camera init script injected (Teams)');
-      } catch (e: any) {
-        log(`[Bot] Warning: virtual camera addInitScript failed (Teams): ${e.message}`);
-      }
-    }
-
-    // Video IN (receive participant video): controlled by videoReceiveEnabled (default off)
-    // When off, disables incoming video tracks to save ~87% CPU per bot.
-    if (!botConfig.videoReceiveEnabled) {
-      try {
-        await context.addInitScript(getVideoBlockInitScript());
-        log('[Bot] Video IN: blocked (Teams, saving CPU)');
-      } catch (e: any) {
-        log(`[Bot] Warning: video block addInitScript failed (Teams): ${e.message}`);
-      }
+    const videoReceiveEnabledTeams = botConfig.videoReceiveEnabled !== false;
+    await context.addInitScript(
+      `window.__vexa_voice_agent_enabled = ${isVoiceAgentTeams}; window.__vexa_video_receive_enabled = ${videoReceiveEnabledTeams};`
+    );
+    try {
+      await context.addInitScript(getVirtualCameraInitScript());
+      log('[Bot] Video hooks: virtual camera init script injected (Teams)');
+    } catch (e: any) {
+      log(`[Bot] Warning: virtual camera addInitScript failed (Teams): ${e.message}`);
     }
 
     page = await context.newPage();
@@ -2463,27 +2452,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     // Set voice agent flag before virtual camera script so it knows
     // whether to disable incoming video tracks (saves ~87% CPU per bot).
     const isVoiceAgent = !!botConfig.voiceAgentEnabled;
-    await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgent};`);
-
-    // Video OUT (avatar/camera): controlled by cameraEnabled (default off)
-    if (botConfig.cameraEnabled) {
-      try {
-        await context.addInitScript(getVirtualCameraInitScript());
-        log('[Bot] Video OUT: virtual camera init script injected');
-      } catch (e: any) {
-        log(`[Bot] Warning: virtual camera addInitScript failed: ${e.message}`);
-      }
-    }
-
-    // Video IN (receive participant video): controlled by videoReceiveEnabled (default off)
-    // When off, disables incoming video tracks to save ~87% CPU per bot.
-    if (!botConfig.videoReceiveEnabled) {
-      try {
-        await context.addInitScript(getVideoBlockInitScript());
-        log('[Bot] Video IN: blocked (saving CPU)');
-      } catch (e: any) {
-        log(`[Bot] Warning: video block addInitScript failed: ${e.message}`);
-      }
+    const videoReceiveEnabled = botConfig.videoReceiveEnabled !== false;
+    await context.addInitScript(
+      `window.__vexa_voice_agent_enabled = ${isVoiceAgent}; window.__vexa_video_receive_enabled = ${videoReceiveEnabled};`
+    );
+    try {
+      await context.addInitScript(getVirtualCameraInitScript());
+      log('[Bot] Video hooks: virtual camera init script injected');
+    } catch (e: any) {
+      log(`[Bot] Warning: virtual camera addInitScript failed: ${e.message}`);
     }
 
     page = await context.newPage();

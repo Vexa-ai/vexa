@@ -9,6 +9,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from meeting_api.schemas import MeetingStatus, MeetingResponse, BotStatusResponse
 
@@ -352,5 +353,105 @@ class TestUpdateBotConfig:
         resp = await unauthed_client.put(
             f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/config",
             json={"language": "es"},
+        )
+        assert resp.status_code == 403
+
+
+class TestBotConcurrencyLimit:
+    """Per-user concurrent bot quota (#402): 0 means depleted, not unlimited."""
+
+    @pytest.mark.asyncio
+    async def test_zero_limit_is_depleted_not_unlimited(self, mock_db):
+        """max_concurrent_bots=0 → 403 depleted (regression for #402)."""
+        from meeting_api.meetings import _enforce_bot_concurrency_limit
+
+        user = make_user(max_concurrent=0)
+        mock_db.execute = AsyncMock()  # should never be queried when depleted
+        with pytest.raises(HTTPException) as exc:
+            await _enforce_bot_concurrency_limit(mock_db, user, exclude_browser_session=True)
+        assert exc.value.status_code == 403
+        assert "deplet" in exc.value.detail.lower()
+        mock_db.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_under_limit_is_allowed(self, mock_db):
+        """Active count below a positive limit passes the gate."""
+        from meeting_api.meetings import _enforce_bot_concurrency_limit
+
+        user = make_user(max_concurrent=2)
+        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=1))
+        # Should not raise.
+        await _enforce_bot_concurrency_limit(mock_db, user, exclude_browser_session=True)
+
+    @pytest.mark.asyncio
+    async def test_at_limit_is_blocked(self, mock_db):
+        """Active count at the limit → 403."""
+        from meeting_api.meetings import _enforce_bot_concurrency_limit
+
+        user = make_user(max_concurrent=2)
+        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=2))
+        with pytest.raises(HTTPException) as exc:
+            await _enforce_bot_concurrency_limit(mock_db, user, exclude_browser_session=True)
+        assert exc.value.status_code == 403
+
+
+class TestGetParticipants:
+    @pytest.mark.asyncio
+    async def test_get_participants_success(self, client, mock_db):
+        """GET participants → 200 with speakers aggregated from transcript segments."""
+        meeting = make_meeting(id=42)
+        rows = [
+            ("Alice", 3, datetime(2024, 1, 1, 12, 0, 0), datetime(2024, 1, 1, 12, 5, 0), 42.5),
+            ("Bob", 1, datetime(2024, 1, 1, 12, 1, 0), datetime(2024, 1, 1, 12, 1, 30), 8.0),
+        ]
+        # First execute() resolves the meeting; second returns aggregated rows.
+        mock_db.execute = AsyncMock(side_effect=[MockResult([meeting]), MockResult(rows)])
+
+        resp = await client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == 42
+        assert data["participant_count"] == 2
+        # Most active speaker first.
+        assert data["participants"][0]["name"] == "Alice"
+        assert data["participants"][0]["segment_count"] == 3
+        assert data["participants"][0]["speaking_time_seconds"] == 42.5
+        assert {p["name"] for p in data["participants"]} == {"Alice", "Bob"}
+
+    @pytest.mark.asyncio
+    async def test_get_participants_unknown_speaker(self, client, mock_db):
+        """Segments with a null speaker are reported under 'Unknown'."""
+        meeting = make_meeting(id=7)
+        rows = [(None, 2, datetime(2024, 1, 1, 12, 0, 0), datetime(2024, 1, 1, 12, 2, 0), 5.0)]
+        mock_db.execute = AsyncMock(side_effect=[MockResult([meeting]), MockResult(rows)])
+
+        resp = await client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["participant_count"] == 1
+        assert data["participants"][0]["name"] == "Unknown"
+
+    @pytest.mark.asyncio
+    async def test_get_participants_meeting_not_found(self, client, mock_db):
+        """GET participants for a non-existent meeting → 404."""
+        mock_db.execute = AsyncMock(return_value=MockResult([]))
+
+        resp = await client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
+        )
+
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_participants_auth_required(self, unauthed_client):
+        """GET participants without auth → 403."""
+        resp = await unauthed_client.get(
+            f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/participants"
         )
         assert resp.status_code == 403

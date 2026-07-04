@@ -3,7 +3,14 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system deps (gcc for building, ffmpeg for audio conversion in deferred transcription)
-RUN apt-get update && apt-get install -y --no-install-recommends gcc ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends gcc ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep Python build tooling current; scanners flag vulnerable transitive
+# versions bundled in the base image even when application deps are clean.
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel jaraco.context
 
 # Install schema-sync library
 COPY libs/schema-sync /schema-sync

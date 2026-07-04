@@ -29,6 +29,7 @@ const baseBrowserArgs = [
   "--incognito",
   "--no-sandbox",
   "--disable-setuid-sandbox",
+  "--autoplay-policy=no-user-gesture-required",
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",
@@ -82,7 +83,7 @@ const baseBrowserArgs = [
 // launch). Chrome still binds 9222 on 127.0.0.1 only; the entrypoint socat relay
 // re-exposes it on 0.0.0.0:9223 for the gateway to reach across the docker network.
 export const CDP_DEBUG_ARGS = [
-  '--remote-debugging-port=9222',
+  `--remote-debugging-port=${process.env.VEXA_CDP_PORT || '9222'}`,
   '--remote-debugging-address=0.0.0.0',
   '--remote-allow-origins=*',
 ];

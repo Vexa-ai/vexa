@@ -8,6 +8,23 @@ import {
   teamsRejectionIndicators,
   teamsJoinButtonSelectors
 } from "./selectors";
+import { dismissTeamsAvConfirmModal, isTeamsAvConfirmModalVisible } from "./modals";
+
+// Clear the Teams "Continue without audio or video" confirm modal if present,
+// then re-click "Join now". This modal can keep the pre-join "Join now" button
+// in the DOM, which the waiting-room checks below would otherwise read as a
+// lobby forever. See modals.ts. Returns true if a modal was dismissed.
+async function clearAvConfirmModalAndRejoin(page: Page): Promise<boolean> {
+  const dismissed = await dismissTeamsAvConfirmModal(page);
+  if (dismissed) {
+    const joinAgain = page.locator('button:has-text("Join now")').first();
+    if (await joinAgain.isVisible().catch(() => false)) {
+      await joinAgain.click().catch(() => {});
+      log("✅ Re-clicked 'Join now' after clearing AV-confirmation modal (admission)");
+    }
+  }
+  return dismissed;
+}
 
 // Function to check if bot has been rejected from the meeting
 export async function checkForTeamsRejection(page: Page): Promise<boolean> {
@@ -66,7 +83,14 @@ export async function waitForTeamsMeetingAdmission(
 ): Promise<boolean> {
   try {
     log("Waiting for Teams meeting admission...");
-    
+
+    // Belt-and-suspenders: Teams' anonymous light-meeting confirm modal
+    // ("Are you sure you don't want audio or video?") can still be on screen
+    // when we reach here (it fires after the Join-now click). If left up it
+    // blocks the join AND keeps the pre-join "Join now" button visible, which
+    // the checks below read as a permanent waiting room. Clear it first.
+    await clearAvConfirmModalAndRejoin(page);
+
     // FIRST: Check if bot is already admitted (no waiting room needed)
     log("Checking if bot is already admitted to the Teams meeting...");
     
@@ -151,6 +175,14 @@ export async function waitForTeamsMeetingAdmission(
       const effectiveTimeout = () => timeout + getEscalationExtensionMs();
 
       while (Date.now() - startTime < effectiveTimeout()) {
+        // If the only reason we look "stuck in waiting room" is the AV-confirm
+        // modal pinning the pre-join "Join now" button, clear it and re-join.
+        if (await isTeamsAvConfirmModalVisible(page)) {
+          log("ℹ️ AV-confirmation modal detected during admission wait — clearing it");
+          await clearAvConfirmModalAndRejoin(page);
+          await page.waitForTimeout(500);
+        }
+
         // Check if we're still in waiting room using visibility
         const lobbyTextStillVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
 
@@ -293,6 +325,10 @@ export async function waitForTeamsMeetingAdmission(
           // Wait for admission in the lobby
           const lobbyStart = Date.now();
           while (Date.now() - lobbyStart < timeout) {
+            if (await isTeamsAvConfirmModalVisible(page)) {
+              await clearAvConfirmModalAndRejoin(page);
+              await page.waitForTimeout(500);
+            }
             const stillInLobby = await page.locator(teamsWaitingRoomIndicators[0]).isVisible().catch(() => false);
             if (!stillInLobby) {
               const admittedNow = await checkForAdmissionIndicators(page);

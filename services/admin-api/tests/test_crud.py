@@ -20,13 +20,33 @@ from httpx import AsyncClient, ASGITransport
 
 # --- Helpers ---
 
+def _iter_flat_routes(routes, prefix=""):
+    """Yield (prefix, route) pairs, flattening lazily included routers.
+
+    FastAPI >= 0.137 no longer flattens `include_router()` into `app.routes`;
+    it appends a lazy `_IncludedRouter` placeholder instead. Recurse into its
+    `original_router` (carrying any include-time prefix) so route-existence
+    checks keep working on both old and new FastAPI versions.
+    """
+    for route in routes:
+        included_router = getattr(route, "original_router", None)
+        if included_router is not None:
+            include_context = getattr(route, "include_context", None)
+            include_prefix = getattr(include_context, "prefix", "") or ""
+            yield from _iter_flat_routes(
+                included_router.routes, prefix + include_prefix
+            )
+        else:
+            yield prefix, route
+
+
 def _route_paths_and_methods():
     """Extract (path, methods) tuples from app routes."""
     routes = []
-    for route in app.routes:
+    for prefix, route in _iter_flat_routes(app.routes):
         if hasattr(route, "methods") and hasattr(route, "path"):
             for method in route.methods:
-                routes.append((route.path, method))
+                routes.append((prefix + route.path, method))
     return routes
 
 

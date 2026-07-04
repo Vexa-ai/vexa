@@ -28,6 +28,7 @@ from meeting_api.schemas import (
     ErrorResponse,
     Platform,
     BotStatusResponse,
+    ParticipantsResponse,
     SpeakRequest, ChatSendRequest, ChatMessagesResponse, ScreenContentRequest,
 )
 
@@ -79,8 +80,8 @@ if not all([ADMIN_API_URL, MEETING_API_URL, TRANSCRIPTION_COLLECTOR_URL, MCP_URL
     raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Security Schemes for OpenAPI
-api_key_scheme = APIKeyHeader(name="X-API-Key", description="API Key for client operations", auto_error=False)
-admin_api_key_scheme = APIKeyHeader(name="X-Admin-API-Key", description="API Key for admin operations", auto_error=False)
+api_key_scheme = APIKeyHeader(name="X-API-Key", scheme_name="ApiKeyAuth", description="API Key for client operations", auto_error=False)
+admin_api_key_scheme = APIKeyHeader(name="X-Admin-API-Key", scheme_name="AdminApiKeyAuth", description="API Key for admin operations", auto_error=False)
 
 _VEXA_ENV = os.getenv("VEXA_ENV", "development")
 _PUBLIC_DOCS = _VEXA_ENV != "production"
@@ -178,6 +179,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- fastapi-guard: per-IP rate limiting, IP allow/deny + auto-ban ---
+# Complementary to the per-key rate_limit_middleware below (per-key catches
+# one-token-many-IPs; guard's per-IP catches many-tokens-from-one-IP and
+# auto-bans repeat offenders). See guard_config.py for the full config and the
+# rationale for what's enabled/disabled. The per-key limiter is NOT replaced.
+from guard_config import apply_guard  # noqa: E402
+
+apply_guard(app)
 
 # --- Rate Limiting Middleware ---
 RATE_LIMIT_SKIP_PATHS = {"/", "/docs", "/openapi.json", "/redoc"}
@@ -496,6 +506,19 @@ async def get_bots_status_proxy(request: Request):
     url = f"{MEETING_API_URL}/bots/status"
     return await forward_request(app.state.http_client, "GET", url, request)
 # --- END Route for GET /bots/status ---
+
+# --- Route for GET /bots/{platform}/{native_meeting_id}/participants ---
+@app.get("/bots/{platform}/{native_meeting_id}/participants",
+         tags=["Bot Management"],
+         summary="Get participants detected in a meeting",
+         description="Retrieves the distinct participants (speakers) detected in a meeting, aggregated from its transcript segments.",
+         response_model=ParticipantsResponse,
+         dependencies=[Depends(api_key_scheme)])
+async def get_participants_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward request to Bot Manager to get the meeting's participants."""
+    url = f"{MEETING_API_URL}/bots/{platform.value}/{native_meeting_id}/participants"
+    return await forward_request(app.state.http_client, "GET", url, request)
+# --- END Route for GET /bots/{platform}/{native_meeting_id}/participants ---
 
 @app.get("/bots/id/{meeting_id}",
          tags=["Bot Management"],

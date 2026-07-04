@@ -1,6 +1,6 @@
 import { runBot } from "."
 import { z } from 'zod';
-import { BotConfig, BrowserSessionConfig } from "./types";
+import { BotConfig } from "./types";
 
 // Browser session mode schema — only needs Redis + S3/workspace config
 const BrowserSessionConfigSchema = z.object({
@@ -27,6 +27,8 @@ export const BotConfigSchema = z.object({
   meetingUrl: z.string().url().nullable(),
   botName: z.string(),
   token: z.string().optional(),
+  obfToken: z.string().optional(),
+  zakToken: z.string().optional(),
   connectionId: z.string().optional(),
   nativeMeetingId: z.string().optional(),
   language: z.string().nullish(),
@@ -51,6 +53,9 @@ export const BotConfigSchema = z.object({
   transcriptionServiceUrl: z.string().optional(),
   transcriptionServiceToken: z.string().optional(),
   voiceAgentEnabled: z.boolean().optional(),
+  voiceAgentSettings: z.object({
+    url: z.string().optional(),
+  }).optional(),
   defaultAvatarUrl: z.string().url().optional(),
   videoReceiveEnabled: z.boolean().optional(),
   cameraEnabled: z.boolean().optional(),
@@ -63,7 +68,31 @@ export const BotConfigSchema = z.object({
   workspaceGitRepo: z.string().optional(),
   workspaceGitToken: z.string().optional(),
   workspaceGitBranch: z.string().optional(),
+  cookieStorageBackend: z.literal('http').optional(),
+  cookieServiceUrl: z.string().optional(),
+  cookieServiceToken: z.string().optional(),
+  userId: z.string().optional(),
 });
+
+function normalizeBotConfigAliases(parsedConfig: any): any {
+  if (!parsedConfig || typeof parsedConfig !== "object") return parsedConfig;
+  const config = { ...parsedConfig };
+
+  if (config.voiceAgentEnabled === undefined && config.voice_agent_enabled !== undefined) {
+    config.voiceAgentEnabled = config.voice_agent_enabled;
+  }
+  if (config.cameraEnabled === undefined && config.camera_enabled !== undefined) {
+    config.cameraEnabled = config.camera_enabled;
+  }
+  if (config.defaultAvatarUrl === undefined && config.default_avatar_url !== undefined) {
+    config.defaultAvatarUrl = config.default_avatar_url;
+  }
+  if (config.voiceAgentSettings === undefined && config.voice_agent_settings !== undefined) {
+    config.voiceAgentSettings = config.voice_agent_settings;
+  }
+
+  return config;
+}
 
 
 // #407 407-C: a crash BEFORE runBot (missing/invalid BOT_CONFIG, schema-validation
@@ -124,7 +153,7 @@ async function reportStartupFailure(rawConfig: string | undefined, error: any): 
   }
 
   try {
-    const parsedConfig = JSON.parse(rawConfig);
+    const parsedConfig = normalizeBotConfigAliases(JSON.parse(rawConfig));
 
     // Check mode BEFORE Zod validation — each mode has its own schema
     if (parsedConfig.mode === "browser_session") {
