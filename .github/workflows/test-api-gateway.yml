@@ -6,11 +6,14 @@ on:
     paths:
       - 'services/api-gateway/**'
       - 'services/meeting-api/meeting_api/schemas.py'
+      - 'constraints.txt'
       - '.github/workflows/test-api-gateway.yml'
   pull_request:
     paths:
       - 'services/api-gateway/**'
       - 'services/meeting-api/**'
+      - 'constraints.txt'
+      - '.github/workflows/test-api-gateway.yml'
 
 permissions:
   contents: read
@@ -18,6 +21,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Cap framework versions so unpinned floors can't pull a breaking
+      # release onto the merge path (see constraints.txt).
+      PIP_CONSTRAINT: ${{ github.workspace }}/constraints.txt
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -31,6 +38,7 @@ jobs:
           pip install -e services/meeting-api/
           pip install -r services/api-gateway/requirements.txt
           pip install pytest pytest-asyncio httpx
+          pip list --format=freeze | grep -iE '^(fastapi|starlette|pydantic|pytest|httpx|uvicorn)'
       - name: Run tests
         env:
           ADMIN_API_URL: http://admin-api:8001
