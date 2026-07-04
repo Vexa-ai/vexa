@@ -1,0 +1,166 @@
+{
+  "$id": "https://vexa.ai/contracts/config.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "config.v1",
+  "description": "The per-service deployment-config declaration: every environment key a service consumes, classed as required-explicit (boot fails loud if unset), defaulted (the code default, documented), or capability (a named optional capability whose tri-state — configured / not_configured / misconfigured — is computed from the env, optionally live-probed, exposed on /health, and consulted by capability-gated endpoints). The declaration is the SSOT the deploy surfaces (compose / helm / lite) and the boot preflight are checked against (gate:config-contract).",
+  "type": "object",
+  "required": ["contract", "service", "keys"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": { "const": "config.v1" },
+    "service": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "The adopting service's name (compose service / helm component / lite program)."
+    },
+    "keys": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/KeyDeclaration" },
+      "description": "Every environment key this service reads (or brokers), one declaration each."
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/Capability" },
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "description": "The named optional capabilities the `capability`-classed keys group into."
+    },
+    "surface_only": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/SurfaceOnlyKey" },
+      "description": "Keys a deploy surface sets on this service that the service does NOT read — documented drift (each entry names why it is still there), so the surface↔declaration check stays honest without silently ignoring anything."
+    }
+  },
+  "$defs": {
+    "Target": {
+      "enum": ["compose", "helm", "lite"],
+      "description": "A deploy surface: deploy/compose (docker-compose.yml + .env.example), deploy/helm (chart templates/values), deploy/lite (entrypoint.sh + supervisord.conf)."
+    },
+    "KeyDeclaration": {
+      "type": "object",
+      "required": ["key", "class", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+        "class": {
+          "enum": ["required-explicit", "defaulted", "capability"],
+          "description": "required-explicit: unset/empty ⇒ the boot preflight raises and the deploy refuses to start. defaulted: the documented code default applies when unset. capability: the key belongs to the named capability; the service runs either way and the capability's tri-state is computed from the env."
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "default": {
+          "type": "string",
+          "description": "The effective default when unset (required for class=defaulted; may describe a derivation, e.g. \"(derived from AGENT_IMAGE)\")."
+        },
+        "capability": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "The capability this key belongs to (required for class=capability; must name an entry in `capabilities`)."
+        },
+        "secret": {
+          "type": "boolean",
+          "description": "The value is a credential (P14): never logged, never in goldens; deploy surfaces feed it from a secret store."
+        },
+        "targets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Target" },
+          "uniqueItems": true,
+          "description": "Which deploy surfaces plumb this key (default: all three). An EMPTY array = an in-code dial deliberately not exposed by any deploy surface (still declared, so the undeclared-read scan stays tight)."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "class": { "const": "defaulted" } }, "required": ["class"] },
+          "then": { "required": ["default"] }
+        },
+        {
+          "if": { "properties": { "class": { "const": "capability" } }, "required": ["class"] },
+          "then": { "required": ["capability"] }
+        },
+        {
+          "if": { "properties": { "class": { "const": "required-explicit" } }, "required": ["class"] },
+          "then": { "not": { "required": ["default"] } }
+        }
+      ]
+    },
+    "Capability": {
+      "type": "object",
+      "required": ["description", "when_unconfigured"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string", "minLength": 1 },
+        "mode": {
+          "enum": ["all", "any"],
+          "description": "all (default): configured ⇔ every member key set; SOME-but-not-all set ⇒ misconfigured. any: configured ⇔ at least one member key set (alternative credential paths); env-only state is never misconfigured (a probe can still demote to misconfigured)."
+        },
+        "when_unconfigured": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The observable degraded behavior: what capability-gated endpoints answer (the typed, actionable error) when the capability is not configured."
+        },
+        "probe": { "$ref": "#/$defs/Probe" }
+      }
+    },
+    "Probe": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "description": "A cheap LIVE verification that set values actually WORK — so set-but-failing credentials show as `misconfigured` on /health BEFORE any workload runs (the silent-401 STT incident). Probes run only when the env-level state is already `configured`; they execute at boot (logged, never boot-blocking) and lazily on /health when the cached result is older than `ttl_s`. A probe failure demotes the /health row to `misconfigured` with a reason; it never changes the service's own `status`.",
+      "properties": {
+        "kind": { "enum": ["http", "file"] },
+        "timeout_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Per-attempt budget (default 2s — must stay under the deploy healthcheck timeout)."
+        },
+        "ttl_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Cache lifetime (default 60s): /health refreshes the probe at most this often."
+        },
+        "http": {
+          "type": "object",
+          "required": ["url_key"],
+          "additionalProperties": false,
+          "description": "One authenticated request to the capability's endpoint. Verdict: an `unauthorized_statuses` answer or a network failure/timeout ⇒ probe FAILS (misconfigured); ANY other status (400/404/405/…) proves the endpoint is reachable and the credential accepted ⇒ probe passes.",
+          "properties": {
+            "method": { "type": "string", "default": "POST" },
+            "url_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the base URL" },
+            "path": { "type": "string", "description": "appended to the base URL (e.g. /v1/audio/transcriptions)" },
+            "auth_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the bearer token sent as Authorization" },
+            "unauthorized_statuses": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "description": "statuses that mean the credential was REJECTED (default [401, 403])"
+            }
+          }
+        },
+        "file": {
+          "type": "object",
+          "required": ["path_key"],
+          "additionalProperties": false,
+          "description": "Verifies a credentials FILE as visible to THIS service. Skipped (not failed) when `path_key` is unset — e.g. a mode:any capability satisfied by an API key instead. Verdict: a regular, readable, non-empty JSON file ⇒ passes; a DIRECTORY (docker's bind-mount of a missing host path), unreadable, or non-JSON content ⇒ FAILS (misconfigured). `fallback_paths` lets a containerized service check a mirror mount of a docker-HOST path it cannot see directly.",
+          "properties": {
+            "path_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "the declared key holding the path (HOST-path semantics documented on the key)" },
+            "fallback_paths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "in-container mirror locations checked when the key's own path is not visible locally"
+            }
+          }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "http" } } }, "then": { "required": ["http"] } },
+        { "if": { "properties": { "kind": { "const": "file" } } }, "then": { "required": ["file"] } }
+      ]
+    },
+    "SurfaceOnlyKey": {
+      "type": "object",
+      "required": ["key", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

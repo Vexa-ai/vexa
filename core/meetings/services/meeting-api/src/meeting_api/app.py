@@ -69,10 +69,15 @@ def create_app(
     # The edge: read/mint X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
 
-    # --- shared liveness probe (gate:health): the unified process is up. No auth, no I/O. ---
+    # --- shared liveness probe (gate:health): the unified process is up. No auth. The ADDITIVE
+    # `capabilities` rows are the config.v1 tri-states (stt · object_storage) incl. the cached STT
+    # live auth probe (ADR-0026) — existing consumers key on `status` only and keep working; the
+    # rows never flip `status` (an unconfigured capability degrades a FEATURE, not the process). ---
     @app.get("/health")
     async def health():
-        return {"status": "ok", "service": "meeting-api"}
+        from .config_preflight import capability_health
+
+        return {"status": "ok", "service": "meeting-api", "capabilities": capability_health()}
 
     # --- bot_spawn ports (resolved FIRST: the meeting_repo is also the lifecycle-persistence target) ---
     if meeting_repo is None:

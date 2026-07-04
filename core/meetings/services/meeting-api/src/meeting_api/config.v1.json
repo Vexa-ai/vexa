@@ -1,0 +1,264 @@
+{
+  "contract": "config.v1",
+  "service": "meeting-api",
+  "keys": [
+    {
+      "key": "ADMIN_TOKEN",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4)"
+    },
+    {
+      "key": "DB_HOST",
+      "class": "defaulted",
+      "default": "postgres",
+      "description": "PostgreSQL host (the meeting/session/transcript store)"
+    },
+    {
+      "key": "DB_PORT",
+      "class": "defaulted",
+      "default": "5432",
+      "description": "PostgreSQL port"
+    },
+    {
+      "key": "DB_NAME",
+      "class": "defaulted",
+      "default": "vexa",
+      "description": "PostgreSQL database name"
+    },
+    {
+      "key": "DB_USER",
+      "class": "defaulted",
+      "default": "postgres",
+      "description": "PostgreSQL user"
+    },
+    {
+      "key": "DB_PASSWORD",
+      "class": "defaulted",
+      "default": "postgres",
+      "secret": true,
+      "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+    },
+    {
+      "key": "DATABASE_URL",
+      "class": "defaulted",
+      "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD as postgresql+asyncpg://)",
+      "secret": true,
+      "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen)",
+      "targets": []
+    },
+    {
+      "key": "REDIS_URL",
+      "class": "defaulted",
+      "default": "redis://redis:6379/0",
+      "description": "the transcription_segments stream + bm:meeting:{id}:status pub/sub + bot-command channel backing"
+    },
+    {
+      "key": "RUNTIME_API_URL",
+      "class": "defaulted",
+      "default": "http://runtime:8090",
+      "description": "the runtime kernel's runtime.v1 surface bot_spawn creates workloads on"
+    },
+    {
+      "key": "MEETING_API_URL",
+      "class": "defaulted",
+      "default": "http://meeting-api:8080",
+      "description": "this service's own base URL as the spawned bot must reach it (lifecycle.v1 callback + transcript socket); compose/helm rely on the default service DNS name, lite overrides to localhost",
+      "targets": ["lite"]
+    },
+    {
+      "key": "INTERNAL_API_SECRET",
+      "class": "defaulted",
+      "default": "(unset — the internal lifecycle-callback header is then not attached)",
+      "secret": true,
+      "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback)"
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_URL",
+      "class": "capability",
+      "capability": "stt",
+      "description": "STT base URL the spawned bot transcribes against (the client appends /v1/audio/transcriptions) — self-hosted deploy/transcription or a hosted vexa.ai token's endpoint"
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_TOKEN",
+      "class": "capability",
+      "capability": "stt",
+      "secret": true,
+      "description": "bearer token for the STT service (must match that unit's API_TOKEN)"
+    },
+    {
+      "key": "TRANSCRIBE_ENABLED",
+      "class": "defaulted",
+      "default": "true",
+      "description": "deployment-level default for a spawn's transcribe_enabled when the request does not say — set false for a capture-only deployment with no STT",
+      "targets": ["compose"]
+    },
+    {
+      "key": "RECORDING_ENABLED",
+      "class": "defaulted",
+      "default": "true",
+      "description": "deployment-level default for a spawn's recording_enabled when the request does not say",
+      "targets": ["compose"]
+    },
+    {
+      "key": "MINIO_ENDPOINT",
+      "class": "defaulted",
+      "default": "minio:9000",
+      "description": "object-store host:port (or full http(s) URL) recordings are written to"
+    },
+    {
+      "key": "MINIO_ACCESS_KEY",
+      "class": "capability",
+      "capability": "object_storage",
+      "description": "object-store access key (recordings upload/finalize)"
+    },
+    {
+      "key": "MINIO_SECRET_KEY",
+      "class": "capability",
+      "capability": "object_storage",
+      "secret": true,
+      "description": "object-store secret key"
+    },
+    {
+      "key": "MINIO_BUCKET",
+      "class": "defaulted",
+      "default": "vexa",
+      "description": "recordings bucket"
+    },
+    {
+      "key": "MINIO_SECURE",
+      "class": "defaulted",
+      "default": "false",
+      "description": "https toward the object store when true"
+    },
+    {
+      "key": "S3_ENDPOINT",
+      "class": "defaulted",
+      "default": "(unset — falls back to MINIO_ENDPOINT/MINIO_SECURE)",
+      "description": "explicit S3 endpoint override for a non-MinIO store",
+      "targets": []
+    },
+    {
+      "key": "S3_ACCESS_KEY",
+      "class": "defaulted",
+      "default": "(unset — falls back to MINIO_ACCESS_KEY)",
+      "description": "explicit S3 access-key override",
+      "targets": []
+    },
+    {
+      "key": "S3_SECRET_KEY",
+      "class": "defaulted",
+      "default": "(unset — falls back to MINIO_SECRET_KEY)",
+      "secret": true,
+      "description": "explicit S3 secret-key override",
+      "targets": []
+    },
+    {
+      "key": "RECORDING_BUCKET",
+      "class": "defaulted",
+      "default": "recordings",
+      "description": "recordings bucket for the standalone recordings composition (the unified app uses MINIO_BUCKET first)",
+      "targets": []
+    },
+    {
+      "key": "STORAGE_BACKEND",
+      "class": "defaulted",
+      "default": "minio",
+      "description": "storage-backend label stamped into the recording's meeting.data JSONB",
+      "targets": []
+    },
+    {
+      "key": "MEETING_TOKEN_TTL_SECONDS",
+      "class": "defaulted",
+      "default": "18000",
+      "description": "MeetingToken lifetime — must outlive the bot's max active time (default 4h) or transcription dies mid-meeting",
+      "targets": []
+    },
+    {
+      "key": "SEGMENT_CONSUMER_INTERVAL",
+      "class": "defaulted",
+      "default": "0.5",
+      "description": "poll interval (s) of the transcription_segments stream consumer loop",
+      "targets": []
+    },
+    {
+      "key": "WEBHOOK_DRAIN_INTERVAL",
+      "class": "defaulted",
+      "default": "5",
+      "description": "sweep interval (s) of the webhook retry-queue drain loop",
+      "targets": []
+    },
+    {
+      "key": "SCHEDULER_TICK_INTERVAL",
+      "class": "defaulted",
+      "default": "1",
+      "description": "tick interval (s) of the schedule.v1 job loop (drives join-retry re-spawns)",
+      "targets": []
+    },
+    {
+      "key": "STOP_RECONCILE_GRACE_S",
+      "class": "defaulted",
+      "default": "45",
+      "description": "grace (s) before a stopping meeting whose workload is gone is reconciled",
+      "targets": []
+    },
+    {
+      "key": "STOP_RECONCILE_INTERVAL_S",
+      "class": "defaulted",
+      "default": "15",
+      "description": "interval (s) of the stop-reconcile loop",
+      "targets": []
+    },
+    {
+      "key": "RECONCILE_ACTIVE_GRACE_S",
+      "class": "defaulted",
+      "default": "300",
+      "description": "grace (s) before an active meeting with a dead workload is failed by the reconciler",
+      "targets": []
+    },
+    {
+      "key": "HOST",
+      "class": "defaulted",
+      "default": "0.0.0.0",
+      "description": "uvicorn bind host (lite binds 127.0.0.1 behind its internal proxy)",
+      "targets": ["lite"]
+    },
+    {
+      "key": "PORT",
+      "class": "defaulted",
+      "default": "8080",
+      "description": "uvicorn bind port",
+      "targets": ["lite"]
+    },
+    {
+      "key": "LOG_LEVEL",
+      "class": "defaulted",
+      "default": "info",
+      "description": "uvicorn/app log level"
+    }
+  ],
+  "capabilities": {
+    "stt": {
+      "description": "spawned bots can transcribe (the STT service bot_spawn threads into the invocation.v1 payload)",
+      "mode": "all",
+      "when_unconfigured": "POST /bots with transcribe_enabled=true answers a typed 503 naming the unset key(s) — bots must opt out explicitly (transcribe_enabled=false / TRANSCRIBE_ENABLED=false) to spawn capture-only",
+      "probe": {
+        "kind": "http",
+        "timeout_s": 2,
+        "ttl_s": 60,
+        "http": {
+          "method": "POST",
+          "url_key": "TRANSCRIPTION_SERVICE_URL",
+          "path": "/v1/audio/transcriptions",
+          "auth_key": "TRANSCRIPTION_SERVICE_TOKEN",
+          "unauthorized_statuses": [401, 403]
+        }
+      }
+    },
+    "object_storage": {
+      "description": "recordings persist to the object store (chunk upload + finalize → meeting.data JSONB)",
+      "mode": "all",
+      "when_unconfigured": "recording upload/finalize fails at request time with a storage auth error; transcripts are unaffected"
+    }
+  }
+}

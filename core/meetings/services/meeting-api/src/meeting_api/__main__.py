@@ -36,28 +36,20 @@ def _database_url() -> str:
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
 
 
-# Config the production boot REQUIRES to be functional. Validated fail-fast in build_production_app so
-# a misconfigured deploy refuses to boot (A4) — rather than booting fine and 500-ing every POST /bots
-# when the MeetingToken mint hits a missing ADMIN_TOKEN deep in the request path.
-_REQUIRED_ENV = ("ADMIN_TOKEN",)
-
-
 def _require_config(env: "os._Environ | dict | None" = None) -> None:
-    """Fail-fast on missing required config (A4). ADMIN_TOKEN is HS256-signing the MeetingToken every
-    spawn mints (invocation.mint_meeting_token) AND the recordings-upload verifier checks — unset, the
-    deploy 500s every POST /bots. Raise a clear, actionable error at boot instead.
+    """Fail-fast on missing required config (A4), driven by the config.v1 declaration (ADR-0026).
 
-    Raises ``RuntimeError`` naming every missing var, so the failure points straight at the misconfig.
+    ``config.v1.json`` (next to this module) declares every env key the service consumes; the
+    vendored shared preflight raises ``ConfigError`` (a ``RuntimeError``) naming every missing
+    *required-explicit* key — today ADMIN_TOKEN, which HS256-signs the MeetingToken every spawn
+    mints (invocation.mint_meeting_token) AND the recordings-upload verifier checks; unset, the
+    deploy would 500 every POST /bots, so it refuses to boot instead. Capability tri-states
+    (stt · object_storage, incl. the STT live auth probe) are logged here and exposed on
+    ``/health``; they never block boot.
     """
-    src = env if env is not None else os.environ
-    missing = [name for name in _REQUIRED_ENV if not (src.get(name) or "").strip()]
-    if missing:
-        raise RuntimeError(
-            "meeting-api is misconfigured and refuses to boot — required environment "
-            f"variable(s) not set: {', '.join(missing)}. "
-            "ADMIN_TOKEN HS256-signs the per-spawn MeetingToken (and the recordings-upload verifier); "
-            "without it every POST /bots would 500. Set it and restart."
-        )
+    from .config_preflight import preflight
+
+    preflight(env)
 
 
 def build_production_app():
