@@ -18,14 +18,16 @@ import subprocess
 from typing import Callable, Optional
 
 from llm.errors import LLMAuthError, LLMError, looks_like_auth_failure
-from llm.ports import CompletionResult
+from llm.ports import CompletionResult, scrubbed_git_env
 
 # A blocking CLI runner: argv, cwd, timeout → (returncode, stdout+stderr text). Injected for tests.
 CliRun = Callable[[list[str], str, float], tuple[int, str]]
 
 
 def _run_subprocess(argv: list[str], cwd: str, timeout: float) -> tuple[int, str]:
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    # scrubbed_git_env: the CLI shells out to git; a hook-exported GIT_DIR must not re-point it.
+    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                          env=scrubbed_git_env())
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 

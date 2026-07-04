@@ -20,10 +20,28 @@ This module imports NOTHING from product code — it must stay liftable into a s
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Protocol
+
+# Env vars that redirect git's repo/worktree/index/object discovery away from cwd. Git HOOKS
+# export GIT_DIR (and friends) into their descendants; a git subprocess inheriting them operates
+# on the HOOK's repo with its own cwd as the work tree — a workspace commit then REWRITES the
+# hook's branch. Deliberately a module-local twin of ``shared.gitenv`` (this module owns zero
+# product imports so it stays liftable, same stance as the local ``_git`` below).
+_GIT_REPO_DISCOVERY_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+                            "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+                            "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+
+
+def scrubbed_git_env() -> dict[str, str]:
+    """``os.environ`` minus every git repo-discovery redirect — cwd-based discovery, always.
+    Used for the local ``_git`` AND for launching harness CLIs (they shell out to git in the
+    workspace and would inherit the same poisoned discovery)."""
+    return {k: v for k, v in os.environ.items() if k not in _GIT_REPO_DISCOVERY_VARS}
+
 
 # A raw process runner: given an argv + a cwd, yield the process's stdout lines. Injected into CLI
 # harness adapters so their parsers are offline-provable with a fake (no CLI, no network).
@@ -74,8 +92,10 @@ class HarnessPort(Protocol):
 
 def _git(work: Path, *args: str) -> str:
     """Local git runner (trimmed stdout). Deliberately NOT shared.adapters._git — this module owns
-    zero product imports so it stays liftable."""
-    proc = subprocess.run(["git", *args], cwd=work, capture_output=True, text=True, check=True)
+    zero product imports so it stays liftable. Scrubbed env: the turn commit must land on ``work``,
+    never on a repo a hook exported via GIT_DIR."""
+    proc = subprocess.run(["git", *args], cwd=work, capture_output=True, text=True, check=True,
+                          env=scrubbed_git_env())
     return proc.stdout.strip()
 
 

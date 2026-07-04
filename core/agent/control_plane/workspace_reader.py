@@ -212,13 +212,16 @@ class WorkspaceReader:
         (the governed git knowledge graph the agent commits to). Empty shape if not yet a repo."""
         import subprocess
 
+        from shared.gitenv import scrubbed_git_env
+
         ws = self._ws(subject)
         if not (ws / ".git").exists():
             return {"branch": "", "changes": [], "commits": []}
 
         def git(*args: str) -> str:
+            # scrubbed env: a hook-exported GIT_DIR would report the HOOK's repo, not this workspace
             return subprocess.run(
-                ["git", "-C", str(ws), *args], capture_output=True, text=True
+                ["git", "-C", str(ws), *args], capture_output=True, text=True, env=scrubbed_git_env()
             ).stdout.strip()
 
         changes = []
