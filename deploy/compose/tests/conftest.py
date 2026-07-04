@@ -261,11 +261,14 @@ def stack():
 
 
 def _cleanup(s: Stack) -> None:
-    # Remove any bot containers the runtime spawned on the HOST daemon (default-bridge, outside the
-    # compose project) so `down -v` leaves nothing behind.
+    # Remove any bot containers the runtime spawned on the HOST daemon (outside the compose project)
+    # so `down -v` leaves nothing behind. Scoped to THIS project's network: the runtime attaches every
+    # workload to DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa, and a bare name=^vexa-mtg- would rm -f
+    # ANOTHER stack's live meeting bots on a shared host (the exact bbb-prod-box scenario COMPOSE_PROJECT
+    # exists for).
     try:
         names = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "name=^vexa-mtg-"],
+            ["docker", "ps", "-aq", "--filter", "name=^vexa-mtg-", "--filter", f"network={PROJECT}_vexa"],
             capture_output=True, text=True, timeout=30,
         ).stdout.split()
         if names:
