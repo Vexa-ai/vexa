@@ -155,6 +155,8 @@ test_data/
 *.mp4
 *.txt
 !**/requirements.txt
+# CI dependency ceilings applied via PIP_CONSTRAINT in the test workflows.
+!constraints.txt
 # v0.10.5.3 fix: hallucinations corpus files were silently dropped when
 # *.txt was added globally. The corpus is loaded by hallucination-filter.ts
 # at runtime — without these files the bot ships with empty filter,
