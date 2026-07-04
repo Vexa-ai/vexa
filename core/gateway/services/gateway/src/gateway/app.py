@@ -56,6 +56,9 @@ _DEFAULT_MEETING_API_URL = "http://meeting-api"
 # agent-api (Stage 1) derives its `subject` from that header (never from the client). Sentinel base —
 # the DownstreamClient resolves it; what matters is the /api/<path> the gateway forwards verbatim.
 _DEFAULT_AGENT_API_URL = "http://agent-api"
+# The identity control plane (admin-api): the self-serve /user/webhook config lives there
+# (writes to user.data JSONB — the same blob /internal/validate reads the webhook config from).
+_DEFAULT_ADMIN_API_URL = "http://admin-api"
 
 
 def _required_scopes(path: str) -> Optional[Set[str]]:
@@ -72,6 +75,7 @@ def create_app(
     *,
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
     agent_api_url: str = _DEFAULT_AGENT_API_URL,
+    admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     rate_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
@@ -317,6 +321,24 @@ def create_app(
         return await _forward(
             "PUT", _meeting(f"/meetings/{platform}/{native_meeting_id}/intent"), request
         )
+
+    # ---- user self-serve webhook config (main.py:1080 set_user_webhook_proxy) ----
+    # Identity OWNS the config (user.data JSONB via admin-api); the gateway is the public edge for
+    # it, exactly like the meeting routes: _forward resolves the key via /internal/validate (the
+    # Authorizer), injects identity headers, and returns the downstream body + status verbatim.
+    # No ROUTE_SCOPES entry — any valid key may manage its own webhook (parity with 0.10.6, which
+    # gated it on api_key_scheme alone).
+    def _admin(path: str) -> str:
+        return f"{admin_api_url}{path}"
+
+    @app.put("/user/webhook")
+    async def set_user_webhook(request: Request):
+        return await _forward("PUT", _admin("/user/webhook"), request)
+
+    # Read-back for the self-serve config (admin-api masks the secret before it ships).
+    @app.get("/user/webhook")
+    async def get_user_webhook(request: Request):
+        return await _forward("GET", _admin("/user/webhook"), request)
 
     # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under the canonical /agent/*
     # prefix so the SAME edge resolves key → user and injects X-User-Id; agent-api derives `subject`

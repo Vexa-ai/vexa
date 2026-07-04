@@ -83,6 +83,15 @@ def test_golden_identity_flow(client):
                          "webhook_events": {"meeting.completed": True}})
     assert r.status_code == 200, r.text
 
+    # 2c. read the config back (self-serve GET) — the secret is MASKED, never in the clear
+    r = client.get("/user/webhook", headers={"X-API-Key": token_value})
+    assert r.status_code == 200, r.text
+    cfg = r.json()
+    assert cfg["webhook_url"] == "https://example.com/hook"
+    assert cfg["webhook_secret_set"] is True
+    assert "shh" not in (cfg["webhook_secret"] or "")
+    assert cfg["webhook_events"] == {"meeting.completed": True}
+
     # 3. /internal/validate — correct secret → user_id + scopes + webhook config surfaced
     r = client.post("/internal/validate", headers={"X-Internal-Secret": INTERNAL_SECRET},
                     json={"token": token_value})

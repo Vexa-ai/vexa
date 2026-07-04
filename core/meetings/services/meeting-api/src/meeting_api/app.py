@@ -146,10 +146,36 @@ def _mount_lifecycle(
 
     from .lifecycle.machine import IllegalTransition, TransitionSource
     from .lifecycle.receiver import conforms
-    from .lifecycle.webhook import build_status_change_envelope
+    from .lifecycle.webhook import build_status_change_envelope, build_typed_envelope
     from .obs import log_event
+    from .webhooks import clean_meeting_data
+
+    def _iso(v):
+        return v.isoformat() if hasattr(v, "isoformat") else v
+
+    def _meeting_projection_from_row(row: dict) -> dict:
+        """The parent's `_build_meeting_event_data` shape (webhooks.py) from a meeting row dict —
+        the meeting block the typed webhooks carry (golden Envelope.meeting-completed.json).
+        completion_reason/failure_stage are hoisted to top level; internal data keys stripped."""
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        return {
+            "id": row.get("id"),
+            "user_id": row.get("user_id"),
+            "platform": row.get("platform"),
+            "native_meeting_id": row.get("native_meeting_id"),
+            "constructed_meeting_url": row.get("constructed_meeting_url"),
+            "status": row.get("status"),
+            "completion_reason": data.get("completion_reason"),
+            "failure_stage": data.get("failure_stage"),
+            "start_time": _iso(row.get("start_time")),
+            "end_time": _iso(row.get("end_time")),
+            "data": clean_meeting_data(data),
+            "created_at": _iso(row.get("created_at")),
+            "updated_at": _iso(row.get("updated_at")),
+        }
 
     app.state.status_change_webhooks = []
+    app.state.typed_webhooks = []
 
     @app.post("/bots/internal/callback/lifecycle")
     async def lifecycle_callback(request: Request) -> JSONResponse:
@@ -226,22 +252,41 @@ def _mount_lifecycle(
             except Exception as e:  # noqa: BLE001 — persistence is best-effort
                 log_event("lifecycle_persist_failed", audience="system", level="warning",
                           span="lifecycle.callback", fields={"error": str(e)})
-        # Deliver the sealed meeting.status_change webhook to the user's configured endpoint (per-user
-        # config rides on meeting.data — set at spawn from identity via the gateway; NO users-table read).
+        # Build the TYPED event the transition maps to (meeting.started on active,
+        # meeting.completed with the post-meeting envelope on completion, bot.failed on terminal
+        # failure) — additive alongside meeting.status_change, never instead of it. Built AFTER the
+        # persist so the meeting block is the durable row projection (the parent's
+        # _build_meeting_event_data shape) when the row is known; the FSM-record fallback otherwise.
+        typed_envelope = None
+        if not change.no_op:
+            typed_envelope = build_typed_envelope(
+                change,
+                meeting=_meeting_projection_from_row(meeting_row)
+                if isinstance(meeting_row, dict) else None,
+            )
+            if typed_envelope is not None:
+                app.state.typed_webhooks.append(typed_envelope)
+        # Deliver the sealed webhook.v1 envelopes (meeting.status_change + the typed event, if any)
+        # to the user's configured endpoint (per-user config rides on meeting.data — set at spawn
+        # from identity via the gateway; NO users-table read). The sink's per-user event filter
+        # (webhooks/delivery.py) suppresses unsubscribed event types before any HTTP.
         # Best-effort: a delivery hiccup must never fail the bot's lifecycle callback (P3a).
         if webhook_sink is not None and isinstance(meeting_row, dict):
             data = meeting_row.get("data") if isinstance(meeting_row.get("data"), dict) else {}
             url = data.get("webhook_url")
             if url:
-                try:
-                    await webhook_sink.deliver(
-                        url, envelope, data.get("webhook_secret"),
-                        events_config=data.get("webhook_events"),
-                        label=f"meeting:{meeting_row.get('id')}",
-                    )
-                except Exception as e:  # noqa: BLE001 — delivery is best-effort
-                    log_event("webhook_deliver_failed", audience="system", level="warning",
-                              span="lifecycle.callback", fields={"error": str(e)})
+                for env in (envelope, typed_envelope):
+                    if env is None:
+                        continue
+                    try:
+                        await webhook_sink.deliver(
+                            url, env, data.get("webhook_secret"),
+                            events_config=data.get("webhook_events"),
+                            label=f"meeting:{meeting_row.get('id')}",
+                        )
+                    except Exception as e:  # noqa: BLE001 — delivery is best-effort
+                        log_event("webhook_deliver_failed", audience="system", level="warning",
+                                  span="lifecycle.callback", fields={"error": str(e)})
         # Publish each persisted FSM advance to bm:meeting:{id}:status in the canonical 0.10.6 WS
         # contract shape (the source of truth; api-gateway forwards the redis payload verbatim):
         #   {type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id, ts}
