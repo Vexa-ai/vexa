@@ -417,18 +417,22 @@ async def test_stop_reconcile_no_container_id_does_not_crash():
     assert runtime.deleted == [], "no container id → no kill, no crash"
 
 
-async def test_stop_reconcile_kill_failure_is_best_effort():
-    """A runtime.delete_workload that RAISES is caught (logged), never failing the sweep — the row is
-    still completed and the loop survives (the next tick retries)."""
+async def test_stop_reconcile_kill_failure_never_completes_the_row():
+    """A runtime.delete_workload that RAISES is caught (logged) and never crashes the sweep — but
+    the row is NOT completed: an UNCONFIRMED teardown must never produce a terminal meeting over a
+    possibly-live container (the orphaned-live-bot incident). The row stays `stopping` and the next
+    tick retries; other rows in the same sweep are still processed."""
     import logging
 
     from meeting_api.lifecycle.reconcile import reconcile_stale_stopping_sweep
 
     class _ThrowingRuntime(FakeRuntimeClient):
         async def delete_workload(self, workload_id):
-            raise RuntimeError("kernel unreachable")
+            if workload_id == "mtg-9-x":
+                raise RuntimeError("kernel unreachable")
+            await super().delete_workload(workload_id)
 
-    repo = _StaleStoppingRepo([(9, "sess-9", "mtg-9-x")])
+    repo = _StaleStoppingRepo([(9, "sess-9", "mtg-9-x"), (10, "sess-10", "mtg-10-ok")])
     posted: list[dict] = []
 
     async def post_lifecycle(body):
@@ -438,7 +442,70 @@ async def test_stop_reconcile_kill_failure_is_best_effort():
     n = await reconcile_stale_stopping_sweep(
         repo, _ThrowingRuntime(), post_lifecycle, stop_grace=45, log=logging.getLogger("t"),
     )
-    assert n == 1 and posted, "the sweep survives a kill failure and still completes the row"
+    assert n == 1, "only the CONFIRMED teardown completes; the failed one is retried next sweep"
+    assert [b["connection_id"] for b in posted] == ["sess-10"], (
+        "the unconfirmed row must NOT be completed — no terminal meeting over a possibly-live bot"
+    )
+
+
+async def test_stop_reconcile_runtime_404_never_completes_the_row():
+    """THE INCIDENT (defect C): the user pressed Stop, the recreated runtime 404'd the DELETE, and
+    the meeting was completed anyway — over a container still capturing audio. A WorkloadUnknown
+    (404) teardown is UNCONFIRMED: the row must stay `stopping` (loud in the logs), never
+    completed."""
+    import logging
+
+    from meeting_api.lifecycle.reconcile import reconcile_stale_stopping_sweep
+
+    repo = _StaleStoppingRepo([(1, "sess-1", "mtg-1-38a5a399")])
+    runtime = FakeRuntimeClient(workloads={})   # the kernel knows NOTHING (post-recreate registry)
+    posted: list[dict] = []
+
+    async def post_lifecycle(body):
+        posted.append(body)
+        return 200
+
+    n = await reconcile_stale_stopping_sweep(
+        repo, runtime, post_lifecycle, stop_grace=45, log=logging.getLogger("t"),
+    )
+    assert n == 0
+    assert posted == [], "a runtime 404 must never advance the meeting to completed"
+    assert runtime.deleted == [], "nothing was confirmed torn down"
+
+
+async def test_http_runtime_client_delete_404_raises_workload_unknown():
+    """The production adapter's contract: DELETE /workloads/{id} → 404 raises WorkloadUnknown
+    (termination UNCONFIRMED), any other non-2xx raises SpawnFailed, a 2xx returns cleanly.
+    The old adapter swallowed ALL of it — the incident's DELETE → 404 → 'success'."""
+    import pytest
+
+    from meeting_api.bot_spawn.adapters import HttpRuntimeClient
+    from meeting_api.bot_spawn.ports import SpawnFailed, WorkloadUnknown
+
+    class _Resp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    class _StubHttp:
+        def __init__(self, status_code):
+            self._code = status_code
+            self.deleted: list[str] = []
+
+        async def delete(self, url, timeout=None):
+            self.deleted.append(url)
+            return _Resp(self._code)
+
+    rt404 = HttpRuntimeClient(_StubHttp(404), "http://runtime:8090")
+    with pytest.raises(WorkloadUnknown):
+        await rt404.delete_workload("mtg-2-d93eee39")
+
+    rt500 = HttpRuntimeClient(_StubHttp(500), "http://runtime:8090")
+    with pytest.raises(SpawnFailed):
+        await rt500.delete_workload("mtg-2-d93eee39")
+
+    ok = _StubHttp(200)
+    await HttpRuntimeClient(ok, "http://runtime:8090").delete_workload("mtg-2-d93eee39")
+    assert ok.deleted == ["http://runtime:8090/workloads/mtg-2-d93eee39"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────

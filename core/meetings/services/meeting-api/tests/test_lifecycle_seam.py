@@ -731,21 +731,24 @@ def test_quiet_but_live_active_not_reaped_even_past_grace():
     assert "wl-live" not in runtime.deleted  # the live bot's workload was NOT torn down
 
 
-def test_dead_active_workload_gone_is_reaped():
-    """An `active` meeting past the grace whose bot WORKLOAD IS GONE (runtime 404 → not tracked) IS
-    reaped to `completed` (the ujp-aqif-kmv convergence: a truly-dead active bot still completes)."""
+def test_untracked_active_workload_404_is_never_reaped():
+    """THE INCIDENT (defect B), FLIPPED FROM THE OLD ASSERTION: a runtime 404 is NOT evidence the
+    bot is gone — a recreated runtime (in-memory registry lost) 404s over a LIVE, capturing bot.
+    The old sweep completed the meeting on exactly this 404 (posted from 127.0.0.1, zero evidence:
+    no exit code, no bot callback) and orphaned the container. Now: the meeting stays `active`,
+    nothing is deleted, and the desync is loud in the logs. Evidence (a TRACKED terminal workload,
+    or the bot's own callback) still reaps — see the neighbouring tests."""
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="active")  # past the grace
-    repo._meetings[m["id"]]["bot_container_id"] = "wl-dead"
-    # Empty workload map → get_workload("wl-dead") returns None (404, gone).
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-untracked"
+    # Empty workload map → get_workload("wl-untracked") returns None (404: the kernel doesn't KNOW).
     runtime = FakeRuntimeClient(workloads={})
     client = TestClient(create_app(meeting_repo=repo))
 
     n = _run_general_sweep_rt(client, repo, runtime)
-    assert n == 1
-    assert repo._meetings[m["id"]]["status"] == "completed"
-    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "left_alone"
-    assert "wl-dead" in runtime.deleted  # the orphan workload was torn down
+    assert n == 0, "a 404 must never advance the meeting to completed"
+    assert repo._meetings[m["id"]]["status"] == "active"
+    assert runtime.deleted == []
 
 
 def test_dead_active_terminal_workload_state_is_reaped():
@@ -797,3 +800,41 @@ def test_active_with_unknown_liveness_is_not_reaped():
     n = _run_general_sweep_rt(client, repo, runtime)
     assert n == 0
     assert repo._meetings[m["id"]]["status"] == "active"
+
+
+def test_stopping_with_untracked_workload_stays_stopping():
+    """Defect C in the general sweep: a `stopping` meeting whose workload the runtime 404s must NOT
+    complete — termination is UNCONFIRMED (a live container may be orphaned). It stays `stopping`
+    (truthful: the stop is not done), loud in the logs, retried next sweep — the re-adopting
+    runtime answers truthfully once booted."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-untracked"
+    repo._meetings[m["id"]]["data"]["stop_requested"] = True
+    runtime = FakeRuntimeClient(workloads={})   # post-recreate registry: knows nothing
+    client = TestClient(create_app(meeting_repo=repo))
+
+    n = _run_general_sweep_rt(client, repo, runtime)
+    assert n == 0
+    assert repo._meetings[m["id"]]["status"] == "stopping"
+    assert runtime.deleted == []
+
+
+def test_bot_callback_evidence_still_completes_during_runtime_desync():
+    """Evidence still advances the FSM even while the runtime registry is desynced: the sweep
+    refuses the 404 (no reap), but the bot's OWN terminal lifecycle callback — the primary
+    evidence — completes the meeting exactly as before."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-untracked"
+    runtime = FakeRuntimeClient(workloads={})
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _run_general_sweep_rt(client, repo, runtime) == 0        # 404 → no reap
+    assert repo._meetings[m["id"]]["status"] == "active"
+
+    r = client.post(ENDPOINT, json={                                 # the bot's own evidence
+        "connection_id": "sess-uid", "status": "completed", "completion_reason": "left_alone",
+    })
+    assert r.status_code == 200
+    assert repo._meetings[m["id"]]["status"] == "completed"

@@ -147,9 +147,11 @@ class RuntimeClient(Protocol):
     async def delete_workload(self, workload_id: str) -> None:
         """Tear down a previously-spawned workload (``DELETE /workloads/{id}`` on the kernel).
 
-        The COMPENSATION for a partial spawn (ROB3): when a post-spawn DB write fails, the just-created
-        workload must be torn down so no orphaned bot keeps running with no session row to resolve its
-        uploads. Best-effort — a teardown that itself fails must not mask the original spawn failure."""
+        The COMPENSATION for a partial spawn (ROB3) and the reconcile sweeps' orphan-kill. A clean
+        return means the kernel CONFIRMED the teardown (workload destroyed). Raises
+        ``WorkloadUnknown`` on a 404 — the kernel does not know the workload, so termination is
+        UNCONFIRMED: a container may still be live (a recreated runtime that lost its registry).
+        Callers must treat that as failure-to-confirm and fail loud, never as "already gone"."""
         ...
 
     async def get_workload(self, workload_id: str) -> Optional[dict]:
@@ -187,6 +189,20 @@ class SpawnFailed(Exception):
     ALSO raised (ROB3) when a post-spawn DB write fails AFTER the workload was created: the orphaned
     workload is torn down (``RuntimeClient.delete_workload``) and the spawn is re-raised as this, so
     the route maps it to 502 and no inconsistent half-spawned state is left behind."""
+
+
+class WorkloadUnknown(Exception):
+    """The runtime answered 404 for a workload id — it does NOT know the workload.
+
+    NOT evidence the container is gone: a runtime whose registry was lost (recreate) 404s over a
+    STILL-RUNNING bot (the orphaned-live-bot incident). A delete/stop that gets this must report
+    termination as UNCONFIRMED (fail loud), and the lifecycle FSM must never advance a meeting to
+    a terminal state on it — only positive evidence (a tracked terminal workload state, or the
+    bot's own lifecycle callback) advances the FSM."""
+
+    def __init__(self, workload_id: str):
+        self.workload_id = workload_id
+        super().__init__(f"runtime does not know workload {workload_id!r} (termination unconfirmed)")
 
 
 class DuplicateMeeting(Exception):
