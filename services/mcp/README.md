@@ -59,7 +59,7 @@ Vexa can join Microsoft Teams meetings using **all major URL formats**. The `par
 | Format | Example | Status |
 |--------|---------|--------|
 | T1: Standard join | `teams.microsoft.com/l/meetup-join/19%3ameeting_{id}%40thread.v2/...` | PASS |
-| T2: Meet shortlink (OeNB) | `teams.microsoft.com/meet/{id}?p={passcode}` | PASS |
+| T2: Meet shortlink | `teams.microsoft.com/meet/{id}?p={passcode}` | PASS |
 | T3: Channel meeting | `teams.microsoft.com/l/meetup-join/19%3a{channel}%40thread.tacv2/...` | PASS |
 | T4: Custom domain | `{org}.teams.microsoft.com/meet/{id}?p={passcode}` | PASS |
 | T5: Deep link | `msteams:/l/meetup-join/...` | NOT SUPPORTED |

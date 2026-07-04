@@ -26,6 +26,12 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting room"]',
   '[aria-label*="Asking to be let in"]',
   '[aria-label*="waiting for admission"]',
+  // FIX (2026-07-03, Unseen Dynamics): the Google Meet 'Asking to be let in' waiting
+  // screen shows a 'Return to home screen' button. It was a googleRejectionIndicator,
+  // so the bot false-rejected in ~4s (admission_rejected_by_admin) and never waited for
+  // the host to admit it. Reclassified as a WAITING indicator; genuine denials are still
+  // caught by the 'denied your request' text patterns above.
+  'button:has-text("Return to home screen")',
 ];
 
 // Google's Gemini "take notes for me" in-call consent prompt. This is a consent
@@ -64,7 +70,6 @@ export const googleRejectionIndicators: string[] = [
   'text*="cannot join this call"',
   'text*="Ask to join again"',
   'button:has-text("Ask to join again")',
-  'button:has-text("Return to home screen")',
 
   // Meeting not found or access denied patterns
   'text="Meeting not found"',
