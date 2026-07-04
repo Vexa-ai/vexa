@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 
 class WS:
-    def __init__(self, url: str, *, timeout: float = 10.0):
+    def __init__(self, url: str, *, timeout: float = 10.0, headers: dict | None = None):
         u = urlparse(url)
         self.host = u.hostname
         self.port = u.port or (443 if u.scheme == "wss" else 80)
@@ -29,13 +29,22 @@ class WS:
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
         )
+        # Optional extra handshake headers (additive): the 0.10 /ws contract authenticates via the
+        # X-API-Key HEADER as well as the api_key query param — compat callers pass it here.
+        for h, v in (headers or {}).items():
+            handshake += f"{h}: {v}\r\n"
+        handshake += "\r\n"
         self.sock.sendall(handshake.encode())
-        resp = self._read_until(b"\r\n\r\n")
-        if b"101" not in resp.split(b"\r\n", 1)[0]:
-            raise RuntimeError(f"ws handshake failed: {resp[:200]!r}")
-        self._buf = b""
+        raw = self._read_until(b"\r\n\r\n")
+        head, _sep, rest = raw.partition(b"\r\n\r\n")
+        if b"101" not in head.split(b"\r\n", 1)[0]:
+            raise RuntimeError(f"ws handshake failed: {raw[:200]!r}")
+        # KEEP any bytes read past the 101 response header: a server that sends its first frame
+        # immediately (e.g. an auto-subscribed channel) can land it in the SAME TCP segment as the
+        # handshake reply — resetting the buffer here silently ATE that frame.
+        self._buf = rest
 
     def _read_until(self, marker: bytes) -> bytes:
         data = b""

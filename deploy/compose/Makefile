@@ -12,7 +12,7 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexaai/vexa-bot:v012
 
-.PHONY: stack-test stack-test-bot stack-test-mock dashboard-harness provision-token up down build ps logs bot _bot_check _access
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up down build ps logs bot _bot_check _access
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -52,6 +52,13 @@ stack-test-chaos:
 ## speak/canAccess) — no browser/STT. Pass COMPOSE_PROJECT to isolate on a shared host (bbb).
 stack-test-mock:
 	MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test
+
+## stack-test-v010 — the 0.10 API backward-compat behavioral suite (release DoD 6): a 0.10-style
+## client's real REST + WS flows against the running 0.12 stack, MOCK_BOT scenarios only. Opt-in
+## via V010_COMPAT=1 (without it the compat dir is not even collected — the default gate:compose
+## collection is unchanged). Needs mock-bot:dev, like stack-test-mock. Runs ONLY tests/compat/.
+stack-test-v010:
+	V010_COMPAT=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test compat
 
 ## up / down / build — hand-drive the stack (dev only; the proof manages its own lifecycle).
 ## `up` is the zero-friction entrypoint: seeds .env from .env.example if absent, brings the stack up,
