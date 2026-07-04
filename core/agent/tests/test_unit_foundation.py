@@ -145,3 +145,44 @@ def test_dispatcher_rejects_nonconformant_invocation():
     with pytest.raises(Exception):
         d.dispatch({"trigger": "message"})  # missing required fields
     assert not rt.spawned
+
+
+# ── model-auth passthrough: agent-api env → worker spec env (the k8s/helm credential seam) ────
+
+def test_dispatcher_worker_env_passes_model_auth_allowlist(monkeypatch):
+    """Every allowlisted model-auth var set on agent-api lands in the worker spec env — this is the
+    ONLY credential path on the k8s/process backends (no bind-mount, no runtime brokering)."""
+    for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:
+        monkeypatch.setenv(key, f"val-{key}")
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:
+        assert env[key] == f"val-{key}"
+
+
+def test_dispatcher_worker_env_omits_unset_model_auth(monkeypatch):
+    """Unset (or blank) auth stays ABSENT — a creds-less CI stack must boot fine; the worker fails
+    at inference with the existing actionable auth/preflight error, not a poisoned empty var."""
+    for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")  # blank-only value must be skipped too
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert not any(key in env for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST)
+
+
+def test_dispatcher_worker_env_forwards_only_the_allowlist(monkeypatch):
+    """No blanket env forwarding (P14/P15): a non-allowlisted secret in agent-api's environment
+    never reaches the worker."""
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "never-forward-me")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sub-token")
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sub-token"

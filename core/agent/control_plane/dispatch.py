@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 import contracts
 from shared.config import Settings
@@ -20,6 +21,23 @@ from shared.ports import IdentityPort, RuntimePort
 from shared.units import chat_session, dispatch_id, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
+
+# ── model-auth passthrough (the k8s/helm credential seam) ────────────────────
+# The worker needs a MODEL credential, and delivery used to differ by substrate: the docker backend
+# brokers creds itself (the HOST_CLAUDE_CREDENTIALS bind-mount + copying ANTHROPIC_*/VEXA_LLM_* from
+# the runtime service env), but the k8s and process backends deliver ONLY this spec env — so a helm
+# worker booted with no credential at all (claude CLI: "Not logged in" → chat "Model inference
+# error"). agent-api therefore stamps an EXPLICIT allowlist from its own environment into every
+# dispatch, making credential delivery uniform across backends. Never blanket-forward env (P14/P15):
+# each entry is a var a core/agent/llm adapter (or the claude CLI itself) actually reads.
+MODEL_AUTH_ENV_ALLOWLIST = (
+    "CLAUDE_CODE_OAUTH_TOKEN",  # claude CLI subscription OAuth — the env twin of the docker credentials mount
+    "ANTHROPIC_API_KEY",        # claude CLI + the llm/ completion adapters (last-resort fallback)
+    "ANTHROPIC_AUTH_TOKEN",     # claude CLI gateway/OpenRouter token; llm/ adapters fall back to it
+    "ANTHROPIC_BASE_URL",       # claude CLI gateway endpoint; openai_compat base-url fallback
+    "VEXA_LLM_API_KEY",         # llm/ completion adapters' first-class credential (deliberately no Settings field)
+    "VEXA_LLM_BASE_URL",        # llm/ completion adapters' first-class endpoint (pairs with the key above)
+)
 
 
 def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str) -> dict[str, str]:
@@ -84,6 +102,15 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         env["VEXA_MEETING_NATIVE_ID"] = str(meeting["native_id"])
         if meeting.get("platform"):
             env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
+    # Model-auth passthrough (see MODEL_AUTH_ENV_ALLOWLIST above): stamp the explicit allowlist from
+    # agent-api's own env. Set-and-nonblank only — an unset var stays ABSENT so the worker's
+    # preflight/auth taxonomy (llm/errors.py) still reports the actionable missing-credential error
+    # and a creds-less CI boot is unaffected. Backends that also broker creds keep the
+    # dispatch-stamped value (docker_backend copies a key only when it is NOT already in the spec env).
+    for key in MODEL_AUTH_ENV_ALLOWLIST:
+        value = (os.environ.get(key) or "").strip()
+        if value and key not in env:
+            env[key] = value
     return env
 
 

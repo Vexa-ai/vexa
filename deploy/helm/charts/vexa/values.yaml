@@ -31,7 +31,7 @@ global:
 # Recommended: override via --set-file / external secret tooling, or point existingSecretName at a
 # Secret carrying these keys: ADMIN_API_TOKEN, INTERNAL_API_SECRET, TRANSCRIPTION_SERVICE_TOKEN,
 # VEXA_DISPATCH_SIGNING_KEY, VEXA_BOT_API_KEY, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
-# ANTHROPIC_BASE_URL.
+# ANTHROPIC_BASE_URL, CLAUDE_CODE_OAUTH_TOKEN.
 secrets:
   existingSecretName: ""
   adminApiToken: "CHANGE_ME"        # admin-api auth + MeetingToken signing (== meeting-api ADMIN_TOKEN)
@@ -42,9 +42,22 @@ secrets:
   nextauthSecret: ""                # terminal next-auth session signing (default dev key; set in prod)
   # Model-provider auth. ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL are the OpenRouter/subscription
   # pair (compose sources them from .env as a single source of truth — here they live in the Secret).
+  # claudeCodeOauthToken (CLAUDE_CODE_OAUTH_TOKEN) is the claude CLI's subscription OAuth token —
+  # the env-delivered counterpart of compose's HOST_CLAUDE_CREDENTIALS bind-mount (k8s has no host
+  # mount). agent-api stamps these model-auth vars into every worker dispatch (an explicit
+  # allowlist — control_plane/dispatch.py MODEL_AUTH_ENV_ALLOWLIST), so workers spawned as Pods can
+  # authenticate; leave them all empty and the stack still boots — chat then fails at inference
+  # with the actionable auth error. If both a subscription token and ANTHROPIC_* are set, the
+  # claude CLI resolves precedence itself (env credentials win over any mounted credentials file);
+  # set exactly one to avoid ambiguity.
+  # SECURITY: spec-env values are readable on spawned worker Pods (`kubectl describe pod`) and in
+  # this chart-managed Secret. Prefer existingSecretName — a pre-created Secret carrying these
+  # keys — over inline values here (inline values persist in helm release manifests), and RBAC-
+  # scope pod/secret read access accordingly.
   anthropicApiKey: ""
   anthropicAuthToken: ""
   anthropicBaseUrl: ""
+  claudeCodeOauthToken: ""
 
 # ---------- Shared backing config ----------
 database:
