@@ -97,7 +97,7 @@ async function check(name: string, actual: boolean, expected: boolean) {
   // 3. CONTRAST — a genuine host denial. SHOULD be a rejection (correct).
   await check(
     'genuine host denial ("denied your request") → rejection (correct)',
-    await checkForGoogleRejection(mockPage(['text*="denied your request"'])),
+    await checkForGoogleRejection(mockPage(['text=denied your request'])),
     true,
   );
 
@@ -121,7 +121,7 @@ async function check(name: string, actual: boolean, expected: boolean) {
   // 6. Detector fires on the consent prompt copy.
   await check(
     'consent prompt visible → hasConsentPrompt = true',
-    await hasConsentPrompt(mockPage(['text*="take notes for me"'])),
+    await hasConsentPrompt(mockPage(['text=take notes for me'])),
     true,
   );
   await check(
@@ -136,7 +136,7 @@ async function check(name: string, actual: boolean, expected: boolean) {
   await check(
     'consent prompt + participant tiles → admission SUPPRESSED (no false ACTIVE)',
     await checkForGoogleAdmissionIndicators(
-      mockPage(['text*="take notes for me"'], false, ['John Doe']),
+      mockPage(['text=take notes for me'], false, ['John Doe']),
     ),
     false,
   );

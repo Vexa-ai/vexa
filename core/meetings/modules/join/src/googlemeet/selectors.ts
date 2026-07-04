@@ -1,5 +1,13 @@
 // Centralized Google Meet selectors and indicators
 // Keep this file free of runtime logic; export constants only.
+//
+// TEXT-SELECTOR SEMANTICS (Playwright): quoted `text="foo"` is EXACT match
+// (case-sensitive); unquoted `text=foo` is SUBSTRING match (case-insensitive,
+// whitespace-normalized). `text*=` is NOT a Playwright engine — such entries
+// threw InvalidSelectorError on every locator call and were silently skipped
+// by the detectors' try/catch loops (dead selectors). All `text*="foo"`
+// entries were replaced with the unquoted substring form on 2026-07-04;
+// src/shared/selector-validity.test.ts now gates every selector array.
 
 export const googleInitialAdmissionIndicators: string[] = [
   // DOM fallback selectors — only indicators that do NOT appear in the lobby.
@@ -14,9 +22,10 @@ export const googleInitialAdmissionIndicators: string[] = [
 export const googleWaitingRoomIndicators: string[] = [
   // Modern waiting room text patterns (2024 Google Meet UI)
   'text="Asking to be let in..."',
-  'text*="Asking to be let in"',
+  'text=Asking to be let in',
   'text="You\'ll join the call when someone lets you in"',
-  'text*="You\'ll join the call when someone lets you"',
+  'text=You\'ll join the call when someone lets you',
+  'text=You’ll join the call when someone lets you', // live Meet copy uses a typographic apostrophe
   'text="Please wait until a meeting host brings you into the call"',
   'text="Waiting for the host to let you in"',
   'text="You\'re in the waiting room"',
@@ -51,28 +60,36 @@ export const googleWaitingRoomIndicators: string[] = [
 // reproduce with a live meeting that has Gemini notes enabled and adjust if
 // Google changes the copy.
 export const googleConsentPromptIndicators: string[] = [
-  'text*="take notes for me"',
-  'text*="Take notes for me"',
-  'text*="taking notes"',
+  // Unquoted text= is substring + case-insensitive, so one entry covers
+  // "take notes for me" / "Take notes for me".
+  'text=take notes for me',
   '[role="dialog"]:has-text("take notes for me")',
   '[role="alertdialog"]:has-text("take notes for me")',
   'button:has-text("take notes for me")',
+  // "taking notes" is dialog-scoped ON PURPOSE: a bare substring would also
+  // match the persistent "Gemini is taking notes" in-call pill shown when
+  // notes are ALREADY running — that state must not read as a pending consent
+  // gate (it would suppress admission for the entire call).
+  '[role="dialog"]:has-text("taking notes")',
+  '[role="alertdialog"]:has-text("taking notes")',
 ];
 
 export const googleRejectionIndicators: string[] = [
   // Waiting-room denial patterns. Google Meet can leave some lobby text in
   // the DOM after a host rejects the bot, so these must be checked before
   // waiting-room indicators in admission polling.
-  'text*="denied your request"',
-  'text*="denied your request to join"',
-  'text*="Your request to join was denied"',
-  'text*="You were denied"',
-  'text*="weren\'t allowed to join"',
-  'text*="not allowed to join"',
-  'text*="not admitted"',
-  'text*="can\'t join this call"',
-  'text*="cannot join this call"',
-  'text*="Ask to join again"',
+  'text=denied your request',
+  'text=denied your request to join',
+  'text=Your request to join was denied',
+  'text=You were denied',
+  'text=weren\'t allowed to join',
+  'text=weren’t allowed to join', // typographic apostrophe (live Meet copy)
+  'text=not allowed to join',
+  'text=not admitted',
+  'text=can\'t join this call',
+  'text=can’t join this call', // typographic apostrophe (live Meet copy)
+  'text=cannot join this call',
+  'text=Ask to join again',
   'button:has-text("Ask to join again")',
 
   // Meeting not found or access denied patterns
@@ -257,19 +274,19 @@ export const googleSpeakingIndicators: string[] = [
 export const googleRemovalIndicators: string[] = [
   // Meeting ended messages
   'text="Meeting ended"',
-  'text*="Meeting ended"',
+  'text=Meeting ended',
   'text="Call ended"',
-  'text*="Call ended"',
+  'text=Call ended',
   'text="You left the meeting"',
-  'text*="You left the meeting"',
-  
+  'text=You left the meeting',
+
   // Connection issues
   'text="Connection lost"',
-  'text*="Connection lost"',
+  'text=Connection lost',
   'text="Unable to connect"',
-  'text*="Unable to connect"',
+  'text=Unable to connect',
   'text="Reconnecting"',
-  'text*="Reconnecting"',
+  'text=Reconnecting',
   
   // Generic error patterns
   '[role="alert"]',
