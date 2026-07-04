@@ -117,7 +117,7 @@ vexaai/vexa-bot:v012
 {{- end -}}
 {{- end -}}
 
-{{/* The agent-worker image ref (AGENT_WORKER_IMAGE; byte-identical to agent-api, distinct name). */}}
+{{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image). */}}
 {{- define "vexa.agentWorkerImage" -}}
 {{- if .Values.global.imageTag -}}
 {{- printf "vexaai/v012-agent-worker:%s" .Values.global.imageTag -}}

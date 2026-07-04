@@ -66,10 +66,10 @@ class ProfileRegistry:
 
 
 def worker_image_for(agent_image: str) -> str:
-    """The image a SPAWNED agent worker runs under. It is byte-identical to the agent-api image
-    (`AGENT_IMAGE`) — workers ARE that image — but carried under a DISTINCT name so `docker images`
-    /`docker ps` no longer show every ephemeral worker as the agent-api service. Env-configurable via
-    `AGENT_WORKER_IMAGE`; defaults to the agent-api image's repo with `-api` swapped for `-worker`
+    """The image a SPAWNED agent worker runs under — the DEDICATED worker build
+    (core/agent/worker/Dockerfile: claude-code + node + the `worker` package), NOT the agent-api
+    control-plane image (which ships no `worker` module and cannot serve a dispatch). Env-configurable
+    via `AGENT_WORKER_IMAGE`; defaults to the agent-api image's repo with `-api` swapped for `-worker`
     (preserving the `:${IMAGE_TAG}` tag), e.g. `vexaai/v012-agent-api:dev` → `vexaai/v012-agent-worker:dev`.
     Falls back to the agent-api image itself when no derivation is possible (empty/odd name)."""
     override = os.environ.get("AGENT_WORKER_IMAGE", "").strip()
@@ -92,9 +92,9 @@ def default_registry() -> ProfileRegistry:
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
     browser_image = os.environ.get("BROWSER_IMAGE", "")
     agent_image = os.environ.get("AGENT_IMAGE", "")
-    # Workers run the agent-api BYTES under a distinct NAME (see worker_image_for). The runtime ensures
-    # this name exists as a local tag alias of AGENT_IMAGE at startup (build_production_app); dispatch
-    # falls back to AGENT_IMAGE if the alias is missing, so spawn never breaks.
+    # Workers run their OWN image (see worker_image_for — core/agent/worker/Dockerfile, not the
+    # agent-api image). The Docker backend ensures it is present at startup, pulling it when absent
+    # (build_production_app → DockerBackend.ensure_worker_image).
     agent_worker_image = worker_image_for(agent_image)
     return ProfileRegistry(
         {

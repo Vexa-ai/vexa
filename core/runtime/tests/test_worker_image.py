@@ -1,13 +1,15 @@
-"""Unit tests for DockerBackend.ensure_image_alias — the rebuild-free TAG ALIAS that lets spawned
-workers run the agent-api BYTES under a distinct image NAME (vexaai/v012-agent-worker:dev).
+"""Unit tests for DockerBackend.ensure_worker_image — the startup PULL that guarantees the dedicated
+agent-worker image (core/agent/worker/Dockerfile) is present before any dispatch.
 
-These never touch a real daemon: the unix-socket session is faked so we can assert the exact tag
-call is made when the alias is missing, is a NO-OP when present, and FALLS BACK to the agent-api
-image on any tag failure (so dispatch never breaks). Also exercises the worker create spec using the
-worker image name."""
+This replaced the pre-0.12.0 tag ALIAS that re-tagged agent-api bytes under the worker name: the
+worker is a different build, so the alias made every published-images dispatch die with
+``No module named worker``. The contract now: no-op when the image is local (compose-built :dev),
+PULL when absent, and on pull failure return the worker name UNCHANGED so the spawn fails loudly
+with 'No such image' — never silently running agent-api bytes.
+
+These never touch a real daemon: the unix-socket session is faked so we can assert the exact
+/images/create pull call. Also exercises the worker create spec using the worker image name."""
 from __future__ import annotations
-
-import pytest
 
 from runtime_kernel.docker_backend import DockerBackend
 from runtime_kernel.profiles import Runnable
@@ -48,63 +50,70 @@ def _backend(routes) -> tuple[DockerBackend, FakeSession]:
 
 
 TARGET = "vexaai/v012-agent-worker:dev"
-SOURCE = "vexaai/v012-agent-api:dev"
 
 
-def test_alias_created_when_missing():
-    routes = {
-        ("GET", f"/images/{TARGET}/json"): FakeResp(404),   # target absent
-        ("GET", f"/images/{SOURCE}/json"): FakeResp(200),   # source present
-        ("POST", f"/images/{SOURCE}/tag"): FakeResp(201),   # tag succeeds
-    }
+class PullingSession(FakeSession):
+    """Stateful fake: the target image 404s until a /images/create pull is seen, then 200s —
+    the shape of a real daemon around a successful pull."""
+
+    def __init__(self, pull_status: int = 200):
+        super().__init__({})
+        self.pulled = False
+        self.pull_status = pull_status
+
+    def request(self, method, url, **kw):
+        path = "/" + url.split("%2F", 1)[1].split("/", 1)[1] if "%2F" in url else url
+        self.calls.append((method, path))
+        if method == "POST" and path.startswith("/images/create"):
+            if self.pull_status == 200:
+                self.pulled = True
+            return FakeResp(self.pull_status, "pull says no" if self.pull_status != 200 else "")
+        if method == "GET" and path.startswith(f"/images/{TARGET}/json"):
+            return FakeResp(200 if self.pulled else 404)
+        return FakeResp(500, "no route")
+
+
+def test_noop_when_worker_image_present():
+    routes = {("GET", f"/images/{TARGET}/json"): FakeResp(200)}  # locally built (:dev path)
     b, sess = _backend(routes)
-    assert b.ensure_image_alias(TARGET, SOURCE) == TARGET
-    # the tag call carried the right repo+tag
-    tag_calls = [p for (m, p) in sess.calls if m == "POST" and "/tag" in p]
-    assert tag_calls == [f"/images/{SOURCE}/tag?repo=vexaai/v012-agent-worker&tag=dev"]
+    assert b.ensure_worker_image(TARGET) == TARGET
+    assert not any("/images/create" in p for (_m, p) in sess.calls)  # never pulls
 
 
-def test_alias_noop_when_present():
-    routes = {("GET", f"/images/{TARGET}/json"): FakeResp(200)}  # target already exists
-    b, sess = _backend(routes)
-    assert b.ensure_image_alias(TARGET, SOURCE) == TARGET
-    assert not any("/tag" in p for (_m, p) in sess.calls)  # never tagged
+def test_pulls_when_worker_image_missing():
+    b = DockerBackend()
+    sess = PullingSession()
+    b._session = sess
+    assert b.ensure_worker_image(TARGET) == TARGET
+    pulls = [p for (m, p) in sess.calls if m == "POST" and p.startswith("/images/create")]
+    # exactly one pull, of the WORKER repo+tag (percent-encoded query values)
+    assert pulls == ["/images/create?fromImage=vexaai%2Fv012-agent-worker&tag=dev"]
+    # never creates a tag alias of anything — the impostor-alias regression guard
+    assert not any("/tag" in p for (_m, p) in sess.calls)
 
 
-def test_alias_noop_when_target_equals_source():
+def test_pull_failure_keeps_worker_name_fail_visible():
+    b = DockerBackend()
+    b._session = PullingSession(pull_status=500)
+    # the WORKER name comes back even though the pull failed: dispatch must fail with
+    # 'No such image: …agent-worker…', NOT silently run agent-api bytes under the wrong name.
+    assert b.ensure_worker_image(TARGET) == TARGET
+
+
+def test_no_daemon_calls_for_empty_target():
     b, sess = _backend({})
-    assert b.ensure_image_alias(SOURCE, SOURCE) == SOURCE
-    assert sess.calls == []  # nothing to do, no daemon calls at all
+    assert b.ensure_worker_image("") == ""
+    assert sess.calls == []
 
 
-def test_fallback_when_tag_fails():
-    routes = {
-        ("GET", f"/images/{TARGET}/json"): FakeResp(404),
-        ("GET", f"/images/{SOURCE}/json"): FakeResp(200),
-        ("POST", f"/images/{SOURCE}/tag"): FakeResp(500, "daemon boom"),
-    }
-    b, _ = _backend(routes)
-    assert b.ensure_image_alias(TARGET, SOURCE) == SOURCE  # dispatch keeps using agent-api image
-
-
-def test_fallback_when_source_missing():
-    routes = {
-        ("GET", f"/images/{TARGET}/json"): FakeResp(404),
-        ("GET", f"/images/{SOURCE}/json"): FakeResp(404),  # source not built locally
-    }
-    b, sess = _backend(routes)
-    assert b.ensure_image_alias(TARGET, SOURCE) == SOURCE
-    assert not any("/tag" in p for (_m, p) in sess.calls)  # never attempts the tag
-
-
-def test_fallback_on_exception():
+def test_returns_target_on_exception():
     class Boom(FakeSession):
         def request(self, *a, **k):
             raise RuntimeError("socket gone")
 
     b = DockerBackend()
     b._session = Boom({})
-    assert b.ensure_image_alias(TARGET, SOURCE) == SOURCE  # exception → fall back, no raise
+    assert b.ensure_worker_image(TARGET) == TARGET  # never raises, keeps the truthful name
 
 
 def test_worker_create_spec_uses_worker_image():
