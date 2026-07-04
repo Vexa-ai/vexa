@@ -98,7 +98,9 @@ def _compose(*args: str, env: dict | None = None, check: bool = True, timeout: i
 
 def _stack_env() -> dict:
     return {
-        "IMAGE_TAG": "dev",
+        # dev = the locally-built images (the routine gate). Release CI overrides this to pin the
+        # PUBLISHED :vX.Y.Z tag (with COMPOSE_NO_BUILD=1), so the proof runs against the artifacts.
+        "IMAGE_TAG": os.getenv("IMAGE_TAG", "dev"),
         # Pin the project name into the interpolation env too (not just `-p`), so the compose's
         # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa resolves to the SAME network compose creates —
         # the bot must be spawned onto it to reach meeting-api/redis.
@@ -235,7 +237,10 @@ def stack():
     # Clean any prior gate run, then bring it up + build (P4 images are cached → fast on a warm host).
     _compose("down", "-v", "--remove-orphans", check=False)
     build = os.getenv("COMPOSE_NO_BUILD") != "1"
-    up_args = ["up", "-d", "--remove-orphans"] + (["--build"] if build else [])
+    # --no-build must be EXPLICIT: without it, compose silently falls back to building from the
+    # working tree when a pinned image can't be pulled — the release validation would then "prove"
+    # local layers instead of the published artifacts it exists to verify.
+    up_args = ["up", "-d", "--remove-orphans"] + (["--build"] if build else ["--no-build"])
     _compose(*up_args, timeout=1800)
 
     s = Stack()
