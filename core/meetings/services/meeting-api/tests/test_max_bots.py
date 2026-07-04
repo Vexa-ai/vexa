@@ -105,12 +105,44 @@ async def test_browser_session_excluded_from_count():
 
 
 async def test_no_cap_means_no_precheck():
-    """max_concurrent=None (no gateway limit header) → no pre-check (parent: only enforce if >0)."""
+    """max_concurrent=None (no gateway limit header) → no pre-check. Only ABSENCE skips the gate —
+    cap=0 is a real value (depleted, see the #456-parity tests below), never "no limit"."""
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     for i in range(5):
         m = await _spawn(repo, runtime, f"m-{i}", cap=None)
         repo.set_status(m["id"], "active")  # all stay active
     # never raised — no cap, no pre-check
+
+
+# ── Vexa-ai/vexa#456 parity: cap=0 means DEPLETED (no bots), never unlimited ────────────────────
+
+async def test_cap_zero_rejects_first_spawn():
+    """cap=0 → even the FIRST spawn is rejected, before the runtime call and with nothing inserted.
+
+    Regression for the `max_concurrent > 0` guard skipping the check entirely at cap 0, which made
+    the most-restricted users unlimited (quota/billing bypass — Vexa-ai/vexa#456)."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    with pytest.raises(MaxBotsExceeded) as exc:
+        await _spawn(repo, runtime, "m-1", cap=0)
+    assert exc.value.cap == 0
+    assert len(runtime.specs) == 0  # rejected BEFORE the runtime call
+    assert await repo.count_active_bots(user_id=USER) == 0  # nothing inserted
+
+
+async def test_negative_cap_also_depleted():
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    with pytest.raises(MaxBotsExceeded):
+        await _spawn(repo, runtime, "m-1", cap=-1)
+
+
+async def test_cap_zero_rejects_continue_meeting():
+    """The reused-terminal-row path has its own cap gate — cap=0 must reject the continue too
+    (a continued run is a new ACTIVE bot)."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    m1 = await _spawn(repo, runtime, "m-1", cap=1)
+    repo.set_status(m1["id"], "completed")  # terminal → eligible for continue_meeting
+    with pytest.raises(MaxBotsExceeded):
+        await _spawn(repo, runtime, "m-1", cap=0, continue_meeting=True)
 
 
 # ── defense-in-depth: the runtime kernel's QuotaExceeded is the backstop ─────────────────────────
@@ -155,6 +187,35 @@ def test_route_429_on_runtime_backstop(monkeypatch):
     # no x-user-limits header → no pre-check; the kernel backstop still yields 429
     r = client.post("/bots", headers={"x-user-id": str(USER)},
                     json={"platform": "google_meet", "native_meeting_id": "m-1"})
+    assert r.status_code == 429, r.text
+
+
+def test_route_429_on_cap_zero_and_cap_one_still_admits_one(monkeypatch):
+    """x-user-limits: 0 → the FIRST POST /bots is 429 (was 201/unlimited — the #456 bug); and the
+    fix must not over-reject: limits=1 still admits exactly one, then 429s the second."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    client = _client(repo, runtime)
+    depleted = {"x-user-id": str(USER), "x-user-limits": "0"}
+    r = client.post("/bots", headers=depleted, json={"platform": "google_meet", "native_meeting_id": "m-0"})
+    assert r.status_code == 429, r.text
+    assert len(runtime.specs) == 0  # no spawn reached the runtime
+
+    cap_one = {"x-user-id": str(USER), "x-user-limits": "1"}
+    r1 = client.post("/bots", headers=cap_one, json={"platform": "google_meet", "native_meeting_id": "m-1"})
+    assert r1.status_code == 201, r1.text
+    repo.set_status(r1.json()["id"], "active")
+    r2 = client.post("/bots", headers=cap_one, json={"platform": "google_meet", "native_meeting_id": "m-2"})
+    assert r2.status_code == 429, r2.text
+
+
+def test_route_429_on_cap_zero_json_form(monkeypatch):
+    """The JSON header form must not lose 0 to falsiness: {"max_concurrent_bots": 0} → 429."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    client = _client(repo, runtime)
+    headers = {"x-user-id": str(USER), "x-user-limits": '{"max_concurrent_bots": 0}'}
+    r = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     assert r.status_code == 429, r.text
 
 

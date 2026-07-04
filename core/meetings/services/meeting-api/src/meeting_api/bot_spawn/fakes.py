@@ -83,6 +83,10 @@ class InMemoryMeetingRepo:
         between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
         ``count_active_bots`` / ``create_meeting`` methods) cannot interleave concurrent spawns here —
         modelling the real adapter's single-transaction guard (advisory lock + unique partial index)."""
+        # 0. depleted — a cap <= 0 means NO bots allowed (0 is "depleted", never "unlimited");
+        #    only ``None`` (no cap provided) skips the gate. Mirrors the real adapter.
+        if max_concurrent is not None and max_concurrent <= 0:
+            raise MaxBotsExceeded(user_id, max_concurrent)
         # 1. dedup — an ACTIVE row for (user, platform, native) blocks the spawn (409).
         for m in self._meetings.values():
             if (
@@ -95,7 +99,7 @@ class InMemoryMeetingRepo:
                     f"An active meeting already exists for {platform}/{native_meeting_id}"
                 )
         # 2. cap — count the user's ACTIVE bots (browser_session excluded); reject the N+1th (429).
-        if max_concurrent is not None and max_concurrent > 0:
+        if max_concurrent is not None:
             active = sum(
                 1 for m in self._meetings.values()
                 if m["user_id"] == user_id

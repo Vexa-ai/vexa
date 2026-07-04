@@ -123,7 +123,9 @@ async def request_bot(
 
     ``continue_meeting`` (P3c): if the prior meeting for (platform, native_id) is TERMINAL, reuse
     that row + add a new session instead of creating a fresh meeting. ``max_concurrent`` (P3e): the
-    per-user cap — the spawn is rejected if the user already has that many ACTIVE bots.
+    per-user cap — the spawn is rejected if the user already has that many ACTIVE bots. A cap
+    ``<= 0`` means the quota is DEPLETED (every spawn rejected) — 0 is never "unlimited"; ``None``
+    means no cap was provided, so no pre-check.
     """
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
@@ -151,10 +153,13 @@ async def request_bot(
         # part of the fresh-insert TOCTOU window — but the per-user cap still applies (a continued run
         # is an active bot). Keep the original pre-check here, excluding the row being reopened from the
         # count, to preserve the P3e semantics (test_max_bots.test_continue_meeting_session_counts_against_cap).
-        if max_concurrent is not None and max_concurrent > 0:
-            active = await repo.count_active_bots(
-                user_id=user_id, exclude_meeting_id=reused_row["id"],
-            )
+        if max_concurrent is not None:
+            # cap <= 0 = depleted: reject without counting (0 >= cap holds for any cap <= 0).
+            active = 0
+            if max_concurrent > 0:
+                active = await repo.count_active_bots(
+                    user_id=user_id, exclude_meeting_id=reused_row["id"],
+                )
             if active >= max_concurrent:
                 log_event(
                     "bot_spawn_max_bots_exceeded", audience="user", level="warning",
@@ -183,7 +188,7 @@ async def request_bot(
                 platform=platform,
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
-                max_concurrent=(max_concurrent if max_concurrent and max_concurrent > 0 else None),
+                max_concurrent=max_concurrent,
             )
         except MaxBotsExceeded:
             log_event(
