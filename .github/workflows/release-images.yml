@@ -253,11 +253,21 @@ jobs:
       - name: Every published manifest resolves and carries linux/amd64
         run: |
           set -euo pipefail
+          # `imagetools inspect` prints no Platform line for classic-driver (schema-v2)
+          # manifests even when the registry descriptor says linux/amd64 — the bot image
+          # is built on the classic driver by design, so read the registry descriptor
+          # instead; it is authoritative for both manifest shapes.
           for img in $ALL_IMAGES; do
             echo "== $img:$VERSION"
-            OUT="$(docker buildx imagetools inspect "$img:$VERSION")"
-            grep -q 'linux/amd64' <<<"$OUT" \
-              || { echo "::error ::$img:$VERSION has no linux/amd64 manifest"; exit 1; }
+            docker manifest inspect -v "$img:$VERSION" | python3 -c '
+          import sys, json
+          d = json.load(sys.stdin)
+          items = d if isinstance(d, list) else [d]
+          plats = {(m.get("Descriptor", {}).get("platform", {}).get("os"),
+                    m.get("Descriptor", {}).get("platform", {}).get("architecture"))
+                   for m in items}
+          sys.exit(0 if ("linux", "amd64") in plats else 1)
+          ' || { echo "::error ::$img:$VERSION has no linux/amd64 manifest"; exit 1; }
           done
           echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present"
 
