@@ -59,9 +59,12 @@ def test_stress_max_bots_never_overspills(stack):
     user_id = _create_user(stack, max_bots=cap)
 
     def spawn_one(i):
+        # transcribe_enabled=false — same STT-less mock lane as mock_scenarios_test._spawn (CC4 would
+        # 503 a default transcription-on spawn before the cap enforcement this proof contends with).
         code, _ = post_json(
             f"{stack.meeting_api}/bots",
-            {"platform": "google_meet", "native_meeting_id": f"cont-{i}-{uuid.uuid4().hex[:4]}", "bot_name": "mock:immediate-stop"},
+            {"platform": "google_meet", "native_meeting_id": f"cont-{i}-{uuid.uuid4().hex[:4]}", "bot_name": "mock:immediate-stop",
+             "transcribe_enabled": False},
             headers={"x-user-id": str(user_id), "x-user-limits": str(cap)},
         )
         return code

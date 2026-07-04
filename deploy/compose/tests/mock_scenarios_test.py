@@ -38,10 +38,15 @@ TERMINAL = {"completed", "failed"}
 # ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
 def _spawn(stack, user_id, scenario, *, native_id=None, max_bots=5):
+    # transcribe_enabled=false — this lane is explicitly "no browser/STT/GPU": the CI stack has no
+    # STT creds, so a default (transcription-on) spawn is 503'd by meeting-api's CC4 fail-loud guard
+    # before any FSM runs. The mock fakes the pipeline and emits its transcript segments regardless,
+    # so every dataflow assertion below still proves the collector path.
     native_id = native_id or f"mk-{scenario}-{uuid.uuid4().hex[:6]}"
     code, body = post_json(
         f"{stack.meeting_api}/bots",
-        {"platform": "google_meet", "native_meeting_id": native_id, "bot_name": f"mock:{scenario}"},
+        {"platform": "google_meet", "native_meeting_id": native_id, "bot_name": f"mock:{scenario}",
+         "transcribe_enabled": False},
         headers={"x-user-id": str(user_id), "x-user-limits": str(max_bots)},
     )
     assert code == 201, f"POST /bots mock:{scenario} → {code} {body}"
@@ -208,10 +213,12 @@ def test_mock_max_bots_live(stack):
     held = [_spawn(stack, user_id, "immediate-stop", max_bots=cap)[0] for _ in range(cap)]
     for nid in held:
         _wait_meeting(stack, user_id, nid, statuses={"active", "joining", "awaiting_admission"}, timeout=60)
-    # N+1 spawn at the cap → 429 (the live pre-check counts the active mocks).
+    # N+1 spawn at the cap → 429 (the live pre-check counts the active mocks). transcribe_enabled=false
+    # so the STT-less CI stack's CC4 guard (503) can't preempt the cap check this asserts.
     code, body = post_json(
         f"{stack.meeting_api}/bots",
-        {"platform": "google_meet", "native_meeting_id": f"overflow-{uuid.uuid4().hex[:6]}", "bot_name": "mock:normal"},
+        {"platform": "google_meet", "native_meeting_id": f"overflow-{uuid.uuid4().hex[:6]}", "bot_name": "mock:normal",
+         "transcribe_enabled": False},
         headers={"x-user-id": str(user_id), "x-user-limits": str(cap)},
     )
     assert code == 429, f"N+1 spawn at cap should be 429, got {code} {body}"
@@ -220,7 +227,8 @@ def test_mock_max_bots_live(stack):
     _wait_meeting(stack, user_id, held[0], statuses=TERMINAL, timeout=60)
     code, body = post_json(
         f"{stack.meeting_api}/bots",
-        {"platform": "google_meet", "native_meeting_id": f"refill-{uuid.uuid4().hex[:6]}", "bot_name": "mock:immediate-stop"},
+        {"platform": "google_meet", "native_meeting_id": f"refill-{uuid.uuid4().hex[:6]}", "bot_name": "mock:immediate-stop",
+         "transcribe_enabled": False},
         headers={"x-user-id": str(user_id), "x-user-limits": str(cap)},
     )
     assert code == 201, f"after freeing a slot the next spawn should be admitted, got {code} {body}"
