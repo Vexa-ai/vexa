@@ -38,9 +38,26 @@ pactl set-source-mute virtual_mic 1 2>/dev/null || true
 # Run the worker from its package dir so the schema path (src→../../../contracts)
 # and the pnpm-linked workspace deps resolve. Always emit start + exit breadcrumbs
 # so an instant crash is never silent in container stdout.
-cd /app/core/meetings/services/bot
+# BOT_APP_DIR/BOT_WORKER_ENTRY are overridable so the entrypoint's signal handling is
+# unit-testable outside the image (entrypoint.test.ts drives a stub worker through it).
+cd "${BOT_APP_DIR:-/app/core/meetings/services/bot}" || exit 1
 echo "[entrypoint] Starting @vexa/bot worker (node dist/index.js, DISPLAY=${DISPLAY})..."
-node dist/index.js
+
+# SIGNAL FORWARDING (the exit-137 fix): this script is PID 1, and a PID-1 bash neither dies on
+# SIGTERM nor passes it to a foreground child — so `docker stop` (and the runtime's graceful
+# terminate) reached NOBODY, every stop escalated to SIGKILL (exit 137) mid-capture, and the
+# bot's graceful leave (leave meeting → flush recording → terminal lifecycle callback → exit 0,
+# bounded <25s by its own watchdog) never ran. Run the worker in the background and FORWARD
+# TERM/INT to it; wait() resumes on the trap (128+N) so loop until the worker really exits.
+node "${BOT_WORKER_ENTRY:-dist/index.js}" &
+WORKER_PID=$!
+trap 'kill -TERM "${WORKER_PID}" 2>/dev/null' TERM
+trap 'kill -INT "${WORKER_PID}" 2>/dev/null' INT
+wait "${WORKER_PID}"
 EXIT_CODE=$?
+while kill -0 "${WORKER_PID}" 2>/dev/null; do
+  wait "${WORKER_PID}"
+  EXIT_CODE=$?
+done
 echo "[entrypoint] @vexa/bot worker exited with code ${EXIT_CODE}"
 exit ${EXIT_CODE}
