@@ -346,9 +346,13 @@ def test_06d_max_bots(stack):
         )
 
     def _overflow_status():
+        # transcribe_enabled=false — the documented opt-out for a deployment without STT creds (the
+        # CI stack seeds .env.example: TRANSCRIPTION_SERVICE_URL/TOKEN empty). Without it the CC4
+        # fail-loud guard 503s BEFORE the cap check and this proof never reaches the 429 it targets.
         code, _ = post_json(
             f"{stack.meeting_api}/bots",
-            {"platform": platform, "native_meeting_id": f"overflow-{uuid.uuid4().hex[:6]}"},
+            {"platform": platform, "native_meeting_id": f"overflow-{uuid.uuid4().hex[:6]}",
+             "transcribe_enabled": False},
             headers=spawn_headers,
         )
         return code
@@ -403,9 +407,12 @@ def test_03_real_bot_spawn_joining(stack):
     platform, native_id = "google_meet", f"abc-defg-{uuid.uuid4().hex[:3]}"
 
     # POST /bots through meeting-api → spawns the bot via runtime over the host docker socket.
+    # transcribe_enabled=false: the CI stack has no STT creds (CC4 would 503 the spawn otherwise),
+    # and this leg proves spawn → container → `joining` — transcription is out of its scope.
     code, body = post_json(
         f"{stack.meeting_api}/bots",
-        {"platform": platform, "native_meeting_id": native_id, "bot_name": "GateBot"},
+        {"platform": platform, "native_meeting_id": native_id, "bot_name": "GateBot",
+         "transcribe_enabled": False},
         headers={"x-user-id": str(user_id), "x-user-limits": "5"},
     )
     assert code == 201, f"POST /bots → {code} {body}"
@@ -440,14 +447,14 @@ def test_03_real_bot_spawn_joining(stack):
             )
         STATE["bot_container_name"] = appeared
 
-        # The bot was spawned on the HOST default bridge; attach it to the compose network so its
-        # lifecycle callback (http://meeting-api:8080/…) + redis can resolve, then it can report joining.
-        net = subprocess.run(["docker", "network", "ls", "--filter", "name=vexa", "--format", "{{.Name}}"],
-                             capture_output=True, text=True, timeout=20).stdout.split()
-        compose_net = next((n for n in net if n.endswith("_vexa")), None)
-        if compose_net:
-            subprocess.run(["docker", "network", "connect", compose_net, container_name],
-                           capture_output=True, timeout=20)
+        # Belt-and-suspenders: ensure the bot sits on THIS project's compose network so its lifecycle
+        # callback (http://meeting-api:8080/…) + redis can resolve. The runtime already attaches it via
+        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa (connect on an attached container is a no-op error,
+        # swallowed). Named deterministically — the old any-`*_vexa` scan could attach the bot to ANOTHER
+        # stack's network on a shared host.
+        from conftest import PROJECT
+        subprocess.run(["docker", "network", "connect", f"{PROJECT}_vexa", container_name],
+                       capture_output=True, timeout=20)
 
         # PROOF (b): the meeting advances to `joining` — the bot's first lifecycle callback lands.
         # The lifecycle store is in-process (keyed by connection_id, no GET), so we observe the
