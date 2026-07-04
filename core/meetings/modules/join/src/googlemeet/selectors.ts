@@ -1,5 +1,13 @@
 // Centralized Google Meet selectors and indicators
 // Keep this file free of runtime logic; export constants only.
+//
+// TEXT-SELECTOR SEMANTICS (Playwright): quoted `text="foo"` is EXACT match
+// (case-sensitive); unquoted `text=foo` is SUBSTRING match (case-insensitive,
+// whitespace-normalized). `text*=` is NOT a Playwright engine — such entries
+// threw InvalidSelectorError on every locator call and were silently skipped
+// by the detectors' try/catch loops (dead selectors). All `text*="foo"`
+// entries were replaced with the unquoted substring form on 2026-07-04;
+// src/shared/selector-validity.test.ts now gates every selector array.
 
 export const googleInitialAdmissionIndicators: string[] = [
   // DOM fallback selectors — only indicators that do NOT appear in the lobby.
@@ -14,9 +22,10 @@ export const googleInitialAdmissionIndicators: string[] = [
 export const googleWaitingRoomIndicators: string[] = [
   // Modern waiting room text patterns (2024 Google Meet UI)
   'text="Asking to be let in..."',
-  'text*="Asking to be let in"',
+  'text=Asking to be let in',
   'text="You\'ll join the call when someone lets you in"',
-  'text*="You\'ll join the call when someone lets you"',
+  'text=You\'ll join the call when someone lets you',
+  'text=You’ll join the call when someone lets you', // live Meet copy uses a typographic apostrophe
   'text="Please wait until a meeting host brings you into the call"',
   'text="Waiting for the host to let you in"',
   'text="You\'re in the waiting room"',
@@ -26,24 +35,62 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting room"]',
   '[aria-label*="Asking to be let in"]',
   '[aria-label*="waiting for admission"]',
+
+  // FIX (Vexa-ai/vexa#471, @priitvimberg): the "Asking to be let in" waiting
+  // screen shows a "Return to home screen" button. It was listed in
+  // googleRejectionIndicators, so the bot false-rejected in ~4s
+  // (awaiting_admission_rejected) instead of waiting for the host to admit it.
+  // Reclassified as a WAITING indicator; genuine denials are still caught by
+  // the "denied your request" text patterns in googleRejectionIndicators.
+  'button:has-text("Return to home screen")',
+];
+
+// Google's Gemini "take notes for me" in-call consent prompt (Vexa-ai/vexa#454,
+// @thatditsyboy; issue #429). This is a consent gate, not mere chrome: until a
+// human accepts or declines, the bot is not truly participating, yet the
+// surrounding meeting controls can read as "admitted" (status active, 0
+// transcriptions). Detected so the bot routes to needs_human_help instead of
+// false-reporting ACTIVE.
+//
+// Targeted at the prompt's distinctive copy ("take notes for me" / "taking
+// notes") so it does NOT match the always-present Gemini toolbar button.
+//
+// NOTE: these selectors are best-effort and SHOULD be confirmed against the
+// live prompt DOM (the upstream PR flags its selectors as best-effort) —
+// reproduce with a live meeting that has Gemini notes enabled and adjust if
+// Google changes the copy.
+export const googleConsentPromptIndicators: string[] = [
+  // Unquoted text= is substring + case-insensitive, so one entry covers
+  // "take notes for me" / "Take notes for me".
+  'text=take notes for me',
+  '[role="dialog"]:has-text("take notes for me")',
+  '[role="alertdialog"]:has-text("take notes for me")',
+  'button:has-text("take notes for me")',
+  // "taking notes" is dialog-scoped ON PURPOSE: a bare substring would also
+  // match the persistent "Gemini is taking notes" in-call pill shown when
+  // notes are ALREADY running — that state must not read as a pending consent
+  // gate (it would suppress admission for the entire call).
+  '[role="dialog"]:has-text("taking notes")',
+  '[role="alertdialog"]:has-text("taking notes")',
 ];
 
 export const googleRejectionIndicators: string[] = [
   // Waiting-room denial patterns. Google Meet can leave some lobby text in
   // the DOM after a host rejects the bot, so these must be checked before
   // waiting-room indicators in admission polling.
-  'text*="denied your request"',
-  'text*="denied your request to join"',
-  'text*="Your request to join was denied"',
-  'text*="You were denied"',
-  'text*="weren\'t allowed to join"',
-  'text*="not allowed to join"',
-  'text*="not admitted"',
-  'text*="can\'t join this call"',
-  'text*="cannot join this call"',
-  'text*="Ask to join again"',
+  'text=denied your request',
+  'text=denied your request to join',
+  'text=Your request to join was denied',
+  'text=You were denied',
+  'text=weren\'t allowed to join',
+  'text=weren’t allowed to join', // typographic apostrophe (live Meet copy)
+  'text=not allowed to join',
+  'text=not admitted',
+  'text=can\'t join this call',
+  'text=can’t join this call', // typographic apostrophe (live Meet copy)
+  'text=cannot join this call',
+  'text=Ask to join again',
   'button:has-text("Ask to join again")',
-  'button:has-text("Return to home screen")',
 
   // Meeting not found or access denied patterns
   'text="Meeting not found"',
@@ -227,19 +274,19 @@ export const googleSpeakingIndicators: string[] = [
 export const googleRemovalIndicators: string[] = [
   // Meeting ended messages
   'text="Meeting ended"',
-  'text*="Meeting ended"',
+  'text=Meeting ended',
   'text="Call ended"',
-  'text*="Call ended"',
+  'text=Call ended',
   'text="You left the meeting"',
-  'text*="You left the meeting"',
-  
+  'text=You left the meeting',
+
   // Connection issues
   'text="Connection lost"',
-  'text*="Connection lost"',
+  'text=Connection lost',
   'text="Unable to connect"',
-  'text*="Unable to connect"',
+  'text=Unable to connect',
   'text="Reconnecting"',
-  'text*="Reconnecting"',
+  'text=Reconnecting',
   
   // Generic error patterns
   '[role="alert"]',

@@ -2,6 +2,14 @@
 // (join / admission / leave / removal). Speaker-detection and caption
 // selectors are recording concerns and stay OUTSIDE this brick.
 // Keep this file free of runtime logic; export constants only.
+//
+// TEXT-SELECTOR SEMANTICS (Playwright): quoted `text="foo"` is EXACT match
+// (case-sensitive); unquoted `text=foo` is SUBSTRING match (case-insensitive,
+// whitespace-normalized). `text*=` is NOT a Playwright engine — such entries
+// threw InvalidSelectorError on every locator call and were silently skipped
+// by the detectors' try/catch loops (dead selectors). All `text*="foo"`
+// entries were replaced with the unquoted substring form on 2026-07-04;
+// src/shared/selector-validity.test.ts now gates every selector array.
 
 export const teamsInitialAdmissionIndicators: string[] = [
   // Most reliable indicators: Leave buttons that actually exist in Teams meetings
@@ -15,7 +23,7 @@ export const teamsInitialAdmissionIndicators: string[] = [
 export const teamsWaitingRoomIndicators: string[] = [
   // Pre-join screen specific text (generic patterns)
   'text="Someone will let you in shortly"',
-  'text*="Someone will let you in shortly"', // Generic pattern for any bot name
+  'text=Someone will let you in shortly', // Generic (substring) pattern for any bot name
   'text="You\'re in the lobby"',
   'text="Waiting for someone to let you in"',
   'text="Please wait until someone admits you"',
@@ -47,25 +55,25 @@ export const teamsWaitingRoomIndicators: string[] = [
 export const teamsRejectionIndicators: string[] = [
   // Primary rejection message
   'text="Sorry, but you were denied"',
-  'text*="Sorry, but you were denied"',
+  'text=Sorry, but you were denied',
 
   // Alternative rejection patterns
   'text="You were denied entry"',
-  'text*="You were denied entry"',
+  'text=You were denied entry',
   'text="Access denied"',
-  'text*="Access denied"',
+  'text=Access denied',
   'text="Entry denied"',
-  'text*="Entry denied"',
+  'text=Entry denied',
   'text="Request denied"',
-  'text*="Request denied"',
+  'text=Request denied',
   'text="Admission denied"',
-  'text*="Admission denied"',
+  'text=Admission denied',
   'text="Unable to join"',
-  'text*="Unable to join"',
+  'text=Unable to join',
   'text="Connection failed"',
-  'text*="Connection failed"',
+  'text=Connection failed',
   'text="Join failed"',
-  'text*="Join failed"',
+  'text=Join failed',
 
   // Rejection dialog elements
   '[role="dialog"]:has-text("denied")',
@@ -84,21 +92,22 @@ export const teamsRejectionIndicators: string[] = [
 export const teamsRemovalIndicators: string[] = [
   // Strong removal/error messages
   'text="You\'ve been removed from this meeting"',
-  'text*="You\'ve been removed from this meeting"',
+  'text=You\'ve been removed from this meeting',
+  'text=You’ve been removed from this meeting', // typographic apostrophe (live Teams copy)
   'text="You have been removed from this meeting"',
-  'text*="You have been removed from this meeting"',
+  'text=You have been removed from this meeting',
   'text="Removed from meeting"',
-  'text*="Removed from meeting"',
+  'text=Removed from meeting',
 
   // Error states
   'text="Meeting ended"',
-  'text*="Meeting ended"',
+  'text=Meeting ended',
   'text="Call ended"',
-  'text*="Call ended"',
+  'text=Call ended',
   'text="Connection lost"',
-  'text*="Connection lost"',
+  'text=Connection lost',
   'text="Unable to connect"',
-  'text*="Unable to connect"',
+  'text=Unable to connect',
 
   // Generic error patterns
   '[role="alert"]',

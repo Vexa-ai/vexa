@@ -13,6 +13,7 @@ import {
   teamsSpeakerEnableSelectors,
   teamsSpeakerDisableSelectors
 } from "./selectors";
+import { dismissTeamsAvConfirmModal, isTeamsAvConfirmModalVisible } from "./modals";
 
 // NOTE vs the monolith: the WebRTC remote-audio hook and the voice-agent
 // virtual-camera flow are RECORDING/HOST concerns and stay outside this brick.
@@ -261,6 +262,45 @@ export async function joinMicrosoftTeams(
     await page.waitForTimeout(1000);
   } catch (error) {
     log("⚠️ Join button not found — bot may not be able to enter the meeting");
+  }
+
+  // Step 6c: Handle the post-"Join now" AV-confirmation modal (Vexa-ai/vexa#467).
+  //
+  // Teams' anonymous "light meeting" flow pops "Are you sure you don't want
+  // audio or video?" AFTER the Join-now click (camera + mic are off). It blocks
+  // the join until dismissed, and leaves the pre-join "Join now" button in the
+  // DOM — which admission.ts then mistakes for a lobby and loops on forever.
+  // Poll briefly: dismiss the modal, re-click "Join now", and stop once we've
+  // reached the lobby or been admitted. See modals.ts for the full rationale.
+  log("Step 6c: Handling post-join AV-confirmation modal (if shown)...");
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const dismissed = await dismissTeamsAvConfirmModal(page);
+    if (dismissed) {
+      const joinAgain = page.locator('button:has-text("Join now")').first();
+      if (await joinAgain.isVisible().catch(() => false)) {
+        await joinAgain.click().catch(() => {});
+        log("✅ Re-clicked 'Join now' after dismissing AV-confirmation modal");
+      }
+    }
+
+    // Stop as soon as we've left pre-join: lobby reached or already admitted.
+    const inLobby = await page
+      .locator('text=/Someone will let you in shortly|Waiting for someone to let you in|Waiting to be admitted/i')
+      .first()
+      .isVisible()
+      .catch(() => false);
+    const admitted = await page
+      .locator('button[id="hangup-button"], button[aria-label="Leave"], button[data-tid="hangup-main-btn"]')
+      .first()
+      .isVisible()
+      .catch(() => false);
+    const modalStillThere = await isTeamsAvConfirmModalVisible(page);
+    if (inLobby || admitted || (!dismissed && !modalStillThere)) {
+      if (inLobby) log("✅ Reached Teams lobby after Join now");
+      if (admitted) log("✅ Admitted to Teams meeting after Join now");
+      break;
+    }
+    await page.waitForTimeout(1000);
   }
 
   // Mute mic for all bots after join. TTS bots unmute only when speaking
