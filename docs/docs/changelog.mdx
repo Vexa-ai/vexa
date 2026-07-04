@@ -37,6 +37,118 @@ notable line and the migration notes between majors.
 - **Re-check your secrets.** Set real values for `ADMIN_TOKEN`, `INTERNAL_API_SECRET`,
   `VEXA_DISPATCH_SIGNING_KEY`, and DB/MinIO credentials — see [Configuration](/configuration).
 
+### Parity with the 0.10.x line
+
+The public `api.v1` contract is sealed **hash-equal to `main`'s OpenAPI 1.5.0** and enforced in CI
+(`gate:contract-version`), so the wire surface is identical by construction. Two honest caveats
+follow from that:
+
+1. A sealed *endpoint* is not automatically a wired *capability* — some contract routes are not
+   mounted in the open-core control plane yet, and this page says which.
+2. Anything `main` merged **after** 1.5.0 is by definition not in 0.12 until a contract revision.
+
+Every row below was verified against the 0.12 tree (route tables, module code, or a live-edge
+probe), not inferred from planning docs.
+
+#### Not yet in 0.12
+
+| Capability (0.10.x has it) | Status in 0.12 | Honest note |
+|---|---|---|
+| Mid-call bot config — `PUT /bots/{platform}/{id}/config` (change language/task live) | contract-sealed, not wired | The gateway mounts and forwards it, but the live bot-control plane isn't wired in the open-core meeting-api — authenticated calls return the downstream `404`. Flagged in the [Meetings API](/api/meetings) reference. |
+| Voice agent — `POST /bots/{platform}/{id}/speak` (TTS into the call) | contract-sealed, not wired | Proven at contract level (`acts.v1` + the mock-bot speak-ack gate); the real path returns `404` in the shipped stack. Contract-ready, not user-ready. |
+| Interactive bots beyond speak — in-meeting **chat**, **screen share**, **avatar** | contract-sealed, not wired | The `chat`/`screen`/`avatar` endpoints are in the sealed `api.v1`, but the 0.12 gateway does not mount them (edge probe: `404`). Roadmap framing → **Decision 3** below. |
+| Transcript **share links** — `POST /transcripts/…/share` + `GET /public/transcripts/{id}.txt` | contract-sealed, not mounted | Verified: both routes are in the sealed `api.v1`; neither is mounted at the 0.12 gateway (edge probe: `404`). The feature was dashboard-coupled in 0.10.x. |
+| `GET …/participants` — meeting participants endpoint (main PR #453) | post-seal | Merged into `main` after the 1.5.0 seal; lands with the next contract revision, not before. → **Decision 4**. |
+| **`discord`** as a non-bot ingest platform (main PR #452) | post-seal | The 0.12 platform enum is `google_meet` / `zoom` / `teams` — a contract test asserts `DELETE /bots/discord/…` → `422`. → **Decision 4**. |
+| Zoom **bring-your-own OBF/ZAK tokens** + native SDK path (main PR #320) | not carried | Verified: the carved bot joins Zoom via the **web client only** (`buildZoomWebClientUrl` → `app.zoom.us/wc/…/join`); no ZAK/OBF token handling and no native-SDK branch exist anywhere in the join/capture/bot code. |
+| **Segment-latency env knobs** (main PR #447: `MIN_AUDIO_DURATION_SEC`, `SUBMIT_INTERVAL_SEC`, `IDLE_TIMEOUT_SEC`) | partial | The three knobs exist as **programmatic** config (`SpeakerStreamManagerConfig`: `minAudioDuration` / `submitInterval` / `idleTimeoutSec`), but nothing reads them from the environment — a deployment cannot opt into low-latency mode without code. |
+| `max_concurrent_bots=0` treated as **depleted, not unlimited** (main PR #456) | not carried | Verified by test: the pre-check is skipped when the cap is `0` (`max_concurrent > 0` guard), so `POST /bots` with a `0` cap returns `201` — in 0.12, `0` still means *unlimited*. |
+| Swagger/OpenAPI **auth-scheme fixes** (main PRs #319, #336) | not carried | The 0.12 admin-api declares both `APIKeyHeader`s **without `scheme_name`** — the exact collapsed-scheme Swagger bug #319 fixed; the 0.12 gateway declares no OpenAPI security schemes at all. Cosmetic-but-real DX gap in the *served* docs (the sealed contract is unaffected). |
+| Dashboard-authz + schedule-callback hardening (main PR #406) | superseded by architecture | 0.12 scheduling compiles `schedule.v1` jobs that the runtime scheduler fires internally — there is no exposed schedule-callback endpoint to harden. The vendored dashboard rides as an optional compose overlay behind the gateway. |
+| Hardened Python Docker builds (main PR #435) | superseded | 0.12 rebuilt all of its images. |
+
+#### Verified carried (previously uncertain)
+
+- **Stop a bot** — `DELETE /bots/{platform}/{native_meeting_id}` is mounted and live end-to-end:
+  the gateway forwards it and the meeting-api stop router handles it (leave command over redis +
+  direct runtime teardown for a still-booting bot), with route-level tests.
+- **Google Meet lobby-timeout vs host-denial** (main PR #460) — carried in a **stronger typed
+  form**: admission ends in a typed `AdmissionOutcome` (`denial` | `lobby_timeout` |
+  `join_failure`); a denial maps to `rejected`, a lobby timeout to the retryable
+  `awaiting_admission_timeout`.
+- **WS subscription authz for hex-derived native IDs** (main PR #385) — subsumed: the 0.12
+  authorize-subscribe hop authorizes on **DB ownership first**; URL constructability is advisory
+  only, so Vexa-generated 16-hex Teams IDs subscribe fine.
+- **Token scoping** (main PR #436 territory) — present: admin token mint issues `vxa_<scope>_…`
+  tokens, accepts multi-scope `?scopes=bot,tx`, and the gateway enforces per-route scopes.
+
+#### Known defects carried (flagged, not hidden)
+
+- **max-bots cap has a TOCTOU race** — concurrent `POST /bots` can overspill the per-user cap
+  (bounded; reproduced and asserted by the stress lane; likely shared with `main`). The atomic fix
+  is on the enhancement list.
+
+#### What 0.12 delivers instead
+
+- **One front door** — a single gateway with auth + per-route scopes; **server-derived identity**
+  (client-supplied `subject` is ignored everywhere).
+- **The agent control plane** — dispatch, streamed chat, routines (cron/event), events, and
+  workspace APIs; sandboxed CLI agents over an **OKF v0.1** git workspace.
+- **Sealed, frozen contracts** — `api.v1` hash-equal to `main`'s OpenAPI 1.5.0, enforced by
+  `gate:contract-version`; parity itself is a gate (`gate:parity`).
+- **A gate system `main` doesn't have** — module isolation, acyclic import graph, one front door
+  per module, fail-loud fault surfacing, complete mediation (default-deny), per-service health,
+  license/SBOM cleanliness, an architecture-compliance map.
+- **A real-stack proof lane** — `gate:compose` + MOCK_BOT drives the full control plane
+  (join/reject/crash/timeout, recordings, webhook envelopes, WS frames) on every change.
+- **Architecture as code** — a validated FINOS CALM model with generated views, enforced in CI.
+- **The lite / compose / helm deploy trio** — `deploy/lite` (the whole control plane in one
+  container, process runtime backend), `deploy/compose` (`make all`), and `deploy/helm`
+  (`charts/vexa`, bots spawn as Pods via `RUNTIME_BACKEND=k8s`). Lite and helm docs are pending
+  (→ **Decision 1**).
+- **An MCP server for the public API** — the 0.10.6 meeting-control MCP service is ported
+  (9 tools + 4 prompts, stateless, every call authorized by the gateway with the caller's key)
+  and runs as its own compose service (→ **Decision 2**).
+- **The terminal workbench** — the primary client surface (docs pending); the vendored dashboard
+  remains available as an optional compose overlay.
+- **Honest roadmap/status docs** — capabilities are claimed only with a green gate behind them.
+
+#### Four release-notes decisions — Dmitry to pick during PR review
+
+<Note>Each block below carries BOTH variants. Pick one per decision and delete the other (and
+this note) before merge — nothing here is publishable as-is.</Note>
+
+**Decision 1 — Vexa Lite.** Verified: `deploy/lite` exists in-tree (one-container control plane,
+process runtime backend); zero corpus docs.
+> **OPTION A / OPTION B — Dmitry pick one:**
+> - **A (advertise):** release notes present Lite as a supported third deploy path (the
+>   lite/compose/helm trio) and a corpus deployment section is added for it.
+> - **B (soft-launch):** Lite stays in-tree/README-only for 0.12.0; release notes call it
+>   experimental, docs to follow once the release-image validation matrix proves it from
+>   published images.
+
+**Decision 2 — Vexa MCP server.** Verified: ported at `core/meetings/services/mcp` (9 tools +
+4 prompts), compose service on its **own host port** (`127.0.0.1:18010`) — the gateway does not
+front `/mcp` yet; several 0.10.6 tools are unported pending the unmounted routes above.
+> **OPTION A / OPTION B — Dmitry pick one:**
+> - **A (ship it):** release notes announce the MCP server as carried into 0.12, with a docs page
+>   (client config + the direct-port exposure + the not-yet-ported tool list).
+> - **B (hold):** keep MCP out of the 0.12 release notes until the gateway fronts `/mcp` (the
+>   "one front door" story stays clean); mention it only on the roadmap.
+
+**Decision 3 — Interactive bots beyond speak (chat / screen share / avatar).**
+> **OPTION A / OPTION B — Dmitry pick one:**
+> - **A (roadmap):** keep them on the roadmap as "contract-sealed, control plane not wired" —
+>   the same honest framing config/speak already use.
+> - **B (dropped):** declare them dropped from the open core; the sealed endpoints remain
+>   contract-only until an `api.v2` decision.
+
+**Decision 4 — `discord` ingest + `GET …/participants` scheduling.**
+> **OPTION A / OPTION B — Dmitry pick one:**
+> - **A (commit):** the release notes commit both to the next `api.v1` revision (or `api.v2`).
+> - **B (no commitment):** the release notes state only that they are post-seal `main` features
+>   absent from 0.12, with no schedule attached.
+
 ## Versioning
 
 Vexum follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the

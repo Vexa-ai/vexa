@@ -70,9 +70,12 @@ The *set being green* IS "better than main"; main ships per-service tests only, 
 _⏳ rows are planned gates (A:V2/A:V3/Lane B), not yet green — listed for completeness, not claimed._
 
 ## 4 · Known parity gaps (flagged, not silently dropped — P21)
-- **`DELETE /bots` HTTP route** unmounted in the unified meeting-api (the stop *logic* exists,
-  `lifecycle/stop.py`); the api.v1 endpoint 404s. Flagged for wiring; the L3 lane drives stop via the
-  leave-command for now. (Found by the mock-bot L3 lane, Learning #27.)
+- ~~**`DELETE /bots` HTTP route** unmounted in the unified meeting-api~~ — **RESOLVED (verified
+  2026-07-04):** the stop route is mounted and live. `lifecycle/stop_router.py` is wired into
+  `meeting_api/app.py` (leave command over redis + direct runtime teardown for a still-booting
+  bot), covered by `tests/test_stop_route.py`; an unauthenticated edge probe returns `401`
+  (route exists). This bullet predated the stop-router landing. (Originally found by the
+  mock-bot L3 lane, Learning #27.)
 - **max-bots cap has a TOCTOU race** — the count-then-insert pre-check isn't atomic, so concurrent
   `POST /bots` can overspill the per-user cap (the stress lane reproduces it). Likely shared with main;
   making it atomic (advisory lock / serializable / conditional insert) is a *better-than-main*
