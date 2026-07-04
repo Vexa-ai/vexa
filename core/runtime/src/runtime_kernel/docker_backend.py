@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Optional
+from urllib.parse import quote
 
 import requests_unixsocket
 
@@ -86,37 +87,48 @@ class DockerBackend:
         r = self._req("GET", f"/images/{ref}/json")
         return r.status_code == 200
 
-    def ensure_image_alias(self, target: str, source: str) -> str:
-        """Ensure ``target`` names a LOCAL image, creating it as a TAG ALIAS of ``source`` if absent —
-        rebuild-free, no pull (the source is the locally-built agent-api image). Used so spawned workers
-        run the agent-api BYTES under a distinct image NAME (see ``profiles.worker_image_for``).
+    def ensure_worker_image(self, target: str) -> str:
+        """Ensure ``target`` (the agent-worker image) is PRESENT on the daemon, PULLING it from its
+        registry when absent. The daemon's create API never implicit-pulls, and the compose
+        ``agent-worker`` service is a build-only profile that ``up``/``pull`` skip — so on a
+        published-images deployment nothing else ever fetches this image.
 
-        Idempotent: a no-op when ``target`` already exists, or when target == source (nothing to alias).
-        FAIL-SAFE: any tag failure (source missing, daemon error, malformed ref) is logged and the
-        caller-supplied ``source`` is returned, so dispatch keeps working on the agent-api image. Returns
-        the image name dispatch should use — ``target`` on success, ``source`` on fallback."""
-        if not target or not source or target == source:
-            return source or target
+        This REPLACES the pre-0.12.0 tag ALIAS that re-tagged the agent-api image under this name:
+        the worker is a DIFFERENT build (claude-code + node + the ``worker`` package —
+        core/agent/worker/Dockerfile), so aliasing agent-api bytes made every dispatch die with
+        ``No module named worker`` and left an impostor local tag masquerading as the published image.
+
+        Idempotent (no-op when ``target`` is already local — the compose-built ``:dev`` path).
+        FAIL-VISIBLE: if the pull fails, ``target`` is still returned so the spawn fails loudly with
+        ``No such image: <target>`` — never silently running the wrong bytes. Never raises."""
+        if not target:
+            return target
         try:
             if self._image_exists(target):
-                return target  # alias already in place — no-op
-            if not self._image_exists(source):
-                logger.warning(
-                    "worker image alias: source %r missing; falling back to it for dispatch", source
-                )
-                return source
+                return target  # already local (built or previously pulled) — no-op
             repo, _, tag = target.partition(":")
-            r = self._req("POST", f"/images/{source}/tag?repo={repo}&tag={tag or 'latest'}")
-            if r.status_code in (200, 201):
-                logger.info("worker image alias created: %s -> %s", source, target)
-                return target
-            logger.warning(
-                "worker image alias: tag %s -> %s failed (%s): %s; falling back to source",
-                source, target, r.status_code, r.text.strip(),
+            logger.info("worker image %s not present locally; pulling", target)
+            r = self._req(
+                "POST",
+                f"/images/create?fromImage={quote(repo, safe='')}&tag={quote(tag or 'latest', safe='')}",
+                timeout=600,
             )
-        except Exception as e:  # noqa: BLE001 — alias must NEVER break dispatch
-            logger.warning("worker image alias: tag %s -> %s errored: %s; falling back", source, target, e)
-        return source
+            # /images/create streams pull progress and can report errors mid-stream with a 200 —
+            # only a re-check of the local store proves the pull landed.
+            if r.status_code == 200 and self._image_exists(target):
+                logger.info("worker image pulled: %s", target)
+                return target
+            logger.error(
+                "worker image %s could not be pulled (%s): %s — agent dispatch will fail with "
+                "'No such image' until it is pulled or built (docker compose build agent-worker)",
+                target, r.status_code, r.text.strip()[:300],
+            )
+        except Exception as e:  # noqa: BLE001 — image ensure must NEVER break the boot
+            logger.error(
+                "worker image %s pull errored: %s — agent dispatch will fail until it is present",
+                target, e,
+            )
+        return target
 
     def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
         if not runnable.image:

@@ -7,6 +7,9 @@
 #     build-bot       vexaai/vexa-bot — special-cased: FROM the locally-built
 #                     vexa/meet-join-env:dev base, so it uses the classic docker driver
 #     verify          every published manifest resolves + carries linux/amd64
+#     image-identity  every published image CONTAINS what its NAME promises (e.g. agent-worker can
+#                     `import worker` and CMD is `python -m worker`) — a mis-wired matrix entry or
+#                     a cross-tagged push fails HERE, loudly, before any validate leg runs
 #     validate-*      compose / mock-FSM / bot-spawn / lite / helm-k3s — each leg PULLS the
 #                     published :vX.Y.Z images (proves the artifacts, not the local builds)
 #     promote         moving tag :v012 on all images once every leg is green (stable tags
@@ -272,11 +275,74 @@ jobs:
           echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
+  # Image-identity smoke — a dumb, loud assertion that every published image CONTAINS what its
+  # NAME promises, before any validate leg spends an hour on it. This is the gate that catches a
+  # matrix entry pointing at the wrong Dockerfile, a cross-tagged push, or any other
+  # right-name/wrong-bytes mixup (the failure mode that shipped agent dispatches dying with
+  # 'No module named worker'). Every image in ALL_IMAGES MUST have a case arm — an unlisted
+  # image fails the job.
+  image-identity:
+    needs: [preflight, verify-manifests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Every published image contains what its name promises
+        run: |
+          set -euo pipefail
+          probe() {  # probe <ref> <cmd...> — run the identity one-liner with the entrypoint cleared
+            local ref="$1"; shift
+            docker run --rm --entrypoint "" "$ref" "$@" \
+              || { echo "::error title=image-identity::$ref FAILED its identity probe ($*) — the published image does not contain what its name promises"; exit 1; }
+          }
+          for img in $ALL_IMAGES; do
+            ref="$img:$VERSION"
+            echo "== $ref"
+            docker pull -q "$ref"
+            case "$img" in
+              vexaai/v012-admin-api)    probe "$ref" python -c "import admin_api" ;;
+              vexaai/v012-runtime)      probe "$ref" python -c "import runtime_kernel" ;;
+              vexaai/v012-agent-worker)
+                # The per-dispatch claude-in-container harness — NOT the control plane. It must
+                # carry the worker + llm packages and boot via `python -m worker` (profiles.py
+                # spawns it with exactly that command).
+                probe "$ref" python -c "import worker, llm"
+                CMD="$(docker inspect --format '{{json .Config.Cmd}}' "$ref")"
+                if [ "$CMD" != '["python","-m","worker"]' ]; then
+                  echo "::error title=image-identity::$ref CMD is $CMD, expected [\"python\",\"-m\",\"worker\"] — the published agent-worker is NOT the worker build (core/agent/worker/Dockerfile)"
+                  exit 1
+                fi
+                ;;
+              vexaai/v012-agent-api)    probe "$ref" python -c "import control_plane.api" ;;
+              vexaai/v012-meeting-api)  probe "$ref" python -c "import meeting_api" ;;
+              vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
+              vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
+              vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
+              vexaai/vexa-dashboard)    probe "$ref" node -e "require('fs').accessSync('/app/docker-entrypoint.sh'); require('fs').accessSync('/app/server.js')" ;;
+              vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
+              vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
+              *)
+                echo "::error title=image-identity::no identity assertion for $img — every image in ALL_IMAGES must state what proves its contents match its name"
+                exit 1
+                ;;
+            esac
+            echo "   ✓ $ref contents match its name"
+            docker image rm -f "$ref" >/dev/null 2>&1 || true   # keep runner disk headroom (lite alone is multi-GB)
+          done
+          echo "✓ all $(wc -w <<<"$ALL_IMAGES") published images match their names"
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
   # Validation legs — every one pulls the PUBLISHED :$VERSION images (COMPOSE_NO_BUILD=1 /
   # helm --set global.imageTag / lite IMAGE_TAG). Green here means the artifacts work, not
   # the working tree.
   validate-compose:
-    needs: [preflight, verify-manifests]
+    needs: [preflight, verify-manifests, image-identity]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -292,6 +358,11 @@ jobs:
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
         run: cp deploy/compose/.env.example deploy/compose/.env
+      # The compose agent-worker service is a build-only profile — `up`/`pull` skip it, and the
+      # runtime spawns workers through the docker socket API. Pre-pull the PUBLISHED worker image so
+      # the runtime's presence check finds it and this leg exercises the published worker bytes.
+      - name: Pre-pull the published agent-worker image
+        run: docker pull "vexaai/v012-agent-worker:$VERSION"
       - name: stack-test (always-on subset) from published images
         working-directory: deploy/compose
         env:
@@ -306,7 +377,7 @@ jobs:
           docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
 
   validate-mock-fsm:
-    needs: [preflight, verify-manifests]
+    needs: [preflight, verify-manifests, image-identity]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -323,6 +394,9 @@ jobs:
         run: cp deploy/compose/.env.example deploy/compose/.env
       - name: Build the mock bot (local instrument image, never published)
         run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
+      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
+      - name: Pre-pull the published agent-worker image
+        run: docker pull "vexaai/v012-agent-worker:$VERSION"
       - name: stack-test + MOCK_BOT scenarios from published images
         working-directory: deploy/compose
         env:
@@ -338,7 +412,7 @@ jobs:
           docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
 
   validate-bot-spawn:
-    needs: [preflight, verify-manifests]
+    needs: [preflight, verify-manifests, image-identity]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -357,6 +431,9 @@ jobs:
       # the published bot image must already be on the daemon.
       - name: Pre-pull the published bot image
         run: docker pull "vexaai/vexa-bot:$VERSION"
+      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
+      - name: Pre-pull the published agent-worker image
+        run: docker pull "vexaai/v012-agent-worker:$VERSION"
       - name: stack-test + real bot spawn (COMPOSE_BOT=1) from published images
         working-directory: deploy/compose
         env:
@@ -372,7 +449,7 @@ jobs:
           docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
 
   validate-lite:
-    needs: [preflight, verify-manifests]
+    needs: [preflight, verify-manifests, image-identity]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -404,7 +481,7 @@ jobs:
           docker logs vexa-lite --tail 300 || true
 
   validate-helm-k3s:
-    needs: [preflight, verify-manifests]
+    needs: [preflight, verify-manifests, image-identity]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -463,6 +540,7 @@ jobs:
     needs:
       - preflight
       - verify-manifests
+      - image-identity
       - validate-compose
       - validate-mock-fsm
       - validate-bot-spawn

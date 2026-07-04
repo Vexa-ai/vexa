@@ -2,7 +2,7 @@
 
 Pure unit test — no Docker daemon and no Kubernetes cluster needed: the backend constructors are
 lazy (they don't connect at __init__), so we only assert the env→class mapping and the invariant
-that the Docker-only image-alias step is skipped for backends that lack ``ensure_image_alias``."""
+that the Docker-only worker-image ensure step is skipped for backends that lack ``ensure_worker_image``."""
 from __future__ import annotations
 
 import pytest
@@ -39,9 +39,10 @@ def test_k8s_backend_reads_pod_namespace(monkeypatch):
     assert backend._ns == "vexa-prod"
 
 
-def test_only_docker_backend_has_image_alias():
-    # build_production_app() guards the AGENT_WORKER_IMAGE tag-alias on hasattr(backend,
-    # "ensure_image_alias"): docker makes a local alias; k8s/process pull by full ref instead.
-    assert hasattr(DockerBackend, "ensure_image_alias")
-    assert not hasattr(K8sBackend, "ensure_image_alias")
-    assert not hasattr(ProcessBackend, "ensure_image_alias")
+def test_only_docker_backend_ensures_worker_image():
+    # build_production_app() guards the AGENT_WORKER_IMAGE presence-ensure (pull-when-absent) on
+    # hasattr(backend, "ensure_worker_image"): docker pre-pulls via the socket API (which never
+    # implicit-pulls at create); k8s/process pull by full ref themselves at spawn time.
+    assert hasattr(DockerBackend, "ensure_worker_image")
+    assert not hasattr(K8sBackend, "ensure_worker_image")
+    assert not hasattr(ProcessBackend, "ensure_worker_image")

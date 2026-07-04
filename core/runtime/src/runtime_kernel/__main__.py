@@ -113,24 +113,22 @@ def build_production_app():
     from .profiles import apply_command_overrides, default_registry, worker_image_for
 
     backend = _build_backend()
-    # Workers run the agent-api BYTES under a distinct image NAME. With the Docker backend we ensure
-    # that name exists as a local TAG ALIAS of AGENT_IMAGE up front (rebuild-free, no pull). On any
-    # failure ensure_image_alias returns AGENT_IMAGE, which we then pin as AGENT_WORKER_IMAGE so the
-    # registry resolves to it — dispatch falls back to the agent-api image and never breaks. Other
-    # backends (k8s/process) pull the worker image from a registry by its full ref, so there is no
-    # local alias to make: we set AGENT_WORKER_IMAGE from worker_image_for(AGENT_IMAGE) directly.
+    # The agent worker is its OWN image (core/agent/worker/Dockerfile — claude-code + node + the
+    # `worker` package), NOT a rename of the agent-api image. With the Docker backend we ensure that
+    # image is present up front — pulling it when absent, since the socket create API never
+    # implicit-pulls and the compose agent-worker service is a build-only profile `up` skips. On
+    # failure the worker name is still pinned so a dispatch fails loudly with 'No such image' rather
+    # than silently spawning agent-api bytes that die with 'No module named worker'. Other backends
+    # (k8s/process) pull by full ref themselves, so we just derive AGENT_WORKER_IMAGE.
     agent_image = os.getenv("AGENT_IMAGE", "")
     if agent_image:
-        if hasattr(backend, "ensure_image_alias"):
+        target = worker_image_for(agent_image)
+        if hasattr(backend, "ensure_worker_image"):
             try:
-                target = worker_image_for(agent_image)
-                resolved = backend.ensure_image_alias(target, agent_image)
-                os.environ["AGENT_WORKER_IMAGE"] = resolved
-            except Exception as e:  # noqa: BLE001 — startup aliasing must never crash the boot
-                logger.warning("worker image alias setup failed: %s; using AGENT_IMAGE", e)
-                os.environ["AGENT_WORKER_IMAGE"] = agent_image
-        else:
-            os.environ.setdefault("AGENT_WORKER_IMAGE", worker_image_for(agent_image))
+                target = backend.ensure_worker_image(target)
+            except Exception as e:  # noqa: BLE001 — startup image ensure must never crash the boot
+                logger.warning("worker image ensure failed: %s; keeping %s", e, target)
+        os.environ["AGENT_WORKER_IMAGE"] = target
 
     scheduler = _build_scheduler()
     if scheduler is not None:
