@@ -22,6 +22,7 @@ jobs:
       - run: pnpm gate:graph
       - run: pnpm gate:schema
       - run: pnpm gate:contract-version
+      - run: pnpm gate:config-contract
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
       # the runtime docker-backend lifecycle test creates containers via the docker socket API,

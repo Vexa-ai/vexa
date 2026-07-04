@@ -40,16 +40,18 @@ secrets:
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
   nextauthSecret: ""                # terminal next-auth session signing (default dev key; set in prod)
-  # Model-provider auth. ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL are the OpenRouter/subscription
-  # pair (compose sources them from .env as a single source of truth — here they live in the Secret).
-  # claudeCodeOauthToken (CLAUDE_CODE_OAUTH_TOKEN) is the claude CLI's subscription OAuth token —
-  # the env-delivered counterpart of compose's HOST_CLAUDE_CREDENTIALS bind-mount (k8s has no host
-  # mount). agent-api stamps these model-auth vars into every worker dispatch (an explicit
-  # allowlist — control_plane/dispatch.py MODEL_AUTH_ENV_ALLOWLIST), so workers spawned as Pods can
-  # authenticate; leave them all empty and the stack still boots — chat then fails at inference
-  # with the actionable auth error. If both a subscription token and ANTHROPIC_* are set, the
-  # claude CLI resolves precedence itself (env credentials win over any mounted credentials file);
-  # set exactly one to avoid ambiguity.
+  # Model-provider auth (config.v1 `model_inference` capability, ADR-0026). ANTHROPIC_AUTH_TOKEN +
+  # ANTHROPIC_BASE_URL are the OpenRouter/subscription pair (compose sources them from .env as a
+  # single source of truth — here they live in the Secret). claudeCodeOauthToken
+  # (CLAUDE_CODE_OAUTH_TOKEN) is the claude CLI's subscription OAuth token — the env-delivered
+  # counterpart of the compose/lite-only HOST_CLAUDE_CREDENTIALS subscription-file mount, which has
+  # no k8s analog in this chart. On helm, workers get credentials ONLY via agent-api stamping these
+  # model-auth vars into every worker dispatch spec env (an explicit allowlist —
+  # control_plane/dispatch.py MODEL_AUTH_ENV_ALLOWLIST); the /health `model_inference` row reports
+  # which path (if any) is configured. Leave them all empty and the stack still boots — chat then
+  # fails at inference with the actionable auth error. If both a subscription token and ANTHROPIC_*
+  # are set, the claude CLI resolves precedence itself (env credentials win over any mounted
+  # credentials file); set exactly one to avoid ambiguity.
   # SECURITY: spec-env values are readable on spawned worker Pods (`kubectl describe pod`) and in
   # this chart-managed Secret. Prefer existingSecretName — a pre-created Secret carrying these
   # keys — over inline values here (inline values persist in helm release manifests), and RBAC-

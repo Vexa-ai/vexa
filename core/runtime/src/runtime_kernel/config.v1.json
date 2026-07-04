@@ -1,0 +1,247 @@
+{
+  "contract": "config.v1",
+  "service": "runtime",
+  "keys": [
+    {
+      "key": "RUNTIME_BACKEND",
+      "class": "defaulted",
+      "default": "docker",
+      "description": "spawn backend: docker (host socket API), k8s (Pods via kubectl under the runtime's RBAC), process (child processes — lite)",
+      "targets": ["helm", "lite"]
+    },
+    {
+      "key": "HOST",
+      "class": "defaulted",
+      "default": "0.0.0.0",
+      "description": "uvicorn bind host",
+      "targets": ["lite"]
+    },
+    {
+      "key": "PORT",
+      "class": "defaulted",
+      "default": "8090",
+      "description": "uvicorn bind port",
+      "targets": ["lite"]
+    },
+    {
+      "key": "LOG_LEVEL",
+      "class": "defaulted",
+      "default": "info",
+      "description": "uvicorn/app log level"
+    },
+    {
+      "key": "REDIS_URL",
+      "class": "capability",
+      "capability": "scheduler",
+      "description": "backing for the durable schedule.v1 cron store; unset ⇒ no scheduler is constructed"
+    },
+    {
+      "key": "SCHED_TICK_SEC",
+      "class": "defaulted",
+      "default": "5",
+      "description": "scheduler tick-loop interval (s)",
+      "targets": []
+    },
+    {
+      "key": "POD_NAMESPACE",
+      "class": "defaulted",
+      "default": "(unset — kubectl's current namespace)",
+      "description": "k8s backend namespace, injected via the downward API",
+      "targets": ["helm"]
+    },
+    {
+      "key": "DOCKER_HOST",
+      "class": "defaulted",
+      "default": "(unset — /var/run/docker.sock)",
+      "description": "docker socket/endpoint override for the docker backend",
+      "targets": []
+    },
+    {
+      "key": "DOCKER_NETWORK",
+      "class": "defaulted",
+      "default": "(unset — docker's default bridge)",
+      "description": "network spawned workloads join — compose sets the project network so bots resolve meeting-api/redis by service name",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "DOCKER_SHM_SIZE",
+      "class": "defaulted",
+      "default": "(backend default)",
+      "description": "shm-size for spawned browser-bot containers",
+      "targets": []
+    },
+    {
+      "key": "BROWSER_IMAGE",
+      "class": "capability",
+      "capability": "bot_spawn",
+      "description": "the meeting-bot image the `meeting-bot` profile spawns (vexaai/vexa-bot:v012)"
+    },
+    {
+      "key": "AGENT_IMAGE",
+      "class": "capability",
+      "capability": "agent_spawn",
+      "description": "the agent control-plane image tag the worker image is derived from (worker_image_for); unset ⇒ the `agent` profile cannot spawn"
+    },
+    {
+      "key": "AGENT_WORKER_IMAGE",
+      "class": "defaulted",
+      "default": "(derived from AGENT_IMAGE by worker_image_for; ensured/pulled at boot on the docker backend)",
+      "description": "the per-dispatch WORKER image (claude-in-container) the runtime spawns for `agent` workloads",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "BOT_COMMAND",
+      "class": "defaulted",
+      "default": "(unset — the image entrypoint runs)",
+      "description": "process-backend override: the executable that IS the meeting-bot (lite runs /usr/local/bin/vexa-bot-launch)",
+      "targets": ["lite"]
+    },
+    {
+      "key": "AGENT_WORKER_COMMAND",
+      "class": "defaulted",
+      "default": "(unset — the image entrypoint runs)",
+      "description": "process-backend override: the executable that IS the agent worker (lite runs /usr/local/bin/vexa-agent-worker)",
+      "targets": ["lite"]
+    },
+    {
+      "key": "HOST_CLAUDE_CREDENTIALS",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "DOCKER-HOST path (NOT an in-container path) to a claude credentials JSON (~/.claude/.credentials.json); the docker backend bind-mounts it READ-ONLY into every spawned agent-worker at /root/.claude/.credentials.json — the claude-code runner's subscription credential path. compose also mirror-mounts it into the runtime container at /var/lib/vexa/host-claude-credentials so the config.v1 file probe can verify the host file actually exists (docker turns a MISSING host path into an empty directory in the worker → 'Model inference failed: Not logged in')",
+      "targets": ["compose", "lite"]
+    },
+    {
+      "key": "ANTHROPIC_API_KEY",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "API-key credential path, brokered into spawned workers (alternative to the subscription mount)"
+    },
+    {
+      "key": "ANTHROPIC_AUTH_TOKEN",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "OAuth/OpenRouter-style bearer credential path, brokered into spawned workers (pairs with ANTHROPIC_BASE_URL)"
+    },
+    {
+      "key": "VEXA_LLM_API_KEY",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "provider-agnostic llm-module credential path, brokered into spawned workers (CompletionPort adapters)",
+      "targets": ["compose"]
+    },
+    {
+      "key": "ANTHROPIC_BASE_URL",
+      "class": "defaulted",
+      "default": "(provider default — api.anthropic.com)",
+      "secret": true,
+      "description": "endpoint the ANTHROPIC_* credentials authenticate against, brokered into spawned workers"
+    },
+    {
+      "key": "ANTHROPIC_MODEL",
+      "class": "defaulted",
+      "default": "(provider default)",
+      "description": "model id brokered into spawned workers"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+      "class": "defaulted",
+      "default": "(provider default)",
+      "description": "opus-alias model id brokered into spawned workers"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "class": "defaulted",
+      "default": "(provider default)",
+      "description": "sonnet-alias model id brokered into spawned workers"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "class": "defaulted",
+      "default": "(provider default)",
+      "description": "haiku-alias model id brokered into spawned workers"
+    },
+    {
+      "key": "VEXA_LLM_PROVIDER",
+      "class": "defaulted",
+      "default": "(openai-compat)",
+      "description": "llm-module CompletionPort adapter key, brokered into spawned workers",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_LLM_BASE_URL",
+      "class": "defaulted",
+      "default": "(adapter default)",
+      "secret": true,
+      "description": "llm-module endpoint, brokered into spawned workers",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_LLM_MODEL",
+      "class": "defaulted",
+      "default": "(adapter default)",
+      "description": "llm-module deployment-default model, brokered into spawned workers",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_LLM_MAX_TOKENS",
+      "class": "defaulted",
+      "default": "(adapter default)",
+      "description": "llm-module completion cap, brokered into spawned workers",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_RUNNER",
+      "class": "defaulted",
+      "default": "claude-code",
+      "description": "the agent HARNESS for workspace turns, brokered into spawned workers",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_AGENT_SRC_MOUNT",
+      "class": "defaulted",
+      "default": "(unset — the worker runs its baked-in source)",
+      "description": "dev loop: host path of the agent source bind-mounted over the worker's /app",
+      "targets": ["compose"]
+    }
+  ],
+  "capabilities": {
+    "scheduler": {
+      "description": "the durable schedule.v1 cron (routine jobs, join-retry re-arms) is live",
+      "mode": "all",
+      "when_unconfigured": "/schedule answers a typed 503 (honest absence); one-shot workload spawns are unaffected"
+    },
+    "bot_spawn": {
+      "description": "the `meeting-bot` profile can spawn (the meetings plane's bot container)",
+      "mode": "all",
+      "when_unconfigured": "a runtime.v1 create with profile=meeting-bot fails loud at spawn time (no image to run)"
+    },
+    "agent_spawn": {
+      "description": "the `agent` profile can spawn (the per-dispatch claude-in-container worker)",
+      "mode": "all",
+      "when_unconfigured": "a runtime.v1 create with profile=agent fails loud at spawn time (no worker image derivable)"
+    },
+    "model_inference": {
+      "description": "spawned agent-workers get WORKING model-provider credentials brokered in — either the mounted claude subscription file (HOST_CLAUDE_CREDENTIALS) or an API-style key (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / VEXA_LLM_API_KEY)",
+      "mode": "any",
+      "when_unconfigured": "agent dispatches spawn but every turn fails inside the worker ('Model inference failed: Not logged in' / provider 401) — configure ONE credential path",
+      "probe": {
+        "kind": "file",
+        "ttl_s": 60,
+        "file": {
+          "path_key": "HOST_CLAUDE_CREDENTIALS",
+          "fallback_paths": ["/var/lib/vexa/host-claude-credentials"]
+        }
+      }
+    }
+  },
+  "surface_only": [
+    {
+      "key": "INTERNAL_API_SECRET",
+      "reason": "set on the runtime by compose/helm/lite but never read by runtime code (the internal-call secret is a gateway↔admin-api↔meeting-api concern) — documented drift surfaced by gate:config-contract; candidate for a deploy-surface cleanup"
+    }
+  ]
+}

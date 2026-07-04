@@ -153,6 +153,12 @@ services:
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_vexa
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Mirror of HOST_CLAUDE_CREDENTIALS (a DOCKER-HOST path — see .env.example) into THIS container,
+      # so the config.v1 `model_inference` file probe can verify the host file actually exists before
+      # any worker spawns: docker bind-mounts a MISSING host path as an empty DIRECTORY, which is how
+      # a bad path becomes 'Model inference failed: Not logged in' inside the worker. /dev/null when
+      # unset (the probe is skipped then — an ANTHROPIC_* key may be the credential path instead).
+      - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health').status==200 else 1)"]
       interval: 10s
@@ -268,6 +274,11 @@ services:
       # `stt` resource; the funded internal@vexa.ai token). Unset → bot joins+captures but no transcript.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
+      # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
+      # capture-only bots instead of 503-ing every default POST /bots.
+      - TRANSCRIBE_ENABLED=${TRANSCRIBE_ENABLED:-true}
+      - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}

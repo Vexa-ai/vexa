@@ -20,5 +20,6 @@
   "core/meetings/contracts/webhook.v1": "d043f0f5c51b08532b04ff00a5f6b62f99d0cccc79c58c82bd28a55b17755deb",
   "core/runtime/contracts/runtime.v1": "9d67b9379e0d34c4d715764a467e7f6e6543a5db8177fc284fb4a7418067bc18",
   "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648",
+  "deploy/contracts/config.v1": "cf5961992377978a3dabc11cf7291f4781cc1115d6407b6888d3dc7a4c38328d",
   "deploy/contracts/execution-targets.v1": "0c644571b7823024aa2e7ec6a135a55202233155c6c60eef79f1f4ec063e6375"
 }

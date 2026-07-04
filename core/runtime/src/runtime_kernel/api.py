@@ -92,7 +92,14 @@ def create_app(
             except Exception:
                 results[name] = False
         healthy = all(results.values())
-        body = {"status": "ok" if healthy else "degraded", "checks": results}
+        # ADDITIVE config.v1 rows (ADR-0026): the declared capability tri-states (scheduler ·
+        # bot_spawn · agent_spawn · model_inference, incl. the credentials-file probe). They never
+        # affect `status`/`checks` or the status code — existing consumers keep working; an
+        # unconfigured capability degrades a FEATURE, not the process.
+        from .config_preflight import capability_health
+
+        body = {"status": "ok" if healthy else "degraded", "checks": results,
+                "capabilities": capability_health()}
         return JSONResponse(body, status_code=200 if healthy else 503)
 
     @app.post("/workloads", status_code=201)

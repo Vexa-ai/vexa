@@ -19,6 +19,7 @@
     "gate:graph": "node scripts/gates.mjs graph",
     "gate:schema": "node scripts/gates.mjs schema",
     "gate:contract-version": "node scripts/gates.mjs contract-version",
+    "gate:config-contract": "node scripts/gates.mjs config-contract",
     "gate:dataflow": "node scripts/gates.mjs dataflow",
     "seal:contracts": "node scripts/gates.mjs seal",
     "seal:arch": "node scripts/gates.mjs seal-arch",
