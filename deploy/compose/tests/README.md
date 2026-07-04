@@ -33,7 +33,7 @@ node scripts/gates.mjs compose           # the wired gate (docker absent → gre
 
 ### Always-on vs `COMPOSE_BOT`-gated — why
 
-Steps 3 and 6a drive a **real `vexaai/vexa-bot:dev` container** (Playwright browser, ~7GB image)
+Steps 3 and 6a drive a **real `vexaai/vexa-bot:v012` container** (Playwright browser, ~7GB image)
 through its lifecycle. That is slow and inherently flaky for a routine gate (browser boot, a dummy
 meeting URL, callback timing). The fast steps (1·2·4·5·6c·6d·6b) exercise the entire control plane —
 auth, the transcript bus, recordings→object-store, and the lifecycle/scheduling wiring — with no real

@@ -77,7 +77,7 @@ gateway:
   replicaCount: 2
   image:
     repository: vexaai/v012-gateway
-    tag: dev
+    tag: v012
   service:
     type: ClusterIP
     port: 8000
@@ -94,7 +94,7 @@ adminApi:
   replicaCount: 2
   image:
     repository: vexaai/v012-admin-api
-    tag: dev
+    tag: v012
   service:
     type: ClusterIP
     port: 8001
@@ -110,7 +110,7 @@ meetingApi:
   replicaCount: 2
   image:
     repository: vexaai/v012-meeting-api
-    tag: dev
+    tag: v012
   service:
     type: ClusterIP
     port: 8080
@@ -133,15 +133,15 @@ runtime:
   replicaCount: 1               # keep at 1 unless backend=k8s (Redis is the state-of-record)
   image:
     repository: vexaai/v012-runtime
-    tag: dev
+    tag: v012
   service:
     type: ClusterIP
     port: 8090
   # Images the runtime spawns. browserImage = the bot (published ~3.6GB, a reference, never built by
   # this chart). agentImage/agentWorkerImage default to the v012 agent repos at global.imageTag.
-  browserImage: "vexaai/vexa-bot:dev"
-  agentImage: "vexaai/v012-agent-api:dev"
-  agentWorkerImage: "vexaai/v012-agent-worker:dev"
+  browserImage: ""            # empty → follows global.imageTag (fallback vexaai/vexa-bot:v012)
+  agentImage: "vexaai/v012-agent-api:v012"
+  agentWorkerImage: "vexaai/v012-agent-worker:v012"
   logLevel: "info"
   resources:
     requests: { cpu: 50m, memory: 256Mi }
@@ -154,7 +154,7 @@ agentApi:
   replicaCount: 1               # shares a workspace store with spawned workers; keep single for RWO PVC
   image:
     repository: vexaai/v012-agent-api
-    tag: dev
+    tag: v012
   service:
     type: ClusterIP
     port: 8100
@@ -177,7 +177,7 @@ terminal:
   replicaCount: 2
   image:
     repository: vexaai/v012-terminal
-    tag: dev
+    tag: v012
   service:
     type: ClusterIP
     port: 3000

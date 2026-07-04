@@ -18,7 +18,7 @@ services:
       dockerfile: clients/dashboard/Dockerfile
       args:
         VEXA_API_URL: http://gateway:8000
-    image: vexa-dashboard:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-dashboard:${IMAGE_TAG:-dev}
     environment:
       # Internal SSOT — the dashboard's Next proxy + /ws rewrite target the gateway on the vexa network.
       - VEXA_API_URL=http://gateway:8000

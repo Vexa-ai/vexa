@@ -104,7 +104,7 @@ this chart. runtime.browserImage is the explicit value; global.imageTag (set) pi
 {{- else if .Values.global.imageTag -}}
 {{- printf "vexaai/vexa-bot:%s" .Values.global.imageTag -}}
 {{- else -}}
-vexaai/vexa-bot:dev
+vexaai/vexa-bot:v012
 {{- end -}}
 {{- end -}}
 
@@ -122,7 +122,7 @@ vexaai/vexa-bot:dev
 {{- if .Values.global.imageTag -}}
 {{- printf "vexaai/v012-agent-worker:%s" .Values.global.imageTag -}}
 {{- else -}}
-{{- .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:dev" -}}
+{{- .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
 {{- end -}}
 {{- end -}}
 

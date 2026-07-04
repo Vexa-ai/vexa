@@ -14,7 +14,7 @@ resolves against in planning, before execution (ADR-0020).
 |---|---|---|---|
 | spawns-over | the 4 core services + dashboard | `<service>/Dockerfile` build + `python -m <pkg>` | container images, env wiring, ordered health-gated bring-up |
 | spawns-over | infra | `redis:7-alpine` · `postgres:17-alpine` · `minio` + `minio/mc` | the backing stores every service `depends_on: service_healthy` |
-| spawns-over | bot | `runtime` → `/var/run/docker.sock`, `BROWSER_IMAGE=vexaai/vexa-bot:dev` | on-demand per-meeting bot container (published image, never built here) |
+| spawns-over | bot | `runtime` → `/var/run/docker.sock`, `BROWSER_IMAGE=vexaai/vexa-bot:v012` | on-demand per-meeting bot container (published image, never built here) |
 | produces | `scripts/gates.mjs` (`gate:execution-env`) + planning preflight | `execution-targets.v1` JSON (`deploy/execution-targets.json`, gitignored) | the resolved targets[]/resources[] registry; `secret_ref` references only (P14) |
 | calls | host secret store | `secret_ref: vexa-secrets:<path>` / `env:<NAME>` | references to credentials — never inline secret values |
 | publishes | dev loop | `docker-compose.dev.yml` source bind-mounts + `watchfiles` | host checkout → process restart, no image rebuild |

@@ -13,7 +13,7 @@ building its own slim `uv`-based image from `<service>/Dockerfile`:
 
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts
-`/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:dev`, published — a
+`/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:v012`, published — a
 reference, never built here) on demand; the bot is NOT a compose service.
 
 ## Usage
