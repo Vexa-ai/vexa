@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, 
 import { useService, useStore, CommandServiceId } from "../platform";
 import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
+import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
@@ -926,6 +927,10 @@ export function Chat({ params = {} }: ChatProps) {
   );
 }
 
-registerCommand({ id: "skill.research", title: "Research and file to the workspace", skill: "/research", run: () => {} });
-registerCommand({ id: "skill.draft", title: "Draft an email or doc", skill: "/draft", run: () => {} });
-registerCommand({ id: "skill.routine", title: "Create a scheduled routine", skill: ROUTINE_COMMAND, run: () => {} });
+// Agent /-skills — absent in meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings), where the chat
+// rail itself doesn't render (Workbench) and the proxy refuses agent paths.
+if (!meetingsOnly()) {
+  registerCommand({ id: "skill.research", title: "Research and file to the workspace", skill: "/research", run: () => {} });
+  registerCommand({ id: "skill.draft", title: "Draft an email or doc", skill: "/draft", run: () => {} });
+  registerCommand({ id: "skill.routine", title: "Create a scheduled routine", skill: ROUTINE_COMMAND, run: () => {} });
+}

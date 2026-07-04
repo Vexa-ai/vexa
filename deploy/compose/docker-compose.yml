@@ -361,6 +361,11 @@ services:
         # Google Analytics 4 measurement id, baked into the client bundle at build time (NEXT_PUBLIC_*).
         # Set GA_MEASUREMENT_ID in .env, then rebuild the terminal image. Empty → GA stays off.
         NEXT_PUBLIC_GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
+        # Terminal mode, baked at build time (NEXT_PUBLIC_* — see clients/terminal/src/app/mode.ts).
+        # "meetings" = meetings-only terminal: only the meetings list + meeting/canvas tabs + the
+        # API-tokens surface load, and the server proxy refuses agent-api paths (404). Uncomment
+        # (or set TERMINAL_MODE=meetings in .env) and REBUILD the terminal image to enable:
+        # NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-meetings}
     image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"

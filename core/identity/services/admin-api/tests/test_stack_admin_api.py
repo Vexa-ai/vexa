@@ -184,3 +184,26 @@ def test_admin_tier_auth_enforced(client):
     r = client.post("/admin/users", headers={"X-Admin-API-Key": "wrong"},  # bad key
                     json={"email": "f@vexa.ai"})
     assert r.status_code == 403
+
+
+def test_list_user_tokens_scoped_and_secret_free(client):
+    """GET /admin/users/{id}/tokens: only THAT user's tokens, metadata only — the secret value
+    never appears in a list (mint is the only crossing). Unknown user → 404; admin tier enforced."""
+    alice = client.post("/admin/users", headers=_admin(), json={"email": "alice-tokens@vexa.ai"}).json()
+    carol = client.post("/admin/users", headers=_admin(), json={"email": "carol-tokens@vexa.ai"}).json()
+
+    minted = client.post(f"/admin/users/{alice['id']}/tokens?scopes=bot,tx&name=ci&expires_in=3600",
+                         headers=_admin()).json()
+    client.post(f"/admin/users/{carol['id']}/tokens?scope=bot", headers=_admin())
+
+    r = client.get(f"/admin/users/{alice['id']}/tokens", headers=_admin())
+    assert r.status_code == 200, r.text
+    tokens = r.json()
+    assert [t["id"] for t in tokens] == [minted["id"]]           # scoped: carol's token absent
+    assert tokens[0]["name"] == "ci"
+    assert set(tokens[0]["scopes"]) == {"bot", "tx"}
+    assert tokens[0]["expires_at"] is not None
+    assert "token" not in tokens[0]                              # secret never listed
+
+    assert client.get("/admin/users/999999/tokens", headers=_admin()).status_code == 404
+    assert client.get(f"/admin/users/{alice['id']}/tokens").status_code == 403  # admin tier required

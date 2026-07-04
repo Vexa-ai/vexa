@@ -23,6 +23,7 @@ import { Chat } from "../surfaces/chat";
 import { listWorkspaceTree } from "../surfaces/workspaceApi";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
+import { meetingsOnly } from "../app/mode";
 
 // ── theme toggle: dark ⇄ day mode, icon button in the profile row ──
 function ThemeToggle() {
@@ -243,7 +244,10 @@ export function Workbench() {
   // CHAT-ONLY mode: the Sessions view is left-sidebar + chat, no center canvas. New users land here
   // (default list = "sessions") so onboarding is just the conversation; Meetings/Files/Routines reveal
   // the full 3-pane interface.
-  const chatOnly = activeList === "sessions";
+  // Meetings-only mode: no agent chat rail at all — 2-pane shell (a stale persisted "sessions"
+  // activeList must not flip it into chat-only either; that list doesn't register in this mode).
+  const meetOnly = meetingsOnly();
+  const chatOnly = !meetOnly && activeList === "sessions";
   const commands = useService(CommandServiceId);
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
@@ -296,10 +300,10 @@ export function Workbench() {
           // single-pane resolution: center wins when it has content, else chat.
           const centerHasContent = !chatOnly && activeTab != null;
           const showLeft = !leftCollapsed && tier === "full";
-          const showCenter = !chatOnly && (tier !== "single" || centerHasContent);
-          const showRight = tier === "single"
+          const showCenter = !chatOnly && (tier !== "single" || centerHasContent || meetOnly);
+          const showRight = !meetOnly && (tier === "single"
             ? !(showCenter)                                   // ¼-width: exactly one pane
-            : (chatOnly || !rightCollapsed);
+            : (chatOnly || !rightCollapsed));
           return (
             <Allotment
               key={`${chatOnly ? "chat-only" : "full"}-${tier}`}
@@ -318,9 +322,12 @@ export function Workbench() {
                   </div>
                 </Allotment.Pane>
               )}
-              <Allotment.Pane visible={showRight} minSize={tier === "full" ? 300 : 200} preferredSize={chatOnly ? "80%" : "30%"}>
-                <RightPane />
-              </Allotment.Pane>
+              {/* meetings-only: the chat rail never MOUNTS (not merely hidden) — no agent fetches fire */}
+              {!meetOnly && (
+                <Allotment.Pane visible={showRight} minSize={tier === "full" ? 300 : 200} preferredSize={chatOnly ? "80%" : "30%"}>
+                  <RightPane />
+                </Allotment.Pane>
+              )}
             </Allotment>
           );
         })()}

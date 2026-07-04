@@ -6,6 +6,7 @@ import { useContext, useEffect, useRef, useState, type CSSProperties, type Mouse
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
+import { meetingsOnly } from "../app/mode";
 import { Icon } from "../ui-kit";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocNavContext, type DocNavigate } from "../ui-kit/MdxDoc";
@@ -583,5 +584,8 @@ function DocTab({ id, params }: TabProps) {
   );
 }
 
-registerList({ id: "files", label: "Knowledge", icon: "panel", order: 30, component: FilesList });
-registerTab("doc", DocTab);
+// Agent surface — absent in meetings-only mode (NEXT_PUBLIC_TERMINAL_MODE=meetings).
+if (!meetingsOnly()) {
+  registerList({ id: "files", label: "Knowledge", icon: "panel", order: 30, component: FilesList });
+  registerTab("doc", DocTab);
+}

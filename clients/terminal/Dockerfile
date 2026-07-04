@@ -16,13 +16,22 @@ COPY . .
 # Empty → GA renders nothing (opt-in). Changing it requires a rebuild.
 ARG NEXT_PUBLIC_GA_MEASUREMENT_ID=""
 ENV NEXT_PUBLIC_GA_MEASUREMENT_ID=$NEXT_PUBLIC_GA_MEASUREMENT_ID
+# Terminal mode (src/app/mode.ts). "meetings" builds a meetings-only terminal: only the meetings
+# list + meeting/canvas tabs + the API-tokens surface register, and the server proxy refuses
+# agent-api paths (404). Empty (default) keeps every surface. NEXT_PUBLIC_* → set BEFORE `next build`.
+ARG NEXT_PUBLIC_TERMINAL_MODE=""
+ENV NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
 # Regular build (not standalone): produces .next served by the custom server in production.
 RUN npm run build
 
 FROM node:22-slim AS runtime
+# The server-side proxy gate reads the mode at REQUEST time (process.env), so the runtime stage must
+# carry the same value the bundle was built with — client gating and edge gating stay in lockstep.
+ARG NEXT_PUBLIC_TERMINAL_MODE=""
 ENV NODE_ENV=production \
     PORT=3000 \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
 WORKDIR /app
 # Prod-only deps (keeps next/react/ws; drops the build toolchain), PLUS typescript — Next loads the
 # TypeScript next.config.ts at runtime and would otherwise try to auto-install it (no network in a pod).

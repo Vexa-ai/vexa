@@ -33,6 +33,28 @@ All upstreams resolve to `AGENT_API_URL` (default `http://127.0.0.1:18100`).
 `core/agent/services/agent-api`. Schemas are sealed in `contracts.seal.json` (repo root) — the
 proxies forward bodies verbatim, they do not re-declare schemas.
 
+## Terminal modes
+
+`NEXT_PUBLIC_TERMINAL_MODE` (build-time public env — inlined by `next build`, changing it requires a
+rebuild; see `src/app/mode.ts`):
+
+- unset / empty (default) — every surface registers.
+- `meetings` — a meetings-only terminal: only the **Meetings** list, the **meeting/canvas** tabs, and
+  the **API Tokens** surface register. The agent surfaces (chat, sessions, workspace/knowledge,
+  routines) and their palette commands never register, and the server proxy refuses agent-api paths
+  with 404 (`src/app/api/proxyMode.ts`), so no agent traffic is possible from this deployment.
+
+Pass it as a Docker build arg (`--build-arg NEXT_PUBLIC_TERMINAL_MODE=meetings`) or via the
+commented example on the `terminal` service in `deploy/compose/docker-compose.yml`.
+
+## API tokens (self-serve)
+
+The **API Tokens** left list (`src/surfaces/tokens.tsx`) lets the logged-in user list, mint
+(scopes `bot`/`tx`/`browser`, optional name + expiry) and revoke their own tokens. The `/api/tokens`
+routes call admin-api with the server's `VEXA_ADMIN_API_KEY` (admin tier, like the login flow) and
+scope every operation to the user resolved from the httpOnly auth cookies — a `user_id` from the
+client is never accepted. The minted token value is returned once, at creation.
+
 ## Isolated evaluation
 
 No test suite yet (`tests/` absent). Standalone build + typecheck:
