@@ -113,5 +113,44 @@ expectFileContains(
   'hasExplicitDenyText',
 );
 
+console.log('\n=== Google Meet Gemini consent-gate handling (#429) ===');
+
+expectFileContains(
+  'selectors define a consent-prompt indicator list',
+  SELECTORS_TS,
+  'googleConsentPromptIndicators',
+);
+
+expectFileContains(
+  'consent selectors target the take-notes prompt copy',
+  SELECTORS_TS,
+  'take notes for me',
+);
+
+expectFileContains(
+  'admission.ts has a consent-prompt detector',
+  ADMISSION_TS,
+  'export async function hasConsentPrompt',
+);
+
+expectOrder(
+  'admission suppresses ACTIVE when a consent prompt is present',
+  admissionBody,
+  'const consentPending = await hasConsentPrompt(page)',
+  'return false',
+);
+
+expectFileContains(
+  'consent gate escalates to needs_human_help (consent_required)',
+  ADMISSION_TS,
+  'triggerEscalation(botConfig, "consent_required")',
+);
+
+expectFileContains(
+  'consent is escalated, not auto-clicked (human decision)',
+  ADMISSION_TS,
+  'not auto-consenting',
+);
+
 console.log(`\n=== googlemeet admission summary: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);

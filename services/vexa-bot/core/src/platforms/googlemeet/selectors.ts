@@ -28,6 +28,27 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting for admission"]',
 ];
 
+// Google's Gemini "take notes for me" in-call consent prompt. This is a consent
+// gate, not mere chrome: until a human accepts or declines, the bot is not truly
+// participating, yet the surrounding meeting controls can read as "admitted"
+// (issue #429: status active, 0 transcriptions). Detected so the bot routes to
+// needs_human_help instead of false-reporting ACTIVE.
+//
+// Targeted at the prompt's distinctive copy ("take notes for me" / "taking
+// notes") so it does NOT match the always-present Gemini toolbar button.
+//
+// NOTE: these selectors are best-effort and SHOULD be confirmed against the live
+// prompt DOM — reproduce per #429 (packages/meet-join standalone runner) and
+// adjust if Google changes the copy.
+export const googleConsentPromptIndicators: string[] = [
+  'text*="take notes for me"',
+  'text*="Take notes for me"',
+  'text*="taking notes"',
+  '[role="dialog"]:has-text("take notes for me")',
+  '[role="alertdialog"]:has-text("take notes for me")',
+  'button:has-text("take notes for me")',
+];
+
 export const googleRejectionIndicators: string[] = [
   // Waiting-room denial patterns. Google Meet can leave some lobby text in
   // the DOM after a host rejects the bot, so these must be checked before
