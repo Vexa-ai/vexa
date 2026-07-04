@@ -1,20 +1,25 @@
 # deploy/compose — the v0.12 control-plane stack (P4)
 
 `docker-compose.yml` brings up the v0.12 control plane: the infra (`postgres:17-alpine`,
-`redis:7-alpine`, `minio` + `minio-init`) and the four long-running Python services, each
-building its own slim `uv`-based image from `<service>/Dockerfile`:
+`redis:7-alpine`, `minio` + `minio-init`) and the long-running services below, each building its own
+slim image from `<service>/Dockerfile`:
 
 | service      | build context                          | host port | entrypoint                         |
 |--------------|----------------------------------------|-----------|------------------------------------|
 | admin-api    | `core/identity/services/admin-api`     | 18057     | `python -m admin_api`              |
 | runtime      | `core/runtime`                         | 18090     | `python -m runtime_kernel`         |
 | meeting-api  | `core/meetings/services/meeting-api`   | 18080     | `python -m meeting_api`            |
+| agent-api    | `core/agent/services/agent-api`        | 18100     | `uvicorn control_plane.api`        |
 | gateway      | `core/gateway/services/gateway`        | 18056     | `python -m gateway`                |
+| terminal     | `clients/terminal`                     | 13000     | Next.js custom server              |
 
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts
-`/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:dev`, published — a
-reference, never built here) on demand; the bot is NOT a compose service.
+`/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE`, **built from source** via `make bot` and
+spawned **without pulling** — the published `vexaai/vexa-bot:dev` is the old 0.10 line, incompatible
+with this stack's `lifecycle.v1`) on demand and the per-dispatch agent worker
+(`vexaai/v012-agent-worker:dev`, a `build-only` compose profile); neither is a long-running compose
+service.
 
 ## Usage
 

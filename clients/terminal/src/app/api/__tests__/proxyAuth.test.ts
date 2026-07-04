@@ -13,10 +13,14 @@ vi.mock("next/headers", () => ({
 }));
 
 import { resolveApiKey } from "../proxyAuth";
-import { GET as catchAllGet } from "../[...path]/route";
+import { GET as catchAllGet, PUT as catchAllPut, PATCH as catchAllPatch } from "../[...path]/route";
 
 function makeReq(search = ""): import("next/server").NextRequest {
   return { method: "GET", nextUrl: { search } } as unknown as import("next/server").NextRequest;
+}
+
+function makeReqM(method: string, body = "", search = ""): import("next/server").NextRequest {
+  return { method, nextUrl: { search }, text: async () => body } as unknown as import("next/server").NextRequest;
 }
 
 afterEach(() => {
@@ -81,5 +85,49 @@ describe("catch-all proxy — meetings domain forwards the cookie token as X-API
     await catchAllGet(makeReq(), { params: Promise.resolve({ path: ["meetings"] }) });
 
     expect(seen.key).toBe("legacy-bot-key");
+  });
+});
+
+describe("catch-all proxy — PATCH and PUT verbs forward (regression: handler exported only GET/POST/DELETE → 405)", () => {
+  it("forwards PATCH to the agent domain, body intact (routine enable/disable)", async () => {
+    jar.set("vexa-token", "tok");
+    const seen: { url?: string; method?: string; body?: unknown } = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        seen.url = url;
+        seen.method = init?.method;
+        seen.body = init?.body;
+        return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+
+    await catchAllPatch(makeReqM("PATCH", JSON.stringify({ enabled: false })), {
+      params: Promise.resolve({ path: ["routines", "daily", "enabled"] }),
+    });
+
+    expect(seen.method).toBe("PATCH");
+    expect(seen.url).toContain("/agent/routines/daily/enabled");
+    expect(seen.body).toBe(JSON.stringify({ enabled: false }));
+  });
+
+  it("forwards PUT to the meetings domain (schedule/cancel intent)", async () => {
+    jar.set("vexa-token", "tok");
+    const seen: { url?: string; method?: string } = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        seen.url = url;
+        seen.method = init?.method;
+        return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+
+    await catchAllPut(makeReqM("PUT", JSON.stringify({ intent: "scheduled" })), {
+      params: Promise.resolve({ path: ["meetings", "google_meet", "abc", "intent"] }),
+    });
+
+    expect(seen.method).toBe("PUT");
+    expect(seen.url).toContain("/meetings/google_meet/abc/intent");
   });
 });

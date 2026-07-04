@@ -5,7 +5,9 @@ This module is the **execution domain**: it turns a trigger (a chat turn, a fire
 schedule, an external event, a live transcript beat) into a **governed agent action**
 committed to a user's `workspace.v1` git repo. It owns 8 control-plane contracts and houses
 the `agent-api` service — the one Dispatcher that funnels every trigger through a single
-`unit.v1` envelope and spawns an isolated `runtime.v1` agent worker (claude-in-container).
+`unit.v1` envelope and spawns an isolated `runtime.v1` agent worker. The worker reaches models
+and coding-agent CLIs only through the provider-agnostic [`llm`](llm) module (completion +
+harness ports; `claude-code` is the default harness adapter, selected by `VEXA_RUNNER`).
 Agents never run in the control plane; isolation *is* the enforcement of governance.
 
 ## Boundary (SoC)

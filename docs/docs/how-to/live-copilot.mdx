@@ -13,7 +13,7 @@ everything else; only the trigger (the transcript stream) differs.
 The id invariant is `meeting_id == session_uid == native_id`.
 
 ```bash
-curl -X POST "$API_BASE/agent/api/meeting/start" \
+curl -X POST "$API_BASE/agent/meeting/start" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"native_id":"abc-defg-hij","platform":"google_meet","title":"Acme renewal"}'
 # → 202, the live-meeting record
@@ -24,7 +24,7 @@ curl -X POST "$API_BASE/agent/api/meeting/start" \
 Processing is opt-in. Toggle it on to start consuming the transcript:
 
 ```bash
-curl -X POST "$API_BASE/agent/api/meeting/process" \
+curl -X POST "$API_BASE/agent/meeting/process" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"native_id":"abc-defg-hij","platform":"google_meet","on":true}'
 # → { ..., "processing": true, "resumed_from": "<cursor-id>" }
@@ -36,7 +36,7 @@ Subscribe to the SSE stream that merges transcript and copilot output:
 
 ```bash
 curl -N -H "X-API-Key: $API_KEY" \
-  "$API_BASE/agent/api/meeting/stream?meeting_id=abc-defg-hij&session_uid=abc-defg-hij"
+  "$API_BASE/agent/meeting/stream?meeting_id=abc-defg-hij&session_uid=abc-defg-hij"
 ```
 
 Event types on the stream: `transcript`, `card` (a proposal), `message-delta`, `tool-call`, `ping`,
@@ -52,7 +52,7 @@ Turn it back on and it resumes from exactly where it stopped:
 
 ```bash
 # pause — clears the flag, freezes the cursor
-curl -X POST "$API_BASE/agent/api/meeting/process" \
+curl -X POST "$API_BASE/agent/meeting/process" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"native_id":"abc-defg-hij","platform":"google_meet","on":false}'
 # → { ..., "processing": false }
@@ -63,7 +63,7 @@ curl -X POST "$API_BASE/agent/api/meeting/process" \
 ## Health
 
 ```bash
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/meeting/relay-health"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/meeting/relay-health"
 ```
 
 A stale bot key surfaces as `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air.

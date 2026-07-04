@@ -1,8 +1,9 @@
 """meeting.py — the live MEETING copilot of the in-container agent harness.
 
-Consumes the meeting's ``transcript.v1`` Stream, gates cheaply, runs the governed turn (via the generic
-engine's ``run_turn_over_workspace``) to clean the transcript + surface proactive cards, and (on
-``session_end``) authors the post-meeting kg meeting entity.
+Consumes the meeting's ``transcript.v1`` Stream, gates cheaply, cleans the transcript + surfaces
+proactive cards via a DIRECT ``CompletionPort`` call (a card beat is a pure prompt→text turn — no
+tools, no subprocess, no workspace memory), and (on ``session_end``) authors the post-meeting kg
+meeting entity via the governed harness turn (``run_turn_over_workspace``).
 
 Imports the GENERIC helpers it needs from ``worker.engine`` (one direction); the engine imports the
 meeting entry functions only inside ``main()`` (function-local) to avoid an import cycle.
@@ -15,17 +16,24 @@ import re
 from pathlib import Path
 from typing import Callable, Iterator
 
+from llm import (
+    LLMAuthError,
+    auth_error_event,
+    completion_from_env,
+    looks_like_auth_failure,
+    model_error_event,
+)
 from shared.agent_config import (
     DEFAULT_CARD_KINDS,
     DEFAULT_POLISH_RULES,
     DEFAULT_TAG_RULES,
 )
-from worker.engine import (
-    _Stream,
-    _auth_error_event,
-    looks_like_auth_failure,
-)
+from worker.engine import _Stream
 from worker.engine import run_turn_over_workspace as _engine_run_turn_over_workspace
+
+# Back-compat aliases (pre-llm-split names the worker.worker shim re-exports).
+_auth_error_event = auth_error_event
+_model_error_event = model_error_event
 
 
 def run_turn_over_workspace(*args, **kwargs):
@@ -230,27 +238,22 @@ def fallback_processed_notes(segments: list[dict], stage_by_id: dict[str, int] |
     return notes
 
 
-def _model_error_event(message: object, *, model: str | None, stage: str) -> dict:
-    text = " ".join(str(message or "model inference failed").split())
-    return {"type": "model-error", "error": {"stage": stage, "model": model or "", "message": text[:600]}}
-
-
 def meeting_card_turn(
     work: Path, segments: list[dict], *, model: str | None = None,
     card_kinds: list[str] | None = None, steering: str = "",
     polish_rules: str = DEFAULT_POLISH_RULES, tag_rules: str = DEFAULT_TAG_RULES,
+    completion=None,
 ) -> Iterator[dict]:
-    """One copilot beat: read the recent transcript, stream the agent working, then emit a proactive
-    card per salient finding. Reuses the governed turn (with session continuity across beats). The
-    wanted ``card_kinds`` + workspace ``steering`` shape the prompt, and cards are filtered to the
-    allowed kinds."""
-    # Copilot behavior is steered EXCLUSIVELY by agents/meeting.md (folded into the prompt below).
-    # Residual risk: the card turn runs `claude -p` with cwd=workspace, so claude also auto-loads the
-    # workspace CLAUDE.md as project memory. There is no clean, granular Claude Code flag to suppress
-    # ONLY CLAUDE.md for a single turn (`--bare` exists but also strips skills/MCP/hooks and narrows the
-    # toolset — too blunt for a turn that Reads kg entities for context). So we keep CLAUDE.md free of
-    # copilot steering (seed guard) instead of stripping it: CLAUDE.md must carry file conventions only,
-    # and all watch/ignore/tone steering lives in agents/meeting.md's body.
+    """One copilot beat: polish the recent transcript window + emit a proactive card per salient
+    finding, via ONE direct ``CompletionPort`` call. A beat is a pure prompt→text turn — everything
+    it needs is already in the prompt window, so there is no harness, no subprocess, and no
+    workspace memory (the old tool-granted turn let the model explore the KG every beat — the
+    dominant per-beat latency; a direct completion also never auto-loads workspace conventions, so
+    steering lives EXCLUSIVELY in agents/meeting.md). The wanted ``card_kinds`` + workspace
+    ``steering`` shape the prompt, and cards are filtered to the allowed kinds.
+
+    ``completion`` is injectable; by default it resolves through the ``worker.worker``
+    ``completion_factory`` seam (env-selected adapter, ``VEXA_LLM_PROVIDER``)."""
     kinds = card_kinds or list(DEFAULT_CARD_KINDS)
     segment_by_id = {str(s.get("segment_id") or s.get("id") or ""): s for s in segments}
     stage_by_id = {seg_id: int(s.get("rewrite_pass") or 1) for seg_id, s in segment_by_id.items()}
@@ -259,34 +262,25 @@ def meeting_card_turn(
         f"speaker={s.get('speaker', '?')}] {s.get('text', '')}"
         for s in segments
     )
-    reply: str | None = None
-    chunks: list[str] = []
     prompt = build_card_prompt(lines, kinds, steering, polish_rules=polish_rules, tag_rules=tag_rules)
-    # propose-only: a read-only turn (no Write/Edit). We DON'T forward the streaming turn events — the
-    # raw JSON reply would leak into the UI as a "note"; the meeting feed wants only the parsed cards.
+    # We DON'T forward raw model output as turn events — the JSON reply would leak into the UI as a
+    # "note"; the meeting feed wants only the parsed notes/cards.
     try:
-        for ev in run_turn_over_workspace(work, prompt, model=model, allowed_tools=["Read"], commit=False, session_continuity=False):
-            if ev.get("type") == "message-delta" and ev.get("text"):
-                chunks.append(str(ev.get("text") or ""))
-            if ev.get("type") == "done":
-                reply = ev.get("reply") or "".join(chunks)
-                if ev.get("ok") is False:
-                    # Fail LOUD on a 401/auth mismatch: a distinct auth-error (provider host + the
-                    # BASE_URL-vs-TOKEN fix) instead of the opaque generic model-error (WS1b). The 401
-                    # text may be in the done reply OR in earlier streamed chunks, so scan both.
-                    blob = (reply or "") + " " + "".join(chunks)
-                    if looks_like_auth_failure(blob):
-                        yield _auth_error_event(reply or blob, model=model, stage="meeting-card")
-                        return
-                    yield _model_error_event(reply, model=model, stage="meeting-card")
-                    return
+        if completion is None:
+            import worker.worker as _w
+            completion = getattr(_w, "completion_factory", completion_from_env)()
+        reply = completion.complete(prompt, model=model).text
+    except LLMAuthError as exc:
+        # Fail LOUD on a 401/auth mismatch: a distinct auth-error (provider host + the
+        # BASE_URL-vs-KEY fix) instead of the opaque generic model-error (WS1b).
+        yield auth_error_event(exc, model=model, stage="meeting-card")
+        return
     except Exception as exc:
         if looks_like_auth_failure(exc):
-            yield _auth_error_event(exc, model=model, stage="meeting-card")
+            yield auth_error_event(exc, model=model, stage="meeting-card")
             return
-        yield _model_error_event(exc, model=model, stage="meeting-card")
+        yield model_error_event(exc, model=model, stage="meeting-card")
         return
-    reply = reply or "".join(chunks)
     notes = parse_notes(reply, stage_by_id, segment_by_id)
     cards = parse_cards(reply, kinds)
     if segments and not notes:

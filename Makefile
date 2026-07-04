@@ -1,26 +1,19 @@
 # =============================================================================
-# Vexa (v0.12) — top-level deploy entrypoints
+# Vexa open-core — top-level deploy entrypoint (Docker Compose)
 # =============================================================================
-# Two self-host shapes (docs/roadmap/deployment.mdx):
-#   make lite   — single container, all services (process backend) — quick eval / small teams
-#   make all    — full stack, each service in its own container (compose) — dev / production
-.PHONY: lite lite-down all up down help
+.PHONY: all up down bot help
 
 help:
 	@echo "Vexa deploy:"
-	@echo "  make lite        single-container deploy (Vexa Lite)"
-	@echo "  make lite-down   stop the lite container + sidecars"
-	@echo "  make all         full Docker Compose stack"
-	@echo "  make down        stop the compose stack"
-
-lite:                ## single-container deploy (Vexa Lite)
-	@$(MAKE) --no-print-directory -C deploy/lite all
-
-lite-down:           ## stop lite container + sidecars
-	@$(MAKE) --no-print-directory -C deploy/lite down
+	@echo "  make all   full Docker Compose stack"
+	@echo "  make bot   build the meeting bot from source (needed before bots can join)"
+	@echo "  make down  stop the compose stack"
 
 all up:              ## full compose stack
 	@$(MAKE) --no-print-directory -C deploy/compose up
+
+bot:                 ## build the meeting bot image from source (matches the stack's lifecycle.v1)
+	@$(MAKE) --no-print-directory -C deploy/compose bot
 
 down:                ## stop the compose stack
 	@$(MAKE) --no-print-directory -C deploy/compose down

@@ -129,7 +129,7 @@ services:
     env_file:
       - .env
     environment:
-      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
+      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:v012}
       # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
@@ -323,12 +323,49 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # MCP service — the Model Context Protocol front for the PUBLIC API (v0.12 port of 0.10.6
+  # services/mcp). Stateless: every tool call forwards the caller's key to the gateway as
+  # X-API-Key; exposed on its OWN host port (no gateway /mcp forward yet — see the service README).
+  mcp:
+    build:
+      context: ../../core/meetings/services/mcp
+      dockerfile: Dockerfile
+    image: vexaai/v012-mcp:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${MCP_HOST_PORT:-18010}:8010"
+    environment:
+      - GATEWAY_URL=http://gateway:8000
+      - PORT=8010
+      - VEXA_ENV=${VEXA_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
   # The user-facing web UI (Next.js custom server). Proxies /ws → gateway and REST → agent-api/admin-api.
   # The terminal is the front door for humans; the gateway remains the API front door for programmatic use.
   terminal:
     build:
       context: ../../clients/terminal
       dockerfile: Dockerfile
+      args:
+        # Google Analytics 4 measurement id, baked into the client bundle at build time (NEXT_PUBLIC_*).
+        # Set GA_MEASUREMENT_ID in .env, then rebuild the terminal image. Empty → GA stays off.
+        NEXT_PUBLIC_GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
+        # Terminal mode, baked at build time (NEXT_PUBLIC_* — see clients/terminal/src/app/mode.ts).
+        # "meetings" = meetings-only terminal: only the meetings list + meeting/canvas tabs + the
+        # API-tokens surface load, and the server proxy refuses agent-api paths (404). Uncomment
+        # (or set TERMINAL_MODE=meetings in .env) and REBUILD the terminal image to enable:
+        # NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-meetings}
     image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"
@@ -342,10 +379,25 @@ services:
       - VEXA_API_URL=http://gateway:8000
       - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      # Composer mic dictation (/api/stt) — same STT service the meeting pipeline uses; token stays
+      # server-side. Empty → the mic button reports "not configured" instead of failing silently.
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
       # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
       # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
+      # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
+      # secret to expose that sign-in button on the login page; leave empty to hide it (the dev
+      # type-any-email login still works). Register the redirect URI in the provider console:
+      #   Google    → ${NEXTAUTH_URL}/api/auth/callback/google
+      #   Microsoft → ${NEXTAUTH_URL}/api/auth/callback/microsoft
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      # Microsoft tenant: "common" = work/school + personal accounts; or a specific tenant id for org-only.
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 10s

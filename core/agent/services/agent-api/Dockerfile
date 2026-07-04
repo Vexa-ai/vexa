@@ -38,7 +38,7 @@ COPY core/agent/shared ./shared
 COPY core/agent/control_plane ./control_plane
 COPY core/agent/contracts ./contracts
 # The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
-# workspace-seeds/<name>/ — one validated seed per subdir (today: default).
+# workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
 COPY core/agent/workspace-seeds ./workspace-seeds
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module

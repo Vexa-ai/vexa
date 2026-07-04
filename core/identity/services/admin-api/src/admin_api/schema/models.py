@@ -39,7 +39,7 @@ class User(Base):
     name = Column(String(100))
     image_url = Column(Text)
     created_at = Column(DateTime, server_default=func.now(), default=func.now())
-    max_concurrent_bots = Column(Integer, nullable=False, server_default="1", default=1)
+    max_concurrent_bots = Column(Integer, nullable=False, server_default="3", default=3)
     # webhook_url / webhook_secret / webhook_events live here (surfaced by /internal/validate)
     data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
 

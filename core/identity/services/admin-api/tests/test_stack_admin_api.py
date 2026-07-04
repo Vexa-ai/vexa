@@ -83,6 +83,15 @@ def test_golden_identity_flow(client):
                          "webhook_events": {"meeting.completed": True}})
     assert r.status_code == 200, r.text
 
+    # 2c. read the config back (self-serve GET) — the secret is MASKED, never in the clear
+    r = client.get("/user/webhook", headers={"X-API-Key": token_value})
+    assert r.status_code == 200, r.text
+    cfg = r.json()
+    assert cfg["webhook_url"] == "https://example.com/hook"
+    assert cfg["webhook_secret_set"] is True
+    assert "shh" not in (cfg["webhook_secret"] or "")
+    assert cfg["webhook_events"] == {"meeting.completed": True}
+
     # 3. /internal/validate — correct secret → user_id + scopes + webhook config surfaced
     r = client.post("/internal/validate", headers={"X-Internal-Secret": INTERNAL_SECRET},
                     json={"token": token_value})
@@ -102,6 +111,19 @@ def test_golden_identity_flow(client):
     r = client.post("/internal/validate", headers={"X-Internal-Secret": INTERNAL_SECRET},
                     json={"token": token_value})
     assert r.status_code == 401
+
+
+def test_new_user_defaults_to_3_bots(client):
+    """A user created without an explicit limit gets the product default of 3
+    (raised from 1 — see schema/MIGRATION-0003). /internal/validate surfaces it."""
+    r = client.post("/admin/users", headers=_admin(), json={"email": "default-limit@vexa.ai"})
+    assert r.status_code in (200, 201), r.text
+    assert r.json()["max_concurrent_bots"] == 3
+    token = client.post(f"/admin/users/{r.json()['id']}/tokens?scope=bot",
+                        headers=_admin()).json()["token"]
+    v = client.post("/internal/validate", headers={"X-Internal-Secret": INTERNAL_SECRET},
+                    json={"token": token}).json()
+    assert v["max_concurrent"] == 3
 
 
 def test_internal_validate_requires_secret(client):
@@ -171,3 +193,26 @@ def test_admin_tier_auth_enforced(client):
     r = client.post("/admin/users", headers={"X-Admin-API-Key": "wrong"},  # bad key
                     json={"email": "f@vexa.ai"})
     assert r.status_code == 403
+
+
+def test_list_user_tokens_scoped_and_secret_free(client):
+    """GET /admin/users/{id}/tokens: only THAT user's tokens, metadata only — the secret value
+    never appears in a list (mint is the only crossing). Unknown user → 404; admin tier enforced."""
+    alice = client.post("/admin/users", headers=_admin(), json={"email": "alice-tokens@vexa.ai"}).json()
+    carol = client.post("/admin/users", headers=_admin(), json={"email": "carol-tokens@vexa.ai"}).json()
+
+    minted = client.post(f"/admin/users/{alice['id']}/tokens?scopes=bot,tx&name=ci&expires_in=3600",
+                         headers=_admin()).json()
+    client.post(f"/admin/users/{carol['id']}/tokens?scope=bot", headers=_admin())
+
+    r = client.get(f"/admin/users/{alice['id']}/tokens", headers=_admin())
+    assert r.status_code == 200, r.text
+    tokens = r.json()
+    assert [t["id"] for t in tokens] == [minted["id"]]           # scoped: carol's token absent
+    assert tokens[0]["name"] == "ci"
+    assert set(tokens[0]["scopes"]) == {"bot", "tx"}
+    assert tokens[0]["expires_at"] is not None
+    assert "token" not in tokens[0]                              # secret never listed
+
+    assert client.get("/admin/users/999999/tokens", headers=_admin()).status_code == 404
+    assert client.get(f"/admin/users/{alice['id']}/tokens").status_code == 403  # admin tier required

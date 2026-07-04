@@ -20,8 +20,32 @@ describe("apiClient.getJson — fail-loud", () => {
   });
   it("THROWS ApiError(status 0) on a network/DNS failure", async () => {
     globalThis.fetch = vi.fn(async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
-    const err = await getJson("/api/sessions").catch((e) => e as ApiError);
+    const err = (await getJson("/api/sessions").catch((e) => e)) as ApiError;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(0);
+  });
+});
+
+describe("apiClient.getJson — GA api_request usage event (single client→API chokepoint)", () => {
+  const setGtag = () => { const g = vi.fn(); (window as unknown as { gtag: typeof g }).gtag = g; return g; };
+  afterEach(() => { delete (window as unknown as { gtag?: unknown }).gtag; });
+
+  it("fires api_request on success (endpoint normalized, method, status, ok)", async () => {
+    const gtag = setGtag();
+    mock({ ok: true, status: 200, jsonBody: {} });
+    await getJson("/api/meetings/12345?x=1", { method: "POST" });
+    expect(gtag).toHaveBeenCalledWith("event", "api_request", { endpoint: "/api/meetings/:id", method: "POST", status: 200, ok: true });
+  });
+  it("fires api_request ok:false on a non-ok response", async () => {
+    const gtag = setGtag();
+    mock({ ok: false, status: 502, jsonBody: { detail: "down" } });
+    await getJson("/api/sessions").catch(() => {});
+    expect(gtag).toHaveBeenCalledWith("event", "api_request", { endpoint: "/api/sessions", method: "GET", status: 502, ok: false });
+  });
+  it("fires api_request status:0 on a network failure", async () => {
+    const gtag = setGtag();
+    globalThis.fetch = vi.fn(async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
+    await getJson("/api/sessions").catch(() => {});
+    expect(gtag).toHaveBeenCalledWith("event", "api_request", { endpoint: "/api/sessions", method: "GET", status: 0, ok: false });
   });
 });

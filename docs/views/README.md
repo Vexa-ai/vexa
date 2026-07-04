@@ -1,16 +1,15 @@
-# architecture views (generated)
+# docs/views — generated architecture projections
 
-Deterministic perspectives of [`architecture.calm.json`](../../architecture.calm.json), rendered by
-[`scripts/arch-viz.mjs`](../../scripts/arch-viz.mjs). **The `.svg` files here are generated and gitignored
-— do not edit them by hand.** Regenerate:
+Deterministic views carved from the SSOT chart (`architecture.calm.json`). **Never hand-edit** —
+regenerate with `pnpm arch:dsl --write`; `gate:dataflow` fails when any view is stale.
 
-```
-pnpm arch:viz                       # list selectors
-pnpm arch:viz cluster:meetings      # a concern bundle + the carriers it touches
-pnpm arch:viz flow:transcript-flow  # a data path, contract on each hop
-pnpm arch:viz path:proc-stream      # a carrier: its writers → readers
-pnpm arch:viz all                   # every cluster + flow
-```
+| File | View |
+|---|---|
+| `architecture.dsl` | compact text projection — the always-in-context LLM index |
+| `containers.mmd` | C4-ish container view: systems, services, clients, protocols |
+| `ownership.mmd` | P23 data-carrier ownership: write=solid, read=dashed, multi-writer carriers dashed-outline |
+| `flow-*.mmd` | one sequence diagram per declared flow (live transcript, agent dispatch) |
+| `deployment.mmd` | runtime spawn topology (runtime.v1 workloads) |
+| `egress.mmd` | tenant trust boundary; edges carrying a data-egress control |
 
-Flags: `--lod=0..3` (detail), `--scale=0.5..2.5`, `--no-contracts`, `--no-owners`. Same model + same
-spec ⇒ byte-identical output. The model is kept true by `gate:dataflow` (P23); see `docs/ARCHITECTURE.md`.
+GitHub renders the `.mmd` files natively (Mermaid).

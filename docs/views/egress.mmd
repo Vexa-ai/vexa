@@ -1,0 +1,24 @@
+%% GENERATED — pnpm arch:dsl --write
+flowchart LR
+  subgraph tenant["tenant boundary"]
+    agent_api["agent-api"]
+    conformance["conformance"]
+    gateway["gateway"]
+    admin_api["admin-api"]
+    bot["bot"]
+    desktop["desktop"]
+    meeting_api["meeting-api"]
+    mcp["mcp"]
+    slim["slim"]
+    dashboard["dashboard"]
+    extension["extension"]
+    terminal["terminal"]
+    segments_table["transcription_segments (table)"]
+    runtime["runtime"]
+    agent_worker["agent-worker"]
+    redis["redis"]
+    postgres["postgres"]
+    minio["minio"]
+  end
+  transcription["transcription"]
+  bot ==>|"audio -> tenant-hosted"| transcription

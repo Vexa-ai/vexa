@@ -6,7 +6,7 @@
   "core/agent/contracts/task.v1": "12575c8f7e31d3510cddead4fec7a3d5bea93cf8c4b60643fbcf02b3c8b85a26",
   "core/agent/contracts/tool.v1": "a6a19a0539f26adeb2ecfccea6071f6eda99b2185e506eed6f474256810f224e",
   "core/agent/contracts/unit.v1": "d4aea2b8e2e2050cb901395e6be2e14d12640bf6cea559f4db6024d8d782af65",
-  "core/agent/contracts/workspace.v1": "4310ecde33e55b8daf331cc2d86d924a0dc8f7af762a89efbd97dc0d655ff35c",
+  "core/agent/contracts/workspace.v1": "4069d5a747914765ba2d4f2d4cf0968916be1208137f845a3f1691a241f7f20f",
   "core/gateway/contracts/api.v1": "94b08b9a92628c0b16b54bfd2db4f11eec9837082b840ad62e2d0606fb3d450b",
   "core/gateway/contracts/logevent.v1": "7ab25cc7d935e03ea1aec29a0d717576bcfa1a37d7c412400227c98e1df3ed59",
   "core/gateway/contracts/ws.v1": "2a05faeb7c6f49336a69ba6cf1a2074f07d32c1620fd85fa111d249c84705017",

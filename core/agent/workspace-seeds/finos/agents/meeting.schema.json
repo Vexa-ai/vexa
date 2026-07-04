@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "meeting.envelope.v1",
+  "title": "Meeting copilot output envelope (SSOT)",
+  "description": "The single source of truth for what the meeting copilot emits each beat. The worker VALIDATES its parsed output against this (invalid → deterministic fallback), and persists THIS exact shape as the durable render source so live (redis) and finished (file) render identically. The renderer (views/meeting.tsx + agents/meeting-ui.md) consumes these fields. TODO(later): reconcile the renderer's documented `entities{subtitle,value}` hook to this `cards` shape (or vice-versa) and add a model-side validate-and-retry; today validation falls back rather than retries.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["notes", "cards"],
+  "properties": {
+    "notes": {
+      "description": "Cleaned, attributed transcript lines (1:1 with input segments).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "speaker", "text"],
+        "properties": {
+          "id": {"type": "string", "description": "the input segment id (stable key)"},
+          "speaker": {"type": "string"},
+          "chapter": {"type": "string", "description": "empty unless the source gives a literal section title"},
+          "text": {"type": "string", "description": "clean one-line note (first person / direct fact)"},
+          "t": {"type": ["number", "string"], "description": "optional segment timestamp"},
+          "tags": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "cards": {
+      "description": "Tagged entities/signals surfaced from the lines (kinds governed by agents/meeting.md card_kinds).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "title"],
+        "properties": {
+          "kind": {"type": "string"},
+          "title": {"type": "string"},
+          "body": {"type": "string"},
+          "actionable": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

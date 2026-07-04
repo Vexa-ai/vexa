@@ -34,8 +34,12 @@ INCLUDE=(
   clients/slim
   clients/terminal
   clients/README.md
-  # public docs (Mintlify-hosted)
+  # FINOS CALM architecture-as-code model (validated by gate:calm)
+  calm
+  # public docs (Mintlify-hosted) + generated CALM views (checked by gate:dataflow)
   docs/docs
+  docs/views
+  docs/README.md
   # root scaffolding required to build/run the workspace
   package.json
   pnpm-workspace.yaml
@@ -61,7 +65,24 @@ RSYNC_EXCLUDES=(--exclude '.git' --exclude 'node_modules' --exclude '.turbo'
                 --exclude 'dist' --exclude '.next' --exclude '.venv' --exclude 'venv'
                 --exclude '__pycache__' --exclude '*.pyc' --exclude '.pytest_cache'
                 --exclude '.mypy_cache' --exclude '.ruff_cache' --exclude 'coverage'
-                --exclude '*.so' --exclude '.DS_Store' --exclude 'build')
+                --exclude '*.so' --exclude '.DS_Store' --exclude 'build'
+                --exclude 'sync-carve.sh')   # the carve tool itself stays private
+
+# --- open-core-OWNED files (absent from SRC; maintained in the published repo) ---
+# The FINOS governance + security-metadata layer lives ONLY in the published repo,
+# never in SRC. A plain wipe deletes it and the allowlist copy below cannot
+# re-create it, so it must be restored from the last published commit after wiping.
+PRESERVE=(
+  LICENSE
+  NOTICE
+  CONTRIBUTING.md
+  CODE_OF_CONDUCT.md
+  MAINTAINERS.md
+  SECURITY.md
+  security-insights.yml
+  security   # OSPS baseline assessments (published-repo-owned dir)
+  ARCHITECTURE.md   # OSPS-SA-01 root design doc (indexes CALM + docs; published-repo-owned)
+)
 
 echo "▶ source : $SRC"
 echo "▶ publish: $PUB"
@@ -70,6 +91,12 @@ echo "▶ publish: $PUB"
 cd "$PUB"
 # wipe everything tracked except .git, so deletions in SRC propagate
 git ls-files -z | xargs -0 rm -f 2>/dev/null || true
+# restore the open-core-owned governance layer (lives only here, not in SRC).
+# One path per checkout: a single multi-path checkout is all-or-nothing — one
+# missing path silently skipped restoring EVERYTHING (bit us 2026-07-03).
+for p in "${PRESERVE[@]}"; do
+  git checkout HEAD -- "$p" 2>/dev/null || echo "  ⚠ preserve: $p not in published HEAD"
+done
 find "$PUB" -mindepth 1 -name '.git' -prune -o -type d -empty -delete 2>/dev/null || true
 
 # copy the allowlist, preserving layout
@@ -79,6 +106,10 @@ for p in "${INCLUDE[@]}"; do
   rsync -a "${RSYNC_EXCLUDES[@]}" "$SRC/$p" "$PUB/$(dirname "$p")/"
   echo "  ✓ $p"
 done
+
+# advance the carve checkpoint (the published repo records which SRC commit it mirrors)
+mkdir -p "$PUB/.carve"
+git -C "$SRC" rev-parse HEAD > "$PUB/.carve/checkpoint"
 
 git add -A
 SRC_SHA="$(git -C "$SRC" rev-parse --short HEAD)"

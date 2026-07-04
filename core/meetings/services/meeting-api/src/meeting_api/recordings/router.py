@@ -182,6 +182,21 @@ def build_router(
         recs = await repo.list_meeting_recordings(user_id)
         return JSONResponse(content={"recordings": recs})
 
+    @router.get("/recordings/{recording_id}")
+    async def get_recording(
+        recording_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        """Recording detail (api/meetings.mdx: GET /recordings/{recording_id}) — the single recording
+        record, scoped to the caller. 404 if the id isn't one of the caller's recordings."""
+        user_id = _resolve_user_id(x_user_id)
+        recs = await repo.list_meeting_recordings(user_id)
+        rec = next((r for r in recs if r.get("id") == recording_id), None)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        return JSONResponse(content=rec)
+
     @router.get("/recordings/{recording_id}/master")
     async def get_recording_master(
         recording_id: int,

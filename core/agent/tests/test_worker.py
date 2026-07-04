@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 import pathlib
 
-from worker.worker import serve, _link_skills_into_workspace
+from llm.claude_code import ClaudeCodeHarness, _link_skills_into_workspace
+from worker.worker import serve
 
 
 class FakeStream:
@@ -453,7 +454,7 @@ def test_run_turn_persists_namespaced_session_file(tmp_path):
     def fake_exec(argv, cwd):
         yield json.dumps({"type": "result", "subtype": "success", "result": "ok", "session_id": "WORK_SID"})
 
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
+    with mock.patch.object(worker, "harness_factory", lambda: ClaudeCodeHarness(exec_fn=fake_exec)):
         list(worker.run_turn_over_workspace(tmp_path, "hello", session="work"))
 
     f = tmp_path / ".claude" / "sessions" / "work.session"
@@ -480,7 +481,7 @@ def test_run_turn_starts_fresh_when_resume_transcript_is_too_large(tmp_path, mon
         seen["argv"] = argv
         yield json.dumps({"type": "result", "subtype": "success", "result": "ok", "session_id": "NEW_SID"})
 
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
+    with mock.patch.object(worker, "harness_factory", lambda: ClaudeCodeHarness(exec_fn=fake_exec)):
         list(worker.run_turn_over_workspace(tmp_path, "hello", session="work"))
 
     assert "--resume" not in seen["argv"]
@@ -489,7 +490,7 @@ def test_run_turn_starts_fresh_when_resume_transcript_is_too_large(tmp_path, mon
 
 
 def test_meeting_doc_turn_authors_entity_with_frontmatter_and_links(tmp_path):
-    """The real post-meeting WRITE turn: a fake `claude` writes the entity; assert run_unit_turn drove a
+    """The real post-meeting WRITE turn: a fake `claude` writes the entity; assert the harness turn drove a
     write to kg/entities/meeting/<native>.md with the meeting frontmatter + grouped wikilinks, and the
     prompt carried the surfaced cards."""
     from worker import worker
@@ -517,16 +518,16 @@ def test_meeting_doc_turn_authors_entity_with_frontmatter_and_links(tmp_path):
             "Priya joined and committed to sending a quote.\n\n"
             "## Attendees\n- [[Priya]]\n\n## Actions\n- [[Send quote]]\n"
         )
-        # minimal claude --output-format stream-json line so run_unit_turn yields a `done`.
+        # minimal claude --output-format stream-json line so the parser yields a `done`.
         yield json.dumps({"type": "result", "subtype": "success", "result": "wrote", "session_id": "s1"})
 
     cards = [
         {"kind": "person", "title": "Priya", "body": "lead"},
         {"kind": "action", "title": "Send quote", "body": "by Fri"},
     ]
-    # meeting_doc_turn drives the module-level _exec_claude via run_turn_over_workspace; patch it.
+    # meeting_doc_turn drives the harness via run_turn_over_workspace; patch the factory seam.
     import unittest.mock as mock
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
+    with mock.patch.object(worker, "harness_factory", lambda: ClaudeCodeHarness(exec_fn=fake_exec)):
         evs = list(worker.meeting_doc_turn(
             tmp_path, cards, native=native, meeting_id=native, session_uid=native,
             platform="google_meet", date="2026-06-25", title="Meeting nba-agyz-gbe",
@@ -541,7 +542,7 @@ def test_meeting_doc_turn_authors_entity_with_frontmatter_and_links(tmp_path):
     assert "session_uid:" in doc and "platform: google_meet" in doc and "date: 2026-06-25" in doc
     assert "[[Priya]]" in doc and "[[Send quote]]" in doc
     # idempotent: a second run updates the same path, not a duplicate
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
+    with mock.patch.object(worker, "harness_factory", lambda: ClaudeCodeHarness(exec_fn=fake_exec)):
         list(worker.meeting_doc_turn(
             tmp_path, cards, native=native, meeting_id=native, session_uid=native,
             platform="google_meet", date="2026-06-25", title="Meeting nba-agyz-gbe",
@@ -599,17 +600,19 @@ def test_parse_notes_removes_third_person_speaker_boilerplate():
     ]
 
 
-def test_meeting_card_turn_parses_streamed_delta_when_done_reply_is_empty(tmp_path):
-    import unittest.mock as mock
-    from worker import worker
+def test_meeting_card_turn_parses_completion_reply(tmp_path):
+    """(Was the streamed-delta accumulation test — obsolete: a card beat is now ONE CompletionPort
+    call, so the reply arrives whole.) The reply JSON parses into note + card events."""
+    from tests.test_meeting_postprocess_offline import _fake_completion
 
-    def fake_run(*_args, **_kwargs):
-        yield {"type": "message-delta", "text": '{"notes":[{"id":"a","speaker":"Jane","chapter":"Plan","text":"I will send the plan."}],"cards":['}
-        yield {"type": "message-delta", "text": '{"kind":"company","title":"Acme","body":"Customer mentioned."}]}'}
-        yield {"type": "done", "ok": True, "reply": ""}
-
-    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
-        evs = list(meeting_card_turn(tmp_path, [{"segment_id": "a", "speaker": "Jane", "text": "I'll send the plan.", "start": 7.0}], model="openrouter/free"))
+    completion, _ = _fake_completion(
+        '{"notes":[{"id":"a","speaker":"Jane","chapter":"Plan","text":"I will send the plan."}],"cards":'
+        '[{"kind":"company","title":"Acme","body":"Customer mentioned."}]}'
+    )
+    evs = list(meeting_card_turn(
+        tmp_path, [{"segment_id": "a", "speaker": "Jane", "text": "I'll send the plan.", "start": 7.0}],
+        model="openrouter/free", completion=completion,
+    ))
 
     assert evs[0] == {
         "type": "note",
@@ -628,22 +631,16 @@ def test_meeting_card_turn_parses_streamed_delta_when_done_reply_is_empty(tmp_pa
 
 
 def test_meeting_card_turn_falls_back_when_model_omits_matching_notes(tmp_path):
-    import unittest.mock as mock
-    from worker import worker
+    from tests.test_meeting_postprocess_offline import _fake_completion
 
-    def fake_run(*_args, **_kwargs):
-        yield {
-            "type": "done",
-            "ok": True,
-            "reply": '{"notes":[{"id":"1","speaker":"Jane","chapter":"Plan","text":"Speaker says I will send the plan."}],"cards":[]}',
-        }
-
-    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
-        evs = list(meeting_card_turn(
-            tmp_path,
-            [{"segment_id": "seg-a", "speaker": "Jane", "text": "Speaker says I will send the plan.", "start": 7.0, "rewrite_pass": 2}],
-            model="openrouter/free",
-        ))
+    completion, _ = _fake_completion(
+        '{"notes":[{"id":"1","speaker":"Jane","chapter":"Plan","text":"Speaker says I will send the plan."}],"cards":[]}'
+    )
+    evs = list(meeting_card_turn(
+        tmp_path,
+        [{"segment_id": "seg-a", "speaker": "Jane", "text": "Speaker says I will send the plan.", "start": 7.0, "rewrite_pass": 2}],
+        model="openrouter/free", completion=completion,
+    ))
 
     assert evs[0] == {
         "type": "model-error",
@@ -668,14 +665,12 @@ def test_meeting_card_turn_falls_back_when_model_omits_matching_notes(tmp_path):
 
 
 def test_meeting_card_turn_surfaces_model_done_failure(tmp_path):
-    import unittest.mock as mock
-    from worker import worker
+    from llm import LLMError
+    from tests.test_meeting_postprocess_offline import _fake_completion
 
-    def fake_run(*_args, **_kwargs):
-        yield {"type": "done", "ok": False, "reply": "model unavailable"}
-
-    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
-        evs = list(meeting_card_turn(tmp_path, [_seg("Jane", "hello")], model="openrouter/free"))
+    completion, _ = _fake_completion(raises=LLMError("model unavailable"))
+    evs = list(meeting_card_turn(tmp_path, [_seg("Jane", "hello")], model="openrouter/free",
+                                 completion=completion))
 
     assert evs == [{
         "type": "model-error",
@@ -684,15 +679,11 @@ def test_meeting_card_turn_surfaces_model_done_failure(tmp_path):
 
 
 def test_meeting_card_turn_surfaces_model_exception(tmp_path):
-    import unittest.mock as mock
-    from worker import worker
+    from tests.test_meeting_postprocess_offline import _fake_completion
 
-    def fake_run(*_args, **_kwargs):
-        raise RuntimeError("router rejected request")
-        yield {}
-
-    with mock.patch.object(worker, "run_turn_over_workspace", fake_run):
-        evs = list(meeting_card_turn(tmp_path, [_seg("Jane", "hello")], model="openrouter/free"))
+    completion, _ = _fake_completion(raises=RuntimeError("router rejected request"))
+    evs = list(meeting_card_turn(tmp_path, [_seg("Jane", "hello")], model="openrouter/free",
+                                 completion=completion))
 
     assert evs == [{
         "type": "model-error",

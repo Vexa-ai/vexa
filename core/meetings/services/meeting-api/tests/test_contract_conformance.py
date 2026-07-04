@@ -62,18 +62,10 @@ WAIVED: dict[tuple[str, str], str] = {
         "actually maps GET /meetings/{meeting_id} → meeting-api GET /meetings/{meeting_id}; the "
         "dashboard meeting-detail reads /meetings/{id}. Deferred reconcile (drop or implement) is a "
         "lane:contract change (A1/A2, MATURITY-FINDINGS.md).",
-    ("GET", "/recordings/{recording_id}"):
-        "api.v1 declares the single-recording read, but meeting-api serves the recording via "
-        "GET /recordings/{id}/master (+ .../media/{id}/raw); the dashboard player uses /master, not "
-        "the bare detail route. Deferred reconcile (A1, MATURITY-FINDINGS.md).",
     ("DELETE", "/recordings/{recording_id}"):
         "api.v1 declares recording delete; not implemented in the v0.12 carve (no consumer wired "
         "it — delete rides DELETE /meetings/{p}/{n}, which purges the meeting's recordings). "
         "Deferred reconcile (A2, MATURITY-FINDINGS.md).",
-    ("GET", "/bots/status"):
-        "api.v1 declares the running-bot status list; in v0.12 live bot status reaches the dashboard "
-        "over the /ws bot_status channel (Learning #39) + GET /bots (meetings list). The standalone "
-        "status endpoint is an unported parent route — deferred carve.",
     ("PUT", "/bots/{platform}/{native_meeting_id}/config"):
         "Voice/config command to an ACTIVE bot (language/task update) — a bot-command-channel path, "
         "not meeting-api persistence. Deferred with the voice-agent carve; the gateway forwards it.",

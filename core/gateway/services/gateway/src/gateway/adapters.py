@@ -85,7 +85,7 @@ class AdminApiAuthorizer:
         if user_data:
             auth_headers["x-user-id"] = str(user_data["user_id"])
             auth_headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-            auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
+            auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
         try:
             resp = await self._client.post(
                 f"{self._meeting_api_url}/ws/authorize-subscribe",
@@ -141,6 +141,7 @@ def build_production_app(
         redis_client,
         meeting_api_url=meeting_api_url,
         agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
+        admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
 

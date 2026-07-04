@@ -1,0 +1,4 @@
+# Knowledge-as-code SEED DATA, not a code module. This subtree holds the FINOS
+# workspace's seeded knowledge graph (entities: people, organizations, projects)
+# that agents read/write at runtime — pure content, so it opts out of the per-dir
+# README gate (P12). See scripts/gates.mjs walkDirs().

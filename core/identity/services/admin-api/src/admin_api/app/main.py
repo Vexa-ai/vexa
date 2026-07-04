@@ -75,7 +75,7 @@ async def get_current_user(api_key: str = Security(USER_KEY_HEADER),
 class UserCreate(BaseModel):
     email: str
     name: Optional[str] = None
-    max_concurrent_bots: int = 1
+    max_concurrent_bots: int = 3
 
 
 class UserResponse(BaseModel):
@@ -92,6 +92,19 @@ class TokenResponse(BaseModel):
     token: str
     user_id: int
     scopes: List[str]
+
+    model_config = {"from_attributes": True}
+
+
+class TokenInfo(BaseModel):
+    """A token as listed — metadata only, NEVER the secret value (mint is the only place it crosses)."""
+    id: int
+    user_id: int
+    scopes: List[str]
+    name: Optional[str] = None
+    created_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -168,6 +181,20 @@ def create_app() -> FastAPI:
         await db.refresh(tok)
         return TokenResponse.model_validate(tok)
 
+    # --- GET /admin/users/{user_id}/tokens → the user's tokens, metadata only (no secret values).
+    # Added for the terminal's token self-serve surface: it lists on the user's behalf (admin tier,
+    # scoped server-side to the logged-in user) and verifies ownership before forwarding a revoke.
+    @app.get("/admin/users/{user_id}/tokens", response_model=List[TokenInfo],
+             dependencies=[Depends(verify_admin_token)])
+    async def list_tokens_for_user(user_id: int, db: AsyncSession = Depends(get_db)):
+        user = await db.get(User, user_id)
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        rows = (await db.execute(
+            select(APIToken).where(APIToken.user_id == user_id).order_by(APIToken.id)
+        )).scalars().all()
+        return [TokenInfo.model_validate(t) for t in rows]
+
     @app.delete("/admin/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT,
                 dependencies=[Depends(verify_admin_token)])
     async def delete_token(token_id: int, db: AsyncSession = Depends(get_db)):
@@ -196,6 +223,23 @@ def create_app() -> FastAPI:
         await db.commit()
         await db.refresh(user)
         return UserResponse.model_validate(user)
+
+    @app.get("/user/webhook")
+    async def get_user_webhook(user: User = Depends(get_current_user)):
+        """Read back the caller's webhook config. The secret NEVER leaves in the clear —
+        it is masked to its last 4 chars (`********abcd`), enough to recognize which secret
+        is set without disclosing it."""
+        data = user.data if isinstance(user.data, dict) else {}
+        secret = data.get("webhook_secret")
+        masked = None
+        if secret:
+            masked = "********" + (secret[-4:] if len(secret) > 8 else "")
+        return {
+            "webhook_url": data.get("webhook_url"),
+            "webhook_secret_set": bool(secret),
+            "webhook_secret": masked,
+            "webhook_events": data.get("webhook_events"),
+        }
 
     # --- internal tier: the gateway's authz oracle (FAIL-CLOSED) ---
     @app.post("/internal/validate", include_in_schema=False)

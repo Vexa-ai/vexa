@@ -23,4 +23,5 @@ each domain's published contracts nest in `core/<domain>/contracts/`, a domain's
 The move into `core/` is purely structural: the sealed contracts are byte-identical (only their
 registry keys re-prefixed to `core/…`), and the full gate suite stays green.
 
-_Governed by [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) (P1–P21). See §3 for the tree and the dependency rules._
+_The per-domain bounded-context rules (P1–P3) and the dependency seam are summarized above; see the
+[architecture docs](../docs/docs/architecture/README.md) for modules, dispatch, execution, and governance._

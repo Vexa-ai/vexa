@@ -25,7 +25,8 @@ export async function initWorkspace(): Promise<{ workspace: string; seeded: bool
   return getJson(`/api/workspace/init`, { method: "POST" });
 }
 
-export interface AttachedWorkspaces { active: string | null; slots: Record<string, { repo: string | null; ref: string | null }> }
+export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; nested?: boolean }
+export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot> }
 export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null; nested: boolean }
 
 /** The subject's attachment view: which workspace is active + the parked ones available to swap back to. */
@@ -35,13 +36,24 @@ export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
 
 /** Attach a custom external git repo as the active workspace (swap). The current workspace is PARKED
  *  (kept, never destroyed) so it can be swapped back to. Omit `repo` to swap back to the seeded default.
- *  `token` (optional) authenticates a PRIVATE repo's clone — used server-side for the clone only, never
- *  stored (P15). */
-export async function swapWorkspace(repo?: string, ref?: string, token?: string): Promise<SwapResult> {
+ *  `fresh` (seed only) rebuilds the default from the template instead of restoring your parked seed —
+ *  the displaced default is kept under a recoverable backup slot. `token` (optional) authenticates a
+ *  PRIVATE repo's clone — used server-side for the clone only, never stored (P15). */
+export async function swapWorkspace(repo?: string, ref?: string, token?: string, fresh?: boolean, slug?: string): Promise<SwapResult> {
   return getJson(`/api/workspace/swap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repo: repo ?? null, ref: ref ?? null, token: token ?? null }),
+    body: JSON.stringify({ repo: repo ?? null, ref: ref ?? null, slug: slug ?? null, token: token ?? null, fresh: fresh ?? false }),
+  });
+}
+
+/** Rename a workspace slot — a DISPLAY label only (the slug + parked tree are unchanged, so swap-back and
+ *  repo re-attach keep matching). Pass an empty `name` to clear the label. Returns the updated view. */
+export async function renameWorkspace(slug: string, name: string): Promise<AttachedWorkspaces> {
+  return getJson(`/api/workspace/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug, name }),
   });
 }
 
