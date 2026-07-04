@@ -109,8 +109,16 @@ def build_production_app():
     """Wire the runtime API with the env-selected spawn backend + the env-driven profile registry,
     plus the durable cron scheduler (REDIS_URL) with a background tick loop."""
     from .api import create_app
+    from .config_preflight import preflight
     from .kernel import Runtime
     from .profiles import apply_command_overrides, default_registry, worker_image_for
+
+    # config.v1 boot preflight (ADR-0026): validate the declaration against the env — the runtime has
+    # no required-explicit keys today, so this logs the capability tri-states (scheduler · bot_spawn ·
+    # agent_spawn · model_inference, incl. the credentials-file probe that catches a SET
+    # HOST_CLAUDE_CREDENTIALS whose host file is absent) so a deploy's config completeness is visible
+    # in the boot log and on /health BEFORE any workload runs. Capabilities never block boot.
+    preflight()
 
     backend = _build_backend()
     # The agent worker is its OWN image (core/agent/worker/Dockerfile — claude-code + node + the

@@ -3,8 +3,8 @@
  * The vexa 0.12 gate suite (ARCHITECTURE.md §4). Each gate is GREEN-ON-EMPTY and becomes
  * real as content lands — "an artifact exists only when gate-green" (P9).
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
- *                                contract-version|python|stack|node|health|access|tracing|replay|
- *                                telemetry|eval|licenses|compose|execution-env|all]
+ *                                contract-version|config-contract|python|stack|node|health|access|
+ *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -650,7 +650,168 @@ function gateDataflow() {
   return true;
 }
 
-const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+// gate:config-contract (ADR-0026) — the config.v1 deployment-config contract holds for every ADOPTED
+// service (the three planes: meeting-api · runtime · agent-api). Five checks per service:
+//   1. its config.v1.json declaration conforms to the sealed schema (the contract's validate.mjs);
+//   2. its vendored config_preflight.py is byte-identical to the canonical contract copy;
+//   3. declaration → surfaces: every declared key appears in each deploy surface its `targets` names
+//      (compose: the service's `environment:` block, or .env.example when the service is env_file-fed;
+//      helm: `- name: KEY` in the service's deployment template; lite: the supervisord program's
+//      environment= line or an entrypoint.sh export);
+//   4. surfaces → declaration: every key a surface sets on the service is declared (or carried in the
+//      declaration's `surface_only` list with a reason) — only process-plumbing vars are allowlisted;
+//   5. undeclared-read scan: every literal os.getenv/os.environ read in the service's source names a
+//      declared key (so a new env read MUST land in the declaration — the SSOT — to pass CI).
+const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
+// process-plumbing vars a surface may set without a declaration entry (kept TIGHT + documented):
+// interpreter/runtime wiring only, never product config.
+const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ"]);
+// literal env-read spellings the scanner recognizes (Python; `_os` aliases included by substring match)
+const CONFIG_READ_RES = [
+  /os\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
+  /os\.environ\.get\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
+  /os\.environ\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g,
+  /os\.environ\.setdefault\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
+];
+const CONFIG_ADOPTED = [
+  {
+    service: "meeting-api",
+    decl: "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+    preflight: "core/meetings/services/meeting-api/src/meeting_api/config_preflight.py",
+    scan: ["core/meetings/services/meeting-api/src"],
+    compose: "meeting-api", helm: ["deployment-meeting-api.yaml"], lite: "meeting-api",
+  },
+  {
+    service: "runtime",
+    decl: "core/runtime/src/runtime_kernel/config.v1.json",
+    preflight: "core/runtime/src/runtime_kernel/config_preflight.py",
+    scan: ["core/runtime/src"],
+    compose: "runtime", helm: ["deployment-runtime.yaml"], lite: "runtime",
+  },
+  {
+    service: "agent-api",
+    decl: "core/agent/control_plane/config.v1.json",
+    preflight: "core/agent/control_plane/config_preflight.py",
+    scan: ["core/agent/control_plane", "core/agent/shared"],
+    compose: "agent-api", helm: ["deployment-agent-api.yaml"], lite: "agent-api",
+  },
+];
+
+// docker-compose.yml is parsed line-wise (no YAML dep): a service block runs from `  name:` to the
+// next 2-space key; its `environment:` list items are `- KEY=…`; `env_file:` marks .env-fed services.
+function composeServiceEnv(service) {
+  const text = readFileSync(join(ROOT, "deploy", "compose", "docker-compose.yml"), "utf8");
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => l.trimEnd() === `  ${service}:`);
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i].trimEnd())) { end = i; break; }
+  }
+  const block = lines.slice(start, end);
+  const keys = new Set();
+  for (const l of block) { const m = l.match(/^\s*-\s*([A-Z][A-Z0-9_]*)=/); if (m) keys.add(m[1]); }
+  const envFile = block.some((l) => l.trim() === "env_file:");
+  return { keys, envFile };
+}
+const dotEnvExampleKeys = () => new Set(
+  readFileSync(join(ROOT, "deploy", "compose", ".env.example"), "utf8").split("\n")
+    .map((l) => (l.match(/^([A-Z][A-Z0-9_]*)=/) || [])[1]).filter(Boolean));
+function helmEnvKeys(templates) {
+  const keys = new Set();
+  for (const t of templates) {
+    const text = readFileSync(join(ROOT, "deploy", "helm", "charts", "vexa", "templates", t), "utf8");
+    for (const m of text.matchAll(/-\s+name:\s+([A-Z][A-Z0-9_]*)\b/g)) keys.add(m[1]);
+  }
+  return keys;
+}
+function liteProgramEnv(program) {
+  const text = readFileSync(join(ROOT, "deploy", "lite", "supervisord.conf"), "utf8");
+  const m = text.split(new RegExp(`\\[program:${program}\\]`))[1];
+  if (!m) return new Set();
+  const section = m.split(/\n\[/)[0];
+  const envLine = (section.match(/^environment=(.*)$/m) || [])[1] || "";
+  return new Set([...envLine.matchAll(/([A-Z][A-Z0-9_]*)=/g)].map((x) => x[1]));
+}
+const liteEntrypointExports = () => new Set(
+  [...readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8")
+    .matchAll(/^export ([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]));
+function scanEnvReads(dirs) {
+  const found = new Map(); // key -> first "file" it was seen in
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      if (skippable(name) || name === "tests") continue;
+      const p = join(dir, name);
+      let s; try { s = statSync(p); } catch { continue; }
+      if (s.isDirectory()) { walk(p); continue; }
+      if (!name.endsWith(".py")) continue;
+      const text = readFileSync(p, "utf8");
+      for (const re of CONFIG_READ_RES) {
+        re.lastIndex = 0;
+        for (const m of text.matchAll(re)) {
+          if (!found.has(m[1])) found.set(m[1], rel(p));
+        }
+      }
+    }
+  };
+  for (const d of dirs) if (existsSync(join(ROOT, d))) walk(join(ROOT, d));
+  return found;
+}
+
+function gateConfigContract() {
+  if (!existsSync(CONFIG_CONTRACT_DIR)) { console.log("  ✓ gate:config-contract — no config.v1 contract yet (green-on-empty)"); return true; }
+  const canonical = readFileSync(join(CONFIG_CONTRACT_DIR, "preflight.py"), "utf8");
+  const envExample = dotEnvExampleKeys();
+  const entrypointExports = liteEntrypointExports();
+  const errs = [];
+  let keyCount = 0, capCount = 0;
+  for (const svc of CONFIG_ADOPTED) {
+    const declPath = join(ROOT, svc.decl);
+    if (!existsSync(declPath)) { errs.push(`${svc.service}: declaration missing (${svc.decl})`); continue; }
+    // 1. schema conformance (the contract's own validator — same oracle as gate:schema)
+    try { execSync(`node ${JSON.stringify(join(CONFIG_CONTRACT_DIR, "validate.mjs"))} --check --file ${JSON.stringify(declPath)}`, { stdio: "pipe" }); }
+    catch (e) { errs.push(`${svc.service}: declaration does not conform:\n${(e.stdout || e.stderr || e).toString().slice(-800)}`); continue; }
+    // 2. the vendored preflight is the canonical one, byte for byte
+    if (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical)
+      errs.push(`${svc.service}: ${svc.preflight} is missing or has drifted from deploy/contracts/config.v1/preflight.py (vendor it VERBATIM)`);
+    const decl = JSON.parse(readFileSync(declPath, "utf8"));
+    const declared = new Set((decl.keys || []).map((k) => k.key));
+    const surfaceOnly = new Set((decl.surface_only || []).map((k) => k.key));
+    keyCount += declared.size; capCount += Object.keys(decl.capabilities || {}).length;
+    const compose = composeServiceEnv(svc.compose);
+    if (!compose) { errs.push(`${svc.service}: compose service '${svc.compose}' not found`); continue; }
+    const helm = helmEnvKeys(svc.helm);
+    const lite = liteProgramEnv(svc.lite);
+    // 3. declaration → surfaces (per the key's declared targets; default = all three)
+    for (const k of decl.keys || []) {
+      const targets = k.targets ?? ["compose", "helm", "lite"];
+      if (targets.includes("compose") && !compose.keys.has(k.key) && !(compose.envFile && envExample.has(k.key)))
+        errs.push(`${svc.service}: ${k.key} declared for compose but absent from the '${svc.compose}' environment block${compose.envFile ? " and .env.example" : ""}`);
+      if (targets.includes("helm") && !helm.has(k.key))
+        errs.push(`${svc.service}: ${k.key} declared for helm but absent from ${svc.helm.join("/")}`);
+      if (targets.includes("lite") && !lite.has(k.key) && !entrypointExports.has(k.key))
+        errs.push(`${svc.service}: ${k.key} declared for lite but absent from [program:${svc.lite}] env and entrypoint.sh exports`);
+    }
+    // 4. surfaces → declaration (explicit entries only; env_file feeds the whole .env by design)
+    const surfaceSets = [["compose", compose.keys], ["helm", helm], ["lite", lite]];
+    for (const [surface, keys] of surfaceSets) {
+      for (const key of keys) {
+        if (!declared.has(key) && !surfaceOnly.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
+          errs.push(`${svc.service}: ${surface} sets ${key} but the declaration does not carry it (declare it, or list it in surface_only with a reason)`);
+      }
+    }
+    // 5. undeclared literal env reads in the service's source
+    for (const [key, where] of scanEnvReads(svc.scan)) {
+      if (!declared.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
+        errs.push(`${svc.service}: undeclared env read ${key} at ${where} — add it to ${svc.decl}`);
+    }
+  }
+  if (errs.length) return fail(["config-contract (ADR-0026) — config.v1 violations:", ...errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:config-contract — ${CONFIG_ADOPTED.length} adopted service(s) · ${keyCount} declared keys · ${capCount} capabilities · declarations ≡ deploy surfaces ≡ code reads`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
