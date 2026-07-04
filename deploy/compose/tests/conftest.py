@@ -237,7 +237,10 @@ def stack():
     # Clean any prior gate run, then bring it up + build (P4 images are cached → fast on a warm host).
     _compose("down", "-v", "--remove-orphans", check=False)
     build = os.getenv("COMPOSE_NO_BUILD") != "1"
-    up_args = ["up", "-d", "--remove-orphans"] + (["--build"] if build else [])
+    # --no-build must be EXPLICIT: without it, compose silently falls back to building from the
+    # working tree when a pinned image can't be pulled — the release validation would then "prove"
+    # local layers instead of the published artifacts it exists to verify.
+    up_args = ["up", "-d", "--remove-orphans"] + (["--build"] if build else ["--no-build"])
     _compose(*up_args, timeout=1800)
 
     s = Stack()
