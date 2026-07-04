@@ -136,10 +136,21 @@ def build_production_app():
     # apply_command_overrides is a no-op unless BOT_COMMAND / AGENT_WORKER_COMMAND are set (the
     # process-backend / `lite` case) — docker/k8s keep the image entrypoints unchanged.
     profiles = apply_command_overrides(default_registry())
-    return create_app(
-        Runtime(backend=backend, profiles=profiles),
-        scheduler=scheduler,
-    )
+    runtime = Runtime(backend=backend, profiles=profiles)
+    # Re-adopt the workloads this runtime spawned that are STILL on the substrate (containers/pods
+    # survive a runtime recreate untouched): without this, the fresh in-memory registry 404s over a
+    # live bot, and the control plane misreads that 404 as "bot gone" — the orphaned-live-bot
+    # incident. Runs BEFORE uvicorn serves, so the first GET /workloads answer is already truthful.
+    try:
+        adopted = runtime.adopt()
+        if adopted:
+            logger.info(
+                "re-adopted %d workload(s) found on the %s substrate after restart",
+                adopted, backend.name,
+            )
+    except Exception as e:  # noqa: BLE001 — adoption is a boot aid; it must never block the boot
+        logger.warning("workload re-adoption failed: %s", e)
+    return create_app(runtime, scheduler=scheduler)
 
 
 def main() -> None:
