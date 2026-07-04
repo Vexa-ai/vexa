@@ -1150,16 +1150,31 @@ async def request_bot(
     if meeting_data.get("capture_modes"):
         bot_config["captureModes"] = meeting_data["capture_modes"]
     if req.authenticated:
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-        minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
-        s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
-        s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
         bot_config["authenticated"] = True
-        bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
-        bot_config["s3Endpoint"] = s3_endpoint_url
-        bot_config["s3Bucket"] = s3_bucket
-        bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
-        bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
+        cookie_backend = os.environ.get("COOKIE_STORAGE_BACKEND", "s3")
+        if cookie_backend == "http":
+            cookie_service_url = os.environ.get("COOKIE_SERVICE_URL", "").strip()
+            if not cookie_service_url:
+                raise HTTPException(
+                    status_code=500,
+                    detail="COOKIE_STORAGE_BACKEND=http but COOKIE_SERVICE_URL is not configured",
+                )
+            bot_config["cookieStorageBackend"] = "http"
+            bot_config["cookieServiceUrl"] = cookie_service_url
+            cookie_service_token = os.environ.get("COOKIE_SERVICE_TOKEN", "").strip()
+            if cookie_service_token:
+                bot_config["cookieServiceToken"] = cookie_service_token
+            bot_config["userId"] = str(current_user.id)
+        else:
+            minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+            minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
+            s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
+            s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
+            bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
+            bot_config["s3Endpoint"] = s3_endpoint_url
+            bot_config["s3Bucket"] = s3_bucket
+            bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
+            bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
     # Remove None values
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
 
@@ -1361,7 +1376,28 @@ async def save_browser_session(token: str):
 
 @router.delete("/internal/browser-sessions/{user_id}/storage")
 async def delete_browser_storage(user_id: int):
-    """Delete stored browser data from S3 for a user via MinIO API."""
+    """Delete stored browser data for a user (S3/MinIO or HTTP cookie service)."""
+    cookie_backend = os.environ.get("COOKIE_STORAGE_BACKEND", "s3")
+
+    if cookie_backend == "http":
+        cookie_service_url = os.environ.get("COOKIE_SERVICE_URL", "").strip()
+        if not cookie_service_url:
+            raise HTTPException(status_code=500, detail="COOKIE_STORAGE_BACKEND=http but COOKIE_SERVICE_URL is not configured")
+        headers: dict = {}
+        token = os.environ.get("COOKIE_SERVICE_TOKEN", "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                res = await client.delete(f"{cookie_service_url}/userdata/{user_id}", headers=headers)
+            if res.status_code == 404:
+                return {"message": f"No browser data found for user {user_id}"}
+            if not res.is_success:
+                raise HTTPException(status_code=500, detail=f"Cookie service DELETE failed: {res.status_code}")
+            return {"message": f"Deleted browser data for user {user_id} via HTTP cookie service"}
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=500, detail=f"Cookie service unreachable: {e}")
+
     import boto3
     from botocore.config import Config as BotoConfig
 
@@ -1381,7 +1417,6 @@ async def delete_browser_storage(user_id: int):
             region_name="us-east-1",
         )
 
-        # List and delete all objects under the prefix
         deleted = 0
         paginator = s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=s3_bucket, Prefix=prefix):

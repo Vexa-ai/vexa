@@ -1,4 +1,4 @@
-.PHONY: all up down test env preflight init-db build push build-and-push set-latest set-dev setup-builder help
+.PHONY: all up up-local down test env preflight init-db build build-local push build-and-push set-latest set-dev setup-builder help _pull-image _run-container
 
 # --- Paths ---
 ROOT := $(shell git rev-parse --show-toplevel)
@@ -36,7 +36,10 @@ help:
 	@echo "Vexa Lite Docker Build & Push (Multi-Arch)"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make build              - Build locally for current platform (tagged as dev)"
+	@echo "  make build              - Build locally for current platform (tagged as vexa-lite:dev)"
+	@echo "  make build-local        - Build locally and tag as vexaai/vexa-lite:dev (use with up-local)"
+	@echo "  make up                 - Pull from DockerHub and start"
+	@echo "  make up-local           - Start using locally built image (requires build-local first)"
 	@echo "  make push               - Build multi-arch (amd64+arm64), push with timestamp tag, update 'dev' tag"
 	@echo "  make build-and-push     - Alias for push"
 	@echo "  make set-latest [TAG=]  - Set 'latest' tag to specified tag (or last pushed)"
@@ -58,6 +61,11 @@ build:
 	@echo "Building $(LOCAL_TAG) for current platform..."
 	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
 	@echo "Build complete: $(LOCAL_TAG)"
+
+build-local:
+	@echo "Building $(DOCKERHUB_USER)/$(IMAGE_NAME):$(TAG) from local source..."
+	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) -t $(DOCKERHUB_USER)/$(IMAGE_NAME):$(TAG) --label local-build=true $(CONTEXT)
+	@echo "Build complete — use 'make up-local' to run without pulling from DockerHub"
 
 push: setup-builder
 	@echo "Building multi-arch $(UNIQUE_DOCKERHUB_TAG) for $(PLATFORMS)..."
@@ -126,6 +134,25 @@ preflight:
 
 # --- Up ---
 up:
+	@$(MAKE) --no-print-directory _pull-image _run-container
+
+up-local:
+	@IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	IMAGE_TAG=$${IMAGE_TAG:-latest}; \
+	if ! docker image inspect $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG 2>/dev/null | \
+		python3 -c "import sys,json; l=json.load(sys.stdin)[0]['Config'].get('Labels') or {}; exit(0 if l.get('local-build')=='true' else 1)" 2>/dev/null; then \
+		echo "ERROR: No local build found. Run 'make build-local' first."; exit 1; \
+	fi
+	@$(MAKE) --no-print-directory _run-container
+
+_pull-image:
+	@if ! docker info > /dev/null 2>&1; then echo "ERROR: Docker is not running."; exit 1; fi
+	@IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	IMAGE_TAG=$${IMAGE_TAG:-latest}; \
+	echo "Pulling $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG..."; \
+	docker pull $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG
+
+_run-container:
 	@if ! docker info > /dev/null 2>&1; then echo "ERROR: Docker is not running."; exit 1; fi
 	@IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	IMAGE_TAG=$${IMAGE_TAG:-latest}; \
@@ -154,12 +181,11 @@ up:
 		done; \
 	fi; \
 	echo "  ✓ PostgreSQL ready"; \
-	echo "Pulling $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG..."; \
-	docker pull $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG; \
 	echo "Starting Vexa Lite..."; \
 	docker rm -f vexa-lite 2>/dev/null || true; \
 	docker run -d --name vexa-lite --shm-size=2g --network host \
 		-v vexa-lite-recordings:/var/lib/vexa/recordings \
+		--env-file $(ENV_FILE) \
 		-e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/vexa \
 		-e DB_PASSWORD=postgres \
 		-e DB_SSL_MODE=disable \

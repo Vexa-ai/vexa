@@ -22,6 +22,7 @@ import { Page, Browser, BrowserContext } from 'playwright-core';
 import { execSync } from 'child_process';
 import * as net from 'net';
 import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR } from './s3-sync';
+import { verifyCookieServiceContract, downloadCookiesFromHttp, uploadCookiesToHttp } from './cookie-http';
 // HTTP imports removed - using unified callback service instead
 
 // Per-speaker transcription pipeline
@@ -809,14 +810,24 @@ async function performGracefulLeave(
     }
   }
 
-  // Sync browser data back to S3 for authenticated bots (preserves cookies/sessions)
-  if (currentBotConfig?.authenticated && currentBotConfig?.userdataS3Path) {
+  // Sync browser data back for authenticated bots (preserves cookies/sessions)
+  if (currentBotConfig?.authenticated) {
     try {
-      log("[Graceful Leave] Syncing browser data to S3 (authenticated bot)...");
-      syncBrowserDataToS3(currentBotConfig);
-      log("[Graceful Leave] Browser data synced to S3.");
+      if (currentBotConfig.cookieStorageBackend === 'http' && currentBotConfig.cookieServiceUrl) {
+        log("[Graceful Leave] Uploading browser data to HTTP service...");
+        await uploadCookiesToHttp({
+          cookieServiceUrl: currentBotConfig.cookieServiceUrl,
+          cookieServiceToken: currentBotConfig.cookieServiceToken,
+          userId: currentBotConfig.userId!,
+        });
+        log("[Graceful Leave] Browser data uploaded to HTTP service.");
+      } else if (currentBotConfig.userdataS3Path) {
+        log("[Graceful Leave] Syncing browser data to S3 (authenticated bot)...");
+        syncBrowserDataToS3(currentBotConfig);
+        log("[Graceful Leave] Browser data synced to S3.");
+      }
     } catch (syncErr: any) {
-      log(`[Graceful Leave] Browser data S3 sync failed: ${syncErr.message}`);
+      log(`[Graceful Leave] Browser data sync failed: ${syncErr.message}`);
     }
   }
 
@@ -2160,7 +2171,7 @@ function startBotResourceSampler(): BotResourceSampler {
 //     was missing → gateway CDP proxy hit a dead :9223 and returned 502.
 // A pure-Node TCP proxy (no socat dependency) works identically in both.
 let __cdpRelayStarted = false;
-function startCdpRelay(listenPort = 9223, targetPort = 9222): void {
+function startCdpRelay(listenPort = (Number(process.env.VEXA_RELAY_PORT) || 9223), targetPort = (Number(process.env.VEXA_CDP_PORT) || 9222)): void {
   if (__cdpRelayStarted) return;
   __cdpRelayStarted = true;
   try {
@@ -2312,12 +2323,23 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
   }
 
-  // --- Authenticated bot: use persistent context with userdata from S3 ---
-  if (botConfig.authenticated && botConfig.userdataS3Path) {
-    log('[Bot] Authenticated mode: downloading userdata from S3...');
+  // --- Authenticated bot: use persistent context with userdata from S3 or HTTP ---
+  if (botConfig.authenticated) {
     ensureBrowserDataDir();
-    syncBrowserDataFromS3(botConfig);
     cleanStaleLocks(BROWSER_DATA_DIR);
+    if (botConfig.cookieStorageBackend === 'http' && botConfig.cookieServiceUrl) {
+      log('[Bot] Authenticated mode: downloading cookies from HTTP service...');
+      const cookieCfg = {
+        cookieServiceUrl: botConfig.cookieServiceUrl,
+        cookieServiceToken: botConfig.cookieServiceToken,
+        userId: botConfig.userId!,
+      };
+      await verifyCookieServiceContract(cookieCfg);
+      await downloadCookiesFromHttp(cookieCfg);
+    } else if (botConfig.userdataS3Path) {
+      log('[Bot] Authenticated mode: downloading userdata from S3...');
+      syncBrowserDataFromS3(botConfig);
+    }
 
     const authArgs = getAuthenticatedBrowserArgs();
     const context: BrowserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {

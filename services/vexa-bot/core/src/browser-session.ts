@@ -8,6 +8,7 @@ import { BrowserSessionConfig } from './types';
 import { TTSPlaybackService } from './services/tts-playback';
 import { MeetingChatService } from './services/chat';
 import { s3Sync, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR, BROWSER_CACHE_EXCLUDES } from './s3-sync';
+import { verifyCookieServiceContract, downloadCookiesFromHttp, uploadCookiesToHttp } from './cookie-http';
 
 const WORKSPACE_DIR = '/workspace';
 
@@ -97,7 +98,24 @@ function syncWorkspaceUp(config: BrowserSessionConfig): void {
   }
 }
 
-function saveAll(config: BrowserSessionConfig): { success: boolean; error?: string } {
+async function saveBrowserData(config: BrowserSessionConfig): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (config.cookieStorageBackend === 'http' && config.cookieServiceUrl) {
+      await uploadCookiesToHttp({
+        cookieServiceUrl: config.cookieServiceUrl,
+        cookieServiceToken: config.cookieServiceToken,
+        userId: config.userId!,
+      });
+    } else {
+      syncBrowserDataToS3(config);
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+async function saveAll(config: BrowserSessionConfig): Promise<{ success: boolean; error?: string }> {
   try {
     console.log('[browser-session] Saving workspace...');
     syncWorkspaceUp(config);
@@ -105,15 +123,14 @@ function saveAll(config: BrowserSessionConfig): { success: boolean; error?: stri
     console.error(`[browser-session] Workspace save failed: ${err.message}`);
     // Workspace failure is non-fatal, continue to browser data
   }
-  try {
-    console.log('[browser-session] Saving browser data...');
-    syncBrowserDataToS3(config);
+  console.log('[browser-session] Saving browser data...');
+  const result = await saveBrowserData(config);
+  if (result.success) {
     console.log('[browser-session] Save complete');
-    return { success: true };
-  } catch (err: any) {
-    console.error(`[browser-session] Browser data save FAILED: ${err.message}`);
-    return { success: false, error: err.message };
+  } else {
+    console.error(`[browser-session] Browser data save FAILED: ${result.error}`);
   }
+  return result;
 }
 
 // --- Main entry point ---
@@ -124,7 +141,17 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
   mkdirSync(WORKSPACE_DIR, { recursive: true });
 
   // Download existing data
-  syncBrowserDataFromS3(config);
+  if (config.cookieStorageBackend === 'http' && config.cookieServiceUrl) {
+    const cookieCfg = {
+      cookieServiceUrl: config.cookieServiceUrl,
+      cookieServiceToken: config.cookieServiceToken,
+      userId: config.userId!,
+    };
+    await verifyCookieServiceContract(cookieCfg);
+    await downloadCookiesFromHttp(cookieCfg);
+  } else {
+    syncBrowserDataFromS3(config);
+  }
   syncWorkspaceDown(config);
 
   // Clean stale locks
@@ -179,7 +206,7 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
 
       // Legacy plain-string commands (save_storage / stop)
       if (message === 'save_storage') {
-        const result = saveAll(config);
+        const result = await saveAll(config);
         if (result.success) {
           await publisher.publish(channelName, 'save_storage:done');
         } else {
@@ -188,7 +215,7 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
         return;
       } else if (message === 'stop') {
         console.log('[browser-session] Stop command received, saving and exiting...');
-        saveAll(config);
+        await saveAll(config);
         await context.close();
         process.exit(0);
         return;
@@ -230,7 +257,7 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
         ttsPlaybackService.interrupt();
       } else if (command.action === 'leave') {
         console.log('[browser-session] Leave command received, saving and exiting...');
-        saveAll(config);
+        await saveAll(config);
         await context.close();
         process.exit(0);
       } else if (command.action === 'chat_send') {
@@ -279,7 +306,7 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
   // Graceful shutdown
   const shutdown = async () => {
     console.log('[browser-session] Shutting down, saving...');
-    saveAll(config);
+    await saveAll(config);
     await context.close();
     process.exit(0);
   };
@@ -290,11 +317,9 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
   // Auto-save browser data every 60s — ensures login state persists
   // even if the container is killed without graceful shutdown
   const autoSaveInterval = setInterval(() => {
-    try {
-      syncBrowserDataToS3(config);
-    } catch (err: any) {
+    saveBrowserData(config).catch((err: any) => {
       console.error(`[browser-session] Auto-save failed: ${err.message}`);
-    }
+    });
   }, 60_000);
 
   // Keep alive

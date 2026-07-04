@@ -65,6 +65,10 @@ export const BotConfigSchema = z.object({
   workspaceGitRepo: z.string().optional(),
   workspaceGitToken: z.string().optional(),
   workspaceGitBranch: z.string().optional(),
+  cookieStorageBackend: z.literal('http').optional(),
+  cookieServiceUrl: z.string().optional(),
+  cookieServiceToken: z.string().optional(),
+  userId: z.string().optional(),
 });
 
 

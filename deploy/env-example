@@ -55,6 +55,12 @@ MINIO_SECRET_KEY=vexa-secret-key
 MINIO_BUCKET=vexa
 MINIO_SECURE=false
 
+# Cookie storage backend for authenticated bot mode (default: s3)
+# Switch to http to use an external cookie service instead of MinIO:
+# COOKIE_STORAGE_BACKEND=http
+# COOKIE_SERVICE_URL=http://localhost:9001
+# COOKIE_SERVICE_TOKEN=your-secret-token
+
 # Local GPU transcription (uncomment to self-host)
 # LOCAL_TRANSCRIPTION=true
 
