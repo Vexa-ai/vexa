@@ -3,13 +3,19 @@ title: "Architecture as Code (CALM)"
 description: "The runtime architecture is a validated FINOS CALM model — nodes, data carriers, single-writer ownership, and a self-hostable meeting-intelligence pattern, enforced in CI."
 ---
 
-The vexa runtime is modeled as code using **[FINOS CALM](https://calm.finos.org/)** (Common Architecture
-Language Model). The model lives in [`calm/`](https://github.com/Vexa-ai/vexa-core/tree/main/calm) and is
-validated in CI by `pnpm gate:calm` — so the architecture description can't silently drift from the system.
+The Vexum runtime is modeled as code using **[FINOS CALM](https://calm.finos.org/)** (Common Architecture
+Language Model). There is **one chart** — the repo-root
+[`architecture.calm.json`](https://github.com/Vexa-ai/vexa-core/blob/main/architecture.calm.json) — the
+single source of truth; [`calm/`](https://github.com/Vexa-ai/vexa-core/tree/main/calm) holds the governance
+controls and the reusable pattern that validate it. Two CI gates keep it honest: `pnpm gate:calm` (FINOS
+pattern conformance) and `pnpm gate:dataflow` (model↔disk completeness, ownership enforcement, and a
+reality diff against the code) — so the architecture description can't silently drift from the system.
 
 ## What's modeled
 
-`calm/architecture.calm.json` is the runtime / data-flow view: the standing services
+The chart carries both lenses at once: the complete **module / service / contract inventory** (every
+`core/*` service, module, and sealed contract is registered — adding one without registering it turns CI
+red) and the **runtime / data-flow view**: the standing services
 ([gateway](/architecture/identity-and-trust), `meeting-api`, `agent-api`, `admin-api`,
 [`runtime`](/architecture/execution)), the **runtime-spawned workers** (`bot`, `agent-worker` —
 [`deployed-in` the runtime kernel](/architecture/execution)), the redis transcript fabric, the durable
@@ -44,11 +50,29 @@ omits the egress control or the render-only client is rejected:
 
 ```bash
 pnpm gate:calm
-# = calm validate -p calm/patterns/meeting-intelligence.pattern.json -a calm/architecture.calm.json
+# = calm validate -p calm/patterns/meeting-intelligence.pattern.json -a architecture.calm.json
 ```
 
 Because the model is standard CALM, you can also `calm generate` a conformant starter architecture from the
 pattern and validate your own deployment against it with the FINOS [`calm-cli`](https://www.npmjs.com/package/@finos/calm-cli).
+
+## Generated views
+
+Diagram views are **carved from the chart, never drawn by hand**. `pnpm arch:dsl --write` regenerates
+[`docs/views/`](https://github.com/Vexa-ai/vexa-core/tree/main/docs/views) deterministically, and
+`gate:dataflow` fails when they are stale:
+
+| View | Shows |
+|---|---|
+| `architecture.dsl` | compact text projection — the always-in-context LLM index |
+| `containers.mmd` | systems, services, clients, and the protocols between them |
+| `ownership.mmd` | every data carrier and its writers/readers (multi-writer carriers highlighted) |
+| `flow-*.mmd` | one sequence diagram per declared flow (live transcript · agent dispatch) |
+| `deployment.mmd` | the runtime.v1 spawn topology |
+| `egress.mmd` | the tenant trust boundary and every egress-controlled edge |
+
+The chart is also **sealed** (`architecture.seal.json`): any edit fails CI until deliberately re-sealed
+with `pnpm seal:arch`, so ownership or boundary changes are always a reviewed act.
 
 ## Why this exists
 

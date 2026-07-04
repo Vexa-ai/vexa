@@ -20,12 +20,13 @@ with one command.
 curl -fsSL https://get.docker.com | sh
 git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa-core
 make all          # full Docker Compose stack — seeds .env, builds, and prints your API key
+make bot          # build the meeting bot from source — needed before a bot can join (§2′)
 ```
 
 `make all` brings up the whole stack and **prints an API key + your URLs** when it finishes:
 
 ```text
-  Vexa is up.
+  Vexum is up.
     Terminal UI : http://localhost:13000
     API gateway : http://localhost:18056
     API key     : vxa_…
@@ -85,7 +86,7 @@ Every captured meeting compiles into your **workspace** — a Markdown knowledge
 and writes like a developer in a repo. Chat with it:
 
 ```bash
-curl -N -X POST "$API_BASE/agent/api/chat" \
+curl -N -X POST "$API_BASE/agent/chat" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"prompt":"What did we decide in my last meeting?"}'
 ```

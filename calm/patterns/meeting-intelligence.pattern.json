@@ -13,7 +13,7 @@
         { "contains": { "type": "object", "properties": { "unique-id": { "const": "agent-api" } }, "required": ["unique-id"] } },
         { "contains": { "type": "object", "properties": { "unique-id": { "const": "bot" } }, "required": ["unique-id"] } },
         { "contains": { "type": "object", "properties": { "unique-id": { "const": "terminal" }, "node-type": { "const": "webclient" }, "controls": { "type": "object", "required": ["render-only"] } }, "required": ["unique-id", "controls"] } },
-        { "contains": { "type": "object", "properties": { "unique-id": { "const": "stt" } }, "required": ["unique-id"] } }
+        { "contains": { "type": "object", "properties": { "unique-id": { "const": "transcription" } }, "required": ["unique-id"] } }
       ]
     },
     "relationships": {

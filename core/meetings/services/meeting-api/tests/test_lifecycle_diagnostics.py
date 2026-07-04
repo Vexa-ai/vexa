@@ -142,8 +142,11 @@ def test_terminal_cause_attribution(row):
         assert final["data"]["bot_resources"] == terminal["bot_resources"]
 
     # 5. The emitted meeting.status_change webhook carries the SAME attribution. One per hop.
-    assert len(deliveries) == len(prefix) + 2
-    last_hook = deliveries[-1]
+    # (Typed events — meeting.started / meeting.completed / bot.failed — ride ALONGSIDE the
+    # status_change stream; filter to status_change here, then assert the typed terminal below.)
+    status_hooks = [d for d in deliveries if d["event_type"] == "meeting.status_change"]
+    assert len(status_hooks) == len(prefix) + 2
+    last_hook = status_hooks[-1]
     assert last_hook["event_type"] == "meeting.status_change"
     sc = last_hook["data"]["status_change"]
     assert sc["new_status"] == terminal_status
@@ -151,6 +154,15 @@ def test_terminal_cause_attribution(row):
     assert sc["transition_source"] == "bot_callback"
     assert last_hook["data"]["meeting"]["completion_reason"] == want_reason
     assert last_hook["data"]["meeting"]["failure_stage"] == want_stage
+
+    # 6. The terminal transition ALSO emitted its typed event (webhook.v1 EventType parity):
+    # completed → meeting.completed (post-meeting {meeting} envelope), failed → bot.failed.
+    typed = [d for d in deliveries if d["event_type"] != "meeting.status_change"]
+    want_terminal_event = "meeting.completed" if terminal_status == "completed" else "bot.failed"
+    assert typed[-1]["event_type"] == want_terminal_event
+    assert typed[-1]["data"]["meeting"]["completion_reason"] == want_reason
+    if terminal_status == "completed":
+        assert "status_change" not in typed[-1]["data"]
 
 
 def test_failure_stage_is_server_derived_not_payload():

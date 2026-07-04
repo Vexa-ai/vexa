@@ -18,6 +18,15 @@ export function registerEngineCommands(container: ServiceContainer): void {
   cmd.register({ id: "workbench.toggleRight", title: "Toggle Right Sidebar", run: ({ container: c }) => c.get(LayoutServiceId).toggleRight() });
   cmd.register({ id: "workbench.resetLayout", title: "Reset Layout", run: ({ container: c }) => c.get(LayoutServiceId).resetLayout() });
   cmd.register({ id: "chat.focus", title: "Focus Chat", run: ({ container: c }) => focusChat(c) });
+  // Go back: restore the UI state from before the last navigation (VS Code-style).
+  // Escape is layered: overlays (palette, menus, dropdowns) close themselves and stop
+  // propagation, so this only fires when nothing is on top. Never navigates while the
+  // user is typing — Escape there means "leave the field", handled locally.
+  cmd.register({ id: "nav.back", title: "Go Back (previous UI state)", run: ({ container: c }) => {
+    const el = document.activeElement as HTMLElement | null;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    c.get(LayoutServiceId).goBack();
+  } });
 
   // one "show list" command per registered left list (generated from the registry).
   for (const l of registry.lists()) {
@@ -29,4 +38,6 @@ export function registerEngineCommands(container: ServiceContainer): void {
   kb.register({ key: "$mod+p", command: "palette.toggle" });
   kb.register({ key: "$mod+b", command: "workbench.toggleLeft" });
   kb.register({ key: "$mod+j", command: "workbench.toggleRight" });
+  kb.register({ key: "Escape", command: "nav.back" });
+  kb.register({ key: "Alt+ArrowLeft", command: "nav.back" });
 }

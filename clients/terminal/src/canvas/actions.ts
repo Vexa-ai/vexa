@@ -69,16 +69,20 @@ export const ONBOARDING_KICKOFF_MARK = "[onboarding-kickoff]";
 // Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
 // instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
 export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
-export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. To set you up, paste your **LinkedIn** profile text (it's login-walled, so paste the text — not a link). Or just give me your name + company and I'll take it from there.";
+export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. Your workspace starts from the **FINOS** knowledge graph — I'll add **you** on top of it. To set you up, **paste your LinkedIn URL** (just the link — that's how you position who you are). Or give me your name + company and I'll take it from there.";
 // Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
 export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
 export const ONBOARDING_GROUNDING = ONBOARDING_KICKOFF_MARK + [
-  "Read these workspace files before answering (use the Read tool): onboarding.md",
+  "Read these workspace files before answering (use the Read tool): onboarding.md, CLAUDE.md",
   "",
   "I'm a new user replying to onboarding. Follow the discovery-loop playbook in onboarding.md:",
-  "research my public footprint autonomously and DEEPLY with web search (never bounce back a fact you",
-  "can find online), scaffold my entities, and only ask me about the genuine gaps you can't resolve",
-  "yourself — saying why each matters. Run at least two discovery cycles. My details:",
+  "this workspace ALREADY holds the FINOS knowledge graph — add ME on top of it, don't start blank.",
+  "If I gave a LinkedIn URL, use it as a SEARCH ANCHOR (search me from it; do NOT try to fetch the",
+  "login-walled page). Research my public footprint autonomously and DEEPLY with web search (never",
+  "bounce back a fact you can find online) and scaffold my entities. SAVE ME as the single person node",
+  "with `self: true` (store my LinkedIn URL on it) so I'm distinct from the FINOS people and everyone",
+  "else. Only ask me about the genuine gaps you can't resolve yourself — saying why each matters. Run",
+  "at least two discovery cycles. My details:",
 ].join("\n");
 
 function makeActions(layout?: LayoutService): HarnessActions {

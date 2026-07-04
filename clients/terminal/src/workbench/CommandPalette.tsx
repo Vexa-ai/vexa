@@ -21,7 +21,7 @@ export function CommandPalette() {
 
   const lists = registry.lists();
   const cmds = commands.all().filter((c) => !c.id.startsWith("list."));
-  const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") palette.close(); };
+  const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); palette.close(); } };  // consume: close-topmost beats nav.back
 
   return (
     <div style={overlay} onClick={palette.close}>

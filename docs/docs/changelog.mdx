@@ -20,6 +20,11 @@ notable line and the migration notes between majors.
   [Agent API](/api/agent) at the `/agent/*` prefix (the legacy `/api/*` alias still resolves).
 - **Compose-based self-host.** The open core brings the whole control plane up with `make all` (Docker
   Compose) on a single Linux host. See [Deployment](/deployment).
+- **Open Knowledge Format workspaces.** The workspace knowledge graph (`kg/`) is an
+  [OKF v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) bundle: the
+  entity frontmatter contract is a strict superset of OKF, seeds ship generated `index.md` listings,
+  and the whole knowledge base is portable to any OKF consumer. See
+  [Browse the workspace](/how-to/workspace-files#the-knowledge-graph-is-an-okf-bundle).
 
 ### Migrating from 0.10
 
@@ -34,6 +39,6 @@ notable line and the migration notes between majors.
 
 ## Versioning
 
-Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
+Vexum follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
 GitHub release notes and mirrored in the migration section above. Pin a specific image with `IMAGE_TAG`
 so deploys are reproducible.

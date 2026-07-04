@@ -2,7 +2,7 @@
 
 `stack_test.py` brings up the **real** v0.12 compose stack (see `../docker-compose.yml`), proves it
 is ready to run the vexa bot, and tears it all down (`down -v`) in a guaranteed finally — the
-"fully tested / proven ready" deliverable wired as **`gate:compose`** in `scripts/gates.mjs`.
+"fully tested / proven ready" deliverable, run via `make -C deploy/compose stack-test`.
 
 The `stack` session fixture (`conftest.py`) owns the whole lifecycle: `docker compose up -d --build`
 under an isolated project name, a bounded wait for every service `healthy`, then `down -v` on exit.
@@ -28,44 +28,40 @@ Everything polls with bounded timeouts — never sleep-and-hope. Absent docker �
 ```bash
 make -C deploy/compose stack-test        # always-on subset (what gate:compose runs)
 make -C deploy/compose stack-test-bot    # + the real bot-spawn proof (COMPOSE_BOT=1, slow ~7GB image)
-node scripts/gates.mjs compose           # the wired gate (docker absent → green skip)
 ```
+
+On a host where other services hold the default ports (or a dev stack is already up), run the proof
+beside them with `COMPOSE_DYNAMIC_PORTS=1` so the gate binds free random host ports.
 
 ### Always-on vs `COMPOSE_BOT`-gated — why
 
 Steps 3 and 6a drive a **real `vexaai/vexa-bot:v012` container** (Playwright browser, ~7GB image)
-through its lifecycle. That is slow and inherently flaky for a routine gate (browser boot, a dummy
+through its lifecycle (the published `vexaai/vexa-bot:dev` is the old 0.10 line and fails the
+`lifecycle.v1` handshake; a source-built bot from `make -C deploy/compose bot` also works). That
+is slow and inherently flaky for a routine gate (browser boot, a dummy
 meeting URL, callback timing). The fast steps (1·2·4·5·6c·6d·6b) exercise the entire control plane —
 auth, the transcript bus, recordings→object-store, and the lifecycle/scheduling wiring — with no real
 bot, deterministically, so they are the always-on `gate:compose`. The bot-spawn proof is **runnable**
 (`COMPOSE_BOT=1`) and is the thing that finally says "a real bot spawns and reaches `joining`".
 
-### FLAGGED — the real bot-spawn (step 3) cannot pass on the current stack yet
+### RESOLVED — the real bot-spawn (step 3) now passes
 
-Running `COMPOSE_BOT=1` against this stack root-caused **three real carve gaps** that block a live
-bot spawn (all surfaced by the live stack, none by the offline gates):
+The three carve gaps that once blocked a live `COMPOSE_BOT=1` bot spawn are all fixed; a `POST /bots`
+on the live stack now spawns a real `vexa-mtg-…` container (verified end-to-end):
 
-1. **meeting-api had no `ADMIN_TOKEN`** — the bot-spawn flow mints a MeetingToken, and the shipped
-   `invocation.mint_meeting_token` (called with no `token_secret` from `bot_spawn`) signs it with
-   `os.environ["ADMIN_TOKEN"]`; the P4 compose env never set it → every `POST /bots` 500'd. **Fixed
-   here** by pinning `ADMIN_TOKEN=${INTERNAL_API_SECRET}` on the meeting-api service in
-   `../docker-compose.yml` (so mint and the recordings verifier — which uses `INTERNAL_API_SECRET` —
-   agree). Deeper fix (out of this gate's scope): `app.create_app` should forward `token_secret` into
-   the `bot_spawn` router too, not only recordings.
-2. **`updated_at` tz mismatch** — `bot_spawn/adapters.SqlAlchemyMeetingRepo.set_bot_container` /
-   `reopen_meeting` write `datetime.now(timezone.utc)` (offset-aware) into the `meetings.updated_at`
-   `TIMESTAMP WITHOUT TIME ZONE` column → asyncpg `DataError: can't subtract offset-naive and
-   offset-aware datetimes`. A shipped meeting-api bug (out of this gate's edit scope).
-3. **the runtime image has no `docker` CLI** — `runtime/Dockerfile` does `apt-get install docker.io`,
-   but on Debian-slim that package ships only the **daemon** (`dockerd`/`docker-proxy`/`docker-init`),
-   not the `docker` *client* the `DockerBackend` shells out to. So every spawn raises FileNotFoundError
-   → the runtime returns the workload as `stopped/start_failed` and **no `vexa-…` container is ever
-   created**. A shipped runtime-image bug (out of this gate's edit scope; needs the real Docker CLI in
-   the image).
+1. **meeting-api `ADMIN_TOKEN`** — fixed. `../docker-compose.yml` sets `ADMIN_TOKEN` on the meeting-api
+   service, and `__main__.py` resolves `token_secret = os.getenv("ADMIN_TOKEN")` with a fail-fast
+   `_require_config(("ADMIN_TOKEN",))` that refuses to boot without it, so `POST /bots` returns `201`
+   (no more 500 on mint). (`bot_spawn` still relies on the `ADMIN_TOKEN` env fallback inside
+   `mint_meeting_token` rather than an explicitly-threaded `token_secret`, but the fail-fast guarantees
+   it is present.)
+2. **`updated_at` tz mismatch** — fixed. The repo writes tz-naive (`datetime.now(timezone.utc).replace(tzinfo=None)`)
+   and the column uses a server-side `onupdate=func.now()`, so there is no offset-aware/naive subtraction.
+3. **runtime image `docker` CLI** — fixed (was a misdiagnosis). The `DockerBackend` talks to
+   `/var/run/docker.sock` over the **socket HTTP API** (`requests_unixsocket`), needing no `docker`
+   client and no daemon in the image; `runtime/Dockerfile` installs no docker package at all.
 
-Step 3 stays present + runnable and now **fails with a self-explaining diagnostic** (it reports the
-runtime workload's `stopReason`), so the moment gaps 2+3 are fixed it goes green. The always-on subset
-is unaffected by these (it never spawns a real container) and is fully green on the live stack.
+The always-on subset (never spawns a real container) remains fully green on the live stack.
 
 ### Note on `GET /transcripts` vs the `:mutable` frame (step 4)
 

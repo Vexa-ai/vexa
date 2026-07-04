@@ -188,6 +188,26 @@ def build_router(
         )
         return JSONResponse(content={"meetings": meetings, "has_more": False})
 
+    # --- GET /bots/status → the caller's currently-running bots (api/meetings.mdx "Running bots").
+    # Running == any non-terminal FSM status (requested·joining·awaiting_admission·active·stopping);
+    # terminal (completed·failed) rows are excluded. Owner-scoped via X-User-Id. ---
+    _RUNNING_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
+
+    @router.get("/bots/status")
+    async def bots_status(
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+        platform: Optional[str] = Query(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        meetings = await store.list_meetings(user_id, platform=platform)
+        running = [m for m in meetings if m.get("status") in _RUNNING_STATUSES]
+        log_event(
+            "bots_status", audience="user", span="bots.status",
+            user_id=user_id, fields={"running": len(running)},
+        )
+        return JSONResponse(content={"running": running, "count": len(running)})
+
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
     # Reuses list_meetings + filters by id (owner-scoped, so a non-owner can't read another's meeting). ---
     @router.get("/meetings/{meeting_id}")

@@ -12,6 +12,10 @@ still fail. Check the bot's live state:
 curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 ```
 
+- **Bot image not built (self-host)** — the meeting bot is **built from source** (`make bot`), not
+  pulled. If it's missing, the bot can't spawn and the meeting sticks at `requested`; if you're on the
+  stale published `vexaai/vexa-bot:dev` (the old 0.10 line) the bot reaches `joining` then fails the
+  `lifecycle.v1` handshake. Fix: `make bot`, and point `BROWSER_IMAGE` at the built tag.
 - **Bad meeting id** — `native_meeting_id` is the id *inside* the join URL (e.g. `abc-defg-hij`), not the
   whole URL. Wrong platform value also fails: use `google_meet`, `zoom`, or `teams`.
 - **Waiting room / admission** — on Meet and Teams the bot may be parked in a lobby until a host admits
@@ -45,7 +49,10 @@ The [runtime](/core/runtime) spawns bot and agent containers via the Docker sock
 
 - The runtime needs access to the host Docker socket and the right group — set `DOCKER_GID` to the host's
   docker group id.
-- Pull failures: confirm `BROWSER_IMAGE` and `AGENT_IMAGE` resolve and `IMAGE_TAG` matches what you built.
+- The meeting bot (`BROWSER_IMAGE`) is **built from source** (`make bot`) and the runtime spawns it
+  **without pulling** — it must exist locally first. Confirm it's there (`docker image inspect "$BROWSER_IMAGE"`);
+  the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by
+  `make all` — confirm it resolves and `IMAGE_TAG` matches what you built.
 
 ## Agent write was rejected
 

@@ -9,7 +9,7 @@ no one watching, works your [workspace](/concepts#workspace), and commits; the o
 ## Create the routine
 
 ```bash
-curl -X POST "$API_BASE/agent/api/routines" \
+curl -X POST "$API_BASE/agent/routines" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{
     "name":"Morning brief",
@@ -27,21 +27,21 @@ fires it once immediately so you can verify the output without waiting.
 
 ```bash
 # list
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/routines"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/routines"
 
 # pause / resume
-curl -X PATCH "$API_BASE/agent/api/routines/Morning%20brief/enabled" \
+curl -X PATCH "$API_BASE/agent/routines/Morning%20brief/enabled" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"enabled":false}'
 
 # delete (by routine id)
-curl -X DELETE "$API_BASE/agent/api/routines/<routine_id>" -H "X-API-Key: $API_KEY"
+curl -X DELETE "$API_BASE/agent/routines/<routine_id>" -H "X-API-Key: $API_KEY"
 ```
 
 ## Read the result
 
 ```bash
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/workspace/file?path=brief/today.md"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=brief/today.md"
 ```
 
 ## Variations

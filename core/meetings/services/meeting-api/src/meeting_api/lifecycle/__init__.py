@@ -50,7 +50,7 @@ from .stop import (
     request_stop,
     stop_event_for,
 )
-from .webhook import build_status_change_envelope
+from .webhook import build_status_change_envelope, build_typed_envelope, typed_event_type
 
 __all__ = [
     "BotStatus",
@@ -69,6 +69,8 @@ __all__ = [
     "RetryOutcome",
     "RetryPolicy",
     "build_status_change_envelope",
+    "build_typed_envelope",
+    "typed_event_type",
     "classify_retry",
     "classify_user_stop",
     "is_transient",

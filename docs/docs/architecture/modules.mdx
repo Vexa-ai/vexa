@@ -102,3 +102,49 @@ Every change is proven at the lowest level that can catch it. Governed by
 | **L2** | Unit | A brick does its job in isolation, collaborators faked (ports/adapters). | per-service tests |
 | **L3** | Integration | Modules compose across a real seam (e.g. gateway → meeting-api, agent-api → runtime). | per-service / cross-module tests |
 | **L4** | Live + eval | A **real meeting, scored** — bots join, speak a known timeline, and the captured `transcript.v1` is scored (completeness · leakage · attribution) vs ground truth. 0.12 is "done" when live scores ≥ the 0.11 baseline. | [`core/meetings/eval`](https://github.com/Vexa-ai/vexa-core/tree/main/core/meetings/eval/README.md) |
+
+## Gates, harness & fixtures
+
+The eval levels are *enforced*, not aspirational: **an artifact "exists" only when it is gate-green**
+(P9). Three terms separate the concern:
+
+- a **gate** is a runnable check that turns CI red when a rule is crossed;
+- the **harness** is the machinery that stands a real (or faked) system up so a gate can run;
+- **fixtures** are the inputs and lifecycle plumbing the harness runs against.
+
+### The gate
+
+In this tree the runnable bar is `pnpm typecheck build test`, the compose stack-readiness proof —
+`make -C deploy/compose stack-test` (it stands the whole stack up, proves it, and tears it down) —
+and the gate suite (`scripts/gates.mjs`, invoked as `pnpm gates` / `pnpm gate:*`): readme · isolation ·
+exports · graph · schema · contract-version · python · licenses in CI, plus the two architecture gates —
+`pnpm gate:dataflow` (model↔disk completeness, single-writer / render-only ownership, a reality diff
+against the code, and view staleness) and `pnpm gate:calm`
+([Architecture as Code](/architecture/architecture-as-code)). Contracts **and** the architecture chart
+are sealed (`pnpm seal:contracts` / `pnpm seal:arch`) — drift from a seal is deliberate-only.
+
+### The harness — three tiers
+
+| Tier | What it stands up | Where |
+|---|---|---|
+| **Stack proof** | the **real** v0.12 compose stack — `up --build`, wait every service healthy, prove health · auth · transcript dataflow · recording · control-plane invariants, then `down -v` in a guaranteed `finally` | [`deploy/compose/tests`](https://github.com/Vexa-ai/vexa-core/tree/main/deploy/compose/tests) |
+| **Replay** | drives the agent / meeting path with **no real meeting** — XADDs `transcript.v1` segments onto the same redis stream the bot produces, so a turn replays offline and deterministically | [`core/agent/eval/replay`](https://github.com/Vexa-ai/vexa-core/tree/main/core/agent/eval/replay) |
+| **Unit** | one brick in isolation, collaborators faked through its ports/adapters | each service's `tests/` |
+
+Two rules run through every tier: **poll with bounded timeouts, never sleep-and-hope**, and
+**green-or-skip** — when Docker is absent the stack proof *skips* rather than fails, so the gate stays
+honest on a machine that cannot run it. The slow, real-bot lanes (a ~7GB browser image) are opt-in
+behind `COMPOSE_BOT=1`; the always-on subset never spawns one.
+
+### Fixtures
+
+- **Golden vectors** — committed example envelopes that *are the spec* (P8). Tests load them **by path
+  from the published contract** (e.g. the `transcript.v1` and `lifecycle.v1` goldens), never by
+  importing the producing domain's code — which preserves the same `meetings ⊥ agent` boundary the
+  production code keeps.
+- **Lifecycle fixtures** — the session-scoped `stack` fixture owns the whole compose `up → healthy →
+  down -v` cycle; the unit tier uses ephemeral testcontainers (Postgres / Redis), in-process fakes
+  (`fakeredis`, a fake authorizer, a fake webhook receiver), and a `FakeClock` so time-based logic is
+  deterministic.
+- **Replay fixtures** — captured transcript material (a scripted call) plus a VTT→fixture converter, so
+  an agent turn can be re-driven offline without a live meeting.

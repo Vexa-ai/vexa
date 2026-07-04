@@ -14,15 +14,19 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from shared.gitenv import scrubbed_git_env
+
 # A folder may serve as a workspace seed only if it carries these — the minimum a workspace needs to be
 # governable. CLAUDE.md is the auto-loaded root memory/contract every turn reads; without it the
 # workspace has no governance root.
 REQUIRED_SEED_PATHS = ("CLAUDE.md",)
 
 # The seeds ROOT is a registry of named templates — one validated seed per subdir
-# (``workspace-seeds/<name>/``). Today only ``default`` ships; adding a flavor (e.g. a business
-# workspace) is a new subdir, no code change. ``resolve_seed_dir`` is the single selection seam.
-DEFAULT_TEMPLATE = "default"
+# (``workspace-seeds/<name>/``). Flavors today: ``finos`` (the default — a FINOS-ecosystem knowledge
+# graph) and ``default`` (a bare scaffold, still selectable via ``VEXA_DEFAULT_TEMPLATE=default`` or an
+# explicit ``VEXA_WORKSPACE_SEED_DIR``). Adding a flavor is a new subdir, no code change.
+# ``resolve_seed_dir`` is the single selection seam.
+DEFAULT_TEMPLATE = "finos"
 DEFAULT_SEEDS_ROOT = "/app/workspace-seeds"
 
 
@@ -73,8 +77,11 @@ def seed_workspace(ws: Path, seed_dir: "Path | None") -> Path:
                 shutil.copytree(item, dst, dirs_exist_ok=True)
             else:
                 shutil.copy2(item, dst)
+    # scrubbed_git_env: a hook-exported GIT_DIR would otherwise re-point init/add/commit at the
+    # HOOK's repo (with `ws` as its work tree) and rewrite that repo's branch — see shared/gitenv.py.
+    env = scrubbed_git_env()
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
-        subprocess.run(["git", *args], cwd=str(ws), check=True, capture_output=True, text=True)
-    subprocess.run(["git", "add", "-A"], cwd=str(ws), check=True, capture_output=True, text=True)
-    subprocess.run(["git", "commit", "-q", "-m", "seed", "--allow-empty"], cwd=str(ws), check=True, capture_output=True, text=True)
+        subprocess.run(["git", *args], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
+    subprocess.run(["git", "add", "-A"], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", "seed", "--allow-empty"], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
     return ws

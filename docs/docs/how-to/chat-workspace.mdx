@@ -13,7 +13,7 @@ maintained Markdown knowledge base the agent reads and edits like a developer in
 The endpoint returns **Server-Sent Events**:
 
 ```bash
-curl -N -X POST "$API_BASE/agent/api/chat" \
+curl -N -X POST "$API_BASE/agent/chat" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"prompt":"What did we agree with Acme on pricing, and what is still open?"}'
 ```
@@ -35,7 +35,7 @@ Because input from you is **trusted**, the same agent can write — record a dec
 draft a doc. Just ask:
 
 ```bash
-curl -N -X POST "$API_BASE/agent/api/chat" \
+curl -N -X POST "$API_BASE/agent/chat" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"prompt":"Record that Acme renewed at the Q3 pricing, effective July 1."}'
 ```
@@ -50,11 +50,11 @@ Pass `session` to keep context across turns; reset or inspect history:
 # continue a session
 -d '{"prompt":"And who owns the follow-up?","session":"<sessionId>"}'
 
-curl -X POST "$API_BASE/agent/api/chat/reset" -H "X-API-Key: $API_KEY" \
+curl -X POST "$API_BASE/agent/chat/reset" -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" -d '{"session":"<sessionId>"}'      # → {"ok":true}
 
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/sessions"             # list sessions
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/sessions/<id>/history"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/sessions"             # list sessions
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/sessions/<id>/history"
 ```
 
 ## Build a cross-source briefing

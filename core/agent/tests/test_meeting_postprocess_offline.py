@@ -1,19 +1,18 @@
 """test_meeting_postprocess_offline.py — the offline LLM-postprocessing harness (WS3).
 
 The critical untested seam: a FIXED transcript fed through ``worker.meeting_card_turn`` (and
-``meeting_doc_turn``) with a DETERMINISTIC ``exec_claude`` that REPLAYS pre-recorded claude
-``--output-format stream-json`` JSONL — no redis, no docker, no live provider. This makes the whole
-"fixed transcript in → expected entities out" pipeline reproducible:
+``meeting_doc_turn``) with DETERMINISTIC llm-port fakes — no redis, no docker, no live provider.
+This makes the whole "fixed transcript in → expected entities out" pipeline reproducible:
 
-  fixture segments → meeting_card_turn → parse_notes / parse_cards → asserted note/card shapes
-  deduped cards    → meeting_doc_turn  → run_unit_turn write+commit → asserted entity frontmatter
+  fixture segments → meeting_card_turn → CompletionPort fake → parse_notes / parse_cards → shapes
+  deduped cards    → meeting_doc_turn  → HarnessPort (fake exec) write+commit → entity frontmatter
 
-``exec_claude`` is made deterministic by patching the module-level ``worker._exec_claude`` (which
-``run_turn_over_workspace`` drives via ``run_unit_turn``) with a generator that yields canned
-stream-json lines instead of spawning a subprocess — the same injection point ``tests/test_worker.py``
-uses (``mock.patch.object(worker, "_exec_claude", fake_exec)``).
+The card turn takes an injectable ``completion`` (a fake CompletionPort that records the prompt and
+returns a canned reply / raises); the doc turn resolves the harness through the
+``worker.harness_factory`` seam, patched with a ``ClaudeCodeHarness`` whose ``exec_fn`` replays
+canned stream-json lines — the same injection points ``tests/test_worker.py`` uses.
 
-Also covers WS1: the auth-error path (a misconfigured token/base_url → a DISTINCT ``auth-error`` event,
+Also covers WS1: the auth-error path (a misconfigured key/base_url → a DISTINCT ``auth-error`` event,
 not the generic ``model-error``) and the boot preflight guard.
 """
 from __future__ import annotations
@@ -22,6 +21,8 @@ import json
 import unittest.mock as mock
 from pathlib import Path
 
+from llm import CompletionResult, LLMAuthError, LLMError
+from llm.claude_code import ClaudeCodeHarness
 from worker import worker
 
 FIXTURE = Path(__file__).resolve().parents[1] / "eval" / "replay" / "gamestop-allin.jsonl"
@@ -63,8 +64,8 @@ def _result_line(reply: str, *, is_error: bool = False, subtype: str = "success"
 
 
 def _replay_exec(*lines: str):
-    """Build a DETERMINISTIC exec_claude: a (argv, cwd) -> iterator that REPLAYS the given stream-json
-    lines (and records the argv/prompt it was called with) instead of spawning claude."""
+    """Build a DETERMINISTIC harness exec: a (argv, cwd) -> iterator that REPLAYS the given
+    stream-json lines (and records the argv/prompt it was called with) instead of spawning a CLI."""
     captured: dict = {}
 
     def fake_exec(argv, cwd):
@@ -76,6 +77,24 @@ def _replay_exec(*lines: str):
             yield ln
 
     return fake_exec, captured
+
+
+def _fake_completion(reply: str = "", *, raises: Exception | None = None):
+    """A DETERMINISTIC CompletionPort: records the prompt/model it was called with, then returns the
+    canned reply — or raises, for the error-path tests."""
+    captured: dict = {}
+
+    class _Fake:
+        name = "fake"
+
+        def complete(self, prompt, *, system=None, model=None):
+            captured["prompt"] = prompt
+            captured["model"] = model
+            if raises is not None:
+                raise raises
+            return CompletionResult(text=reply, model=model or "fake-model")
+
+    return _Fake(), captured
 
 
 # The pre-recorded model reply for the fixed 4-segment slice: one note per input id (echoing speaker)
@@ -104,22 +123,21 @@ _RECORDED_REPLY = json.dumps({
 # ── the offline harness: fixed transcript in → expected entities out ───────────────────────────────
 
 def test_offline_meeting_card_turn_extracts_notes_and_cards(tmp_path):
-    """The whole card-turn pipeline, offline: a FIXED 4-line transcript replayed through a deterministic
-    exec_claude yields the expected processed notes (one per input id, first-person, frozen flags) and
-    the expected entity cards (filtered to the allowed kinds)."""
+    """The whole card-turn pipeline, offline: a FIXED 4-line transcript through a deterministic
+    CompletionPort fake yields the expected processed notes (one per input id, first-person, frozen
+    flags) and the expected entity cards (filtered to the allowed kinds)."""
     segments = _load_fixture_segments(4)
-    fake_exec, captured = _replay_exec(_result_line(_RECORDED_REPLY))
+    completion, captured = _fake_completion(_RECORDED_REPLY)
 
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
-        evs = list(worker.meeting_card_turn(
-            tmp_path, segments, model="openrouter/free",
-            card_kinds=["person", "company", "product"],
-        ))
+    evs = list(worker.meeting_card_turn(
+        tmp_path, segments, model="openrouter/free",
+        card_kinds=["person", "company", "product"], completion=completion,
+    ))
 
-    # No subprocess, no provider — the recorded stream-json drove the turn.
-    assert "claude" in captured["argv"][0]
-    # The card prompt carried the fixed transcript lines (so a real model would see the same input).
+    # The card prompt carried the fixed transcript lines (so a real model would see the same input),
+    # and the per-beat model reached the port.
     assert "Everyone hates GameStop" in captured["prompt"]
+    assert captured["model"] == "openrouter/free"
 
     notes = [e["note"] for e in evs if e["type"] == "note"]
     cards = [e["card"] for e in evs if e["type"] == "card"]
@@ -148,10 +166,9 @@ def test_offline_meeting_card_turn_falls_back_when_reply_omits_notes(tmp_path):
     no-silent-drop guarantee on a fixed transcript."""
     reply = json.dumps({"notes": [], "cards": [{"kind": "company", "title": "GameStop", "body": "x"}]})
     segments = _load_fixture_segments(2)
-    fake_exec, _ = _replay_exec(_result_line(reply))
+    completion, _ = _fake_completion(reply)
 
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
-        evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free"))
+    evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free", completion=completion))
 
     assert evs[0]["type"] == "model-error"
     assert evs[0]["error"]["message"] == "model response did not include processed transcript notes"
@@ -187,7 +204,7 @@ def test_offline_meeting_doc_turn_authors_entity_from_fixed_cards(tmp_path):
         )
         yield _result_line("wrote kg/entities/meeting/%s.md" % native)
 
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
+    with mock.patch.object(worker, "harness_factory", lambda: ClaudeCodeHarness(exec_fn=fake_exec)):
         evs = list(worker.meeting_doc_turn(
             tmp_path, cards, native=native, meeting_id=native, session_uid=native,
             platform="google_meet", date="2026-06-27", title="GME All-In",
@@ -203,38 +220,34 @@ def test_offline_meeting_doc_turn_authors_entity_from_fixed_cards(tmp_path):
 # ── WS1: the auth-error path (distinct from the generic model-error) ───────────────────────────────
 
 def test_offline_card_turn_emits_auth_error_on_401_done_reply(tmp_path):
-    """A 401 from the provider (token/endpoint mismatch) surfaces as a DISTINCT auth-error carrying the
-    provider host + the BASE_URL-vs-TOKEN hint — NOT the opaque generic model-error. Here the 401 text
-    rides the terminal stream-json `result` (is_error)."""
+    """A 401 from the provider (key/endpoint mismatch) surfaces as a DISTINCT auth-error carrying the
+    provider host + the BASE_URL-vs-KEY hint — NOT the opaque generic model-error. Here the adapter
+    raised the typed ``LLMAuthError`` (what the real openai-compat/anthropic adapters do on 401)."""
     segments = _load_fixture_segments(2)
-    err = "API Error: 401 {\"error\":{\"message\":\"No auth credentials found\"}}"
-    fake_exec, _ = _replay_exec(_result_line(err, is_error=True, subtype="error"))
+    err = "401 from https://api.anthropic.com: {\"error\":{\"message\":\"No auth credentials found\"}}"
+    completion, _ = _fake_completion(raises=LLMAuthError(err))
 
-    with mock.patch.dict("os.environ", {"ANTHROPIC_BASE_URL": "https://api.anthropic.com"}):
-        with mock.patch.object(worker, "_exec_claude", fake_exec):
-            evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free"))
+    with mock.patch.dict("os.environ", {"VEXA_LLM_BASE_URL": "", "ANTHROPIC_BASE_URL": "https://api.anthropic.com"}):
+        evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free", completion=completion))
 
     assert len(evs) == 1
     ev = evs[0]
     assert ev["type"] == "auth-error"  # distinct event, not "model-error"
     assert ev["error"]["provider_host"] == "api.anthropic.com"
+    assert "VEXA_LLM_BASE_URL" in ev["error"]["hint"] and "VEXA_LLM_API_KEY" in ev["error"]["hint"]
     assert "ANTHROPIC_BASE_URL" in ev["error"]["hint"] and "ANTHROPIC_AUTH_TOKEN" in ev["error"]["hint"]
     assert ev["error"]["stage"] == "meeting-card"
 
 
-def test_offline_card_turn_emits_auth_error_on_401_in_streamed_text(tmp_path):
-    """The 401 may arrive as streamed assistant text before a (failed) result — the scan covers the
-    accumulated chunks too, still upgrading to auth-error."""
+def test_offline_card_turn_upgrades_untyped_401_to_auth_error(tmp_path):
+    """The 401 may ride an UNTYPED failure (a transport/CLI error whose text carries the signature) —
+    the signature scan still upgrades it to auth-error."""
     segments = _load_fixture_segments(2)
-    assistant = json.dumps({
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": "Request failed: 401 Unauthorized (invalid bearer token)"}]},
-    })
-    fake_exec, _ = _replay_exec(assistant, _result_line("", is_error=True, subtype="error"))
+    completion, _ = _fake_completion(
+        raises=RuntimeError("Request failed: 401 Unauthorized (invalid bearer token)"))
 
-    with mock.patch.dict("os.environ", {"ANTHROPIC_BASE_URL": "https://openrouter.ai/api"}):
-        with mock.patch.object(worker, "_exec_claude", fake_exec):
-            evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free"))
+    with mock.patch.dict("os.environ", {"VEXA_LLM_BASE_URL": "", "ANTHROPIC_BASE_URL": "https://openrouter.ai/api"}):
+        evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free", completion=completion))
 
     assert [e["type"] for e in evs] == ["auth-error"]
     assert evs[0]["error"]["provider_host"] == "openrouter.ai"
@@ -244,12 +257,24 @@ def test_offline_card_turn_non_auth_failure_stays_generic_model_error(tmp_path):
     """A non-auth failure (e.g. a model timeout) must NOT be misclassified as an auth-error — it stays a
     generic model-error so the auth signal remains meaningful."""
     segments = _load_fixture_segments(2)
-    fake_exec, _ = _replay_exec(_result_line("upstream timeout (504)", is_error=True, subtype="error"))
+    completion, _ = _fake_completion(raises=LLMError("upstream timeout (504)"))
 
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
-        evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free"))
+    evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free", completion=completion))
 
     assert [e["type"] for e in evs] == ["model-error"]
+
+
+def test_card_turn_resolves_completion_factory_seam(tmp_path):
+    """With no explicit ``completion``, the card turn resolves the adapter through the
+    ``worker.completion_factory`` seam — the patch point tests and embedders rely on."""
+    segments = _load_fixture_segments(2)
+    completion, captured = _fake_completion(_RECORDED_REPLY)
+
+    with mock.patch.object(worker, "completion_factory", lambda: completion):
+        evs = list(worker.meeting_card_turn(tmp_path, segments, model="openrouter/free"))
+
+    assert "prompt" in captured  # the factory-built adapter was driven
+    assert any(e["type"] == "note" for e in evs)
 
 
 # ── WS1: the boot preflight guard ──────────────────────────────────────────────────────────────────

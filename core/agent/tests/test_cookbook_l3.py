@@ -1,8 +1,9 @@
 """L3 · Worker over a synthetic transcript (offline) — the worker→cookbook vertical.
 
 The fixture boundary is the transcript: a FIXED slice of the committed `gamestop-allin.jsonl` is replayed
-through `worker.meeting_card_turn` with a DETERMINISTIC `_exec_claude` (no provider, no redis, no docker),
-and the emitted events are folded EXACTLY as the cookbook's `harvest()` folds the live redis stream.
+through `worker.meeting_card_turn` with a DETERMINISTIC CompletionPort fake (no provider, no redis, no
+docker), and the emitted events are folded EXACTLY as the cookbook's `harvest()` folds the live redis
+stream.
 
 This proves the **cross-level identity** the ladder is built on: the worker's offline output carries the
 same `{type, note/card}` event shape the live stream does, so it folds into the cookbook's `Harvest`
@@ -27,9 +28,8 @@ sys.path.insert(0, str(_repo_root() / "clients" / "slim"))   # make vexa_slim im
 
 from tests.test_meeting_postprocess_offline import (         # noqa: E402  reuse the offline harness
     _RECORDED_REPLY,
+    _fake_completion,
     _load_fixture_segments,
-    _replay_exec,
-    _result_line,
 )
 from vexa_slim.harvest import Harvest                         # noqa: E402  the cookbook's carrier
 from worker import worker                                     # noqa: E402
@@ -45,9 +45,9 @@ def _fold_like_cookbook(events: list) -> Harvest:
 
 def test_worker_offline_output_folds_into_cookbook_harvest(tmp_path):
     segments = _load_fixture_segments(4)
-    fake_exec, _captured = _replay_exec(_result_line(_RECORDED_REPLY))
+    completion, _captured = _fake_completion(_RECORDED_REPLY)
 
-    with mock.patch.object(worker, "_exec_claude", fake_exec):
+    with mock.patch.object(worker, "completion_factory", lambda: completion):
         events = list(worker.meeting_card_turn(
             tmp_path, segments, model="openrouter/free",
             card_kinds=["person", "company", "product"],

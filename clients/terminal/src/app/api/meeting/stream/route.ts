@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
     // param (the engine's manual forceReconnect, which opens a fresh EventSource that drops the header).
     const lastEventId = req.headers.get("last-event-id") || req.nextUrl.searchParams.get("lid");
     if (lastEventId) headers["Last-Event-ID"] = lastEventId;
-    const upstream = await fetch(`${GATEWAY_URL}/api/meeting/stream${req.nextUrl.search}`, {
+    const upstream = await fetch(`${GATEWAY_URL}/agent/meeting/stream${req.nextUrl.search}`, {
       method: "GET",
       headers,
       signal: abort.signal,

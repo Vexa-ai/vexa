@@ -47,14 +47,13 @@ WORKDIR /build
 # on the lockfile via the cache mount below.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json turbo.json ./
 # The source the bot build needs: the five backend domains under core/ (the bot + its @vexa/* workspace
-# deps all live under core/meetings/modules/*), plus scripts/. The other pnpm-workspace globs
+# deps all live under core/meetings/modules/*). The other pnpm-workspace globs
 # (integrations/* · clients/* · sdks/* · tools/*) are green-on-empty: a fresh git clone omits empty
 # dirs and the bot depends on none of them, so they are intentionally NOT copied (COPYing an absent
 # dir fails the build).
 COPY core ./core
-COPY scripts ./scripts
-# NB: `schemas/` is a pnpm-workspace glob that is green-on-empty (no packages in
-# this carved tree) — it isn't present, so it's intentionally not COPYed here.
+# NB: `scripts/` and `schemas/` are pnpm-workspace globs that are green-on-empty in this carved tree
+# (no packages) — they aren't present in the open-core repo, so they're intentionally not COPYed here.
 
 # Install the whole workspace. --frozen-lockfile=false: tolerate minor lockfile
 # drift in this carved build (we're proving the image, not gating the lockfile).

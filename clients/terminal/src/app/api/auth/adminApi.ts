@@ -72,6 +72,49 @@ export function createUserToken(userId: string | number): Promise<AdminResult<{ 
   );
 }
 
+// ── token self-serve (the /api/tokens routes) — admin-tier calls, ALWAYS scoped to the logged-in
+//    user's own user_id (resolved server-side from the auth cookies; never taken from the client).
+
+/** A token as admin-api lists it — metadata only, never the secret value. */
+export interface AdminTokenInfo {
+  id: number;
+  user_id: number;
+  scopes: string[];
+  name?: string | null;
+  created_at?: string | null;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+}
+
+/** The mint response — the ONLY place the token value ever crosses. */
+export interface AdminMintedToken extends AdminTokenInfo {
+  token: string;
+}
+
+export function listUserTokens(userId: string | number): Promise<AdminResult<AdminTokenInfo[]>> {
+  return adminRequest<AdminTokenInfo[]>(
+    `/admin/users/${encodeURIComponent(String(userId))}/tokens`,
+    { method: "GET" },
+  );
+}
+
+export function mintUserToken(
+  userId: string | number,
+  opts: { scopes: string[]; name?: string; expiresIn?: number },
+): Promise<AdminResult<AdminMintedToken>> {
+  const q = new URLSearchParams({ scopes: opts.scopes.join(",") });
+  if (opts.name) q.set("name", opts.name);
+  if (opts.expiresIn && opts.expiresIn > 0) q.set("expires_in", String(opts.expiresIn));
+  return adminRequest<AdminMintedToken>(
+    `/admin/users/${encodeURIComponent(String(userId))}/tokens?${q.toString()}`,
+    { method: "POST" },
+  );
+}
+
+export function revokeToken(tokenId: string | number): Promise<AdminResult<void>> {
+  return adminRequest<void>(`/admin/tokens/${encodeURIComponent(String(tokenId))}`, { method: "DELETE" });
+}
+
 /** Find the user by email, creating them if they don't exist, then mint an APIToken.
  *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface. */
 export async function findOrCreateUserToken(

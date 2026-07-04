@@ -2,14 +2,16 @@
 
 Runs INSIDE a runtime-spawned, ISOLATED container (agents never run in the control plane). It reads
 its dispatch from env — the mounted workspace, the minted token, ``REDIS_URL`` + the ``unit:<id>:in/out``
-Stream topics, the ``start`` — runs the claude turn over the mounted ``/workspace`` via the SAME governed
-``run_unit_turn`` (workspace.v1 revalidate + commit) the control plane proved, and ``XADD``s each
-UnitEvent to its output Stream. Then it blocks on the input Stream for the next message (chat
-continuity) until idle — TTL-on-idle by the harness. Continuity is the **session file** in the
-workspace, so a reaped+respawned container resumes instantly.
+Stream topics, the ``start`` — runs the agent turn over the mounted ``/workspace`` via the
+provider-agnostic ``llm`` ports (the HARNESS adapter is selected by ``VEXA_RUNNER``; this module
+never names a vendor), and ``XADD``s each UnitEvent to its output Stream. Then it blocks on the
+input Stream for the next message (chat continuity) until idle — TTL-on-idle by the harness.
+Continuity is the **session file** in the workspace, so a reaped+respawned container resumes
+instantly.
 
-The redis loop is factored into ``serve()`` with the turn-runner INJECTED, so it is offline-provable
-with a fake redis + a fake turn (no docker, no claude).
+The redis loop is factored into ``serve()`` with the turn-runner INJECTED, and the harness itself
+resolves through the ``worker.worker.harness_factory`` seam, so everything is offline-provable with
+a fake redis + a fake harness (no docker, no CLI, no provider).
 
 This module holds the GENERIC engine; the MEETING copilot lives in ``worker.meeting``. ``worker.worker``
 re-exports both so existing ``from worker.worker import X`` imports keep resolving.
@@ -20,20 +22,30 @@ import itertools
 import json
 import logging
 import os
-import re
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
+from llm import (
+    HarnessPort,
+    auth_error_event,
+    harness_from_env,
+    looks_like_auth_failure,
+    preflight_provider_guard,
+    provider_host,
+    run_harness_turn,
+)
+from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
-from worker.decision_claude import run_unit_turn
 
 log = logging.getLogger("agent_api.worker")
 
+# Back-compat aliases: these names predate the llm module split; the worker.worker shim (and
+# meeting.py) re-export/import them under the old underscore names.
+_auth_error_event = auth_error_event
+
 # Bootstrap memory root used ONLY when no valid workspace-seed template is available (tests / misconfig);
-# the normal path seeds the full template (which carries its own CLAUDE.md + agents/ + views/).
-_FALLBACK_CLAUDE_MD = (
+# the normal path seeds the full template (which carries its own conventions file + agents/ + views/).
+_FALLBACK_MEMORY_MD = (
     "# Workspace — your durable memory\n\n"
     "This directory (your current working directory) is your ONLY durable memory, and it is a\n"
     "git repo that is committed automatically after every turn. Anything you should remember —\n"
@@ -56,114 +68,13 @@ class _Stream(Protocol):
     def xread(self, streams: dict, count: int = 1, block: int | None = None) -> list: ...
 
 
-# ── provider/token fail-loud (WS1) ────────────────────────────────────────────────────────────────
-# A 401 from the model provider (e.g. an OpenRouter `sk-or-` token sent to api.anthropic.com, or vice
-# versa) used to surface only as a GENERIC "Model inference failed" — the operator was never told the
-# token and the endpoint disagreed. We detect that signature in the subprocess output / done reply and
-# emit a DISTINCT `auth-error` event that names the provider host + the exact "check BASE_URL vs TOKEN"
-# fix, plus a cheap boot preflight that catches an obviously-mismatched token/host pair before any call.
-
-# Substrings that mark a provider authentication failure in claude-CLI / OpenRouter / Anthropic output.
-_AUTH_SIGNATURE_RE = re.compile(
-    r"\b401\b"
-    r"|unauthorized"
-    r"|invalid[ _-]*bearer"
-    r"|invalid[ _-]*(?:x-)?api[ _-]*key"
-    r"|authentication[ _-]*error"
-    r"|no auth credentials"
-    r"|user not found",  # OpenRouter's 401 body for a bad key
-    re.IGNORECASE,
-)
-
-
-def looks_like_auth_failure(text: object) -> bool:
-    """True if a blob of provider/CLI output carries an authentication-failure signature (401/Unauthorized/
-    invalid bearer/invalid api key/authentication_error). Used to upgrade a generic model error into a
-    distinct, actionable auth-error."""
-    if not text:
-        return False
-    return bool(_AUTH_SIGNATURE_RE.search(str(text)))
-
-
-def provider_host(base_url: str | None = None) -> str:
-    """The host of ``ANTHROPIC_BASE_URL`` (the provider the token is being sent to), for the auth-error
-    hint. Falls back to the raw value, then to ``"unknown"``."""
-    raw = base_url if base_url is not None else os.environ.get("ANTHROPIC_BASE_URL", "")
-    raw = (raw or "").strip()
-    if not raw:
-        return "unknown"
-    from urllib.parse import urlparse
-
-    host = urlparse(raw).netloc or urlparse(raw).path  # bare host (no scheme) lands in .path
-    return host.strip("/") or raw
-
-
-def _auth_error_event(detail: object, *, model: str | None, stage: str) -> dict:
-    """A DISTINCT auth-error event (NOT the generic model-error): names the provider host and tells the
-    operator to reconcile ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN — the token/endpoint mismatch that
-    produces a silent 401."""
-    host = provider_host()
-    text = " ".join(str(detail or "provider rejected the token").split())
-    return {
-        "type": "auth-error",
-        "error": {
-            "stage": stage,
-            "model": model or "",
-            "provider_host": host,
-            "hint": (
-                f"provider {host} returned an auth failure (401) — token/endpoint mismatch; "
-                "check ANTHROPIC_BASE_URL vs ANTHROPIC_AUTH_TOKEN (an sk-or- token must go to "
-                "openrouter.ai, an sk-ant- token to api.anthropic.com)"
-            ),
-            "message": text[:600],
-        },
-    }
-
-
-def preflight_provider_guard(
-    *, base_url: str | None = None, token: str | None = None
-) -> str | None:
-    """Cheap boot guard: if the token PREFIX and the base_url HOST obviously disagree (an ``sk-or-``
-    OpenRouter token pointed at ``api.anthropic.com``, or an ``sk-ant-`` Anthropic token pointed at an
-    openrouter host), return a loud warning string (the caller logs it). Returns None when the pair is
-    consistent or can't be judged (missing values, third-party host). Intentionally conservative — it
-    only fires on a known-bad combination so it never nags on a legitimate custom gateway."""
-    tok = (token if token is not None else os.environ.get("ANTHROPIC_AUTH_TOKEN", "")) or ""
-    host = provider_host(base_url).lower()
-    tok = tok.strip()
-    is_openrouter_host = "openrouter.ai" in host
-    is_anthropic_host = "api.anthropic.com" in host
-    if tok.startswith("sk-or-") and is_anthropic_host:
-        return (
-            "PROVIDER MISMATCH: ANTHROPIC_AUTH_TOKEN looks like an OpenRouter key (sk-or-…) but "
-            f"ANTHROPIC_BASE_URL points at {host} — this will 401. Point the base_url at openrouter.ai/api "
-            "or supply an Anthropic (sk-ant-…) token."
-        )
-    if tok.startswith("sk-ant-") and is_openrouter_host:
-        return (
-            "PROVIDER MISMATCH: ANTHROPIC_AUTH_TOKEN looks like an Anthropic key (sk-ant-…) but "
-            f"ANTHROPIC_BASE_URL points at {host} — this will 401. Point the base_url at api.anthropic.com "
-            "or supply an OpenRouter (sk-or-…) token."
-        )
-    return None
-
-
-# ── the claude turn over the mounted workspace (reuses the governed run_unit_turn) ───────────────
-
-def _exec_claude(argv: list[str], cwd: str) -> Iterator[str]:
-    proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    assert proc.stdout is not None
-    try:
-        yield from proc.stdout
-    finally:
-        proc.wait()
-
+# ── the agent turn over the mounted workspace (drives the llm HarnessPort) ────────────────────────
 
 def _ensure_repo(work: Path) -> None:
     """First dispatch for a subject: seed the workspace from the VALIDATED workspace-seed template (the
     single seed primitive, ``shared.seeding.seed_workspace``) so the turn has a governance root + HEAD.
     Idempotent: an existing ``.git`` is left untouched. If no valid template is available (tests/misconfig),
-    bootstrap a bare repo with a fallback CLAUDE.md so a turn still has its memory root."""
+    bootstrap a bare repo with a fallback conventions file so a turn still has its memory root."""
     if (work / ".git").exists():
         return
     seed_dir = resolve_seed_dir()              # registry root / default template (env override wins)
@@ -172,58 +83,10 @@ def _ensure_repo(work: Path) -> None:
         log.warning("workspace seed %s unavailable (%s) — bootstrapping a bare workspace",
                     seed_dir, "; ".join(problems))
         work.mkdir(parents=True, exist_ok=True)
-        (work / "CLAUDE.md").write_text(_FALLBACK_CLAUDE_MD)
+        (work / "CLAUDE.md").write_text(_FALLBACK_MEMORY_MD)
         seed_workspace(work, None)             # git init + commit over the fallback root
     else:
         seed_workspace(work, seed_dir)         # copy the validated template → git init → commit
-
-
-def _link_chat_into_workspace(work: Path) -> None:
-    """Save + resume chats FROM THE WORKSPACE. claude-code stores a conversation's transcript at
-    ``~/.claude/projects/<cwd-slug>/<session>.jsonl`` — inside the container, so it is wiped when the
-    per-turn container is recreated (no memory). Symlink that dir into the workspace's ``.claude/projects``
-    so the chat is written to the durable git folder and ``--resume`` reads it back across turns. We keep
-    it under ``.claude`` (excluded from the governance ``git clean``) so a rejected turn never wipes the
-    history; it persists on the workspace volume."""
-    ws_projects = work / ".claude" / "projects"
-    ws_projects.mkdir(parents=True, exist_ok=True)
-    home_claude = Path(os.environ.get("HOME", "/root")) / ".claude"
-    home_claude.mkdir(parents=True, exist_ok=True)
-    link = home_claude / "projects"
-    try:
-        if link.is_symlink():
-            if os.readlink(link) == str(ws_projects):
-                return
-            link.unlink()
-        elif link.exists():
-            shutil.rmtree(link, ignore_errors=True)
-        link.symlink_to(ws_projects, target_is_directory=True)
-    except OSError:
-        pass  # best-effort; a fresh turn still works, just without cross-turn resume
-
-
-def _link_skills_into_workspace(work: Path) -> None:
-    """Expose the user's GOVERNED skills to claude. Skills live as VISIBLE, git-tracked files under the
-    workspace's ``skills/<name>/SKILL.md`` (the ``skills/`` tree mirrors the ``agents/`` config home —
-    not a dotfile, so it shows in the Files surface and is committed). claude auto-discovers skills from
-    ``.claude/skills``, which is governance-excluded; so we point ``.claude/skills`` at the real
-    ``skills/`` dir via a symlink. The real files stay durable + committed; claude finds them through the
-    link. Idempotent: create ``skills/`` if absent, then (re)point a stale/wrong symlink — but never
-    clobber a real ``.claude/skills`` directory."""
-    skills = work / "skills"
-    skills.mkdir(parents=True, exist_ok=True)
-    link = work / ".claude" / "skills"
-    link.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if link.is_symlink():
-            if os.readlink(link) == str(skills):
-                return
-            link.unlink()
-        elif link.exists():
-            return  # a real dir already there — don't clobber
-        link.symlink_to(skills, target_is_directory=True)
-    except OSError:
-        pass  # best-effort; the turn still works, just without workspace skills
 
 
 DEFAULT_CHAT_SESSION = "main"
@@ -231,9 +94,12 @@ DEFAULT_CHAT_SESSION = "main"
 
 def _session_file(work: Path, session: str) -> Path:
     """The per-thread continuity file: ``work/.claude/sessions/<session>.session``. Multiple chat threads
-    coexist in the ONE user workspace, each with its own claude ``--resume`` pointer. The default thread
+    coexist in the ONE user workspace, each with its own opaque resume pointer. The default thread
     (``"main"``) transparently ADOPTS the legacy single-thread file (``.claude/.session``) on first read
-    so the current conversation isn't lost when sessions go multi (migrate-on-read)."""
+    so the current conversation isn't lost when sessions go multi (migrate-on-read).
+
+    ``.claude/`` here is the FROZEN on-disk continuity-store path (workspace_reader serves chat
+    history from it) — a path contract, not a vendor coupling."""
     sessions_dir = work / ".claude" / "sessions"
     namespaced = sessions_dir / f"{session}.session"
     if session == DEFAULT_CHAT_SESSION and not namespaced.exists():
@@ -251,22 +117,14 @@ def _chat_resume_max_bytes() -> int:
         return 1000000
 
 
-def _session_transcript_bytes(work: Path, session_id: str) -> int:
-    total = 0
-    for path in (work / ".claude" / "projects").glob(f"*/{session_id}.jsonl"):
-        try:
-            total += path.stat().st_size
-        except OSError:
-            continue
-    return total
-
-
-def _resume_id(work: Path, sess_file: Path) -> str | None:
+def _resume_id(work: Path, sess_file: Path, harness: HarnessPort) -> str | None:
+    """The session id to resume, or None. The id is an OPAQUE per-harness token; the harness also
+    accounts the stored transcript size behind it so an over-budget resume restarts fresh."""
     if not sess_file.exists():
         return None
     sid = sess_file.read_text().strip()
     limit = _chat_resume_max_bytes()
-    if sid and limit > 0 and _session_transcript_bytes(work, sid) > limit:
+    if sid and limit > 0 and harness.transcript_bytes(work, sid) > limit:
         return None
     return sid or None
 
@@ -275,29 +133,29 @@ def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
 ) -> Iterator[dict]:
-    """One governed claude turn over the mounted workspace: resume from the session file, run
-    ``run_unit_turn`` (which revalidates entity writes vs workspace.v1 and commits), and persist the
-    captured session id. A stale ``--resume`` (the server session expired) retries fresh once.
+    """One governed agent turn over the mounted workspace: resume from the session file, drive
+    ``run_harness_turn`` (which commits the tree when it changed), and persist the captured session
+    id. A stale resume (the harness session expired) retries fresh once.
     ``allowed_tools`` defaults to Read/Write/Edit; pass ``["Read"]`` for a propose-only (no-write) turn.
     ``session`` namespaces the continuity file so chat threads stay distinct (default ``"main"``)."""
     _ensure_repo(work)
-    _link_chat_into_workspace(work)  # chats are saved to / resumed from the workspace, not ~/.claude
-    _link_skills_into_workspace(work)  # governed skills/ → .claude/skills so claude auto-discovers them
+    # Resolve the harness through the worker.worker seam at call time so a test patching
+    # `worker.worker.harness_factory` reaches this call site (the harness was one module historically).
+    import worker.worker as _w
+    factory = getattr(_w, "harness_factory", harness_from_env)
+    harness: HarnessPort = factory()
+    harness.prepare(work)  # harness-specific continuity/skills wiring (durable, workspace-rooted)
     sess_file = _session_file(work, session)
     # session_continuity=False (the meeting copilot): never read/write the shared chat session — its
     # card-extraction beats must NOT pollute the user's chat conversation memory.
-    resume = _resume_id(work, sess_file) if session_continuity else None
+    resume = _resume_id(work, sess_file, harness) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
-    # Resolve _exec_claude through the worker.worker shim at call time so a test patching
-    # `worker.worker._exec_claude` reaches this call site (the harness was one module historically).
-    import worker.worker as _w
-    exec_claude = getattr(_w, "_exec_claude", _exec_claude)
-    gen = run_unit_turn(str(work), prompt, exec_claude, allowed_tools=allowed, session=resume, model=model, commit=commit)
+    gen = run_harness_turn(work, prompt, harness, allowed_tools=allowed, session=resume, model=model, commit=commit)
     first = next(gen, None)
     if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
         if sess_file.exists():
             sess_file.unlink()
-        gen = run_unit_turn(str(work), prompt, exec_claude, allowed_tools=allowed, session=None, model=model, commit=commit)
+        gen = run_harness_turn(work, prompt, harness, allowed_tools=allowed, session=None, model=model, commit=commit)
         first = next(gen, None)
     captured: str | None = None
     for ev in (gen if first is None else itertools.chain([first], gen)):
@@ -368,9 +226,9 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
 
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
-    # Boot preflight (WS1b): if the token prefix and the base_url host obviously disagree (sk-or- token →
-    # api.anthropic.com, or sk-ant- token → openrouter), log a loud warning NOW — before the first call —
-    # so a misconfigured provider pair is visible at container start, not only as a runtime 401.
+    # Boot preflight (WS1b): if a credential prefix and its base-url host obviously disagree, log a
+    # loud warning NOW — before the first call — so a misconfigured provider pair is visible at
+    # container start, not only as a runtime 401. Judges the completion pair, then the harness pair.
     _warn = preflight_provider_guard()
     if _warn:
         log.warning("agent-api worker: %s", _warn)
@@ -430,8 +288,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             on_envelope=on_envelope,
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
-        # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are still governed
-        # (workspace.v1 revalidation + commit). Override with VEXA_CHAT_TOOLS (comma-separated).
+        # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are committed by
+        # run_harness_turn. Override with VEXA_CHAT_TOOLS (comma-separated).
         chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
                       or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch").split(",")
         session = os.environ.get("VEXA_CHAT_SESSION") or DEFAULT_CHAT_SESSION

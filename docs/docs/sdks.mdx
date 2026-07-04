@@ -3,12 +3,12 @@ title: "SDKs & clients"
 description: "The canonical interface is the REST API; published libraries wrap it."
 ---
 
-Vexa's contract is its **HTTP API** — the [Meetings API](/api/meetings) and [Agent API](/api/agent) are
+Vexum's contract is its **HTTP API** — the [Meetings API](/api/meetings) and [Agent API](/api/agent) are
 the same surface whether you self-host or use the hosted service. Any HTTP client works.
 
 ## What ships today
 
-The open-core ships three ways to drive Vexa:
+The open-core ships three ways to drive Vexum:
 
 - **The HTTP API** — the canonical interface. Every capability is reachable over plain REST + WebSocket;
   see the [API reference](/api/agent).
@@ -48,8 +48,8 @@ Identity is **server-derived** from the key — you never send a user id or subj
 The API is stable and self-describing:
 
 - **Meetings** — `POST /bots`, `GET /transcripts/{platform}/{id}` (poll or WebSocket), `GET /recordings`.
-- **Agent** — `POST /agent/api/chat` (SSE), `POST /agent/api/routines`, `POST /agent/invocations`,
-  `POST /agent/events`, and the `/agent/api/workspace/*` reads.
+- **Agent** — `POST /agent/chat` (SSE), `POST /agent/routines`, `GET /agent/sessions`, `GET /agent/models`,
+  and the `/agent/workspace/*` reads. (`/api/*` is a deprecated alias for the same routes.)
 - **Errors** — conventional status codes with a JSON `detail`; see the [error reference](/api/errors).
 
 Streamed endpoints emit typed frames (SSE / WebSocket) documented per endpoint in the

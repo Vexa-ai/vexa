@@ -28,8 +28,8 @@ The agent reads the latest transcript and existing entities, then commits the re
 workspace:
 
 ```bash
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/workspace/tree"
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/workspace/file?path=meetings/2026-06-29-acme.md"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/tree"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=meetings/2026-06-29-acme.md"
 ```
 
 ## Option B — a standing routine
@@ -37,7 +37,7 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/api/workspace/file?path=meetings/
 If you'd rather not wire a hook, run it on a schedule that sweeps recent meetings:
 
 ```bash
-curl -X POST "$API_BASE/agent/api/routines" \
+curl -X POST "$API_BASE/agent/routines" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{
     "name":"Meeting reports",
@@ -57,7 +57,7 @@ already holds, and each run leaves the workspace more complete (people, companie
 ## Going live instead
 
 To surface decisions and action items **during** the call rather than after, run the live copilot —
-`POST /api/meeting/start` then stream cards from `GET /api/meeting/stream`. See
+`POST /agent/meeting/start` then stream cards from `GET /agent/meeting/stream`. See
 [Meeting copilot](/how-to/live-copilot) and the [Agent API](/api/agent#live-meeting-copilot).
 
 <Note>
