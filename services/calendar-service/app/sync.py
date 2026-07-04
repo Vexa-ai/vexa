@@ -159,12 +159,17 @@ async def schedule_upcoming_bots(db: AsyncSession) -> int:
 
         try:
             async with httpx.AsyncClient() as client:
+                # Bot display name = the owning user's name (e.g. "Hugo"), so an
+                # auto-joined bot appears to participants as the agent, not "Vexa".
+                # One user = one agent (seeded from the agents master table);
+                # user.name is an existing column — no schema change. Falls back to
+                # the legacy label only when a user has no name set.
                 resp = await client.post(
                     f"{MEETING_API_URL}/bots",
                     json={
                         "platform": event.platform,
                         "native_meeting_id": _extract_native_id(event.meeting_url, event.platform),
-                        "bot_name": f"Vexa - {event.title or 'Calendar'}",
+                        "bot_name": (user.name or f"Vexa - {event.title or 'Calendar'}"),
                     },
                     headers={"X-API-Key": BOT_API_TOKEN},
                     timeout=30,
