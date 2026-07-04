@@ -323,6 +323,34 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # MCP service — the Model Context Protocol front for the PUBLIC API (v0.12 port of 0.10.6
+  # services/mcp). Stateless: every tool call forwards the caller's key to the gateway as
+  # X-API-Key; exposed on its OWN host port (no gateway /mcp forward yet — see the service README).
+  mcp:
+    build:
+      context: ../../core/meetings/services/mcp
+      dockerfile: Dockerfile
+    image: vexaai/v012-mcp:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${MCP_HOST_PORT:-18010}:8010"
+    environment:
+      - GATEWAY_URL=http://gateway:8000
+      - PORT=8010
+      - VEXA_ENV=${VEXA_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
   # The user-facing web UI (Next.js custom server). Proxies /ws → gateway and REST → agent-api/admin-api.
   # The terminal is the front door for humans; the gateway remains the API front door for programmatic use.
   terminal:

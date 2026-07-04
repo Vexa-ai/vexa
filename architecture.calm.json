@@ -214,6 +214,23 @@
       ]
     },
     {
+      "unique-id": "mcp",
+      "node-type": "service",
+      "name": "mcp",
+      "description": "MCP tools + prompts over the public API (stateless FastAPI, /mcp mount)",
+      "metadata": [
+        {
+          "path": "core/meetings/services/mcp"
+        }
+      ],
+      "interfaces": [
+        {
+          "unique-id": "mcp-http",
+          "type": "api"
+        }
+      ]
+    },
+    {
       "unique-id": "buffer",
       "node-type": "module",
       "name": "buffer",
@@ -1187,6 +1204,7 @@
             "bot",
             "desktop",
             "meeting-api",
+            "mcp",
             "buffer",
             "capture-codec",
             "gmeet-capture",
@@ -1825,6 +1843,22 @@
           "access": "read"
         }
       ]
+    },
+    {
+      "unique-id": "mcp-gw",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "mcp"
+          },
+          "destination": {
+            "node": "gateway",
+            "interface": "gateway-rest"
+          }
+        }
+      },
+      "description": "every MCP tool forwards the caller's X-API-Key to the public REST surface",
+      "protocol": "HTTPS"
     },
     {
       "unique-id": "gw-ma",

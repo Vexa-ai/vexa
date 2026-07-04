@@ -4,6 +4,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   service bot
   service desktop
   service meeting-api
+  service mcp
   module buffer
   module capture-codec
   module gmeet-capture
@@ -105,6 +106,7 @@ edges:
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
   agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
+  mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)
