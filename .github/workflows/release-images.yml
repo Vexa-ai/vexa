@@ -418,6 +418,9 @@ jobs:
       - name: Install k3s (ephemeral single node)
         run: |
           curl -sfL https://get.k3s.io | sudo sh -s - --write-kubeconfig-mode 644
+          # kubectl errors out (rather than waiting) while the API server is still booting —
+          # poll until it answers, then wait for node readiness.
+          for i in $(seq 1 60); do kubectl get nodes >/dev/null 2>&1 && break; sleep 5; done
           kubectl wait --for=condition=Ready node --all --timeout=300s
       - name: helm install from published images
         run: |
