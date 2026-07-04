@@ -399,8 +399,15 @@ def create_app(
     @app.get("/health")
     def health():
         ok = dispatcher is not None
+        # ADDITIVE config.v1 rows (ADR-0026): the agent plane's capability tri-states (bot_gateway ·
+        # model_inference). They never affect `status`/`checks` or the status code — an unconfigured
+        # capability degrades a FEATURE (e.g. 'add bot from URL', worker model credentials), not the
+        # process; the runtime's /health carries the credentials-file probe for the mount mechanics.
+        from control_plane.config_preflight import capability_health
+
         return JSONResponse(
-            {"status": "ok" if ok else "degraded", "service": "agent-api", "checks": {"dispatcher": ok}},
+            {"status": "ok" if ok else "degraded", "service": "agent-api", "checks": {"dispatcher": ok},
+             "capabilities": capability_health()},
             status_code=200 if ok else 503,
         )
 
@@ -884,7 +891,14 @@ def create_app(
 def _build_production_app() -> FastAPI:
     from shared.adapters import LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
     from shared.config import load_settings
+    from control_plane.config_preflight import preflight
     from control_plane.workspace_routines import start_workspace_routine_reconciler
+
+    # config.v1 boot preflight (ADR-0026): agent-api has no required-explicit keys today, so this
+    # logs the capability tri-states (bot_gateway · model_inference) — a deploy that cannot add bots
+    # from URL or whose workers will have NO model credentials says so in the boot log and on
+    # /health, instead of failing at first chat with 'Model inference failed: Not logged in'.
+    preflight()
 
     settings = load_settings()
     runtime = RuntimeHttpClient(settings.runtime_api_url)

@@ -24,6 +24,11 @@ import pytest
 
 COMPOSE_DIR = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = COMPOSE_DIR / "docker-compose.yml"
+
+# The 0.10 backward-compat suite (compat/) is OPT-IN via V010_COMPAT=1: without it the directory
+# is not collected at all, so the default gate:compose collection is unchanged (a compat/conftest.py
+# cannot own this gate — a second module named `conftest` shadows this one and breaks imports).
+collect_ignore_glob = [] if os.getenv("V010_COMPAT") == "1" else ["compat/*"]
 PROJECT = os.getenv("COMPOSE_PROJECT", "vexa-compose-gate")  # override on a shared host (e.g. bbb prod box)
 
 # The built services + the host ports they publish. The ports read from the same env vars the

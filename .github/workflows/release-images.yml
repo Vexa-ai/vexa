@@ -411,6 +411,45 @@ jobs:
           docker ps -a
           docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
 
+  # 0.10 API backward-compat (release DoD 6): a 0.10-style client's real REST + WS flows against
+  # the stack FROM THE PUBLISHED IMAGES — passes + strict `V010-BREAK:` xfails only; any unexpected
+  # failure (a compat surface regressing, or a recorded break silently un-breaking) turns this red.
+  validate-v010-compat:
+    needs: [preflight, verify-manifests, image-identity]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: astral-sh/setup-uv@v5
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Seed compose .env
+        run: cp deploy/compose/.env.example deploy/compose/.env
+      - name: Build the mock bot (local instrument image, never published)
+        run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
+      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
+      - name: Pre-pull the published agent-worker image
+        run: docker pull "vexaai/v012-agent-worker:$VERSION"
+      - name: 0.10 backward-compat suite (V010_COMPAT=1) from published images
+        working-directory: deploy/compose
+        env:
+          COMPOSE_NO_BUILD: "1"
+          IMAGE_TAG: ${{ needs.preflight.outputs.version }}
+          V010_COMPAT: "1"
+          MOCK_BOT: "1"
+          BROWSER_IMAGE: mock-bot:dev
+        run: ./bin/stack-test compat
+      - name: Compose state on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
+
   validate-bot-spawn:
     needs: [preflight, verify-manifests, image-identity]
     runs-on: ubuntu-latest
@@ -543,6 +582,7 @@ jobs:
       - image-identity
       - validate-compose
       - validate-mock-fsm
+      - validate-v010-compat
       - validate-bot-spawn
       - validate-lite
       - validate-helm-k3s

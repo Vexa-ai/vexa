@@ -40,8 +40,12 @@ secrets:
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
   nextauthSecret: ""                # terminal next-auth session signing (default dev key; set in prod)
-  # Model-provider auth. ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL are the OpenRouter/subscription
-  # pair (compose sources them from .env as a single source of truth — here they live in the Secret).
+  # Model-provider auth (config.v1 `model_inference` capability, ADR-0026). ANTHROPIC_AUTH_TOKEN +
+  # ANTHROPIC_BASE_URL are the OpenRouter/subscription pair (compose sources them from .env as a
+  # single source of truth — here they live in the Secret). NOTE: the compose/lite-only
+  # HOST_CLAUDE_CREDENTIALS subscription-file mount has no k8s analog in this chart — on helm,
+  # workers get credentials ONLY via these brokered ANTHROPIC_* values; the runtime's /health
+  # `model_inference` row reports which path (if any) is configured.
   anthropicApiKey: ""
   anthropicAuthToken: ""
   anthropicBaseUrl: ""
