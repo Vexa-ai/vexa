@@ -157,7 +157,7 @@ function MountSection({ mount }: { mount: ActiveMount }) {
         style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 8px", cursor: "pointer",
           fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mount.slug}</span>
+        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mount.name || mount.slug}</span>
         {mount.role === "shared" && (
           <span style={{ marginLeft: "auto", fontSize: 9.5, letterSpacing: 0, textTransform: "none", color: "var(--t3)",
             border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared · {mount.write ? "read-write" : "read-only"}</span>

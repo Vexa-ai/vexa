@@ -40,7 +40,7 @@ export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
 
 /** One member of the ADDITIVE active set (the mount stack the next agent turn mounts — WP-A2.1). The
  *  `primary` member is the private baseline (always active, never deactivatable). */
-export interface ActiveMount { slug: string; repo: string | null; ref: string | null; role: string; path: string; write: boolean; primary: boolean }
+export interface ActiveMount { slug: string; repo: string | null; ref: string | null; role: string; path: string; write: boolean; primary: boolean; name?: string | null }
 export interface ActiveSet { subject: string; active: ActiveMount[] }
 
 /** The subject's ORDERED active set — the workspaces currently MOUNTED into the agent turn (vs the parked

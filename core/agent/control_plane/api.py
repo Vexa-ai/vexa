@@ -1044,7 +1044,7 @@ def create_app(
             "subject": subject,
             "active": [
                 {"slug": m.slug, "repo": m.repo, "ref": m.ref, "role": m.role,
-                 "path": m.path, "write": m.write, "primary": m.primary}
+                 "path": m.path, "write": m.write, "primary": m.primary, "name": m.name}
                 for m in mounts
             ],
         }

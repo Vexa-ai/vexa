@@ -83,6 +83,7 @@ class ActiveMount:
     path: str           # ABSOLUTE on-disk path inside the mounted store root (<root>/<subject> or <root>/.attached/<subject>/<slug>)
     write: bool = True  # the subject may always write their own private workspaces; membership gates land later
     primary: bool = False  # True == the private baseline at <root>/<subject> (always active, never deactivatable)
+    name: Optional[str] = None  # the DISPLAY label (switcher rename), so KNOWLEDGE shows the same name as the switcher — not the raw slug
 
 
 @dataclass(frozen=True)
@@ -367,6 +368,7 @@ def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
             path=str(_slug_dir(rootp, subject, state, slug)),
             write=True,
             primary=(slug == primary),
+            name=(slot.get("name") or "").strip() or None,   # the switcher's display label (rename), if set
         ))
     return mounts
 
@@ -463,6 +465,7 @@ def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]
             path=str(ws_dir),
             write=role in ("contributor", "owner"),  # viewer = read-only; the write gate lands here
             primary=False,  # a shared workspace is never the private baseline
+            name=ws_id,  # a shared workspace's id IS its name (no per-user rename label)
         ))
     return mounts
 
