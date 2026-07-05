@@ -190,6 +190,22 @@ def test_non_member_is_refused_shared_tree_and_file(tmp_path):
     assert file.status_code == 403          # ...nor read its files by slug
 
 
+# ── the reader can read ANY workspace dir under root by path (own .attached slots + shared ws) ─────
+def test_reader_reads_any_dir_under_root_and_guards_traversal(tmp_path):
+    import pytest
+    from control_plane.workspace_reader import WorkspaceReader
+    wsr = WorkspaceReader(str(tmp_path))
+    # a dir that is NOT <root>/<subject> — mimics a non-primary private slot (.attached/…) or a shared ws
+    d = tmp_path / ".attached" / "u1" / "extra"
+    (d / "kg").mkdir(parents=True)
+    (d / "kg" / "note.md").write_text("hi")
+
+    assert wsr.tree_at(d) == ["kg/note.md"]          # path-based read (impossible via tree(subject) before)
+    assert wsr.read_at(d, "kg/note.md") == "hi"
+    with pytest.raises(ValueError):                  # a dir OUTSIDE the store root is refused (traversal guard)
+        wsr.tree_at(tmp_path.parent)
+
+
 def test_dispatch_without_index_is_private_only(tmp_path):
     from types import SimpleNamespace
     from control_plane.dispatch import build_mount_set

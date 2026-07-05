@@ -125,11 +125,13 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile, openMenu }:
   );
 }
 
-// ── shared-workspace section (Lane A) ─────────────────────────────────────────────
-// One collapsible READ-ONLY section per SHARED workspace the user is a member of (from the active set).
-// Its kg tree is fetched scoped by slug; files open read-only via docTab(path, slug). Additive: the
-// primary KNOWLEDGE tree above is untouched, so the single-workspace view can never regress.
-function SharedTreeSection({ mount }: { mount: ActiveMount }) {
+// ── per-mount KNOWLEDGE section (Lane A) ──────────────────────────────────────────
+// One collapsible section per NON-PRIMARY active mount — the user's other private workspaces AND the
+// shared workspaces they're a member of (the primary stays the top tree above). Each mount's kg tree is
+// fetched scoped by slug (own .attached slots + shared ws both read by path server-side); files open via
+// docTab(path, slug). Shared mounts are badged read-only (writes need Lane W). Additive — the primary
+// tree is untouched, so the single-workspace view can never regress.
+function MountSection({ mount }: { mount: ActiveMount }) {
   const layout = useService(LayoutServiceId);
   const [tree, setTree] = useState<string[]>([]);
   const [open, setOpen] = useState(true);
@@ -156,8 +158,10 @@ function SharedTreeSection({ mount }: { mount: ActiveMount }) {
           fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mount.slug}</span>
-        <span style={{ marginLeft: "auto", fontSize: 9.5, letterSpacing: 0, textTransform: "none", color: "var(--t3)",
-          border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared · read-only</span>
+        {mount.role === "shared" && (
+          <span style={{ marginLeft: "auto", fontSize: 9.5, letterSpacing: 0, textTransform: "none", color: "var(--t3)",
+            border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared · read-only</span>
+        )}
       </div>
       {open && (<>
         {error && <div role="alert" style={{ margin: "0 8px 6px", fontSize: 11.5, color: "var(--live)" }}>⚠ {error}</div>}
@@ -180,8 +184,9 @@ function FilesList() {
   // Knowledge view defaults to ONLY the knowledge graph (kg/); the eye toggle reveals the rest of the
   // workspace scaffold (CLAUDE.md, agents/, skills/, views/, …). Default ON = kg-only.
   const [kgOnly, setKgOnly] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
-  // Lane A: the SHARED workspaces in the active set — rendered as read-only sections beneath the primary tree.
-  const [sharedMounts, setSharedMounts] = useState<ActiveMount[]>([]);
+  // Lane A: every NON-PRIMARY active mount (other private workspaces + shared) — rendered as sections
+  // beneath the primary tree, so KNOWLEDGE mirrors the agent's full mount set, not just the primary.
+  const [extraMounts, setExtraMounts] = useState<ActiveMount[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { const a = JSON.parse(readSS(SS_EXPANDED) ?? "null"); return new Set(Array.isArray(a) ? a : []); } catch { return new Set(); }
   });
@@ -195,14 +200,14 @@ function FilesList() {
         .then((t) => { setTree((prev) => (JSON.stringify(prev) === JSON.stringify(t) ? prev : t)); setError(null); })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
     };
-    // Lane A: resolve the shared workspaces in the active set (best-effort — a failure just hides the
-    // shared sections, never the primary tree).
-    const loadShared = () => void readActiveSet()
-      .then((s) => setSharedMounts(s.active.filter((m) => m.role === "shared")))
-      .catch(() => { /* shared sections are additive; ignore */ });
+    // Lane A: resolve the non-primary mounts in the active set (best-effort — a failure just hides the
+    // extra sections, never the primary tree).
+    const loadExtra = () => void readActiveSet()
+      .then((s) => setExtraMounts(s.active.filter((m) => !m.primary)))
+      .catch(() => { /* extra sections are additive; ignore */ });
     load();
-    loadShared();
-    const id = setInterval(() => { if (!document.hidden) { load(); loadShared(); } }, 5000);
+    loadExtra();
+    const id = setInterval(() => { if (!document.hidden) { load(); loadExtra(); } }, 5000);
     window.addEventListener("focus", load);
     return () => { clearInterval(id); window.removeEventListener("focus", load); };
   }, [reloadKey]);
@@ -310,8 +315,8 @@ function FilesList() {
           { id: "copy-path", label: "Copy path", detail: menu.path, onSelect: () => copyText(menu.path) },
         ]} />
       )}
-      {/* Lane A: shared workspaces (member-of) as read-only KNOWLEDGE sections — the agent mounts them too. */}
-      {!q && sharedMounts.map((mount) => <SharedTreeSection key={mount.slug} mount={mount} />)}
+      {/* Lane A: every non-primary mount (other private + shared) as a KNOWLEDGE section — mirrors the mount set. */}
+      {!q && extraMounts.map((mount) => <MountSection key={mount.slug} mount={mount} />)}
       <WorkspaceSwitcher onSwapped={() => setReloadKey((k) => k + 1)} />
       <GitSection />
     </div>

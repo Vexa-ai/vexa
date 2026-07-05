@@ -64,14 +64,27 @@ class WorkspaceReader:
     def workspace_dir(self, subject: str) -> Path:
         return self._ws(subject)
 
+    def _guard_under_root(self, base: Path) -> Path:
+        """A workspace dir must live under the store root (traversal guard). Used by the path-based
+        readers so a mount PATH (from the active set — own private slots under .attached, or a shared
+        workspace at <root>/<id>) can be read directly, not only a ``<root>/<subject>`` dir."""
+        base = base.resolve()
+        root = self._root.resolve()
+        if base != root and root not in base.parents:
+            raise ValueError("outside root")
+        return base
+
     def tree(self, subject: str, hidden: bool = False) -> list[str]:
-        """Sorted relative paths of the subject's files.
+        """Sorted relative paths of the subject's files (the subject's own ``<root>/<subject>`` dir)."""
+        return self.tree_at(self._ws(subject), hidden=hidden)
+
+    def tree_at(self, base: Path, hidden: bool = False) -> list[str]:
+        """Sorted relative paths of the files under ``base`` (any workspace dir under the store root).
 
         Always excludes ``.git`` internals. By default also excludes ``.claude`` and any other
-        dotfile/dotdir; pass ``hidden=True`` to include those (e.g. so the Files panel can show
-        ``.claude/`` sessions + config). ``.git`` stays hidden either way.
+        dotfile/dotdir; pass ``hidden=True`` to include those. ``.git`` stays hidden either way.
         """
-        ws = self._ws(subject)
+        ws = self._guard_under_root(base)
         if not ws.exists():
             return []
         out: list[str] = []
@@ -86,8 +99,12 @@ class WorkspaceReader:
         return out
 
     def read(self, subject: str, path: str) -> Optional[str]:
-        """The text at ``path`` within the subject's workspace, or None if absent. Traversal-guarded."""
-        ws = self._ws(subject)
+        """The text at ``path`` within the subject's own workspace, or None if absent. Traversal-guarded."""
+        return self.read_at(self._ws(subject), path)
+
+    def read_at(self, base: Path, path: str) -> Optional[str]:
+        """The text at ``path`` within the ``base`` workspace dir, or None if absent. Traversal-guarded."""
+        ws = self._guard_under_root(base)
         f = (ws / path).resolve()
         if ws not in f.parents:  # the resolved path must stay inside the workspace
             raise ValueError("invalid path")

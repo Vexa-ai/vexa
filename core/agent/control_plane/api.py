@@ -860,23 +860,32 @@ def create_app(
         workload_id = dispatcher.dispatch(invocation)
         return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
-    def _read_target(request: Request, slug: Optional[str]) -> str:
-        """Resolve which workspace a READ (tree/file) targets. Default = the caller's own subject. A `slug`
-        addresses another workspace at the store root — allowed ONLY for a SHARED workspace the caller is a
-        member of (authoritative policy/members.json check via is_member). Lane A: this is what lets the
-        KNOWLEDGE panel read a shared mount's tree/files without leaking arbitrary workspaces by slug."""
+    def _read_target(request: Request, slug: Optional[str]) -> Path:
+        """Resolve which workspace dir a READ (tree/file) targets, returning its ABSOLUTE PATH. Default (no
+        slug) = the caller's primary baseline. A `slug` addresses ANOTHER mount in the caller's active set —
+        their own non-primary private workspaces (which live under .attached, NOT <root>/<slug>) OR a SHARED
+        workspace they're a member of. Authorization is by construction: the set is built for THIS subject
+        (own actives + shared_active_mounts over their memberships), so a slug not in it → 403. This is what
+        lets the KNOWLEDGE panel render one section per active mount without leaking arbitrary workspaces."""
         subject = subject_of(request)
         target = (slug or "").strip()
+        mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
+        try:
+            mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
+        except Exception:  # noqa: BLE001 — a shared-mount hiccup must not break a plain own-workspace read
+            pass
         if not target or target == subject:
-            return subject
-        if membership_mod.is_member(wsr.root, target, subject) is None:
-            raise HTTPException(status_code=403, detail="not a member of this workspace")
-        return target
+            primary = next((m for m in mounts if m.primary), None)
+            return Path(primary.path) if primary else (wsr.root / subject)
+        for m in mounts:
+            if m.slug == target:
+                return Path(m.path)
+        raise HTTPException(status_code=403, detail="not authorized for this workspace")
 
     @app.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False, slug: Optional[str] = None):
         try:
-            return {"files": wsr.tree(_read_target(request, slug), hidden=hidden)}
+            return {"files": wsr.tree_at(_read_target(request, slug), hidden=hidden)}
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
 
@@ -915,7 +924,7 @@ def create_app(
     @app.get("/api/workspace/file")
     def ws_file(request: Request, path: str, slug: Optional[str] = None):
         try:
-            content = wsr.read(_read_target(request, slug), path)
+            content = wsr.read_at(_read_target(request, slug), path)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid path")
         if content is None:
