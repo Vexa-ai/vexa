@@ -397,6 +397,34 @@ def create_shared_workspace_dir(root: str | Path, name: str) -> str:
     return wid
 
 
+def hidden_shared_set(root: str | Path, subject: str) -> set[str]:
+    """The workspace_ids the subject has SWITCHED OFF (deactivated from their active set) — a per-user UI
+    preference stored in their attach state (``hidden_shared``). Membership is unchanged; the workspace is
+    just not mounted/shown until re-activated. Fails soft to an empty set (never breaks the active-set read)."""
+    try:
+        rootp = Path(root)
+        _safe_subject_dir(rootp, subject)
+        return set(_load_state(_store(rootp, subject)).get("hidden_shared", []))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def set_shared_active(root: str | Path, subject: str, workspace_id: str, active: bool) -> None:
+    """Switch a shared workspace ON (mount it) or OFF (hide from the active set) for THIS subject. Toggles
+    membership in the ``hidden_shared`` list in their attach state — does NOT touch the membership grant."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    hidden = set(state.get("hidden_shared", []))
+    if active:
+        hidden.discard(workspace_id)
+    else:
+        hidden.add(workspace_id)
+    state["hidden_shared"] = sorted(hidden)
+    _save_state(store, state)
+
+
 def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]) -> list[ActiveMount]:
     """The SHARED workspaces the subject is a MEMBER of (Lane A) — the seam that turns a membership grant
     into a mount in the active set. ``memberships`` is the derived index ``users.data.memberships[]`` (each
@@ -413,11 +441,14 @@ def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]
     from control_plane import workspace_membership as membership
 
     rootp = Path(root).resolve()  # resolve up front so the traversal guard compares like-for-like (macOS /var→/private/var)
+    hidden = hidden_shared_set(rootp, subject)  # workspaces the subject switched OFF (not mounted until re-enabled)
     mounts: list[ActiveMount] = []
     for entry in memberships:
         ws_id = (entry.get("workspace_id") or "").strip() if isinstance(entry, dict) else ""
         if not ws_id or ws_id == subject or ws_id.startswith(".") or ws_id in membership.RESERVED_SLUGS:
             continue  # own baseline / reserved / dot-namespaced are never shared mounts
+        if ws_id in hidden:
+            continue  # switched off by the user — keep the membership, just don't mount it
         ws_dir = (rootp / ws_id).resolve()
         if not ws_dir.exists() or rootp not in ws_dir.parents:
             continue  # not materialized on this node, or a traversal attempt — skip, never raise

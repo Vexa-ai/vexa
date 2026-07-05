@@ -163,9 +163,21 @@ def test_dispatch_mount_set_includes_shared_read_only(tmp_path):
     shared = [mount for mount in stack if mount["role"] == SHARED_ROLE]
 
     assert [mount["slug"] for mount in shared] == ["wsA"]
-    assert shared[0]["write"] is False           # Slice 1: shared is READ-ONLY until Lane W (serialized writer)
+    assert shared[0]["write"] is True            # contributor mounts the shared ws READ-WRITE
     # and the _system tier is still appended last (three-tier stack intact)
     assert stack[-1]["slug"] == "_system"
+
+
+def test_switch_off_hides_shared_from_active_set(tmp_path):
+    from control_plane.workspace_attach import set_shared_active, shared_active_mounts
+    idx = _grant(tmp_path, "wsA", owner="owner1", subject="u1", role="contributor")
+
+    assert [m.slug for m in shared_active_mounts(tmp_path, "u1", idx.list("u1"))] == ["wsA"]
+    set_shared_active(tmp_path, "u1", "wsA", active=False)     # switch it OFF
+    assert shared_active_mounts(tmp_path, "u1", idx.list("u1")) == []   # not mounted...
+    assert m.is_member(tmp_path, "wsA", "u1") == "contributor"          # ...but still a member
+    set_shared_active(tmp_path, "u1", "wsA", active=True)      # switch back ON
+    assert [m.slug for m in shared_active_mounts(tmp_path, "u1", idx.list("u1"))] == ["wsA"]
 
 
 # ── tree/file reads scoped by slug are membership-gated (authorization) ───────────────────────────

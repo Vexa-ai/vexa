@@ -86,6 +86,13 @@ export async function listSharedMemberships(): Promise<Membership[]> {
   return data.memberships ?? [];
 }
 
+/** Switch a shared workspace ON (mount) or OFF (hide) in your active set — membership is unchanged. */
+export async function setSharedActive(workspace_id: string, active: boolean): Promise<{ workspace_id: string; active: boolean }> {
+  return getJson(`/api/workspace/shared/${encodeURIComponent(workspace_id)}/active`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active }),
+  });
+}
+
 /** ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap): the
  *  private baseline and any other active workspaces stay mounted. Pass `repo` to clone/restore a git repo,
  *  or `slug` to activate an already-parked slot. Idempotent — an already-active workspace is a no-op.

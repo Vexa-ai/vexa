@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, createSharedWorkspace, mintInvite, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, createSharedWorkspace, mintInvite, listSharedMemberships, setSharedActive, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -160,7 +160,7 @@ function MountSection({ mount }: { mount: ActiveMount }) {
         <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mount.slug}</span>
         {mount.role === "shared" && (
           <span style={{ marginLeft: "auto", fontSize: 9.5, letterSpacing: 0, textTransform: "none", color: "var(--t3)",
-            border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared · read-only</span>
+            border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared · {mount.write ? "read-write" : "read-only"}</span>
         )}
       </div>
       {open && (<>
@@ -332,6 +332,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   // `view.active` (the single private-baseline primary) — a workspace can be MOUNTED (in the set) or just
   // AVAILABLE (parked). Drives the per-row toggle; the baseline is always in the set and non-deactivatable.
   const [activeSet, setActiveSet] = useState<ActiveMount[]>([]);
+  const [sharedMemberships, setSharedMemberships] = useState<Membership[]>([]);  // ALL shared (incl switched-off)
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<{ repo: string; ref: string; token: string } | null>(null);  // non-null = attach form shown
@@ -346,6 +347,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const load = () => {
     void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
     void readActiveSet().then((s) => setActiveSet(s.active)).catch(() => { /* active-set is additive UI; a failure just leaves the toggles at the baseline */ });
+    void listSharedMemberships().then(setSharedMemberships).catch(() => { /* shared list is additive; ignore */ });
   };
   useEffect(() => { if (open) load(); }, [open]);
   const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_WS_OPEN, n ? "1" : "0"); return n; });
@@ -395,6 +397,14 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     setBusy(true); setErr(null);
     try { setView(await renameWorkspace(slug, name.trim())); setRenaming(null); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); setRenaming(null); }
+    finally { setBusy(false); }
+  };
+
+  // Switch a SHARED workspace ON/OFF in the active set (mount vs hide) — membership is unchanged.
+  const toggleShared = async (workspaceId: string, active: boolean) => {
+    setBusy(true); setErr(null);
+    try { await setSharedActive(workspaceId, active); load(); onSwapped(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
 
@@ -500,24 +510,36 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             </div>
           );
         })}
-        {/* SHARED workspaces (member-of) — listed here too, not only in KNOWLEDGE. Read-only rows (you don't
-            park/rename/publish a shared ws); owner/contributor gets a Share action to mint an invite link. */}
-        {activeSet.filter((m) => m.role === "shared").map((m) => (
-          <div key={`shared:${m.slug}`}
-            style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12 }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-            <Icon name="folder" size={12} style={{ color: "var(--t3)", flex: "none" }} />
-            <span style={{ flex: 1, color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.slug}</span>
-            <span style={{ flex: "none", fontSize: 9.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>
-              shared{m.write ? "" : " · read-only"}
-            </span>
-            <span onClick={() => setShare({ wsId: m.slug, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null })}
-              title="Share this workspace — create an invite link"
-              style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-              <Icon name="upload" size={12} />
-            </span>
-          </div>
-        ))}
+        {/* SHARED workspaces (member-of) — listed here too, not only in KNOWLEDGE. A CHECKBOX switches each
+            ON (mounted into the agent) or OFF (hidden — membership kept). The role gates write: contributor/
+            owner are read-write, viewer read-only. Owner/contributor gets a Share action to mint a link. */}
+        {sharedMemberships.map((mem) => {
+          const wsId = mem.workspace_id;
+          const mounted = activeSet.some((m) => m.role === "shared" && m.slug === wsId);
+          const canWrite = mem.role === "contributor" || mem.role === "owner";
+          return (
+            <div key={`shared:${wsId}`}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              <Checkbox checked={mounted} disabled={busy}
+                onChange={() => void toggleShared(wsId, !mounted)}
+                title={mounted ? "Mounted — uncheck to switch off (you stay a member)" : "Switched off — check to mount"}
+                label={`${wsId} — shared (${mem.role})`} />
+              <span onClick={() => void toggleShared(wsId, !mounted)}
+                style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}>{wsId}</span>
+              <span style={{ flex: "none", fontSize: 9.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>
+                shared · {canWrite ? "read-write" : "read-only"}
+              </span>
+              {canWrite && (
+                <span onClick={() => setShare({ wsId, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null })}
+                  title="Share this workspace — create an invite link"
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
+                  <Icon name="upload" size={12} />
+                </span>
+              )}
+            </div>
+          );
+        })}
         {form === null ? (
           <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
             <Icon name="plus" size={12} /> Attach repo…

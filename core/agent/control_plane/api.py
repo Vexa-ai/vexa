@@ -45,6 +45,7 @@ from control_plane.workspace_attach import (
     create_workspace,
     deactivate_workspace,
     rename_workspace,
+    set_shared_active,
     shared_active_mounts,
     swap_workspace,
 )
@@ -289,6 +290,13 @@ class SharedNewBody(BaseModel):
     workspace shareable so invites can be minted against it. ``name`` → display + workspace-id base."""
     model_config = {"extra": "forbid"}
     name: str = "Shared workspace"
+
+
+class SharedActiveBody(BaseModel):
+    """Switch a shared workspace ON (mount) or OFF (hide) in the caller's active set — per-user, membership
+    is unchanged."""
+    model_config = {"extra": "forbid"}
+    active: bool
 
 
 class WorkspaceActivateBody(BaseModel):
@@ -1248,6 +1256,17 @@ def create_app(
 
     def _member_error(exc: MembershipError):
         return HTTPException(status_code=exc.status, detail=str(exc))
+
+    @app.post("/api/workspace/shared/{workspace_id}/active")
+    def ws_shared_active(workspace_id: str, request: Request, body: SharedActiveBody = Body(...)):
+        """Switch a SHARED workspace ON/OFF in the caller's active set (mount vs hide). Membership is
+        unchanged — this is a per-user mount preference so a member can 'switch it off' without leaving."""
+        subject = subject_of(request)
+        try:
+            set_shared_active(wsr.root, subject, workspace_id, body.active)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid workspace")
+        return {"workspace_id": workspace_id, "active": body.active}
 
     @app.post("/api/workspace/shared/new", status_code=201)
     def ws_shared_new(request: Request, body: SharedNewBody = Body(default=SharedNewBody())):

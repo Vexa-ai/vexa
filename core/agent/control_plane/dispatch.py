@@ -37,8 +37,9 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
 
     ``memberships`` (Lane A) = the subject's ``users.data.memberships[]`` index (the dispatcher resolves it
     once and passes the data in). When present, the SHARED workspaces the subject is a member of are
-    appended after their private set. Slice 1: shared mounts are READ-ONLY regardless of the member's role —
-    shared WRITES require the serialized attributed writer (Lane W); until it lands, ``write=False`` here.
+    appended after their private set, WRITABLE per the member's role (contributor/owner → rw, viewer → ro).
+    NOTE: concurrent shared writes are not yet serialized (Lane W) — sequential attributed writes work
+    (author = principal, via the per-mount commit path); true concurrency-safety lands with the writer.
 
     Fails SOFT: any error resolving the on-disk set (a never-seeded subject, a store hiccup) falls back to
     the lone private-baseline mount so a dispatch never dies on mount resolution."""
@@ -57,15 +58,15 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
         ]
     if not memberships:
         return private
-    # Lane A: append the shared workspaces the subject is a member of — mounted READ-ONLY for Slice 1
-    # (the write gate opens with Lane W). A shared-mount hiccup must never break the dispatch → fall soft.
+    # Lane A: append the shared workspaces the subject is a member of — WRITABLE per role (contributor/owner
+    # write; viewer read-only). A shared-mount hiccup must never break the dispatch → fall soft.
     try:
         shared = shared_active_mounts(root, subject, memberships)
     except Exception:  # noqa: BLE001
         logger.warning("shared-mount resolution failed for subject=%s — mounting private workspaces only", subject)
         shared = []
     return private + [
-        {"slug": s.slug, "path": s.path, "role": s.role, "write": False, "primary": False}
+        {"slug": s.slug, "path": s.path, "role": s.role, "write": s.write, "primary": False}
         for s in shared
     ]
 
