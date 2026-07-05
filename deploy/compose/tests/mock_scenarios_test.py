@@ -82,11 +82,19 @@ def _diag(stack, native_id, m):
 
 
 def _seg_count(stack, meeting_id):
-    out = stack.redis_cli("HLEN", f"meeting:{meeting_id}:segments")
+    """Segments visible in durable-or-live stores. Since #53 the db-writer flushes settled
+    segments to postgres and TRIMS the redis hash (completion flush empties it entirely), so the
+    hash alone reads 0 for a completed meeting — the durable truth is postgres + the live tail."""
+    live = durable = 0
     try:
-        return int(out)
+        live = int(stack.redis_cli("HLEN", f"meeting:{meeting_id}:segments"))
     except Exception:
-        return 0
+        pass
+    try:
+        durable = int(stack.psql(f"SELECT count(*) FROM transcriptions WHERE meeting_id = {int(meeting_id)}"))
+    except Exception:
+        pass
+    return live + durable
 
 
 def _stop_bot(stack, user_id, native_id):
@@ -119,7 +127,7 @@ def test_mock_normal_full_lifecycle(stack):
         if segs:
             break
         time.sleep(2)
-    assert segs >= 1, f"normal published no transcript segments (hash empty for meeting {m['id']})"
+    assert segs >= 1, f"normal published no transcript segments (redis hash AND postgres empty for meeting {m['id']})"
 
     # recording leg: the mock uploaded a chunk → it landed in minio under this user.
     deadline = time.time() + 20
