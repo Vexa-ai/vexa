@@ -88,5 +88,25 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       if (platform === 'zoom')  { await leaveZoomMeeting(page, undefined, reason); return; }
       await leaveGoogleMeet(page, undefined, reason);
     },
+    async withdraw(reason) {
+      // Bug 2 — cancel a PENDING join from the waiting room / pre-join screen. Two-step, both
+      // best-effort:
+      //  1. Click the platform's cancel/leave affordance. The stateless leave-click helpers already
+      //     include the waiting-room selectors: Teams' teamsLeaveSelectors carry the "Cancel" buttons
+      //     "(for awaiting admission/waiting room)", and googleLeaveSelectors include Cancel/Close. On
+      //     Zoom the web client shows no reliable pre-admit cancel, so step 2 is the withdraw there.
+      //  2. GUARANTEED DROP: close the page. Google Meet's lobby often exposes no clickable Cancel
+      //     (just "Asking to join…"), so closing the tab is the reliable way to abandon the request;
+      //     it is also the universal fallback if the cancel click missed. Closing the page after the
+      //     click is harmless (the click already fired).
+      try {
+        if (platform === 'teams')      await leaveMicrosoftTeams(page, undefined, reason);
+        else if (platform === 'zoom')  await leaveZoomMeeting(page, undefined, reason);
+        else                           await leaveGoogleMeet(page, undefined, reason);
+      } catch { /* best-effort: fall through to the guaranteed page close */ }
+      try {
+        if (!page.isClosed()) await page.close({ runBeforeUnload: false });
+      } catch { /* best-effort */ }
+    },
   };
 }

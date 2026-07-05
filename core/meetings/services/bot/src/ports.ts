@@ -29,6 +29,10 @@ export interface JoinDriver {
   onRemoval(cb: () => void): () => void;
   /** Leave the meeting (best-effort; never throws fatally). */
   leave(reason: string): Promise<void>;
+  /** Withdraw a PENDING join request from the waiting room / pre-join screen (Bug 2): cancel the
+   *  ask-to-join (Teams/Meet have a Cancel affordance) and, as a guaranteed drop, close the page so
+   *  the request is abandoned even where no cancel button is reachable. Best-effort; never throws. */
+  withdraw(reason: string): Promise<void>;
 }
 
 /** The capture → lane → STT → transcript/recording engine. The orchestrator starts/stops

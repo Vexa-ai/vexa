@@ -960,3 +960,18 @@ def test_seed_claude_md_defers_copilot_steering_to_meeting_md():
     # No copilot watch/ignore steering smuggled into CLAUDE.md (only the guard *mentions* the words).
     assert "surface only new entities" not in lower
     assert "real-time meeting behavior" not in lower
+
+
+def test_serve_meeting_reaps_on_idle_without_session_end():
+    """Bug 3 backstop: an agent-meet copilot whose transcript goes QUIET with NO session_end marker
+    (the bot was SIGKILLed / stopped in the waiting room, so it never emitted one) still reaps — the
+    idle read (xread block=idle_ms) returns empty → serve_meeting RETURNS (exit 0 → container reaped).
+    This is the idle path that MUST cover meeting copilots: without it (or with a 4h idle window) the
+    worker lingers. The deterministic path is meeting-api emitting session_end on the meeting terminal;
+    this idle-reap is the guaranteed backstop."""
+    # Segments arrive, then the stream goes silent — NO session_end is ever delivered.
+    s = MeetingStream(inbox=[_transcript("1-0", _seg("Jane", "hi"), _seg("Raj", "hello"))])
+    # serve_meeting must RETURN (reap) rather than block forever — the next xread yields [] (idle).
+    serve_meeting(s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn, idle_ms=10)
+    # It returned (the test would hang otherwise) — the copilot reaped on idle, no session_end needed.
+    assert True
