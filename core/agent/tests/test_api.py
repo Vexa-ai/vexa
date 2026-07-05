@@ -624,3 +624,47 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     back = c.post("/api/workspace/swap", headers=h, json={})       # repo omitted → swap back to seed
     assert back.json()["active"] == "seed" and back.json()["cloned"] is False
     assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
+
+
+def test_workspace_publish_pushes_born_workspace_to_remote(tmp_path, monkeypatch):
+    """POST /api/workspace/publish pushes the vexa-born active workspace's full history to the created
+    (here: injected/local bare) repo. Per-call token, never stored; errors token-redacted (P15).
+    Real git over a local bare repo — no network (the GitHub creation seam is monkeypatched)."""
+    import subprocess
+    from control_plane import workspace_publish as wp
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+
+    bare = tmp_path / "remote.git"
+    bare.mkdir()
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main"], cwd=bare, check=True)
+    monkeypatch.setattr(wp, "_github_create_repo", lambda name, private, token, org: str(bare))
+
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)                       # a vexa-born workspace with history
+
+    r = c.post("/api/workspace/publish", headers=h,
+               json={"repo_name": "my-ws", "token": "ghp_SECRET"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["created"] is True and body["pushed_ref"]
+    sha = subprocess.run(["git", "rev-parse", body["pushed_ref"]], cwd=bare,
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert sha == body["head_sha"]
+    # P15: the token never lands in the workspace's persisted git config
+    assert "ghp_SECRET" not in (workspaces / "u_jane" / ".git" / "config").read_text()
+
+    # bad input → 400 with a clear message; missing name → 400 too
+    r2 = c.post("/api/workspace/publish", headers=h, json={"repo_name": "bad name!", "token": "t"})
+    assert r2.status_code == 400
+    r3 = c.post("/api/workspace/publish", headers=h, json={"token": "t"})
+    assert r3.status_code == 400

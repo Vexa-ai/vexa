@@ -72,6 +72,48 @@ def _git(cwd: Path, *args: str, token: str | None = None) -> str:
     return proc.stdout.strip()
 
 
+class GitPushError(RuntimeError):
+    """A token-authenticated push failed. The message is REDACTED of the token (P15) so it is safe
+    to surface in an API error body / log."""
+
+
+def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str | None,
+                    *, remote: str = _PUSH_REMOTE) -> str:
+    """THE shared governed-push mechanic: push ``ref`` to ``remote_url`` over a DEDICATED remote so
+    the repo's ``origin`` is never clobbered. The token (if any) rides on the remote URL for the
+    push's duration ONLY, then the persisted remote is scrubbed back to the token-free URL (P15).
+    Returns the pushed HEAD sha. NEVER forces — a non-fast-forward push fails loud. Failures raise
+    ``GitPushError`` with the token redacted from the message.
+
+    Both credential flows converge here: ``GitHubVcs.push`` (brokered secret store) and the
+    per-call-token workspace publish (``control_plane.workspace_publish``)."""
+    work = Path(work_dir)
+    if token and "://" in remote_url:
+        proto, rest = remote_url.split("://", 1)
+        auth_url = f"{proto}://{token}@{rest}"
+    else:
+        auth_url = remote_url
+
+    def redact(text: str) -> str:
+        return text.replace(token, "***") if token else text
+
+    try:
+        # (Re-)point the dedicated remote at the authenticated URL — `set-url` on a re-publish,
+        # `add` the first time (either may be the one that fails, hence the fallback order).
+        try:
+            _git(work, "remote", "set-url", remote, auth_url, token=token)
+        except RuntimeError:
+            _git(work, "remote", "add", remote, auth_url, token=token)
+        try:
+            _git(work, "push", remote, ref, token=token)
+            return _git(work, "rev-parse", "HEAD", token=token)
+        finally:
+            # Strip the token from the persisted remote so it can't leak to the repo/object store.
+            _git(work, "remote", "set-url", remote, remote_url, token=token)
+    except RuntimeError as exc:
+        raise GitPushError(redact(str(exc))) from None
+
+
 class RealGitWorkspace(WorkspacePort):
     """``WorkspacePort`` backed by real ``git`` on a local working tree.
 
@@ -160,20 +202,10 @@ class GitHubVcs(VcsPort):
             "github push subject=%s remote=%s ref=%s token=%r",
             self._subject, remote_url, ref, brokered,  # %r → BrokeredSecret redacts itself
         )
-        if "://" in remote_url:
-            proto, rest = remote_url.split("://", 1)
-            auth_url = f"{proto}://{brokered.reveal()}@{rest}"
-        else:
-            auth_url = remote_url
-        # A dedicated remote so we never clobber the clone's ``origin``; the token lives on it only
-        # for the duration of the push, then we replace it with the token-free URL (P15).
-        _git(work, "remote", "add", _PUSH_REMOTE, auth_url, token=brokered.reveal())
-        try:
-            _git(work, "push", _PUSH_REMOTE, ref, token=brokered.reveal())
-            return _git(work, "rev-parse", "HEAD")
-        finally:
-            # Strip the token from the persisted remote so it can't leak to the repo/object store.
-            _git(work, "remote", "set-url", _PUSH_REMOTE, remote_url)
+        # The one shared governed-push mechanic (push_with_token): dedicated remote so the clone's
+        # ``origin`` is never clobbered, token on the remote URL only for the push's duration, then
+        # scrubbed back to the token-free URL; failure messages token-redacted (P15).
+        return push_with_token(work, remote_url, ref, brokered.reveal(), remote=_PUSH_REMOTE)
 
 
 class RuntimeHttpClient(RuntimePort):
