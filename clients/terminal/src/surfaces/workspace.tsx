@@ -439,7 +439,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   // Share ANY of your workspaces: make it shareable (promote a private one to shared if needed), then open
   // the Share dialog. There is NO share-vs-not choice at create time — every workspace can be shared after.
   const doShareWorkspace = async (slug: string) => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setPubForm(null); setRowMenu(null);  // one dialog at a time
     try {
       const { workspace_id } = await shareEnableWorkspace(slug);
       load(); onSwapped();
@@ -528,16 +528,16 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 </a>
               )}
               {!isRenaming && isPrimary && activeBorn && !busy && (
-                <span onClick={() => { setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "", remoteUrl: view.published_url ?? undefined }); }}
+                <span onClick={() => { setShare(null); setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "", remoteUrl: view.published_url ?? undefined }); }}
                   title={view.published_url ? "Push updates to GitHub" : "Publish this workspace to GitHub…"}
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-                  <Icon name="upload" size={12} />
+                  <Icon name="github" size={12} />
                 </span>
               )}
               {!isRenaming && !isPrimary && !busy && (
                 <span onClick={() => void doShareWorkspace(slug)} title="Share this workspace — create an invite link"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-                  <Icon name="upload" size={12} />
+                  <Icon name="link" size={12} />
                 </span>
               )}
               {!isRenaming && (
@@ -573,10 +573,10 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 <Icon name={canWrite ? "user" : "eye"} size={12} />
               </span>
               {canWrite && (
-                <span onClick={() => setShare({ wsId, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null })}
+                <span onClick={() => { setPubForm(null); setShare({ wsId, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null }); }}
                   title="Share this workspace — create an invite link"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-                  <Icon name="upload" size={12} />
+                  <Icon name="link" size={12} />
                 </span>
               )}
               {mem.role === "owner" && (
