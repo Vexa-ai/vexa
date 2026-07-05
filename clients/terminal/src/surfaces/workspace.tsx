@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -399,6 +399,15 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     finally { setBusy(false); }
   };
 
+  // UN-SHARE (owner only): move the workspace back to your private store — the mirror of Share.
+  const doUnshare = async (workspaceId: string) => {
+    if (typeof window !== "undefined" && !window.confirm(`Stop sharing "${workspaceId}"? Other members will lose access; it becomes a private workspace of yours.`)) return;
+    setBusy(true); setErr(null);
+    try { await unshareWorkspace(workspaceId); load(); onSwapped(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
   // Switch a SHARED workspace ON/OFF in the active set (mount vs hide) — membership is unchanged.
   const toggleShared = async (workspaceId: string, active: boolean) => {
     setBusy(true); setErr(null);
@@ -542,6 +551,10 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
                   <Icon name="upload" size={12} />
                 </span>
+              )}
+              {mem.role === "owner" && (
+                <span onClick={() => void doUnshare(wsId)} title="Stop sharing — make it a private workspace again"
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 13, lineHeight: 1 }}>×</span>
               )}
             </div>
           );

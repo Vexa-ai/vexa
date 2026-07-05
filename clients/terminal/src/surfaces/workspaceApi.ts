@@ -108,6 +108,11 @@ export async function shareEnableWorkspace(slug: string): Promise<{ workspace_id
   return getJson(`/api/workspace/${encodeURIComponent(slug)}/share-enable`, { method: "POST" });
 }
 
+/** UN-SHARE a workspace (owner only) — move it back to your private store; other members lose access. */
+export async function unshareWorkspace(workspaceId: string): Promise<{ slug: string }> {
+  return getJson(`/api/workspace/${encodeURIComponent(workspaceId)}/unshare`, { method: "POST" });
+}
+
 /** Switch a shared workspace ON (mount) or OFF (hide) in your active set — membership is unchanged. */
 export async function setSharedActive(workspace_id: string, active: boolean): Promise<{ workspace_id: string; active: boolean }> {
   return getJson(`/api/workspace/shared/${encodeURIComponent(workspace_id)}/active`, {

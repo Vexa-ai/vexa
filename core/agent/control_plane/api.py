@@ -44,6 +44,7 @@ from control_plane.workspace_attach import (
     create_shared_workspace_dir,
     create_workspace,
     deactivate_workspace,
+    ensure_workspace_private,
     ensure_workspace_shareable,
     rename_workspace,
     set_shared_active,
@@ -1268,6 +1269,26 @@ def create_app(
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid workspace")
         return {"workspace_id": workspace_id, "active": body.active}
+
+    @app.post("/api/workspace/{workspace_id}/unshare")
+    def ws_unshare(workspace_id: str, request: Request):
+        """UN-SHARE a workspace (owner only) — move it back into the caller's PRIVATE store and drop every
+        member's index entry, so it stops being shared (mirror of share-enable). Returns the new private slug."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
+            members = membership_mod.read_members(wsr.root, workspace_id)
+            new_slug = ensure_workspace_private(wsr.root, subject, workspace_id)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        for m in members:  # best-effort: the shared workspace is gone, so drop the derived index entries
+            try:
+                mindex.remove(m.get("subject"), workspace_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return {"slug": new_slug}
 
     @app.post("/api/workspace/{slug}/share-enable")
     def ws_share_enable(slug: str, request: Request):

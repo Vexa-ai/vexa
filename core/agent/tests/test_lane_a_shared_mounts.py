@@ -264,6 +264,21 @@ def test_share_enable_promotes_a_private_workspace(tmp_path, monkeypatch):
     assert again == new_id and promoted2 is False
 
 
+def test_unshare_moves_a_shared_workspace_back_to_private(tmp_path):
+    from control_plane.workspace_attach import ensure_workspace_private, active_workspaces
+    idx = _grant(tmp_path, "wsA", owner="owner1", subject="member1", role="contributor")
+    assert (tmp_path / "wsA").exists()
+
+    new_slug = ensure_workspace_private(tmp_path, "owner1", "wsA")   # owner un-shares
+
+    assert not (tmp_path / "wsA").exists()                           # the top-level shared ws is gone...
+    assert (tmp_path / ".attached" / "owner1" / new_slug).exists()   # ...moved into the owner's private store
+    assert new_slug in [m.slug for m in active_workspaces(tmp_path, "owner1")]
+    # dropping the index entry (route does this) → shared_active_mounts no longer surfaces it for the member
+    from control_plane.workspace_attach import shared_active_mounts
+    assert shared_active_mounts(tmp_path, "member1", idx.list("member1")) == []   # ws_dir gone → not mounted
+
+
 def test_cannot_share_the_private_baseline(tmp_path):
     import pytest
     from control_plane.workspace_attach import ensure_workspace_shareable

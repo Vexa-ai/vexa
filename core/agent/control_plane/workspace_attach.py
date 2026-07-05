@@ -469,6 +469,28 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
     return new_id, True
 
 
+def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) -> str:
+    """UN-SHARE — the mirror of ``ensure_workspace_shareable``. Move a top-level shared workspace back into
+    the caller's private store as a normal workspace (git history intact) and return its new private slug.
+    The caller must be the owner (the route enforces it); membership records are cleaned up by the caller.
+    After this, the workspace is private again — other members lose access (its top-level path is gone)."""
+    rootp = Path(root).resolve()
+    _safe_subject_dir(rootp, subject)
+    ws = (rootp / workspace_id).resolve()
+    if not ws.exists() or rootp not in ws.parents:
+        raise KeyError(workspace_id)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    new_slug = _unique_new_slug(state)
+    slot_dir = store / new_slug
+    slot_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(ws), str(slot_dir))  # re-home the tree into the private .attached store
+    state["slots"][new_slug] = {"repo": None, "ref": None, "name": workspace_id}  # keep the name as the label
+    state["active_set"] = _normalized_active_set({**state, "active_set": [*state.get("active_set", []), new_slug]})
+    _save_state(store, state)
+    return new_slug
+
+
 def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]) -> list[ActiveMount]:
     """The SHARED workspaces the subject is a MEMBER of (Lane A) — the seam that turns a membership grant
     into a mount in the active set. ``memberships`` is the derived index ``users.data.memberships[]`` (each
