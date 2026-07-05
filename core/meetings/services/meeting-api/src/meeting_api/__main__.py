@@ -250,28 +250,32 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
 
     async def _stop_reconcile_loop() -> None:
         # Complete meetings stuck in `stopping` past the grace window AND kill any orphan workload (CC6 /
-        # ADR-0024) — through the importable reconcile sweep, reusing the bot's OWN lifecycle callback so
-        # the FSM → persist → webhook → ws-publish path fires identically (no duplicate logic).
+        # ADR-0024) — through the importable reconcile sweep, reusing the SAME in-process lifecycle logic
+        # so the FSM → persist → webhook → ws-publish path fires identically (no duplicate logic).
         if meeting_repo is None or not hasattr(meeting_repo, "list_stale_stopping"):
             return
-        import httpx
-
+        from .lifecycle.machine import TransitionSource as _TS
         from .lifecycle.reconcile import (
             reconcile_stale_nonterminal_sweep,
             reconcile_stale_stopping_sweep,
         )
 
-        port = int(os.getenv("PORT", "8080"))
-        callback = f"http://127.0.0.1:{port}/bots/internal/callback/lifecycle"
-        secret = os.getenv("INTERNAL_API_SECRET")
-        headers = {"content-type": "application/json"}
-        if secret:
-            headers["x-internal-secret"] = secret
+        # Drive the sweep's synthetic terminals through the in-process lifecycle entry — NOT an httpx
+        # POST to 127.0.0.1:PORT. The sweeps only ever post a TERMINAL status after their own evidence
+        # gate (confirmed teardown / bounded untracked escalation), so they are a runtime-destroy-class
+        # advance: `force_terminal_on_destroy=True` lets the terminal edge land even when the in-process
+        # FSM record is a stale non-terminal state the DB already moved past (the loopback self-POST
+        # 409'd on exactly that — `joining → completed` for a bot stopped before it reported active —
+        # leaving the meeting `stopping` and the reaper re-DELETEing every tick forever).
+        apply_lifecycle_event = app.state.apply_lifecycle_event
 
         async def _post_lifecycle(body: dict):
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.post(callback, json=body, headers=headers)
-                return r.status_code
+            status_code, _content = await apply_lifecycle_event(
+                body,
+                transition_source=_TS.RUNTIME_DESTROY,
+                force_terminal_on_destroy=True,
+            )
+            return status_code
 
         # The general sweep (any stale non-terminal status whose bot is gone) subsumes the stale-
         # stopping sweep, but we keep the latter as the guaranteed orphan-kill backstop for `stopping`.

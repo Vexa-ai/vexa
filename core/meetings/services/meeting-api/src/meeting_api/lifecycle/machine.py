@@ -69,6 +69,14 @@ class TransitionSource(str, Enum):
     BOT_CALLBACK = "bot_callback"
     USER_STOP = "user_stop"
     SCHEDULER_TIMEOUT = "scheduler_timeout"
+    # A synthetic terminal driven by RUNTIME-CONFIRMED workload destruction (the runtime kernel
+    # posted `state=destroyed`/`exited`/… for the bot's workload) rather than the bot's own callback.
+    # This is real teardown evidence (#50's principle) that the run is over, and it is the ONLY source
+    # permitted to force the terminal edge from a was-active/pre-active state whose in-process FSM
+    # record is stale (e.g. the store still reads `joining` because the bot was stopped/SIGKILLed
+    # before it could report `active`, while the DB user-stop moved the meeting to `stopping`). See
+    # `LifecycleSink.apply_change(..., force_terminal_on_destroy=True)`.
+    RUNTIME_DESTROY = "runtime_destroy"
 
 
 # The machine. Reduced from the parent's `get_valid_status_transitions` to the bot's
@@ -340,7 +348,20 @@ class LifecycleSink:
         event: Dict[str, Any],
         *,
         transition_source: TransitionSource = TransitionSource.BOT_CALLBACK,
+        force_terminal_on_destroy: bool = False,
     ) -> StatusChange:
+        """Advance the FSM for `event`, returning the resulting `StatusChange`.
+
+        `force_terminal_on_destroy` (only ever set by the runtime-destroy synthetic-terminal path,
+        `TransitionSource.RUNTIME_DESTROY`) permits the terminal edge (`completed`/`failed`) from ANY
+        non-terminal FSM state — including one from which a bot-driven terminal would be illegal (e.g.
+        `joining → completed`, when the store still reads `joining` because the bot was stopped/killed
+        in the waiting room before it could report `active`, while the DB user-stop already moved the
+        meeting to `stopping`). This is safe and narrow: it fires ONLY on runtime-confirmed workload
+        destruction (real teardown evidence), ONLY targets a terminal state, and STILL respects
+        idempotency + terminal-is-terminal below (a completed/failed record is never re-opened, and a
+        DIFFERENT terminal on an already-terminal record is still rejected). Bot-driven transitions
+        (the default) are unaffected — the machine is not loosened for real lifecycle events."""
         connection_id = event["connection_id"]
         to = BotStatus(event["status"])
         rec = self.store.get_or_create(connection_id)
@@ -364,9 +385,19 @@ class LifecycleSink:
         if rec.is_terminal:
             # Terminal is terminal — no event re-opens a completed/failed record (and a transition to
             # a DIFFERENT terminal is rejected). Same-terminal redelivery handled by the no-op above.
+            # This holds even for a runtime-destroy synthetic terminal: the bot's own terminal callback
+            # (or a prior reap) is authoritative once it has landed.
             raise IllegalTransition(connection_id, rec.status, to)
 
-        if not can_transition(rec.status, to):
+        # RUNTIME-DESTROY synthetic terminal: real teardown evidence forces the terminal edge from any
+        # NON-terminal state, even one from which a bot-driven terminal would be illegal (e.g.
+        # `joining → completed` on a bot stopped/killed before it reported `active`). Without this the
+        # synthetic `completed`/`failed` the runtime-callback drives is rejected 409, the meeting stays
+        # `stopping`, and the stop-reconcile sweep re-DELETEs (now 404) every ~15s FOREVER (the reaper
+        # loop). Guarded: ONLY a terminal target, ONLY this source — never loosens bot-driven edges.
+        if force_terminal_on_destroy and to in _TERMINAL:
+            pass  # legal by teardown evidence; fall through to the advance
+        elif not can_transition(rec.status, to):
             raise IllegalTransition(connection_id, rec.status, to)
 
         frm = rec.status
