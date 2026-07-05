@@ -87,8 +87,11 @@ export const authOptions: AuthOptions = {
       cookieStore.set(USER_INFO_COOKIE, JSON.stringify({ email: result.user.email, name: displayName }), opts);
       return true;
     },
-    // Land back on the workbench; AuthGate's /api/auth/me poll then sees the cookie and renders.
-    async redirect({ baseUrl }) {
+    // Land back on the workbench, HONORING a same-origin callbackUrl so an invite link's ?invite=<token>
+    // survives the OAuth round-trip (InviteRedeemer then redeems it post-auth). Off-origin URLs → baseUrl.
+    async redirect({ url, baseUrl }) {
+      if (url.startsWith("/")) return `${baseUrl}${url}`;
+      if (url.startsWith(baseUrl)) return url;
       return baseUrl;
     },
   },

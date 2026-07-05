@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import re
+import secrets
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -368,6 +369,32 @@ def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
             primary=(slug == primary),
         ))
     return mounts
+
+
+def _slugify_name(name: str) -> str:
+    """A safe workspace-id base from a human name: lowercase alnum, spaces/punct → '-', trimmed."""
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return s[:40] or "shared"
+
+
+def create_shared_workspace_dir(root: str | Path, name: str) -> str:
+    """CREATE a new TOP-LEVEL shared workspace at ``<root>/<workspace_id>`` (where shared workspaces are
+    addressed — NOT under a subject's .attached store), git-inited + seeded from the layout template.
+    Returns the fresh ``workspace_id``. Ownership is NOT set here — the caller (the /shared/new route)
+    calls ``workspace_membership.ensure_owner`` next, so dir-creation (attach domain) and the owner grant
+    (membership domain) stay separated. Materialize-then-move so a seed failure leaves the root untouched."""
+    rootp = Path(root)
+    base = _slugify_name(name)
+    wid = f"{base}-{secrets.token_hex(3)}"
+    while (rootp / wid).exists():
+        wid = f"{base}-{secrets.token_hex(3)}"
+    staged = rootp / f".staging-shared-{wid}"
+    if staged.exists():
+        shutil.rmtree(staged)
+    _reseed(staged)  # git init + seed the layout template
+    (rootp / wid).parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(staged), str(rootp / wid))
+    return wid
 
 
 def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]) -> list[ActiveMount]:

@@ -16,7 +16,22 @@ import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
 import { meetingsOnly } from "./mode";
+import { acceptInvite } from "../surfaces/workspaceApi";
 import "../surfaces";
+
+/** Post-auth invite redeem (Lane M/A): if the URL carries ?invite=<token>, redeem it into a membership
+ *  ONCE the user is authenticated (this only mounts inside AuthGate's authed subtree), then reload without
+ *  the token so the shared workspace appears. Rendered as null — it's an effect, not UI. */
+function InviteRedeemer() {
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("invite");
+    if (!token) return;
+    void acceptInvite(token)
+      .catch((e) => console.error("invite redeem failed:", e))
+      .finally(() => window.location.replace(window.location.pathname));  // drop ?invite= + reload
+  }, []);
+  return null;
+}
 
 const container = createContainer([
   reg(ContextKeyServiceId, () => createContextKeyService()),
@@ -37,6 +52,7 @@ export function App() {
   if (!mounted) return <div style={{ height: "100vh", background: "var(--bg)" }} />;
   return (
     <AuthGate>
+      <InviteRedeemer />
       <OnboardingGate>
         <ServicesProvider container={container}>
           <Workbench />

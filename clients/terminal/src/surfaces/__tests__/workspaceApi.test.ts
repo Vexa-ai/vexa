@@ -42,6 +42,23 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
     expect(await readWorkspaceFile("kg/x.md", { slug: "wsA" })).toBe("shared");
     expect(lastUrl()).toBe("/api/workspace/file?path=kg%2Fx.md&slug=wsA");
   });
+  it("share flow: createSharedWorkspace / mintInvite / acceptInvite POST the right bodies", async () => {
+    const { createSharedWorkspace, mintInvite, acceptInvite } = await import("../workspaceApi");
+    mock(true, 201, { workspace_id: "deal-room-ab12cd", role: "owner", name: "Deal Room" });
+    expect((await createSharedWorkspace("Deal Room")).workspace_id).toBe("deal-room-ab12cd");
+    expect(lastUrl()).toBe("/api/workspace/shared/new");
+    expect(lastBody()).toEqual({ name: "Deal Room" });
+
+    mock(true, 201, { id: "i1", token: "TOK", role: "contributor", workspace_id: "deal-room-ab12cd", expires_at: "", max_uses: 50, mode: "open" });
+    await mintInvite({ workspace_id: "deal-room-ab12cd", role: "contributor", mode: "open", max_uses: 50, expires_in_sec: 604800 });
+    expect(lastUrl()).toBe("/api/workspace/invites");
+    expect(lastBody()).toMatchObject({ workspace_id: "deal-room-ab12cd", role: "contributor", mode: "open", max_uses: 50 });
+
+    mock(true, 200, { workspace_id: "deal-room-ab12cd", role: "contributor", already_member: false });
+    expect((await acceptInvite("TOK")).already_member).toBe(false);
+    expect(lastUrl()).toBe("/api/workspace/invites/accept");
+    expect(lastBody()).toEqual({ token: "TOK" });
+  });
   it("readWorkspaceGit returns a valid GitState on 200", async () => {
     mock(true, 200, { branch: "main", changes: [], commits: [] });
     expect((await readWorkspaceGit()).branch).toBe("main");

@@ -41,6 +41,7 @@ from control_plane.workspace_attach import (
     activate_workspace,
     active_workspaces,
     attached_workspaces,
+    create_shared_workspace_dir,
     create_workspace,
     deactivate_workspace,
     rename_workspace,
@@ -281,6 +282,13 @@ class RoleSetBody(BaseModel):
     """Flip a member's role (owner only) — the "change read/write permissions" DoD item."""
     model_config = {"extra": "forbid"}
     role: str                            # viewer | contributor | owner
+
+
+class SharedNewBody(BaseModel):
+    """CREATE a new shared workspace (top-level, caller becomes owner) — the bootstrap that makes a
+    workspace shareable so invites can be minted against it. ``name`` → display + workspace-id base."""
+    model_config = {"extra": "forbid"}
+    name: str = "Shared workspace"
 
 
 class WorkspaceActivateBody(BaseModel):
@@ -1240,6 +1248,22 @@ def create_app(
 
     def _member_error(exc: MembershipError):
         return HTTPException(status_code=exc.status, detail=str(exc))
+
+    @app.post("/api/workspace/shared/new", status_code=201)
+    def ws_shared_new(request: Request, body: SharedNewBody = Body(default=SharedNewBody())):
+        """CREATE a new shared workspace and make the caller its OWNER — the bootstrap for the share flow.
+        A fresh top-level workspace (git-inited + seeded) is created at <root>/<workspace_id>; the caller is
+        granted owner in BOTH stores (policy/members.json + the index). The caller can then mint invites."""
+        subject = subject_of(request)
+        try:
+            wid = create_shared_workspace_dir(wsr.root, body.name)
+            membership_mod.ensure_owner(wsr.root, wid, subject, index=mindex, commit_fn=_pc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        except Exception as exc:  # noqa: BLE001 — surface a clean 500 (dir/seed failure) rather than a stack
+            logger.exception("shared-workspace create failed for subject=%s", subject)
+            raise HTTPException(status_code=500, detail="could not create shared workspace")
+        return {"workspace_id": wid, "role": "owner", "name": body.name}
 
     @app.post("/api/workspace/invites", status_code=201)
     def ws_invite_create(request: Request, body: InviteCreateBody = Body(...)):

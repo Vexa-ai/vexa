@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, createSharedWorkspace, mintInvite, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -340,6 +340,9 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const [published, setPublished] = useState<PublishResult | null>(null);  // last publish success (repo URL shown)
   const [renaming, setRenaming] = useState<string | null>(null);  // slug whose name is being edited inline
   const cancelled = useRef(false);  // Escape vs Enter/blur on the rename input (blur fires for both)
+  // Share dialog (Lane M/A): non-null = the workspace_id being shared; carries the invite terms + the minted link.
+  const [share, setShare] = useState<{ wsId: string; role: string; mode: string; emails: string; ttlDays: number; link: string | null } | null>(null);
+  const [newSharedName, setNewSharedName] = useState<string | null>(null);  // non-null = the "new shared workspace" name form is shown
   const load = () => {
     void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
     void readActiveSet().then((s) => setActiveSet(s.active)).catch(() => { /* active-set is additive UI; a failure just leaves the toggles at the baseline */ });
@@ -392,6 +395,33 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     setBusy(true); setErr(null);
     try { setView(await renameWorkspace(slug, name.trim())); setRenaming(null); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); setRenaming(null); }
+    finally { setBusy(false); }
+  };
+
+  // CREATE a shared workspace (caller becomes owner) and immediately open the Share dialog for it.
+  const doNewShared = async (name: string) => {
+    setBusy(true); setErr(null);
+    try {
+      const { workspace_id } = await createSharedWorkspace(name.trim() || "Shared workspace");
+      setNewSharedName(null); load(); onSwapped();
+      setShare({ wsId: workspace_id, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null });
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  // MINT an invite for the shared workspace and turn it into a copyable link (open/restricted, role, TTL).
+  const doMintLink = async (s: NonNullable<typeof share>) => {
+    setBusy(true); setErr(null);
+    try {
+      const emails = s.mode === "restricted"
+        ? s.emails.split(/[,\s]+/).map((e) => e.trim()).filter(Boolean) : undefined;
+      const minted = await mintInvite({
+        workspace_id: s.wsId, role: s.role, mode: s.mode,
+        expires_in_sec: s.ttlDays * 86400, max_uses: s.mode === "open" ? 50 : 1, allowed_emails: emails,
+      });
+      const link = `${window.location.origin}/?invite=${encodeURIComponent(minted.token)}`;
+      setShare({ ...s, link });
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
 
@@ -470,6 +500,24 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             </div>
           );
         })}
+        {/* SHARED workspaces (member-of) — listed here too, not only in KNOWLEDGE. Read-only rows (you don't
+            park/rename/publish a shared ws); owner/contributor gets a Share action to mint an invite link. */}
+        {activeSet.filter((m) => m.role === "shared").map((m) => (
+          <div key={`shared:${m.slug}`}
+            style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12 }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+            <Icon name="folder" size={12} style={{ color: "var(--t3)", flex: "none" }} />
+            <span style={{ flex: 1, color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.slug}</span>
+            <span style={{ flex: "none", fontSize: 9.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>
+              shared{m.write ? "" : " · read-only"}
+            </span>
+            <span onClick={() => setShare({ wsId: m.slug, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null })}
+              title="Share this workspace — create an invite link"
+              style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
+              <Icon name="upload" size={12} />
+            </span>
+          </div>
+        ))}
         {form === null ? (
           <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
             <Icon name="plus" size={12} /> Attach repo…
@@ -503,6 +551,65 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
           <Icon name="plus" size={12} /> New workspace…
         </div>
+        {/* New SHARED workspace — creates a workspace you own that others can be invited to, then opens Share. */}
+        {newSharedName === null ? (
+          <div onClick={() => { if (!busy) setNewSharedName(""); }}
+            title="New shared workspace — create one you own and invite others"
+            style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
+            <Icon name="plus" size={12} /> New shared workspace…
+          </div>
+        ) : (
+          <div style={{ padding: "6px 9px", display: "flex", gap: 6 }}>
+            <input autoFocus value={newSharedName} placeholder="shared workspace name" disabled={busy}
+              onChange={(e) => setNewSharedName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void doNewShared(newSharedName); if (e.key === "Escape") setNewSharedName(null); }}
+              style={{ flex: 1, fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+            <button disabled={busy} onClick={() => void doNewShared(newSharedName)}
+              style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>Create</button>
+          </div>
+        )}
+        {/* SHARE dialog — mint an invite link (open/restricted · role · TTL) and copy it. */}
+        {share !== null && (
+          <div style={{ padding: "8px 9px", display: "flex", flexDirection: "column", gap: 7, borderTop: "1px solid var(--line)", marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Share “{share.wsId}”</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <select value={share.role} disabled={busy} onChange={(e) => setShare({ ...share, role: e.target.value, link: null })}
+                style={{ flex: 1, fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }}>
+                <option value="viewer">viewer (read)</option>
+                <option value="contributor">contributor (read+write)</option>
+              </select>
+              <select value={share.mode} disabled={busy} onChange={(e) => setShare({ ...share, mode: e.target.value, link: null })}
+                style={{ flex: 1, fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }}>
+                <option value="open">anyone with link</option>
+                <option value="restricted">restricted (emails)</option>
+              </select>
+              <select value={share.ttlDays} disabled={busy} onChange={(e) => setShare({ ...share, ttlDays: Number(e.target.value), link: null })}
+                style={{ fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }}>
+                <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
+              </select>
+            </div>
+            {share.mode === "restricted" && (
+              <input value={share.emails} placeholder="allowed emails (comma-separated)" disabled={busy}
+                onChange={(e) => setShare({ ...share, emails: e.target.value, link: null })}
+                style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+            )}
+            {share.link ? (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input readOnly value={share.link} onFocus={(e) => e.currentTarget.select()}
+                  style={{ flex: 1, fontSize: 11.5, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t2)" }} />
+                <button onClick={() => void copyText(share.link!)}
+                  style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer" }}>Copy</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button disabled={busy} onClick={() => void doMintLink(share)}
+                  style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>{busy ? "Creating…" : "Create link"}</button>
+                <button disabled={busy} onClick={() => setShare(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+              </div>
+            )}
+            {share.link && <div onClick={() => setShare(null)} style={{ fontSize: 11, color: "var(--t3)", cursor: "pointer", alignSelf: "flex-end" }}>Done</div>}
+          </div>
+        )}
         {/* Publish / push-updates form — opened from the ACTIVE row's ↑ action (no list-level trigger:
             publish is an action on the active workspace, not a new list entry). Push-updates mode
             (remoteUrl set) skips repo creation: token only, plain push to the published home. */}

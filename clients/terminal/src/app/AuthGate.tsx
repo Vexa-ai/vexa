@@ -76,12 +76,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>Sign in to continue.</div>
 
         {providers.google && (
-          <button onClick={() => signIn("google", { callbackUrl: "/" })} style={oauthBtn}>
+          <button onClick={() => signIn("google", { callbackUrl: window.location.pathname + window.location.search })} style={oauthBtn}>
             <GoogleMark /> Continue with Google
           </button>
         )}
         {providers.microsoft && (
-          <button onClick={() => signIn("microsoft", { callbackUrl: "/" })} style={oauthBtn}>
+          <button onClick={() => signIn("microsoft", { callbackUrl: window.location.pathname + window.location.search })} style={oauthBtn}>
             <MicrosoftMark /> Continue with Microsoft
           </button>
         )}

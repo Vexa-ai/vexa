@@ -49,6 +49,43 @@ export async function readActiveSet(): Promise<ActiveSet> {
   return getJson(`/api/workspace/active`);
 }
 
+// ── sharing (Lane M/Lane A): create a shared workspace, mint/redeem invites ──────────────────────
+export interface Membership { workspace_id: string; role: string; added_at?: string }
+export interface MintedInvite { id: string; token: string; role: string; workspace_id: string; expires_at: string; max_uses: number; mode: string }
+
+/** CREATE a new shared workspace and make the caller its OWNER (the bootstrap that makes a workspace
+ *  shareable). Returns the fresh workspace_id — invites can then be minted against it. */
+export async function createSharedWorkspace(name: string): Promise<{ workspace_id: string; role: string; name: string }> {
+  return getJson(`/api/workspace/shared/new`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+  });
+}
+
+/** MINT a scoped invite for a shared workspace (owner/contributor). The token is returned ONCE. */
+export async function mintInvite(opts: { workspace_id: string; role?: string; mode?: string; expires_in_sec?: number; max_uses?: number; allowed_emails?: string[] }): Promise<MintedInvite> {
+  return getJson(`/api/workspace/invites`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: opts.workspace_id, role: opts.role ?? "contributor", mode: opts.mode ?? "open",
+      expires_in_sec: opts.expires_in_sec ?? 604800, max_uses: opts.max_uses ?? 1,
+      allowed_emails: opts.allowed_emails ?? null,
+    }),
+  });
+}
+
+/** REDEEM an invite token (any logged-in user) → membership. Idempotent per user. */
+export async function acceptInvite(token: string): Promise<{ workspace_id: string; role: string; already_member: boolean }> {
+  return getJson(`/api/workspace/invites/accept`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
+  });
+}
+
+/** The "workspaces shared with me" listing (the derived index — users.data.memberships[]). */
+export async function listSharedMemberships(): Promise<Membership[]> {
+  const data = await getJson<{ memberships?: Membership[] }>(`/api/workspace/shared`);
+  return data.memberships ?? [];
+}
+
 /** ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap): the
  *  private baseline and any other active workspaces stay mounted. Pass `repo` to clone/restore a git repo,
  *  or `slug` to activate an already-parked slot. Idempotent — an already-active workspace is a no-op.

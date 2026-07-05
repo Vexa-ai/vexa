@@ -190,6 +190,40 @@ def test_non_member_is_refused_shared_tree_and_file(tmp_path):
     assert file.status_code == 403          # ...nor read its files by slug
 
 
+# ── the full share flow: create shared ws (bootstrap) → mint → accept → appears for the new member ──
+def test_share_flow_create_mint_accept(tmp_path, monkeypatch):
+    # a minimal seed template so create_shared_workspace_dir can seed the new ws
+    seed = tmp_path / "_seed"; (seed / "kg" / "entities").mkdir(parents=True); (seed / "index.md").write_text("# seed\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    idx = m.InMemoryMembershipIndex()
+    client = _client(tmp_path, index=idx)
+
+    # 1) owner creates a shareable workspace (bootstrap)
+    created = client.post("/api/workspace/shared/new", json={"name": "Deal Room"}, headers=_h("owner1"))
+    assert created.status_code == 201
+    wid = created.json()["workspace_id"]
+    assert wid.startswith("deal-room-")
+    assert m.is_member(tmp_path, wid, "owner1") == "owner"     # caller is owner in the authoritative store
+
+    # 2) owner mints an open contributor invite
+    minted = client.post("/api/workspace/invites",
+                         json={"workspace_id": wid, "role": "contributor", "mode": "open", "max_uses": 5},
+                         headers=_h("owner1"))
+    assert minted.status_code == 201
+    token = minted.json()["token"]
+
+    # 3) a brand-new user redeems it → membership
+    before = client.get("/api/workspace/active", headers=_h("newbie")).json()["active"]
+    assert all(x["slug"] != wid for x in before)
+    accepted = client.post("/api/workspace/invites/accept", json={"token": token}, headers=_h("newbie"))
+    assert accepted.status_code == 200 and accepted.json()["already_member"] is False
+
+    # 4) the shared ws now shows in the new member's active set
+    after = client.get("/api/workspace/active", headers=_h("newbie")).json()["active"]
+    shared = [x for x in after if x["slug"] == wid]
+    assert shared and shared[0]["role"] == SHARED_ROLE
+
+
 # ── the reader can read ANY workspace dir under root by path (own .attached slots + shared ws) ─────
 def test_reader_reads_any_dir_under_root_and_guards_traversal(tmp_path):
     import pytest
