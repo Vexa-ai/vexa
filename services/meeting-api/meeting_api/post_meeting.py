@@ -377,6 +377,19 @@ async def run_all_tasks(meeting_id: int):
     except Exception as e:
         logger.error(f"AI notes generation failed for meeting {meeting_id}: {e}", exc_info=True)
 
+    # Task 5 (Phase 2 MVP): Speaker diarization
+    try:
+        from .diarization_service import run_diarization
+        async with async_session_local() as db:
+            result = await run_diarization(meeting_id, db)
+            await db.commit()
+            logger.info(
+                f"[Post-meeting] Task 5: diarization completed for meeting {meeting_id}: "
+                f"{result.get('total_speakers', 0)} speakers, {result.get('updated_count', 0)} segments updated"
+            )
+    except Exception as e:
+        logger.error(f"Speaker diarization failed for meeting {meeting_id}: {e}", exc_info=True)
+
     logger.info(f"Post-meeting tasks completed for meeting {meeting_id}")
 
 
