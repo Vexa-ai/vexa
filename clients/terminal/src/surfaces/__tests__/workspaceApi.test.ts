@@ -2,7 +2,7 @@
  *  error throws, a malformed git body throws (never reaches GitSection as a fake GitState), and a 404
  *  file read is the one legit "empty" → null. */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, publishWorkspace } from "../workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace } from "../workspaceApi";
 import { ApiError } from "../apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -91,5 +91,31 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
     await renameWorkspace("seed", "Home");
     expect(lastUrl()).toBe("/api/workspace/rename");
     expect(lastBody()).toEqual({ slug: "seed", name: "Home" });
+  });
+
+  // ── the additive active set (WP-A2.1) ──────────────────────────────────────
+  it("readActiveSet GETs /api/workspace/active — the ordered mount set (primary first)", async () => {
+    mock(true, 200, { subject: "u1", active: [{ slug: "seed", repo: null, ref: null, role: "private", path: "/w/u1", write: true, primary: true }] });
+    const s = await readActiveSet();
+    expect(lastUrl()).toBe("/api/workspace/active");
+    expect(s.active[0].primary).toBe(true);
+  });
+  it("activateWorkspace POSTs repo/ref/slug/token to /api/workspace/activate (ADD to the set)", async () => {
+    mock(true, 200, { subject: "u1", slug: "shared-x", changed: true, cloned: true, nested: false });
+    await activateWorkspace({ repo: "https://h/r.git", ref: "dev", token: "TOK" });
+    expect(lastUrl()).toBe("/api/workspace/activate");
+    expect(lastBody()).toEqual({ repo: "https://h/r.git", ref: "dev", slug: null, token: "TOK" });
+    await activateWorkspace({ slug: "seed" });  // re-activate a parked slot, no repo
+    expect(lastBody()).toEqual({ repo: null, ref: null, slug: "seed", token: null });
+  });
+  it("deactivateWorkspace POSTs {slug} to /api/workspace/deactivate (park)", async () => {
+    mock(true, 200, { subject: "u1", slug: "shared-x", changed: true });
+    await deactivateWorkspace("shared-x");
+    expect(lastUrl()).toBe("/api/workspace/deactivate");
+    expect(lastBody()).toEqual({ slug: "shared-x" });
+  });
+  it("FAIL-LOUD: deactivating the private baseline throws (409 from the backend)", async () => {
+    mock(false, 409, { detail: "the private baseline workspace is always active" });
+    await expect(deactivateWorkspace("seed")).rejects.toBeInstanceOf(ApiError);
   });
 });

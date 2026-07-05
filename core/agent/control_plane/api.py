@@ -34,7 +34,15 @@ from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
-from control_plane.workspace_attach import CloneError, attached_workspaces, rename_workspace, swap_workspace
+from control_plane.workspace_attach import (
+    CloneError,
+    activate_workspace,
+    active_workspaces,
+    attached_workspaces,
+    deactivate_workspace,
+    rename_workspace,
+    swap_workspace,
+)
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
@@ -244,6 +252,24 @@ class WorkspaceRenameBody(BaseModel):
     model_config = {"extra": "forbid"}
     slug: str
     name: Optional[str] = None
+
+
+class WorkspaceActivateBody(BaseModel):
+    """ADD a workspace to the subject's active set (the additive mount set — WP-A2.1). Pass ``repo`` to
+    clone/restore a git repo, or ``slug`` to activate an already-parked slot. Unlike swap it does NOT park
+    the others — the private baseline and any other active workspaces stay mounted."""
+    model_config = {"extra": "forbid"}
+    repo: Optional[str] = None   # git URL to clone (first time) / restore (thereafter)
+    ref: Optional[str] = None    # branch/tag/sha (defaults to main)
+    slug: Optional[str] = None   # activate an already-parked slot directly (no repo needed)
+    token: Optional[str] = None  # access token for a PRIVATE repo — clone only, never stored (P15)
+
+
+class WorkspaceDeactivateBody(BaseModel):
+    """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot be
+    deactivated (it is the subject's durable memory root)."""
+    model_config = {"extra": "forbid"}
+    slug: str
 
 
 class MeetingStart(BaseModel):
@@ -811,6 +837,56 @@ def create_app(
             "parked": result.parked_slug,
             "nested": result.nested,
         }
+
+    # ── the additive mount set (WP-A2.1): ACTIVE-SET membership over swap's park/restore machinery ──────
+    @app.get("/api/workspace/active")
+    def ws_active(request: Request):
+        """The subject's ordered ACTIVE SET — the workspaces the next dispatch mounts (the private baseline
+        first, then any activated extras). Each: ``slug, repo, ref, role, path, write, primary``."""
+        subject = subject_of(request)
+        try:
+            mounts = active_workspaces(wsr.root, subject)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        return {
+            "subject": subject,
+            "active": [
+                {"slug": m.slug, "repo": m.repo, "ref": m.ref, "role": m.role,
+                 "path": m.path, "write": m.write, "primary": m.primary}
+                for m in mounts
+            ],
+        }
+
+    @app.post("/api/workspace/activate")
+    def ws_activate(request: Request, body: WorkspaceActivateBody = Body(default=WorkspaceActivateBody())):
+        """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
+        Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
+        subject = subject_of(request)
+        try:
+            result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                        slug=body.slug or None, token=body.token or None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown workspace")
+        except CloneError as exc:
+            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+        return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
+                "cloned": result.cloned, "nested": result.nested}
+
+    @app.post("/api/workspace/deactivate")
+    def ws_deactivate(request: Request, body: WorkspaceDeactivateBody = Body(...)):
+        """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot
+        be deactivated (409). Idempotent — a not-active slug is a no-op."""
+        subject = subject_of(request)
+        try:
+            result = deactivate_workspace(wsr.root, subject, body.slug)
+        except ValueError as exc:
+            # invalid subject vs the non-deactivatable baseline — distinguish by message
+            if "baseline" in str(exc):
+                raise HTTPException(status_code=409, detail="the private baseline workspace is always active")
+            raise HTTPException(status_code=400, detail="invalid subject")
+        return {"subject": result.subject, "slug": result.slug, "changed": result.changed}
 
     @app.post("/api/workspace/publish")
     def ws_publish(request: Request, body: WorkspacePublishBody = Body(...)):

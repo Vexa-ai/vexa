@@ -462,6 +462,110 @@ def test_run_turn_persists_namespaced_session_file(tmp_path):
     assert not (tmp_path / ".claude" / ".session").exists()  # never touched the legacy single-thread file
 
 
+def test_active_mounts_reads_the_set_and_falls_back_to_baseline(monkeypatch, tmp_path):
+    from worker import worker
+    # explicit set
+    mounts = [{"slug": "seed", "path": str(tmp_path / "u1"), "role": "private", "write": True, "primary": True},
+              {"slug": "shared-x", "path": str(tmp_path / "shared"), "role": "private", "write": True, "primary": False}]
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps(mounts))
+    got = worker.active_mounts()
+    assert [m["slug"] for m in got] == ["seed", "shared-x"]
+    # fallback: no VEXA_MOUNTS → the single private baseline from VEXA_WORKSPACE_PATH
+    monkeypatch.delenv("VEXA_MOUNTS", raising=False)
+    monkeypatch.setenv("VEXA_WORKSPACE_PATH", "/workspaces/u1")
+    base = worker.active_mounts()
+    assert len(base) == 1 and base[0]["primary"] is True and base[0]["path"] == "/workspaces/u1"
+
+
+def test_mounts_preamble_declares_each_mount_or_stays_empty():
+    from worker import worker
+    # single mount → no preamble (nothing to disambiguate)
+    assert worker.mounts_preamble([{"slug": "seed", "path": "/w/u1", "primary": True, "write": True}]) == ""
+    # multi-mount → declares paths, slugs, roles + the write-routing policy
+    txt = worker.mounts_preamble([
+        {"slug": "seed", "path": "/w/u1", "role": "private", "write": True, "primary": True},
+        {"slug": "shared-x", "path": "/w/.attached/u1/shared-x", "role": "shared", "write": False, "primary": False},
+    ])
+    assert "/w/u1" in txt and "seed" in txt and "PRIVATE baseline" in txt
+    assert "/w/.attached/u1/shared-x" in txt and "READ-ONLY" in txt
+    assert "Write-routing policy" in txt
+
+
+def test_mounts_preamble_declares_the_three_tiers_verbatim():
+    """The three-tier stack (AMENDMENT 4) is declared to the model with each mount's TIER + write-rule so
+    it never guesses where it may write: _global READ-ONLY, _system read-write, the private baseline."""
+    from worker import worker
+    txt = worker.mounts_preamble([
+        {"slug": "_global", "path": "/w/_global", "role": "global", "write": False, "primary": False},
+        {"slug": "seed", "path": "/w/u1", "role": "private", "write": True, "primary": True},
+        {"slug": "_system", "path": "/w/.system/u1", "role": "system", "write": True, "primary": False},
+    ])
+    assert "/w/_global" in txt and "GLOBAL SYSTEM" in txt and "READ-ONLY" in txt
+    assert "/w/.system/u1" in txt and "PRIVATE SYSTEM" in txt
+    assert "PRIVATE baseline" in txt
+    # the routing policy names both system tiers explicitly
+    assert "`_global`" in txt and "`_system`" in txt
+
+
+def test_read_only_global_mount_is_never_committed(tmp_path, monkeypatch):
+    """The _global GLOBAL SYSTEM tier is READ-ONLY: even if it appears in VEXA_MOUNTS it must be EXCLUDED
+    from the per-mount commit path (agents never write, thus never commit, _global)."""
+    from worker import engine
+    private = tmp_path / "u1"; private.mkdir()
+    glob = tmp_path / "global"; glob.mkdir()
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps([
+        {"slug": "_global", "path": str(glob), "role": "global", "write": False, "primary": False},
+        {"slug": "seed", "path": str(private), "role": "private", "write": True, "primary": True},
+    ]))
+    # the read-only _global path is not among the writable extras the commit loop touches
+    assert engine._extra_mount_paths(private) == []
+
+
+def test_run_turn_declares_mounts_and_commits_extras_with_principal(tmp_path, monkeypatch):
+    """End to end at the worker seam: a chat turn with a SECOND active mount declares both to the model
+    (the preamble rides the prompt) and commits the extra mount, authored by the principal."""
+    import subprocess
+    import unittest.mock as mock
+    from worker import worker
+
+    private = tmp_path / "u1"; private.mkdir()
+    shared = tmp_path / "shared"; shared.mkdir()
+    for d in (shared,):  # the extra mount is a real repo (the primary is seeded by _ensure_repo)
+        subprocess.run(["git", "init", "-q"], cwd=str(d), check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(d), check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=str(d), check=True)
+        (d / "seed.md").write_text("x")
+        subprocess.run(["git", "add", "-A"], cwd=str(d), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(d), check=True)
+
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps([
+        {"slug": "seed", "path": str(private), "role": "private", "write": True, "primary": True},
+        {"slug": "shared-x", "path": str(shared), "role": "private", "write": True, "primary": False},
+    ]))
+    monkeypatch.setenv("VEXA_PRINCIPAL_NAME", "Jane Doe")
+    monkeypatch.setenv("VEXA_PRINCIPAL_EMAIL", "jane@example.com")
+    seen: dict = {}
+
+    def fake_exec(argv, cwd):
+        seen["prompt"] = argv[2] if len(argv) > 2 else ""  # claude -p <prompt>
+        (shared / "note.md").write_text("shared note")     # the model writes the EXTRA mount
+        yield json.dumps({"type": "result", "subtype": "success", "result": "did it", "session_id": "S"})
+
+    with mock.patch.object(worker, "harness_factory", lambda: ClaudeCodeHarness(exec_fn=fake_exec)):
+        evs = list(worker.run_turn_over_workspace(private, "please write the shared note", session="work"))
+
+    # the mount set was DECLARED to the model (WP-A1.1)
+    assert "Your mounted workspaces" in seen["prompt"] and str(shared) in seen["prompt"]
+    # the extra mount committed, authored by the principal (D4)
+    assert any(e["type"] == "commit" for e in evs)
+    fmt = "%an%n%ae%n%cn%n%ce"
+    an, ae, cn, ce = subprocess.run(["git", "log", "-1", f"--pretty=format:{fmt}"], cwd=str(shared),
+                                    capture_output=True, text=True).stdout.splitlines()
+    assert (an, ae) == ("Jane Doe", "jane@example.com")
+    assert (cn, ce) == ("Vexa", "platform@vexa.ai")
+    assert (shared / "note.md").exists()
+
+
 def test_run_turn_starts_fresh_when_resume_transcript_is_too_large(tmp_path, monkeypatch):
     """A bloated Claude Code transcript is preserved on disk, but no longer resumed for a live chat turn."""
     import unittest.mock as mock
