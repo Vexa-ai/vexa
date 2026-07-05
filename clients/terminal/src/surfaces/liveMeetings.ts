@@ -33,6 +33,70 @@ interface SegmentDTO {
   text?: string | null;
 }
 
+/** A persisted processed note from the durable store (`data.processed.views[].doc.notes[]`,
+ *  written by meeting-api's db-writer from the copilot's proc stream). SAME producer and shape as
+ *  the live SSE `note` event payload — {id, speaker, chapter, text, t?, pass, frozen}. */
+export interface ProcessedNoteDTO {
+  id: string;
+  speaker?: string;
+  chapter?: string;
+  text: string;
+  t?: number;
+  tsMs?: number;   // absent in the durable store (live-only anchor); optional so the merged union renders
+  pass?: number;
+  frozen?: boolean;
+}
+
+/** The copilot view id inside data.processed.views[] (mirrors meeting-api's PROC_VIEW_ID). */
+const COPILOT_NOTES_VIEW_ID = "copilot-notes";
+
+interface ProcessedViewDTO { id?: string; doc?: { notes?: unknown[] } | null }
+interface TranscriptResponseDTO {
+  segments?: SegmentDTO[];
+  data?: { processed?: { views?: ProcessedViewDTO[] } | null } | null;
+}
+
+/** Both durable halves of a meeting's transcript response: the raw segments (mapped for the
+ *  transcript pane) and the copilot's persisted processed notes. */
+export interface DurableTranscript {
+  lines: TranscriptLine[];
+  notes: ProcessedNoteDTO[];
+}
+
+/** Pull the copilot-notes view's notes out of a transcript response body. Exported for tests. */
+export function processedNotesOf(body: TranscriptResponseDTO | null | undefined): ProcessedNoteDTO[] {
+  const views = body?.data?.processed?.views;
+  if (!Array.isArray(views)) return [];
+  const view = views.find((v) => v?.id === COPILOT_NOTES_VIEW_ID);
+  const raw = view?.doc?.notes;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
+    .map((n) => ({
+      id: String(n.id ?? "").trim(),
+      speaker: typeof n.speaker === "string" ? n.speaker : undefined,
+      chapter: typeof n.chapter === "string" ? n.chapter : undefined,
+      text: typeof n.text === "string" ? n.text : "",
+      t: typeof n.t === "number" && Number.isFinite(n.t) ? n.t : undefined,
+      pass: typeof n.pass === "number" ? n.pass : undefined,
+      frozen: typeof n.frozen === "boolean" ? n.frozen : undefined,
+    }))
+    .filter((n) => n.id && n.text.trim());
+}
+
+/** Merge live note deltas OVER a durable seed by note id (the backend's own merge rule — a live
+ *  re-emit of a persisted note updates it in place, never duplicates). Seed order is preserved;
+ *  notes only seen live append in arrival order. Exported for tests. */
+export function mergeNotesById<T extends { id: string }>(seed: T[], live: T[]): T[] {
+  if (!seed.length) return live;
+  if (!live.length) return seed;
+  const seedIds = new Set(seed.map((n) => n.id));
+  const liveById = new Map(live.map((n) => [n.id, n]));
+  const out: T[] = seed.map((n) => liveById.get(n.id) ?? n);
+  for (const n of live) if (!seedIds.has(n.id)) out.push(n);
+  return out;
+}
+
 function formatTranscriptTime(start?: number | null): string {
   if (start == null || !Number.isFinite(start)) return "";
   const date = new Date(start * 1000);
@@ -141,22 +205,33 @@ function ensureStarted() {
   });
 }
 
-/** Fetch a PAST meeting's recorded transcript over REST (gateway → meeting-api). Maps each segment to a
- *  TranscriptLine for the transcript pane. Returns [] on error / no transcript. */
-export async function fetchTranscript(platform: string, nativeId: string): Promise<TranscriptLine[]> {
+const EMPTY_DURABLE: DurableTranscript = { lines: [], notes: [] };
+
+/** Fetch a meeting's DURABLE transcript over REST (gateway → meeting-api): the recorded segments
+ *  for the transcript pane PLUS the copilot's persisted processed notes (data.processed.views —
+ *  the copilot-notes view). For a past meeting this is THE source; for a live one it seeds
+ *  whatever was persisted before the client connected. Returns empties on error. */
+export async function fetchDurableTranscript(platform: string, nativeId: string): Promise<DurableTranscript> {
   // the platform on the mock is display-cased ("Google Meet") — normalise back to the API slug
   const slug = platform === "Google Meet" ? "google_meet" : platform.toLowerCase().replace(/\s+/g, "_");
   try {
     const r = await fetch(`/api/transcripts/${slug}/${encodeURIComponent(nativeId)}`, { cache: "no-store" });
-    if (!r.ok) return [];
-    const { segments } = (await r.json()) as { segments?: SegmentDTO[] };
-    const list = segments || [];
-    return list
+    if (!r.ok) return EMPTY_DURABLE;
+    const body = (await r.json()) as TranscriptResponseDTO;
+    const list = body.segments || [];
+    const lines = list
       .filter((s) => (s.text ?? "").trim())
       .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
+    return { lines, notes: processedNotesOf(body) };
   } catch {
-    return [];
+    return EMPTY_DURABLE;
   }
+}
+
+/** Fetch a PAST meeting's recorded transcript lines (segments only). Kept for callers that don't
+ *  need the processed notes. */
+export async function fetchTranscript(platform: string, nativeId: string): Promise<TranscriptLine[]> {
+  return (await fetchDurableTranscript(platform, nativeId)).lines;
 }
 
 /** Last-known meeting by id (sync) — lets non-hook lookups resolve a real meeting. */
