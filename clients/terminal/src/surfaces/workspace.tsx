@@ -262,7 +262,7 @@ function FilesList() {
 
 // ── Workspaces (attach/swap a custom git repo) — over /api/workspace/swap + /attached ──────────────
 const SS_WS_OPEN = "ws.attach.open";
-function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
+export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  // exported for the surface test
   const [open, setOpen] = useState<boolean>(() => readSS(SS_WS_OPEN) === "1");  // default collapsed
   const [view, setView] = useState<AttachedWorkspaces>({ active: null, slots: {} });
   const [err, setErr] = useState<string | null>(null);
@@ -375,11 +375,6 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
                 <span onClick={() => setRenaming(slug)} title="Rename (display label only)"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 11 }}>✎</span>
               )}
-              {!isRenaming && slug === "seed" && !busy && (
-                <span onClick={() => { if (window.confirm("Start fresh? The default workspace is rebuilt from the template. Your current default is kept under a recoverable backup ('default (previous)').")) void swapToSlot("seed", true); }}
-                  title="Start fresh — rebuild the default from the template (current default kept as a backup)"
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 12 }}>↻</span>
-              )}
             </div>
           );
         })}
@@ -406,6 +401,14 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
             </div>
           </div>
         )}
+        {/* Start fresh is a LIST-LEVEL action (not a row icon): it CREATES a new default workspace —
+            the current one is parked as a recoverable backup ('default (previous)') — so it lives
+            alongside "+ Attach repo…" as the other way to bring a new workspace into the list. */}
+        <div onClick={() => { if (!busy && window.confirm("Start fresh? The default workspace is rebuilt from the template. Your current default is kept under a recoverable backup ('default (previous)').")) void swapToSlot("seed", true); }}
+          title="Start fresh — rebuild the default from the template (current default kept as a backup)"
+          style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
+          <Icon name="plus" size={12} /> Start fresh…
+        </div>
         {/* Publish / push-updates form — opened from the ACTIVE row's ↑ action (no list-level trigger:
             publish is an action on the active workspace, not a new list entry). Push-updates mode
             (remoteUrl set) skips repo creation: token only, plain push to the published home. */}
