@@ -844,6 +844,17 @@ async def ask_meetings_proxy(request: Request):
     url = f"{MEETING_API_URL}/internal/search/ask"
     return await forward_request(app.state.http_client, "POST", url, request)
 
+
+@app.get("/internal/meetings/{meeting_id}/export",
+        tags=["Export"],
+        summary="Export meeting as Markdown",
+        dependencies=[Depends(api_key_scheme)])
+async def export_meeting_proxy(request: Request, meeting_id: int):
+    """Forward export request to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/meetings/{meeting_id}/export?format=md"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+
 # --- Transcription Collector Routes ---
 @app.get("/meetings",
         tags=["Transcriptions"],

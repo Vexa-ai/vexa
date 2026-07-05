@@ -29,6 +29,7 @@ from .security_headers import SecurityHeadersMiddleware
 from .meetings import router as meetings_router, set_redis
 from .highlight_routes import router as highlight_router
 from .search_routes import router as search_router
+from .export_routes import router as export_router
 from .callbacks import router as callbacks_router
 from .voice_agent import router as voice_agent_router
 from .recordings import router as recordings_router
@@ -88,6 +89,7 @@ app.include_router(recordings_router)
 app.include_router(collector_router)
 app.include_router(highlight_router)
 app.include_router(search_router)
+app.include_router(export_router)
 
 # Collector background task references
 _collector_tasks: list = []
