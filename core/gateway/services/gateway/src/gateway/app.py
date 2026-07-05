@@ -189,11 +189,15 @@ def create_app(
         # Strip any client-supplied identity headers first (anti-spoofing, main.py:294-296).
         excluded = {"host", "content-length", "transfer-encoding"}
         headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
-        for h in ("x-user-id", "x-user-scopes", "x-user-limits",
+        for h in ("x-user-id", "x-user-email", "x-user-scopes", "x-user-limits",
                   "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"):
             headers.pop(h, None)
         headers["x-api-key"] = client_key
         headers["x-user-id"] = str(user_id)
+        # The RESOLVED verified email (never client-declared; /internal/validate returns it). agent-api's
+        # membership redeem (Lane M) checks it for RESTRICTED invites (allowed_emails).
+        if user_data.get("email"):
+            headers["x-user-email"] = str(user_data["email"])
         headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
         headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
         # Per-user webhook config (identity owns it; /internal/validate returns it from user.data).
@@ -279,6 +283,13 @@ def create_app(
     @app.post("/bots/{platform}/{native_meeting_id}/speak")
     async def speak(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/bots/{platform}/{native_meeting_id}/speak"), request)
+
+    # P0 (cross-tenant leak fix): the by-ROW-id transcript read the terminal uses to fetch EXACTLY the
+    # row it displays (owner-scoped downstream). Registered BEFORE the native route so `by-id` is not
+    # matched as a {platform}. Forwarded verbatim; the auth/identity prep (X-User-Id) is shared.
+    @app.get("/transcripts/by-id/{meeting_id}")
+    async def transcript_by_id(meeting_id: int, request: Request):
+        return await _forward("GET", _meeting(f"/transcripts/by-id/{meeting_id}"), request)
 
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):

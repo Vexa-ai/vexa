@@ -293,12 +293,16 @@ class RedisStreamReader(StreamReader):
         self._block = block_ms
         self._giveup = idle_giveup_ms
 
-    def read(self, unit_id: str):
+    def read(self, unit_id: str, *, resume: str | None = None):
         import redis
 
         client = redis.from_url(self._url, decode_responses=True)
         topic = f"unit:{unit_id}:out"
-        last_id = "$"  # only events from now on — never replay a prior turn's stream
+        # Fresh connect → ``$`` (only events from now on). Reconnect → the client's last-seen Stream id
+        # (Last-Event-ID): XREAD gaplessly delivers everything published while the reader was gone —
+        # crucial when a per-dispatch worker cold-starts AFTER the SSE dropped (the false 'No chat
+        # output arrived' failure was the reader giving up / the stream ending before any resume).
+        last_id = resume or "$"
         waited = 0
         while True:
             resp = client.xread({topic: last_id}, count=50, block=self._block)
@@ -312,7 +316,8 @@ class RedisStreamReader(StreamReader):
                 for entry_id, fields in entries:
                     last_id = entry_id
                     ev = json.loads(fields.get("event", "{}"))
-                    yield ev
+                    # Surface the Stream id as the SSE cursor (``id:``) so a dropped view resumes here.
+                    yield (ev, entry_id)
                     # `turn-complete` is the worker's terminal marker — it comes AFTER `done` + `commit`,
                     # so stopping on `done` would drop the commit. Close the view only on turn-complete.
                     if ev.get("type") == "turn-complete":
@@ -350,4 +355,61 @@ class SchedulerHttpClient(SchedulerPort):
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
+            raise
+
+
+class AdminApiMembershipIndex:
+    """A ``MembershipIndex`` (control_plane.workspace_membership) over the identity admin-api's internal
+    edge — the DERIVED ``users.data.memberships[]`` mirror of the authoritative ``policy/members.json``.
+
+    agent-api has no DB; the memberships index lives in the identity service's Postgres. This adapter
+    POSTs the mirror updates over the admin-api's internal tier (``X-Internal-Secret``, same shape as the
+    gateway→admin-api authz oracle). Best-effort by contract: the caller catches and logs failures — the
+    git file is the recovery source (Q6), so a down index never loses a grant. Stdlib urllib (no dep).
+    """
+
+    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 10.0) -> None:
+        self._base = base_url.rstrip("/")
+        self._secret = internal_secret
+        self._timeout = timeout
+
+    def _headers(self) -> dict[str, str]:
+        h = {"Content-Type": "application/json"}
+        if self._secret:
+            h["X-Internal-Secret"] = self._secret
+        return h
+
+    def add(self, subject: str, workspace_id: str, role: str, added_at: str) -> None:
+        body = json.dumps({"workspace_id": workspace_id, "role": role, "added_at": added_at}).encode()
+        req = urllib.request.Request(
+            f"{self._base}/internal/users/{subject}/memberships",
+            data=body, headers=self._headers(), method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self._timeout):
+            pass
+
+    def remove(self, subject: str, workspace_id: str) -> None:
+        req = urllib.request.Request(
+            f"{self._base}/internal/users/{subject}/memberships/{workspace_id}",
+            headers=self._headers(), method="DELETE",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout):
+                pass
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+
+    def list(self, subject: str) -> list[dict]:
+        req = urllib.request.Request(
+            f"{self._base}/internal/users/{subject}/memberships",
+            headers=self._headers(), method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                data = json.loads(r.read())
+            return data.get("memberships", []) if isinstance(data, dict) else (data or [])
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return []
             raise

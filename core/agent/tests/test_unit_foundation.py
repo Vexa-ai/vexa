@@ -171,7 +171,11 @@ def test_dispatcher_worker_env_carries_numeric_meeting_id():
     d.dispatch(inv)  # would raise at the seam if the hint leaked into the contract check
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_MEETING_NUMERIC_ID"] == "17"
-    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:abc-defg-hij"  # transcript key stays NATIVE
+    # P0 (cross-tenant leak fix): the transcript carrier keys on the meetings-domain ROW id
+    # (numeric_meeting_id) — unique per run — NOT the native id (which collides across tenants +
+    # a user's re-sends). The native id rides SEPARATELY as VEXA_MEETING_ID (the readable kg doc name).
+    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:17"          # carrier keys on the ROW id
+    assert env["VEXA_MEETING_ID"] == "abc-defg-hij"                 # native survives for display only
 
 # ── model-auth passthrough: agent-api env → worker spec env (the k8s/helm credential seam) ────
 
@@ -212,3 +216,96 @@ def test_dispatcher_worker_env_forwards_only_the_allowlist(monkeypatch):
     _, _profile, env = rt.spawned[0]
     assert "AWS_SECRET_ACCESS_KEY" not in env
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sub-token"
+
+
+# ── the additive mount set in the dispatch (WP-A1.1) ──────────────────────────
+
+def _seed_ws(root, subject, marker="SEED"):
+    """A seeded private baseline at <root>/<subject> (mirrors the workspace_attach test helper)."""
+    from shared.seeding import seed_workspace
+    ws = root / subject
+    ws.mkdir(parents=True)
+    (ws / "CLAUDE.md").write_text(marker)
+    seed_workspace(ws, None)
+    return ws
+
+
+def test_dispatcher_worker_env_carries_the_baseline_plus_system_tier(tmp_path):
+    """No activated extras, no _global configured → VEXA_MOUNTS is the three-tier stack degraded to the
+    private baseline + the always-present PRIVATE SYSTEM tier (AMENDMENT 4). The active portion is exactly
+    today's single-workspace behavior; _system is appended (create-if-absent, read-write)."""
+    settings = load_settings(workspaces_dir=str(tmp_path / "workspaces"))
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    mounts = json.loads(env["VEXA_MOUNTS"])
+    assert [m["role"] for m in mounts] == ["private", "system"]  # no _global (unconfigured)
+    assert mounts[0]["primary"] is True and mounts[0]["path"].endswith("/u_jane")
+    sysm = mounts[-1]
+    assert sysm["slug"] == "_system" and sysm["write"] is True and sysm["primary"] is False
+
+
+def test_dispatcher_mount_stack_is_global_then_active_then_system(tmp_path):
+    """The full THREE-TIER stack (AMENDMENT 4): _global (RO) first, then the ORDERED active set (private
+    baseline + the activated extra), then _system (RW) last — VEXA_MOUNTS is the whole stack, a LIST."""
+    from control_plane.workspace_attach import activate_workspace
+    import subprocess
+    root = tmp_path / "workspaces"
+    _seed_ws(root, "u_jane")
+    # a local git repo to activate as a second, additive workspace (no network)
+    origin = tmp_path / "shared"
+    origin.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
+    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    (origin / "CLAUDE.md").write_text("SHARED"); run("add", "-A"); run("commit", "-q", "-m", "s")
+    slug = activate_workspace(root, "u_jane", str(origin), "main").slug
+    # a platform-owned _global repo, mounted READ-ONLY into every worker
+    gdir = tmp_path / "global"
+    gdir.mkdir()
+    grun = lambda *a: subprocess.run(["git", *a], cwd=gdir, check=True, capture_output=True)
+    grun("init", "-q", "-b", "main"); grun("config", "user.email", "p@p"); grun("config", "user.name", "p")
+    (gdir / "CLAUDE.md").write_text("GLOBAL"); grun("add", "-A"); grun("commit", "-q", "-m", "g")
+
+    settings = load_settings(workspaces_dir=str(root), global_system_workspace_path=str(gdir))
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    mounts = json.loads(env["VEXA_MOUNTS"])
+    roles = [m["role"] for m in mounts]
+    assert roles == ["global", "private", "private", "system"]  # the three-tier stack, in order
+    g, base, extra, sysm = mounts
+    # tier 1 — _global: READ-ONLY, its own host source, absent from the active-set commit path
+    assert g["slug"] == "_global" and g["write"] is False and g["source"] == str(gdir)
+    assert g["path"] == str(root / "_global")
+    # tier 2 — the active set: private baseline (in place) + the activated extra (store slot)
+    assert base["primary"] is True and base["path"] == str(root / "u_jane")
+    assert extra["slug"] == slug and extra["primary"] is False
+    assert extra["path"] == str(root / ".attached" / "u_jane" / slug)
+    # tier 3 — _system: read-write, per-user, always last
+    assert sysm["slug"] == "_system" and sysm["write"] is True
+
+
+def test_dispatcher_stamps_principal_for_attribution(monkeypatch):
+    """The dispatch principal (VEXA_PRINCIPAL_*) is stamped for per-mount commit attribution (D4).
+    Absent an explicit principal it defaults to the subject."""
+    monkeypatch.delenv("VEXA_PRINCIPAL_NAME", raising=False)
+    monkeypatch.delenv("VEXA_PRINCIPAL_EMAIL", raising=False)
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_PRINCIPAL_NAME"] == "u_jane"
+    assert env["VEXA_PRINCIPAL_EMAIL"] == "u_jane@vexa.local"
+
+
+def test_dispatcher_principal_env_wins_over_subject(monkeypatch):
+    monkeypatch.setenv("VEXA_PRINCIPAL_NAME", "Jane Doe")
+    monkeypatch.setenv("VEXA_PRINCIPAL_EMAIL", "jane@example.com")
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_PRINCIPAL_NAME"] == "Jane Doe"
+    assert env["VEXA_PRINCIPAL_EMAIL"] == "jane@example.com"

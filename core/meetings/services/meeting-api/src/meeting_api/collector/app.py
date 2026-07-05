@@ -110,6 +110,33 @@ def build_router(
     """
     router = APIRouter()
 
+    # --- GET /transcripts/by-id/{meeting_id} → api.v1 TranscriptionResponse for an EXACT row (P0).
+    # Registered BEFORE /transcripts/{platform}/{native_meeting_id} so `by-id` is not swallowed as a
+    # platform. Owner-scoped: the row must belong to the caller (X-User-Id) or 404 — so it can neither
+    # leak another tenant's transcript NOR (unlike the native path, which resolves to the NEWEST row)
+    # hydrate the wrong one of a user's several rows on the same meeting link. The terminal fetches the
+    # EXACT row it is displaying by its id. ---
+    @router.get("/transcripts/by-id/{meeting_id}")
+    async def get_transcript_by_id(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        doc = await store.get_transcript_by_id(user_id, meeting_id)
+        if doc is None:
+            log_event(
+                "transcript_not_found", audience="system", level="warning",
+                span="transcripts.get_by_id", user_id=user_id, meeting_id=str(meeting_id),
+            )
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        log_event(
+            "transcript_served", audience="user", span="transcripts.get_by_id",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"segments": len(doc.get("segments", []))},
+        )
+        return JSONResponse(content=doc)
+
     # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
     @router.get("/transcripts/{platform}/{native_meeting_id}")
     async def get_transcript(

@@ -61,6 +61,68 @@ _FALLBACK_MEMORY_MD = (
 TurnFn = Callable[[str], Iterator[dict]]
 
 
+# ── the active mount set (WP-A1.1) — declared VERBATIM to the model so it never guesses where to write ──
+
+def active_mounts() -> list[dict]:
+    """The dispatch's ordered active mount set from ``VEXA_MOUNTS`` (``[{slug,path,role,write,primary}]``).
+    A dispatch that predates the set (no ``VEXA_MOUNTS``) falls back to the single private baseline at
+    ``VEXA_WORKSPACE_PATH`` — identical to today's one-workspace behavior."""
+    raw = os.environ.get("VEXA_MOUNTS")
+    if raw:
+        try:
+            data = json.loads(raw)
+            mounts = [m for m in data if isinstance(m, dict) and m.get("path")] if isinstance(data, list) else []
+            if mounts:
+                return mounts
+        except (ValueError, TypeError):
+            log.warning("VEXA_MOUNTS is not valid JSON — falling back to the private baseline")
+    path = os.environ.get("VEXA_WORKSPACE_PATH", "/workspace")
+    return [{"slug": Path(path).name, "path": path, "role": "private", "write": True, "primary": True}]
+
+
+def _tier_label(m: dict) -> str:
+    """The mount's TIER + write-rule, declared VERBATIM so the model never guesses where it may write
+    (AMENDMENT 4 three-tier stack). Derived from role/primary/write, not from the slug."""
+    role = m.get("role", "private")
+    if role == "global":
+        return "GLOBAL SYSTEM tier — READ-ONLY (platform behaviour/skills/tools; never write here)"
+    if role == "system":
+        return "PRIVATE SYSTEM tier — read-write (your chats/sessions, settings, routines; private, never shared)"
+    if m.get("primary"):
+        return "your PRIVATE baseline (durable personal memory) — read-write"
+    writable = "read-write" if m.get("write", True) else "READ-ONLY (do not write here)"
+    return f"{role} workspace — {writable}"
+
+
+def mounts_preamble(mounts: list[dict]) -> str:
+    """A prompt preamble that DECLARES every mount in the THREE-TIER stack to the model VERBATIM — names,
+    paths, tiers, roles, write rules — plus the default write-routing policy (WP-A1.2). The agent must
+    never guess where it may read/write. Enforcement is minimal in this WP (per-mount commit with the
+    principal as author); the routing rule is STATED. A single private mount ⇒ no preamble (nothing to
+    disambiguate — the legacy one-workspace turn is unchanged)."""
+    if len(mounts) <= 1:
+        return ""
+    lines = ["## Your mounted workspaces", "",
+             "This turn mounts a STACK of workspaces (the three-tier mount stack). Each is a separate git"
+             " repo; every writable one is committed independently after the turn:",
+             ""]
+    for m in mounts:
+        lines.append(f"- `{m['path']}` — **{m.get('slug')}** ({_tier_label(m)})")
+    lines += [
+        "",
+        "Write-routing policy:",
+        "- Platform behaviour/skills/tools live in the GLOBAL SYSTEM tier (`_global`) — READ-ONLY, never write it.",
+        "- Chats/sessions/settings → the PRIVATE SYSTEM tier (`_system`).",
+        "- Personal notes/drafts and anything the user marks private → your PRIVATE baseline mount.",
+        "- Content produced FOR a shared/community space (shared notes, common docs, shared entities) →"
+        " the matching shared mount (only if it is read-write).",
+        "- Never write to a READ-ONLY mount.",
+        "Always use ABSOLUTE paths under the mount you intend — do not guess or invent mount paths.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 class _Stream(Protocol):
     """The slice of redis the harness needs (XADD out, XREAD in) — a fake satisfies it in tests."""
 
@@ -129,13 +191,37 @@ def _resume_id(work: Path, sess_file: Path, harness: HarnessPort) -> str | None:
     return sid or None
 
 
+def _principal_author() -> tuple[str, str] | None:
+    """The dispatch PRINCIPAL (name, email) for commit attribution (D4) — the authenticated human whose
+    input drove the turn, stamped into the worker env by the dispatcher. Absent ⇒ None (git falls back to
+    its configured identity, and the committer is still the platform via ``_commit_env``)."""
+    name = (os.environ.get("VEXA_PRINCIPAL_NAME") or "").strip()
+    email = (os.environ.get("VEXA_PRINCIPAL_EMAIL") or "").strip()
+    if name and email:
+        return name, email
+    return None
+
+
+def _extra_mount_paths(work: Path) -> list[Path]:
+    """The WRITABLE mounts OTHER than the primary ``work`` — the additional repos a turn may have written,
+    each committed independently after the turn (WP-A1.2). READ-ONLY mounts (the ``_global`` GLOBAL SYSTEM
+    tier) are EXCLUDED — agents never write, and thus never commit, ``_global`` (AMENDMENT 4)."""
+    extras: list[Path] = []
+    for m in active_mounts():
+        p = Path(m["path"])
+        if not m.get("primary") and m.get("write", True) and p != work:
+            extras.append(p)
+    return extras
+
+
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
 ) -> Iterator[dict]:
-    """One governed agent turn over the mounted workspace: resume from the session file, drive
-    ``run_harness_turn`` (which commits the tree when it changed), and persist the captured session
-    id. A stale resume (the harness session expired) retries fresh once.
+    """One governed agent turn over the mounted workspace SET: resume from the session file, DECLARE the
+    active mounts to the model, drive ``run_harness_turn`` (which commits EACH changed mount, authored by
+    the dispatch principal), and persist the captured session id. A stale resume (the harness session
+    expired) retries fresh once.
     ``allowed_tools`` defaults to Read/Write/Edit; pass ``["Read"]`` for a propose-only (no-write) turn.
     ``session`` namespaces the continuity file so chat threads stay distinct (default ``"main"``)."""
     _ensure_repo(work)
@@ -150,12 +236,20 @@ def run_turn_over_workspace(
     # card-extraction beats must NOT pollute the user's chat conversation memory.
     resume = _resume_id(work, sess_file, harness) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
-    gen = run_harness_turn(work, prompt, harness, allowed_tools=allowed, session=resume, model=model, commit=commit)
+    # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
+    # agent never guesses where it may read/write. Single-mount turns get no preamble.
+    mounts = active_mounts()
+    author = _principal_author()
+    extras = _extra_mount_paths(work)
+    turn_prompt = mounts_preamble(mounts) + prompt if mounts_preamble(mounts) else prompt
+    gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
+                           commit=commit, author=author, extra_mounts=extras)
     first = next(gen, None)
     if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
         if sess_file.exists():
             sess_file.unlink()
-        gen = run_harness_turn(work, prompt, harness, allowed_tools=allowed, session=None, model=model, commit=commit)
+        gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=None, model=model,
+                               commit=commit, author=author, extra_mounts=extras)
         first = next(gen, None)
     captured: str | None = None
     for ev in (gen if first is None else itertools.chain([first], gen)):
@@ -241,8 +335,15 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # The GOVERNED, workspace-driven copilot config (agents/meeting.md) — loaded ONCE at meeting
         # start from the mounted workspace; absent ⇒ all defaults. Env stays the ultimate model default.
         cfg = load_meeting_config(work)
-        # native id == the tail of the transcript stream (tc:meeting:<native>); meeting facts are in env.
-        native = os.environ.get("VEXA_MEETING_ID") or transcript_stream.rsplit(":", 1)[-1]
+        # P0 (cross-tenant leak fix): the transcript carrier is keyed by the meetings-domain ROW id
+        # (VEXA_MEETING_NUMERIC_ID) — the transcript_stream tail is now that row id, NOT the native id.
+        # The NATIVE id (human-readable, e.g. abc-defg-hij) is carried SEPARATELY in VEXA_MEETING_ID for
+        # display + the readable kg doc name (nuance #1: kg/entities/meeting/{native}.md must survive).
+        # Never derive `native` from the stream tail anymore (that is the row id); fall back to the tail
+        # only when VEXA_MEETING_ID is somehow unset (older dispatcher), which at worst degrades the
+        # display name, never the row-scoped isolation.
+        row_id = os.environ.get("VEXA_MEETING_NUMERIC_ID") or transcript_stream.rsplit(":", 1)[-1]
+        native = os.environ.get("VEXA_MEETING_ID") or row_id
         session_uid = os.environ.get("VEXA_MEETING_SESSION_UID") or native
         platform = os.environ.get("VEXA_MEETING_PLATFORM") or "google_meet"
         import datetime as _dt
@@ -282,16 +383,16 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             idle_ms=idle_ms, beat_segments=cfg.cadence_segments,
             doc_turn=doc_turn, enabled=cfg.enabled,
             start_id=os.environ.get("VEXA_TRANSCRIPT_START_ID", "0"),
-            # The processed-notes stream is keyed by the meetings-domain ROW id when the dispatch
-            # carries it (VEXA_MEETING_NUMERIC_ID): the row id is unique per meeting run, so a
-            # re-sent bot on the same native link can never mix/clobber a previous meeting's
-            # processed doc — and the meeting-api db-writer (which knows its own row ids) drains
-            # proc:meeting:{numeric} into the meeting row's data JSONB (durable). Native-keyed
-            # fallback for older dispatchers that don't pass the row id. The CURSOR stays keyed by
-            # the NATIVE id: it is a position in tc:meeting:{native}, which re-sends share — the
-            # gap-fill must resume from where the previous run left off, whichever row that was.
-            proc_stream=f"proc:meeting:{os.environ.get('VEXA_MEETING_NUMERIC_ID') or native}",
-            cursor_key=f"proc:meeting:{native}:cursor",
+            # P0 (cross-tenant leak fix): BOTH the processed-notes stream AND its cursor key on the
+            # meetings-domain ROW id (VEXA_MEETING_NUMERIC_ID) — unique per meeting run, so neither a
+            # re-sent bot on the same native link NOR a different tenant on the same link can ever
+            # mix/clobber/read another meeting's processed doc. The meeting-api db-writer (which knows
+            # its own row ids) drains proc:meeting:{row_id} into that meeting row's data JSONB (durable).
+            # The cursor is now a position in the ROW-KEYED transcript stream tc:meeting:{row_id} (each
+            # row has its own stream), so it too MUST be row-scoped — a shared native-keyed cursor would
+            # resume one row from another row's position (and leak progress across tenants).
+            proc_stream=f"proc:meeting:{row_id}",
+            cursor_key=f"proc:meeting:{row_id}:cursor",
             on_proc_note=on_proc_note,
             on_envelope=on_envelope,
             # Provenance stamped on every processed-notes entry: what pipeline/provider/model

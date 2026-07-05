@@ -19,6 +19,7 @@ from urllib.parse import quote
 import requests_unixsocket
 
 from .backend import WorkloadHandle
+from .mounts import workspace_binds
 from .profiles import Runnable
 
 MANAGED_LABEL = "runtime.managed"
@@ -187,15 +188,15 @@ class DockerBackend:
         if shm:
             host_config["ShmSize"] = shm
 
-        # Workspace mount (Workspace primitive): the dispatch's granted git folder is PORTED IN, not
-        # cloned — a bind of a host path / named volume the workload env names. Generic: the backend
-        # just forwards source→target; the control plane decides what to mount (mode is enforced by the
-        # token at the boundary above this).
+        # Workspace mount set (Workspace primitive + WP-A1.1): the dispatch's granted git folders are
+        # PORTED IN, not cloned — a bind of a host path / named volume the workload env names. The mount
+        # plumbing is SHARED across all three backends (runtime_kernel.mounts.workspace_binds): the store
+        # backing bind exposes every in-store active workspace, and any out-of-store mount (a future
+        # cross-store shared workspace) gets its own bind. Generic: the backend forwards source→target for
+        # each; the control plane decides the set (per-workspace write is gated by the token above this).
         binds: list[str] = []
-        mount_src = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
-        mount_tgt = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
-        if mount_src and mount_tgt:
-            binds.append(f"{mount_src}:{mount_tgt}")
+        for b in workspace_binds(env):
+            binds.append(f"{b.source}:{b.target}:ro" if b.read_only else f"{b.source}:{b.target}")
 
         # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only;
         # API-style provider env (the VEXA_LLM_* completion dials + the claude-code runner's

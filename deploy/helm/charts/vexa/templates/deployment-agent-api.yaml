@@ -52,6 +52,13 @@ spec:
             # is the contract; full worker mounting needs RWX storage (see README — follow-up).
             - name: VEXA_WORKSPACE_MOUNT_SOURCE
               value: {{ include "vexa.componentName" (list . "agent-workspaces") | quote }}
+            # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global),
+            # mounted READ-ONLY into every worker. Empty = no _global mount (mount-when-present); REF pins
+            # it for safe rollout (empty = HEAD). Provisioning a real _global repo on k8s is a follow-up.
+            - name: VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH
+              value: {{ .Values.agentApi.globalSystemWorkspacePath | default "" | quote }}
+            - name: VEXA_GLOBAL_SYSTEM_WORKSPACE_REF
+              value: {{ .Values.agentApi.globalSystemWorkspaceRef | default "" | quote }}
             - name: VEXA_REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: VEXA_DISPATCH_SIGNING_KEY

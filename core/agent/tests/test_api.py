@@ -39,8 +39,9 @@ class _FakeIdentity:
 
 
 class _FakeReader:
-    """A StreamReader fake — yields the dispatch's UnitEvents (what redis XREAD would relay)."""
-    def read(self, unit_id):
+    """A StreamReader fake — yields the dispatch's UnitEvents (what redis XREAD would relay). Accepts the
+    ``resume`` kwarg (the resumable-SSE contract) even though this bare fake ignores the cursor."""
+    def read(self, unit_id, *, resume=None):
         yield {"type": "message-delta", "text": "hi"}
         yield {"type": "commit", "sha": "abc123"}
 
@@ -49,6 +50,22 @@ def _client(stream_reader=None) -> TestClient:
     return TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), stream_reader=stream_reader,
     ))
+
+
+# ── SSE ownership gate (P0) test helpers ──────────────────────────────────────────────────────────
+# The live SSE feed now OWNER-SCOPES every request (subject_of → meeting-api ownership lookup) before it
+# opens the redis stream. In L2 we inject a fake owner-lookup: a map of {(user_id, row_id): native}, and
+# every /api/meeting/stream request carries an X-User-Id. `None` from the lookup == not-owned → 403.
+def _fake_owner_lookup(owned: dict):
+    """owned = {(user_id, str(meeting_id)): native_meeting_id}. Returns a create_app-compatible
+    ``(user_id, meeting_id) -> dict | None`` — the meeting record when owned, else None."""
+    def _lookup(user_id, meeting_id):
+        nat = owned.get((str(user_id), str(meeting_id)))
+        if nat is None:
+            return None
+        return {"id": int(meeting_id) if str(meeting_id).isdigit() else meeting_id,
+                "native_meeting_id": nat, "user_id": user_id}
+    return _lookup
 
 
 def test_health_ok():
@@ -178,6 +195,58 @@ def test_chat_defaults_session_to_main(tmp_path):
     assert r.headers["X-Unit-Id"] == "agent-u_jane-chat-main"
     rows = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
     assert rows[0]["session"] == "main" and rows[0]["title"] == "no session given"
+
+
+class _CursorReader:
+    """A StreamReader fake that surfaces per-event Stream cursors (``(event, cursor)`` tuples) — what the
+    RESUMABLE chat SSE emits as ``id:`` lines — and records the ``resume`` cursor it was asked to read from."""
+    def __init__(self):
+        self.resume_seen = "UNSET"
+
+    def read(self, unit_id, *, resume=None):
+        self.resume_seen = resume
+        yield ({"type": "message-delta", "text": "hi"}, "5-0")
+        yield ({"type": "turn-complete"}, "6-0")
+
+
+def test_chat_sse_carries_resumable_ids():
+    """The chat turn SSE is RESUMABLE like /api/meeting/stream: every event carries an ``id:`` = the unit
+    output Stream cursor, so a dropped view reconnects with Last-Event-ID and resumes gaplessly (the
+    cold-start 'No chat output arrived' false failure is a client that gave up on a stream it could resume)."""
+    reader = _CursorReader()
+    c = _client(reader)
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    body = r.text
+    assert "id: 5-0" in body and "id: 6-0" in body      # cursors surfaced for resume
+    assert '"message-delta"' in body and '"turn-complete"' in body
+    assert reader.resume_seen is None                   # a fresh connect resumes from nothing
+
+
+def test_chat_resume_reattaches_without_a_second_dispatch():
+    """A reconnect (Last-Event-ID present) RE-ATTACHES to the warm unit and resumes the read from the
+    cursor — it does NOT dispatch a second turn (the worker completes regardless; resume only re-shows
+    the missed output). Proven by: no new runtime spawn on the resume, and the cursor reaches the reader."""
+    runtime = _FakeRuntime()
+    reader = _CursorReader()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=reader,
+    ))
+    r1 = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r1.status_code == 200
+    spawned_after_first = len(runtime.spawned)
+    assert spawned_after_first >= 1                      # the fresh turn dispatched (spawned the unit)
+
+    r2 = c.post(
+        "/api/chat",
+        headers={"Last-Event-ID": "5-0"},
+        json={"prompt": "hi", "subject": "u_jane", "session": "s1"},
+    )
+    assert r2.status_code == 200
+    assert r2.headers["X-Unit-Id"] == "agent-u_jane-chat-s1"   # same warm unit re-attached
+    assert reader.resume_seen == "5-0"                         # resumed from the client's cursor
+    assert len(runtime.spawned) == spawned_after_first, \
+        "resume re-dispatched a turn — a reconnect must re-attach to the warm unit, not run it twice"
 
 
 def test_meeting_start_threads_transcript_tail_cursor(monkeypatch):
@@ -324,9 +393,11 @@ def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatc
     monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: fake)
     c = TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+        meeting_owner_lookup=_fake_owner_lookup({("u_owner", "abc"): "abc"}),
     ))
 
-    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "abc", "session_uid": "abc"}) as r:
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "abc", "session_uid": "abc"},
+                  headers={"X-User-Id": "u_owner"}) as r:
         body = "".join(r.iter_text())
 
     assert r.status_code == 200
@@ -505,6 +576,7 @@ def _stream_client(fake_redis, monkeypatch):
     monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake_redis)
     return TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+        meeting_owner_lookup=_fake_owner_lookup({("u_owner", "m1"): "m1"}),
     ))
 
 
@@ -537,7 +609,7 @@ def test_sse_resumes_from_last_event_id_no_reseed(monkeypatch):
     fr = _StreamRedis()
     c = _stream_client(fr, monkeypatch)
     with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
-                  headers={"Last-Event-ID": "7-0|3-0"}) as r:
+                  headers={"Last-Event-ID": "7-0|3-0", "X-User-Id": "u_owner"}) as r:
         assert r.status_code == 200
         _ = r.read()
     assert fr.xread_last["tc:meeting:m1"] == "7-0"          # resumed from the cursor, NOT "$"
@@ -549,11 +621,85 @@ def test_sse_fresh_connect_seeds_and_tails(monkeypatch):
     """No Last-Event-ID (fresh connect): seed the bounded transcript tail, then live-tail from there."""
     fr = _StreamRedis()
     c = _stream_client(fr, monkeypatch)
-    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"}) as r:
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
+                  headers={"X-User-Id": "u_owner"}) as r:
         assert r.status_code == 200
         _ = r.read()
     assert "tc:meeting:m1" in fr.seeded                     # fresh connect DID seed the tail
     assert fr.xread_last["tc:meeting:m1"] == "$"            # then tails live from now
+
+
+# ── SSE cross-tenant ownership regression (P0 — the FIX-FIRST blocker) ────────────────────────────
+# The by-row-id SSE feed `/api/meeting/stream` must OWNER-SCOPE the row like the WS `/ws` path + the
+# by-id REST path do. Pre-fix it read `tc:meeting:{meeting_id}` straight off the caller-supplied query
+# param with NO identity/ownership check → any authenticated user B could enumerate A's rows and stream
+# A's live transcript + copilot cards. These tests FAIL on the pre-fix code (the stream opened for B) and
+# pass after: B is REFUSED (403, no stream opened) on A's row, and A's own row streams fine.
+def _xtenant_stream_client(monkeypatch):
+    """A live-SSE client whose owner-lookup says: row "10" is owned by u_alice (native "aaa-bbb-ccc"),
+    row "20" is owned by u_bob (native "xxx-yyy-zzz"). The redis fake ends every stream immediately."""
+    import redis
+
+    class _Redis:
+        def xrevrange(self, key, count=1):
+            return []
+
+        def xread(self, last, count=500, block=0):
+            import json as _j
+            # one session_end then drain → the SSE closes cleanly (so a REFUSAL is unambiguous: no body).
+            if not getattr(self, "_done", False):
+                self._done = True
+                return [(f"tc:meeting:{list(last)[0].split(':')[-1]}",
+                         [("9-0", {"payload": _j.dumps({"type": "session_end"})})])]
+            return []
+
+    fake = _Redis()
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake)
+    owned = {("u_alice", "10"): "aaa-bbb-ccc", ("u_bob", "20"): "xxx-yyy-zzz"}
+    return TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+        meeting_owner_lookup=_fake_owner_lookup(owned),
+    ), raise_server_exceptions=True)
+
+
+def test_sse_cross_tenant_meeting_stream_is_refused(monkeypatch):
+    """B (u_bob) enumerates A's row (10) → 403, NO stream opened. B's OWN row (20) streams fine.
+    A (u_alice) streams her own row (10). Missing identity → 401. This FAILS on the pre-fix code."""
+    c = _xtenant_stream_client(monkeypatch)
+
+    # B requests A's row → REFUSED before any stream opens.
+    r = c.get("/api/meeting/stream", params={"meeting_id": "10", "session_uid": "aaa-bbb-ccc"},
+              headers={"X-User-Id": "u_bob"})
+    assert r.status_code == 403, "user B must NOT stream tenant A's live meeting"
+
+    # No identity at all → fail closed. In the gateway-fronted topology (no default subject) that is a
+    # 401; the L2 harness sets VEXA_AGENT_DEFAULT_SUBJECT (autouse `_default_subject`), so clear it here to
+    # assert the real gateway contract: a missing X-User-Id is rejected, never a silent open.
+    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "")
+    c_no_fallback = _xtenant_stream_client(monkeypatch)
+    r = c_no_fallback.get("/api/meeting/stream", params={"meeting_id": "10", "session_uid": "aaa-bbb-ccc"})
+    assert r.status_code == 401
+
+    # B's OWN row streams fine.
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "20", "session_uid": "xxx-yyy-zzz"},
+                  headers={"X-User-Id": "u_bob"}) as r:
+        assert r.status_code == 200
+        _ = r.read()
+
+    # A streams her OWN row fine.
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "10", "session_uid": "aaa-bbb-ccc"},
+                  headers={"X-User-Id": "u_alice"}) as r:
+        assert r.status_code == 200
+        _ = r.read()
+
+
+def test_sse_owned_row_but_foreign_session_uid_is_refused(monkeypatch):
+    """Defense-in-depth: B owns row 20, but pairs it with A's native as `session_uid` to sniff A's copilot
+    out-stream (`unit:agent-meet-{session_uid}:out`) → 403. The session_uid must match the OWNED row."""
+    c = _xtenant_stream_client(monkeypatch)
+    r = c.get("/api/meeting/stream", params={"meeting_id": "20", "session_uid": "aaa-bbb-ccc"},
+              headers={"X-User-Id": "u_bob"})
+    assert r.status_code == 403
 
 
 def test_workspace_init_seeds_from_template(tmp_path, monkeypatch):
@@ -624,6 +770,49 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     back = c.post("/api/workspace/swap", headers=h, json={})       # repo omitted → swap back to seed
     assert back.json()["active"] == "seed" and back.json()["cloned"] is False
     assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
+
+
+def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path, monkeypatch):
+    """POST /api/workspace/activate ADDS a repo to the active set without parking the private baseline;
+    GET /api/workspace/active lists the ordered set; deactivate parks it; the baseline is non-deactivatable."""
+    import subprocess
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    origin = tmp_path / "origin"; origin.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
+    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    (origin / "CLAUDE.md").write_text("SHARED ROOT\n"); run("add", "-A"); run("commit", "-q", "-m", "x")
+
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+
+    r = c.post("/api/workspace/activate", headers=h, json={"repo": str(origin)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["changed"] is True and body["cloned"] is True
+    slug = body["slug"]
+    # the private baseline was NOT parked — still the live tree
+    assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
+
+    active = c.get("/api/workspace/active", headers=h).json()["active"]
+    slugs = [m["slug"] for m in active]
+    assert slugs[0] == "seed" and slug in slugs and len(active) == 2
+    assert active[0]["primary"] is True and active[0]["role"] == "private"
+
+    # deactivate parks it (dropped from the set, tree kept)
+    d = c.post("/api/workspace/deactivate", headers=h, json={"slug": slug})
+    assert d.status_code == 200 and d.json()["changed"] is True
+    assert [m["slug"] for m in c.get("/api/workspace/active", headers=h).json()["active"]] == ["seed"]
+
+    # the private baseline cannot be deactivated
+    assert c.post("/api/workspace/deactivate", headers=h, json={"slug": "seed"}).status_code == 409
 
 
 def test_workspace_publish_pushes_born_workspace_to_remote(tmp_path, monkeypatch):

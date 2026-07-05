@@ -17,6 +17,8 @@ honestly. Built lazily (PEP 562) so ``uvicorn control_plane.api:app`` wires the 
 """
 from __future__ import annotations
 
+import os
+
 import hashlib
 import json
 import logging
@@ -34,8 +36,18 @@ from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
-from control_plane.workspace_attach import CloneError, attached_workspaces, rename_workspace, swap_workspace
+from control_plane.workspace_attach import (
+    CloneError,
+    activate_workspace,
+    active_workspaces,
+    attached_workspaces,
+    deactivate_workspace,
+    rename_workspace,
+    swap_workspace,
+)
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
+from control_plane import workspace_membership as membership_mod
+from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from shared.ports import SchedulerPort, StreamReader
@@ -246,6 +258,47 @@ class WorkspaceRenameBody(BaseModel):
     name: Optional[str] = None
 
 
+class InviteCreateBody(BaseModel):
+    """Mint a scoped invite for a shared workspace (owner/contributor only). Returns the token ONCE."""
+    model_config = {"extra": "forbid"}
+    workspace_id: str
+    role: str = "viewer"                 # viewer | contributor (never owner)
+    expires_in_sec: int = 604800         # 7 days
+    max_uses: int = 1
+    mode: str = "open"                   # open (anyone-with-link) | restricted (allowed_emails only)
+    allowed_emails: Optional[list[str]] = None  # restricted mode: the verified emails permitted to redeem
+
+
+class InviteAcceptBody(BaseModel):
+    """Redeem an invite token (any logged-in user). Idempotent per user."""
+    model_config = {"extra": "forbid"}
+    token: str
+
+
+class RoleSetBody(BaseModel):
+    """Flip a member's role (owner only) — the "change read/write permissions" DoD item."""
+    model_config = {"extra": "forbid"}
+    role: str                            # viewer | contributor | owner
+
+
+class WorkspaceActivateBody(BaseModel):
+    """ADD a workspace to the subject's active set (the additive mount set — WP-A2.1). Pass ``repo`` to
+    clone/restore a git repo, or ``slug`` to activate an already-parked slot. Unlike swap it does NOT park
+    the others — the private baseline and any other active workspaces stay mounted."""
+    model_config = {"extra": "forbid"}
+    repo: Optional[str] = None   # git URL to clone (first time) / restore (thereafter)
+    ref: Optional[str] = None    # branch/tag/sha (defaults to main)
+    slug: Optional[str] = None   # activate an already-parked slot directly (no repo needed)
+    token: Optional[str] = None  # access token for a PRIVATE repo — clone only, never stored (P15)
+
+
+class WorkspaceDeactivateBody(BaseModel):
+    """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot be
+    deactivated (it is the subject's durable memory root)."""
+    model_config = {"extra": "forbid"}
+    slug: str
+
+
 class MeetingStart(BaseModel):
     """Launch a live-meeting copilot for a REAL meeting. The vexa-cloud bridge POSTs this once it has a
     bot in the meeting; the dispatch then tails ``tc:meeting:{native_id}`` (the stream the bridge feeds)."""
@@ -263,6 +316,11 @@ class MeetingProcess(BaseModel):
     native_id: str
     platform: str = "google_meet"
     on: bool
+    # P0 (cross-tenant leak fix): the meetings-domain ROW id (unique per meeting run). When the terminal
+    # knows it (POST /bots returns it), the copilot's opt-in flag + cursor + processed stream key on it —
+    # so a re-sent bot on the same native link, or a DIFFERENT tenant on the same link, can never
+    # arm/clobber/read another meeting's processing. Falls back to native only when absent (legacy).
+    meeting_id: Optional[str] = None
     subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent.
 
 
@@ -299,21 +357,22 @@ def _sse(events) -> Iterator[str]:
 MEETING_CHAT_TRANSCRIPT_SEGMENTS = 400  # bound the live transcript folded into a meeting-chat prompt
 
 
-def _fold_meeting_transcript(redis_url: "str | None", native_id: str, *, limit: int) -> str:
-    """Fold the live transcript Stream ``tc:meeting:{native}`` — the SAME stream the meeting copilot
+def _fold_meeting_transcript(redis_url: "str | None", stream_key: str, *, limit: int) -> str:
+    """Fold the live transcript Stream ``tc:meeting:{stream_key}`` — the SAME stream the meeting copilot
     tails (worker/meeting.py) and the terminal renders — into ordered ``speaker: text`` lines for chat
-    grounding. Refining live drafts are upserted by ``segment_id`` (latest text wins, no duplicate),
-    arrival order preserved, bounded to the last ``limit`` segments. Best-effort: returns "" when redis
-    is unwired or the stream is empty/unreadable (the caller treats that as 'no transcript yet')."""
+    grounding. ``stream_key`` is the meetings-domain ROW id (P0 cross-tenant leak fix: the carrier keys
+    on the row id, never the native id which collides across tenants/re-sends). Refining live drafts are
+    upserted by ``segment_id`` (latest text wins, no duplicate), arrival order preserved, bounded to the
+    last ``limit`` segments. Best-effort: returns "" when redis is unwired or the stream is empty."""
     if not redis_url:
         return ""
     try:
         import redis
 
         r = redis.from_url(redis_url, decode_responses=True)
-        rows = r.xrange(f"tc:meeting:{native_id}")
+        rows = r.xrange(f"tc:meeting:{stream_key}")
     except Exception as exc:  # noqa: BLE001 — grounding is best-effort; never fail the chat turn
-        logger.warning("could not read transcript for %s: %s", native_id, exc)
+        logger.warning("could not read transcript for %s: %s", stream_key, exc)
         return ""
     order: list[str] = []
     seg_by_id: dict[str, dict] = {}
@@ -356,7 +415,12 @@ def _meeting_grounding(
     # A chat turn (trigger "message"), not a live-meeting serve — the transcript travels in the prompt,
     # so the dispatch context stays plain (no meeting env / serve path is engaged for a chat).
     ctx = {"kind": "none", "session": session}
-    transcript = _fold_meeting_transcript(redis_url, native, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+    # P0 (cross-tenant leak fix): read the transcript by the meetings-domain ROW id (``meeting_id``),
+    # which the terminal passes on the active meeting — the transcript carrier keys on it, never the
+    # native id (which would fold a DIFFERENT tenant's / an older row's transcript into this user's chat).
+    # Fall back to native only when the client didn't send a row id (legacy), documented as best-effort.
+    stream_key = m.get("meeting_id") or native
+    transcript = _fold_meeting_transcript(redis_url, str(stream_key), limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
     if transcript:
         preamble = (
             f"You are assisting in a live meeting ({platform}/{native}). Its live transcript so far is "
@@ -369,6 +433,47 @@ def _meeting_grounding(
     return (ctx, [], preamble + prompt)
 
 
+# ── SSE ownership gate (P0 cross-tenant leak fix — the SSE sibling of the by-id REST check) ──────────
+# The live SSE feed `GET /api/meeting/stream` is keyed on a CALLER-SUPPLIED row id (`meeting_id`) and a
+# `session_uid`. Row ids are sequential ints, so without an ownership check any authenticated user B could
+# `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript +
+# copilot cards — an ACTIVE, enumerable cross-tenant read. We mirror the WS `/ws` pattern (gateway
+# `authorize_subscribe` → `Meeting.user_id == user_id`) and the by-id REST path (`get_transcript_by_id`
+# owner-scopes in SQL): verify the caller OWNS the row BEFORE opening the redis stream. Fail CLOSED.
+#
+# agent-api has no meetings DB; it asks meeting-api `GET /meetings/{meeting_id}` forwarding the
+# gateway-injected `X-User-Id` (meeting-api's `_resolve_user_id` trusts it exactly as its by-id path does)
+# — a row owned by another user (or absent) returns 404 there → we treat it as NOT-OWNED. The returned
+# record's `native_meeting_id` also lets us confirm the requested `session_uid` belongs to the SAME owned
+# meeting, so B can't pair its own row with A's native to sniff A's copilot out-stream. Returns the owned
+# meeting record (dict) on success, else None. Injectable so the L2 suite drives it over a fake.
+def _http_meeting_owner_lookup(meeting_api_url: str):
+    """Build the default owner-lookup: GET {meeting_api_url}/meetings/{id} with the caller's X-User-Id.
+    Returns a callable ``(user_id: str, meeting_id: str) -> dict | None`` (the owned meeting record, or
+    None when the row is absent / owned by someone else / meeting-api is unreachable — fail-closed)."""
+    import urllib.error
+    import urllib.request
+
+    base = (meeting_api_url or "").rstrip("/")
+
+    def _lookup(user_id: str, meeting_id: str) -> "dict | None":
+        if not base or not user_id or not str(meeting_id).isdigit():
+            return None  # non-numeric row id can't be an owned meeting row → fail closed
+        try:
+            req = urllib.request.Request(
+                f"{base}/meetings/{int(meeting_id)}", headers={"X-User-Id": str(user_id)})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status != 200:
+                    return None
+                return json.loads(resp.read().decode() or "null")
+        except urllib.error.HTTPError:
+            return None   # 404 (not owned / absent) or any other status → refuse
+        except Exception:  # noqa: BLE001 — meeting-api unreachable → fail CLOSED, never open the stream
+            return None
+
+    return _lookup
+
+
 def create_app(
     dispatcher: Dispatcher,
     *,
@@ -378,6 +483,8 @@ def create_app(
     scheduler: Optional[SchedulerPort] = None,
     invocations_url: Optional[str] = None,
     redis_url: Optional[str] = None,
+    membership_index: Optional[MembershipIndex] = None,
+    meeting_owner_lookup: "Optional[object]" = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -389,18 +496,42 @@ def create_app(
         sess = _Sessions()
     live = _LiveMeetings()
     wsr = reader or WorkspaceReader("/workspaces")
+    mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
     app.state.live_meetings = live
     app.state.scheduler = scheduler
     settings = dispatcher.settings if dispatcher is not None else None
+    # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
+    _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
+        settings.meeting_api_url if settings is not None else "")
+
+    # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
+    # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
+    # x-user-id/x-user-email and re-injects the values it resolved from the verified api-key. In the
+    # current dev/direct topology the terminal and host-local clients reach agent-api WITHOUT the gateway
+    # hop (compose loopback + VEXA_AGENT_DEFAULT_SUBJECT fallback), so those headers are spoofable and
+    # restricted-mode invites MUST NOT be relied on as a security boundary here. A hardened deploy sets
+    # VEXA_REQUIRE_GATEWAY_IDENTITY=1: agent-api then rejects any request lacking the gateway's signed
+    # identity marker (X-Gateway-Verified), so identity headers are only honored when the gateway put
+    # them there. OFF by default so the dev/direct topology keeps working. Full fix = route the terminal
+    # through the gateway (Stage 4) and make the gateway the only thing that can reach agent-api.
+    _require_gateway_identity = os.environ.get("VEXA_REQUIRE_GATEWAY_IDENTITY", "").strip().lower() in ("1", "true", "yes")
 
     def subject_of(request: Request) -> str:
         """The authenticated subject (P20). The gateway resolves the api-key → user_id and injects
         ``X-User-Id``; agent-api derives the workspace/chat/quota partition from THAT, never from the
         client body/query. Fail-closed (401) when the header is absent, unless a single-user fallback
-        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front."""
+        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front.
+
+        When ``VEXA_REQUIRE_GATEWAY_IDENTITY`` is set, the request must additionally carry the gateway's
+        signed identity marker (``X-Gateway-Verified``) — a hardened deploy enforces that identity headers
+        were injected by the gateway, not forged by a direct/host-local caller (see the TOPOLOGY BOUNDARY
+        note above). This does NOT change the default dev/direct topology."""
+        if _require_gateway_identity and not request.headers.get("x-gateway-verified"):
+            raise HTTPException(status_code=401,
+                                detail="gateway-signed identity required (VEXA_REQUIRE_GATEWAY_IDENTITY)")
         uid = request.headers.get("x-user-id")
         if uid:
             return uid
@@ -501,17 +632,35 @@ def create_app(
         import redis as _redis
 
         r = _redis.from_url(redis_url, decode_responses=True)
+        # P0 (cross-tenant leak fix): the copilot's opt-in flag / cursor / processed stream ALL key on
+        # the meetings-domain ROW id — the native id is NOT unique (it collides across tenants + a user's
+        # re-sends), so keying processing state by it armed / clobbered / resumed the wrong meeting. Prefer
+        # the row id the terminal passes (POST /bots returns it); else resolve it off the live registry
+        # (the watcher learns it from the segments' numeric meeting_id and stamps native_id on the entry).
+        # Fall back to native only when neither is available (legacy client + not-yet-live) — documented as
+        # a bootstrap-only path that arms once the row id is known.
+        live_entry = next(
+            (m for m in live.list()
+             if m.get("native_id") == body.native_id or m.get("session_uid") == body.native_id),
+            None,
+        )
+        row_id = (
+            body.meeting_id
+            or (str(live_entry["numeric_meeting_id"])
+                if live_entry and live_entry.get("numeric_meeting_id") else None)
+        )
+        key = row_id or body.native_id
         # The opt-in flag has its OWN key suffix — it must NOT collide with the processed-notes STREAM
-        # ``proc:meeting:{native}`` the worker XADDs (worker.py), else a GET on the flag hits a stream →
+        # ``proc:meeting:{key}`` the worker XADDs (worker.py), else a GET on the flag hits a stream →
         # WRONGTYPE (crashes the watcher's arm loop). ``:cursor`` is likewise a distinct sibling key.
-        flag = f"proc:meeting:{body.native_id}:on"
-        cursor_key = f"proc:meeting:{body.native_id}:cursor"
+        flag = f"proc:meeting:{key}:on"
+        cursor_key = f"proc:meeting:{key}:cursor"
         if not body.on:
             try:
                 r.delete(flag)  # cursor is intentionally LEFT in place (frozen) for the next re-enable
             except Exception:  # noqa: BLE001 — best-effort; the watcher reaps the copilot on TTL anyway
                 pass
-            return {"native_id": body.native_id, "processing": False}
+            return {"native_id": body.native_id, "meeting_id": row_id, "processing": False}
         cursor: str | None = None
         try:
             r.set(flag, "1")
@@ -520,38 +669,40 @@ def create_app(
             cursor = None
         # Gap-fill from the cursor (last cleaned raw id); no cursor yet ⇒ from the start of the transcript.
         start_id = cursor or "0-0"
+        # The dispatch routes by the ROW id (meeting_id) — matching the watcher's row-keyed carriers — and
+        # carries the native SEPARATELY for the readable kg doc name (nuance #1). numeric_meeting_id is the
+        # explicit row-id hint the db-writer needs to persist the processed doc.
         meeting_ref: dict = {
-            "meeting_id": body.native_id, "session_uid": body.native_id,
+            "meeting_id": key, "session_uid": key,
             "platform": body.platform, "transcript_start_id": start_id,
+            "native_id": body.native_id,
         }
-        # Key the copilot's processed-notes stream by the meetings-domain ROW id when the watcher has
-        # already registered it on the live entry (it learns it from the segments' numeric meeting_id).
-        # The row id is unique per meeting run — a re-sent bot on the same native link never
-        # mixes/clobbers a previous meeting's processed doc — and the meeting-api db-writer drains
-        # proc:meeting:{numeric} into the meeting row's data JSONB (the durable processed doc).
-        live_entry = next((m for m in live.list() if m.get("session_uid") == body.native_id), None)
-        if live_entry and live_entry.get("numeric_meeting_id"):
-            meeting_ref["numeric_meeting_id"] = str(live_entry["numeric_meeting_id"])
+        if row_id:
+            meeting_ref["numeric_meeting_id"] = str(row_id)
         inv = units.make_dispatch(
             subject=subject_of(request), trigger="transcription",
             start=units.entrypoint(inline=_MEETING_BRIEF),
             context={"kind": "meeting", "meeting": meeting_ref},
         )
         dispatcher.dispatch(inv)
-        return {"native_id": body.native_id, "processing": True, "resumed_from": start_id}
+        return {"native_id": body.native_id, "meeting_id": row_id, "processing": True, "resumed_from": start_id}
 
     @app.post("/api/chat")
     def chat(body: ChatBody, request: Request):
-        """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE."""
+        """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE.
+
+        RESUMABLE (mirrors /api/meeting/stream): every SSE event carries an ``id:`` = the unit output
+        Stream cursor. A dropped view (per-dispatch worker cold-start races the SSE, a transient proxy
+        drop) reconnects with ``Last-Event-ID`` — we then RE-ATTACH to the SAME warm unit and resume the
+        read from that cursor (gapless) WITHOUT dispatching a second turn. The turn was never lost (the
+        worker completes + commits regardless); resume just re-shows the output the client missed."""
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         session = body.session or units.DEFAULT_CHAT_SESSION
-        # Upsert the durable index on use: a new thread is titled by its first prompt; an existing one
-        # just bumps last_active (title preserved).
-        is_new = not any(r["session"] == session for r in sess.list(subject))
-        sess.upsert(subject, session,
-                    title=_truncate_title(body.prompt) if is_new else None)
+        # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
+        # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
+        resume = request.headers.get("last-event-id") or None
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
         # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the copilot tails) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
@@ -561,9 +712,19 @@ def create_app(
             subject=subject, trigger="message",
             start=units.entrypoint(inline=prompt), context=ctx, tools=tools,
         )
-        unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
+        if resume:
+            # Re-attach only — the warm unit id is deterministic from (subject, session); resume reads
+            # its durable output Stream from the cursor. No new turn, no session re-title.
+            unit_id = units.dispatch_id(inv)
+        else:
+            # Upsert the durable index on first use of a thread: a new thread is titled by its first
+            # prompt; an existing one just bumps last_active (title preserved).
+            is_new = not any(r["session"] == session for r in sess.list(subject))
+            sess.upsert(subject, session,
+                        title=_truncate_title(body.prompt) if is_new else None)
+            unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
         return StreamingResponse(
-            _sse(stream_reader.read(unit_id)),
+            _sse(stream_reader.read(unit_id, resume=resume)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                      "X-Unit-Id": unit_id, "X-Chat-Session": session},
@@ -812,6 +973,56 @@ def create_app(
             "nested": result.nested,
         }
 
+    # ── the additive mount set (WP-A2.1): ACTIVE-SET membership over swap's park/restore machinery ──────
+    @app.get("/api/workspace/active")
+    def ws_active(request: Request):
+        """The subject's ordered ACTIVE SET — the workspaces the next dispatch mounts (the private baseline
+        first, then any activated extras). Each: ``slug, repo, ref, role, path, write, primary``."""
+        subject = subject_of(request)
+        try:
+            mounts = active_workspaces(wsr.root, subject)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        return {
+            "subject": subject,
+            "active": [
+                {"slug": m.slug, "repo": m.repo, "ref": m.ref, "role": m.role,
+                 "path": m.path, "write": m.write, "primary": m.primary}
+                for m in mounts
+            ],
+        }
+
+    @app.post("/api/workspace/activate")
+    def ws_activate(request: Request, body: WorkspaceActivateBody = Body(default=WorkspaceActivateBody())):
+        """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
+        Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
+        subject = subject_of(request)
+        try:
+            result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                        slug=body.slug or None, token=body.token or None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown workspace")
+        except CloneError as exc:
+            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+        return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
+                "cloned": result.cloned, "nested": result.nested}
+
+    @app.post("/api/workspace/deactivate")
+    def ws_deactivate(request: Request, body: WorkspaceDeactivateBody = Body(...)):
+        """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot
+        be deactivated (409). Idempotent — a not-active slug is a no-op."""
+        subject = subject_of(request)
+        try:
+            result = deactivate_workspace(wsr.root, subject, body.slug)
+        except ValueError as exc:
+            # invalid subject vs the non-deactivatable baseline — distinguish by message
+            if "baseline" in str(exc):
+                raise HTTPException(status_code=409, detail="the private baseline workspace is always active")
+            raise HTTPException(status_code=400, detail="invalid subject")
+        return {"subject": result.subject, "slug": result.slug, "changed": result.changed}
+
     @app.post("/api/workspace/publish")
     def ws_publish(request: Request, body: WorkspacePublishBody = Body(...)):
         """Publish this subject's vexa-born workspace to GitHub — the counterpart of swap/attach.
@@ -866,6 +1077,30 @@ def create_app(
         (the durable store kept them, so they only reappeared post-time)."""
         if not redis_url:
             raise HTTPException(status_code=501, detail="redis not wired")
+
+        # P0 (cross-tenant leak fix — SSE sibling of the by-id REST ownership check): OWNER-SCOPE the live
+        # feed BEFORE opening any redis stream. `meeting_id` (row id) + `session_uid` arrive from the
+        # caller's query params; row ids are sequential ints, so without this an authenticated user B could
+        # `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript
+        # + copilot cards (an ACTIVE, enumerable cross-tenant read). Mirror the WS `/ws` path: derive the
+        # caller identity (`subject_of` → 401 on no gateway-injected X-User-Id) and verify the caller OWNS
+        # the requested row (meeting-api `GET /meetings/{id}` owner-scopes in SQL: `Meeting.user_id ==
+        # user_id` → 404 for a foreign/absent row). Fail CLOSED (403) BEFORE the stream opens.
+        # OWNER-ONLY for now (matches the WS path today); a shared-workspace membership grant would extend
+        # `_meeting_owner_lookup` — the clean seam — but is intentionally NOT honored here yet.
+        subject = subject_of(request)  # 401 if no (gateway-injected) identity — fail closed
+        owned = _meeting_owner_lookup(subject, meeting_id)
+        if owned is None:
+            # Absent row, or a row owned by a DIFFERENT tenant → refuse (404-equivalent, no stream opened).
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        # Defense-in-depth on the copilot out-stream: `session_uid` is ALSO caller-supplied and keys
+        # `unit:agent-meet-{session_uid}:out`. The terminal always passes the meeting's own native id as
+        # `session_uid` (meetingLive.ts). Bind it to the OWNED meeting's native so B can't pair its own row
+        # with A's native to sniff A's copilot cards. `session_uid == row id` (the /api/meeting/start
+        # legacy shape, where native==row==session) is also accepted.
+        owned_native = str(owned.get("native_meeting_id") or "")
+        if session_uid not in (owned_native, str(meeting_id)):
+            raise HTTPException(status_code=403, detail="session_uid does not match this meeting")
 
         resume_t, resume_o = _decode_sse_cursor(request.headers.get("last-event-id"))
 
@@ -940,12 +1175,154 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+
+    # ── workspace membership + invites + roles (Lane M) ───────────────────────────────────────────
+    # The access layer for SHARED workspaces. Authoritative store = policy/members.json + policy/
+    # invites.json in the workspace's OWN git repo (PLATFORM-WRITE-ONLY, committed via
+    # membership_mod.policy_commit); mirror = users.data.memberships[] over the injected index.
+    # is_member(workspace_id, subject) -> role|None is the seam Lane A calls for mount/subscribe authz.
+    def _pc(ws, message):
+        return membership_mod.policy_commit(ws, message)
+
+    def _member_error(exc: MembershipError):
+        return HTTPException(status_code=exc.status, detail=str(exc))
+
+    @app.post("/api/workspace/invites", status_code=201)
+    def ws_invite_create(request: Request, body: InviteCreateBody = Body(...)):
+        """Mint a scoped invite token for a shared workspace. Auth: owner OR contributor of the target.
+        The workspace must be shareable (reserved/own-private refused). The token is returned ONCE; only
+        its hash is persisted in policy/invites.json."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, body.workspace_id, subject, "contributor")
+            minted = membership_mod.mint_invite(
+                wsr.root, body.workspace_id, role=body.role, created_by=subject,
+                expires_in_sec=body.expires_in_sec, max_uses=body.max_uses,
+                mode=body.mode, allowed_emails=body.allowed_emails, commit_fn=_pc,
+            )
+        except MembershipError as exc:
+            raise _member_error(exc)
+        # The client composes the accept URL; we hand back the token + id + terms once.
+        return {
+            "id": minted.id, "token": minted.token, "role": minted.role,
+            "workspace_id": body.workspace_id, "expires_at": minted.expires_at,
+            "max_uses": minted.max_uses, "mode": body.mode,
+            "accept_path": "/api/workspace/invites/accept",
+        }
+
+    @app.post("/api/workspace/invites/accept")
+    def ws_invite_accept(request: Request, body: InviteAcceptBody = Body(...)):
+        """Redeem an invite token (any logged-in user) → membership in BOTH stores, use-count bumped.
+        Idempotent per user (accepting twice = one membership, no extra use consumed). The token carries
+        NO workspace id — we resolve it by scanning the shareable workspaces' invites for its hash.
+        Post-auth redeem (AMENDMENT 5): the caller is an already-authenticated user (X-User-Id); a
+        RESTRICTED invite additionally requires their VERIFIED email (X-User-Email, gateway-injected)
+        to be in the invite's allowed_emails."""
+        subject = subject_of(request)
+        # SECURITY BOUNDARY: X-User-Email is trusted as the caller's VERIFIED email ONLY because the
+        # gateway strips any client-sent x-user-email and re-injects the value it resolved from the
+        # api-key. That invariant holds solely when the gateway is agent-api's SOLE ingress. Today the
+        # terminal / host-local clients reach agent-api directly (no gateway hop), so on the direct edge
+        # this header is spoofable — restricted-mode invites are NOT a security boundary until agent-api
+        # is gateway-fronted (Stage 4). VEXA_REQUIRE_GATEWAY_IDENTITY (checked in subject_of) lets a
+        # hardened deploy reject non-gateway callers. See the TOPOLOGY BOUNDARY note in create_app.
+        subject_email = request.headers.get("x-user-email")
+        h = membership_mod.hash_token(body.token)
+        # Resolve which shared workspace this token belongs to by hash (never trust a client-declared id).
+        target_ws = None
+        root = wsr.root
+        for child in sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
+            slug = child.name
+            if slug.startswith(".") or slug in membership_mod.RESERVED_SLUGS:
+                continue
+            for inv in membership_mod._read_json_list(child, membership_mod.INVITES_FILE):
+                if inv.get("hash") == h:
+                    target_ws = slug
+                    break
+            if target_ws:
+                break
+        if target_ws is None:
+            raise HTTPException(status_code=404, detail="invalid invite")
+        try:
+            result = membership_mod.accept_invite(
+                wsr.root, target_ws, token=body.token, subject=subject, subject_email=subject_email,
+                index=mindex, commit_fn=_pc,
+            )
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return result
+
+    @app.delete("/api/workspace/invites/{invite_id}")
+    def ws_invite_revoke(invite_id: str, request: Request, workspace_id: str):
+        """Revoke an invite (owner/contributor of the workspace)."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+            membership_mod.revoke_invite(wsr.root, workspace_id, invite_id, commit_fn=_pc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return {"ok": True, "invite_id": invite_id}
+
+    @app.get("/api/workspace/invites")
+    def ws_invites_list(request: Request, workspace_id: str):
+        """List a workspace's invites (owner/contributor). Hashes are never surfaced."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+            return {"invites": membership_mod.list_invites(wsr.root, workspace_id)}
+        except MembershipError as exc:
+            raise _member_error(exc)
+
+    @app.get("/api/workspace/members")
+    def ws_members_list(request: Request, workspace_id: str):
+        """List a workspace's members (owner/contributor)."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+            return {"members": membership_mod.read_members(wsr.root, workspace_id)}
+        except MembershipError as exc:
+            raise _member_error(exc)
+
+    @app.delete("/api/workspace/members/{member_subject}")
+    def ws_member_remove(member_subject: str, request: Request, workspace_id: str):
+        """Remove a member (owner only)."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
+            membership_mod.remove_member(wsr.root, workspace_id, member_subject, index=mindex, commit_fn=_pc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return {"ok": True, "subject": member_subject}
+
+    @app.post("/api/workspace/members/{member_subject}/role")
+    def ws_member_role(member_subject: str, request: Request, workspace_id: str,
+                       body: RoleSetBody = Body(...)):
+        """Flip a member's role (owner only) — read <-> read/write permissions."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
+            rec = membership_mod.set_role(
+                wsr.root, workspace_id, member_subject, body.role,
+                changed_by=subject, index=mindex, commit_fn=_pc,
+            )
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return rec
+
+    @app.get("/api/workspace/shared")
+    def ws_shared_list(request: Request):
+        """The "workspaces shared with me" listing from the index (users.data.memberships[])."""
+        subject = subject_of(request)
+        try:
+            return {"memberships": mindex.list(subject)}
+        except Exception:
+            return {"memberships": []}
     return app
 
 
 # ── ASGI entrypoint (PEP 562) — `uvicorn control_plane.api:app` resolves this lazily ──────────────────
 def _build_production_app() -> FastAPI:
-    from shared.adapters import LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
+    from shared.adapters import AdminApiMembershipIndex, LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
     from shared.config import load_settings
     from control_plane.config_preflight import preflight
     from control_plane.workspace_routines import start_workspace_routine_reconciler
@@ -962,6 +1339,14 @@ def _build_production_app() -> FastAPI:
     identity = LocalIdentityMinter(settings.dispatch_signing_key.get_secret_value())
     dispatcher = Dispatcher(settings, runtime, identity)
     invocations_url = settings.agent_api_self_url.rstrip("/") + "/invocations"
+    # Lane M: the membership index mirror (users.data.memberships[]) over the admin-api internal edge.
+    # Empty admin_api_url → the in-memory index (git files stay authoritative; only "shared with me"
+    # listing is degraded, per Q6). create_app defaults to InMemoryMembershipIndex when None is passed.
+    membership_index = None
+    if settings.admin_api_url:
+        membership_index = AdminApiMembershipIndex(
+            settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
+        )
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),
@@ -969,6 +1354,7 @@ def _build_production_app() -> FastAPI:
         scheduler=scheduler,
         invocations_url=invocations_url,
         redis_url=settings.redis_url,
+        membership_index=membership_index,
     )
     app.state.workspace_routine_reconciler = start_workspace_routine_reconciler(
         scheduler=scheduler,

@@ -12,6 +12,7 @@ import { Icon } from "../ui-kit";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
+import { streamChatTurn } from "./chatStream";
 import { useLiveMeetings } from "./liveMeetings";
 import { type MeetingMock } from "./meetingModel";
 import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
@@ -688,57 +689,49 @@ export function Chat({ params = {} }: ChatProps) {
       nextId: Math.max(s.nextId, n + 1),
       abort: ctrl,
     }));
+    // Cold-start / mid-turn-drop robustness lives in streamChatTurn: a chat turn spawns a FRESH
+    // per-dispatch worker (docker backend) that takes seconds to boot, and the turn is NEVER lost even
+    // if the SSE closes early (durable, resumable output Stream). So instead of "No chat output arrived"
+    // the instant a stream ends, it RESUMES from the last SSE cursor (Last-Event-ID) and keeps rendering.
+    // While no output has shown we keep an italic "starting" marker so the pane never looks dead — cleared
+    // the instant the first real delta arrives (deltas append, so we must not concat onto it).
+    const STARTING = "_Starting agent…_";
+    const clearStarting = (t: AgentTurn): AgentTurn => (t.text === STARTING ? { ...t, text: "" } : t);
+    const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
+    // The active center tab grounds the turn: a meeting passes {kind, platform, native_id, meeting_id} so
+    // agent-api folds its live transcript into the prompt server-side; a file passes {kind, ref}.
+    // P0 (cross-tenant leak fix): `meeting_id` is the meetings-domain ROW id (the mock's `id`) — the
+    // transcript carrier keys on it, so grounding reads THIS row's transcript (`tc:meeting:{row_id}`),
+    // never a DIFFERENT tenant's / an older row's under the shared native. `native_id` is display only.
+    const active = !ground || !contextRef
+      ? undefined
+      : contextRef.kind === "meeting"
+        ? { kind: "meeting", native_id: contextRef.value, meeting_id: activeMeeting?.id, platform: meetingPlatformSlug(activeMeeting) }
+        : { kind: contextRef.kind, ref: contextRef.raw };
     try {
-      const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
-      // The active center tab grounds the turn: a meeting passes {kind, platform, native_id} so agent-api
-      // folds its live transcript (tc:meeting:{native}) into the prompt server-side; a file passes {kind, ref}.
-      const active = !ground || !contextRef
-        ? undefined
-        : contextRef.kind === "meeting"
-          ? { kind: "meeting", native_id: contextRef.value, platform: meetingPlatformSlug(activeMeeting) }
-          : { kind: contextRef.kind, ref: contextRef.raw };
-      const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, session: sessionForSend, active }), signal: ctrl.signal });
-      if (!r.ok) throw new Error(`Chat request failed (${r.status})`);
-      const reader = r.body?.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      let sawVisibleOutput = false;
-      while (reader) {
-        const { value: chunk, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(chunk, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          let ev: { type: string; text?: string; tool?: string; sha?: string; ok?: boolean; reply?: string };
-          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-          if (ev.type === "message-delta") {
-            sawVisibleOutput = sawVisibleOutput || Boolean(ev.text);
-            patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") + (ev.text ?? "") }));
-          }
-          else if (ev.type === "tool-call") {
-            sawVisibleOutput = true;
-            patchAgentTurn(key, agentId, (t) => ({ ...t, ops: [...t.ops, toolOp(ev.tool ?? "tool")] }));
-          }
-          else if (ev.type === "commit") patchAgentTurn(key, agentId, (t) => ({ ...t, commit: ev.sha }));
-          else if (ev.type === "rejected") patchAgentTurn(key, agentId, (t) => ({ ...t, rejected: "workspace.v1 violation — reverted" }));
-          else if (ev.type === "done" && ev.ok === false) {
-            sawVisibleOutput = true;
-            patchAgentTurn(key, agentId, (t) => ({
-              ...t,
-              text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${ev.reply ? `: ${ev.reply}` : "."}`,
-            }));
-          }
-        }
-        if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-      }
-      if (!sawVisibleOutput) {
-        patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") || "No chat output arrived before the stream closed." }));
+      const result = await streamChatTurn(
+        { prompt: p, session: sessionForSend, active },
+        {
+          onStarting: () => patchAgentTurn(key, agentId, (t) => (t.text || t.ops.length ? t : { ...t, text: STARTING })),
+          onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...clearStarting(t), text: (clearStarting(t).text ?? "") + text })),
+          onTool: (tool) => patchAgentTurn(key, agentId, (t) => ({ ...clearStarting(t), ops: [...t.ops, toolOp(tool)] })),
+          onCommit: (sha) => patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })),
+          onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, rejected: "workspace.v1 violation — reverted" })),
+          onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` }; }),
+          onError: (msg) => patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + msg }; }),
+          onProgress: () => { if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); },
+        },
+        { signal: ctrl.signal },
+      );
+      if (!result.aborted && !result.sawVisibleOutput && !result.terminal) {
+        // No output AND no clean end after resume + the hard cap → a genuinely stuck/failed turn.
+        patchAgentTurn(key, agentId, (t) => ({ ...clearStarting(t), text: (clearStarting(t).text ?? "") || "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." }));
+      } else {
+        patchAgentTurn(key, agentId, (t) => clearStarting(t));  // drop any lingering starting marker
       }
     } catch (e) {
-      if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
-      else patchAgentTurn(key, agentId, (t) => ({ ...t, text: (t.text ?? "") + (t.text ? "\n\n" : "") + ((e as Error)?.message || "Chat request failed.") }));
+      if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + "_stopped_" }; });
+      else patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + ((e as Error)?.message || "Chat request failed.") }; });
     } finally {
       updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
     }

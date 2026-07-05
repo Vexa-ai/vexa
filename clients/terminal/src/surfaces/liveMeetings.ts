@@ -131,10 +131,18 @@ function toMock(d: MeetingRowDTO): MeetingMock {
   const raw = displayStatus(d);
   const live = LIVE_STATUSES.has(d.status);
   const native = d.native_meeting_id;
+  // P0 (cross-tenant leak + wrong-row hydration fix): the tab identity + the live SUBSCRIBE key is the
+  // meetings-domain ROW id (`d.id`), NOT the native code. The native id is NOT unique — it collides
+  // across a user's re-sends of the same link (distinct rows) and across DIFFERENT tenants. Keying the
+  // tab/subscribe by the row id makes every row a DISTINCT meeting: it subscribes to its OWN row-keyed
+  // transcript stream (`tc:meeting:{id}`) and its OWN copilot out-stream (`agent-meet-{id}`), and fetches
+  // its OWN durable transcript by id. The native id rides on `native_id` for DISPLAY + bot actions
+  // (send/stop target the native), and the readable meeting-doc name.
+  const id = String(d.id);
   return {
-    id: native,
+    id,
     native_id: native,
-    session_uid: live ? native : undefined,  // only live meetings subscribe to the copilot stream
+    session_uid: live ? id : undefined,  // only live meetings subscribe to the copilot stream — by ROW id
     title: `${d.platform === "google_meet" ? "Google Meet" : d.platform} · ${native}`,
     when: whenLabel(d, live),
     status: live ? "live" : "past",
@@ -159,8 +167,10 @@ async function snapshot() {
     const r = await fetch("/api/meetings", { cache: "no-store" });
     const { meetings: list } = (await r.json()) as { meetings: MeetingRowDTO[] };
     if (revision !== storeRevision) return;
-    // meeting-api returns one row per bot-launch; the same Meet relaunched yields several rows with the
-    // same native code. Dedupe to ONE row per native (newest wins — the list is newest-first).
+    // P0: meeting-api returns one row per bot-launch. Each row is a DISTINCT meeting run (its own
+    // transcript/processed doc), so we keep them ALL — no longer collapsed to one row per native (that
+    // collapse hydrated the wrong row's notes). Dedup is keyed by the ROW id purely to defend against a
+    // duplicated row in the list (idempotent), never to merge distinct rows sharing a native.
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) => `${x.id}|${x.live_status}|${x.has_recording}`).join(",");
@@ -178,8 +188,11 @@ async function snapshot() {
  *  re-snapshot so a freshly-created (scheduled/idle) meeting surfaces. */
 function applyFrame(f: { meeting_id?: number | string; native?: string; status: string; when?: string }) {
   storeRevision += 1;
+  // P0: match the ROW id first (`meeting_id`) — a native-only match would patch EVERY row sharing that
+  // native (several distinct meetings), flipping the wrong rows' status. Fall back to native only when
+  // the frame carries no row id (older producer), accepting that ambiguity for that legacy frame shape.
   const i = meetings.findIndex(
-    (m) => (f.native && m.native_id === f.native) || (f.meeting_id != null && m.id === String(f.meeting_id)),
+    (m) => (f.meeting_id != null && m.id === String(f.meeting_id)) || (f.native != null && f.meeting_id == null && m.native_id === f.native),
   );
   if (i < 0) { void snapshot(); return; }
   const live = LIVE_STATUSES.has(f.status);
@@ -188,7 +201,7 @@ function applyFrame(f: { meeting_id?: number | string; native?: string; status: 
     ...cur,
     live_status: f.status,
     status: live ? "live" : "past",
-    session_uid: live ? cur.native_id : undefined,
+    session_uid: live ? cur.id : undefined,  // subscribe by the ROW id (P0)
     scheduled_at: f.status === "scheduled" ? (f.when ?? cur.scheduled_at) : cur.scheduled_at,
   };
   meetings = [...meetings.slice(0, i), nextRow, ...meetings.slice(i + 1)];
@@ -210,12 +223,17 @@ const EMPTY_DURABLE: DurableTranscript = { lines: [], notes: [] };
 /** Fetch a meeting's DURABLE transcript over REST (gateway → meeting-api): the recorded segments
  *  for the transcript pane PLUS the copilot's persisted processed notes (data.processed.views —
  *  the copilot-notes view). For a past meeting this is THE source; for a live one it seeds
- *  whatever was persisted before the client connected. Returns empties on error. */
-export async function fetchDurableTranscript(platform: string, nativeId: string): Promise<DurableTranscript> {
-  // the platform on the mock is display-cased ("Google Meet") — normalise back to the API slug
-  const slug = platform === "Google Meet" ? "google_meet" : platform.toLowerCase().replace(/\s+/g, "_");
+ *  whatever was persisted before the client connected. Returns empties on error.
+ *
+ *  P0 (wrong-row hydration fix): fetch by the meetings-domain ROW id via
+ *  `GET /api/transcripts/by-id/{meetingId}` (owner-scoped downstream). The native path
+ *  (`/transcripts/{platform}/{native}`) resolves to the NEWEST row for that native, so a user with
+ *  several rows on the same link always read the latest — the notes of an OLDER row vanished. Fetching
+ *  by the exact row id returns THAT row's segments + processed notes, never a sibling's (and never
+ *  another tenant's). `meetingId` is the row id the mock now carries as `id`. */
+export async function fetchDurableTranscript(meetingId: string): Promise<DurableTranscript> {
   try {
-    const r = await fetch(`/api/transcripts/${slug}/${encodeURIComponent(nativeId)}`, { cache: "no-store" });
+    const r = await fetch(`/api/transcripts/by-id/${encodeURIComponent(meetingId)}`, { cache: "no-store" });
     if (!r.ok) return EMPTY_DURABLE;
     const body = (await r.json()) as TranscriptResponseDTO;
     const list = body.segments || [];
@@ -228,10 +246,10 @@ export async function fetchDurableTranscript(platform: string, nativeId: string)
   }
 }
 
-/** Fetch a PAST meeting's recorded transcript lines (segments only). Kept for callers that don't
- *  need the processed notes. */
-export async function fetchTranscript(platform: string, nativeId: string): Promise<TranscriptLine[]> {
-  return (await fetchDurableTranscript(platform, nativeId)).lines;
+/** Fetch a PAST meeting's recorded transcript lines (segments only), by the ROW id. Kept for callers
+ *  that don't need the processed notes. */
+export async function fetchTranscript(meetingId: string): Promise<TranscriptLine[]> {
+  return (await fetchDurableTranscript(meetingId)).lines;
 }
 
 /** Last-known meeting by id (sync) — lets non-hook lookups resolve a real meeting. */

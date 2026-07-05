@@ -201,10 +201,16 @@ services:
     environment:
       - VEXA_AGENT_API_PORT=8100
       - VEXA_RUNTIME_API_URL=http://runtime:8090
+      # P0 SSE ownership: agent-api verifies meeting-row ownership before opening /api/meeting/stream (owner-scoped like /ws).
+      - VEXA_MEETING_API_URL=http://meeting-api:8080
       # How the runtime's scheduler reaches this service's /invocations sink when a routine fires (MVP2).
       - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
       - VEXA_AGENT_PROFILE=agent
       - VEXA_WORKSPACES_DIR=/workspaces
+      # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
+      # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
       # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
       # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
@@ -226,6 +232,11 @@ services:
       - VEXA_REDIS_URL=redis://redis:6379/0
       # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
       - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
+      # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global) mounted
+      # READ-ONLY into every worker (behaviour/skills/tools). Empty = no _global mount (mount-when-present);
+      # REF pins it to a branch/tag/sha for safe rollout, empty = HEAD.
+      - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
+      - VEXA_GLOBAL_SYSTEM_WORKSPACE_REF=${VEXA_GLOBAL_SYSTEM_WORKSPACE_REF:-}
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
       - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.

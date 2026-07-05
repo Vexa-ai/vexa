@@ -7,14 +7,14 @@ import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
-import { Icon } from "../ui-kit";
+import { Icon, Checkbox } from "../ui-kit";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocNavContext, type DocNavigate } from "../ui-kit/MdxDoc";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, publishWorkspace, type GitState, type AttachedWorkspaces, type PublishResult } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path } });
 
@@ -265,6 +265,10 @@ const SS_WS_OPEN = "ws.attach.open";
 export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  // exported for the surface test
   const [open, setOpen] = useState<boolean>(() => readSS(SS_WS_OPEN) === "1");  // default collapsed
   const [view, setView] = useState<AttachedWorkspaces>({ active: null, slots: {} });
+  // The ADDITIVE active set (WP-A2.1): the slugs currently MOUNTED into the agent turn. Distinct from
+  // `view.active` (the single private-baseline primary) — a workspace can be MOUNTED (in the set) or just
+  // AVAILABLE (parked). Drives the per-row toggle; the baseline is always in the set and non-deactivatable.
+  const [activeSet, setActiveSet] = useState<ActiveMount[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<{ repo: string; ref: string; token: string } | null>(null);  // non-null = attach form shown
@@ -273,19 +277,35 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const [published, setPublished] = useState<PublishResult | null>(null);  // last publish success (repo URL shown)
   const [renaming, setRenaming] = useState<string | null>(null);  // slug whose name is being edited inline
   const cancelled = useRef(false);  // Escape vs Enter/blur on the rename input (blur fires for both)
-  const load = () => { void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e))); };
+  const load = () => {
+    void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+    void readActiveSet().then((s) => setActiveSet(s.active)).catch(() => { /* active-set is additive UI; a failure just leaves the toggles at the baseline */ });
+  };
   useEffect(() => { if (open) load(); }, [open]);
   const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_WS_OPEN, n ? "1" : "0"); return n; });
+  const mountedSlugs = new Set(activeSet.map((m) => m.slug));
+  const primarySlug = activeSet.find((m) => m.primary)?.slug ?? view.active ?? "seed";
 
-  const doSwap = async (repo: string | undefined, ref?: string, token?: string, fresh?: boolean) => {
+  // Per-row active toggle (WP-A2.1): ADD a parked workspace to the mount set (activate) or REMOVE it
+  // (deactivate — parked, never destroyed). The private baseline is always mounted + cannot be dropped.
+  const toggleActive = async (slug: string, mounted: boolean) => {
+    if (slug === primarySlug) return;  // the private baseline is always active
     setBusy(true); setErr(null);
-    try { await swapWorkspace(repo, ref, token, fresh); load(); onSwapped(); setForm(null); }
+    try { if (mounted) { await deactivateWorkspace(slug); } else { await activateWorkspace({ slug }); } load(); onSwapped(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
 
-  // Swap to an existing slot by SLUG (restores the parked tree, no re-clone — reaches no-repo slots like
-  // the seed and the 'start fresh' backup). `fresh` (seed only) rebuilds the default from the template.
+  // ADD a repo to the mount set (additive — does NOT park the others), then re-load so its row shows mounted.
+  const doAttach = async (repo: string, ref?: string, token?: string) => {
+    setBusy(true); setErr(null);
+    try { await activateWorkspace({ repo, ref, token }); load(); onSwapped(); setForm(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  // Swap to an existing slot by SLUG (restores the parked tree, no re-clone). Retained for the
+  // list-level 'Start fresh' action (#59): a seed-fresh rebuild that re-homes the private baseline.
   const swapToSlot = async (slug: string, fresh?: boolean) => {
     setBusy(true); setErr(null);
     try { await swapWorkspace(undefined, undefined, undefined, fresh, slug); load(); onSwapped(); }
@@ -332,39 +352,47 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
       {open && (<>
         {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
-          // A never-swapped subject (view.active === null) is already ON the seed, so the seed row is
-          // the ACTIVE one — render it active + non-clickable. Without this it shows as ○ and clicking
-          // it triggers a destructive swap that parks the live workspace and swaps in a blank re-seed.
-          const active = view.active === slug || (!view.active && slug === "seed");
+          // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
+          // into the agent turn, UNCHECKED = AVAILABLE (parked, check to mount). Multiple rows can be
+          // checked at once — the mount set is ADDITIVE, so a checkbox (multi-select) is the right
+          // affordance; a filled/hollow dot read as a single-select radio. The private baseline is always
+          // mounted + can't be unchecked (a never-swapped subject is on the seed, so the seed row is the
+          // baseline) — its checkbox is checked + disabled.
+          const mounted = mountedSlugs.has(slug) || (mountedSlugs.size === 0 && slug === primarySlug);
+          const isPrimary = slug === primarySlug;
           const isRenaming = renaming === slug;
           const display = meta.name || label(slug, meta.repo);
+          const toggleTitle = isPrimary ? "always active (your private workspace)"
+            : mounted ? "Mounted into the agent — uncheck to unmount (park)" : "Available — check to mount into the agent";
           return (
             <div key={slug}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
-              onMouseEnter={(e) => { if (!active && !isRenaming) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-              <span style={{ width: 14, flex: "none", color: active ? "var(--green)" : "var(--t3)" }}>{active ? "●" : "○"}</span>
+              onMouseEnter={(e) => { if (!isRenaming) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              <Checkbox checked={mounted} disabled={isPrimary || busy}
+                onChange={() => void toggleActive(slug, mounted)}
+                title={toggleTitle} label={`${display} — ${mounted ? "mounted into the agent" : "available (parked)"}`} />
               {isRenaming ? (
                 <input autoFocus defaultValue={meta.name ?? ""} placeholder="display name" disabled={busy}
                   onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
                   onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(null); } else { void doRename(slug, e.currentTarget.value); } }}
                   style={{ flex: 1, fontSize: 12, padding: "3px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, color: "var(--t1)" }} />
               ) : (
-                <span onClick={() => !active && !busy && swapToSlot(slug)}
-                  title={active ? "Active workspace" : "Swap to this workspace"}
-                  style={{ flex: 1, color: active ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: active ? "default" : "pointer" }}>{display}</span>
+                <span onClick={() => !isPrimary && !busy && void toggleActive(slug, mounted)}
+                  title={toggleTitle}
+                  style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: isPrimary ? "default" : "pointer" }}>{display}</span>
               )}
               {/* Published-state affordances — ON the active row (publish is an action on THIS workspace,
                   not a list item): published → a link to its GitHub home (+ a secondary push-updates
                   action, re-publish is a plain push); not yet published (vexa-born only) → the publish
                   action itself. An attached workspace shows neither — it already has a home. */}
-              {!isRenaming && active && view.published_url && (
+              {!isRenaming && isPrimary && view.published_url && (
                 <a href={view.published_url} target="_blank" rel="noreferrer"
                   title={`Published — open on GitHub (${view.published_url})`}
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
                   <Icon name="github" size={12} />
                 </a>
               )}
-              {!isRenaming && active && activeBorn && !busy && (
+              {!isRenaming && isPrimary && activeBorn && !busy && (
                 <span onClick={() => { setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "", remoteUrl: view.published_url ?? undefined }); }}
                   title={view.published_url ? "Push updates to GitHub" : "Publish this workspace to GitHub…"}
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
@@ -386,7 +414,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           <div style={{ padding: "6px 9px", display: "flex", flexDirection: "column", gap: 6 }}>
             <input autoFocus value={form.repo} placeholder="git repo URL" disabled={busy}
               onChange={(e) => setForm({ ...form, repo: e.target.value })}
-              onKeyDown={(e) => { if (e.key === "Enter" && form.repo.trim()) void doSwap(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined); if (e.key === "Escape") setForm(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && form.repo.trim()) void doAttach(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined); if (e.key === "Escape") setForm(null); }}
               style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
             <input value={form.ref} placeholder="ref (optional, default main)" disabled={busy}
               onChange={(e) => setForm({ ...form, ref: e.target.value })}
@@ -395,7 +423,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
               onChange={(e) => setForm({ ...form, token: e.target.value })}
               style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
             <div style={{ display: "flex", gap: 8 }}>
-              <button disabled={busy || !form.repo.trim()} onClick={() => void doSwap(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined)}
+              <button disabled={busy || !form.repo.trim()} onClick={() => void doAttach(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined)}
                 style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
               <button disabled={busy} onClick={() => setForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
             </div>

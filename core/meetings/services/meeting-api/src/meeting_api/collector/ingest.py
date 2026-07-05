@@ -81,11 +81,16 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
     }
 
 
-def _native_stream(native: str) -> str:
-    """The per-meeting native transcript STREAM the collector owns as SINGLE writer (P23) — read by the
-    copilot worker (``serve_meeting``) and the terminal live SSE. (The agent relay used to write this;
-    the agent now only consumes it.)"""
-    return f"tc:meeting:{native}"
+def _transcript_stream(meeting_id: int) -> str:
+    """The per-meeting transcript STREAM the collector owns as SINGLE writer (P23) — read by the copilot
+    worker (``serve_meeting``) and the terminal live SSE.
+
+    P0 (cross-tenant leak fix): keyed by the meetings-domain numeric ROW id, NOT the native meeting id.
+    The native id is NOT unique — it collides across DIFFERENT users (a shared ``tc:meeting:{native}``
+    leaked one user's transcript to another) AND across ONE user's repeated meeting rows. The row id is
+    unique per (user, platform, native, run), so ``tc:meeting:{meeting_id}`` isolates every meeting. The
+    native id still rides in the wire payload for display (``_to_native_wire``)."""
+    return f"tc:meeting:{meeting_id}"
 
 
 def _to_native_wire(native: str, seg: dict) -> dict:
@@ -146,22 +151,23 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
 
     msg_type = data.get("type", "transcription")
     if msg_type == "session_end":
-        # P23: the collector owns tc:meeting:{native} — emit the session_end marker the copilot worker +
-        # terminal SSE read off it (the agent relay used to do this; the agent now only consumes).
-        native = data.get("native_meeting_id")  # prefer the producer-stamped native id (P23)
+        # P23/P0: the collector owns tc:meeting:{meeting_id} (the numeric ROW id, cross-tenant safe) —
+        # emit the session_end marker the copilot worker + terminal SSE read off it (the agent relay used
+        # to do this; the agent now only consumes). Key the marker by the numeric row id (never the
+        # native id, which collides across users/rows). The wire ``uid`` stays the native/session id for
+        # display. When no numeric id is present (an older bot that only sent a native/uid) there is no
+        # row to key on → skip; the copilot reaps on idle anyway.
         mid_raw = data.get("meeting_id")
-        if not native and mid_raw is not None:
+        try:
+            meeting_id = int(mid_raw) if mid_raw is not None else None
+        except (TypeError, ValueError):
+            meeting_id = None
+        if meeting_id is not None:
+            uid = data.get("native_meeting_id") or data.get("uid") or data.get("session_uid") or str(meeting_id)
             try:
-                pair = await _resolve_native(store, int(mid_raw))
-                native = pair[0] if pair else None
-            except (TypeError, ValueError):
-                native = None
-        native = native or data.get("uid") or data.get("session_uid")
-        if native:
-            try:
-                await redis.xadd(_native_stream(native), {"type": "session_end", "uid": native})
+                await redis.xadd(_transcript_stream(meeting_id), {"type": "session_end", "uid": uid})
             except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
-                _log_publish_failure(0, e)
+                _log_publish_failure(meeting_id, e)
         return 0
     if msg_type not in ("transcription", "transcript"):
         # session_start / speaker events are out of scope for this segment unit.
@@ -219,18 +225,20 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             )
         except Exception as e:  # noqa: BLE001 — publish is best-effort; persistence already succeeded
             _log_publish_failure(meeting_id, e)
-        # P23: the collector is the SINGLE writer of the native transcript feed tc:meeting:{native}.
-        # Append each persisted segment (confirmed + pending, in order) for the copilot worker +
-        # terminal SSE. Empty-text segments are skipped (parity with the old agent relay).
-        if native_id:
-            stream = _native_stream(native_id)
-            for seg in persisted:
-                if not (seg.get("text") or "").strip():
-                    continue
-                try:
-                    await redis.xadd(stream, _to_native_wire(native_id, seg))
-                except Exception as e:  # noqa: BLE001 — best-effort; persistence already succeeded
-                    _log_publish_failure(meeting_id, e)
+        # P23/P0: the collector is the SINGLE writer of the transcript feed tc:meeting:{meeting_id}
+        # (the numeric ROW id — cross-tenant safe; the native id collided across users/rows). Append each
+        # persisted segment (confirmed + pending, in order) for the copilot worker + terminal SSE. Written
+        # unconditionally now (no longer gated on native resolution — the row id is always in scope). The
+        # native id still rides in the wire payload for DISPLAY. Empty-text segments are skipped.
+        stream = _transcript_stream(meeting_id)
+        wire_uid = native_id or str(meeting_id)
+        for seg in persisted:
+            if not (seg.get("text") or "").strip():
+                continue
+            try:
+                await redis.xadd(stream, _to_native_wire(wire_uid, seg))
+            except Exception as e:  # noqa: BLE001 — best-effort; persistence already succeeded
+                _log_publish_failure(meeting_id, e)
 
     return len(persisted)
 

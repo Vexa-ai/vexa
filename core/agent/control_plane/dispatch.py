@@ -16,11 +16,76 @@ import logging
 import os
 
 import contracts
+from control_plane.workspace_attach import active_workspaces
+from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared.ports import IdentityPort, RuntimePort
 from shared.units import chat_session, dispatch_id, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
+
+
+def build_active_set(settings: Settings, subject: str) -> list[dict]:
+    """The subject's NORMAL active workspaces (the MIDDLE tier of the stack — WP-A1.1/A2.1): one entry
+    per ACTIVE workspace in the additive set. Each entry: ``{slug, path, role, write, primary}`` with
+    ``path`` the ABSOLUTE container path under the bound store root (the private baseline at the legacy
+    ``<root>/<subject>``; every other active member in its store slot ``<root>/.attached/<subject>/<slug>``).
+
+    Deterministic (primary first), generalizes to N mounts. A subject with no activated extras yields
+    exactly the private baseline — identical to today's single-workspace behavior.
+
+    Fails SOFT: any error resolving the on-disk set (a never-seeded subject, a store hiccup) falls back to
+    the lone private-baseline mount so a dispatch never dies on mount resolution."""
+    root = settings.workspaces_dir
+    try:
+        mounts = active_workspaces(root, subject)
+    except Exception:  # noqa: BLE001 — mount resolution must never break a dispatch; fall back to the baseline
+        logger.warning("active-set resolution failed for subject=%s — mounting the private baseline only", subject)
+        mounts = []
+    if not mounts:
+        return [{"slug": subject, "path": f"{root}/{subject}", "role": "private", "write": True, "primary": True}]
+    return [
+        {"slug": m.slug, "path": m.path, "role": m.role, "write": m.write, "primary": m.primary}
+        for m in mounts
+    ]
+
+
+def build_mount_set(settings: Settings, subject: str) -> list[dict]:
+    """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
+    special-cased slots, so it generalizes uniformly across all three runtime backends:
+
+      1. ``_global``  GLOBAL SYSTEM  — platform-owned, READ-ONLY, ALWAYS mounted (when configured +
+                      present; absent → skipped + logged). Behaviour/skills/tools. Agents never write it.
+      2. active set   NORMAL private + shared workspaces — READ-WRITE (the additive set, WP-A2.1).
+      3. ``_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Create-if-absent (thin
+                      template). Chats migrate here in a later WP.
+
+    Order: ``[_global?, *active, _system]``. ``_global`` (RO) and ``_system`` (RW) are ALWAYS present
+    (barring an unconfigured/absent _global); the normal active workspaces sit between them. Both system
+    tiers fail SOFT into the active set so a dispatch never dies on system-mount resolution — but a
+    system-tier failure is LOGGED loudly (it degrades the model's base behaviour / private memory)."""
+    active = build_active_set(settings, subject)
+    stack: list[dict] = []
+
+    # Tier 1 — GLOBAL SYSTEM (read-only), when configured + present. Absent → skip (the stack still runs).
+    try:
+        g = global_mount(settings, settings.workspaces_dir)
+        if g is not None:
+            stack.append(g)
+    except Exception:  # noqa: BLE001 — a bad _global must never break a dispatch; run without it
+        logger.warning("global-system (_global) mount resolution failed — running the turn without it")
+
+    # Tier 2 — the NORMAL active set (private baseline + activated extras).
+    stack.extend(active)
+
+    # Tier 3 — PRIVATE SYSTEM (read-write), always present (create-if-absent). A failure here degrades the
+    # user's durable private-system memory — log loudly but never abort the dispatch.
+    try:
+        stack.append(system_mount(settings.workspaces_dir, subject))
+    except Exception:  # noqa: BLE001
+        logger.warning("private-system (_system) mount resolution failed for subject=%s — running without it", subject)
+
+    return stack
 
 # ── model-auth passthrough (the k8s/helm credential seam) ────────────────────
 # The worker needs a MODEL credential, and delivery used to differ by substrate: the docker backend
@@ -48,6 +113,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The dispatch's personal (rw) workspace folder is mounted at <root>/<subject>; the Runtime binds the
     # backing store (a host path / named volume) at <root>, and the worker works in the subject subdir.
     root = settings.workspaces_dir
+    # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
+    # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
+    # + roles the turn respects), not a per-mount bind — it generalizes uniformly across all three backends.
+    mounts = build_mount_set(settings, subject)
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -61,10 +130,22 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_START": json.dumps(invocation["start"]),            # entrypoint(inline|path) | session(ref)
         "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
         "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
-        "VEXA_WORKSPACE_PATH": f"{root}/{subject}",               # the worker's cwd (the subject's rw folder)
+        "VEXA_WORKSPACE_PATH": f"{root}/{subject}",               # the worker's cwd (the PRIVATE baseline — mount set primary)
+        "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }
+    # Attribution (D4 / WP-A1.2): the per-mount turn commit is authored by the dispatch PRINCIPAL (the
+    # authenticated human whose input drives the turn), committer stays the platform. Until membership/
+    # sharing lands (later WPs) the principal IS the subject; a caller that already resolved a distinct
+    # principal (VEXA_PRINCIPAL_NAME/EMAIL in agent-api's env, or on the invocation identity) wins.
+    principal = invocation["identity"].get("principal") or {}
+    env["VEXA_PRINCIPAL_NAME"] = (
+        os.environ.get("VEXA_PRINCIPAL_NAME") or principal.get("name") or subject
+    )
+    env["VEXA_PRINCIPAL_EMAIL"] = (
+        os.environ.get("VEXA_PRINCIPAL_EMAIL") or principal.get("email") or f"{subject}@vexa.local"
+    )
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
     if settings.meeting_model:
@@ -85,10 +166,26 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     ctx = invocation.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
     if meeting and meeting.get("meeting_id"):
-        env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{meeting['meeting_id']}"
+        # P0 (cross-tenant leak fix): the transcript carrier keys on the meetings-domain ROW id
+        # (``numeric_meeting_id`` — unique per meeting run), NOT the native meeting id. The native id
+        # is NOT unique: it collides across DIFFERENT users of the same meeting link (a shared
+        # ``tc:meeting:{native}`` LEAKED one tenant's transcript to another) AND across ONE user's
+        # repeated rows (wrong-row hydration). ``meeting['meeting_id']`` is the routing key the watcher
+        # froze (the native id today); the row id rides SEPARATELY as ``numeric_meeting_id``. Key the
+        # carrier by the row id when known, falling back to the routing key only for a meeting that
+        # never resolved a row id (surfaced under its own key, still isolated per that key).
+        row_id = meeting.get("numeric_meeting_id") or meeting["meeting_id"]
+        env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{row_id}"
         env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.meeting_idle_timeout_sec)
         # Carry the meeting facts the post-meeting WRITE turn stamps into the kg entity frontmatter.
-        env["VEXA_MEETING_ID"] = str(meeting["meeting_id"])
+        # VEXA_MEETING_ID is the human-readable NATIVE id (nuance #1: the readable kg doc name
+        # ``kg/entities/meeting/{native}.md`` must survive even though the carriers key by row id).
+        # The watcher now routes by the ROW id (``meeting_id`` == row id) and carries the native
+        # SEPARATELY as ``native_id`` for display; older callers (``/api/meeting/start|process``) still
+        # pass the native as ``meeting_id``. Prefer the explicit ``native_id`` hint, falling back to
+        # ``meeting_id`` (native there) — never the numeric row id, which is unreadable.
+        display_native = meeting.get("native_id") or meeting["meeting_id"]
+        env["VEXA_MEETING_ID"] = str(display_native)
         if meeting.get("session_uid"):
             env["VEXA_MEETING_SESSION_UID"] = str(meeting["session_uid"])
         if meeting.get("platform"):
@@ -97,9 +194,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env["VEXA_TRANSCRIPT_START_ID"] = str(meeting["transcript_start_id"])
         if meeting.get("numeric_meeting_id"):
             # The meetings-domain ROW id (unique per meeting run). The worker keys its
-            # processed-notes stream by it (proc:meeting:{numeric}) so a re-sent bot on the same
-            # native link cannot mix/clobber a previous meeting's processed doc — and the
-            # meeting-api db-writer (which knows its own row ids) drains that stream into the
+            # processed-notes stream AND its transcript-consume stream by it
+            # (tc:/proc:meeting:{numeric}) so a re-sent bot on the same native link — or a DIFFERENT
+            # tenant on the same link — can never mix/clobber/read another meeting's data. The
+            # meeting-api db-writer (which knows its own row ids) drains proc:meeting:{numeric} into the
             # meeting row's data JSONB for durability.
             env["VEXA_MEETING_NUMERIC_ID"] = str(meeting["numeric_meeting_id"])
     elif meeting and meeting.get("native_id"):
@@ -124,9 +222,11 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
 # Internal routing hints that ride on context.meeting but are NOT part of the sealed MeetingRef
 # (additionalProperties: false) — stripped before the unit.v1 contract check, like ctx.session.
 # ``numeric_meeting_id`` is the meetings-domain ROW id (unique per meeting run, unlike the native
-# id a re-sent bot reuses) — the worker keys its processed-notes stream by it so re-sends can never
-# clobber a previous meeting's processed doc.
-_INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id"})
+# id a re-sent bot reuses) — the worker keys its transcript/processed streams by it so re-sends (or a
+# DIFFERENT tenant on the same link) can never clobber/read another meeting's data. ``native_id`` is
+# the human-readable Meet code carried for DISPLAY only (the kg doc name / title); the routing
+# ``meeting_id`` is the row id. Both are agent-api internal — the sealed MeetingRef forbids them.
+_INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id", "native_id"})
 
 
 def _without_chat_session(invocation: dict) -> dict:

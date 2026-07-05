@@ -1,16 +1,21 @@
 """transcription_watcher.py — the agent's IN-PROCESS inbound watch (trigger → arm) over the live transcript.
 
 It runs ONE daemon thread, ARM (``_run_arm``): tail ``transcription_segments`` purely as a TRIGGER to do
-the jobs only the agent-api can do — FREEZE one native routing key per meeting (so the copilot keys on a
-single id across bot re-launches), REGISTER the live meeting, RE-ARM the copilot dispatch while the user
-has processing enabled (spawn-or-touch, idempotent), and on ``session_end`` reap the copilot + connect the
-meeting's kg doc.
+the jobs only the agent-api can do — key the copilot on the meetings-domain numeric ROW id per meeting,
+REGISTER the live meeting, RE-ARM the copilot dispatch while the user has processing enabled (spawn-or-touch,
+idempotent), and on ``session_end`` reap the copilot + connect the meeting's kg doc.
+
+P0 (cross-tenant leak fix): the transcript CARRIER + ``:on`` + ``:cursor`` + dispatch keys are the numeric
+ROW id ``mid`` (unique per (user, platform, native, run)), NOT the native Meet code (which collides across
+DIFFERENT users AND across ONE user's re-sends — keying transcript data by it leaked one user's transcript
+to another). The native code is resolved best-effort for DISPLAY only (the kg doc/title + the ``native_id``
+field); a resolution miss no longer diverges the carrier key.
 
 It does NOT write the transcript carrier. The MEETINGS domain (meeting-api's collector) is the SINGLE
-writer of the per-meeting native feed ``tc:meeting:{native}`` and its ``session_end`` marker (P23) — the
-agent only CONSUMES it: the copilot worker reads it, and the arm thread only READS its tail for the copilot
-resume cursor. `meetings ⊥ agent` (P3): the agent re-derives nothing. ``keymap`` (numeric → frozen native
-key) is the arm thread's own state.
+writer of the per-meeting feed ``tc:meeting:{row_id}`` and its ``session_end`` marker (P23) — the agent only
+CONSUMES it: the copilot worker reads it, and the arm thread only READS its tail for the copilot resume
+cursor. `meetings ⊥ agent` (P3): the agent re-derives nothing. ``keymap`` (numeric meeting_id → row-id
+routing key) is the arm thread's own state.
 
 No extra container, no HTTP hop: it holds the Dispatcher directly.
 """
@@ -43,10 +48,10 @@ _native: dict[str, tuple[str, str]] = {}  # numeric meeting_id → (native_meeti
 _resolve_miss_at: dict[str, float] = {}  # numeric meeting_id → last failed-resolve (monotonic)
 RESOLVE_RETRY_SEC = 3.0
 # The gateway/meeting-api caps `limit` at 100 (>100 → HTTP 422 Unprocessable Entity). Asking for more
-# made EVERY resolve fail, so _resolve_native always returned None → the watcher fell back to the
-# numeric key (tc:meeting:17) while the terminal listens on the native key (tc:meeting:<native>) — the
-# transcript never reached the UI. Keep at/under the cap. (Pagination isn't needed: live meetings are
-# always among the newest rows, which the gateway returns first.)
+# made EVERY resolve fail, so _resolve_native always returned None. Post-P0 the carrier no longer
+# depends on this resolve (it keys on the row id `mid`, always present) — a miss now degrades only
+# the human-readable native DISPLAY, never the transcript itself. Keep at/under the cap. (Pagination
+# isn't needed: live meetings are always among the newest rows, which the gateway returns first.)
 MEETINGS_LIST_LIMIT = 100
 
 # ── P18 (ADR 0010) — fail loud & attributable: the relay's observable health ─────────────────────────
@@ -202,7 +207,7 @@ def _stream_tail_id(r, stream: str) -> str:
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
     """Spawn the watcher (the ARM daemon thread) and return it (tests/introspection). ``keymap``
-    (numeric meeting_id → frozen native routing key) is the arm thread's own state.
+    (numeric meeting_id → row-id routing key) is the arm thread's own state.
 
     ``subject`` is a PRE-M2 placeholder (defaults to ``u_live``): every armed copilot is attributed to
     this one subject. Live-meeting dispatch (M2) must resolve and pass the real meeting OWNER instead —
@@ -217,8 +222,8 @@ def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threa
 
 
 def _run_arm(redis_url: str, dispatcher, live, subject: str, keymap: dict) -> None:
-    """Inbound watch → freeze native key, register live, re-arm copilot, reap on session_end. Does NOT
-    write the transcript carrier — meeting-api's collector owns ``tc:meeting:{native}`` (P23)."""
+    """Inbound watch → key on the row id, register live, re-arm copilot, reap on session_end. Does NOT
+    write the transcript carrier — meeting-api's collector owns ``tc:meeting:{row_id}`` (P23/P0)."""
     import redis as redislib
 
     r = redislib.from_url(redis_url, decode_responses=True, socket_keepalive=True, health_check_interval=10)
@@ -255,44 +260,41 @@ RESOLVE_GRACE_SEC = 6.0  # how long to wait for a native id before falling back 
 
 
 def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> None:
-    # The bot stamps a NUMERIC meeting_id on every segment — but each re-launch of the SAME Meet gets a
-    # fresh numeric id. Resolve it to the native Meet code so the wire/dispatch/feed key on ONE id per
-    # physical meeting (re-launches dedupe to a single entry). Fall back to numeric if resolution fails.
+    # P0 (cross-tenant leak fix): the TRANSCRIPT CARRIER + :on + :cursor + dispatch keys are the numeric
+    # ROW id `mid` — NOT the native Meet code. The native id is NOT unique (it collides across DIFFERENT
+    # users and across ONE user's re-sends of the same link), so keying transcript data by it leaked one
+    # user's transcript to another and hydrated the wrong row. The bot stamps a NUMERIC meeting_id (the
+    # meetings-domain row id, unique per run) on every segment, so we can key on it IMMEDIATELY — no
+    # resolve-grace wait, no gateway round-trip on the hot path.
     #
-    # CRITICAL (multi-meeting fix): the routing key is decided ONCE per numeric meeting_id and frozen in
-    # `keymap`. Without this, a meeting whose native resolves only on a LATER segment (the gateway row
-    # lags the first segments) would flip from the numeric key to the native key mid-stream — forking it
-    # into two streams/copilots, or, if a stale/shared fallback was used, fanning several meetings onto
-    # one key. Freezing the first stable key keeps every distinct meeting a SEPARATE stream/copilot/entry.
+    # The native code is still resolved (best-effort) but ONLY for DISPLAY: the kg doc (`_record_meeting_doc`),
+    # the human-readable title, and the `native_id` field on the live entry / meeting_ref. A resolution
+    # miss no longer diverges the carrier key (that is `mid`, always present) — it only degrades display,
+    # so the P18 relay-health fault is still reported (display only) but the transcript never leaks/starves.
     mid = str(p.get("meeting_id") or p.get("uid") or "")
     if not mid:
         return
-    # P23/P18: PREFER the native id stamped on the segment by its producer (the bot knows it from its
-    # invocation). One writer, no re-derivation — and no 401-prone /meetings round-trip. The gateway
-    # lookup is only a labeled fallback for older bots that don't stamp it yet.
+    # PREFER the native id stamped on the segment by its producer (the bot knows it from its invocation).
+    # The gateway lookup is only a labeled fallback for older bots that don't stamp it — and now purely a
+    # DISPLAY concern (the carrier keys on `mid` regardless).
     stamped = p.get("native_meeting_id") or p.get("native_id")
     if stamped:
         resolved = (str(stamped), p.get("platform") or "google_meet")
     else:
         resolved = _resolve_native(mid)
     native, platform = resolved if resolved else (mid, p.get("platform") or "google_meet")
+    if resolved is None and p.get("type") != "session_end":
+        # DISPLAY-only divergence: the copilot/terminal still key transcript data on the row id `mid`
+        # (correct + isolated) — only the human-readable native code/title is unavailable until the
+        # gateway row surfaces. Report it (P18) but do NOT hold or fork the meeting.
+        _report_fault("native_resolve", "unresolved_display",
+                      f"meeting {mid}: native id not resolved yet — transcript keyed on row id "
+                      f"tc:meeting:{mid} (correct); the human-readable native code/title is pending")
+    # The routing key is the numeric ROW id, frozen once per meeting_id (mid is stable, so this is
+    # trivially stable — kept for structural parity with the reap path below).
     key = keymap.get(mid)
     if key is None:
-        if resolved is None and p.get("type") != "session_end":
-            # Not yet resolved AND not the end — wait (briefly) for the native id rather than committing
-            # this meeting to its numeric key for life (which would diverge from the terminal's native
-            # key). Bounded by RESOLVE_GRACE_SEC so a gateway that never resolves still surfaces the
-            # meeting under its numeric id instead of swallowing it forever.
-            seen = first_seen.setdefault(mid, time.monotonic())
-            if time.monotonic() - seen < RESOLVE_GRACE_SEC:
-                return
-        key = keymap[mid] = native
-        if resolved is None:
-            # P18: committing to the NUMERIC key is a reportable divergence — the copilot will key on
-            # tc:meeting:{numeric} while the terminal/UI listens on the native feed, which stays EMPTY.
-            _report_fault("native_resolve", "unresolved_fallback",
-                          f"meeting {mid}: native id never resolved after {RESOLVE_GRACE_SEC}s — copilot "
-                          f"keyed on numeric tc:meeting:{mid}; the native feed will be EMPTY")
+        key = keymap[mid] = mid
     kind = p.get("type")
     if kind == "transcription":  # P18 liveness: record that segments ARE arriving (distinct from relayed)
         with _HEALTH_LOCK:
@@ -301,8 +303,9 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
             ing["segments"] = int(ing.get("segments", 0)) + 1
     out_stream = f"tc:meeting:{key}"
     if kind == "session_end":
-        # The collector emits the session_end MARKER onto tc:meeting:{native} (P23, single writer); the
-        # agent only does its OWN reaping here — drop the live row, clear keymap, connect the kg doc.
+        # The collector emits the session_end MARKER onto tc:meeting:{row_id} (P23/P0, single writer); the
+        # agent only does its OWN reaping here — drop the live row (by the row-id key we registered it
+        # under), clear keymap, connect the kg doc (native, for display).
         live.drop(key)
         last_arm.pop(key, None)
         keymap.pop(mid, None)
@@ -315,41 +318,48 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
     if kind != "transcription":
         return
 
-    # READ-only: the native feed's tail is the copilot's RESUME cursor. The collector writes the feed.
+    # READ-only: the row-keyed feed's tail is the copilot's RESUME cursor. The collector writes the feed.
     transcript_start_id = _stream_tail_id(r, out_stream)
 
     # Keep the terminal's live feed fresh on EVERY batch (a cheap dict write) so an agent-api restart
     # can't drop the meeting from the list — it reappears on the first segment. Throttle only the spawn.
+    # session_uid == the ROW id `mid` too, so the copilot out-stream (unit:agent-meet-{mid}) and the
+    # transcript carrier (tc:meeting:{mid}) agree — the terminal SSE reads both by the same id.
     live.add({
         "meeting_id": key, "session_uid": key, "native_id": native, "platform": platform,
         "title": _title(platform, native), "unit_id": f"agent-meet-{key}",
-        # The meetings-domain ROW id (unique per meeting run — the native id is REUSED by a re-sent
-        # bot). Carried on the live entry so /api/meeting/process keys the SAME copilot dispatch by
-        # it; the worker writes proc:meeting:{numeric} and the meeting-api db-writer persists that
-        # stream into the meeting row's data JSONB (durable, never clobbered by a re-send).
+        # The meetings-domain ROW id (unique per meeting run). Now the ROUTING key itself — carried
+        # explicitly so /api/meeting/process keys the SAME copilot dispatch by it, and the worker writes
+        # proc:meeting:{row_id} which the meeting-api db-writer persists into the meeting row's data JSONB.
         "numeric_meeting_id": mid if mid.isdigit() else None,
     })
     # Processing is OPT-IN per meeting: only arm / keep-alive the copilot while the user has enabled it
-    # (the terminal sets ``proc:meeting:{key}`` via /api/meeting/process). Default OFF → no copilot →
-    # no processing; the RAW transcript still flows through the relay/seed above. The initial full-history
-    # backfill is dispatched by the endpoint; here we just keep it alive while processing stays on.
+    # (the terminal sets ``proc:meeting:{row_id}:on`` via /api/meeting/process). Default OFF → no copilot →
+    # no processing; the RAW transcript still flows through the collector-owned feed above.
     now = time.monotonic()
     # The opt-in flag is ``proc:meeting:{key}:on`` — a DISTINCT key from the processed-notes stream
     # ``proc:meeting:{key}`` (a GET on that stream raises WRONGTYPE and would crash this arm loop).
     if r.get(f"proc:meeting:{key}:on") and now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
         _arm(dispatcher, subject, key, platform, transcript_start_id=transcript_start_id,
-             numeric_meeting_id=mid if mid.isdigit() else None)
+             numeric_meeting_id=mid if mid.isdigit() else None, native_id=native)
 
 
 def _arm(dispatcher, subject: str, key: str, platform: str, *, transcript_start_id: str = "0-0",
-         numeric_meeting_id: str | None = None) -> None:
-    """Spawn-or-touch the meeting's copilot (keyed agent-meet-{key}). Idempotent: spawns if reaped,
-    touches (keep-alive) if already running. The live-feed registration happens in _handle every batch."""
+         numeric_meeting_id: str | None = None, native_id: str | None = None) -> None:
+    """Spawn-or-touch the meeting's copilot (keyed agent-meet-{key}, where key is the ROW id). Idempotent:
+    spawns if reaped, touches (keep-alive) if already running. The live-feed registration happens in
+    _handle every batch. ``native_id`` is carried for DISPLAY only (the worker names the kg doc/title by
+    the human-readable native code, while the transcript/proc/cursor keys stay the row id)."""
     meeting_ref: dict = {
         "meeting_id": key, "session_uid": key, "platform": platform,
         "transcript_start_id": transcript_start_id,
     }
+    if native_id:
+        # DISPLAY only: the worker names kg/entities/meeting/{native}.md + the title by this human-readable
+        # code (e.g. wfn-gzwz-kwt), never the numeric row id. An internal hint — stripped before the
+        # unit.v1 check. The transcript carrier / proc / cursor keys are all the ROW id (key).
+        meeting_ref["native_id"] = str(native_id)
     if numeric_meeting_id:
         # The meetings-domain row id → the worker keys its processed-notes stream by it
         # (proc:meeting:{numeric}) so a re-sent bot on the same native link never mixes/clobbers a
