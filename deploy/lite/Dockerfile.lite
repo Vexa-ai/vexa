@@ -159,10 +159,14 @@ COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   /app/meeting-a
 COPY core/meetings/contracts/webhook.v1/webhook.schema.json       /app/meeting-api/meetings/contracts/webhook.v1/webhook.schema.json
 COPY core/runtime/contracts/runtime.v1/runtime.schema.json        /app/meeting-api/runtime/contracts/runtime.v1/runtime.schema.json
 COPY core/runtime/contracts/schedule.v1/schedule.schema.json      /app/meeting-api/runtime/contracts/schedule.v1/schedule.schema.json
-# agent control plane + worker (PYTHONPATH=/app/agent; repo_root walk-up == /app/agent)
+# agent control plane + worker (PYTHONPATH=/app/agent; repo_root walk-up == /app/agent).
+# This tree mirrors the WORKER image's /app layout (core/agent/worker/Dockerfile): worker + llm +
+# shared + contracts + the seed registries. llm/ is LOAD-BEARING — worker.py's first import is
+# `from llm import …`; omitting it kills every agent dispatch with ModuleNotFoundError.
 COPY core/agent/shared          /app/agent/shared
 COPY core/agent/control_plane   /app/agent/control_plane
 COPY core/agent/worker          /app/agent/worker
+COPY core/agent/llm             /app/agent/llm
 COPY core/agent/contracts       /app/agent/contracts
 COPY core/agent/workspace-seeds /app/agent/workspace-seeds
 COPY core/agent/tools-seed      /app/agent/tools-seed
@@ -173,6 +177,10 @@ COPY core/agent/contracts/unit.v1/unit.schema.json                /app/agent/age
 COPY core/agent/contracts/routine.v1/routine.schema.json          /app/agent/agent/contracts/routine.v1/routine.schema.json
 COPY core/agent/contracts/event.v1/event.schema.json              /app/agent/agent/contracts/event.v1/event.schema.json
 COPY core/agent/contracts/tool.v1/tool.schema.json                /app/agent/agent/contracts/tool.v1/tool.schema.json
+# Build-time guard: the curated /app/agent tree must import as the worker the launcher execs
+# (vexa-agent-worker → `python -m worker`). Catches an incomplete copy — the exact bug class that
+# shipped a tree without llm/ and killed every chat dispatch — at build time, not first dispatch.
+RUN cd /app/agent && PYTHONPATH=/app/agent /opt/venvs/agent/bin/python -c "import worker.worker"
 
 # ── Bot workspace (built tree) — placed at /app so the bot resolves /app/browser-utils.global.js
 #    and its package-relative schema/deps exactly as in the bot container. The runtime spawns it
@@ -202,6 +210,8 @@ RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker \
 # ── Env defaults (every var supervisord interpolates must be SET; entrypoint derives the rest) ────
 ENV LOG_LEVEL=info \
     RUNTIME_BACKEND=process \
+    BOT_COMMAND=/usr/local/bin/vexa-bot-launch \
+    AGENT_WORKER_COMMAND=/usr/local/bin/vexa-agent-worker \
     DB_HOST=localhost DB_PORT=5432 DB_NAME=vexa DB_USER=postgres DB_PASSWORD=postgres \
     REDIS_HOST=localhost REDIS_PORT=6379 \
     ADMIN_API_TOKEN=changeme INTERNAL_API_SECRET=lite-internal-secret \

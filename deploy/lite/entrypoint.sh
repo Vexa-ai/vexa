@@ -47,6 +47,12 @@ export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"
 export MINIO_BUCKET="${MINIO_BUCKET:-vexa}"
 export MINIO_SECURE="${MINIO_SECURE:-false}"
 
+# Process-backend launchers — DEFAULTS ONLY: an operator-provided BOT_COMMAND /
+# AGENT_WORKER_COMMAND on the container env wins. supervisord interpolates these into the
+# runtime program via %(ENV_…)s — never hardcode them there (that clobbers operator env).
+export BOT_COMMAND="${BOT_COMMAND:-/usr/local/bin/vexa-bot-launch}"
+export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-worker}"
+
 # Agent control plane + worker (BYO inference; credentials brokered by the runtime).
 export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
