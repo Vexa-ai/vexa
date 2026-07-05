@@ -354,6 +354,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
         nativeId: selected.native_id,
         title: selected.title,
         status: selected.live_status ?? selected.status,
+        live: Boolean(selected.session_uid),
         startedAt: selected.scheduled_at,
         participants: participants.map((p) => p.name),
         docs: normalizedSelected.docs.map((doc) => ({
