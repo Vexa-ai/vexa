@@ -282,10 +282,26 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             idle_ms=idle_ms, beat_segments=cfg.cadence_segments,
             doc_turn=doc_turn, enabled=cfg.enabled,
             start_id=os.environ.get("VEXA_TRANSCRIPT_START_ID", "0"),
-            proc_stream=f"proc:meeting:{native}",
+            # The processed-notes stream is keyed by the meetings-domain ROW id when the dispatch
+            # carries it (VEXA_MEETING_NUMERIC_ID): the row id is unique per meeting run, so a
+            # re-sent bot on the same native link can never mix/clobber a previous meeting's
+            # processed doc — and the meeting-api db-writer (which knows its own row ids) drains
+            # proc:meeting:{numeric} into the meeting row's data JSONB (durable). Native-keyed
+            # fallback for older dispatchers that don't pass the row id. The CURSOR stays keyed by
+            # the NATIVE id: it is a position in tc:meeting:{native}, which re-sends share — the
+            # gap-fill must resume from where the previous run left off, whichever row that was.
+            proc_stream=f"proc:meeting:{os.environ.get('VEXA_MEETING_NUMERIC_ID') or native}",
             cursor_key=f"proc:meeting:{native}:cursor",
             on_proc_note=on_proc_note,
             on_envelope=on_envelope,
+            # Provenance stamped on every processed-notes entry: what pipeline/provider/model
+            # produced this cleaned view — persisted verbatim into the durable view's `params`
+            # (meeting.data processed views) by the meeting-api db-writer (reproducibility).
+            proc_params={
+                "pipeline": "meeting-copilot/proc-notes", "version": 1,
+                "provider": os.environ.get("VEXA_LLM_PROVIDER"),
+                "model": cfg.model or os.environ.get("VEXA_LLM_MODEL"),
+            },
         )
     else:  # chat / routine / event — run the entrypoint, then serve interactive messages
         # Research-capable toolset: WEB search/fetch + the workspace tools. Writes are committed by

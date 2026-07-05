@@ -106,6 +106,12 @@ class Transcription(Base):
 
     __table_args__ = (
         Index("ix_transcription_meeting_start", "meeting_id", "start_time"),
+        # The segment identity the db-writer upserts on (ON CONFLICT (meeting_id, segment_id)
+        # WHERE segment_id IS NOT NULL) — mirrors the AUTHORITATIVE admin-api schema
+        # (admin_api.schema.models), which owns the table; kept in sync here so a
+        # metadata.create_all from this mirror builds the same shape.
+        Index("ix_transcription_meeting_segment", "meeting_id", "segment_id",
+              unique=True, postgresql_where=segment_id.isnot(None)),
     )
 
 

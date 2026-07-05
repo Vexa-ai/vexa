@@ -35,13 +35,22 @@ def _segment_to_api(seg: dict) -> dict:
 
 class InMemoryTranscriptStore:
     """A dict-backed ``TranscriptStore``. Owner-scoped by ``user_id`` (the authorization
-    boundary). Keyed internally by the synthetic ``meeting_id``."""
+    boundary). Keyed internally by the synthetic ``meeting_id``.
 
-    def __init__(self):
+    Pass ``redis_client`` (fakeredis) to mirror the PRODUCTION topology exactly: ``append_segment``
+    then lands live segments in the redis hash ``meeting:{id}:segments`` (+ ``active_meetings``),
+    ``get_transcript`` merges the durable dict with that hash, and the db-writer tick
+    (``db_writer.db_writer_tick``) moves segments from the hash into the durable dict via
+    ``upsert_segments`` — so the flush/trim/read-merge seam is testable offline, no docker."""
+
+    def __init__(self, redis_client=None):
         # meeting_id -> {user_id, platform, native_meeting_id, status, start_time, end_time,
         #                data, segments: {segment_id: seg}}
         self._meetings: dict[int, dict] = {}
         self._next_id = 1
+        # Optional live-segment redis (fakeredis in tests) — mirrors the prod adapter's split
+        # between the in-flight hash (redis) and the durable rows (the dict standing in for PG).
+        self._redis = redis_client
 
     def seed_meeting(
         self,
@@ -105,7 +114,20 @@ class InMemoryTranscriptStore:
         if mid is None:
             return None
         m = self._meetings[mid]
-        segments = sorted(m["segments"].values(), key=lambda s: float(s.get("start", 0.0)))
+        by_id = dict(m["segments"])
+        # Redis-wired (prod-topology) mode: merge the LIVE in-flight hash over the durable rows,
+        # exactly like the SqlAlchemy store's read merge.
+        if self._redis is not None:
+            raw = await self._redis.hgetall(f"meeting:{mid}:segments")
+            for v in (raw.values() if isinstance(raw, dict) else []):
+                try:
+                    seg = json.loads(v.decode() if isinstance(v, (bytes, bytearray)) else v)
+                except Exception:
+                    continue
+                sid = seg.get("segment_id")
+                if sid:
+                    by_id[sid] = seg
+        segments = sorted(by_id.values(), key=lambda s: float(s.get("start", 0.0)))
         return {
             "id": mid,
             "platform": m["platform"],
@@ -201,7 +223,7 @@ class InMemoryTranscriptStore:
             "changed": changed,
         }
 
-    async def append_segment(self, meeting_id, segment) -> None:
+    def _row_or_placeholder(self, meeting_id) -> dict:
         m = self._meetings.get(meeting_id)
         if m is None:
             # An ingested segment for an unknown meeting — seed a placeholder so the segment is
@@ -213,7 +235,52 @@ class InMemoryTranscriptStore:
                 "bot_container_id": None, "constructed_meeting_url": None,
                 "data": {}, "created_at": "", "updated_at": "", "segments": {},
             })
-        m["segments"][segment["segment_id"]] = segment
+        return m
+
+    async def append_segment(self, meeting_id, segment) -> None:
+        if self._redis is not None:
+            # Prod-topology mode: live segments land in the redis HASH (+ the db-writer's
+            # active_meetings sweep set), exactly like SqlAlchemyTranscriptStore.append_segment;
+            # only the db-writer tick moves them into the durable dict.
+            from .db_writer import ACTIVE_MEETINGS_KEY, segments_hash_key
+
+            await self._redis.sadd(ACTIVE_MEETINGS_KEY, str(meeting_id))
+            await self._redis.hset(
+                segments_hash_key(meeting_id), segment["segment_id"], json.dumps(segment)
+            )
+            return
+        self._row_or_placeholder(meeting_id)["segments"][segment["segment_id"]] = segment
+
+    async def upsert_segments(self, meeting_id, segments) -> None:
+        """The db-writer's durable sink (the dict stands in for the ``transcriptions`` table):
+        upsert by ``segment_id`` — idempotent, a re-flush updates in place."""
+        m = self._row_or_placeholder(meeting_id)
+        for seg in segments:
+            sid = seg.get("segment_id")
+            if sid:
+                m["segments"][sid] = dict(seg)
+
+    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
+        from .adapters import _find_processed_view
+
+        m = self._meetings.get(meeting_id)
+        if not m:
+            return None
+        view = _find_processed_view(m["data"], view_id)
+        return view.get("source_cursor") if view else None
+
+    async def merge_processed_view(
+        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
+    ) -> None:
+        """Persist drained copilot notes into ``data['processed']['views']`` — the SAME pure
+        upsert the SqlAlchemy store commits (the versioned multi-view shape, merged by note id)."""
+        from .adapters import _upsert_processed_view
+
+        m = self._row_or_placeholder(meeting_id)
+        m["data"] = _upsert_processed_view(
+            m["data"], view_id=view_id, kind=kind, notes=notes,
+            source_cursor=source_cursor, params=params,
+        )
 
 
 class FakeRedisBus:

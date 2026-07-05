@@ -166,7 +166,9 @@ class SqlAlchemyMeetingRepo:
             if sess is None:
                 return  # unknown session (e.g. a self-host bot) — nothing to persist
             m = (
-                await db.execute(select(Meeting).where(Meeting.id == sess.meeting_id))
+                await db.execute(select(Meeting).where(Meeting.id == sess.meeting_id).with_for_update())
+                # FOR UPDATE: db-writer/recordings/docs all lock before read-modify-write of data
+                # JSONB; without it a concurrent db-writer merge commit is clobbered (#53 review).
             ).scalars().first()
             if m is None:
                 return

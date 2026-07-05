@@ -337,3 +337,38 @@ def test_native_resolve_recovers_clears_fault(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Resp())
     assert w._resolve_native("1") == ("nba-agyz-gbe", "google_meet")
     assert w.relay_health()["native_resolve"]["ok"] is True
+
+
+def test_arm_carries_numeric_meeting_id_for_durable_proc_doc(monkeypatch):
+    """The watcher knows the meetings-domain ROW id (the segments' numeric meeting_id) — the arm
+    dispatch must carry it (numeric_meeting_id) so the worker keys its processed-notes stream by it
+    (proc:meeting:{row_id}): unique per meeting run ⇒ a re-sent bot on the same native link never
+    mixes/clobbers a previous meeting's processed doc, and the meeting-api db-writer can persist the
+    stream into the meeting row's data JSONB. The live entry carries it too (for /api/meeting/process)."""
+    _reset_module_caches()
+    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
+    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
+    r.set("proc:meeting:aaa-aaaa-aaa:on", "1")
+
+    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
+
+    meeting = disp.dispatched[0]["context"]["meeting"]
+    assert meeting["numeric_meeting_id"] == "42"
+    assert meeting["meeting_id"] == "aaa-aaaa-aaa"          # routing stays keyed by the native id
+    assert live.by_uid["aaa-aaaa-aaa"]["numeric_meeting_id"] == "42"
+
+
+def test_arm_omits_numeric_meeting_id_when_key_is_not_numeric(monkeypatch):
+    """A meeting that never resolved past its uid fallback has no row id to key the proc doc by —
+    the hint is omitted (the worker falls back to the native key), never a bogus value."""
+    _reset_module_caches()
+    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
+    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
+    r.set("proc:meeting:aaa-aaaa-aaa:on", "1")
+
+    payload = {**_payload("sess-uid-fallback"), "meeting_id": "sess-uid-fallback"}
+    w._handle(r, disp, live, "u_live", payload, *_fresh_state())
+
+    meeting = disp.dispatched[0]["context"]["meeting"]
+    assert "numeric_meeting_id" not in meeting
+    assert live.by_uid["aaa-aaaa-aaa"]["numeric_meeting_id"] is None

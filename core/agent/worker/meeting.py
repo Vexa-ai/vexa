@@ -438,6 +438,7 @@ def serve_meeting(
     cursor_key: str | None = None,
     on_proc_note: Callable[[dict], None] | None = None,
     on_envelope: Callable[[dict], None] | None = None,
+    proc_params: dict | None = None,
 ) -> None:
     """Consume the meeting's ``transcript.v1`` Stream (the meetings⊥agent seam — read by schema), gate
     cheaply (a NEW speaker, or ``beat_segments`` segments), and run a copilot beat that XADDs proactive
@@ -478,7 +479,13 @@ def serve_meeting(
         if not note:
             return
         if proc_stream:
-            stream.xadd(proc_stream, {"note": json.dumps(note)})
+            fields = {"note": json.dumps(note)}
+            if proc_params:
+                # The processing metadata APPLIED (provider/model/pipeline) rides every entry so the
+                # durable consumer (meeting-api db-writer → meeting.data processed views) records
+                # reproducible provenance for the view it persists.
+                fields["params"] = json.dumps(proc_params)
+            stream.xadd(proc_stream, fields)
         # Accumulate the SAME 1:1 cleaned note (keyed by id) into the running envelope notes — a refining
         # pass UPDATES its line in place rather than duplicating, exactly like the markdown upsert.
         nid = str(note.get("id") or "").strip()

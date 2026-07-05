@@ -507,13 +507,22 @@ def create_app(
             cursor = None
         # Gap-fill from the cursor (last cleaned raw id); no cursor yet ⇒ from the start of the transcript.
         start_id = cursor or "0-0"
+        meeting_ref: dict = {
+            "meeting_id": body.native_id, "session_uid": body.native_id,
+            "platform": body.platform, "transcript_start_id": start_id,
+        }
+        # Key the copilot's processed-notes stream by the meetings-domain ROW id when the watcher has
+        # already registered it on the live entry (it learns it from the segments' numeric meeting_id).
+        # The row id is unique per meeting run — a re-sent bot on the same native link never
+        # mixes/clobbers a previous meeting's processed doc — and the meeting-api db-writer drains
+        # proc:meeting:{numeric} into the meeting row's data JSONB (the durable processed doc).
+        live_entry = next((m for m in live.list() if m.get("session_uid") == body.native_id), None)
+        if live_entry and live_entry.get("numeric_meeting_id"):
+            meeting_ref["numeric_meeting_id"] = str(live_entry["numeric_meeting_id"])
         inv = units.make_dispatch(
             subject=subject_of(request), trigger="transcription",
             start=units.entrypoint(inline=_MEETING_BRIEF),
-            context={"kind": "meeting", "meeting": {
-                "meeting_id": body.native_id, "session_uid": body.native_id,
-                "platform": body.platform, "transcript_start_id": start_id,
-            }},
+            context={"kind": "meeting", "meeting": meeting_ref},
         )
         dispatcher.dispatch(inv)
         return {"native_id": body.native_id, "processing": True, "resumed_from": start_id}

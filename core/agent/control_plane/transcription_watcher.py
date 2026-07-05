@@ -323,6 +323,11 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
     live.add({
         "meeting_id": key, "session_uid": key, "native_id": native, "platform": platform,
         "title": _title(platform, native), "unit_id": f"agent-meet-{key}",
+        # The meetings-domain ROW id (unique per meeting run — the native id is REUSED by a re-sent
+        # bot). Carried on the live entry so /api/meeting/process keys the SAME copilot dispatch by
+        # it; the worker writes proc:meeting:{numeric} and the meeting-api db-writer persists that
+        # stream into the meeting row's data JSONB (durable, never clobbered by a re-send).
+        "numeric_meeting_id": mid if mid.isdigit() else None,
     })
     # Processing is OPT-IN per meeting: only arm / keep-alive the copilot while the user has enabled it
     # (the terminal sets ``proc:meeting:{key}`` via /api/meeting/process). Default OFF → no copilot →
@@ -333,19 +338,27 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
     # ``proc:meeting:{key}`` (a GET on that stream raises WRONGTYPE and would crash this arm loop).
     if r.get(f"proc:meeting:{key}:on") and now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
-        _arm(dispatcher, subject, key, platform, transcript_start_id=transcript_start_id)
+        _arm(dispatcher, subject, key, platform, transcript_start_id=transcript_start_id,
+             numeric_meeting_id=mid if mid.isdigit() else None)
 
 
-def _arm(dispatcher, subject: str, key: str, platform: str, *, transcript_start_id: str = "0-0") -> None:
+def _arm(dispatcher, subject: str, key: str, platform: str, *, transcript_start_id: str = "0-0",
+         numeric_meeting_id: str | None = None) -> None:
     """Spawn-or-touch the meeting's copilot (keyed agent-meet-{key}). Idempotent: spawns if reaped,
     touches (keep-alive) if already running. The live-feed registration happens in _handle every batch."""
+    meeting_ref: dict = {
+        "meeting_id": key, "session_uid": key, "platform": platform,
+        "transcript_start_id": transcript_start_id,
+    }
+    if numeric_meeting_id:
+        # The meetings-domain row id → the worker keys its processed-notes stream by it
+        # (proc:meeting:{numeric}) so a re-sent bot on the same native link never mixes/clobbers a
+        # previous meeting's processed doc. An internal hint — stripped before the unit.v1 check.
+        meeting_ref["numeric_meeting_id"] = str(numeric_meeting_id)
     inv = units.make_dispatch(
         subject=subject, trigger="transcription",
         start=units.entrypoint(inline=_BRIEF),
-        context={"kind": "meeting", "meeting": {
-            "meeting_id": key, "session_uid": key, "platform": platform,
-            "transcript_start_id": transcript_start_id,
-        }},
+        context={"kind": "meeting", "meeting": meeting_ref},
     )
     try:
         dispatcher.dispatch(inv)  # idempotent: spawns if reaped, touches if running

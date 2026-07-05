@@ -147,6 +147,32 @@ def test_dispatcher_rejects_nonconformant_invocation():
     assert not rt.spawned
 
 
+def test_dispatcher_worker_env_carries_numeric_meeting_id():
+    """`numeric_meeting_id` (the meetings-domain ROW id — unique per meeting run, unlike the native
+    id a re-sent bot reuses) is an INTERNAL routing hint: it must reach the worker env
+    (VEXA_MEETING_NUMERIC_ID → the proc:meeting:{numeric} processed-notes key the meeting-api
+    db-writer persists) while being STRIPPED before the sealed unit.v1 check
+    (MeetingRef is additionalProperties:false) — exactly like transcript_start_id."""
+    settings = load_settings()
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity())
+    inv = {
+        **VALID_INV,
+        "trigger": "transcription",
+        "identity": {"subject": "u_jane", "launcher": "integration:meetings"},
+        "workspaces": [{"id": "u_jane", "mode": "ro"}],
+        "context": {"kind": "meeting", "meeting": {
+            "meeting_id": "abc-defg-hij",
+            "session_uid": "abc-defg-hij",
+            "platform": "google_meet",
+            "numeric_meeting_id": "17",
+        }},
+    }
+    d.dispatch(inv)  # would raise at the seam if the hint leaked into the contract check
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_MEETING_NUMERIC_ID"] == "17"
+    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:abc-defg-hij"  # transcript key stays NATIVE
+
 # ── model-auth passthrough: agent-api env → worker spec env (the k8s/helm credential seam) ────
 
 def test_dispatcher_worker_env_passes_model_auth_allowlist(monkeypatch):
