@@ -163,3 +163,13 @@ def test_command_overrides_replace_commands(monkeypatch):
     assert reg.resolve("meeting-bot").command == ["/usr/local/bin/vexa-bot-launch"]
     assert reg.resolve("agent").command == ["/usr/local/bin/vexa-agent-worker", "--flag"]
     assert reg.get("agent").idle_timeout_sec == 300  # untouched
+
+
+def test_command_overrides_ignore_blank_env(monkeypatch):
+    """A SET-but-blank override (an env surface that defaults vars to "" — e.g. an image ENV list)
+    must behave like an unset one: never replace a profile command with an empty argv."""
+    monkeypatch.setenv("BOT_COMMAND", "")
+    monkeypatch.setenv("AGENT_WORKER_COMMAND", "   ")
+    reg = apply_command_overrides(default_registry())
+    assert reg.resolve("meeting-bot").command == ["/app/vexa-bot/entrypoint.sh"]
+    assert reg.resolve("agent").command == ["python", "-m", "worker"]

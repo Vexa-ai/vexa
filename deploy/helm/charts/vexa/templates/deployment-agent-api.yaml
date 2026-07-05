@@ -89,6 +89,16 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ANTHROPIC_BASE_URL
                   optional: true
+            # claude CLI subscription OAuth — agent-api stamps this (with the ANTHROPIC_* trio
+            # above) into every worker dispatch spec env, the only credential path for workers
+            # spawned as Pods (dispatch.py MODEL_AUTH_ENV_ALLOWLIST). optional: a creds-less
+            # deploy boots fine and fails at inference with the actionable auth error.
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: CLAUDE_CODE_OAUTH_TOKEN
+                  optional: true
             - name: ANTHROPIC_MODEL
               value: {{ .Values.models.anthropicModel | default "" | quote }}
             - name: ANTHROPIC_DEFAULT_OPUS_MODEL

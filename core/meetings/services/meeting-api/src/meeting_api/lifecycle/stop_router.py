@@ -22,7 +22,7 @@ from typing import Any, Optional, Protocol, runtime_checkable
 
 from fastapi import APIRouter, Header, HTTPException
 
-from ..bot_spawn.ports import MeetingRepo
+from ..bot_spawn.ports import MeetingRepo, WorkloadUnknown
 from .stop import leave_command_channel, leave_command_payload
 
 
@@ -128,11 +128,19 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
 
 
 def _log_stop_teardown_failed(meeting_id, workload_id, err) -> None:
+    # A runtime 404 (WorkloadUnknown) means termination is UNCONFIRMED — a container may still be
+    # live. That is a louder failure (error) than a transient delete error (warning): the meeting
+    # stays `stopping` until the reconcile sweep gets a CONFIRMED teardown, never silently "done".
+    unconfirmed = isinstance(err, WorkloadUnknown)
     try:
         from ..obs import log_event
 
-        log_event("stop_workload_teardown_failed", audience="system", level="warning",
-                  span="bots.stop",
-                  fields={"meeting_id": meeting_id, "workload_id": workload_id, "error": str(err)})
+        log_event(
+            "stop_workload_teardown_unconfirmed" if unconfirmed else "stop_workload_teardown_failed",
+            audience="system",
+            level="error" if unconfirmed else "warning",
+            span="bots.stop",
+            fields={"meeting_id": meeting_id, "workload_id": workload_id, "error": str(err)},
+        )
     except Exception:
         pass

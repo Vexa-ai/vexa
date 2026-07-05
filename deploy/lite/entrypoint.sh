@@ -47,13 +47,25 @@ export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"
 export MINIO_BUCKET="${MINIO_BUCKET:-vexa}"
 export MINIO_SECURE="${MINIO_SECURE:-false}"
 
+# Process-backend launchers — DEFAULTS ONLY: an operator-provided BOT_COMMAND /
+# AGENT_WORKER_COMMAND on the container env wins. supervisord interpolates these into the
+# runtime program via %(ENV_…)s — never hardcode them there (that clobbers operator env).
+export BOT_COMMAND="${BOT_COMMAND:-/usr/local/bin/vexa-bot-launch}"
+export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-worker}"
+
 # Agent control plane + worker (BYO inference; credentials brokered by the runtime).
 export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
 export VEXA_MEETING_MODEL="${VEXA_MEETING_MODEL:-}"
+# HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
+# INSIDE this lite container (mount it in, e.g. -v ~/.claude/.credentials.json:/claude-creds.json:ro
+# and set HOST_CLAUDE_CREDENTIALS=/claude-creds.json). Lite's runtime uses the process backend, so
+# the worker reads the file directly; the runtime's config.v1 file probe verifies it on /health.
+# Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
 export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
+export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-}"
 export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-}"

@@ -105,12 +105,34 @@ def _build_backend():
     return DockerBackend()
 
 
+def _kernel_grace_sec() -> float:
+    """The kernel's stop-poll window, derived from the SAME env the backends' SIGTERM grace reads
+    (RUNTIME_STOP_GRACE_SEC, default 30) plus a small margin. Without this wiring the kernel kept
+    its 5.0 constructor default: on k8s, ``terminate`` returns immediately (``--wait=false``), the
+    pod phase stays Running through the graceful deletion, so ``Runtime.stop()`` force-killed at
+    t≈5 — the 30s grace and the bot's leave watchdog were dead letters. The margin keeps the
+    kernel's force-kill strictly AFTER the substrate's own grace elapses."""
+    try:
+        backend_grace = max(1.0, float(os.getenv("RUNTIME_STOP_GRACE_SEC", "30")))
+    except ValueError:
+        backend_grace = 30.0
+    return backend_grace + 5.0
+
+
 def build_production_app():
     """Wire the runtime API with the env-selected spawn backend + the env-driven profile registry,
     plus the durable cron scheduler (REDIS_URL) with a background tick loop."""
     from .api import create_app
+    from .config_preflight import preflight
     from .kernel import Runtime
     from .profiles import apply_command_overrides, default_registry, worker_image_for
+
+    # config.v1 boot preflight (ADR-0026): validate the declaration against the env — the runtime has
+    # no required-explicit keys today, so this logs the capability tri-states (scheduler · bot_spawn ·
+    # agent_spawn · model_inference, incl. the credentials-file probe that catches a SET
+    # HOST_CLAUDE_CREDENTIALS whose host file is absent) so a deploy's config completeness is visible
+    # in the boot log and on /health BEFORE any workload runs. Capabilities never block boot.
+    preflight()
 
     backend = _build_backend()
     # The agent worker is its OWN image (core/agent/worker/Dockerfile — claude-code + node + the
@@ -136,10 +158,21 @@ def build_production_app():
     # apply_command_overrides is a no-op unless BOT_COMMAND / AGENT_WORKER_COMMAND are set (the
     # process-backend / `lite` case) — docker/k8s keep the image entrypoints unchanged.
     profiles = apply_command_overrides(default_registry())
-    return create_app(
-        Runtime(backend=backend, profiles=profiles),
-        scheduler=scheduler,
-    )
+    runtime = Runtime(backend=backend, profiles=profiles, grace_sec=_kernel_grace_sec())
+    # Re-adopt the workloads this runtime spawned that are STILL on the substrate (containers/pods
+    # survive a runtime recreate untouched): without this, the fresh in-memory registry 404s over a
+    # live bot, and the control plane misreads that 404 as "bot gone" — the orphaned-live-bot
+    # incident. Runs BEFORE uvicorn serves, so the first GET /workloads answer is already truthful.
+    try:
+        adopted = runtime.adopt()
+        if adopted:
+            logger.info(
+                "re-adopted %d workload(s) found on the %s substrate after restart",
+                adopted, backend.name,
+            )
+    except Exception as e:  # noqa: BLE001 — adoption is a boot aid; it must never block the boot
+        logger.warning("workload re-adoption failed: %s", e)
+    return create_app(runtime, scheduler=scheduler)
 
 
 def main() -> None:

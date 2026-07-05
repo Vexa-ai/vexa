@@ -32,6 +32,7 @@ import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { installSignalHandlers } from './signals.js';
 import type {
   JoinDriver,
   Pipeline,
@@ -211,17 +212,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     recording: recording as RecordingSink | undefined,
   });
 
-  // Disposability (P7): a termination signal ends the active phase gracefully (leave →
-  // completed) so the container never hangs after `active`. Wire before run(); unwire after.
-  const onSignal = () => orchestrator.stop('stopped');
-  process.once('SIGTERM', onSignal);
-  process.once('SIGINT', onSignal);
+  // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →
+  // terminal callback → exit 0) so the container never hangs after `active` — BOUNDED by the
+  // force-exit watchdog in signals.ts (<25s, inside the runtime's SIGTERM→SIGKILL stop grace) so
+  // a wedged teardown can never ride a `docker stop` all the way to a silent 137 (the incident's
+  // exit code on BOTH orphaned bots). Wire before run(); release the listeners after.
+  const releaseSignals = installSignalHandlers({ stop: (reason) => orchestrator.stop(reason) });
   try {
     const result = await orchestrator.run({ maxActiveMs: deriveMaxActiveMs(inv) });
     return result.exitCode;
   } finally {
-    process.off('SIGTERM', onSignal);
-    process.off('SIGINT', onSignal);
+    releaseSignals();
     // Tear down the capture bridge + browser (best-effort — a teardown failure must not change
     // the exit code). The orchestrator already stopped the pipeline + left the meeting.
     await stopCapture().catch(() => { /* best-effort */ });
