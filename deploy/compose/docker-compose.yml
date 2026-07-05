@@ -201,6 +201,8 @@ services:
     environment:
       - VEXA_AGENT_API_PORT=8100
       - VEXA_RUNTIME_API_URL=http://runtime:8090
+      # P0 SSE ownership: agent-api verifies meeting-row ownership before opening /api/meeting/stream (owner-scoped like /ws).
+      - VEXA_MEETING_API_URL=http://meeting-api:8080
       # How the runtime's scheduler reaches this service's /invocations sink when a routine fires (MVP2).
       - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
       - VEXA_AGENT_PROFILE=agent
