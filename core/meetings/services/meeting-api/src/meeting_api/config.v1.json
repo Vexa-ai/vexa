@@ -64,7 +64,9 @@
       "class": "defaulted",
       "default": "http://meeting-api:8080",
       "description": "this service's own base URL as the spawned bot must reach it (lifecycle.v1 callback + transcript socket); compose/helm rely on the default service DNS name, lite overrides to localhost",
-      "targets": ["lite"]
+      "targets": [
+        "lite"
+      ]
     },
     {
       "key": "INTERNAL_API_SECRET",
@@ -91,14 +93,18 @@
       "class": "defaulted",
       "default": "true",
       "description": "deployment-level default for a spawn's transcribe_enabled when the request does not say — set false for a capture-only deployment with no STT",
-      "targets": ["compose"]
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "RECORDING_ENABLED",
       "class": "defaulted",
       "default": "true",
       "description": "deployment-level default for a spawn's recording_enabled when the request does not say",
-      "targets": ["compose"]
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "MINIO_ENDPOINT",
@@ -182,6 +188,34 @@
       "targets": []
     },
     {
+      "key": "DB_WRITER_INTERVAL_S",
+      "class": "defaulted",
+      "default": "10",
+      "description": "db-writer cadence (seconds) — each tick flushes immutable live segments from the redis hash meeting:{id}:segments into the transcriptions table and drains proc:meeting:{id} notes into meeting.data (the restored 0.10 flush loop)",
+      "targets": []
+    },
+    {
+      "key": "BACKGROUND_TASK_INTERVAL",
+      "class": "defaulted",
+      "default": "10",
+      "description": "parent-name alias for DB_WRITER_INTERVAL_S (0.10 collector env parity) — used only when DB_WRITER_INTERVAL_S is unset",
+      "targets": []
+    },
+    {
+      "key": "IMMUTABILITY_THRESHOLD",
+      "class": "defaulted",
+      "default": "30",
+      "description": "seconds a live segment must sit unmodified before the db-writer flushes it to postgres — the still-mutable tail (drafts being refined) stays in redis until it settles (0.10 parity)",
+      "targets": []
+    },
+    {
+      "key": "REDIS_SEGMENT_TTL",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "TTL (seconds) re-armed on the live segment hash meeting:{id}:segments at every append — an abandoned hash cannot linger forever once flushed (0.10 parity)",
+      "targets": []
+    },
+    {
       "key": "WEBHOOK_DRAIN_INTERVAL",
       "class": "defaulted",
       "default": "5",
@@ -228,14 +262,18 @@
       "class": "defaulted",
       "default": "0.0.0.0",
       "description": "uvicorn bind host (lite binds 127.0.0.1 behind its internal proxy)",
-      "targets": ["lite"]
+      "targets": [
+        "lite"
+      ]
     },
     {
       "key": "PORT",
       "class": "defaulted",
       "default": "8080",
       "description": "uvicorn bind port",
-      "targets": ["lite"]
+      "targets": [
+        "lite"
+      ]
     },
     {
       "key": "LOG_LEVEL",
@@ -258,7 +296,10 @@
           "url_key": "TRANSCRIPTION_SERVICE_URL",
           "path": "/v1/audio/transcriptions",
           "auth_key": "TRANSCRIPTION_SERVICE_TOKEN",
-          "unauthorized_statuses": [401, 403]
+          "unauthorized_statuses": [
+            401,
+            403
+          ]
         }
       }
     },
