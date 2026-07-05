@@ -100,19 +100,25 @@ class InMemoryTranscriptStore:
         return (m["native_meeting_id"], m.get("platform") or "google_meet")
 
     def _find(self, user_id, platform, native_meeting_id) -> Optional[int]:
-        for mid, m in self._meetings.items():
-            if (
-                m["user_id"] == user_id
-                and m["platform"] == platform
-                and m["native_meeting_id"] == native_meeting_id
-            ):
-                return mid
-        return None
-
-    async def get_transcript(self, user_id, platform, native_meeting_id) -> Optional[dict]:
-        mid = self._find(user_id, platform, native_meeting_id)
-        if mid is None:
+        # NEWEST-first, exactly like the SqlAlchemy store (``order_by(Meeting.created_at.desc())``): a user
+        # with several rows on the SAME native link resolves to the LATEST run. This faithfully mirrors the
+        # symptom-2 ambiguity — the native path can only ever address the newest row, which is precisely
+        # why the by-ROW-id read path exists (P0). Tiebreak on the id so the pick is deterministic.
+        matches = [
+            (mid, m) for mid, m in self._meetings.items()
+            if m["user_id"] == user_id
+            and m["platform"] == platform
+            and m["native_meeting_id"] == native_meeting_id
+        ]
+        if not matches:
             return None
+        matches.sort(key=lambda kv: (kv[1].get("created_at") or "", kv[0]), reverse=True)
+        return matches[0][0]
+
+    async def _transcript_doc(self, mid) -> dict:
+        """Build the api.v1 ``TranscriptionResponse`` for row ``mid`` — shared by ``get_transcript``
+        (native → newest) and ``get_transcript_by_id`` (exact row). Keyed by the row id ``mid``, so a
+        by-id read returns exactly that row's segments/notes."""
         m = self._meetings[mid]
         by_id = dict(m["segments"])
         # Redis-wired (prod-topology) mode: merge the LIVE in-flight hash over the durable rows,
@@ -141,6 +147,24 @@ class InMemoryTranscriptStore:
             "data": m["data"],
             "segments": [_segment_to_api(s) for s in segments],
         }
+
+    async def get_transcript(self, user_id, platform, native_meeting_id) -> Optional[dict]:
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        return await self._transcript_doc(mid)
+
+    async def get_transcript_by_id(self, user_id, meeting_id) -> Optional[dict]:
+        """Exact-row transcript, owner-scoped (P0 wrong-row hydration fix): the row must exist AND be
+        owned by ``user_id`` — else ``None`` (a different tenant's row never leaks)."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        m = self._meetings.get(mid)
+        if m is None or m.get("user_id") != user_id:
+            return None
+        return await self._transcript_doc(mid)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None):
         rows = [

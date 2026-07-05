@@ -37,6 +37,20 @@ class TranscriptStore(Protocol):
         or ``None`` when the user owns no such meeting (the route maps ``None`` → 404)."""
         ...
 
+    async def get_transcript_by_id(
+        self, user_id: int, meeting_id: int
+    ) -> Optional[dict]:
+        """The transcript document for a SPECIFIC meeting ROW (``meeting.id``), owner-scoped by
+        ``user_id`` — the same api.v1 ``TranscriptionResponse`` shape ``get_transcript`` returns,
+        or ``None`` when the user owns no row with that id.
+
+        P0 (wrong-row hydration fix): ``get_transcript`` resolves ``(user, platform, native_id)`` to
+        the NEWEST matching row, so a user with several rows on the same native link always reads the
+        latest — the terminal can't address an OLDER row's notes. This by-ROW-id path lets the
+        terminal fetch EXACTLY the row it is displaying (each row is a distinct meeting run). Still
+        owner-scoped: a row owned by another user returns ``None`` (404), never another tenant's data."""
+        ...
+
     async def list_meetings(
         self,
         user_id: int,

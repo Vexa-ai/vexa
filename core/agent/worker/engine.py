@@ -335,8 +335,15 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # The GOVERNED, workspace-driven copilot config (agents/meeting.md) — loaded ONCE at meeting
         # start from the mounted workspace; absent ⇒ all defaults. Env stays the ultimate model default.
         cfg = load_meeting_config(work)
-        # native id == the tail of the transcript stream (tc:meeting:<native>); meeting facts are in env.
-        native = os.environ.get("VEXA_MEETING_ID") or transcript_stream.rsplit(":", 1)[-1]
+        # P0 (cross-tenant leak fix): the transcript carrier is keyed by the meetings-domain ROW id
+        # (VEXA_MEETING_NUMERIC_ID) — the transcript_stream tail is now that row id, NOT the native id.
+        # The NATIVE id (human-readable, e.g. abc-defg-hij) is carried SEPARATELY in VEXA_MEETING_ID for
+        # display + the readable kg doc name (nuance #1: kg/entities/meeting/{native}.md must survive).
+        # Never derive `native` from the stream tail anymore (that is the row id); fall back to the tail
+        # only when VEXA_MEETING_ID is somehow unset (older dispatcher), which at worst degrades the
+        # display name, never the row-scoped isolation.
+        row_id = os.environ.get("VEXA_MEETING_NUMERIC_ID") or transcript_stream.rsplit(":", 1)[-1]
+        native = os.environ.get("VEXA_MEETING_ID") or row_id
         session_uid = os.environ.get("VEXA_MEETING_SESSION_UID") or native
         platform = os.environ.get("VEXA_MEETING_PLATFORM") or "google_meet"
         import datetime as _dt
@@ -376,16 +383,16 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             idle_ms=idle_ms, beat_segments=cfg.cadence_segments,
             doc_turn=doc_turn, enabled=cfg.enabled,
             start_id=os.environ.get("VEXA_TRANSCRIPT_START_ID", "0"),
-            # The processed-notes stream is keyed by the meetings-domain ROW id when the dispatch
-            # carries it (VEXA_MEETING_NUMERIC_ID): the row id is unique per meeting run, so a
-            # re-sent bot on the same native link can never mix/clobber a previous meeting's
-            # processed doc — and the meeting-api db-writer (which knows its own row ids) drains
-            # proc:meeting:{numeric} into the meeting row's data JSONB (durable). Native-keyed
-            # fallback for older dispatchers that don't pass the row id. The CURSOR stays keyed by
-            # the NATIVE id: it is a position in tc:meeting:{native}, which re-sends share — the
-            # gap-fill must resume from where the previous run left off, whichever row that was.
-            proc_stream=f"proc:meeting:{os.environ.get('VEXA_MEETING_NUMERIC_ID') or native}",
-            cursor_key=f"proc:meeting:{native}:cursor",
+            # P0 (cross-tenant leak fix): BOTH the processed-notes stream AND its cursor key on the
+            # meetings-domain ROW id (VEXA_MEETING_NUMERIC_ID) — unique per meeting run, so neither a
+            # re-sent bot on the same native link NOR a different tenant on the same link can ever
+            # mix/clobber/read another meeting's processed doc. The meeting-api db-writer (which knows
+            # its own row ids) drains proc:meeting:{row_id} into that meeting row's data JSONB (durable).
+            # The cursor is now a position in the ROW-KEYED transcript stream tc:meeting:{row_id} (each
+            # row has its own stream), so it too MUST be row-scoped — a shared native-keyed cursor would
+            # resume one row from another row's position (and leak progress across tenants).
+            proc_stream=f"proc:meeting:{row_id}",
+            cursor_key=f"proc:meeting:{row_id}:cursor",
             on_proc_note=on_proc_note,
             on_envelope=on_envelope,
             # Provenance stamped on every processed-notes entry: what pipeline/provider/model

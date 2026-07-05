@@ -171,7 +171,11 @@ def test_dispatcher_worker_env_carries_numeric_meeting_id():
     d.dispatch(inv)  # would raise at the seam if the hint leaked into the contract check
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_MEETING_NUMERIC_ID"] == "17"
-    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:abc-defg-hij"  # transcript key stays NATIVE
+    # P0 (cross-tenant leak fix): the transcript carrier keys on the meetings-domain ROW id
+    # (numeric_meeting_id) — unique per run — NOT the native id (which collides across tenants +
+    # a user's re-sends). The native id rides SEPARATELY as VEXA_MEETING_ID (the readable kg doc name).
+    assert env["VEXA_TRANSCRIPT_STREAM"] == "tc:meeting:17"          # carrier keys on the ROW id
+    assert env["VEXA_MEETING_ID"] == "abc-defg-hij"                 # native survives for display only
 
 # ── model-auth passthrough: agent-api env → worker spec env (the k8s/helm credential seam) ────
 

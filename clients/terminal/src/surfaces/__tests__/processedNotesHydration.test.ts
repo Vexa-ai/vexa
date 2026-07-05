@@ -80,8 +80,10 @@ describe("fetchDurableTranscript", () => {
   it("returns transcript lines AND hydrated processed notes from one GET", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(fixture), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const { lines, notes } = await fetchDurableTranscript("Google Meet", "abc-defg-hij");
-    expect(fetchMock).toHaveBeenCalledWith("/api/transcripts/google_meet/abc-defg-hij", { cache: "no-store" });
+    // P0 (wrong-row hydration fix): fetch by the meetings-domain ROW id via /api/transcripts/by-id/{id},
+    // not the native path (which resolves to the NEWEST row sharing a native).
+    const { lines, notes } = await fetchDurableTranscript("42");
+    expect(fetchMock).toHaveBeenCalledWith("/api/transcripts/by-id/42", { cache: "no-store" });
     expect(lines).toHaveLength(2);
     expect(lines[1]).toMatchObject({ speaker: "Anna", text: "Acme wants the SSO integration before renewal." });
     expect(notes).toHaveLength(2);
@@ -90,8 +92,8 @@ describe("fetchDurableTranscript", () => {
 
   it("returns empties on HTTP error and on network failure", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
-    expect(await fetchDurableTranscript("Google Meet", "x")).toEqual({ lines: [], notes: [] });
+    expect(await fetchDurableTranscript("42")).toEqual({ lines: [], notes: [] });
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
-    expect(await fetchDurableTranscript("Google Meet", "x")).toEqual({ lines: [], notes: [] });
+    expect(await fetchDurableTranscript("42")).toEqual({ lines: [], notes: [] });
   });
 });
