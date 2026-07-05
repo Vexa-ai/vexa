@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, type GitState, type AttachedWorkspaces } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, publishWorkspace, type GitState, type AttachedWorkspaces, type PublishResult } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path } });
 
@@ -268,6 +268,8 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<{ repo: string; ref: string; token: string } | null>(null);  // non-null = attach form shown
+  const [pubForm, setPubForm] = useState<{ name: string; priv: boolean; token: string } | null>(null);  // non-null = publish form shown
+  const [published, setPublished] = useState<PublishResult | null>(null);  // last publish success (repo URL shown)
   const [renaming, setRenaming] = useState<string | null>(null);  // slug whose name is being edited inline
   const cancelled = useRef(false);  // Escape vs Enter/blur on the rename input (blur fires for both)
   const load = () => { void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e))); };
@@ -290,6 +292,15 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
     finally { setBusy(false); }
   };
 
+  // Publish the vexa-born ACTIVE workspace to GitHub — repo created with the per-call token (never
+  // stored, P15), full history pushed. Success shows the repo URL; failure shows the (redacted) error.
+  const doPublish = async (name: string, priv: boolean, token: string) => {
+    setBusy(true); setErr(null);
+    try { setPublished(await publishWorkspace(name, priv, token)); setPubForm(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
   const doRename = async (slug: string, name: string) => {
     setBusy(true); setErr(null);
     try { setView(await renameWorkspace(slug, name.trim())); setRenaming(null); }
@@ -301,6 +312,13 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
   const slots = Object.entries(view.slots);
   if (!slots.some(([s]) => s === "seed")) slots.unshift(["seed", { repo: null, ref: null }]);
   const label = (slug: string, repo: string | null) => (slug === "seed" ? "default (seed)" : repo ?? slug);
+
+  // Publish applies to a VEXA-BORN active workspace only — one attached from an external repo already
+  // has a home (the backend refuses it too). Default repo name: the workspace's display name, slugified.
+  const activeSlug = view.active ?? "seed";
+  const activeBorn = !view.slots[activeSlug]?.repo;
+  const defaultRepoName = (view.slots[activeSlug]?.name ?? (activeSlug === "seed" ? "vexa-workspace" : activeSlug))
+    .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "vexa-workspace";
 
   return (
     <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
@@ -365,6 +383,36 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
                 style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
               <button disabled={busy} onClick={() => setForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
             </div>
+          </div>
+        )}
+        {activeBorn && (pubForm === null ? (
+          <div onClick={() => { setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "" }); }} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <Icon name="plus" size={12} /> Publish to GitHub…
+          </div>
+        ) : (
+          <div style={{ padding: "6px 9px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <input autoFocus value={pubForm.name} placeholder="repo name" disabled={busy}
+              onChange={(e) => setPubForm({ ...pubForm, name: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Enter" && pubForm.name.trim() && pubForm.token.trim()) void doPublish(pubForm.name.trim(), pubForm.priv, pubForm.token.trim()); if (e.key === "Escape") setPubForm(null); }}
+              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--t2)", cursor: "pointer" }}>
+              <input type="checkbox" checked={pubForm.priv} disabled={busy} onChange={(e) => setPubForm({ ...pubForm, priv: e.target.checked })} />
+              private repo
+            </label>
+            <input type="password" value={pubForm.token} placeholder="GitHub token (repo scope — used once, never stored)" disabled={busy}
+              onChange={(e) => setPubForm({ ...pubForm, token: e.target.value })}
+              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button disabled={busy || !pubForm.name.trim() || !pubForm.token.trim()} onClick={() => void doPublish(pubForm.name.trim(), pubForm.priv, pubForm.token.trim())}
+                style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !pubForm.name.trim() || !pubForm.token.trim() ? 0.5 : 1 }}>{busy ? "Publishing…" : "Publish"}</button>
+              <button disabled={busy} onClick={() => setPubForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+            </div>
+          </div>
+        ))}
+        {published && (
+          <div style={{ padding: "4px 9px", fontSize: 12, color: "var(--t2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "var(--green)" }}>✓</span> published →&nbsp;
+            <a href={published.repo_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{published.repo_url}</a>
           </div>
         )}
       </>)}

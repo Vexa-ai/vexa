@@ -35,6 +35,7 @@ from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from control_plane.workspace_attach import CloneError, attached_workspaces, rename_workspace, swap_workspace
+from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from shared.ports import SchedulerPort, StreamReader
@@ -224,6 +225,18 @@ class WorkspaceSwapBody(BaseModel):
     slug: Optional[str] = None   # target a parked slot DIRECTLY (e.g. a no-repo backup) — restores, no re-clone
     fresh: bool = False          # swap-to-seed only: rebuild the default from template (start fresh) vs restore the park
     token: Optional[str] = None  # access token for a PRIVATE repo — used for the clone only, never stored (P15)
+
+
+class WorkspacePublishBody(BaseModel):
+    """Publish the subject's vexa-born workspace to GitHub — create the repo (unless ``remote_url``
+    targets a pre-created one) and push the current branch's full history. ``token`` is the caller's
+    PAT, used server-side for this call only, NEVER stored (P15)."""
+    model_config = {"extra": "forbid"}
+    repo_name: Optional[str] = None    # name of the repo to create (required unless remote_url is given)
+    private: bool = True               # create the repo private (default) or public
+    token: str                         # GitHub PAT — repo-creation + push only, never persisted (P15)
+    org: Optional[str] = None          # create under this org instead of the user's account
+    remote_url: Optional[str] = None   # skip creation and push to this (pre-created/empty) repo
 
 
 class WorkspaceRenameBody(BaseModel):
@@ -791,6 +804,34 @@ def create_app(
             "cloned": result.cloned,
             "parked": result.parked_slug,
             "nested": result.nested,
+        }
+
+    @app.post("/api/workspace/publish")
+    def ws_publish(request: Request, body: WorkspacePublishBody = Body(...)):
+        """Publish this subject's vexa-born workspace to GitHub — the counterpart of swap/attach.
+        Creates the repo under the caller's account (or ``org``) with their per-call PAT, then pushes
+        the active workspace's current branch (FULL history) over the token-scrubbed dedicated remote.
+        ``remote_url`` skips creation (pre-created/empty repo). Re-publish = plain push (fast-forward
+        or a clear error on divergence — never a force push). The token is used server-side for this
+        call only and never stored; every error is token-redacted (P15)."""
+        subject = subject_of(request)
+        try:
+            result = publish_workspace(
+                wsr.root, subject,
+                token=body.token, repo_name=body.repo_name, private=body.private,
+                org=body.org or None, remote_url=body.remote_url or None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "invalid subject")
+        except RepoExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))   # already token-redacted (P15)
+        except PublishError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))   # already token-redacted (P15)
+        return {
+            "repo_url": result.repo_url,
+            "pushed_ref": result.pushed_ref,
+            "head_sha": result.head_sha,
+            "created": result.created,
         }
 
     @app.post("/api/workspace/rename")

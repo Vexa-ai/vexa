@@ -2,7 +2,7 @@
  *  error throws, a malformed git body throws (never reaches GitSection as a fake GitState), and a 404
  *  file read is the one legit "empty" → null. */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, swapWorkspace, renameWorkspace } from "../workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, swapWorkspace, renameWorkspace, publishWorkspace } from "../workspaceApi";
 import { ApiError } from "../apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -57,6 +57,20 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
     expect(lastBody()).toEqual({ repo: null, ref: null, slug: "seed", token: null, fresh: true });
     await swapWorkspace("https://h/r.git", "dev", "TOK");                 // attach a repo
     expect(lastBody()).toEqual({ repo: "https://h/r.git", ref: "dev", slug: null, token: "TOK", fresh: false });
+  });
+  it("publishWorkspace POSTs {repo_name,private,token} to /api/workspace/publish and returns the result", async () => {
+    mock(true, 200, { repo_url: "https://github.com/u/w", pushed_ref: "main", head_sha: "abc123", created: true });
+    const res = await publishWorkspace("w", true, "TOK");
+    expect(lastUrl()).toBe("/api/workspace/publish");
+    expect(lastBody()).toEqual({ repo_name: "w", private: true, token: "TOK" });
+    expect(res.repo_url).toBe("https://github.com/u/w");
+    expect(res.created).toBe(true);
+  });
+  it("FAIL-LOUD: publishWorkspace throws on a backend error (409 already-exists, 502 push failure)", async () => {
+    mock(false, 409, { detail: "a repository named 'w' already exists under your account" });
+    await expect(publishWorkspace("w", true, "TOK")).rejects.toBeInstanceOf(ApiError);
+    mock(false, 502, { detail: "git push failed" });
+    await expect(publishWorkspace("w", false, "TOK")).rejects.toBeInstanceOf(ApiError);
   });
   it("renameWorkspace POSTs {slug,name} to /api/workspace/rename", async () => {
     mock(true, 200, { active: "seed", slots: {} });

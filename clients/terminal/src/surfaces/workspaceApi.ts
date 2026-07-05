@@ -47,6 +47,20 @@ export async function swapWorkspace(repo?: string, ref?: string, token?: string,
   });
 }
 
+export interface PublishResult { repo_url: string; pushed_ref: string; head_sha: string; created: boolean }
+
+/** Publish the vexa-born ACTIVE workspace to GitHub — the counterpart of attach: create the repo under
+ *  the caller's account (private by default) and push the current branch's FULL history. `token` is the
+ *  caller's PAT — used server-side for this one call (repo creation + push), NEVER stored (P15).
+ *  Re-publish to the same repo is a plain push (fast-forward, or a clear error — never a force push). */
+export async function publishWorkspace(repoName: string, priv: boolean, token: string): Promise<PublishResult> {
+  return getJson(`/api/workspace/publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo_name: repoName, private: priv, token }),
+  });
+}
+
 /** Rename a workspace slot — a DISPLAY label only (the slug + parked tree are unchanged, so swap-back and
  *  repo re-attach keep matching). Pass an empty `name` to clear the label. Returns the updated view. */
 export async function renameWorkspace(slug: string, name: string): Promise<AttachedWorkspaces> {
