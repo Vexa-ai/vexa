@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     # workspace git repo) and mirrors the derived index over this internal edge. Empty base URL = the
     # in-memory index (git files stay authoritative; only the "shared with me" listing is degraded).
     admin_api_url: str = ""                       # e.g. http://admin-api:8001; empty = no index mirror
+    # meeting-api base URL — agent-api hits GET /meetings/{id} on it to OWNER-SCOPE the live SSE stream
+    # (P0 cross-tenant leak fix, SSE sibling): the caller-supplied meeting_id (row id) is verified to
+    # belong to the authenticated X-User-Id BEFORE the redis transcript stream is opened, mirroring the
+    # WS /ws authorize_subscribe ownership gate. meeting-api trusts the gateway-injected X-User-Id the
+    # same way its own /transcripts/by-id path does.
+    meeting_api_url: str = "http://meeting-api:8080"
     # The X-Internal-Secret the admin-api's internal tier checks (same value the gateway uses). SecretStr.
 
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────

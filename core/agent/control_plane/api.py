@@ -433,6 +433,47 @@ def _meeting_grounding(
     return (ctx, [], preamble + prompt)
 
 
+# ── SSE ownership gate (P0 cross-tenant leak fix — the SSE sibling of the by-id REST check) ──────────
+# The live SSE feed `GET /api/meeting/stream` is keyed on a CALLER-SUPPLIED row id (`meeting_id`) and a
+# `session_uid`. Row ids are sequential ints, so without an ownership check any authenticated user B could
+# `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript +
+# copilot cards — an ACTIVE, enumerable cross-tenant read. We mirror the WS `/ws` pattern (gateway
+# `authorize_subscribe` → `Meeting.user_id == user_id`) and the by-id REST path (`get_transcript_by_id`
+# owner-scopes in SQL): verify the caller OWNS the row BEFORE opening the redis stream. Fail CLOSED.
+#
+# agent-api has no meetings DB; it asks meeting-api `GET /meetings/{meeting_id}` forwarding the
+# gateway-injected `X-User-Id` (meeting-api's `_resolve_user_id` trusts it exactly as its by-id path does)
+# — a row owned by another user (or absent) returns 404 there → we treat it as NOT-OWNED. The returned
+# record's `native_meeting_id` also lets us confirm the requested `session_uid` belongs to the SAME owned
+# meeting, so B can't pair its own row with A's native to sniff A's copilot out-stream. Returns the owned
+# meeting record (dict) on success, else None. Injectable so the L2 suite drives it over a fake.
+def _http_meeting_owner_lookup(meeting_api_url: str):
+    """Build the default owner-lookup: GET {meeting_api_url}/meetings/{id} with the caller's X-User-Id.
+    Returns a callable ``(user_id: str, meeting_id: str) -> dict | None`` (the owned meeting record, or
+    None when the row is absent / owned by someone else / meeting-api is unreachable — fail-closed)."""
+    import urllib.error
+    import urllib.request
+
+    base = (meeting_api_url or "").rstrip("/")
+
+    def _lookup(user_id: str, meeting_id: str) -> "dict | None":
+        if not base or not user_id or not str(meeting_id).isdigit():
+            return None  # non-numeric row id can't be an owned meeting row → fail closed
+        try:
+            req = urllib.request.Request(
+                f"{base}/meetings/{int(meeting_id)}", headers={"X-User-Id": str(user_id)})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status != 200:
+                    return None
+                return json.loads(resp.read().decode() or "null")
+        except urllib.error.HTTPError:
+            return None   # 404 (not owned / absent) or any other status → refuse
+        except Exception:  # noqa: BLE001 — meeting-api unreachable → fail CLOSED, never open the stream
+            return None
+
+    return _lookup
+
+
 def create_app(
     dispatcher: Dispatcher,
     *,
@@ -443,6 +484,7 @@ def create_app(
     invocations_url: Optional[str] = None,
     redis_url: Optional[str] = None,
     membership_index: Optional[MembershipIndex] = None,
+    meeting_owner_lookup: "Optional[object]" = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -461,6 +503,9 @@ def create_app(
     app.state.live_meetings = live
     app.state.scheduler = scheduler
     settings = dispatcher.settings if dispatcher is not None else None
+    # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
+    _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
+        settings.meeting_api_url if settings is not None else "")
 
     # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
     # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
@@ -1032,6 +1077,30 @@ def create_app(
         (the durable store kept them, so they only reappeared post-time)."""
         if not redis_url:
             raise HTTPException(status_code=501, detail="redis not wired")
+
+        # P0 (cross-tenant leak fix — SSE sibling of the by-id REST ownership check): OWNER-SCOPE the live
+        # feed BEFORE opening any redis stream. `meeting_id` (row id) + `session_uid` arrive from the
+        # caller's query params; row ids are sequential ints, so without this an authenticated user B could
+        # `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript
+        # + copilot cards (an ACTIVE, enumerable cross-tenant read). Mirror the WS `/ws` path: derive the
+        # caller identity (`subject_of` → 401 on no gateway-injected X-User-Id) and verify the caller OWNS
+        # the requested row (meeting-api `GET /meetings/{id}` owner-scopes in SQL: `Meeting.user_id ==
+        # user_id` → 404 for a foreign/absent row). Fail CLOSED (403) BEFORE the stream opens.
+        # OWNER-ONLY for now (matches the WS path today); a shared-workspace membership grant would extend
+        # `_meeting_owner_lookup` — the clean seam — but is intentionally NOT honored here yet.
+        subject = subject_of(request)  # 401 if no (gateway-injected) identity — fail closed
+        owned = _meeting_owner_lookup(subject, meeting_id)
+        if owned is None:
+            # Absent row, or a row owned by a DIFFERENT tenant → refuse (404-equivalent, no stream opened).
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        # Defense-in-depth on the copilot out-stream: `session_uid` is ALSO caller-supplied and keys
+        # `unit:agent-meet-{session_uid}:out`. The terminal always passes the meeting's own native id as
+        # `session_uid` (meetingLive.ts). Bind it to the OWNED meeting's native so B can't pair its own row
+        # with A's native to sniff A's copilot cards. `session_uid == row id` (the /api/meeting/start
+        # legacy shape, where native==row==session) is also accepted.
+        owned_native = str(owned.get("native_meeting_id") or "")
+        if session_uid not in (owned_native, str(meeting_id)):
+            raise HTTPException(status_code=403, detail="session_uid does not match this meeting")
 
         resume_t, resume_o = _decode_sse_cursor(request.headers.get("last-event-id"))
 

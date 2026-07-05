@@ -292,6 +292,15 @@
       ]
     },
     {
+      "key": "VEXA_MEETING_API_URL",
+      "class": "defaulted",
+      "default": "http://meeting-api:8080",
+      "description": "meeting-api base URL \u2014 agent-api owner-scopes the live SSE feed (GET /api/meeting/stream) by hitting GET /meetings/{id} on it before opening the redis transcript stream (P0 cross-tenant leak fix, SSE sibling of the by-id ownership check)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_INTERNAL_API_SECRET",
       "class": "defaulted",
       "default": "(unset)",
