@@ -38,6 +38,11 @@ STATE_FILENAME = "state.json"
 SEED_SLOT = "seed"  # the reserved slug for the original template-seeded workspace
 SEED_BACKUP_SLOT = "seed-prev"  # where 'start fresh' tucks the displaced default so it stays recoverable
 
+# The subject's PRIVATE baseline — the workspace at ``<root>/<subject>`` that a turn always mounts. Its
+# slug in the active set is whatever ``state.active`` points at (the seed by default). This slug marks
+# the workspace that lives at the legacy in-place path and is ALWAYS active + non-deactivatable.
+PRIVATE_ROLE = "private"
+
 # Inject the actual clone for tests (a local file repo, no network). Signature: (repo_url, ref, dest, token).
 CloneFn = Callable[[str, str, Path, Optional[str]], None]
 
@@ -59,6 +64,40 @@ class SwapResult:
     cloned: bool           # True == a fresh git clone happened (vs restoring a parked tree)
     parked_slug: Optional[str]  # the slug the previously-active workspace was parked under
     nested: bool = False   # True == the clone wasn't a compliant workspace, so it was nested under kg/
+
+
+@dataclass(frozen=True)
+class ActiveMount:
+    """One member of the additive mount set (WP-A1.1). The dispatch turns this into a worker mount at a
+    deterministic path; the worker harness declares slug/role/write verbatim to the model."""
+
+    slug: str
+    repo: Optional[str]
+    ref: Optional[str]
+    role: str           # 'private' (the subject's own baseline / attached repos) — 'shared'/'system' land in later WPs
+    path: str           # ABSOLUTE on-disk path inside the mounted store root (<root>/<subject> or <root>/.attached/<subject>/<slug>)
+    write: bool = True  # the subject may always write their own private workspaces; membership gates land later
+    primary: bool = False  # True == the private baseline at <root>/<subject> (always active, never deactivatable)
+
+
+@dataclass(frozen=True)
+class ActiveResult:
+    """Outcome of one activate/deactivate — for the API body and tests."""
+
+    subject: str
+    slug: str
+    changed: bool             # False == already in the desired state (idempotent no-op)
+    cloned: bool = False      # True == a fresh git clone happened (activate of a never-seen repo)
+    nested: bool = False
+
+
+def _slug_dir(root: Path, subject: str, state: dict, slug: str) -> Path:
+    """Where a slug's workspace tree lives on disk: the PRIMARY (the private baseline) is in place at
+    ``<root>/<subject>``; every other slug lives in its store slot ``<root>/.attached/<subject>/<slug>``.
+    Active-but-secondary and parked members share the store slot — the only difference is set membership."""
+    if slug == _primary_slug(state):
+        return _safe_subject_dir(root, subject)
+    return _store(root, subject) / slug
 
 
 def _repo_name(repo_url: str) -> str:
@@ -133,16 +172,43 @@ def _store(root: Path, subject: str) -> Path:
 def _load_state(store: Path) -> dict:
     f = store / STATE_FILENAME
     if not f.exists():
-        return {"active": None, "slots": {}}
+        return {"active": None, "slots": {}, "active_set": []}
     try:
         data = json.loads(f.read_text())
     except (OSError, json.JSONDecodeError):
-        return {"active": None, "slots": {}}
+        return {"active": None, "slots": {}, "active_set": []}
     if not isinstance(data, dict):
-        return {"active": None, "slots": {}}
+        return {"active": None, "slots": {}, "active_set": []}
     data.setdefault("active", None)
     data.setdefault("slots", {})
+    # ``active_set`` (the additive mount set — WP-A2.1) is an ORDERED list of active slugs. A state.json
+    # written before this field existed carries none; back-compat is derive-from-``active``: the single
+    # active workspace becomes the sole member of the set. The private baseline (``active`` / the seed)
+    # is always the FIRST member (normalized on every read/write). Unknown/duplicate slugs are dropped.
+    if not isinstance(data.get("active_set"), list):
+        data["active_set"] = []
     return data
+
+
+def _primary_slug(state: dict) -> str:
+    """The PRIVATE baseline slug — the workspace that lives at ``<root>/<subject>`` and is always active
+    + non-deactivatable. A never-swapped subject (``active`` is None) is on the seed."""
+    return state.get("active") or SEED_SLOT
+
+
+def _normalized_active_set(state: dict) -> list[str]:
+    """The ordered active set with the private baseline FORCED first and present, duplicates and unknown
+    slugs (no parked tree, not the primary) dropped. Back-compat: an empty set (pre-``active_set`` state)
+    yields just the primary — exactly today's single-active behavior."""
+    primary = _primary_slug(state)
+    ordered: list[str] = [primary]
+    for slug in state.get("active_set", []):
+        if slug == primary or slug in ordered:
+            continue
+        # a secondary member must have a parked tree (its on-disk home) OR a slot record (repo to restore)
+        if slug in state.get("slots", {}):
+            ordered.append(slug)
+    return ordered
 
 
 def _save_state(store: Path, state: dict) -> None:
@@ -151,11 +217,15 @@ def _save_state(store: Path, state: dict) -> None:
 
 
 def attached_workspaces(root: str | Path, subject: str) -> dict:
-    """The subject's attachment view: which slug is active and the parked slots (slug → repo/ref).
-    Read-only; safe to call before any swap (returns the empty shape)."""
+    """The subject's attachment view: which slug is active (the private baseline), the parked slots
+    (slug → repo/ref), and the ordered ``active_set`` (the mount set — WP-A2.1). Read-only; safe to call
+    before any swap (returns the empty shape). The ``active_set`` is normalized (primary first) so the
+    terminal can render the per-row active toggle directly off it."""
     rootp = Path(root)
     _safe_subject_dir(rootp, subject)
-    return _load_state(_store(rootp, subject))
+    state = _load_state(_store(rootp, subject))
+    state["active_set"] = _normalized_active_set(state)
+    return state
 
 
 def swap_workspace(
@@ -257,10 +327,129 @@ def swap_workspace(
         state["slots"][target_slug] = slot
 
     state["active"] = target_slug
+    # The PRIMARY moved: the new active is the private baseline (first in the set). Any SECONDARY active
+    # members (added via ``activate_workspace``) survive the swap — a swap only re-homes the primary, it
+    # must not silently drop the rest of the mount set. ``_normalized_active_set`` re-orders with the new
+    # primary first and prunes the old primary if it is no longer a set member.
+    prior_secondaries = [s for s in state.get("active_set", []) if s != target_slug]
+    state["active_set"] = _normalized_active_set({**state, "active_set": prior_secondaries})
     _save_state(store, state)
     slot = state["slots"].get(target_slug, {})
     return SwapResult(subject, target_slug, slot.get("repo"), slot.get("ref"),
                       swapped=True, cloned=cloned, parked_slug=parked_slug, nested=bool(slot.get("nested")))
+
+
+# ── the additive mount set (WP-A2.1) — activate ADDS to the set without parking the others ──────────
+
+def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
+    """The subject's ordered ACTIVE SET (the mount set the next dispatch materializes). The private
+    baseline (``<root>/<subject>``) is always first; every other member is a secondary active workspace
+    living in its store slot. Read-only; a never-swapped subject yields just the private baseline (its
+    on-disk tree may not exist yet — the worker seeds it on first dispatch, exactly as today)."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    primary = _primary_slug(state)
+    mounts: list[ActiveMount] = []
+    for slug in _normalized_active_set(state):
+        slot = state["slots"].get(slug, {})
+        mounts.append(ActiveMount(
+            slug=slug,
+            repo=slot.get("repo"),
+            ref=slot.get("ref"),
+            role=PRIVATE_ROLE,   # every workspace a subject owns is 'private' for now; 'shared'/'system' land later
+            path=str(_slug_dir(rootp, subject, state, slug)),
+            write=True,
+            primary=(slug == primary),
+        ))
+    return mounts
+
+
+def activate_workspace(
+    root: str | Path,
+    subject: str,
+    repo_url: Optional[str],
+    ref: str = "main",
+    *,
+    slug: Optional[str] = None,
+    token: Optional[str] = None,
+    clone: CloneFn = _git_clone,
+) -> ActiveResult:
+    """ADD a workspace to the subject's active set WITHOUT parking the others (the additive counterpart of
+    ``swap_workspace``). Clone/restore the target into its store slot if it isn't materialized, then mark
+    it active. Idempotent: activating an already-active slug is a no-op (``changed=False``).
+
+    ``repo_url`` clones a repo (first time) / restores its slot (thereafter); pass ``slug`` to activate an
+    already-parked slot directly (a repo whose tree is parked, or a ``SEED_BACKUP_SLOT`` backup). The
+    private baseline is always active and needs no activation — activating its slug is a no-op.
+
+    A clone failure raises ``CloneError`` (token-redacted, P15) WITHOUT mutating the active set."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+
+    target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
+    primary = _primary_slug(state)
+
+    # The private baseline is unconditionally active — activating it (or the seed on a never-swapped
+    # subject) is a no-op, never a destructive re-clone into the store slot.
+    already = target_slug in _normalized_active_set(state)
+    if target_slug == primary or already:
+        return ActiveResult(subject, target_slug, changed=False)
+
+    # Materialize the slot tree OUT OF PLACE if it isn't already parked — a clone failure raises here
+    # leaving the active set untouched (mirrors swap's phase-1 discipline).
+    slot_dir = store / target_slug
+    cloned = nested = False
+    if not slot_dir.exists():
+        if repo_url:
+            staged = store / f".staging-{target_slug}"
+            if staged.exists():
+                shutil.rmtree(staged)
+            cloned, nested = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
+            slot_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(staged), str(slot_dir))
+        else:
+            raise KeyError(target_slug)  # asked to activate a slot with no parked tree and no repo to clone
+
+    slot = state["slots"].get(target_slug, {})
+    if repo_url is not None:
+        slot.update({"repo": repo_url, "ref": ref, "nested": nested})
+    else:
+        slot.setdefault("repo", None)
+        slot.setdefault("ref", None)
+    state["slots"][target_slug] = slot
+    state["active_set"] = _normalized_active_set(
+        {**state, "active_set": [*state.get("active_set", []), target_slug]}
+    )
+    _save_state(store, state)
+    return ActiveResult(subject, target_slug, changed=True, cloned=cloned, nested=nested)
+
+
+def deactivate_workspace(root: str | Path, subject: str, slug: str) -> ActiveResult:
+    """REMOVE a workspace from the subject's active set (park it — never destroyed). The parked tree stays
+    in its store slot, ready to re-activate. Idempotent: deactivating a not-active slug is a no-op.
+
+    The private baseline (``<root>/<subject>``) is ALWAYS active and cannot be deactivated — that is the
+    subject's durable memory root; attempting it raises ``ValueError``."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    slug = (slug or "").strip()
+
+    if slug == _primary_slug(state):
+        raise ValueError("cannot deactivate the private baseline workspace")
+    if slug not in _normalized_active_set(state):
+        return ActiveResult(subject, slug, changed=False)
+
+    # The secondary member already lives in its store slot (activate materialized it there) — dropping it
+    # from the set is all that 'park' means here; nothing to move, nothing destroyed.
+    state["active_set"] = [s for s in _normalized_active_set(state) if s != slug]
+    _save_state(store, state)
+    return ActiveResult(subject, slug, changed=True)
 
 
 def _build_attached(dest: Path, repo_url: str, ref: str, token: Optional[str], clone: CloneFn) -> tuple[bool, bool]:

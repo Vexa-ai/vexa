@@ -61,6 +61,41 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "VEXA_MOUNTS",
+      "class": "defaulted",
+      "default": "(unset — derived per dispatch: the private baseline only)",
+      "description": "the ordered THREE-TIER mount STACK the dispatch stamps into the worker spec — a JSON list [{slug,path,role,write,primary}], one entry per mount: _global (RO) + the active workspaces (RW) + _system (RW) (AMENDMENT 4 / WP-A1.1). Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
+      "class": "defaulted",
+      "default": "(unset — no _global mount; the stack degrades to the active set + _system)",
+      "description": "host path / repo dir of the platform-owned GLOBAL SYSTEM workspace (_global) mounted READ-ONLY into EVERY worker — behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Absent → the _global tier is skipped",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_REF",
+      "class": "defaulted",
+      "default": "(unset — mount HEAD/main)",
+      "description": "pin the _global mount to a ref (branch/tag/sha) for safe rollout of a global behaviour change; empty = mount HEAD (AMENDMENT 4, Q17)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_PRINCIPAL_NAME",
+      "class": "defaulted",
+      "default": "(unset — defaults to the dispatch subject)",
+      "description": "the authenticated human principal's name the dispatch stamps for per-mount commit attribution (D4: git author = principal, committer = platform). Runtime-injected per dispatch",
+      "targets": []
+    },
+    {
+      "key": "VEXA_PRINCIPAL_EMAIL",
+      "class": "defaulted",
+      "default": "(unset — defaults to <subject>@vexa.local)",
+      "description": "the authenticated human principal's email for per-mount commit attribution (D4). Runtime-injected per dispatch",
+      "targets": []
+    },
+    {
       "key": "VEXA_AGENT_DEFAULT_SUBJECT",
       "class": "defaulted",
       "default": "(empty — FAIL-CLOSED: 401 when the gateway's X-User-Id is absent)",

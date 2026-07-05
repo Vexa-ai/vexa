@@ -679,6 +679,49 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
 
 
+def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path, monkeypatch):
+    """POST /api/workspace/activate ADDS a repo to the active set without parking the private baseline;
+    GET /api/workspace/active lists the ordered set; deactivate parks it; the baseline is non-deactivatable."""
+    import subprocess
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    origin = tmp_path / "origin"; origin.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
+    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    (origin / "CLAUDE.md").write_text("SHARED ROOT\n"); run("add", "-A"); run("commit", "-q", "-m", "x")
+
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+
+    r = c.post("/api/workspace/activate", headers=h, json={"repo": str(origin)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["changed"] is True and body["cloned"] is True
+    slug = body["slug"]
+    # the private baseline was NOT parked — still the live tree
+    assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
+
+    active = c.get("/api/workspace/active", headers=h).json()["active"]
+    slugs = [m["slug"] for m in active]
+    assert slugs[0] == "seed" and slug in slugs and len(active) == 2
+    assert active[0]["primary"] is True and active[0]["role"] == "private"
+
+    # deactivate parks it (dropped from the set, tree kept)
+    d = c.post("/api/workspace/deactivate", headers=h, json={"slug": slug})
+    assert d.status_code == 200 and d.json()["changed"] is True
+    assert [m["slug"] for m in c.get("/api/workspace/active", headers=h).json()["active"]] == ["seed"]
+
+    # the private baseline cannot be deactivated
+    assert c.post("/api/workspace/deactivate", headers=h, json={"slug": "seed"}).status_code == 409
+
+
 def test_workspace_publish_pushes_born_workspace_to_remote(tmp_path, monkeypatch):
     """POST /api/workspace/publish pushes the vexa-born active workspace's full history to the created
     (here: injected/local bare) repo. Per-call token, never stored; errors token-redacted (P15).

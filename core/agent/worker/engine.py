@@ -61,6 +61,68 @@ _FALLBACK_MEMORY_MD = (
 TurnFn = Callable[[str], Iterator[dict]]
 
 
+# ── the active mount set (WP-A1.1) — declared VERBATIM to the model so it never guesses where to write ──
+
+def active_mounts() -> list[dict]:
+    """The dispatch's ordered active mount set from ``VEXA_MOUNTS`` (``[{slug,path,role,write,primary}]``).
+    A dispatch that predates the set (no ``VEXA_MOUNTS``) falls back to the single private baseline at
+    ``VEXA_WORKSPACE_PATH`` — identical to today's one-workspace behavior."""
+    raw = os.environ.get("VEXA_MOUNTS")
+    if raw:
+        try:
+            data = json.loads(raw)
+            mounts = [m for m in data if isinstance(m, dict) and m.get("path")] if isinstance(data, list) else []
+            if mounts:
+                return mounts
+        except (ValueError, TypeError):
+            log.warning("VEXA_MOUNTS is not valid JSON — falling back to the private baseline")
+    path = os.environ.get("VEXA_WORKSPACE_PATH", "/workspace")
+    return [{"slug": Path(path).name, "path": path, "role": "private", "write": True, "primary": True}]
+
+
+def _tier_label(m: dict) -> str:
+    """The mount's TIER + write-rule, declared VERBATIM so the model never guesses where it may write
+    (AMENDMENT 4 three-tier stack). Derived from role/primary/write, not from the slug."""
+    role = m.get("role", "private")
+    if role == "global":
+        return "GLOBAL SYSTEM tier — READ-ONLY (platform behaviour/skills/tools; never write here)"
+    if role == "system":
+        return "PRIVATE SYSTEM tier — read-write (your chats/sessions, settings, routines; private, never shared)"
+    if m.get("primary"):
+        return "your PRIVATE baseline (durable personal memory) — read-write"
+    writable = "read-write" if m.get("write", True) else "READ-ONLY (do not write here)"
+    return f"{role} workspace — {writable}"
+
+
+def mounts_preamble(mounts: list[dict]) -> str:
+    """A prompt preamble that DECLARES every mount in the THREE-TIER stack to the model VERBATIM — names,
+    paths, tiers, roles, write rules — plus the default write-routing policy (WP-A1.2). The agent must
+    never guess where it may read/write. Enforcement is minimal in this WP (per-mount commit with the
+    principal as author); the routing rule is STATED. A single private mount ⇒ no preamble (nothing to
+    disambiguate — the legacy one-workspace turn is unchanged)."""
+    if len(mounts) <= 1:
+        return ""
+    lines = ["## Your mounted workspaces", "",
+             "This turn mounts a STACK of workspaces (the three-tier mount stack). Each is a separate git"
+             " repo; every writable one is committed independently after the turn:",
+             ""]
+    for m in mounts:
+        lines.append(f"- `{m['path']}` — **{m.get('slug')}** ({_tier_label(m)})")
+    lines += [
+        "",
+        "Write-routing policy:",
+        "- Platform behaviour/skills/tools live in the GLOBAL SYSTEM tier (`_global`) — READ-ONLY, never write it.",
+        "- Chats/sessions/settings → the PRIVATE SYSTEM tier (`_system`).",
+        "- Personal notes/drafts and anything the user marks private → your PRIVATE baseline mount.",
+        "- Content produced FOR a shared/community space (shared notes, common docs, shared entities) →"
+        " the matching shared mount (only if it is read-write).",
+        "- Never write to a READ-ONLY mount.",
+        "Always use ABSOLUTE paths under the mount you intend — do not guess or invent mount paths.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 class _Stream(Protocol):
     """The slice of redis the harness needs (XADD out, XREAD in) — a fake satisfies it in tests."""
 
@@ -129,13 +191,37 @@ def _resume_id(work: Path, sess_file: Path, harness: HarnessPort) -> str | None:
     return sid or None
 
 
+def _principal_author() -> tuple[str, str] | None:
+    """The dispatch PRINCIPAL (name, email) for commit attribution (D4) — the authenticated human whose
+    input drove the turn, stamped into the worker env by the dispatcher. Absent ⇒ None (git falls back to
+    its configured identity, and the committer is still the platform via ``_commit_env``)."""
+    name = (os.environ.get("VEXA_PRINCIPAL_NAME") or "").strip()
+    email = (os.environ.get("VEXA_PRINCIPAL_EMAIL") or "").strip()
+    if name and email:
+        return name, email
+    return None
+
+
+def _extra_mount_paths(work: Path) -> list[Path]:
+    """The WRITABLE mounts OTHER than the primary ``work`` — the additional repos a turn may have written,
+    each committed independently after the turn (WP-A1.2). READ-ONLY mounts (the ``_global`` GLOBAL SYSTEM
+    tier) are EXCLUDED — agents never write, and thus never commit, ``_global`` (AMENDMENT 4)."""
+    extras: list[Path] = []
+    for m in active_mounts():
+        p = Path(m["path"])
+        if not m.get("primary") and m.get("write", True) and p != work:
+            extras.append(p)
+    return extras
+
+
 def run_turn_over_workspace(
     work: Path, prompt: str, *, model: str | None = None, allowed_tools: list[str] | None = None,
     commit: bool = True, session_continuity: bool = True, session: str = DEFAULT_CHAT_SESSION,
 ) -> Iterator[dict]:
-    """One governed agent turn over the mounted workspace: resume from the session file, drive
-    ``run_harness_turn`` (which commits the tree when it changed), and persist the captured session
-    id. A stale resume (the harness session expired) retries fresh once.
+    """One governed agent turn over the mounted workspace SET: resume from the session file, DECLARE the
+    active mounts to the model, drive ``run_harness_turn`` (which commits EACH changed mount, authored by
+    the dispatch principal), and persist the captured session id. A stale resume (the harness session
+    expired) retries fresh once.
     ``allowed_tools`` defaults to Read/Write/Edit; pass ``["Read"]`` for a propose-only (no-write) turn.
     ``session`` namespaces the continuity file so chat threads stay distinct (default ``"main"``)."""
     _ensure_repo(work)
@@ -150,12 +236,20 @@ def run_turn_over_workspace(
     # card-extraction beats must NOT pollute the user's chat conversation memory.
     resume = _resume_id(work, sess_file, harness) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
-    gen = run_harness_turn(work, prompt, harness, allowed_tools=allowed, session=resume, model=model, commit=commit)
+    # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
+    # agent never guesses where it may read/write. Single-mount turns get no preamble.
+    mounts = active_mounts()
+    author = _principal_author()
+    extras = _extra_mount_paths(work)
+    turn_prompt = mounts_preamble(mounts) + prompt if mounts_preamble(mounts) else prompt
+    gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
+                           commit=commit, author=author, extra_mounts=extras)
     first = next(gen, None)
     if resume and first is not None and first.get("type") == "done" and not first.get("ok", True):
         if sess_file.exists():
             sess_file.unlink()
-        gen = run_harness_turn(work, prompt, harness, allowed_tools=allowed, session=None, model=model, commit=commit)
+        gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=None, model=model,
+                               commit=commit, author=author, extra_mounts=extras)
         first = next(gen, None)
     captured: str | None = None
     for ev in (gen if first is None else itertools.chain([first], gen)):

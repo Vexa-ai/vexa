@@ -145,6 +145,72 @@ def test_run_harness_turn_propose_only_touches_no_git(tmp_path: Path):
     assert [e["type"] for e in evs] == ["done"]  # no commit event on the propose-only path
 
 
+# ── per-mount commit + attribution (WP-A1.2 / D4) ────────────────────────────
+
+def _author_of(repo: Path) -> tuple[str, str, str, str]:
+    """(author name, author email, committer name, committer email) of HEAD."""
+    fmt = "%an%n%ae%n%cn%n%ce"
+    out = subprocess.run(["git", "log", "-1", f"--pretty=format:{fmt}"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.splitlines()
+    return tuple(out)  # type: ignore[return-value]
+
+
+def test_run_harness_turn_commits_each_changed_mount_independently(tmp_path: Path):
+    """The active mount set → ONE commit per changed mount (WP-A1.2). The primary and an extra mount
+    are separate repos: a turn that writes both yields TWO commit events, one landing in each repo."""
+    private = tmp_path / "private"; private.mkdir(); _init_repo(private)
+    shared = tmp_path / "shared"; shared.mkdir(); _init_repo(shared)
+
+    def fake_exec(argv, cwd):  # the "model" writes into BOTH mounts
+        (Path(cwd) / "note.md").write_text("private note")
+        (shared / "doc.md").write_text("shared doc")
+        yield json.dumps({"type": "result", "subtype": "success", "result": "wrote both", "session_id": "s1"})
+
+    evs = list(run_harness_turn(private, "write both", ClaudeCodeHarness(exec_fn=fake_exec),
+                                extra_mounts=[shared]))
+    commits = [e for e in evs if e["type"] == "commit"]
+    assert len(commits) == 2, "one commit per changed mount"
+    # each mount got its OWN commit (distinct repos, distinct HEADs)
+    assert (private / "note.md").exists() and (shared / "doc.md").exists()
+    assert "wrote both" in subprocess.run(["git", "log", "--oneline"], cwd=str(private), capture_output=True, text=True).stdout
+    assert "wrote both" in subprocess.run(["git", "log", "--oneline"], cwd=str(shared), capture_output=True, text=True).stdout
+
+
+def test_run_harness_turn_only_commits_the_mount_that_changed(tmp_path: Path):
+    """An extra mount with NO writes must not get an empty commit — only the changed mount commits."""
+    private = tmp_path / "private"; private.mkdir(); _init_repo(private)
+    shared = tmp_path / "shared"; shared.mkdir(); _init_repo(shared)
+    shared_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(shared), capture_output=True, text=True).stdout.strip()
+
+    def fake_exec(argv, cwd):  # writes ONLY the private mount
+        (Path(cwd) / "note.md").write_text("only private")
+        yield json.dumps({"type": "result", "subtype": "success", "result": "one", "session_id": "s1"})
+
+    evs = list(run_harness_turn(private, "write private", ClaudeCodeHarness(exec_fn=fake_exec),
+                                extra_mounts=[shared]))
+    assert len([e for e in evs if e["type"] == "commit"]) == 1
+    # shared HEAD is unmoved (no empty commit)
+    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(shared), capture_output=True, text=True).stdout.strip() == shared_head
+
+
+def test_run_harness_turn_attributes_commit_to_the_principal(tmp_path: Path):
+    """Attribution (D4): author = the dispatch principal, committer = the platform — on EACH mount."""
+    private = tmp_path / "private"; private.mkdir(); _init_repo(private)
+    shared = tmp_path / "shared"; shared.mkdir(); _init_repo(shared)
+
+    def fake_exec(argv, cwd):
+        (Path(cwd) / "n.md").write_text("p")
+        (shared / "d.md").write_text("s")
+        yield json.dumps({"type": "result", "subtype": "success", "result": "x", "session_id": "s1"})
+
+    list(run_harness_turn(private, "write", ClaudeCodeHarness(exec_fn=fake_exec),
+                          author=("Jane Doe", "jane@example.com"), extra_mounts=[shared]))
+    for repo in (private, shared):
+        an, ae, cn, ce = _author_of(repo)
+        assert (an, ae) == ("Jane Doe", "jane@example.com"), "author = principal"
+        assert (cn, ce) == ("Vexa", "platform@vexa.ai"), "committer = platform"
+
+
 # ── transcript-size accounting (resume-cost cap) ─────────────────────────────
 
 def test_transcript_bytes_sums_matching_session_files(tmp_path: Path):

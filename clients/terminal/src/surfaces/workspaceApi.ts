@@ -36,6 +36,39 @@ export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
   return getJson(`/api/workspace/attached`);
 }
 
+/** One member of the ADDITIVE active set (the mount stack the next agent turn mounts — WP-A2.1). The
+ *  `primary` member is the private baseline (always active, never deactivatable). */
+export interface ActiveMount { slug: string; repo: string | null; ref: string | null; role: string; path: string; write: boolean; primary: boolean }
+export interface ActiveSet { subject: string; active: ActiveMount[] }
+
+/** The subject's ORDERED active set — the workspaces currently MOUNTED into the agent turn (vs the parked
+ *  ones in `slots`, which are AVAILABLE to activate). The private baseline is first and always present. */
+export async function readActiveSet(): Promise<ActiveSet> {
+  return getJson(`/api/workspace/active`);
+}
+
+/** ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap): the
+ *  private baseline and any other active workspaces stay mounted. Pass `repo` to clone/restore a git repo,
+ *  or `slug` to activate an already-parked slot. Idempotent — an already-active workspace is a no-op.
+ *  `token` (optional) authenticates a PRIVATE repo's clone — used server-side only, never stored (P15). */
+export async function activateWorkspace(opts: { repo?: string; ref?: string; slug?: string; token?: string }): Promise<{ subject: string; slug: string; changed: boolean; cloned: boolean; nested: boolean }> {
+  return getJson(`/api/workspace/activate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: opts.repo ?? null, ref: opts.ref ?? null, slug: opts.slug ?? null, token: opts.token ?? null }),
+  });
+}
+
+/** REMOVE a workspace from the active set (park it — never destroyed; the tree stays, ready to re-activate).
+ *  The private baseline cannot be deactivated (the server answers 409). Idempotent — a not-active slug is a no-op. */
+export async function deactivateWorkspace(slug: string): Promise<{ subject: string; slug: string; changed: boolean }> {
+  return getJson(`/api/workspace/deactivate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+}
+
 /** Attach a custom external git repo as the active workspace (swap). The current workspace is PARKED
  *  (kept, never destroyed) so it can be swapped back to. Omit `repo` to swap back to the seeded default.
  *  `fresh` (seed only) rebuilds the default from the template instead of restoring your parked seed —
