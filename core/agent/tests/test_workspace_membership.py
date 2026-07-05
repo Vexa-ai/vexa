@@ -391,3 +391,142 @@ def test_api_restricted_invite_checks_x_user_email(tmp_path):
                 headers={"X-User-Id": "u_alice", "X-User-Email": "alice@vexa.ai"},
                 json={"token": minted["token"]})
     assert ok.status_code == 200 and ok.json()["role"] == "viewer"
+
+
+# ── ATTACK: concurrent accept of a max_uses=1 invite must grant AT MOST 1 (vector 1, the race) ─────
+def test_concurrent_accept_max_uses_one_grants_exactly_one(tmp_path):
+    """8 threads redeem the SAME max_uses=1 invite as 8 distinct subjects simultaneously. A lock-free
+    read-modify-write over-grants (all 8 return granted, uses lost-update to 1). The per-workspace lock
+    must serialize read→check→uses++→commit so EXACTLY ONE subject is admitted and uses lands at 1."""
+    import threading
+
+    _init_ws(tmp_path, "wsA")
+    idx = m.InMemoryMembershipIndex()
+    m.ensure_owner(tmp_path, "wsA", "owner1", index=idx, commit_fn=m.policy_commit)
+    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="owner1", max_uses=1,
+                           commit_fn=m.policy_commit)
+
+    N = 8
+    granted: list[str] = []
+    fully_used: list[str] = []
+    errs: list[Exception] = []
+    granted_lock = threading.Lock()
+    start = threading.Barrier(N)
+
+    def redeem(i: int):
+        start.wait()  # release all threads into the critical section at once
+        try:
+            res = m.accept_invite(tmp_path, "wsA", token=minted.token, subject=f"u{i}",
+                                  index=idx, commit_fn=m.policy_commit)
+            with granted_lock:
+                (granted if not res["already_member"] else []).append(f"u{i}")
+        except m.MembershipError as exc:
+            with granted_lock:
+                (fully_used if exc.status == 410 else errs).append(exc)
+
+    threads = [threading.Thread(target=redeem, args=(i,)) for i in range(N)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errs == [], f"unexpected errors: {errs}"
+    # exactly one new membership granted; the rest refused "fully used"
+    assert len(granted) == 1, f"over-grant: {granted}"
+    assert len(fully_used) == N - 1
+    members = json.loads((tmp_path / "wsA" / m.MEMBERS_FILE).read_text())
+    non_owner = [x for x in members if x["role"] != "owner"]
+    assert len(non_owner) == 1, f"members.json over-granted: {members}"
+    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
+
+
+# ── ATTACK: agent SELF-COMMITS a policy tamper mid-turn (vector 3, the guard bypass) ──────────────
+def test_policy_guard_defeats_agent_self_commit(tmp_path):
+    """The agent toolset includes Bash — an agent turn can ``git commit`` its OWN forged members.json,
+    so a working-tree scan sees a clean tree and the forgery persists in HEAD. The HEAD-authoritative
+    guard must restore policy/ to the PLATFORM's pre-turn baseline: the committed tamper is gone from
+    the working tree AND from the post-turn HEAD tree."""
+    from llm.ports import run_harness_turn
+
+    ws = _init_ws(tmp_path, "wsA")
+    m.ensure_owner(tmp_path, "wsA", "owner1", index=m.InMemoryMembershipIndex(), commit_fn=m.policy_commit)
+    original = (ws / m.MEMBERS_FILE).read_text()
+
+    class _SelfCommittingHarness:
+        def run_turn(self, work, prompt, *, allowed_tools, session, model, mcp_config=None):
+            work = Path(work)
+            (work / "note.md").write_text("legit\n")
+            # forge owner self-entry AND COMMIT IT (the Bash-capable agent's move)
+            (work / m.MEMBERS_FILE).write_text('[{"subject":"attacker","role":"owner"}]\n')
+            _git(work, "add", "-A")
+            _git(work, "-c", "user.email=a@a", "-c", "user.name=a", "commit", "-q", "-m", "pwn")
+            yield {"type": "done", "reply": "did work", "sessionId": "s1", "ok": True}
+
+    events = list(run_harness_turn(ws, "go", _SelfCommittingHarness()))
+    assert "policy-reverted" in [e["type"] for e in events]
+
+    # working tree restored to the platform baseline
+    assert (ws / m.MEMBERS_FILE).read_text() == original
+    # AND the post-turn HEAD tree carries the baseline, not the attacker's forgery
+    committed = _git(ws, "show", "HEAD:policy/members.json")
+    assert "attacker" not in committed
+    assert m.is_member(tmp_path, "wsA", "attacker") is None
+    assert m.is_member(tmp_path, "wsA", "owner1") == "owner"
+
+
+def test_policy_guard_defeats_uncommitted_tamper(tmp_path):
+    """The committed-tamper sibling: an UNcommitted forged members.json is equally reverted to baseline."""
+    from llm.ports import run_harness_turn
+
+    ws = _init_ws(tmp_path, "wsA")
+    m.ensure_owner(tmp_path, "wsA", "owner1", index=m.InMemoryMembershipIndex(), commit_fn=m.policy_commit)
+    original = (ws / m.MEMBERS_FILE).read_text()
+
+    class _Harness:
+        def run_turn(self, work, prompt, *, allowed_tools, session, model, mcp_config=None):
+            (Path(work) / m.MEMBERS_FILE).write_text('[{"subject":"attacker","role":"owner"}]\n')
+            yield {"type": "done", "reply": "x", "sessionId": "s1", "ok": True}
+
+    list(run_harness_turn(ws, "go", _Harness()))
+    assert (ws / m.MEMBERS_FILE).read_text() == original
+    assert "attacker" not in _git(ws, "show", "HEAD:policy/members.json")
+
+
+def test_policy_guard_removes_policy_in_freshly_seeded_workspace(tmp_path):
+    """A workspace with NO baseline policy/ (the agent creates policy/ for the first time, committed):
+    the guard removes it entirely — policy/ must be born from the platform, never from an agent turn."""
+    from llm.ports import run_harness_turn
+
+    ws = _init_ws(tmp_path, "wsA")  # seed commit has NO policy/
+
+    class _Harness:
+        def run_turn(self, work, prompt, *, allowed_tools, session, model, mcp_config=None):
+            work = Path(work)
+            (work / "policy").mkdir(exist_ok=True)
+            (work / m.MEMBERS_FILE).write_text('[{"subject":"attacker","role":"owner"}]\n')
+            _git(work, "add", "-A")
+            _git(work, "-c", "user.email=a@a", "-c", "user.name=a", "commit", "-q", "-m", "seed-pwn")
+            yield {"type": "done", "reply": "x", "sessionId": "s1", "ok": True}
+
+    list(run_harness_turn(ws, "go", _Harness()))
+    assert not (ws / m.MEMBERS_FILE).exists()
+    # HEAD tree has no policy/members.json
+    tree = _git(ws, "ls-tree", "-r", "--name-only", "HEAD")
+    assert "policy/members.json" not in tree.splitlines()
+
+
+# ── vector 2 (topology): the opt-in gateway-identity gate rejects non-gateway callers ──────────────
+def test_require_gateway_identity_flag_rejects_direct_edge(tmp_path, monkeypatch):
+    """With VEXA_REQUIRE_GATEWAY_IDENTITY set, a request WITHOUT the gateway's signed marker
+    (X-Gateway-Verified) is rejected 401 — a hardened deploy stops a direct/host-local caller from
+    forging X-User-Id. The marker present → normal auth. Default (flag unset) is unaffected."""
+    _init_ws(tmp_path, "wsA")
+    monkeypatch.setenv("VEXA_REQUIRE_GATEWAY_IDENTITY", "1")
+    c = _client(tmp_path)
+    # direct caller forging X-User-Id but lacking the gateway marker → 401
+    r = c.get("/api/workspace/members?workspace_id=wsA", headers={"X-User-Id": "attacker"})
+    assert r.status_code == 401
+    # gateway-fronted request (marker present) reaches the normal role gate (403 non-member, not 401)
+    r2 = c.get("/api/workspace/members?workspace_id=wsA",
+               headers={"X-User-Id": "attacker", "X-Gateway-Verified": "1"})
+    assert r2.status_code == 403

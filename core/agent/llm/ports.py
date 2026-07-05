@@ -107,53 +107,107 @@ def _git(work: Path, *args: str) -> str:
 _POLICY_DIR = "policy"
 
 
-def _revert_policy_writes(work: Path) -> list[str]:
-    """Revert any agent-turn change under ``policy/`` before the turn commit — policy/ is
-    PLATFORM-WRITE-ONLY (the Q3 write-guard, default: post-turn validation + revert). Returns the
-    reverted paths so the caller can flag them. Tracked policy/ files are checked out back to HEAD;
-    newly-added / untracked ones are unstaged and removed."""
-    status = _git(work, "status", "--porcelain", "--", _POLICY_DIR)
-    if not status:
-        return []
-    import shutil
-    reverted: list[str] = []
-    for raw in status.splitlines():
-        line = raw.rstrip()
-        if not line.strip():
-            continue
-        untracked = line.lstrip().startswith("??")
-        # Porcelain is "XY<space>PATH"; the shared _git strips the first line's leading space, so parse
-        # tolerantly: the path starts at the first _POLICY_DIR occurrence (policy/ never appears in the
-        # 2-char status code). Renames "old -> new" keep the destination.
-        idx = line.find(_POLICY_DIR)
-        if idx < 0:
-            continue
-        path = line[idx:].strip()
-        if " -> " in path:  # rename
-            path = path.split(" -> ", 1)[1].strip()
-        if not path.startswith(_POLICY_DIR):
-            continue
-        if untracked:
-            target = work / path
-            try:
-                if target.is_dir():
-                    shutil.rmtree(target)
-                elif target.exists():
-                    target.unlink()
-            except OSError:
-                pass
+def _policy_head_sha(work: Path) -> Optional[str]:
+    """The current HEAD sha, or ``None`` if the repo has no commit yet (freshly-init'd workspace).
+    Captured BEFORE a turn runs — while HEAD still reflects the PLATFORM's last policy commit and no
+    agent tool has had a chance to move it — so the post-turn guard has a trustworthy baseline."""
+    try:
+        return _git(work, "rev-parse", "HEAD")
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _list_policy_paths_at(work: Path, ref: str) -> set[str]:
+    """The set of ``policy/`` file paths tracked at ``ref`` (empty if none / ref invalid)."""
+    try:
+        out = _git(work, "ls-tree", "-r", "--name-only", ref, "--", _POLICY_DIR)
+    except subprocess.CalledProcessError:
+        return set()
+    return {ln.strip() for ln in out.splitlines() if ln.strip().startswith(_POLICY_DIR + "/")}
+
+
+def _current_policy_entries(work: Path) -> set[str]:
+    """Every path that currently lives under ``policy/`` in the working tree — tracked, staged,
+    untracked, or a symlink — so the restore can delete anything the baseline did not contain."""
+    entries: set[str] = set()
+    # Tracked + staged (index) entries under policy/.
+    try:
+        for ln in _git(work, "ls-files", "--", _POLICY_DIR).splitlines():
+            if ln.strip():
+                entries.add(ln.strip())
+    except subprocess.CalledProcessError:
+        pass
+    # Untracked (incl. would-be-ignored is out of scope; policy/ is not ignored) entries under policy/.
+    try:
+        for ln in _git(work, "ls-files", "--others", "--exclude-standard", "--", _POLICY_DIR).splitlines():
+            if ln.strip():
+                entries.add(ln.strip())
+    except subprocess.CalledProcessError:
+        pass
+    # And whatever is physically on disk (catches a symlinked-in file or a dir the index doesn't know).
+    policy_root = work / _POLICY_DIR
+    if policy_root.exists() or policy_root.is_symlink():
+        if policy_root.is_symlink() or not policy_root.is_dir():
+            entries.add(_POLICY_DIR)
         else:
-            try:
-                _git(work, "checkout", "HEAD", "--", path)
-            except subprocess.CalledProcessError:
-                # not in HEAD (agent ADDED it) — unstage + delete
+            for child in policy_root.rglob("*"):
+                if child.is_file() or child.is_symlink():
+                    entries.add(child.relative_to(work).as_posix())
+    return entries
+
+
+def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
+    """Make ``policy/`` HEAD-AUTHORITATIVE, not working-tree-scanned — the Q3 write-guard (default:
+    post-turn validation + revert). policy/ is PLATFORM-WRITE-ONLY; the platform's last policy commit is
+    ``base_sha`` (HEAD captured BEFORE the turn, before any agent tool ran). The agent toolset includes
+    ``Bash``, so an agent turn can ``git add policy/ && git commit`` its OWN tamper mid-turn — a
+    working-tree scan then sees a clean tree and the forgery survives in HEAD. This guard instead
+    RESTORES the whole ``policy/`` subtree to its ``base_sha`` state, discarding ANY agent change to
+    policy/ whether COMMITTED (self-commit), staged, uncommitted, a symlink, or a brand-new policy/ in a
+    freshly-seeded workspace. Returns the affected paths so the caller can flag them.
+
+    Mechanism: (1) delete everything currently under policy/ from index + disk; (2) restore the baseline
+    policy/ files from ``base_sha`` (a no-op if the baseline had no policy/). The subsequent turn commit
+    therefore records the PLATFORM's policy tree, never the agent's."""
+    import shutil
+
+    baseline = _list_policy_paths_at(work, base_sha) if base_sha else set()
+    current = _current_policy_entries(work)
+    # Anything present now that is not identical-to-baseline is suspect; but rather than diff contents,
+    # we unconditionally rebuild policy/ from the baseline (cheap, and content tamper of a baselined file
+    # via self-commit would otherwise slip a working-tree scan). affected = union of what we touch.
+    affected = set(current) | set(baseline)
+    if not affected:
+        return []
+
+    # 1) Purge the current policy/ subtree from index + working tree (handles committed, staged,
+    #    untracked, symlink, and directory cases uniformly).
+    try:
+        _git(work, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", _POLICY_DIR)
+    except subprocess.CalledProcessError:
+        pass
+    policy_root = work / _POLICY_DIR
+    try:
+        if policy_root.is_symlink() or (policy_root.exists() and not policy_root.is_dir()):
+            policy_root.unlink(missing_ok=True)
+        elif policy_root.is_dir():
+            shutil.rmtree(policy_root, ignore_errors=True)
+    except OSError:
+        pass
+
+    # 2) Restore the baseline policy/ from base_sha (checkout writes both index + working tree).
+    if baseline and base_sha:
+        try:
+            _git(work, "checkout", base_sha, "--", _POLICY_DIR)
+        except subprocess.CalledProcessError:
+            # Path-by-path fallback if the bulk checkout is refused for any single entry.
+            for path in sorted(baseline):
                 try:
-                    _git(work, "reset", "--", path)
+                    _git(work, "checkout", base_sha, "--", path)
                 except subprocess.CalledProcessError:
                     pass
-                (work / path).unlink(missing_ok=True)
-        reverted.append(path)
-    return reverted
+
+    return sorted(affected)
 
 
 def run_harness_turn(
@@ -182,6 +236,10 @@ def run_harness_turn(
     contend on a workspace another agent may be committing to (the index.lock collision).
     """
     work = Path(work)
+    # Capture HEAD BEFORE the turn — while it still reflects the PLATFORM's last policy commit and no
+    # agent tool (Bash included) has had a chance to move it. This is the baseline the policy guard
+    # restores policy/ to, so an agent self-commit of a policy tamper cannot survive.
+    base_sha = _policy_head_sha(work) if commit else None
     done: Optional[dict] = None
     for ev in harness.run_turn(work, prompt, allowed_tools=allowed_tools, session=session,
                                model=model, mcp_config=mcp_config):
@@ -192,7 +250,7 @@ def run_harness_turn(
     if not commit:
         return
 
-    reverted = _revert_policy_writes(work)  # policy/ is PLATFORM-WRITE-ONLY (Q3 guard)
+    reverted = _revert_policy_writes(work, base_sha)  # policy/ is PLATFORM-WRITE-ONLY (Q3 guard)
     if reverted:
         yield {"type": "policy-reverted", "paths": reverted}
 

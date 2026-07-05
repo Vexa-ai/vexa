@@ -40,6 +40,7 @@ import json
 import logging
 import re
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,6 +130,35 @@ class InMemoryMembershipIndex:
 # The commit primitive is injected (a Callable) so the store is offline-provable with a fake and so
 # the module owns no git-subprocess coupling in its logic. Signature: (workspace_dir, message) -> None.
 CommitFn = Callable[[Path, str], None]
+
+
+# ── per-workspace serialization of read-modify-write-commit on policy/ ────────────────────────────
+# The authoritative store is the workspace git repo (policy/{members,invites}.json). A redeem is a
+# read → check(uses<max) → grant → uses++ → commit; two concurrent redeems of a max_uses=K invite must
+# grant AT MOST K (a lost-update here over-grants — a max_uses=1 link would admit N users). We serialize
+# that critical section per workspace_id with a process-local lock: correct for the common single-process
+# deploy (one uvicorn worker; sync endpoints run in Starlette's threadpool, so the contention is between
+# THREADS — a threading.Lock is the right primitive, not asyncio). The lock guards a fresh re-read from
+# disk (never a stale in-memory copy) + the commit, so the check and the increment cannot interleave.
+#
+# MULTI-REPLICA NOTE: across separate PROCESSES/replicas a process-local lock does not serialize. The
+# durable guard there is the git commit acting as the compare-and-set — two replicas racing the redeem
+# collide on the workspace's index.lock / a non-fast-forward, and the loser must re-read + re-check
+# (uses<max) before retrying. ``accept_invite`` re-reads under the lock and is structured to be retried;
+# a multi-replica deploy MUST additionally front this with a shared lock (redis/advisory) or make the
+# git push the CAS. Today agent-api is pinned single-replica (helm agentApi.replicaCount: 1 on an RWO
+# PVC), so the process-local lock is sufficient and this is a documented, not open, gap.
+_WS_LOCKS: dict[str, threading.Lock] = {}
+_WS_LOCKS_GUARD = threading.Lock()
+
+
+def _ws_lock(workspace_id: str) -> threading.Lock:
+    """The process-local lock serializing the read-modify-write-commit of policy/ for one workspace."""
+    with _WS_LOCKS_GUARD:
+        lk = _WS_LOCKS.get(workspace_id)
+        if lk is None:
+            lk = _WS_LOCKS[workspace_id] = threading.Lock()
+        return lk
 
 
 def policy_commit(ws: Path, message: str) -> None:
@@ -257,6 +287,12 @@ def ensure_owner(root: Path, workspace_id: str, owner_subject: str, *,
     """Idempotently record ``owner_subject`` as the workspace's owner — the bootstrap that turns a bare
     private workspace into a SHARED workspace (the first grant). Safe to call repeatedly."""
     ws = _ws_dir(root, workspace_id)
+    with _ws_lock(workspace_id):
+        _ensure_owner_locked(root, workspace_id, owner_subject, ws=ws, index=index, commit_fn=commit_fn)
+
+
+def _ensure_owner_locked(root: Path, workspace_id: str, owner_subject: str, *, ws: Path,
+                         index: MembershipIndex, commit_fn: Optional[CommitFn] = None) -> None:
     members = _read_json_list(ws, MEMBERS_FILE)
     if any(m.get("subject") == owner_subject and m.get("role") == "owner" for m in members):
         return
@@ -308,37 +344,39 @@ def set_role(root: Path, workspace_id: str, subject: str, role: str, *,
     if role not in ROLES:
         raise MembershipError(f"unknown role {role!r}", status=400)
     ws = assert_shareable(root, workspace_id)
-    members = _read_json_list(ws, MEMBERS_FILE)
-    target = next((m for m in members if m.get("subject") == subject), None)
-    if target is None:
-        raise MembershipError("not a member", status=404)
-    if target.get("role") == "owner" and role != "owner":
-        owners = [m for m in members if m.get("role") == "owner"]
-        if len(owners) <= 1:
-            raise MembershipError("cannot remove the last owner", status=409)
-    target["role"] = role
-    _write_json_list(ws, MEMBERS_FILE, members)
-    _commit(commit_fn, ws, f"policy: role {subject} -> {role} in {workspace_id}")
-    _index_add(index, subject, workspace_id, role, target.get("added_at", _now_iso()))
-    return dict(target)
+    with _ws_lock(workspace_id):  # serialize the members.json read-modify-write (last-owner check + flip)
+        members = _read_json_list(ws, MEMBERS_FILE)
+        target = next((m for m in members if m.get("subject") == subject), None)
+        if target is None:
+            raise MembershipError("not a member", status=404)
+        if target.get("role") == "owner" and role != "owner":
+            owners = [m for m in members if m.get("role") == "owner"]
+            if len(owners) <= 1:
+                raise MembershipError("cannot remove the last owner", status=409)
+        target["role"] = role
+        _write_json_list(ws, MEMBERS_FILE, members)
+        _commit(commit_fn, ws, f"policy: role {subject} -> {role} in {workspace_id}")
+        _index_add(index, subject, workspace_id, role, target.get("added_at", _now_iso()))
+        return dict(target)
 
 
 def remove_member(root: Path, workspace_id: str, subject: str, *,
                   index: MembershipIndex, commit_fn: Optional[CommitFn] = None) -> None:
     """Remove a member from BOTH stores. Refuses to remove the last owner."""
     ws = assert_shareable(root, workspace_id)
-    members = _read_json_list(ws, MEMBERS_FILE)
-    target = next((m for m in members if m.get("subject") == subject), None)
-    if target is None:
-        return  # idempotent
-    if target.get("role") == "owner":
-        owners = [m for m in members if m.get("role") == "owner"]
-        if len(owners) <= 1:
-            raise MembershipError("cannot remove the last owner", status=409)
-    members = [m for m in members if m.get("subject") != subject]
-    _write_json_list(ws, MEMBERS_FILE, members)
-    _commit(commit_fn, ws, f"policy: remove {subject} from {workspace_id}")
-    _index_remove(index, subject, workspace_id)
+    with _ws_lock(workspace_id):  # serialize the members.json read-modify-write (last-owner check + drop)
+        members = _read_json_list(ws, MEMBERS_FILE)
+        target = next((m for m in members if m.get("subject") == subject), None)
+        if target is None:
+            return  # idempotent
+        if target.get("role") == "owner":
+            owners = [m for m in members if m.get("role") == "owner"]
+            if len(owners) <= 1:
+                raise MembershipError("cannot remove the last owner", status=409)
+        members = [m for m in members if m.get("subject") != subject]
+        _write_json_list(ws, MEMBERS_FILE, members)
+        _commit(commit_fn, ws, f"policy: remove {subject} from {workspace_id}")
+        _index_remove(index, subject, workspace_id)
 
 
 # ── invites ─────────────────────────────────────────────────────────────────────────────────────
@@ -415,38 +453,47 @@ def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
     ``subject_email`` is the caller's VERIFIED email (from the auth provider; dev-login trusts the typed
     email in dev only). Required for a ``restricted`` invite; ignored for ``open``.
 
-    Returns ``{"workspace_id", "role", "already_member"}``."""
+    Returns ``{"workspace_id", "role", "already_member"}``.
+
+    ATOMICITY: the read → check(uses<max) → grant → uses++ → commit runs under the per-workspace lock so
+    N concurrent redeems of a max_uses=K invite grant AT MOST K memberships (no lost-update over-grant).
+    The invites file is re-read from DISK inside the lock — never a copy captured before it — so the
+    use-count check sees every prior redeem's increment. (Multi-replica: see ``_ws_lock``.)"""
     ws = assert_shareable(root, workspace_id)
     t = now if now is not None else time.time()
-    invites = _read_json_list(ws, INVITES_FILE)
     h = hash_token(token)
-    rec = next((i for i in invites if i.get("hash") == h), None)
-    if rec is None:
-        raise MembershipError("invalid invite", status=404)
-    if rec.get("revoked"):
-        raise MembershipError("invite revoked", status=410)
-    if int(rec.get("expires_at", 0)) < t:
-        raise MembershipError("invite expired", status=410)
+    with _ws_lock(workspace_id):
+        # Fresh read UNDER the lock: the authoritative uses counter, not a value read before we waited.
+        invites = _read_json_list(ws, INVITES_FILE)
+        rec = next((i for i in invites if i.get("hash") == h), None)
+        if rec is None:
+            raise MembershipError("invalid invite", status=404)
+        if rec.get("revoked"):
+            raise MembershipError("invite revoked", status=410)
+        if int(rec.get("expires_at", 0)) < t:
+            raise MembershipError("invite expired", status=410)
 
-    # AMENDMENT 5: restricted invites admit only an authenticated user whose VERIFIED email is listed.
-    if rec.get("mode", DEFAULT_INVITE_MODE) == "restricted":
-        allowed = {_normalize_email(e) for e in (rec.get("allowed_emails") or [])}
-        if _normalize_email(subject_email) not in allowed:
-            raise MembershipError("this invite is restricted to specific email addresses", status=403)
+        # AMENDMENT 5: restricted invites admit only an authenticated user whose VERIFIED email is listed.
+        if rec.get("mode", DEFAULT_INVITE_MODE) == "restricted":
+            allowed = {_normalize_email(e) for e in (rec.get("allowed_emails") or [])}
+            if _normalize_email(subject_email) not in allowed:
+                raise MembershipError("this invite is restricted to specific email addresses", status=403)
 
-    already = is_member(root, workspace_id, subject) is not None
-    if not already and int(rec.get("uses", 0)) >= int(rec.get("max_uses", 1)):
-        raise MembershipError("invite fully used", status=410)
+        already = is_member(root, workspace_id, subject) is not None
+        if not already and int(rec.get("uses", 0)) >= int(rec.get("max_uses", 1)):
+            raise MembershipError("invite fully used", status=410)
 
-    role = rec.get("role", "viewer")
-    grant_membership(root, workspace_id, subject, role, added_by=rec.get("created_by", "invite"),
-                     index=index, commit_fn=commit_fn)
-    if not already:
-        # Consume a use only for a NEW membership — re-accept is a no-op on the counter (idempotent).
-        rec["uses"] = int(rec.get("uses", 0)) + 1
-        _write_json_list(ws, INVITES_FILE, invites)
-        _commit(commit_fn, ws, f"policy: invite {rec.get('id')} used ({subject})")
-    return {"workspace_id": workspace_id, "role": role, "already_member": already}
+        role = rec.get("role", "viewer")
+        grant_membership(root, workspace_id, subject, role, added_by=rec.get("created_by", "invite"),
+                         index=index, commit_fn=commit_fn)
+        if not already:
+            # Consume a use only for a NEW membership — re-accept is a no-op on the counter (idempotent).
+            # This write + commit lands the increment durably before the lock is released, so the next
+            # waiter re-reads the bumped counter and a max_uses=1 invite refuses the second grant.
+            rec["uses"] = int(rec.get("uses", 0)) + 1
+            _write_json_list(ws, INVITES_FILE, invites)
+            _commit(commit_fn, ws, f"policy: invite {rec.get('id')} used ({subject})")
+        return {"workspace_id": workspace_id, "role": role, "already_member": already}
 
 
 def revoke_invite(root: Path, workspace_id: str, invite_id: str, *,

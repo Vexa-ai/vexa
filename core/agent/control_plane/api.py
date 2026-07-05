@@ -17,6 +17,8 @@ honestly. Built lazily (PEP 562) so ``uvicorn control_plane.api:app`` wires the 
 """
 from __future__ import annotations
 
+import os
+
 import hashlib
 import json
 import logging
@@ -423,11 +425,31 @@ def create_app(
     app.state.scheduler = scheduler
     settings = dispatcher.settings if dispatcher is not None else None
 
+    # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
+    # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
+    # x-user-id/x-user-email and re-injects the values it resolved from the verified api-key. In the
+    # current dev/direct topology the terminal and host-local clients reach agent-api WITHOUT the gateway
+    # hop (compose loopback + VEXA_AGENT_DEFAULT_SUBJECT fallback), so those headers are spoofable and
+    # restricted-mode invites MUST NOT be relied on as a security boundary here. A hardened deploy sets
+    # VEXA_REQUIRE_GATEWAY_IDENTITY=1: agent-api then rejects any request lacking the gateway's signed
+    # identity marker (X-Gateway-Verified), so identity headers are only honored when the gateway put
+    # them there. OFF by default so the dev/direct topology keeps working. Full fix = route the terminal
+    # through the gateway (Stage 4) and make the gateway the only thing that can reach agent-api.
+    _require_gateway_identity = os.environ.get("VEXA_REQUIRE_GATEWAY_IDENTITY", "").strip().lower() in ("1", "true", "yes")
+
     def subject_of(request: Request) -> str:
         """The authenticated subject (P20). The gateway resolves the api-key → user_id and injects
         ``X-User-Id``; agent-api derives the workspace/chat/quota partition from THAT, never from the
         client body/query. Fail-closed (401) when the header is absent, unless a single-user fallback
-        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front."""
+        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front.
+
+        When ``VEXA_REQUIRE_GATEWAY_IDENTITY`` is set, the request must additionally carry the gateway's
+        signed identity marker (``X-Gateway-Verified``) — a hardened deploy enforces that identity headers
+        were injected by the gateway, not forged by a direct/host-local caller (see the TOPOLOGY BOUNDARY
+        note above). This does NOT change the default dev/direct topology."""
+        if _require_gateway_identity and not request.headers.get("x-gateway-verified"):
+            raise HTTPException(status_code=401,
+                                detail="gateway-signed identity required (VEXA_REQUIRE_GATEWAY_IDENTITY)")
         uid = request.headers.get("x-user-id")
         if uid:
             return uid
@@ -1011,6 +1033,13 @@ def create_app(
         RESTRICTED invite additionally requires their VERIFIED email (X-User-Email, gateway-injected)
         to be in the invite's allowed_emails."""
         subject = subject_of(request)
+        # SECURITY BOUNDARY: X-User-Email is trusted as the caller's VERIFIED email ONLY because the
+        # gateway strips any client-sent x-user-email and re-injects the value it resolved from the
+        # api-key. That invariant holds solely when the gateway is agent-api's SOLE ingress. Today the
+        # terminal / host-local clients reach agent-api directly (no gateway hop), so on the direct edge
+        # this header is spoofable — restricted-mode invites are NOT a security boundary until agent-api
+        # is gateway-fronted (Stage 4). VEXA_REQUIRE_GATEWAY_IDENTITY (checked in subject_of) lets a
+        # hardened deploy reject non-gateway callers. See the TOPOLOGY BOUNDARY note in create_app.
         subject_email = request.headers.get("x-user-email")
         h = membership_mod.hash_token(body.token)
         # Resolve which shared workspace this token belongs to by hash (never trust a client-declared id).
