@@ -10,6 +10,7 @@ import subprocess
 from typing import Optional
 
 from .backend import WorkloadHandle
+from .mounts import k8s_volume_mounts
 from .profiles import Runnable
 
 MANAGED_LABEL = "runtime.managed"
@@ -32,6 +33,25 @@ def _stop_grace_sec() -> int:
         return max(1, int(float(os.getenv("RUNTIME_STOP_GRACE_SEC", "30"))))
     except ValueError:
         return 30
+
+
+def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]:
+    """The ``kubectl run --overrides`` spec that mounts the workspace store into the worker Pod — the k8s
+    twin of the docker backend's ``Binds``, from the SAME env. The store PVC (``VEXA_WORKSPACE_MOUNT_SOURCE``
+    = the claim name on k8s) is bound at the store root (``VEXA_WORKSPACE_MOUNT_TARGET``), exposing the WHOLE
+    active mount set (WP-A1.1) — every in-store workspace lives under the root. Returns None when no store
+    is configured (no override needed). Pure/env-driven → unit-tested offline (no kubectl)."""
+    pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
+    root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
+    volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
+    if not volumes:
+        return None
+    return {
+        "spec": {
+            "containers": [{"name": container_name, "volumeMounts": volume_mounts}],
+            "volumes": volumes,
+        }
+    }
 
 
 class K8sBackend:
@@ -60,6 +80,12 @@ class K8sBackend:
         ]
         for k, v in env.items():
             args += [f"--env={k}={v}"]
+        # Workspace mount set (WP-A1.1): the store PVC is bound at the store root via --overrides,
+        # exposing every active workspace (they live under the root). The container name kubectl uses
+        # for a `run` Pod is the Pod name, so the volumeMount targets that container.
+        overrides = pod_overrides(env, container_name=name)
+        if overrides:
+            args += ["--overrides", json.dumps(overrides)]
         if runnable.command:
             args += ["--command", "--", *runnable.command]
         _kubectl(*args)

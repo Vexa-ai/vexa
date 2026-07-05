@@ -39,8 +39,9 @@ class _FakeIdentity:
 
 
 class _FakeReader:
-    """A StreamReader fake — yields the dispatch's UnitEvents (what redis XREAD would relay)."""
-    def read(self, unit_id):
+    """A StreamReader fake — yields the dispatch's UnitEvents (what redis XREAD would relay). Accepts the
+    ``resume`` kwarg (the resumable-SSE contract) even though this bare fake ignores the cursor."""
+    def read(self, unit_id, *, resume=None):
         yield {"type": "message-delta", "text": "hi"}
         yield {"type": "commit", "sha": "abc123"}
 
@@ -178,6 +179,58 @@ def test_chat_defaults_session_to_main(tmp_path):
     assert r.headers["X-Unit-Id"] == "agent-u_jane-chat-main"
     rows = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
     assert rows[0]["session"] == "main" and rows[0]["title"] == "no session given"
+
+
+class _CursorReader:
+    """A StreamReader fake that surfaces per-event Stream cursors (``(event, cursor)`` tuples) — what the
+    RESUMABLE chat SSE emits as ``id:`` lines — and records the ``resume`` cursor it was asked to read from."""
+    def __init__(self):
+        self.resume_seen = "UNSET"
+
+    def read(self, unit_id, *, resume=None):
+        self.resume_seen = resume
+        yield ({"type": "message-delta", "text": "hi"}, "5-0")
+        yield ({"type": "turn-complete"}, "6-0")
+
+
+def test_chat_sse_carries_resumable_ids():
+    """The chat turn SSE is RESUMABLE like /api/meeting/stream: every event carries an ``id:`` = the unit
+    output Stream cursor, so a dropped view reconnects with Last-Event-ID and resumes gaplessly (the
+    cold-start 'No chat output arrived' false failure is a client that gave up on a stream it could resume)."""
+    reader = _CursorReader()
+    c = _client(reader)
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    body = r.text
+    assert "id: 5-0" in body and "id: 6-0" in body      # cursors surfaced for resume
+    assert '"message-delta"' in body and '"turn-complete"' in body
+    assert reader.resume_seen is None                   # a fresh connect resumes from nothing
+
+
+def test_chat_resume_reattaches_without_a_second_dispatch():
+    """A reconnect (Last-Event-ID present) RE-ATTACHES to the warm unit and resumes the read from the
+    cursor — it does NOT dispatch a second turn (the worker completes regardless; resume only re-shows
+    the missed output). Proven by: no new runtime spawn on the resume, and the cursor reaches the reader."""
+    runtime = _FakeRuntime()
+    reader = _CursorReader()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=reader,
+    ))
+    r1 = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r1.status_code == 200
+    spawned_after_first = len(runtime.spawned)
+    assert spawned_after_first >= 1                      # the fresh turn dispatched (spawned the unit)
+
+    r2 = c.post(
+        "/api/chat",
+        headers={"Last-Event-ID": "5-0"},
+        json={"prompt": "hi", "subject": "u_jane", "session": "s1"},
+    )
+    assert r2.status_code == 200
+    assert r2.headers["X-Unit-Id"] == "agent-u_jane-chat-s1"   # same warm unit re-attached
+    assert reader.resume_seen == "5-0"                         # resumed from the client's cursor
+    assert len(runtime.spawned) == spawned_after_first, \
+        "resume re-dispatched a turn — a reconnect must re-attach to the warm unit, not run it twice"
 
 
 def test_meeting_start_threads_transcript_tail_cursor(monkeypatch):
@@ -624,6 +677,49 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
     back = c.post("/api/workspace/swap", headers=h, json={})       # repo omitted → swap back to seed
     assert back.json()["active"] == "seed" and back.json()["cloned"] is False
     assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
+
+
+def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path, monkeypatch):
+    """POST /api/workspace/activate ADDS a repo to the active set without parking the private baseline;
+    GET /api/workspace/active lists the ordered set; deactivate parks it; the baseline is non-deactivatable."""
+    import subprocess
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    origin = tmp_path / "origin"; origin.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=origin, check=True, capture_output=True)
+    run("init", "-q", "-b", "main"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    (origin / "CLAUDE.md").write_text("SHARED ROOT\n"); run("add", "-A"); run("commit", "-q", "-m", "x")
+
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+
+    r = c.post("/api/workspace/activate", headers=h, json={"repo": str(origin)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["changed"] is True and body["cloned"] is True
+    slug = body["slug"]
+    # the private baseline was NOT parked — still the live tree
+    assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"
+
+    active = c.get("/api/workspace/active", headers=h).json()["active"]
+    slugs = [m["slug"] for m in active]
+    assert slugs[0] == "seed" and slug in slugs and len(active) == 2
+    assert active[0]["primary"] is True and active[0]["role"] == "private"
+
+    # deactivate parks it (dropped from the set, tree kept)
+    d = c.post("/api/workspace/deactivate", headers=h, json={"slug": slug})
+    assert d.status_code == 200 and d.json()["changed"] is True
+    assert [m["slug"] for m in c.get("/api/workspace/active", headers=h).json()["active"]] == ["seed"]
+
+    # the private baseline cannot be deactivated
+    assert c.post("/api/workspace/deactivate", headers=h, json={"slug": "seed"}).status_code == 409
 
 
 def test_workspace_publish_pushes_born_workspace_to_remote(tmp_path, monkeypatch):

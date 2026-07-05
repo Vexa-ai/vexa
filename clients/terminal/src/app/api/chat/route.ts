@@ -59,9 +59,18 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.text();
     const apiKey = await resolveApiKey();
+    // Forward Last-Event-ID so a reconnect RESUMES the chat turn from the client's last-seen cursor
+    // (gapless), instead of re-dispatching or missing everything the worker emitted during the gap —
+    // the same resume contract as /api/meeting/stream. On resume agent-api re-attaches to the warm
+    // unit and reads from the cursor; it does NOT start a second turn.
+    const lastEventId = req.headers.get("last-event-id");
     const upstream = await fetch(`${GATEWAY_URL}/agent/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(apiKey ? { "X-API-Key": apiKey } : {}) },
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { "X-API-Key": apiKey } : {}),
+        ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
+      },
       body,
       signal: abort.signal,
     });

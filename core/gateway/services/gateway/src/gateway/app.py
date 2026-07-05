@@ -189,11 +189,15 @@ def create_app(
         # Strip any client-supplied identity headers first (anti-spoofing, main.py:294-296).
         excluded = {"host", "content-length", "transfer-encoding"}
         headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
-        for h in ("x-user-id", "x-user-scopes", "x-user-limits",
+        for h in ("x-user-id", "x-user-email", "x-user-scopes", "x-user-limits",
                   "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"):
             headers.pop(h, None)
         headers["x-api-key"] = client_key
         headers["x-user-id"] = str(user_id)
+        # The RESOLVED verified email (never client-declared; /internal/validate returns it). agent-api's
+        # membership redeem (Lane M) checks it for RESTRICTED invites (allowed_emails).
+        if user_data.get("email"):
+            headers["x-user-email"] = str(user_data["email"])
         headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
         headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
         # Per-user webhook config (identity owns it; /internal/validate returns it from user.data).

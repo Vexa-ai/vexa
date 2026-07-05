@@ -14,7 +14,10 @@ import * as api from "../workspaceApi";
 vi.mock("../workspaceApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspaceApi")>()),
   readAttachedWorkspaces: vi.fn(),
+  readActiveSet: vi.fn(),
   swapWorkspace: vi.fn(),
+  activateWorkspace: vi.fn(),
+  deactivateWorkspace: vi.fn(),
 }));
 
 const view = {
@@ -25,10 +28,19 @@ const view = {
   },
 } as unknown as Awaited<ReturnType<typeof api.readAttachedWorkspaces>>;
 
-async function renderOpenSwitcher() {
+// The active set: `leo` is the PRIMARY (private baseline, always mounted); `seed` is parked (available).
+const activeSet = {
+  subject: "u1",
+  active: [{ slug: "leo", repo: null, ref: null, role: "private", path: "/w/u1", write: true, primary: true }],
+} as unknown as Awaited<ReturnType<typeof api.readActiveSet>>;
+
+async function renderOpenSwitcher(overrideActive?: Awaited<ReturnType<typeof api.readActiveSet>>) {
   sessionStorage.setItem("ws.attach.open", "1"); // section open by default for the test
   vi.mocked(api.readAttachedWorkspaces).mockResolvedValue(view);
+  vi.mocked(api.readActiveSet).mockResolvedValue(overrideActive ?? activeSet);
   vi.mocked(api.swapWorkspace).mockResolvedValue(undefined as never);
+  vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true, cloned: false, nested: false });
+  vi.mocked(api.deactivateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true });
   const onSwapped = vi.fn();
   render(<WorkspaceSwitcher onSwapped={onSwapped} />);
   await screen.findByText("leo"); // slots loaded
@@ -66,5 +78,47 @@ describe("WorkspaceSwitcher — start fresh is a list-level action", () => {
     fireEvent.click(screen.getByText("Start fresh…"));
     expect(api.swapWorkspace).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+});
+
+describe("WorkspaceSwitcher — additive active set (WP-A2.1)", () => {
+  it("a parked workspace's toggle ACTIVATES it (adds to the mount set, no swap/park)", async () => {
+    const { onSwapped } = await renderOpenSwitcher();
+    // `seed` is parked (○) — clicking its label activates it WITHOUT parking `leo` (the additive path)
+    fireEvent.click(screen.getByText("default (previous)"));
+    await waitFor(() => expect(api.activateWorkspace).toHaveBeenCalledWith({ slug: "seed" }));
+    expect(api.swapWorkspace).not.toHaveBeenCalled();  // additive, not swap-park
+    await waitFor(() => expect(onSwapped).toHaveBeenCalled());
+  });
+
+  it("a mounted secondary's toggle DEACTIVATES it (parks — never destroyed)", async () => {
+    // both leo (primary) and seed are mounted; seed's toggle should park seed
+    await renderOpenSwitcher({
+      subject: "u1",
+      active: [
+        { slug: "leo", repo: null, ref: null, role: "private", path: "/w/u1", write: true, primary: true },
+        { slug: "seed", repo: null, ref: null, role: "private", path: "/w/.attached/u1/seed", write: true, primary: false },
+      ],
+    } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
+    fireEvent.click(screen.getByText("default (previous)"));
+    await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("seed"));
+  });
+
+  it("the PRIMARY baseline can't be toggled off (no activate/deactivate call)", async () => {
+    await renderOpenSwitcher();
+    fireEvent.click(screen.getByText("leo"));  // the primary
+    // give any async a tick; the primary click is a no-op
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.deactivateWorkspace).not.toHaveBeenCalled();
+    expect(api.activateWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("'Attach repo…' ADDS the repo to the set (activate), not a swap", async () => {
+    await renderOpenSwitcher();
+    fireEvent.click(screen.getByText("Attach repo…"));
+    fireEvent.change(screen.getByPlaceholderText("git repo URL"), { target: { value: "https://example.com/r.git" } });
+    fireEvent.click(screen.getByText("Attach"));
+    await waitFor(() => expect(api.activateWorkspace).toHaveBeenCalledWith({ repo: "https://example.com/r.git", ref: undefined, token: undefined }));
+    expect(api.swapWorkspace).not.toHaveBeenCalled();
   });
 });

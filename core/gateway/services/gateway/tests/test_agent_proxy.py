@@ -120,3 +120,12 @@ def test_meeting_stream_is_streamed_with_injected_user():
     assert downstream.last["url"] == "http://agent-api/api/meeting/stream"
     assert downstream.last["params"] == {"meeting_id": "m1", "session_uid": "s1"}
     assert downstream.last["headers"]["x-user-id"] == "7"
+
+
+def test_verified_email_injected_and_spoof_stripped():
+    """Lane M / AMENDMENT 5: the gateway injects the RESOLVED verified email as x-user-email (never the
+    client's) — agent-api's restricted-invite redeem checks it."""
+    client, downstream = _client()
+    client.post("/agent/workspace/invites/accept",
+                headers={**AUTH, "x-user-email": "attacker@evil.com"}, json={"token": "t"})
+    assert downstream.last["headers"]["x-user-email"] == "u@example.com"  # resolved, not the spoof
