@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -345,6 +345,8 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const cancelled = useRef(false);  // Escape vs Enter/blur on the rename input (blur fires for both)
   // Share dialog (Lane M/A): non-null = the workspace_id being shared; carries the invite terms + the minted link.
   const [share, setShare] = useState<{ wsId: string; role: string; mode: string; emails: string; ttlDays: number; link: string | null } | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ slug: string; display: string; x: number; y: number } | null>(null);  // per-row … menu (archive/delete)
+  const [showArchived, setShowArchived] = useState(false);  // the collapsed 'Archived' group
   const load = () => {
     void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
     void readActiveSet().then((s) => setActiveSet(s.active)).catch(() => { /* active-set is additive UI; a failure just leaves the toggles at the baseline */ });
@@ -410,6 +412,22 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     finally { setBusy(false); }
   };
 
+  // Archive (collapse, keep) / un-archive one of your workspaces.
+  const doArchive = async (slug: string, archived: boolean) => {
+    setBusy(true); setErr(null);
+    try { await archiveWorkspace(slug, archived); load(); onSwapped(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  // Delete one of your workspaces — irreversible (hard confirm).
+  const doDelete = async (slug: string, display: string) => {
+    if (typeof window !== "undefined" && !window.confirm(`Delete "${display}"? This permanently removes the workspace and all its data.`)) return;
+    setBusy(true); setErr(null);
+    try { await deleteWorkspace(slug); load(); onSwapped(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
   // Switch a SHARED workspace ON/OFF in the active set (mount vs hide) — membership is unchanged.
   const toggleShared = async (workspaceId: string, active: boolean) => {
     setBusy(true); setErr(null);
@@ -447,8 +465,10 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   };
 
   // The slots, with the seed always offered (so you can always swap back to the default).
-  const slots = Object.entries(view.slots);
-  if (!slots.some(([s]) => s === "seed")) slots.unshift(["seed", { repo: null, ref: null }]);
+  const allSlots = Object.entries(view.slots);
+  if (!allSlots.some(([s]) => s === "seed")) allSlots.unshift(["seed", { repo: null, ref: null }]);
+  const slots = allSlots.filter(([, meta]) => !meta.archived);           // live rows
+  const archivedSlots = allSlots.filter(([, meta]) => meta.archived);    // collapsed 'Archived' group
   const label = (slug: string, repo: string | null) => (slug === "seed" ? "default (seed)" : repo ?? slug);
 
   // Publish applies to a VEXA-BORN active workspace only — one attached from an external repo already
@@ -523,6 +543,10 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
               {!isRenaming && (
                 <span onClick={() => setRenaming(slug)} title="Rename (display label only)"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 11 }}>✎</span>
+              )}
+              {!isRenaming && !isPrimary && (
+                <span onClick={(e) => setRowMenu({ slug, display, x: e.clientX, y: e.clientY })} title="More — archive · delete"
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 13, lineHeight: 1 }}>⋯</span>
               )}
             </div>
           );
@@ -677,6 +701,31 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             <span style={{ color: "var(--green)" }}>✓</span> published →&nbsp;
             <a href={published.repo_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{published.repo_url}</a>
           </div>
+        )}
+        {/* Archived workspaces — collapsed group; the data is kept, restore to bring them back. */}
+        {archivedSlots.length > 0 && (
+          <div style={{ marginTop: 4 }}>
+            <div onClick={() => setShowArchived((v) => !v)}
+              style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", cursor: "pointer", fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+              <Icon name="chevR" size={12} style={{ transform: showArchived ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+              Archived ({archivedSlots.length})
+            </div>
+            {showArchived && archivedSlots.map(([slug, meta]) => (
+              <div key={`arch:${slug}`} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px 4px 24px", fontSize: 12, color: "var(--t3)", opacity: busy ? 0.6 : 1 }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meta.name || label(slug, meta.repo)}</span>
+                <span onClick={() => void doArchive(slug, false)} title="Un-archive" style={{ flex: "none", color: "var(--accent)", cursor: "pointer", fontSize: 11 }}>restore</span>
+                <span onClick={() => void doDelete(slug, meta.name || label(slug, meta.repo))} title="Delete permanently" style={{ flex: "none", color: "var(--t3)", cursor: "pointer", fontSize: 13, padding: "0 3px" }}>×</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Per-row … menu: archive / delete. */}
+        {rowMenu && (
+          <ContextMenu x={rowMenu.x} y={rowMenu.y} onClose={() => setRowMenu(null)} items={[
+            { id: "archive", label: "Archive", detail: "collapse · keep data", onSelect: () => void doArchive(rowMenu.slug, true) },
+            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => void doDelete(rowMenu.slug, rowMenu.display) },
+          ]} />
         )}
       </>)}
     </div>

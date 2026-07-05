@@ -44,9 +44,11 @@ from control_plane.workspace_attach import (
     create_shared_workspace_dir,
     create_workspace,
     deactivate_workspace,
+    delete_workspace,
     ensure_workspace_private,
     ensure_workspace_shareable,
     rename_workspace,
+    set_archived,
     set_shared_active,
     shared_active_mounts,
     swap_workspace,
@@ -299,6 +301,12 @@ class SharedActiveBody(BaseModel):
     is unchanged."""
     model_config = {"extra": "forbid"}
     active: bool
+
+
+class ArchiveBody(BaseModel):
+    """Archive (collapse, keep) or un-archive one of the caller's own workspaces."""
+    model_config = {"extra": "forbid"}
+    archived: bool = True
 
 
 class WorkspaceActivateBody(BaseModel):
@@ -1269,6 +1277,30 @@ def create_app(
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid workspace")
         return {"workspace_id": workspace_id, "active": body.active}
+
+    @app.post("/api/workspace/{slug}/archive")
+    def ws_archive(slug: str, request: Request, body: ArchiveBody = Body(default=ArchiveBody())):
+        """Archive (collapse, keep the data) or un-archive one of the caller's own workspaces."""
+        subject = subject_of(request)
+        try:
+            set_archived(wsr.root, subject, slug, body.archived)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except KeyError:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        return {"slug": slug, "archived": body.archived}
+
+    @app.delete("/api/workspace/{slug}")
+    def ws_delete(slug: str, request: Request):
+        """DELETE one of the caller's own workspaces — removes the data irreversibly. Baseline is refused."""
+        subject = subject_of(request)
+        try:
+            delete_workspace(wsr.root, subject, slug)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except KeyError:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        return {"slug": slug, "deleted": True}
 
     @app.post("/api/workspace/{workspace_id}/unshare")
     def ws_unshare(workspace_id: str, request: Request):

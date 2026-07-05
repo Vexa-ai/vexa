@@ -279,6 +279,32 @@ def test_unshare_moves_a_shared_workspace_back_to_private(tmp_path):
     assert shared_active_mounts(tmp_path, "member1", idx.list("member1")) == []   # ws_dir gone → not mounted
 
 
+def test_archive_and_delete_workspace(tmp_path, monkeypatch):
+    import pytest
+    from control_plane.workspace_attach import (create_workspace, set_archived, delete_workspace,
+                                                 attached_workspaces, active_workspaces)
+    seed = tmp_path / "_seed"; (seed / "kg").mkdir(parents=True); (seed / "index.md").write_text("# seed\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    slug = create_workspace(tmp_path, "u1", name="Scratch").slug
+
+    # archive → flag set + unmounted (dropped from the active set), tree kept
+    set_archived(tmp_path, "u1", slug, True)
+    assert attached_workspaces(tmp_path, "u1")["slots"][slug]["archived"] is True
+    assert slug not in [m.slug for m in active_workspaces(tmp_path, "u1")]
+    assert (tmp_path / ".attached" / "u1" / slug).exists()   # data preserved
+    set_archived(tmp_path, "u1", slug, False)                # un-archive
+    assert attached_workspaces(tmp_path, "u1")["slots"][slug]["archived"] is False
+
+    # delete → slot + tree gone
+    delete_workspace(tmp_path, "u1", slug)
+    assert slug not in attached_workspaces(tmp_path, "u1")["slots"]
+    assert not (tmp_path / ".attached" / "u1" / slug).exists()
+
+    # the baseline is protected from both
+    with pytest.raises(ValueError): set_archived(tmp_path, "u1", "seed", True)
+    with pytest.raises(ValueError): delete_workspace(tmp_path, "u1", "seed")
+
+
 def test_cannot_share_the_private_baseline(tmp_path):
     import pytest
     from control_plane.workspace_attach import ensure_workspace_shareable

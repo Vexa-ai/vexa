@@ -27,7 +27,19 @@ export async function initWorkspace(): Promise<{ workspace: string; seeded: bool
   return getJson(`/api/workspace/init`, { method: "POST" });
 }
 
-export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; nested?: boolean }
+export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; nested?: boolean; archived?: boolean }
+
+/** Archive (collapse, keep the data) or un-archive one of your workspaces. */
+export async function archiveWorkspace(slug: string, archived: boolean): Promise<{ slug: string; archived: boolean }> {
+  return getJson(`/api/workspace/${encodeURIComponent(slug)}/archive`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ archived }),
+  });
+}
+
+/** DELETE one of your workspaces — removes the data irreversibly. */
+export async function deleteWorkspace(slug: string): Promise<{ slug: string; deleted: boolean }> {
+  return getJson(`/api/workspace/${encodeURIComponent(slug)}`, { method: "DELETE" });
+}
 /** `published_url`: where the ACTIVE workspace was published (the token-free URL of its GitHub home),
  *  or null when it never was — a published workspace renders a link instead of the publish action. */
 export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null }

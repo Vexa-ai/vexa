@@ -469,6 +469,46 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
     return new_id, True
 
 
+def set_archived(root: str | Path, subject: str, slug: str, archived: bool) -> None:
+    """ARCHIVE / un-archive one of the subject's OWN workspaces — a persistent ``archived`` flag on the
+    slot. Archiving also unmounts it (drops it from the active set) so it stops loading; the tree is KEPT
+    (collapsed under 'Archived' in the UI). The baseline is refused (it's the personal home)."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    if slug == _primary_slug(state):
+        raise ValueError("the baseline workspace can't be archived")
+    slot = state["slots"].get(slug)
+    if slot is None:
+        raise KeyError(slug)
+    slot["archived"] = bool(archived)
+    state["slots"][slug] = slot
+    if archived:
+        state["active_set"] = [s for s in state.get("active_set", []) if s != slug]
+    _save_state(store, state)
+
+
+def delete_workspace(root: str | Path, subject: str, slug: str) -> None:
+    """DELETE one of the subject's OWN workspaces — REMOVE its tree from the private store and drop the slot.
+    DESTRUCTIVE + irreversible. The baseline / seed slot is refused. Guarded so it can only remove a path
+    UNDER the subject's own store (never the baseline, never outside root)."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    if slug in (_primary_slug(state), SEED_SLOT):
+        raise ValueError("the baseline workspace can't be deleted")
+    if slug not in state["slots"]:
+        raise KeyError(slug)
+    slot_dir = (store / slug).resolve()
+    if store.resolve() in slot_dir.parents and slot_dir.exists():  # only ever a slot under this subject's store
+        shutil.rmtree(slot_dir, ignore_errors=True)
+    state["slots"].pop(slug, None)
+    state["active_set"] = [s for s in state.get("active_set", []) if s != slug]
+    _save_state(store, state)
+
+
 def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) -> str:
     """UN-SHARE — the mirror of ``ensure_workspace_shareable``. Move a top-level shared workspace back into
     the caller's private store as a normal workspace (git history intact) and return its new private slug.
