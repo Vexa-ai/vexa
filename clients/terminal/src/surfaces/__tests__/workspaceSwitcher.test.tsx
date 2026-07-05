@@ -1,10 +1,11 @@
 /** Behavioral test for the WORKSPACES sidebar section (workspace.tsx WorkspaceSwitcher).
  *
- *  Owner ruling (start-fresh placement): "start fresh" CREATES a new default workspace (the current
- *  one is parked as '(previous)'), so it is a LIST-LEVEL item alongside "+ Attach repo…" — NOT a ↻
- *  icon on a workspace row. These tests pin: the list offers "+ Start fresh…", no row carries the ↻
- *  icon anymore, and the item still drives the exact same flow (confirm → swap to the seed slot with
- *  fresh=true) as the old icon did.
+ *  ADDITIVE model (WP-A1): the list-level "+ New workspace…" action CREATES a fresh blank workspace and
+ *  ADDS it to the mount set (a new CHECKED row) — it does NOT swap/rebuild/park the baseline, and pops NO
+ *  scary confirm (creating a workspace is non-destructive). It lives alongside "+ Attach repo…" as the two
+ *  ways to bring a workspace into the set. These tests pin: the list offers "+ New workspace…" (not the old
+ *  "Start fresh…"), clicking it calls createWorkspace (never swapWorkspace/fresh) with no window.confirm,
+ *  and no row carries the old ↻ icon.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -18,6 +19,7 @@ vi.mock("../workspaceApi", async (importOriginal) => ({
   swapWorkspace: vi.fn(),
   activateWorkspace: vi.fn(),
   deactivateWorkspace: vi.fn(),
+  createWorkspace: vi.fn(),
 }));
 
 const view = {
@@ -41,6 +43,7 @@ async function renderOpenSwitcher(overrideActive?: Awaited<ReturnType<typeof api
   vi.mocked(api.swapWorkspace).mockResolvedValue(undefined as never);
   vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true, cloned: false, nested: false });
   vi.mocked(api.deactivateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true });
+  vi.mocked(api.createWorkspace).mockResolvedValue({ subject: "u1", slug: "workspace-1", changed: true, added: true });
   const onSwapped = vi.fn();
   render(<WorkspaceSwitcher onSwapped={onSwapped} />);
   await screen.findByText("leo"); // slots loaded
@@ -50,11 +53,12 @@ async function renderOpenSwitcher(overrideActive?: Awaited<ReturnType<typeof api
 beforeEach(() => sessionStorage.clear());
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-describe("WorkspaceSwitcher — start fresh is a list-level action", () => {
-  it("offers '+ Start fresh…' as a list item alongside '+ Attach repo…'", async () => {
+describe("WorkspaceSwitcher — '+ New workspace…' CREATES + ADDS (additive), not swap-rebuild-baseline", () => {
+  it("offers '+ New workspace…' as a list item alongside '+ Attach repo…' (not the old 'Start fresh…')", async () => {
     await renderOpenSwitcher();
     expect(screen.getByText("Attach repo…")).toBeTruthy();
-    expect(screen.getByText("Start fresh…")).toBeTruthy();
+    expect(screen.getByText("New workspace…")).toBeTruthy();
+    expect(screen.queryByText("Start fresh…")).toBeNull();  // the old swap-rebuild action is gone
   });
 
   it("no workspace row carries the old ↻ icon anymore", async () => {
@@ -62,22 +66,52 @@ describe("WorkspaceSwitcher — start fresh is a list-level action", () => {
     expect(screen.queryByText("↻")).toBeNull();
   });
 
-  it("clicking it (confirmed) runs the SAME flow as before: swap to the seed slot with fresh=true", async () => {
+  it("clicking it calls createWorkspace — NOT swapWorkspace/fresh — and pops NO confirm", async () => {
     const { onSwapped } = await renderOpenSwitcher();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    fireEvent.click(screen.getByText("Start fresh…"));
-    await waitFor(() => expect(api.swapWorkspace).toHaveBeenCalledWith(undefined, undefined, undefined, true, "seed"));
-    expect(confirm).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByText("New workspace…"));
+    await waitFor(() => expect(api.createWorkspace).toHaveBeenCalled());
+    expect(confirm).not.toHaveBeenCalled();                 // creating a workspace is non-destructive
+    expect(api.swapWorkspace).not.toHaveBeenCalled();       // NOT the swap-rebuild-baseline path
     await waitFor(() => expect(onSwapped).toHaveBeenCalled());
     confirm.mockRestore();
   });
 
-  it("declining the confirmation swaps nothing", async () => {
+  it("re-reads the active set after creating, so the new (checked) row shows up", async () => {
     await renderOpenSwitcher();
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    fireEvent.click(screen.getByText("Start fresh…"));
-    expect(api.swapWorkspace).not.toHaveBeenCalled();
-    confirm.mockRestore();
+    vi.mocked(api.readActiveSet).mockClear();
+    fireEvent.click(screen.getByText("New workspace…"));
+    // the reload() after create re-fetches the active set → the new checked row is picked up
+    await waitFor(() => expect(api.readActiveSet).toHaveBeenCalled());
+  });
+
+  it("the new workspace loads back as a CHECKED (active) row, existing rows unaffected", async () => {
+    // after create, the backend adds workspace-1 to the active set; the switcher reloads and renders it
+    // as a checked row alongside the untouched baseline (leo) and parked seed.
+    await renderOpenSwitcher();
+    vi.mocked(api.readAttachedWorkspaces).mockResolvedValue({
+      active: "leo",
+      slots: {
+        seed: { repo: null, ref: null, name: "default (previous)" },
+        leo: { repo: null, ref: null, name: "leo" },
+        "workspace-1": { repo: null, ref: null, name: "New workspace" },
+      },
+    } as unknown as Awaited<ReturnType<typeof api.readAttachedWorkspaces>>);
+    vi.mocked(api.readActiveSet).mockResolvedValue({
+      subject: "u1",
+      active: [
+        { slug: "leo", repo: null, ref: null, role: "private", path: "/w/u1", write: true, primary: true },
+        { slug: "workspace-1", repo: null, ref: null, role: "private", path: "/w/.attached/u1/workspace-1", write: true, primary: false },
+      ],
+    } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
+    fireEvent.click(screen.getByText("New workspace…"));
+    const newRow = await screen.findByText("New workspace");
+    const cb = newRow.closest("div")!.querySelector<HTMLElement>('[role="checkbox"]')!;
+    await waitFor(() => expect(cb.getAttribute("aria-checked")).toBe("true"));  // new row is CHECKED
+    // the baseline (leo) is still checked+disabled — untouched by the create
+    const leoCb = screen.getByText("leo").closest("div")!.querySelector<HTMLElement>('[role="checkbox"]')!;
+    expect(leoCb.getAttribute("aria-checked")).toBe("true");
+    expect(leoCb.getAttribute("aria-disabled")).toBe("true");
   });
 });
 

@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 const docTab = (path: string) => ({ id: `doc:${path}`, title: base(path), kind: "doc", params: { path } });
 
@@ -304,11 +304,12 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     finally { setBusy(false); }
   };
 
-  // Swap to an existing slot by SLUG (restores the parked tree, no re-clone). Retained for the
-  // list-level 'Start fresh' action (#59): a seed-fresh rebuild that re-homes the private baseline.
-  const swapToSlot = async (slug: string, fresh?: boolean) => {
+  // CREATE a brand-new BLANK workspace and ADD it to the mount set (additive — the "new workspace" list
+  // action). NOT a swap: the private baseline and every other active workspace are left untouched (nothing
+  // parked/rebuilt/backed up). The new row loads back CHECKED (it joined the active set).
+  const doNewWorkspace = async () => {
     setBusy(true); setErr(null);
-    try { await swapWorkspace(undefined, undefined, undefined, fresh, slug); load(); onSwapped(); }
+    try { await createWorkspace(); load(); onSwapped(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
@@ -429,13 +430,15 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             </div>
           </div>
         )}
-        {/* Start fresh is a LIST-LEVEL action (not a row icon): it CREATES a new default workspace —
-            the current one is parked as a recoverable backup ('default (previous)') — so it lives
-            alongside "+ Attach repo…" as the other way to bring a new workspace into the list. */}
-        <div onClick={() => { if (!busy && window.confirm("Start fresh? The default workspace is rebuilt from the template. Your current default is kept under a recoverable backup ('default (previous)').")) void swapToSlot("seed", true); }}
-          title="Start fresh — rebuild the default from the template (current default kept as a backup)"
+        {/* New workspace is a LIST-LEVEL action (not a row icon): it CREATES a fresh blank workspace
+            (seeded from the template) and ADDS it to the mount set — additive, so it destroys nothing and
+            leaves the baseline + every other workspace untouched. It lives alongside "+ Attach repo…" as
+            the two ways to bring a new workspace into the set. No confirmation: creating a workspace is
+            non-destructive. The new row appears CHECKED (it joined the active set). */}
+        <div onClick={() => { if (!busy) void doNewWorkspace(); }}
+          title="New workspace — create a blank workspace and add it to your set (nothing is replaced)"
           style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
-          <Icon name="plus" size={12} /> Start fresh…
+          <Icon name="plus" size={12} /> New workspace…
         </div>
         {/* Publish / push-updates form — opened from the ACTIVE row's ↑ action (no list-level trigger:
             publish is an action on the active workspace, not a new list entry). Push-updates mode

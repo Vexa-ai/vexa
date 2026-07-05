@@ -815,6 +815,49 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
     assert c.post("/api/workspace/deactivate", headers=h, json={"slug": "seed"}).status_code == 409
 
 
+def test_workspace_new_creates_a_blank_workspace_and_adds_it_without_swapping(tmp_path, monkeypatch):
+    """POST /api/workspace/new CREATES a fresh template-seeded workspace at a new slug and ADDS it to the
+    active set (additive). It does NOT park/rebuild/back-up the baseline — the baseline stays live+primary."""
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"; seed.mkdir(); (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+    # write real work into the baseline so we can prove it is untouched
+    (workspaces / "u_jane" / "kg").mkdir(parents=True, exist_ok=True)
+    (workspaces / "u_jane" / "kg" / "real.md").write_text("MY REAL WORK")
+
+    r = c.post("/api/workspace/new", headers=h, json={})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["changed"] is True and body["added"] is True and body["slug"] == "workspace-1"
+
+    # the baseline is UNTOUCHED — not parked, not rebuilt
+    assert (workspaces / "u_jane" / "kg" / "real.md").read_text() == "MY REAL WORK"
+    assert not (workspaces / ".attached" / "u_jane" / "seed").exists()
+    assert not (workspaces / ".attached" / "u_jane" / "seed-prev").exists()
+    # the new workspace was seeded from the template into its slot and joined the set (checked/active)
+    assert (workspaces / ".attached" / "u_jane" / "workspace-1" / "CLAUDE.md").read_text() == "SEED\n"
+    active = c.get("/api/workspace/active", headers=h).json()["active"]
+    slugs = [m["slug"] for m in active]
+    assert slugs == ["seed", "workspace-1"]
+    assert active[0]["primary"] is True                       # baseline still primary+first
+    assert active[1]["primary"] is False and active[1]["repo"] is None
+
+    # a named create honors the label; a second create mints a distinct slug
+    r2 = c.post("/api/workspace/new", headers=h, json={"name": "Research"})
+    assert r2.status_code == 201 and r2.json()["slug"] == "workspace-2"
+    view = c.get("/api/workspace/attached", headers=h).json()
+    assert view["slots"]["workspace-2"]["name"] == "Research"
+    assert view["slots"]["workspace-1"]["name"] == "New workspace"
+
+
 def test_workspace_publish_pushes_born_workspace_to_remote(tmp_path, monkeypatch):
     """POST /api/workspace/publish pushes the vexa-born active workspace's full history to the created
     (here: injected/local bare) repo. Per-call token, never stored; errors token-redacted (P15).

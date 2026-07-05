@@ -428,6 +428,77 @@ def activate_workspace(
     return ActiveResult(subject, target_slug, changed=True, cloned=cloned, nested=nested)
 
 
+NEW_SLUG_PREFIX = "workspace"        # fresh blank workspaces get slugs workspace-1, workspace-2, …
+DEFAULT_NEW_NAME = "New workspace"   # …and this display name (New workspace, New workspace 2, …)
+
+
+def _unique_new_slug(state: dict) -> str:
+    """Mint a fresh, never-used slug for a brand-new blank workspace: ``workspace-<n>`` with ``n`` the
+    lowest positive integer whose slug isn't already a known slot (avoids colliding with a parked/active
+    workspace, the seed, or a repo slug). Deterministic and filesystem-safe."""
+    taken = set(state.get("slots", {})) | {SEED_SLOT, SEED_BACKUP_SLOT, _primary_slug(state)}
+    n = 1
+    while f"{NEW_SLUG_PREFIX}-{n}" in taken:
+        n += 1
+    return f"{NEW_SLUG_PREFIX}-{n}"
+
+
+def _unique_new_name(state: dict, base: str = DEFAULT_NEW_NAME) -> str:
+    """A display name not already used by another slot: ``New workspace``, then ``New workspace 2``, …
+    Keeps the list readable when several blanks are created (labels are only cosmetic, so a soft-unique
+    default is enough — a user rename always wins)."""
+    names = {slot.get("name") for slot in state.get("slots", {}).values() if slot.get("name")}
+    if base not in names:
+        return base
+    n = 2
+    while f"{base} {n}" in names:
+        n += 1
+    return f"{base} {n}"
+
+
+def create_workspace(
+    root: str | Path,
+    subject: str,
+    *,
+    name: Optional[str] = None,
+) -> ActiveResult:
+    """CREATE a brand-new BLANK workspace, seeded from the validated template, at a fresh unique slug and
+    ADD it to the subject's active set (the additive-model counterpart of "start fresh" — WP-A1).
+
+    This is NOT a swap: the private baseline (``<root>/<subject>``) and every other active workspace are
+    left completely untouched — nothing is parked, rebuilt, or backed up. The new workspace is materialized
+    in its own store slot (``<root>/.attached/<subject>/<slug>``), git-initialized + seed-committed by the
+    single seeding primitive, given a display name (``name`` if provided, else a unique "New workspace"),
+    and marked active. Returns its slug (``ActiveResult.changed`` is always True — a create is never a no-op).
+    """
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+
+    target_slug = _unique_new_slug(state)
+    slot_dir = store / target_slug
+
+    # Materialize OUT OF PLACE, then move into the slot — a seeding failure leaves the active set untouched
+    # (mirrors activate's phase discipline). The seed primitive git-inits + commits the fresh tree.
+    staged = store / f".staging-{target_slug}"
+    if staged.exists():
+        shutil.rmtree(staged)
+    _reseed(staged)
+    slot_dir.parent.mkdir(parents=True, exist_ok=True)
+    if slot_dir.exists():
+        shutil.rmtree(slot_dir)
+    shutil.move(str(staged), str(slot_dir))
+
+    slot = {"repo": None, "ref": None, "name": (name or "").strip()[:80] or _unique_new_name(state)}
+    state["slots"][target_slug] = slot
+    state["active_set"] = _normalized_active_set(
+        {**state, "active_set": [*state.get("active_set", []), target_slug]}
+    )
+    _save_state(store, state)
+    return ActiveResult(subject, target_slug, changed=True, cloned=False)
+
+
 def deactivate_workspace(root: str | Path, subject: str, slug: str) -> ActiveResult:
     """REMOVE a workspace from the subject's active set (park it — never destroyed). The parked tree stays
     in its store slot, ready to re-activate. Idempotent: deactivating a not-active slug is a no-op.
