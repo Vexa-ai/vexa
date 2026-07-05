@@ -284,7 +284,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   const actions = useCanvasActionState();
   const [durable, setDurable] = useState<DurableTranscript>({ lines: [], notes: [] });
   // The count of live copilot notes seen this session — read (not depended-on) inside the durable
-  // effect so a finalize-refetch can tell "the meeting HAD notes live" from "genuinely empty". A ref,
+  // effect so a finalize-refetch can tell "the meeting HAD notes live" versus being genuinely empty. A ref,
   // not a dep, so live deltas don't re-fire the durable fetch (they only refresh this counter).
   const liveNotesCount = safeArray(live.notes).length;
   const liveNotesRef = useRef(0);
