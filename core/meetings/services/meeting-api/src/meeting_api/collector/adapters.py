@@ -328,13 +328,22 @@ class SqlAlchemyTranscriptStore:
                 return None
             return await self._transcript_doc(db, meeting)
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None):
-        from sqlalchemy import select
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
+        from sqlalchemy import cast, func, or_, select
+        from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
 
         async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.user_id == user_id)
+            # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
+            # (owned by someone else) surface in the caller's list so a share recipient can find + open them.
+            access = [
+                Meeting.user_id == user_id,
+                cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
+            ]
+            if member_workspaces:
+                access.append(Meeting.data["workspace_id"].astext.in_(list(member_workspaces)))
+            stmt = select(Meeting).where(or_(*access))
             if status:
                 stmt = stmt.where(Meeting.status == status)
             if platform:
@@ -358,6 +367,7 @@ class SqlAlchemyTranscriptStore:
                     "start_time": m.start_time.isoformat() if m.start_time else None,
                     "end_time": m.end_time.isoformat() if m.end_time else None,
                     "data": m.data if isinstance(m.data, dict) else {},
+                    "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                     "updated_at": m.updated_at.isoformat() if m.updated_at else None,
                 }

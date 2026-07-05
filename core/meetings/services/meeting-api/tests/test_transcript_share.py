@@ -61,6 +61,20 @@ def test_restricted_share_checks_verified_email():
     assert _authorized(client, VISITOR)
 
 
+def test_shared_meeting_surfaces_in_the_recipients_list():
+    """After redeeming, the meeting shows in the recipient's /meetings list (flagged shared) so they can
+    FIND and open it — even though they don't own it. This is the fix for 'shared meeting is not there'."""
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=OWNER, platform=PLAT, native_meeting_id=NID)
+    client = TestClient(create_app(store, redis=None))
+    token = client.post(f"/meetings/{PLAT}/{NID}/share", json={"mode": "open"}, headers={"x-user-id": str(OWNER)}).json()["token"]
+
+    assert client.get("/meetings", headers={"x-user-id": str(VISITOR)}).json()["meetings"] == []  # before
+    client.post("/transcripts/share/accept", json={"token": token}, headers={"x-user-id": str(VISITOR)})
+    mine = client.get("/meetings", headers={"x-user-id": str(VISITOR)}).json()["meetings"]
+    assert len(mine) == 1 and mine[0]["native_meeting_id"] == NID and mine[0]["shared"] is True
+
+
 def test_bad_token_is_404():
     client = _client()
     r = client.post("/transcripts/share/accept", json={"token": "999.nope"}, headers={"x-user-id": str(VISITOR)})

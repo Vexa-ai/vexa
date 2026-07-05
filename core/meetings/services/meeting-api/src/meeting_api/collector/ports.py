@@ -59,6 +59,7 @@ class TranscriptStore(Protocol):
         platform: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        member_workspaces: "Optional[set[str]]" = None,
     ) -> list[dict]:
         """The user's meetings, newest first — a list of api.v1 ``MeetingResponse``-shaped dicts
         (the body of ``MeetingListResponse``)."""

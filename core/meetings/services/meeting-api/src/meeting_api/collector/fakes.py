@@ -172,10 +172,17 @@ class InMemoryTranscriptStore:
         )
         return await self._transcript_doc(mid) if authorized else None
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
+        mws = member_workspaces or set()
+
+        def accessible(m):
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            return (m["user_id"] == user_id
+                    or user_id in (data.get("transcript_viewers") or [])
+                    or data.get("workspace_id") in mws)
         rows = [
             (mid, m) for mid, m in self._meetings.items()
-            if m["user_id"] == user_id
+            if accessible(m)
             and (status is None or m["status"] == status)
             and (platform is None or m["platform"] == platform)
         ]
@@ -197,6 +204,7 @@ class InMemoryTranscriptStore:
                 "start_time": m["start_time"],
                 "end_time": m["end_time"],
                 "data": m["data"],
+                "shared": m["user_id"] != user_id,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],
             }

@@ -178,14 +178,17 @@ def build_router(
     async def get_meetings(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
         limit: Optional[int] = Query(default=None, ge=1, le=100),
         offset: Optional[int] = Query(default=None, ge=0),
         status: Optional[str] = Query(default=None),
         platform: Optional[str] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
+        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
         meetings = await store.list_meetings(
-            user_id, status=status, platform=platform, limit=limit, offset=offset
+            user_id, status=status, platform=platform, limit=limit, offset=offset,
+            member_workspaces=member_workspaces,
         )
         log_event(
             "meetings_listed",
