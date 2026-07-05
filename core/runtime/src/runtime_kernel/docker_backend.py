@@ -70,6 +70,27 @@ def _workload_id_from_leaf(leaf: str) -> str:
     return leaf
 
 
+def _stack_network() -> Optional[str]:
+    """The stack-unique compose network every workload this runtime spawns joins (``start()`` sets
+    ``HostConfig.NetworkMode`` from the same env). On a SHARED daemon (two vexa stacks on one host —
+    the release-host layout) the managed label and the name prefix are IDENTICAL across stacks, so
+    the network is THE discriminator that scopes discovery and ``find`` to THIS stack's containers —
+    and it works retroactively for label-less incident-era containers too. Unset ⇒ single-stack
+    deployment, no scoping (docker's default bridge)."""
+    return os.getenv("DOCKER_NETWORK") or None
+
+
+def _in_stack_network(network: Optional[str], inspect_body: dict) -> bool:
+    """Whether an INSPECTED container is attached to the stack network (no scoping when unset).
+    Checks both ``HostConfig.NetworkMode`` (what ``start()`` sets) and the live
+    ``NetworkSettings.Networks`` map (covers containers attached by name after create)."""
+    if not network:
+        return True
+    if (inspect_body.get("HostConfig") or {}).get("NetworkMode") == network:
+        return True
+    return network in ((inspect_body.get("NetworkSettings") or {}).get("Networks") or {})
+
+
 def _socket_url() -> str:
     """Encode DOCKER_HOST (unix:///var/run/docker.sock) as a requests_unixsocket http+unix URL."""
     raw = os.getenv("DOCKER_HOST", "unix:///var/run/docker.sock")
@@ -241,11 +262,17 @@ class DockerBackend:
         """Re-derive a live handle for a workload whose in-process handle was lost (restart): the
         container name is deterministic (``prefix + leaf``), so an inspect proves it still exists.
         Returns ``None`` when the substrate has no such container (any state counts as found —
-        an exited container still needs stop/destroy to observe/reclaim it truthfully)."""
+        an exited container still needs stop/destroy to observe/reclaim it truthfully).
+
+        STACK-SCOPED: on a shared daemon a same-named container in ANOTHER stack's network must
+        stay invisible — otherwise a re-derived handle would let this stack's stop/destroy reach a
+        foreign stack's live bot."""
         name = self._cname(workload_id)
         r = self._req("GET", f"/containers/{name}/json")
         if r.status_code != 200:
             return None
+        if not _in_stack_network(_stack_network(), r.json() or {}):
+            return None  # exists, but it is ANOTHER stack's container — not ours to touch
         return WorkloadHandle(id=workload_id, impl=name)
 
     def list_workload_containers(self) -> list[dict]:
@@ -255,13 +282,23 @@ class DockerBackend:
         recreated and its in-memory registry lost. A name-prefix fallback catches label-less strays,
         guarded by the compose-project label so the stack's own services are never adopted.
 
+        STACK-SCOPED (the shared-daemon fix): the labels and the name prefix are the SAME constants
+        in every vexa stack, so on a shared daemon a label-only filter would adopt ANOTHER stack's
+        live bots. When the stack network is configured, both passes additionally filter on it —
+        only containers attached to THIS stack's compose network are ever adopted.
+
         Returns ``[{workload_id, name, running, exit_code, started_at}, …]``; never raises."""
         found: dict[str, dict] = {}
+        network = _stack_network()
         try:
             import json as _json
 
-            label_filter = quote(_json.dumps({"label": [f"{MANAGED_LABEL}=true"]}), safe="")
-            r = self._req("GET", f"/containers/json?all=1&filters={label_filter}")
+            def _filters(spec: dict) -> str:
+                if network:
+                    spec = {**spec, "network": [network]}
+                return quote(_json.dumps(spec), safe="")
+
+            r = self._req("GET", f"/containers/json?all=1&filters={_filters({'label': [f'{MANAGED_LABEL}=true']})}")
             if r.status_code == 200:
                 for c in r.json():
                     wid = (c.get("Labels") or {}).get(WORKLOAD_ID_LABEL)
@@ -269,7 +306,8 @@ class DockerBackend:
                         found[wid] = self._adoptable(wid, c)
             # Fallback: prefix-named containers WITHOUT the labels (spawned before the labels
             # existed). Compose-owned services can share the prefix — exclude anything compose owns.
-            r = self._req("GET", "/containers/json?all=1")
+            fallback_qs = f"?all=1&filters={_filters({})}" if network else "?all=1"
+            r = self._req("GET", f"/containers/json{fallback_qs}")
             if r.status_code == 200:
                 for c in r.json():
                     labels = c.get("Labels") or {}

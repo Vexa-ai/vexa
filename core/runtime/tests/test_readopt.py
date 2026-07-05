@@ -42,7 +42,8 @@ class _Resp:
 class FakeDockerSession:
     """Answers the exact socket-API calls DockerBackend makes, from a canned container table.
 
-    ``containers`` : name(leaf) -> {"labels": {...}, "running": bool, "exit_code": int|None}
+    ``containers`` : name(leaf) -> {"labels": {...}, "running": bool, "exit_code": int|None,
+    "network": str|None (the compose network the container is attached to)}
     """
 
     def __init__(self, containers: dict[str, dict]):
@@ -59,13 +60,19 @@ class FakeDockerSession:
             q = parse_qs(parsed.query)
             entries = []
             label_filter = None
+            network_filter = None
             if "filters" in q:
-                label_filter = json.loads(q["filters"][0]).get("label", [])
+                filters = json.loads(q["filters"][0])
+                label_filter = filters.get("label", [])
+                network_filter = filters.get("network", [])
             for name, c in self.containers.items():
                 labels = c.get("labels", {})
                 if label_filter and not all(
                     labels.get(k) == v for k, v in (f.split("=", 1) for f in label_filter)
                 ):
+                    continue
+                # the daemon's network filter: only containers attached to that network match
+                if network_filter and c.get("network") not in network_filter:
                     continue
                 entries.append({
                     "Names": [f"/{name}"],
@@ -78,10 +85,15 @@ class FakeDockerSession:
             c = self.containers.get(name)
             if c is None:
                 return _Resp(404, {"message": "no such container"})
-            return _Resp(200, {"State": {
-                "Running": bool(c.get("running")),
-                "ExitCode": c.get("exit_code", 0),
-            }})
+            net = c.get("network")
+            return _Resp(200, {
+                "State": {
+                    "Running": bool(c.get("running")),
+                    "ExitCode": c.get("exit_code", 0),
+                },
+                "HostConfig": {"NetworkMode": net or "default"},
+                "NetworkSettings": {"Networks": {net: {}} if net else {}},
+            })
         if method == "POST" and "/stop" in path:
             name = path.split("/")[2]
             c = self.containers.get(name)
@@ -152,6 +164,75 @@ def test_docker_find_rederives_handle_and_404_means_absent():
     h = be.find("mtg-2-d93eee39")
     assert h is not None and h._impl == "vexa-mtg-2-d93eee39"
     assert be.find("mtg-nope") is None
+
+
+# ── stack scoping on a SHARED daemon (two vexa stacks, one docker) ───────────────────────────────
+# The managed label and the vexa- name prefix are the SAME constants in every stack, so on a shared
+# daemon (the release host: prod + eyeball) label-only discovery adopts the OTHER stack's live bots —
+# and a network-blind find() would let this stack's stop/destroy reach them. DOCKER_NETWORK (the same
+# env start() uses for HostConfig.NetworkMode) is the stack discriminator: it scopes both passes of
+# discovery AND find(), and works retroactively for label-less incident-era containers.
+
+def test_docker_discovery_is_scoped_to_the_stack_network(monkeypatch):
+    """Two containers, SAME labels, different networks: only the one on THIS stack's network is
+    adopted — the foreign stack's bot stays invisible."""
+    monkeypatch.setenv("DOCKER_NETWORK", "vexa_prod_default")
+    be, _ = _backend({
+        "vexa-mtg-2-d93eee39": {
+            "labels": dict(LABELS), "running": True, "network": "vexa_prod_default",
+        },
+        "vexa-mtg-7-eyeball": {
+            "labels": {"runtime.managed": "true", "runtime.workload_id": "mtg-7-eyeball"},
+            "running": True, "network": "vexa_eyeball_default",   # the OTHER stack's bot
+        },
+    })
+    found = be.list_workload_containers()
+    assert [i["workload_id"] for i in found] == ["mtg-2-d93eee39"]
+
+
+def test_docker_name_fallback_is_scoped_to_the_stack_network(monkeypatch):
+    """The label-less name-fallback pass (incident-era strays) is network-scoped too — a foreign
+    stack's pre-label stray with the shared vexa- prefix is never adopted."""
+    monkeypatch.setenv("DOCKER_NETWORK", "vexa_prod_default")
+    be, _ = _backend({
+        "vexa-mtg-1-38a5a399": {"labels": {}, "running": True, "network": "vexa_prod_default"},
+        "vexa-mtg-6-foreign": {"labels": {}, "running": True, "network": "vexa_eyeball_default"},
+    })
+    ids = [i["workload_id"] for i in be.list_workload_containers()]
+    assert ids == ["mtg-1-38a5a399"]
+
+
+def test_docker_find_never_reaches_a_foreign_network_container(monkeypatch):
+    """find() must not re-derive a handle for a same-named container in ANOTHER stack's network —
+    otherwise this stack's stop/destroy would reach the foreign stack's live bot with a 204."""
+    monkeypatch.setenv("DOCKER_NETWORK", "vexa_prod_default")
+    be, _ = _backend({
+        "vexa-mtg-2-d93eee39": {
+            "labels": dict(LABELS), "running": True, "network": "vexa_eyeball_default",
+        },
+    })
+    assert be.find("mtg-2-d93eee39") is None            # exists, but not ours to touch
+
+    # …and the same container IS findable when it is on OUR network.
+    monkeypatch.setenv("DOCKER_NETWORK", "vexa_eyeball_default")
+    h = be.find("mtg-2-d93eee39")
+    assert h is not None and h._impl == "vexa-mtg-2-d93eee39"
+
+
+def test_docker_discovery_unscoped_when_no_network_configured(monkeypatch):
+    """Back-compat: without DOCKER_NETWORK (single-stack / default bridge) discovery and find are
+    unscoped — exactly the pre-fix behavior."""
+    monkeypatch.delenv("DOCKER_NETWORK", raising=False)
+    be, _ = _backend({
+        "vexa-mtg-2-d93eee39": {"labels": dict(LABELS), "running": True, "network": "net-a"},
+        "vexa-mtg-9-other": {
+            "labels": {"runtime.managed": "true", "runtime.workload_id": "mtg-9-other"},
+            "running": True, "network": "net-b",
+        },
+    })
+    ids = sorted(i["workload_id"] for i in be.list_workload_containers())
+    assert ids == ["mtg-2-d93eee39", "mtg-9-other"]
+    assert be.find("mtg-2-d93eee39") is not None
 
 
 def test_docker_cleanup_raises_when_delete_fails():
