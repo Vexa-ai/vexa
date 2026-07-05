@@ -50,7 +50,7 @@ async def search_meetings(
         FROM meetings m
         LEFT JOIN transcriptions t ON t.meeting_id = m.id
         WHERE m.user_id = :user_id
-          AND t.text @@ to_tsquery('english', :query)
+          AND t.text @@ to_tsquery('spanish', :query)
         GROUP BY m.id
         ORDER BY m.created_at DESC
         LIMIT :limit
@@ -73,7 +73,7 @@ async def search_meetings(
                 SELECT text, speaker, start_time
                 FROM transcriptions
                 WHERE meeting_id = :mid
-                  AND text @@ to_tsquery('english', :query)
+                  AND text @@ to_tsquery('spanish', :query)
                 ORDER BY start_time
                 LIMIT 5
             """),
