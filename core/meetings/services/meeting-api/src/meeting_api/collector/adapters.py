@@ -17,11 +17,49 @@ redis installed in the test venv — which is why ``pyproject.toml`` needs NO ``
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
+from datetime import datetime, timezone
 from typing import Optional
 
 from .ports import RedisBus, TranscriptStore
+
+
+def _sha(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _expired(iso: Optional[str]) -> bool:
+    """True if the ISO-8601 timestamp is in the past (None = never expires)."""
+    if not iso:
+        return False
+    try:
+        exp = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        return exp < _now()
+    except ValueError:
+        return False
+
+
+def validate_transcript_grant(grant: dict, user_email: Optional[str]) -> Optional[str]:
+    """Shared (fake + real) validation of a transcript share grant → an error code, or None if OK.
+    open = anyone authenticated; restricted = the caller's verified email ∈ allowed_emails."""
+    if grant.get("revoked"):
+        return "revoked"
+    if _expired(grant.get("expires_at")):
+        return "expired"
+    if grant.get("mode") == "restricted":
+        allowed = {e.lower() for e in grant.get("allowed_emails", [])}
+        if not user_email or user_email.lower() not in allowed:
+            return "not_allowed"
+    return None
 
 
 def _doc_ref(doc: dict) -> dict:
@@ -340,16 +378,18 @@ class SqlAlchemyTranscriptStore:
             )).scalars().first()
             if owned:
                 return owned.id  # (a) owner
-            if member_workspaces:
-                rows = (await db.execute(
-                    select(Meeting).where(
-                        Meeting.platform == platform,
-                        Meeting.platform_specific_id == native_meeting_id,
-                    )
-                )).scalars().all()
-                for mtg in rows:  # (b) member of the meeting's bound shared workspace
-                    if isinstance(mtg.data, dict) and mtg.data.get("workspace_id") in member_workspaces:
-                        return mtg.id
+            rows = (await db.execute(
+                select(Meeting).where(
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                )
+            )).scalars().all()
+            for mtg in rows:
+                data = mtg.data if isinstance(mtg.data, dict) else {}
+                if member_workspaces and data.get("workspace_id") in member_workspaces:
+                    return mtg.id  # (b) member of the meeting's bound shared workspace (optional convenience)
+                if user_id in (data.get("transcript_viewers") or []):
+                    return mtg.id  # (c) redeemed an INDEPENDENT transcript-share link for this meeting
             return None
 
     async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> "Optional[str]":
@@ -378,6 +418,79 @@ class SqlAlchemyTranscriptStore:
             flag_modified(meeting, "data")
             await db.commit()
             return workspace_id
+
+    async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
+                                    mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
+        """OWNER-scoped: mint an INDEPENDENT transcript share grant (no workspace needed). Stored in
+        ``data.share_grants[]`` as {id, secret_hash, mode, allowed_emails, expires_at, revoked} — only the
+        HASH, never the token. Returns {id, token, ...} ONCE (token = ``<meeting_id>.<secret>`` so redeem
+        resolves the meeting). None if the caller owns no such meeting."""
+        from datetime import timedelta
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (select(Meeting).where(
+                Meeting.user_id == user_id, Meeting.platform == platform,
+                Meeting.platform_specific_id == native_meeting_id,
+            ).order_by(Meeting.created_at.desc()).limit(1).with_for_update())
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return None
+            secret = secrets.token_urlsafe(24)
+            gid = secrets.token_hex(8)
+            expires_at = (_now() + timedelta(seconds=int(expires_in_sec))).isoformat()
+            grant = {"id": gid, "secret_hash": _sha(secret), "mode": mode,
+                     "allowed_emails": list(allowed_emails or []), "expires_at": expires_at, "revoked": False}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            data["share_grants"] = list(data.get("share_grants", [])) + [grant]
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return {"id": gid, "token": f"{meeting.id}.{secret}", "mode": mode, "expires_at": expires_at}
+
+    async def redeem_transcript_share(self, user_id, user_email, token) -> "Optional[dict]":
+        """Redeem a transcript share token (any authenticated user) → grants THIS user subscribe access to
+        that meeting's live feed (adds them to ``data.transcript_viewers[]``). Token = ``<meeting_id>.<secret>``.
+        Returns {meeting_id, ok} on success, {error} on an invalid/expired/not-allowed grant, or None if the
+        token is malformed / the meeting is gone. Cross-user by design — the capability token IS the authz."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        if not token or "." not in token:
+            return None
+        mid_s, secret = token.split(".", 1)
+        try:
+            mid = int(mid_s)
+        except ValueError:
+            return None
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == mid).with_for_update()
+            )).scalars().first()
+            if not meeting or not isinstance(meeting.data, dict):
+                return None
+            data = dict(meeting.data)
+            h = _sha(secret)
+            grant = next((g for g in data.get("share_grants", []) if g.get("secret_hash") == h), None)
+            if not grant:
+                return {"error": "invalid"}
+            err = validate_transcript_grant(grant, user_email)
+            if err:
+                return {"error": err}
+            viewers = list(data.get("transcript_viewers", []))
+            if user_id not in viewers:
+                viewers.append(user_id)
+            data["transcript_viewers"] = viewers
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return {"meeting_id": mid, "ok": True}
 
     async def append_segment(self, meeting_id, segment) -> None:
         # Live segments land in the Redis hash (``meeting:{id}:segments``), flushed to Postgres by

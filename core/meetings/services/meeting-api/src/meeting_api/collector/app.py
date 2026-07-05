@@ -281,6 +281,61 @@ def build_router(
         )
         return JSONResponse(content={"workspace_id": bound})
 
+    # --- POST /meetings/{platform}/{native_meeting_id}/share → mint an INDEPENDENT transcript share link
+    # (capability token). Owner-scoped. open|restricted(+allowed_emails), TTL. The token is returned ONCE
+    # (only its hash is stored). Redeemed at POST /transcripts/share/accept — NO workspace involved. ---
+    @router.post("/meetings/{platform}/{native_meeting_id}/share")
+    async def mint_transcript_share(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        mode = str(payload.get("mode", "open")).strip() or "open"
+        emails = payload.get("allowed_emails") or []
+        ttl = int(payload.get("expires_in_sec", 86400) or 86400)
+        minted = await store.mint_transcript_share(
+            user_id, platform, native_meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
+        )
+        if minted is None:
+            raise HTTPException(status_code=404, detail=f"Meeting not found for {platform}/{native_meeting_id}")
+        log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
+                  user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}", fields={"mode": mode})
+        return JSONResponse(content=minted)
+
+    # --- POST /transcripts/share/accept → redeem a transcript share token (any authenticated user) →
+    # subscribe access to that meeting's live feed. Token carries the meeting; NO workspace. ---
+    @router.post("/transcripts/share/accept")
+    async def accept_transcript_share(
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+        x_user_email: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        token = str(payload.get("token", "")).strip() if isinstance(payload, dict) else ""
+        if not token:
+            raise HTTPException(status_code=422, detail="'token' is required")
+        result = await store.redeem_transcript_share(user_id, x_user_email, token)
+        if result is None:
+            raise HTTPException(status_code=404, detail="invalid or unknown share token")
+        if result.get("error"):
+            code = 403 if result["error"] in ("not_allowed", "revoked", "expired") else 400
+            raise HTTPException(status_code=code, detail=result["error"])
+        log_event("transcript_share_accepted", audience="user", span="meetings.transcript.accept",
+                  user_id=user_id, meeting_id=str(result.get("meeting_id")), fields={})
+        return JSONResponse(content=result)
+
     # --- POST /meetings/{platform}/{native_meeting_id}/docs → connect a workspace doc to a meeting.
     # Appends {workspace, path, title?, kind?} to meeting.data['docs'], deduped by path (idempotent).
     # Owner-scoped. Returns the updated docs array. Doc bodies live in the agent workspace — only the

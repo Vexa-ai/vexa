@@ -201,11 +201,15 @@ class InMemoryTranscriptStore:
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is not None:
             return mid  # (a) owner
-        if member_workspaces:  # (b) member of the meeting's bound shared workspace
-            for m_id, m in self._meetings.items():
-                if (m.get("platform") == platform and m.get("native_meeting_id") == native_meeting_id
-                        and isinstance(m.get("data"), dict) and m["data"].get("workspace_id") in member_workspaces):
-                    return m_id
+        for m_id, m in self._meetings.items():
+            if not (m.get("platform") == platform and m.get("native_meeting_id") == native_meeting_id
+                    and isinstance(m.get("data"), dict)):
+                continue
+            data = m["data"]
+            if member_workspaces and data.get("workspace_id") in member_workspaces:
+                return m_id  # (b) member of the bound workspace
+            if user_id in (data.get("transcript_viewers") or []):
+                return m_id  # (c) redeemed an independent transcript-share link
         return None
 
     async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id):
@@ -214,6 +218,46 @@ class InMemoryTranscriptStore:
             return None
         self._meetings[mid]["data"]["workspace_id"] = workspace_id
         return workspace_id
+
+    async def mint_transcript_share(self, user_id, platform, native_meeting_id, *,
+                                    mode="open", allowed_emails=None, expires_in_sec=86400):
+        from datetime import timedelta
+
+        from .adapters import _now, _sha
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        import secrets
+        secret = secrets.token_urlsafe(24)
+        gid = secrets.token_hex(8)
+        expires_at = (_now() + timedelta(seconds=int(expires_in_sec))).isoformat()
+        grant = {"id": gid, "secret_hash": _sha(secret), "mode": mode,
+                 "allowed_emails": list(allowed_emails or []), "expires_at": expires_at, "revoked": False}
+        self._meetings[mid]["data"].setdefault("share_grants", []).append(grant)
+        return {"id": gid, "token": f"{mid}.{secret}", "mode": mode, "expires_at": expires_at}
+
+    async def redeem_transcript_share(self, user_id, user_email, token):
+        from .adapters import _sha, validate_transcript_grant
+        if not token or "." not in token:
+            return None
+        mid_s, secret = token.split(".", 1)
+        try:
+            mid = int(mid_s)
+        except ValueError:
+            return None
+        m = self._meetings.get(mid)
+        if not m:
+            return None
+        grant = next((g for g in m["data"].get("share_grants", []) if g.get("secret_hash") == _sha(secret)), None)
+        if not grant:
+            return {"error": "invalid"}
+        err = validate_transcript_grant(grant, user_email)
+        if err:
+            return {"error": err}
+        viewers = m["data"].setdefault("transcript_viewers", [])
+        if user_id not in viewers:
+            viewers.append(user_id)
+        return {"meeting_id": mid, "ok": True}
 
     async def connect_doc(self, user_id, platform, native_meeting_id, doc):
         from .adapters import _upsert_doc

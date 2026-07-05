@@ -81,6 +81,21 @@ class TranscriptStore(Protocol):
         subscribe to the live feed. Returns the bound id, or ``None`` when the user owns no such meeting."""
         ...
 
+    async def mint_transcript_share(
+        self, user_id: int, platform: str, native_meeting_id: str, *,
+        mode: str = "open", allowed_emails: "Optional[list]" = None, expires_in_sec: int = 86400,
+    ) -> "Optional[dict]":
+        """OWNER-scoped: mint an INDEPENDENT transcript share grant (``data.share_grants[]``, hash-at-rest).
+        Returns {id, token, ...} once, or ``None`` when the user owns no such meeting."""
+        ...
+
+    async def redeem_transcript_share(
+        self, user_id: int, user_email: "Optional[str]", token: str
+    ) -> "Optional[dict]":
+        """Redeem a transcript share token (any authed user) → adds them to ``data.transcript_viewers[]``.
+        Returns {meeting_id, ok}, {error}, or ``None`` (malformed/unknown token). The token IS the authz."""
+        ...
+
     async def append_segment(self, meeting_id: int, segment: dict) -> None:
         """Persist one ingested transcript segment for ``meeting_id`` (keyed by its
         ``segment_id`` — stable identity, last-write-wins, exactly the collector's Redis-hash
