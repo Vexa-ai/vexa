@@ -838,3 +838,136 @@ def test_bot_callback_evidence_still_completes_during_runtime_desync():
     })
     assert r.status_code == 200
     assert repo._meetings[m["id"]]["status"] == "completed"
+
+
+# ── bounded untracked escalation (the zombie-loop fix) ───────────────────────────────────────────
+# "Untracked, never reap" is right as a reflex but wrong as a steady state: on the process backend a
+# runtime restart kills the workers WITH the runtime (adopt() is a no-op, no callback will ever
+# come), so every meeting live across the restart would loop `untracked` + a dead DELETE at error
+# level every sweep, forever. The sweep now tracks CONTINUOUS untracked observations per meeting;
+# past the window (MEETING_UNTRACKED_GRACE_SEC) with no recovery the meeting advances to `failed`
+# carrying the evidence note. Recovery — runtime re-adoption OR a bot heartbeat/callback — resets
+# the window, so the escalation only ever fires on a genuinely lost workload.
+
+def _run_general_sweep_esc(client, repo, runtime, tracker, *, untracked_grace,
+                           stop_grace=45.0, active_grace=300.0):
+    """One general sweep with an INJECTED untracked-tracker + escalation window."""
+    import logging
+
+    async def _post_cb(body: dict):
+        return client.post(ENDPOINT, json=body).status_code
+
+    return asyncio.run(reconcile_stale_nonterminal_sweep(
+        repo, runtime, _post_cb, stop_grace=stop_grace, active_grace=active_grace,
+        log=logging.getLogger("test.reconcile"),
+        untracked_grace=untracked_grace, untracked_since=tracker,
+    ))
+
+
+def _make_stale(repo, meeting_id) -> None:
+    """Push a row's updated_at far into the past (quiet past any grace window)."""
+    repo._meetings[meeting_id]["updated_at"] = "2026-06-20T00:00:00+00:00"
+
+
+def test_untracked_blip_does_not_escalate():
+    """A SHORT untracked blip (runtime restarting) must NOT escalate: the runtime re-adopts the
+    workload, the probe answers alive again, and the window resets — even with a zero grace."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-blip"
+    runtime = FakeRuntimeClient(workloads={})          # runtime just restarted: knows nothing
+    client = TestClient(create_app(meeting_repo=repo))
+    tracker: dict = {}
+
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert repo._meetings[m["id"]]["status"] == "active"   # first observation only opens the window
+    assert m["id"] in tracker
+
+    # The runtime finishes booting and RE-ADOPTS the live bot — the probe answers alive again.
+    runtime._workloads["wl-blip"] = {"workloadId": "wl-blip", "state": "running"}
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert repo._meetings[m["id"]]["status"] == "active"
+    assert tracker == {}, "recovery must reset the untracked window"
+
+    # A LATER desync starts a FRESH window — the old blip never counts toward it.
+    runtime._workloads.pop("wl-blip")
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert repo._meetings[m["id"]]["status"] == "active"
+
+
+def test_continuous_untracked_past_window_escalates_once_with_evidence():
+    """CONTINUOUS untracked past the window (runtime restart on the process backend: the workers
+    died with it, no callback will ever come) escalates the meeting to `failed` EXACTLY ONCE, with
+    the evidence note recorded on the transition — and the 15s error/DELETE loop stops (the
+    terminal row leaves the sweep's listing)."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-lost"
+    runtime = FakeRuntimeClient(workloads={})          # untracked forever — nothing will re-adopt
+    client = TestClient(create_app(meeting_repo=repo))
+    tracker: dict = {}
+
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert repo._meetings[m["id"]]["status"] == "active"   # window opened, not yet elapsed
+
+    n = _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0)
+    assert n == 1, "continuous untracked past the window must escalate"
+    assert repo._meetings[m["id"]]["status"] == "failed"
+    assert runtime.deleted == []                            # nothing was blindly torn down
+    assert tracker == {}
+    # The evidence note rides the transition: what was unaccountable, and the policy applied.
+    data = repo._meetings[m["id"]]["data"]
+    trail = data.get("status_transition", [])
+    assert any("presumed lost" in (t.get("reason") or "") for t in trail), trail
+
+    # Exactly once: the terminal row is no longer listed — the loop has converged.
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert repo._meetings[m["id"]]["status"] == "failed"
+
+
+def test_stopping_untracked_past_window_escalates_too():
+    """The `stopping` zombie (user pressed Stop, then the runtime restarted on the process backend):
+    the teardown stays unconfirmable (404) forever — past the window it converges to `failed`
+    instead of retrying the dead DELETE every sweep for eternity."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-gone"
+    repo._meetings[m["id"]]["data"]["stop_requested"] = True
+    runtime = FakeRuntimeClient(workloads={})
+    client = TestClient(create_app(meeting_repo=repo))
+    tracker: dict = {}
+
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert repo._meetings[m["id"]]["status"] == "stopping"  # window opened
+
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 1
+    assert repo._meetings[m["id"]]["status"] == "failed"
+    assert runtime.deleted == []
+
+
+def test_bot_callback_mid_window_cancels_escalation():
+    """A sign of life mid-window — the bot's callback/heartbeat bumping the row — cancels the
+    escalation: the row leaves the stale listing, the window resets, and a LATER quiet spell starts
+    from zero. The meeting is never failed under a live bot."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-alive"
+    runtime = FakeRuntimeClient(workloads={})
+    client = TestClient(create_app(meeting_repo=repo))
+    tracker: dict = {}
+
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert m["id"] in tracker                               # window opened
+
+    # Mid-window the bot proves it is alive (its callback/heartbeat bumps the row's updated_at —
+    # exactly what the receiver's persist does): the row is no longer stale.
+    _set_updated_now(repo, m["id"])
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert tracker == {}, "a bot sign-of-life must cancel the pending escalation"
+    assert repo._meetings[m["id"]]["status"] == "active"
+
+    # The meeting goes quiet again LATER, still untracked: a fresh window — no instant escalation
+    # from the stale pre-callback observation.
+    _make_stale(repo, m["id"])
+    assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
+    assert repo._meetings[m["id"]]["status"] == "active"

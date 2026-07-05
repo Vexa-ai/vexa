@@ -155,6 +155,11 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     # this window. With that gate in place, 300s is a SANE default again (the 86400 env stopgap, which
     # only worked because it disabled the time-based reap entirely, is no longer needed).
     active_grace = float(os.getenv("RECONCILE_ACTIVE_GRACE_S", "300"))
+    # Bounded untracked escalation (the zombie-loop fix): a meeting whose workload stays UNTRACKED
+    # (runtime 404) CONTINUOUSLY past this window — no runtime re-adoption, no bot callback — is
+    # presumed lost (runtime restart on the process backend / external removal) and advanced to
+    # `failed` with the evidence note, instead of retrying an error + dead DELETE every sweep forever.
+    untracked_grace = float(os.getenv("MEETING_UNTRACKED_GRACE_SEC", "600"))
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
@@ -239,6 +244,7 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
                     await reconcile_stale_nonterminal_sweep(
                         meeting_repo, runtime, _post_lifecycle,
                         stop_grace=stop_grace, active_grace=active_grace, log=log,
+                        untracked_grace=untracked_grace,
                     )
                 await reconcile_stale_stopping_sweep(
                     meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
