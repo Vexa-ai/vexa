@@ -763,6 +763,87 @@ async def transcribe_meeting_proxy(meeting_id: int, request: Request):
     url = f"{MEETING_API_URL}/meetings/{meeting_id}/transcribe"
     return await forward_request(app.state.http_client, "POST", url, request)
 
+
+# --- Grainbox Internal Meeting Intelligence Routes ---
+@app.post("/internal/meetings/{meeting_id}/ai-notes",
+          tags=["Meeting Intelligence"],
+          summary="Generate or regenerate AI notes for a meeting",
+          dependencies=[Depends(api_key_scheme)])
+async def regenerate_ai_notes_proxy(meeting_id: int, request: Request):
+    """Forward AI notes regeneration to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/meetings/{meeting_id}/ai-notes"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
+@app.get("/internal/meetings/{meeting_id}/highlights",
+         tags=["Meeting Intelligence"],
+         summary="List highlights for a meeting",
+         dependencies=[Depends(api_key_scheme)])
+async def list_highlights_proxy(meeting_id: int, request: Request):
+    """Forward highlight listing to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/meetings/{meeting_id}/highlights"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+
+@app.post("/internal/meetings/{meeting_id}/highlights",
+          tags=["Meeting Intelligence"],
+          summary="Create a highlight for a meeting",
+          dependencies=[Depends(api_key_scheme)])
+async def create_highlight_proxy(meeting_id: int, request: Request):
+    """Forward highlight creation to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/meetings/{meeting_id}/highlights"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
+@app.put("/internal/highlights/{highlight_id}",
+         tags=["Meeting Intelligence"],
+         summary="Update a highlight",
+         dependencies=[Depends(api_key_scheme)])
+async def update_highlight_proxy(highlight_id: int, request: Request):
+    """Forward highlight update to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/highlights/{highlight_id}"
+    return await forward_request(app.state.http_client, "PUT", url, request)
+
+
+@app.delete("/internal/highlights/{highlight_id}",
+            tags=["Meeting Intelligence"],
+            summary="Delete a highlight",
+            dependencies=[Depends(api_key_scheme)])
+async def delete_highlight_proxy(highlight_id: int, request: Request):
+    """Forward highlight deletion to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/highlights/{highlight_id}"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
+
+
+@app.post("/internal/highlights/{highlight_id}/generate-clip",
+          tags=["Meeting Intelligence"],
+          summary="Generate a share token for a highlight clip",
+          dependencies=[Depends(api_key_scheme)])
+async def generate_highlight_clip_proxy(highlight_id: int, request: Request):
+    """Forward highlight clip generation to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/highlights/{highlight_id}/generate-clip"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
+@app.get("/internal/search",
+         tags=["Meeting Intelligence"],
+         summary="Search meeting transcripts",
+         dependencies=[Depends(api_key_scheme)])
+async def search_meetings_proxy(request: Request):
+    """Forward meeting archive search to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/search"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+
+@app.post("/internal/search/ask",
+          tags=["Meeting Intelligence"],
+          summary="Ask a question across meeting transcripts",
+          dependencies=[Depends(api_key_scheme)])
+async def ask_meetings_proxy(request: Request):
+    """Forward meeting archive Q&A to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/search/ask"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
 # --- Transcription Collector Routes ---
 @app.get("/meetings",
         tags=["Transcriptions"],

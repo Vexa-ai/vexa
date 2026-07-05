@@ -96,6 +96,24 @@ class TestMeetingRoutes:
         assert ("DELETE", "/meetings/{platform}/{native_meeting_id}") in ROUTES
 
 
+class TestMeetingIntelligenceRoutes:
+    def test_ai_notes_exists(self):
+        assert ("POST", "/internal/meetings/{meeting_id}/ai-notes") in ROUTES
+
+    def test_meeting_highlights_exists(self):
+        assert ("GET", "/internal/meetings/{meeting_id}/highlights") in ROUTES
+        assert ("POST", "/internal/meetings/{meeting_id}/highlights") in ROUTES
+
+    def test_highlight_mutation_exists(self):
+        assert ("PUT", "/internal/highlights/{highlight_id}") in ROUTES
+        assert ("DELETE", "/internal/highlights/{highlight_id}") in ROUTES
+        assert ("POST", "/internal/highlights/{highlight_id}/generate-clip") in ROUTES
+
+    def test_search_exists(self):
+        assert ("GET", "/internal/search") in ROUTES
+        assert ("POST", "/internal/search/ask") in ROUTES
+
+
 class TestWebSocketRoute:
     def test_ws_route_exists(self):
         ws_paths = [r.path for r in app.routes if hasattr(r, "path") and "websocket" in type(r).__name__.lower()]

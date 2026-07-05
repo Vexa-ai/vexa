@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Search, X, Clock, Users, FileText } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Search, X, Clock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { withBasePath } from "@/lib/base-path";
 
 interface SearchResult {
   meeting: {
@@ -12,7 +12,7 @@ interface SearchResult {
     native_id: string;
     status: string;
     start_time?: string;
-    data?: Record<string, any>;
+    data?: Record<string, unknown>;
   };
   matched_segments: Array<{
     text: string;
@@ -42,15 +42,23 @@ export function SearchBar({ onSearch }: SearchBarProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  const defaultSearch = async (value: string): Promise<SearchResult[]> => {
+    const res = await fetch(withBasePath(`/api/vexa/internal/search?q=${encodeURIComponent(value)}`));
+    if (!res.ok) throw new Error("Search failed");
+    const data = await res.json();
+    return data.results || [];
+  };
+
   const handleSearch = async () => {
-    if (!query.trim() || !onSearch) return;
+    if (!query.trim()) return;
     setLoading(true);
     setActive(true);
     try {
-      const resp = await onSearch(query);
+      const resp = await (onSearch || defaultSearch)(query);
       setResults(resp);
     } catch (err) {
       console.error("Search failed:", err);
+      setResults([]);
     }
     setLoading(false);
   };
