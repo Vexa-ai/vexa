@@ -1,6 +1,6 @@
 "use client";
 import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useLiveMeetings, fetchTranscript } from "../surfaces/liveMeetings";
+import { useLiveMeetings, fetchDurableTranscript, mergeNotesById, type DurableTranscript } from "../surfaces/liveMeetings";
 import { meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/meetingModel";
 import { useMeetingLive } from "../surfaces/meetingLive";
 import { useCanvasActionState } from "./actions";
@@ -277,16 +277,18 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   );
   const live = useMeetingLive(selected.id, selected.session_uid ?? "");
   const actions = useCanvasActionState();
-  const [recorded, setRecorded] = useState<TranscriptLine[]>([]);
+  const [durable, setDurable] = useState<DurableTranscript>({ lines: [], notes: [] });
 
+  // Hydrate from the DURABLE store (segments + persisted processed notes). Runs for past AND live
+  // meetings: past → this is the only source (the copilot stream is gone once the bot stops); live →
+  // it seeds notes already persisted before this client connected (page opened mid-meeting), with
+  // live deltas merged over the seed by note id. Re-runs when session_uid flips (meeting ended).
   useEffect(() => {
-    if (selected.session_uid || !selected.native_id) {
-      setRecorded([]);
-      return;
-    }
+    setDurable({ lines: [], notes: [] });
+    if (!selected.native_id) return;
     let cancelled = false;
-    void fetchTranscript(selected.platform, selected.native_id).then((lines) => {
-      if (!cancelled) setRecorded(lines);
+    void fetchDurableTranscript(selected.platform, selected.native_id).then((next) => {
+      if (!cancelled) setDurable(next);
     });
     return () => { cancelled = true; };
   }, [selected.id, selected.native_id, selected.platform, selected.session_uid]);
@@ -303,7 +305,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       docs: safeArray(selected.docs),
     };
     const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t, tsMs: s.tsMs, completed: s.completed }));
-    const recordedSegments = safeArray(recorded).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
+    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
@@ -364,7 +366,9 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       transcript: {
         segments,
         liveCaption: selected.session_uid ? latestCaption(live.transcript, live.note) : undefined,
-        notes: safeArray(live.notes).map((note) => ({
+        // Durable seed (persisted copilot view) with live deltas merged over it by note id — the
+        // same rule the db-writer uses, so a live re-emit updates in place and never duplicates.
+        notes: mergeNotesById(safeArray(durable.notes), safeArray(live.notes)).map((note) => ({
           id: note.id,
           speaker: note.speaker,
           chapter: note.chapter,
@@ -399,7 +403,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     live.notes,
     live.reconnects,
     live.transcript,
-    recorded,
+    durable,
     selected,
   ]);
 }
