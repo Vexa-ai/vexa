@@ -38,11 +38,11 @@ class TranscriptStore(Protocol):
         ...
 
     async def get_transcript_by_id(
-        self, user_id: int, meeting_id: int
+        self, user_id: int, meeting_id: int, member_workspaces: "Optional[set[str]]" = None
     ) -> Optional[dict]:
-        """The transcript document for a SPECIFIC meeting ROW (``meeting.id``), owner-scoped by
-        ``user_id`` — the same api.v1 ``TranscriptionResponse`` shape ``get_transcript`` returns,
-        or ``None`` when the user owns no row with that id.
+        """The transcript document for a SPECIFIC meeting ROW (``meeting.id``), authorized by owner OR
+        transcript-share viewer OR bound-workspace member (``member_workspaces``) — the same api.v1
+        ``TranscriptionResponse`` shape ``get_transcript`` returns, or ``None`` when unauthorized.
 
         P0 (wrong-row hydration fix): ``get_transcript`` resolves ``(user, platform, native_id)`` to
         the NEWEST matching row, so a user with several rows on the same native link always reads the

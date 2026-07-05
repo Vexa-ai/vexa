@@ -65,3 +65,21 @@ def test_bad_token_is_404():
     client = _client()
     r = client.post("/transcripts/share/accept", json={"token": "999.nope"}, headers={"x-user-id": str(VISITOR)})
     assert r.status_code == 404
+
+
+def test_visitor_can_LOAD_the_transcript_after_redeem():
+    """After redeeming, the recipient can READ the durable transcript by id — not just subscribe."""
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(user_id=OWNER, platform=PLAT, native_meeting_id=NID,
+                             segments=[{"segment_id": "s1", "text": "hello", "speaker": "A"}])
+    client = TestClient(create_app(store, redis=None))
+    token = client.post(f"/meetings/{PLAT}/{NID}/share", json={"mode": "open"}, headers={"x-user-id": str(OWNER)}).json()["token"]
+
+    # before redeem: a stranger reading the row by id is refused (P0 — no leak)
+    assert client.get(f"/transcripts/by-id/{mid}", headers={"x-user-id": str(VISITOR)}).status_code == 404
+    client.post("/transcripts/share/accept", json={"token": token}, headers={"x-user-id": str(VISITOR)})
+    # after redeem: the recipient loads the durable transcript
+    ok = client.get(f"/transcripts/by-id/{mid}", headers={"x-user-id": str(VISITOR)})
+    assert ok.status_code == 200 and ok.json()["segments"]
+    # a still-unrelated user remains refused
+    assert client.get(f"/transcripts/by-id/{mid}", headers={"x-user-id": str(OTHER)}).status_code == 404

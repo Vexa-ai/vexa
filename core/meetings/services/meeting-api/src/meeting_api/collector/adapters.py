@@ -301,10 +301,11 @@ class SqlAlchemyTranscriptStore:
                 return None
             return await self._transcript_doc(db, meeting)
 
-    async def get_transcript_by_id(self, user_id, meeting_id) -> Optional[dict]:
-        """Exact-row transcript, owner-scoped (P0 wrong-row hydration fix). Resolve ``meeting.id ==
-        meeting_id AND meeting.user_id == user_id`` — a row owned by another user (or absent) returns
-        ``None`` (→ 404), so this can never leak a different tenant's transcript."""
+    async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
+        """Exact-row transcript for ``meeting.id == meeting_id``, authorized by the SAME three-way rule as
+        authorize_subscribe: (a) owner, (b) member of the bound workspace, (c) redeemed a transcript-share
+        link (``data.transcript_viewers``). Any other caller → ``None`` (→ 404), so it can never leak an
+        unrelated tenant's transcript (P0) while letting a shared recipient load the durable feed."""
         from sqlalchemy import select
 
         from .models import Meeting
@@ -314,9 +315,16 @@ class SqlAlchemyTranscriptStore:
         except (TypeError, ValueError):
             return None
         async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id)
-            meeting = (await db.execute(stmt)).scalars().first()
+            meeting = (await db.execute(select(Meeting).where(Meeting.id == mid))).scalars().first()
             if not meeting:
+                return None
+            data = meeting.data if isinstance(meeting.data, dict) else {}
+            authorized = (
+                meeting.user_id == user_id                                          # (a) owner
+                or user_id in (data.get("transcript_viewers") or [])                # (c) transcript-share
+                or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)  # (b) bound ws member
+            )
+            if not authorized:
                 return None
             return await self._transcript_doc(db, meeting)
 

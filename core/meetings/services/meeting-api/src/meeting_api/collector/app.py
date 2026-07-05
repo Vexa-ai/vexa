@@ -121,9 +121,11 @@ def build_router(
         meeting_id: int,
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        doc = await store.get_transcript_by_id(user_id, meeting_id)
+        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        doc = await store.get_transcript_by_id(user_id, meeting_id, member_workspaces)
         if doc is None:
             log_event(
                 "transcript_not_found", audience="system", level="warning",

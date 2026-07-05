@@ -154,17 +154,23 @@ class InMemoryTranscriptStore:
             return None
         return await self._transcript_doc(mid)
 
-    async def get_transcript_by_id(self, user_id, meeting_id) -> Optional[dict]:
-        """Exact-row transcript, owner-scoped (P0 wrong-row hydration fix): the row must exist AND be
-        owned by ``user_id`` — else ``None`` (a different tenant's row never leaks)."""
+    async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
+        """Exact-row transcript authorized by owner OR transcript-viewer OR bound-workspace member (mirrors
+        authorize_subscribe) — any other caller → ``None`` (a different tenant's row never leaks)."""
         try:
             mid = int(meeting_id)
         except (TypeError, ValueError):
             return None
         m = self._meetings.get(mid)
-        if m is None or m.get("user_id") != user_id:
+        if m is None:
             return None
-        return await self._transcript_doc(mid)
+        data = m.get("data") if isinstance(m.get("data"), dict) else {}
+        authorized = (
+            m.get("user_id") == user_id
+            or user_id in (data.get("transcript_viewers") or [])
+            or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)
+        )
+        return await self._transcript_doc(mid) if authorized else None
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None):
         rows = [
