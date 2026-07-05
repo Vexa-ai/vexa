@@ -66,16 +66,30 @@ function ProcessedTranscript() {
   );
 }
 
-export function MeetingCanvasView({ meetingId }: { meetingId?: string }) {
-  // Default OFF → deliver the RAW transcript; the user flips it ON to get the processed canvas.
-  const [processing, setProcessing] = useState(false);
+/** Default view when the user hasn't touched the toggle:
+ *  - LIVE meeting → raw (unchanged): processing is an explicit opt-in that arms the copilot.
+ *  - COMPLETED meeting → processed IF durable notes were persisted (they're the meeting's real
+ *    output; defaulting to raw made users think their processed notes were lost), else raw. */
+export function defaultProcessingView(live: boolean, hasNotes: boolean): boolean {
+  return !live && hasNotes;
+}
 
-  // The toggle ALSO controls backend processing: ON enables the copilot (full-history backfill the
-  // first time, else resume); OFF disables it so nothing is processed. The raw transcript is unaffected.
+function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
+  const { meeting, transcript } = useMeeting();
+  const live = meeting.live === true;
+  const hasNotes = (transcript.notes?.length ?? 0) > 0;
+
+  // null = untouched → follow the default (which can flip once the durable notes hydrate).
+  const [override, setOverride] = useState<boolean | null>(null);
+  const processing = override ?? defaultProcessingView(live, hasNotes);
+
+  // LIVE: the toggle ALSO controls backend processing — ON enables the copilot (full-history backfill
+  // the first time, else resume); OFF disables it. COMPLETED: pure view switch — there is nothing to
+  // arm any more, so we must NOT hit the process endpoint.
   const toggleProcessing = () => {
     const next = !processing;
-    setProcessing(next);
-    if (meetingId) {
+    setOverride(next);
+    if (meetingId && live) {
       void fetch("/api/meeting/process", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ native_id: meetingId, on: next }),
@@ -83,37 +97,46 @@ export function MeetingCanvasView({ meetingId }: { meetingId?: string }) {
     }
   };
 
+  // Completed meetings get view names (nothing is "processing" any more); live keeps the arm/disarm wording.
+  const label = live ? `Processing ${processing ? "on" : "off"}` : (processing ? "Processed" : "Raw");
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)" }}>
+      <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, padding: `8px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
+        <button
+          type="button"
+          onClick={toggleProcessing}
+          aria-pressed={processing}
+          title={processing ? "Showing the cleaned, copilot-processed view" : (live ? "Showing the raw transcript — flip on for processing" : "Showing the raw transcript")}
+          style={{
+            display: "flex", alignItems: "center", gap: 7, cursor: "pointer",
+            background: processing ? "var(--accent)" : "transparent",
+            color: processing ? "#241008" : "var(--t2)",
+            border: `1px solid ${processing ? "var(--accent)" : "var(--line2)"}`,
+            borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 600,
+          }}
+        >
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: processing ? "#241008" : "var(--t3)", flex: "none" }} />
+          {label}
+        </button>
+        <span style={{ fontSize: 11.5, color: "var(--t3)" }}>{processing ? "cleaned + copilot" : "raw transcript"}</span>
+      </div>
+      <MeetingHealthBanner />
+      <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
+          {processing ? <ProcessedTranscript /> : <RawTranscript />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export function MeetingCanvasView({ meetingId }: { meetingId?: string }) {
   return (
     <MeetingScopeProvider meetingId={meetingId}>
       <MeetingSourceProvider meetingId={meetingId}>
         <CanvasActionsProvider>
-          <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)" }}>
-            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, padding: `8px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
-              <button
-                type="button"
-                onClick={toggleProcessing}
-                aria-pressed={processing}
-                title={processing ? "Showing the cleaned, copilot-processed view" : "Showing the raw transcript — flip on for processing"}
-                style={{
-                  display: "flex", alignItems: "center", gap: 7, cursor: "pointer",
-                  background: processing ? "var(--accent)" : "transparent",
-                  color: processing ? "#241008" : "var(--t2)",
-                  border: `1px solid ${processing ? "var(--accent)" : "var(--line2)"}`,
-                  borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 600,
-                }}
-              >
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: processing ? "#241008" : "var(--t3)", flex: "none" }} />
-                Processing {processing ? "on" : "off"}
-              </button>
-              <span style={{ fontSize: 11.5, color: "var(--t3)" }}>{processing ? "cleaned + copilot" : "raw transcript"}</span>
-            </div>
-            <MeetingHealthBanner />
-            <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-              <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
-                {processing ? <ProcessedTranscript /> : <RawTranscript />}
-              </div>
-            </main>
-          </div>
+          <MeetingCanvasBody meetingId={meetingId} />
         </CanvasActionsProvider>
       </MeetingSourceProvider>
     </MeetingScopeProvider>

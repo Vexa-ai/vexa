@@ -74,6 +74,7 @@ export interface MeetingState {
     nativeId?: string;
     title: string;
     status?: string;
+    live?: boolean;             // true while the backend session is live (session_uid present)
     startedAt?: string;
     participants?: string[];
     docs?: { path: string; title?: string; kind?: string; present?: boolean }[];
