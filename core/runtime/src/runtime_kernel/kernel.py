@@ -81,6 +81,65 @@ class Runtime:
             raise KeyError(workload_id)
         return record
 
+    def _handle_for(self, workload_id: str) -> Optional[WorkloadHandle]:
+        """The live handle for a workload — re-derived from the substrate via the backend's
+        optional ``find`` when the in-process map lost it (a restarted runtime). Without this, a
+        post-restart ``stop``/``destroy`` would report success while the real container kept
+        running (the orphaned-live-bot defect)."""
+        h = self._handles.get(workload_id)
+        if h is None:
+            finder = getattr(self.backend, "find", None)
+            if finder is not None:
+                try:
+                    h = finder(workload_id)
+                except Exception:  # noqa: BLE001 — a failed lookup means "no handle", never a crash
+                    h = None
+                if h is not None:
+                    self._handles[workload_id] = h
+        return h
+
+    def adopt(self) -> int:
+        """Boot-time re-adoption (the orphaned-live-bot fix): ask the backend for the workload
+        containers it spawned that still exist on the substrate, re-attach live handles, and
+        re-register any record the (in-memory) store lost across the restart — so
+        ``GET /workloads/{id}`` answers truthfully after a runtime recreate instead of 404ing over
+        a still-running bot, and stop/destroy reach the real container again.
+
+        A still-running container re-registers as ``running``; an exited one as ``stopped`` with
+        its real exit code (EVIDENCE the control plane's lifecycle decisions can act on). Records
+        a durable store kept only get their handle re-attached. Returns the number of records
+        re-registered. Never raises — adoption must not block the boot."""
+        lister = getattr(self.backend, "list_workload_containers", None)
+        if lister is None:
+            return 0
+        try:
+            discovered = lister()
+        except Exception:  # noqa: BLE001 — discovery failure must not block the boot
+            return 0
+        adopted = 0
+        for info in discovered:
+            wid = info.get("workload_id")
+            name = info.get("name")
+            if not wid or not name:
+                continue
+            self._handles.setdefault(wid, WorkloadHandle(id=wid, impl=name))
+            if self.store.get(wid) is not None:
+                continue                       # durable store kept the record — handle was the gap
+            spec = WorkloadSpec(workloadId=wid, profile="adopted", env={})
+            status = WorkloadStatus(
+                workloadId=wid, profile=spec.profile,
+                state=RuntimeState.running, backend=self.backend.name,
+            )
+            if not info.get("running"):
+                code = info.get("exit_code")
+                status.state = RuntimeState.stopped
+                status.exitCode = code
+                status.stoppedAt = _now()
+                status.stopReason = StopReason.completed if code == 0 else StopReason.failed
+            self._persist(spec, status)
+            adopted += 1
+        return adopted
+
     # ── runtime.v1 operations ────────────────────────────────────────────────
     def create(self, spec: WorkloadSpec) -> WorkloadStatus:
         runnable = self.profiles.resolve(spec.profile)
@@ -118,7 +177,13 @@ class Runtime:
     def get(self, workload_id: str) -> WorkloadStatus:
         record = self._record(workload_id)
         status = record.status
-        handle = self._handles.get(workload_id)
+        # A running record with NO in-process handle (restart) re-derives one from the substrate,
+        # so the exit-reflection below stays truthful across a runtime recreate.
+        handle = (
+            self._handle_for(workload_id)
+            if status.state == RuntimeState.running
+            else self._handles.get(workload_id)
+        )
         # reflect a workload that exited on its own (only observable while we hold a live handle)
         if status.state == RuntimeState.running and handle is not None:
             code = self.backend.exit_code(handle)
@@ -142,7 +207,7 @@ class Runtime:
         status.state = RuntimeState.stopping
         self._persist(record.spec, status)
         self._emit(workload_id, RuntimeState.stopping)
-        h = self._handles.get(workload_id)
+        h = self._handle_for(workload_id)                           # re-derives post-restart handles
         if h is not None:
             self.backend.terminate(h)                               # graceful SIGTERM + grace window
             deadline = time.time() + self.grace_sec
@@ -163,9 +228,9 @@ class Runtime:
 
     def destroy(self, workload_id: str) -> WorkloadStatus:
         record = self._record(workload_id)
-        h = self._handles.get(workload_id)
+        h = self._handle_for(workload_id)                           # re-derives post-restart handles
         if h is not None:
-            self.backend.cleanup(h)
+            self.backend.cleanup(h)   # raises on an unconfirmed reclaim — destroyed is never a lie
         status = record.status
         status.state = RuntimeState.destroyed
         self._persist(record.spec, status)

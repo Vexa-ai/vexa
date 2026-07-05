@@ -18,7 +18,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .ports import DuplicateMeeting, MaxBotsExceeded, QuotaExceeded, SpawnFailed
+from .ports import (
+    DuplicateMeeting,
+    MaxBotsExceeded,
+    QuotaExceeded,
+    SpawnFailed,
+    WorkloadUnknown,
+)
 
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
 _TERMINAL_STATUSES = ("completed", "failed")
@@ -263,6 +269,10 @@ class FakeRuntimeClient:
         return {"workloadId": spec["workloadId"], "state": "starting"}
 
     async def delete_workload(self, workload_id: str) -> None:
+        # Mirrors the HTTP adapter: an id the kernel doesn't track raises WorkloadUnknown (404) —
+        # termination UNCONFIRMED. With the default (no map) every teardown is tracked + confirmed.
+        if self._workloads is not None and workload_id not in self._workloads:
+            raise WorkloadUnknown(workload_id)
         # Record the teardown so the partial-spawn test asserts the orphaned workload was torn down.
         self.deleted.append(workload_id)
         if self._workloads is not None:

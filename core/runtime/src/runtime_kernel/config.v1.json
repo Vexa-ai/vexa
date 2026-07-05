@@ -83,6 +83,13 @@
       "targets": []
     },
     {
+      "key": "RUNTIME_STOP_GRACE_SEC",
+      "class": "defaulted",
+      "default": "30",
+      "description": "grace (s) a stopping workload gets between SIGTERM and force-kill",
+      "targets": []
+    },
+    {
       "key": "BROWSER_IMAGE",
       "class": "capability",
       "capability": "bot_spawn",

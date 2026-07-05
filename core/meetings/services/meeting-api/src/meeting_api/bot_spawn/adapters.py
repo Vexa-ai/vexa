@@ -15,7 +15,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ..sessions import new_session
-from .ports import DuplicateMeeting, MaxBotsExceeded, QuotaExceeded, SpawnFailed
+from .ports import (
+    DuplicateMeeting,
+    MaxBotsExceeded,
+    QuotaExceeded,
+    SpawnFailed,
+    WorkloadUnknown,
+)
 
 
 def _row_to_dict(m) -> dict:
@@ -435,16 +441,29 @@ class HttpRuntimeClient:
         return resp.json()
 
     async def delete_workload(self, workload_id: str) -> None:
-        """Tear down a workload (``DELETE /workloads/{id}``) — the ROB3 partial-spawn compensation.
+        """Tear down a workload (``DELETE /workloads/{id}``) — teardown must be CONFIRMED.
 
-        Best-effort: a 404 (already gone) is fine, and any error is left for the caller to log; this
-        teardown must never mask the original post-spawn DB failure that triggered it."""
-        await self._client.delete(f"{self._url}/workloads/{workload_id}", timeout=30.0)
+        A 2xx means the kernel destroyed the workload (with kernel re-adoption that reaches the
+        real container even across a runtime restart). A 404 raises ``WorkloadUnknown``: the kernel
+        does not know the workload, so termination is UNCONFIRMED — a container may still be live
+        (the orphaned-live-bot incident treated exactly this 404 as success). Any other error
+        raises ``SpawnFailed``. Callers log loud and retry/backstop; they must never report a stop
+        as done on these."""
+        resp = await self._client.delete(
+            f"{self._url}/workloads/{workload_id}",
+            timeout=60.0,  # the kernel's graceful teardown can hold the request for its stop grace
+        )
+        if resp.status_code == 404:
+            raise WorkloadUnknown(workload_id)
+        if resp.status_code >= 400:
+            raise SpawnFailed(f"runtime kernel delete_workload returned {resp.status_code}")
 
     async def get_workload(self, workload_id: str) -> Optional[dict]:
-        """Liveness probe (``GET /workloads/{id}``). 404 → the kernel no longer tracks the workload
-        (the bot is GONE) → ``None``. Any other non-200 raises (treated by the caller as 'unknown,
-        do not reap' — fail safe toward NOT killing a possibly-live meeting)."""
+        """Liveness probe (``GET /workloads/{id}``). 404 → the kernel does not TRACK the workload →
+        ``None`` — which is NOT evidence the bot is gone (a recreated runtime forgets live bots);
+        the reconcile sweep treats it as 'untracked: fail loud, do not reap'. Any other non-200
+        raises (caller treats it as 'unknown, do not reap' — fail safe toward NOT killing a
+        possibly-live meeting)."""
         resp = await self._client.get(f"{self._url}/workloads/{workload_id}", timeout=10.0)
         if resp.status_code == 404:
             return None

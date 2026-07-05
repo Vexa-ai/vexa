@@ -217,6 +217,13 @@
       "targets": []
     },
     {
+      "key": "MEETING_UNTRACKED_GRACE_SEC",
+      "class": "defaulted",
+      "default": "600",
+      "description": "continuous-untracked window (s): a meeting whose workload the runtime 404s for this long with no re-adoption and no bot callback is presumed lost and failed with an evidence note",
+      "targets": []
+    },
+    {
       "key": "HOST",
       "class": "defaulted",
       "default": "0.0.0.0",

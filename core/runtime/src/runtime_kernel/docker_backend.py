@@ -22,8 +22,22 @@ from .backend import WorkloadHandle
 from .profiles import Runnable
 
 MANAGED_LABEL = "runtime.managed"
+WORKLOAD_ID_LABEL = "runtime.workload_id"
+_COMPOSE_LABEL = "com.docker.compose.project"
 
 logger = logging.getLogger("runtime_kernel.docker_backend")
+
+
+def _stop_grace_sec() -> int:
+    """How long ``terminate`` lets a workload leave gracefully before the daemon SIGKILLs it.
+
+    A live meeting bot needs real time to honour SIGTERM (leave the meeting, flush the recording,
+    POST its terminal lifecycle callback) — its own signal handler bounds that at <25s, so the old
+    hard-coded ``t=5`` guaranteed every runtime-initiated stop of a live bot died 137 mid-leave."""
+    try:
+        return max(1, int(float(os.getenv("RUNTIME_STOP_GRACE_SEC", "30"))))
+    except ValueError:
+        return 30
 
 
 def _worker_naming(workload_id: str) -> tuple[str, dict[str, str]]:
@@ -46,6 +60,35 @@ def _worker_naming(workload_id: str) -> tuple[str, dict[str, str]]:
     else:
         kind = "event"
     return f"worker-{rest}", {"vexa.role": "worker", "vexa.kind": kind}
+
+
+def _workload_id_from_leaf(leaf: str) -> str:
+    """Reverse ``_worker_naming`` for the label-less name-match fallback: a ``worker-*`` container
+    leaf maps back to its ``agent-*`` workload id; anything else IS the workload id."""
+    if leaf.startswith("worker-"):
+        return f"agent-{leaf[len('worker-'):]}"
+    return leaf
+
+
+def _stack_network() -> Optional[str]:
+    """The stack-unique compose network every workload this runtime spawns joins (``start()`` sets
+    ``HostConfig.NetworkMode`` from the same env). On a SHARED daemon (two vexa stacks on one host —
+    the release-host layout) the managed label and the name prefix are IDENTICAL across stacks, so
+    the network is THE discriminator that scopes discovery and ``find`` to THIS stack's containers —
+    and it works retroactively for label-less incident-era containers too. Unset ⇒ single-stack
+    deployment, no scoping (docker's default bridge)."""
+    return os.getenv("DOCKER_NETWORK") or None
+
+
+def _in_stack_network(network: Optional[str], inspect_body: dict) -> bool:
+    """Whether an INSPECTED container is attached to the stack network (no scoping when unset).
+    Checks both ``HostConfig.NetworkMode`` (what ``start()`` sets) and the live
+    ``NetworkSettings.Networks`` map (covers containers attached by name after create)."""
+    if not network:
+        return True
+    if (inspect_body.get("HostConfig") or {}).get("NetworkMode") == network:
+        return True
+    return network in ((inspect_body.get("NetworkSettings") or {}).get("Networks") or {})
 
 
 def _socket_url() -> str:
@@ -196,7 +239,7 @@ class DockerBackend:
         payload: dict[str, Any] = {
             "Image": runnable.image,
             "Env": [f"{k}={v}" for k, v in spawn_env.items()],
-            "Labels": {MANAGED_LABEL: "true", "runtime.workload_id": workload_id, **worker_labels},
+            "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels},
             "HostConfig": host_config,
         }
         if runnable.command:
@@ -215,6 +258,83 @@ class DockerBackend:
             raise RuntimeError(f"docker start {name} failed ({s.status_code}): {s.text.strip()}")
         return WorkloadHandle(id=workload_id, impl=name)
 
+    def find(self, workload_id: str) -> Optional[WorkloadHandle]:
+        """Re-derive a live handle for a workload whose in-process handle was lost (restart): the
+        container name is deterministic (``prefix + leaf``), so an inspect proves it still exists.
+        Returns ``None`` when the substrate has no such container (any state counts as found —
+        an exited container still needs stop/destroy to observe/reclaim it truthfully).
+
+        STACK-SCOPED: on a shared daemon a same-named container in ANOTHER stack's network must
+        stay invisible — otherwise a re-derived handle would let this stack's stop/destroy reach a
+        foreign stack's live bot."""
+        name = self._cname(workload_id)
+        r = self._req("GET", f"/containers/{name}/json")
+        if r.status_code != 200:
+            return None
+        if not _in_stack_network(_stack_network(), r.json() or {}):
+            return None  # exists, but it is ANOTHER stack's container — not ours to touch
+        return WorkloadHandle(id=workload_id, impl=name)
+
+    def list_workload_containers(self) -> list[dict]:
+        """Discover the workload containers THIS backend spawned — running or exited — for boot
+        re-adoption (the orphaned-live-bot fix): every ``start()`` stamps ``runtime.managed=true`` +
+        ``runtime.workload_id``, so a label filter recovers them after the runtime process was
+        recreated and its in-memory registry lost. A name-prefix fallback catches label-less strays,
+        guarded by the compose-project label so the stack's own services are never adopted.
+
+        STACK-SCOPED (the shared-daemon fix): the labels and the name prefix are the SAME constants
+        in every vexa stack, so on a shared daemon a label-only filter would adopt ANOTHER stack's
+        live bots. When the stack network is configured, both passes additionally filter on it —
+        only containers attached to THIS stack's compose network are ever adopted.
+
+        Returns ``[{workload_id, name, running, exit_code, started_at}, …]``; never raises."""
+        found: dict[str, dict] = {}
+        network = _stack_network()
+        try:
+            import json as _json
+
+            def _filters(spec: dict) -> str:
+                if network:
+                    spec = {**spec, "network": [network]}
+                return quote(_json.dumps(spec), safe="")
+
+            r = self._req("GET", f"/containers/json?all=1&filters={_filters({'label': [f'{MANAGED_LABEL}=true']})}")
+            if r.status_code == 200:
+                for c in r.json():
+                    wid = (c.get("Labels") or {}).get(WORKLOAD_ID_LABEL)
+                    if wid:
+                        found[wid] = self._adoptable(wid, c)
+            # Fallback: prefix-named containers WITHOUT the labels (spawned before the labels
+            # existed). Compose-owned services can share the prefix — exclude anything compose owns.
+            fallback_qs = f"?all=1&filters={_filters({})}" if network else "?all=1"
+            r = self._req("GET", f"/containers/json{fallback_qs}")
+            if r.status_code == 200:
+                for c in r.json():
+                    labels = c.get("Labels") or {}
+                    if WORKLOAD_ID_LABEL in labels or _COMPOSE_LABEL in labels:
+                        continue
+                    for raw in c.get("Names") or []:
+                        leaf = raw.lstrip("/")
+                        if leaf.startswith(self._prefix):
+                            wid = _workload_id_from_leaf(leaf[len(self._prefix):])
+                            found.setdefault(wid, self._adoptable(wid, c))
+                            break
+        except Exception as e:  # noqa: BLE001 — discovery is a boot aid; it must never crash the boot
+            logger.warning("workload container discovery failed: %s", e)
+        return list(found.values())
+
+    def _adoptable(self, workload_id: str, c: dict) -> dict:
+        """Shape one /containers/json entry as an adoption record for the kernel."""
+        name = self._cname(workload_id)
+        running = c.get("State") == "running"
+        return {
+            "workload_id": workload_id,
+            "name": name,
+            "running": running,
+            # /containers/json has no exit code — inspect only the exited ones.
+            "exit_code": None if running else self._exit_from_inspect(name),
+        }
+
     def exit_code(self, h: WorkloadHandle) -> Optional[int]:
         return self._exit_from_inspect(h._impl)  # type: ignore[attr-defined]
 
@@ -229,10 +349,20 @@ class DockerBackend:
         return int(code) if code is not None else None
 
     def terminate(self, h: WorkloadHandle) -> None:
-        self._req("POST", f"/containers/{h._impl}/stop?t=5")  # type: ignore[attr-defined]
+        # SIGTERM + a real grace window (RUNTIME_STOP_GRACE_SEC, default 30): a live meeting bot
+        # leaves the meeting / flushes / posts its terminal callback on SIGTERM within <25s. The
+        # daemon SIGKILLs after the grace, so termination is still guaranteed.
+        grace = _stop_grace_sec()
+        self._req("POST", f"/containers/{h._impl}/stop?t={grace}", timeout=grace + 30)  # type: ignore[attr-defined]
 
     def kill(self, h: WorkloadHandle) -> None:
         self._req("POST", f"/containers/{h._impl}/kill")  # type: ignore[attr-defined]
 
     def cleanup(self, h: WorkloadHandle) -> None:
-        self._req("DELETE", f"/containers/{h._impl}?force=true")  # type: ignore[attr-defined]
+        # Reclaim MUST be truthful: a failed force-delete while the container may still be running
+        # would let `destroy` report `destroyed` over a live bot. 404 = already gone (fine).
+        r = self._req("DELETE", f"/containers/{h._impl}?force=true")  # type: ignore[attr-defined]
+        if r.status_code not in (204, 404):
+            raise RuntimeError(
+                f"docker delete {h._impl} failed ({r.status_code}): {r.text.strip()[:200]}"
+            )
