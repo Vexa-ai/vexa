@@ -61,7 +61,7 @@ class _FakeScheduler:
 
 
 class _FakeReader:
-    def read(self, unit_id):
+    def read(self, unit_id, *, resume=None):
         yield {"type": "message-delta", "text": "hi"}
         yield {"type": "commit", "sha": "abc123"}
 

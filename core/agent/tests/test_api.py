@@ -39,8 +39,9 @@ class _FakeIdentity:
 
 
 class _FakeReader:
-    """A StreamReader fake — yields the dispatch's UnitEvents (what redis XREAD would relay)."""
-    def read(self, unit_id):
+    """A StreamReader fake — yields the dispatch's UnitEvents (what redis XREAD would relay). Accepts the
+    ``resume`` kwarg (the resumable-SSE contract) even though this bare fake ignores the cursor."""
+    def read(self, unit_id, *, resume=None):
         yield {"type": "message-delta", "text": "hi"}
         yield {"type": "commit", "sha": "abc123"}
 
@@ -178,6 +179,58 @@ def test_chat_defaults_session_to_main(tmp_path):
     assert r.headers["X-Unit-Id"] == "agent-u_jane-chat-main"
     rows = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
     assert rows[0]["session"] == "main" and rows[0]["title"] == "no session given"
+
+
+class _CursorReader:
+    """A StreamReader fake that surfaces per-event Stream cursors (``(event, cursor)`` tuples) — what the
+    RESUMABLE chat SSE emits as ``id:`` lines — and records the ``resume`` cursor it was asked to read from."""
+    def __init__(self):
+        self.resume_seen = "UNSET"
+
+    def read(self, unit_id, *, resume=None):
+        self.resume_seen = resume
+        yield ({"type": "message-delta", "text": "hi"}, "5-0")
+        yield ({"type": "turn-complete"}, "6-0")
+
+
+def test_chat_sse_carries_resumable_ids():
+    """The chat turn SSE is RESUMABLE like /api/meeting/stream: every event carries an ``id:`` = the unit
+    output Stream cursor, so a dropped view reconnects with Last-Event-ID and resumes gaplessly (the
+    cold-start 'No chat output arrived' false failure is a client that gave up on a stream it could resume)."""
+    reader = _CursorReader()
+    c = _client(reader)
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    body = r.text
+    assert "id: 5-0" in body and "id: 6-0" in body      # cursors surfaced for resume
+    assert '"message-delta"' in body and '"turn-complete"' in body
+    assert reader.resume_seen is None                   # a fresh connect resumes from nothing
+
+
+def test_chat_resume_reattaches_without_a_second_dispatch():
+    """A reconnect (Last-Event-ID present) RE-ATTACHES to the warm unit and resumes the read from the
+    cursor — it does NOT dispatch a second turn (the worker completes regardless; resume only re-shows
+    the missed output). Proven by: no new runtime spawn on the resume, and the cursor reaches the reader."""
+    runtime = _FakeRuntime()
+    reader = _CursorReader()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=reader,
+    ))
+    r1 = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r1.status_code == 200
+    spawned_after_first = len(runtime.spawned)
+    assert spawned_after_first >= 1                      # the fresh turn dispatched (spawned the unit)
+
+    r2 = c.post(
+        "/api/chat",
+        headers={"Last-Event-ID": "5-0"},
+        json={"prompt": "hi", "subject": "u_jane", "session": "s1"},
+    )
+    assert r2.status_code == 200
+    assert r2.headers["X-Unit-Id"] == "agent-u_jane-chat-s1"   # same warm unit re-attached
+    assert reader.resume_seen == "5-0"                         # resumed from the client's cursor
+    assert len(runtime.spawned) == spawned_after_first, \
+        "resume re-dispatched a turn — a reconnect must re-attach to the warm unit, not run it twice"
 
 
 def test_meeting_start_threads_transcript_tail_cursor(monkeypatch):

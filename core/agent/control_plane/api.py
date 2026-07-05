@@ -542,16 +542,20 @@ def create_app(
 
     @app.post("/api/chat")
     def chat(body: ChatBody, request: Request):
-        """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE."""
+        """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE.
+
+        RESUMABLE (mirrors /api/meeting/stream): every SSE event carries an ``id:`` = the unit output
+        Stream cursor. A dropped view (per-dispatch worker cold-start races the SSE, a transient proxy
+        drop) reconnects with ``Last-Event-ID`` — we then RE-ATTACH to the SAME warm unit and resume the
+        read from that cursor (gapless) WITHOUT dispatching a second turn. The turn was never lost (the
+        worker completes + commits regardless); resume just re-shows the output the client missed."""
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         session = body.session or units.DEFAULT_CHAT_SESSION
-        # Upsert the durable index on use: a new thread is titled by its first prompt; an existing one
-        # just bumps last_active (title preserved).
-        is_new = not any(r["session"] == session for r in sess.list(subject))
-        sess.upsert(subject, session,
-                    title=_truncate_title(body.prompt) if is_new else None)
+        # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
+        # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
+        resume = request.headers.get("last-event-id") or None
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
         # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the copilot tails) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
@@ -561,9 +565,19 @@ def create_app(
             subject=subject, trigger="message",
             start=units.entrypoint(inline=prompt), context=ctx, tools=tools,
         )
-        unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
+        if resume:
+            # Re-attach only — the warm unit id is deterministic from (subject, session); resume reads
+            # its durable output Stream from the cursor. No new turn, no session re-title.
+            unit_id = units.dispatch_id(inv)
+        else:
+            # Upsert the durable index on first use of a thread: a new thread is titled by its first
+            # prompt; an existing one just bumps last_active (title preserved).
+            is_new = not any(r["session"] == session for r in sess.list(subject))
+            sess.upsert(subject, session,
+                        title=_truncate_title(body.prompt) if is_new else None)
+            unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
         return StreamingResponse(
-            _sse(stream_reader.read(unit_id)),
+            _sse(stream_reader.read(unit_id, resume=resume)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                      "X-Unit-Id": unit_id, "X-Chat-Session": session},
