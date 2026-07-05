@@ -855,6 +855,16 @@ async def export_meeting_proxy(request: Request, meeting_id: int):
     return await forward_request(app.state.http_client, "GET", url, request)
 
 
+@app.post("/internal/meetings/{meeting_id}/diarize",
+        tags=["Diarization"],
+        summary="Run speaker diarization on a meeting",
+        dependencies=[Depends(api_key_scheme)])
+async def diarize_meeting_proxy(request: Request, meeting_id: int):
+    """Forward diarization request to meeting-api."""
+    url = f"{MEETING_API_URL}/internal/meetings/{meeting_id}/diarize"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
 # --- Transcription Collector Routes ---
 @app.get("/meetings",
         tags=["Transcriptions"],
