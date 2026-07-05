@@ -263,6 +263,11 @@ class MeetingProcess(BaseModel):
     native_id: str
     platform: str = "google_meet"
     on: bool
+    # P0 (cross-tenant leak fix): the meetings-domain ROW id (unique per meeting run). When the terminal
+    # knows it (POST /bots returns it), the copilot's opt-in flag + cursor + processed stream key on it —
+    # so a re-sent bot on the same native link, or a DIFFERENT tenant on the same link, can never
+    # arm/clobber/read another meeting's processing. Falls back to native only when absent (legacy).
+    meeting_id: Optional[str] = None
     subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent.
 
 
@@ -299,21 +304,22 @@ def _sse(events) -> Iterator[str]:
 MEETING_CHAT_TRANSCRIPT_SEGMENTS = 400  # bound the live transcript folded into a meeting-chat prompt
 
 
-def _fold_meeting_transcript(redis_url: "str | None", native_id: str, *, limit: int) -> str:
-    """Fold the live transcript Stream ``tc:meeting:{native}`` — the SAME stream the meeting copilot
+def _fold_meeting_transcript(redis_url: "str | None", stream_key: str, *, limit: int) -> str:
+    """Fold the live transcript Stream ``tc:meeting:{stream_key}`` — the SAME stream the meeting copilot
     tails (worker/meeting.py) and the terminal renders — into ordered ``speaker: text`` lines for chat
-    grounding. Refining live drafts are upserted by ``segment_id`` (latest text wins, no duplicate),
-    arrival order preserved, bounded to the last ``limit`` segments. Best-effort: returns "" when redis
-    is unwired or the stream is empty/unreadable (the caller treats that as 'no transcript yet')."""
+    grounding. ``stream_key`` is the meetings-domain ROW id (P0 cross-tenant leak fix: the carrier keys
+    on the row id, never the native id which collides across tenants/re-sends). Refining live drafts are
+    upserted by ``segment_id`` (latest text wins, no duplicate), arrival order preserved, bounded to the
+    last ``limit`` segments. Best-effort: returns "" when redis is unwired or the stream is empty."""
     if not redis_url:
         return ""
     try:
         import redis
 
         r = redis.from_url(redis_url, decode_responses=True)
-        rows = r.xrange(f"tc:meeting:{native_id}")
+        rows = r.xrange(f"tc:meeting:{stream_key}")
     except Exception as exc:  # noqa: BLE001 — grounding is best-effort; never fail the chat turn
-        logger.warning("could not read transcript for %s: %s", native_id, exc)
+        logger.warning("could not read transcript for %s: %s", stream_key, exc)
         return ""
     order: list[str] = []
     seg_by_id: dict[str, dict] = {}
@@ -356,7 +362,12 @@ def _meeting_grounding(
     # A chat turn (trigger "message"), not a live-meeting serve — the transcript travels in the prompt,
     # so the dispatch context stays plain (no meeting env / serve path is engaged for a chat).
     ctx = {"kind": "none", "session": session}
-    transcript = _fold_meeting_transcript(redis_url, native, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+    # P0 (cross-tenant leak fix): read the transcript by the meetings-domain ROW id (``meeting_id``),
+    # which the terminal passes on the active meeting — the transcript carrier keys on it, never the
+    # native id (which would fold a DIFFERENT tenant's / an older row's transcript into this user's chat).
+    # Fall back to native only when the client didn't send a row id (legacy), documented as best-effort.
+    stream_key = m.get("meeting_id") or native
+    transcript = _fold_meeting_transcript(redis_url, str(stream_key), limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
     if transcript:
         preamble = (
             f"You are assisting in a live meeting ({platform}/{native}). Its live transcript so far is "
@@ -501,17 +512,35 @@ def create_app(
         import redis as _redis
 
         r = _redis.from_url(redis_url, decode_responses=True)
+        # P0 (cross-tenant leak fix): the copilot's opt-in flag / cursor / processed stream ALL key on
+        # the meetings-domain ROW id — the native id is NOT unique (it collides across tenants + a user's
+        # re-sends), so keying processing state by it armed / clobbered / resumed the wrong meeting. Prefer
+        # the row id the terminal passes (POST /bots returns it); else resolve it off the live registry
+        # (the watcher learns it from the segments' numeric meeting_id and stamps native_id on the entry).
+        # Fall back to native only when neither is available (legacy client + not-yet-live) — documented as
+        # a bootstrap-only path that arms once the row id is known.
+        live_entry = next(
+            (m for m in live.list()
+             if m.get("native_id") == body.native_id or m.get("session_uid") == body.native_id),
+            None,
+        )
+        row_id = (
+            body.meeting_id
+            or (str(live_entry["numeric_meeting_id"])
+                if live_entry and live_entry.get("numeric_meeting_id") else None)
+        )
+        key = row_id or body.native_id
         # The opt-in flag has its OWN key suffix — it must NOT collide with the processed-notes STREAM
-        # ``proc:meeting:{native}`` the worker XADDs (worker.py), else a GET on the flag hits a stream →
+        # ``proc:meeting:{key}`` the worker XADDs (worker.py), else a GET on the flag hits a stream →
         # WRONGTYPE (crashes the watcher's arm loop). ``:cursor`` is likewise a distinct sibling key.
-        flag = f"proc:meeting:{body.native_id}:on"
-        cursor_key = f"proc:meeting:{body.native_id}:cursor"
+        flag = f"proc:meeting:{key}:on"
+        cursor_key = f"proc:meeting:{key}:cursor"
         if not body.on:
             try:
                 r.delete(flag)  # cursor is intentionally LEFT in place (frozen) for the next re-enable
             except Exception:  # noqa: BLE001 — best-effort; the watcher reaps the copilot on TTL anyway
                 pass
-            return {"native_id": body.native_id, "processing": False}
+            return {"native_id": body.native_id, "meeting_id": row_id, "processing": False}
         cursor: str | None = None
         try:
             r.set(flag, "1")
@@ -520,25 +549,23 @@ def create_app(
             cursor = None
         # Gap-fill from the cursor (last cleaned raw id); no cursor yet ⇒ from the start of the transcript.
         start_id = cursor or "0-0"
+        # The dispatch routes by the ROW id (meeting_id) — matching the watcher's row-keyed carriers — and
+        # carries the native SEPARATELY for the readable kg doc name (nuance #1). numeric_meeting_id is the
+        # explicit row-id hint the db-writer needs to persist the processed doc.
         meeting_ref: dict = {
-            "meeting_id": body.native_id, "session_uid": body.native_id,
+            "meeting_id": key, "session_uid": key,
             "platform": body.platform, "transcript_start_id": start_id,
+            "native_id": body.native_id,
         }
-        # Key the copilot's processed-notes stream by the meetings-domain ROW id when the watcher has
-        # already registered it on the live entry (it learns it from the segments' numeric meeting_id).
-        # The row id is unique per meeting run — a re-sent bot on the same native link never
-        # mixes/clobbers a previous meeting's processed doc — and the meeting-api db-writer drains
-        # proc:meeting:{numeric} into the meeting row's data JSONB (the durable processed doc).
-        live_entry = next((m for m in live.list() if m.get("session_uid") == body.native_id), None)
-        if live_entry and live_entry.get("numeric_meeting_id"):
-            meeting_ref["numeric_meeting_id"] = str(live_entry["numeric_meeting_id"])
+        if row_id:
+            meeting_ref["numeric_meeting_id"] = str(row_id)
         inv = units.make_dispatch(
             subject=subject_of(request), trigger="transcription",
             start=units.entrypoint(inline=_MEETING_BRIEF),
             context={"kind": "meeting", "meeting": meeting_ref},
         )
         dispatcher.dispatch(inv)
-        return {"native_id": body.native_id, "processing": True, "resumed_from": start_id}
+        return {"native_id": body.native_id, "meeting_id": row_id, "processing": True, "resumed_from": start_id}
 
     @app.post("/api/chat")
     def chat(body: ChatBody, request: Request):

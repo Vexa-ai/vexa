@@ -690,12 +690,15 @@ export function Chat({ params = {} }: ChatProps) {
     }));
     try {
       const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
-      // The active center tab grounds the turn: a meeting passes {kind, platform, native_id} so agent-api
-      // folds its live transcript (tc:meeting:{native}) into the prompt server-side; a file passes {kind, ref}.
+      // The active center tab grounds the turn: a meeting passes {kind, platform, native_id, meeting_id}
+      // so agent-api folds its live transcript into the prompt server-side; a file passes {kind, ref}.
+      // P0 (cross-tenant leak fix): `meeting_id` is the meetings-domain ROW id (the mock's `id`) — the
+      // transcript carrier keys on it, so grounding reads THIS row's transcript (`tc:meeting:{row_id}`),
+      // never a DIFFERENT tenant's / an older row's under the shared native. `native_id` is display only.
       const active = !ground || !contextRef
         ? undefined
         : contextRef.kind === "meeting"
-          ? { kind: "meeting", native_id: contextRef.value, platform: meetingPlatformSlug(activeMeeting) }
+          ? { kind: "meeting", native_id: contextRef.value, meeting_id: activeMeeting?.id, platform: meetingPlatformSlug(activeMeeting) }
           : { kind: contextRef.kind, ref: contextRef.raw };
       const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: p, session: sessionForSend, active }), signal: ctrl.signal });
       if (!r.ok) throw new Error(`Chat request failed (${r.status})`);

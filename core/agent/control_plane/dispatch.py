@@ -85,10 +85,26 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     ctx = invocation.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
     if meeting and meeting.get("meeting_id"):
-        env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{meeting['meeting_id']}"
+        # P0 (cross-tenant leak fix): the transcript carrier keys on the meetings-domain ROW id
+        # (``numeric_meeting_id`` — unique per meeting run), NOT the native meeting id. The native id
+        # is NOT unique: it collides across DIFFERENT users of the same meeting link (a shared
+        # ``tc:meeting:{native}`` LEAKED one tenant's transcript to another) AND across ONE user's
+        # repeated rows (wrong-row hydration). ``meeting['meeting_id']`` is the routing key the watcher
+        # froze (the native id today); the row id rides SEPARATELY as ``numeric_meeting_id``. Key the
+        # carrier by the row id when known, falling back to the routing key only for a meeting that
+        # never resolved a row id (surfaced under its own key, still isolated per that key).
+        row_id = meeting.get("numeric_meeting_id") or meeting["meeting_id"]
+        env["VEXA_TRANSCRIPT_STREAM"] = f"tc:meeting:{row_id}"
         env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.meeting_idle_timeout_sec)
         # Carry the meeting facts the post-meeting WRITE turn stamps into the kg entity frontmatter.
-        env["VEXA_MEETING_ID"] = str(meeting["meeting_id"])
+        # VEXA_MEETING_ID is the human-readable NATIVE id (nuance #1: the readable kg doc name
+        # ``kg/entities/meeting/{native}.md`` must survive even though the carriers key by row id).
+        # The watcher now routes by the ROW id (``meeting_id`` == row id) and carries the native
+        # SEPARATELY as ``native_id`` for display; older callers (``/api/meeting/start|process``) still
+        # pass the native as ``meeting_id``. Prefer the explicit ``native_id`` hint, falling back to
+        # ``meeting_id`` (native there) — never the numeric row id, which is unreadable.
+        display_native = meeting.get("native_id") or meeting["meeting_id"]
+        env["VEXA_MEETING_ID"] = str(display_native)
         if meeting.get("session_uid"):
             env["VEXA_MEETING_SESSION_UID"] = str(meeting["session_uid"])
         if meeting.get("platform"):
@@ -97,9 +113,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env["VEXA_TRANSCRIPT_START_ID"] = str(meeting["transcript_start_id"])
         if meeting.get("numeric_meeting_id"):
             # The meetings-domain ROW id (unique per meeting run). The worker keys its
-            # processed-notes stream by it (proc:meeting:{numeric}) so a re-sent bot on the same
-            # native link cannot mix/clobber a previous meeting's processed doc — and the
-            # meeting-api db-writer (which knows its own row ids) drains that stream into the
+            # processed-notes stream AND its transcript-consume stream by it
+            # (tc:/proc:meeting:{numeric}) so a re-sent bot on the same native link — or a DIFFERENT
+            # tenant on the same link — can never mix/clobber/read another meeting's data. The
+            # meeting-api db-writer (which knows its own row ids) drains proc:meeting:{numeric} into the
             # meeting row's data JSONB for durability.
             env["VEXA_MEETING_NUMERIC_ID"] = str(meeting["numeric_meeting_id"])
     elif meeting and meeting.get("native_id"):
@@ -124,9 +141,11 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
 # Internal routing hints that ride on context.meeting but are NOT part of the sealed MeetingRef
 # (additionalProperties: false) — stripped before the unit.v1 contract check, like ctx.session.
 # ``numeric_meeting_id`` is the meetings-domain ROW id (unique per meeting run, unlike the native
-# id a re-sent bot reuses) — the worker keys its processed-notes stream by it so re-sends can never
-# clobber a previous meeting's processed doc.
-_INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id"})
+# id a re-sent bot reuses) — the worker keys its transcript/processed streams by it so re-sends (or a
+# DIFFERENT tenant on the same link) can never clobber/read another meeting's data. ``native_id`` is
+# the human-readable Meet code carried for DISPLAY only (the kg doc name / title); the routing
+# ``meeting_id`` is the row id. Both are agent-api internal — the sealed MeetingRef forbids them.
+_INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id", "native_id"})
 
 
 def _without_chat_session(invocation: dict) -> dict:

@@ -280,6 +280,13 @@ def create_app(
     async def speak(platform: str, native_meeting_id: str, request: Request):
         return await _forward("POST", _meeting(f"/bots/{platform}/{native_meeting_id}/speak"), request)
 
+    # P0 (cross-tenant leak fix): the by-ROW-id transcript read the terminal uses to fetch EXACTLY the
+    # row it displays (owner-scoped downstream). Registered BEFORE the native route so `by-id` is not
+    # matched as a {platform}. Forwarded verbatim; the auth/identity prep (X-User-Id) is shared.
+    @app.get("/transcripts/by-id/{meeting_id}")
+    async def transcript_by_id(meeting_id: int, request: Request):
+        return await _forward("GET", _meeting(f"/transcripts/by-id/{meeting_id}"), request)
+
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
         return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)

@@ -167,10 +167,86 @@ class SqlAlchemyTranscriptStore:
             self._native_cache[mid] = pair
             return pair
 
+    async def _transcript_doc(self, db, meeting) -> dict:
+        """Build the api.v1 ``TranscriptionResponse`` dict for a resolved ``meeting`` ROW — the shared
+        body used by BOTH ``get_transcript`` (native → newest row) and ``get_transcript_by_id`` (exact
+        row). Reads the row's persisted ``transcriptions`` + merges the live redis in-flight hash, all
+        keyed by ``meeting.id`` (the row id) — so a by-id read returns EXACTLY that row's segments/notes,
+        never a sibling row's (the wrong-row hydration fix)."""
+        from sqlalchemy import select
+
+        from .models import Transcription
+
+        seg_rows = (
+            await db.execute(
+                select(Transcription).where(Transcription.meeting_id == meeting.id)
+            )
+        ).scalars().all()
+        data = meeting.data if isinstance(meeting.data, dict) else {}
+        # Postgres-persisted segments (the background db-writer flush path).
+        seg_by_id: dict = {}
+        order: list = []
+        for r in seg_rows:
+            s = _segment_to_api({
+                "start": r.start_time, "end": r.end_time, "text": r.text,
+                "language": r.language, "speaker": r.speaker,
+                "segment_id": r.segment_id, "completed": True,
+            })
+            sid = s.get("segment_id") or f"pg-{len(order)}"
+            if sid not in seg_by_id:
+                order.append(sid)
+            seg_by_id[sid] = s
+        # Merge the LIVE Redis hash of in-flight segments (``meeting:{id}:segments``) — the source
+        # of truth before/until the db-writer flush. The carve had dropped this merge, so a transcript
+        # whose segments are still only in Redis (every short/just-finished meeting) read as EMPTY.
+        if self._redis is not None:
+            try:
+                raw = await self._redis.hgetall(f"meeting:{meeting.id}:segments")
+                for v in (raw.values() if isinstance(raw, dict) else []):
+                    try:
+                        seg = json.loads(v.decode() if isinstance(v, (bytes, bytearray)) else v)
+                    except Exception:
+                        continue
+                    s = _segment_to_api(seg)
+                    sid = s.get("segment_id") or f"rh-{len(order)}"
+                    if sid not in seg_by_id:
+                        order.append(sid)
+                    seg_by_id[sid] = s
+            except Exception:
+                pass
+        segments = sorted((seg_by_id[k] for k in order), key=lambda s: (s.get("start") or 0.0))
+        # The dashboard's renderer SKIPS any segment without absolute_start_time
+        # (use-vexa-websocket.ts: `if (!seg.absolute_start_time) continue`). Derive it from the
+        # meeting start + the relative offset when a producer didn't supply it, so the historical
+        # transcript renders (the carve served only relative start/end → the UI dropped every segment).
+        from datetime import timedelta
+        base = meeting.start_time or meeting.created_at
+        if base is not None:
+            for s in segments:
+                if not s.get("absolute_start_time") and s.get("start") is not None:
+                    try:
+                        s["absolute_start_time"] = (base + timedelta(seconds=float(s["start"]))).isoformat()
+                        s["absolute_end_time"] = (base + timedelta(seconds=float(s.get("end") or s["start"]))).isoformat()
+                    except Exception:
+                        pass
+        return {
+            "id": meeting.id,
+            "platform": meeting.platform,
+            "native_meeting_id": meeting.platform_specific_id,
+            "constructed_meeting_url": (data.get("constructed_meeting_url")),
+            "status": meeting.status,
+            "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
+            "end_time": meeting.end_time.isoformat() if meeting.end_time else None,
+            "recordings": data.get("recordings", []),
+            "notes": data.get("notes"),
+            "data": data,
+            "segments": segments,
+        }
+
     async def get_transcript(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select  # lazy: SQLAlchemy not needed for the in-memory fakes
 
-        from .models import Meeting, Transcription  # local re-export of the admin-api models
+        from .models import Meeting  # local re-export of the admin-api models
 
         async with self._session_factory() as db:
             stmt = (
@@ -185,71 +261,26 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
-            seg_rows = (
-                await db.execute(
-                    select(Transcription).where(Transcription.meeting_id == meeting.id)
-                )
-            ).scalars().all()
-            data = meeting.data if isinstance(meeting.data, dict) else {}
-            # Postgres-persisted segments (the background db-writer flush path).
-            seg_by_id: dict = {}
-            order: list = []
-            for r in seg_rows:
-                s = _segment_to_api({
-                    "start": r.start_time, "end": r.end_time, "text": r.text,
-                    "language": r.language, "speaker": r.speaker,
-                    "segment_id": r.segment_id, "completed": True,
-                })
-                sid = s.get("segment_id") or f"pg-{len(order)}"
-                if sid not in seg_by_id:
-                    order.append(sid)
-                seg_by_id[sid] = s
-            # Merge the LIVE Redis hash of in-flight segments (``meeting:{id}:segments``) — the source
-            # of truth before/until the db-writer flush. The carve had dropped this merge, so a transcript
-            # whose segments are still only in Redis (every short/just-finished meeting) read as EMPTY.
-            if self._redis is not None:
-                try:
-                    raw = await self._redis.hgetall(f"meeting:{meeting.id}:segments")
-                    for v in (raw.values() if isinstance(raw, dict) else []):
-                        try:
-                            seg = json.loads(v.decode() if isinstance(v, (bytes, bytearray)) else v)
-                        except Exception:
-                            continue
-                        s = _segment_to_api(seg)
-                        sid = s.get("segment_id") or f"rh-{len(order)}"
-                        if sid not in seg_by_id:
-                            order.append(sid)
-                        seg_by_id[sid] = s
-                except Exception:
-                    pass
-            segments = sorted((seg_by_id[k] for k in order), key=lambda s: (s.get("start") or 0.0))
-            # The dashboard's renderer SKIPS any segment without absolute_start_time
-            # (use-vexa-websocket.ts: `if (!seg.absolute_start_time) continue`). Derive it from the
-            # meeting start + the relative offset when a producer didn't supply it, so the historical
-            # transcript renders (the carve served only relative start/end → the UI dropped every segment).
-            from datetime import timedelta
-            base = meeting.start_time or meeting.created_at
-            if base is not None:
-                for s in segments:
-                    if not s.get("absolute_start_time") and s.get("start") is not None:
-                        try:
-                            s["absolute_start_time"] = (base + timedelta(seconds=float(s["start"]))).isoformat()
-                            s["absolute_end_time"] = (base + timedelta(seconds=float(s.get("end") or s["start"]))).isoformat()
-                        except Exception:
-                            pass
-            return {
-                "id": meeting.id,
-                "platform": meeting.platform,
-                "native_meeting_id": meeting.platform_specific_id,
-                "constructed_meeting_url": (data.get("constructed_meeting_url")),
-                "status": meeting.status,
-                "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
-                "end_time": meeting.end_time.isoformat() if meeting.end_time else None,
-                "recordings": data.get("recordings", []),
-                "notes": data.get("notes"),
-                "data": data,
-                "segments": segments,
-            }
+            return await self._transcript_doc(db, meeting)
+
+    async def get_transcript_by_id(self, user_id, meeting_id) -> Optional[dict]:
+        """Exact-row transcript, owner-scoped (P0 wrong-row hydration fix). Resolve ``meeting.id ==
+        meeting_id AND meeting.user_id == user_id`` — a row owned by another user (or absent) returns
+        ``None`` (→ 404), so this can never leak a different tenant's transcript."""
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        async with self._session_factory() as db:
+            stmt = select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id)
+            meeting = (await db.execute(stmt)).scalars().first()
+            if not meeting:
+                return None
+            return await self._transcript_doc(db, meeting)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None):
         from sqlalchemy import select

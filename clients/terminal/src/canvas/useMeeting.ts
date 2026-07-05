@@ -1,5 +1,5 @@
 "use client";
-import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLiveMeetings, fetchDurableTranscript, mergeNotesById, type DurableTranscript } from "../surfaces/liveMeetings";
 import { meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/meetingModel";
 import { useMeetingLive } from "../surfaces/meetingLive";
@@ -267,6 +267,11 @@ function knownDoc(docs: { path?: string; title?: string; kind?: string; present?
   };
 }
 
+// Bug-3 finalizer-flush retry budget: after a meeting finalizes, the durable `data.processed`
+// can lag by a beat. Retry the durable fetch a few times, briefly, ONLY when live had notes.
+const DURABLE_REFETCH_ATTEMPTS = 5;
+const DURABLE_REFETCH_DELAY_MS = 600;
+
 function useLiveMeetingState(meetingId?: string): MeetingState {
   const contextMeetingId = useContext(MeetingScopeContext);
   const scopedMeetingId = meetingId ?? contextMeetingId;
@@ -278,20 +283,53 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   const live = useMeetingLive(selected.id, selected.session_uid ?? "");
   const actions = useCanvasActionState();
   const [durable, setDurable] = useState<DurableTranscript>({ lines: [], notes: [] });
+  // The count of live copilot notes seen this session — read (not depended-on) inside the durable
+  // effect so a finalize-refetch can tell "the meeting HAD notes live" from "genuinely empty". A ref,
+  // not a dep, so live deltas don't re-fire the durable fetch (they only refresh this counter).
+  const liveNotesCount = safeArray(live.notes).length;
+  const liveNotesRef = useRef(0);
+  liveNotesRef.current = liveNotesCount;
 
   // Hydrate from the DURABLE store (segments + persisted processed notes). Runs for past AND live
   // meetings: past → this is the only source (the copilot stream is gone once the bot stops); live →
   // it seeds notes already persisted before this client connected (page opened mid-meeting), with
-  // live deltas merged over the seed by note id. Re-runs when session_uid flips (meeting ended).
+  // live deltas merged over the seed by note id.
+  //
+  // P0 Bug-3 (stop-refetch timing): this effect must re-run BOTH when `session_uid` clears (stop) AND
+  // when the effective status transitions to a TERMINAL state (completed/failed/stopped) — the durable
+  // `data.processed` is persisted by the finalizer only once the FSM reaches a terminal status, which
+  // lands DURING the "stopping" window AFTER `session_uid` already cleared. Keying only on `session_uid`
+  // fetched the still-empty row and never refetched. So `effStatus` (live_status ?? status) is a dep,
+  // and on a terminal status we short-retry when durable came back EMPTY but live HAD notes
+  // (finalizer-flush latency) so the pane ends up SHOWING the notes rather than stuck-empty.
+  const effStatus = selected.live_status ?? selected.status;
   useEffect(() => {
     setDurable({ lines: [], notes: [] });
-    if (!selected.native_id) return;
+    // P0 (wrong-row hydration fix): hydrate by the meetings-domain ROW id (`selected.id`), so the pane
+    // shows EXACTLY this row's durable segments + processed notes — never the newest row sharing the
+    // native (the old native-keyed fetch). `native_id` presence still gates a real (resolved) meeting vs
+    // the unresolved placeholder, but the fetch key is the row id.
+    if (!selected.native_id || !selected.id) return;
+    const rowId = selected.id;
+    const terminal = effStatus === "completed" || effStatus === "failed" || effStatus === "stopped";
     let cancelled = false;
-    void fetchDurableTranscript(selected.platform, selected.native_id).then((next) => {
-      if (!cancelled) setDurable(next);
-    });
-    return () => { cancelled = true; };
-  }, [selected.id, selected.native_id, selected.platform, selected.session_uid]);
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const load = (attempt: number): void => {
+      void fetchDurableTranscript(rowId).then((next) => {
+        if (cancelled) return;
+        setDurable(next);
+        // Finalizer-flush latency: on the terminal transition the durable row can still be EMPTY for a
+        // beat even though the copilot produced notes live. Retry briefly (bounded) so the persisted
+        // processed notes surface instead of leaving the pane stuck-empty after stop.
+        const empty = (next.notes?.length ?? 0) === 0 && (next.lines?.length ?? 0) === 0;
+        if (terminal && empty && liveNotesRef.current > 0 && attempt < DURABLE_REFETCH_ATTEMPTS) {
+          retry = setTimeout(() => { if (!cancelled) load(attempt + 1); }, DURABLE_REFETCH_DELAY_MS);
+        }
+      });
+    };
+    load(0);
+    return () => { cancelled = true; if (retry) clearTimeout(retry); };
+  }, [selected.id, selected.native_id, selected.platform, selected.session_uid, effStatus]);
 
   return useMemo(() => {
     const participants = safeArray(selected.participants);
