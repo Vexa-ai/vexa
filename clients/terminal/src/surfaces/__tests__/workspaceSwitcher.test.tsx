@@ -122,3 +122,76 @@ describe("WorkspaceSwitcher — additive active set (WP-A2.1)", () => {
     expect(api.swapWorkspace).not.toHaveBeenCalled();
   });
 });
+
+describe("WorkspaceSwitcher — active set uses CHECKBOXES, not radio-style dots (multi-active is the model)", () => {
+  // The multi-select mental model must be visually obvious: each row renders a real role="checkbox"
+  // (checked = mounted, unchecked = parked). A filled/hollow dot read as a single-select radio.
+  const rowCheckbox = (name: string) =>
+    screen.getByText(name).closest("div")!.querySelector<HTMLElement>('[role="checkbox"]')!;
+
+  it("each workspace row renders a real accessible checkbox (no ●/○ dot)", async () => {
+    await renderOpenSwitcher();
+    // one checkbox per slot row (seed + leo)
+    expect(screen.getAllByRole("checkbox").length).toBeGreaterThanOrEqual(2);
+    // the old dot affordance is gone
+    expect(screen.queryByText("●")).toBeNull();
+    expect(screen.queryByText("○")).toBeNull();
+  });
+
+  it("the checkbox reflects active-set membership: primary checked, parked unchecked", async () => {
+    await renderOpenSwitcher();  // leo = primary (mounted), seed = parked
+    expect(rowCheckbox("leo").getAttribute("aria-checked")).toBe("true");
+    expect(rowCheckbox("default (previous)").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("clicking a parked row's checkbox toggles via activate (adds to the mount set)", async () => {
+    await renderOpenSwitcher();
+    fireEvent.click(rowCheckbox("default (previous)"));  // seed is parked → activate
+    await waitFor(() => expect(api.activateWorkspace).toHaveBeenCalledWith({ slug: "seed" }));
+  });
+
+  it("clicking a mounted secondary's checkbox toggles via deactivate (parks it)", async () => {
+    await renderOpenSwitcher({
+      subject: "u1",
+      active: [
+        { slug: "leo", repo: null, ref: null, role: "private", path: "/w/u1", write: true, primary: true },
+        { slug: "seed", repo: null, ref: null, role: "private", path: "/w/.attached/u1/seed", write: true, primary: false },
+      ],
+    } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
+    fireEvent.click(rowCheckbox("default (previous)"));  // seed is mounted → deactivate
+    await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("seed"));
+  });
+
+  it("the private baseline's checkbox is CHECKED and DISABLED (can't be unchecked)", async () => {
+    await renderOpenSwitcher();
+    const cb = rowCheckbox("leo");  // the primary baseline
+    expect(cb.getAttribute("aria-checked")).toBe("true");
+    expect(cb.getAttribute("aria-disabled")).toBe("true");
+    expect(cb.getAttribute("title")).toContain("always active");
+    // clicking it is a no-op (no activate/deactivate)
+    fireEvent.click(cb);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.deactivateWorkspace).not.toHaveBeenCalled();
+    expect(api.activateWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("MULTIPLE rows can be checked at once (the UI reflects >1 mounted — additive, not radio)", async () => {
+    await renderOpenSwitcher({
+      subject: "u1",
+      active: [
+        { slug: "leo", repo: null, ref: null, role: "private", path: "/w/u1", write: true, primary: true },
+        { slug: "seed", repo: null, ref: null, role: "private", path: "/w/.attached/u1/seed", write: true, primary: false },
+      ],
+    } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
+    const checked = screen.getAllByRole("checkbox").filter((c) => c.getAttribute("aria-checked") === "true");
+    expect(checked.length).toBe(2);  // both leo AND seed checked simultaneously
+  });
+
+  it("the checkbox is keyboard-operable (Space toggles via activate)", async () => {
+    await renderOpenSwitcher();
+    const cb = rowCheckbox("default (previous)");
+    expect(cb.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(cb, { key: " " });
+    await waitFor(() => expect(api.activateWorkspace).toHaveBeenCalledWith({ slug: "seed" }));
+  });
+});
