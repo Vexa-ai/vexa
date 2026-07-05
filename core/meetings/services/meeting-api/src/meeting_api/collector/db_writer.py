@@ -140,8 +140,19 @@ async def flush_meeting_segments(
         done_fields.append(field)
 
     if batch:
-        # The durable write FIRST; only a confirmed write may trim redis.
-        await sink.upsert_segments(meeting_id, batch)
+        # The durable write FIRST; only a confirmed write may trim redis. On a FAILED write,
+        # re-arm the hash TTL before propagating: a completed meeting gets no more appends (nothing
+        # re-arms the TTL), so a sink outage longer than the TTL would expire the tail unflushed
+        # (#53 review, vector 2).
+        try:
+            await sink.upsert_segments(meeting_id, batch)
+        except Exception:
+            import os as _os
+            try:
+                await redis_c.expire(hash_key, int(_os.environ.get("REDIS_SEGMENT_TTL", "3600")))
+            except Exception:  # noqa: BLE001 — best-effort re-arm; the original error matters more
+                pass
+            raise
     if done_fields:
         await redis_c.hdel(hash_key, *done_fields)
     remaining = await redis_c.hlen(hash_key)
