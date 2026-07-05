@@ -86,6 +86,22 @@ export async function listSharedMemberships(): Promise<Membership[]> {
   return data.memberships ?? [];
 }
 
+/** Redeem an INDEPENDENT transcript share token (any logged-in user) → subscribe access to that
+ *  meeting's live feed. Decoupled from workspaces. Used post-auth alongside acceptInvite for a bundle. */
+export async function acceptTranscriptShare(token: string): Promise<{ meeting_id: number; ok: boolean }> {
+  return getJson(`/api/transcripts/share/accept`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
+  });
+}
+
+/** MINT an independent transcript share link for a meeting (owner). Token returned once. */
+export async function mintTranscriptShare(opts: { platform: string; native_meeting_id: string; mode?: string; allowed_emails?: string[]; expires_in_sec?: number }): Promise<{ id: string; token: string; mode: string; expires_at: string }> {
+  return getJson(`/api/meetings/${encodeURIComponent(opts.platform)}/${encodeURIComponent(opts.native_meeting_id)}/share`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: opts.mode ?? "open", allowed_emails: opts.allowed_emails ?? [], expires_in_sec: opts.expires_in_sec ?? 86400 }),
+  });
+}
+
 /** Switch a shared workspace ON (mount) or OFF (hide) in your active set — membership is unchanged. */
 export async function setSharedActive(workspace_id: string, active: boolean): Promise<{ workspace_id: string; active: boolean }> {
   return getJson(`/api/workspace/shared/${encodeURIComponent(workspace_id)}/active`, {

@@ -16,19 +16,23 @@ import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
 import { meetingsOnly } from "./mode";
-import { acceptInvite } from "../surfaces/workspaceApi";
+import { acceptInvite, acceptTranscriptShare } from "../surfaces/workspaceApi";
 import "../surfaces";
 
-/** Post-auth invite redeem (Lane M/A): if the URL carries ?invite=<token>, redeem it into a membership
- *  ONCE the user is authenticated (this only mounts inside AuthGate's authed subtree), then reload without
- *  the token so the shared workspace appears. Rendered as null — it's an effect, not UI. */
+/** Post-auth share redeem (Lane M/A + M0): a link may carry ?invite=<token> (shared WORKSPACE membership)
+ *  and/or ?tshare=<token> (independent TRANSCRIPT feed) — the two are decoupled but BUNDLEABLE in one link.
+ *  Redeem whichever are present ONCE authenticated (this only mounts inside AuthGate's authed subtree),
+ *  then reload without the tokens so the shared workspace + live feed appear. Rendered as null. */
 function InviteRedeemer() {
   useEffect(() => {
-    const token = new URLSearchParams(window.location.search).get("invite");
-    if (!token) return;
-    void acceptInvite(token)
-      .catch((e) => console.error("invite redeem failed:", e))
-      .finally(() => window.location.replace(window.location.pathname));  // drop ?invite= + reload
+    const p = new URLSearchParams(window.location.search);
+    const invite = p.get("invite");
+    const tshare = p.get("tshare");
+    if (!invite && !tshare) return;
+    const jobs: Promise<unknown>[] = [];
+    if (invite) jobs.push(acceptInvite(invite).catch((e) => console.error("workspace invite redeem failed:", e)));
+    if (tshare) jobs.push(acceptTranscriptShare(tshare).catch((e) => console.error("transcript share redeem failed:", e)));
+    void Promise.allSettled(jobs).finally(() => window.location.replace(window.location.pathname));
   }, []);
   return null;
 }
