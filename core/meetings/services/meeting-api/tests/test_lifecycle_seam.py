@@ -1106,7 +1106,10 @@ def test_runtime_destroyed_unknown_workload_is_noop():
 # `tc:meeting:{native}` (agent worker/meeting.py) OR its VEXA_IDLE_TIMEOUT_SEC (default 4h). When the
 # bot never emitted `session_end` (SIGKILLed, or stopped in the waiting room — Bug 2), the worker sat
 # idle for the full 4h. The lifecycle fix: on a terminal FSM advance, meeting-api emits the session_end
-# marker onto the same feed, reaping the copilot immediately regardless of how the bot died.
+# marker onto the ROW-keyed feed tc:meeting:{meeting_row_id} — the SAME carrier the collector
+# (collector/ingest.py _transcript_stream) writes and the worker tails (VEXA_TRANSCRIPT_STREAM), post P0
+# row-scoping (fix/transcript-cross-tenant-leak). Native is never a data key. This reaps the copilot
+# immediately regardless of how the bot died.
 
 class _StreamRecordingRedis:
     """A redis fake that records BOTH publishes and xadds (the copilot-reap path uses xadd)."""
@@ -1139,53 +1142,61 @@ def _drive_terminal_seam(client, connection_id="sess-uid", *, terminal="complete
 
 
 def test_terminal_meeting_emits_session_end_to_reap_copilot():
-    """On `completed`, meeting-api xadds a session_end marker to tc:meeting:{native} — the copilot
-    worker's reap signal. Keyed by the meeting's native id (matches the collector + worker feed key)."""
+    """On `completed`, meeting-api xadds a session_end marker to the ROW-keyed feed
+    tc:meeting:{meeting_row_id} — the copilot worker's reap signal. Keyed by the meetings-domain
+    numeric ROW id (post P0 row-scoping), the SAME carrier the collector writes and the worker tails
+    (VEXA_TRANSCRIPT_STREAM=tc:meeting:{row_id}). The native id is NEVER a data key — a regression that
+    reverts to tc:meeting:{native} would land on a dead key and the copilot would never reap."""
     repo = InMemoryMeetingRepo()
-    m = _seed(repo, status="requested")   # native_meeting_id == "m1" (per _seed)
+    m = _seed(repo, status="requested")   # native_meeting_id == "m1"; m["id"] is the numeric ROW id
     redis = _StreamRecordingRedis()
     client = TestClient(create_app(meeting_repo=repo, redis=redis))
 
     _drive_terminal_seam(client, terminal="completed")
 
-    stream = "tc:meeting:m1"
-    assert stream in redis.streams, f"no session_end emitted; streams={list(redis.streams)}"
+    stream = f"tc:meeting:{m['id']}"
+    assert stream in redis.streams, f"no session_end on the ROW-keyed stream; streams={list(redis.streams)}"
+    # The native-keyed stream must NOT be written — native is never a data key post P0.
+    assert "tc:meeting:m1" not in redis.streams, "regressed to the native-keyed (dead) stream"
     markers = [p for p in redis.streams[stream] if p.get("type") == "session_end"]
     assert len(markers) == 1
-    assert markers[0]["uid"] == "m1"
 
 
 def test_failed_meeting_also_reaps_copilot():
     """A meeting that terminates `failed` (e.g. the bot never got admitted) ALSO emits session_end —
-    a copilot armed for it must not linger for the idle window either."""
+    a copilot armed for it must not linger for the idle window either. Row-keyed (post P0)."""
     repo = InMemoryMeetingRepo()
-    _seed(repo, status="requested")
+    m = _seed(repo, status="requested")
     redis = _StreamRecordingRedis()
     client = TestClient(create_app(meeting_repo=repo, redis=redis))
 
     _drive_terminal_seam(client, terminal="failed")
 
-    markers = [p for p in redis.streams.get("tc:meeting:m1", []) if p.get("type") == "session_end"]
+    stream = f"tc:meeting:{m['id']}"
+    markers = [p for p in redis.streams.get(stream, []) if p.get("type") == "session_end"]
     assert len(markers) == 1
+    assert "tc:meeting:m1" not in redis.streams, "regressed to the native-keyed (dead) stream"
 
 
 def test_non_terminal_advance_does_not_emit_session_end():
     """A non-terminal advance (joining/active) must NOT reap the copilot — the meeting is still live."""
     repo = InMemoryMeetingRepo()
-    _seed(repo, status="requested")
+    m = _seed(repo, status="requested")
     redis = _StreamRecordingRedis()
     client = TestClient(create_app(meeting_repo=repo, redis=redis))
 
     _post(client, connection_id="sess-uid", status="joining")
     _post(client, connection_id="sess-uid", status="active")
 
-    assert "tc:meeting:m1" not in redis.streams, "session_end emitted while the meeting is still live"
+    stream = f"tc:meeting:{m['id']}"
+    assert stream not in redis.streams, "session_end emitted while the meeting is still live"
+    assert "tc:meeting:m1" not in redis.streams
 
 
 def test_idempotent_terminal_replay_does_not_double_reap():
     """A redelivered terminal (no_op) must NOT xadd a second session_end (the reap is once-per-advance)."""
     repo = InMemoryMeetingRepo()
-    _seed(repo, status="requested")
+    m = _seed(repo, status="requested")
     redis = _StreamRecordingRedis()
     client = TestClient(create_app(meeting_repo=repo, redis=redis))
 
@@ -1194,5 +1205,6 @@ def test_idempotent_terminal_replay_does_not_double_reap():
     r = _post(client, connection_id="sess-uid", status="completed", completion_reason="stopped")
     assert r.status_code == 200
 
-    markers = [p for p in redis.streams.get("tc:meeting:m1", []) if p.get("type") == "session_end"]
+    stream = f"tc:meeting:{m['id']}"
+    markers = [p for p in redis.streams.get(stream, []) if p.get("type") == "session_end"]
     assert len(markers) == 1, f"double reap on idempotent replay: {markers}"

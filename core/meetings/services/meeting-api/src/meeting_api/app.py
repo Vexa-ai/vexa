@@ -369,18 +369,20 @@ def _mount_lifecycle(
                                   level="warning", span="lifecycle.callback",
                                   fields={"error": str(e)})
         # COPILOT REAP (Bug 3): the moment a meeting lands TERMINAL, emit the `session_end` marker onto
-        # the meeting's native transcript feed `tc:meeting:{native}` — the EXACT stream the meeting
-        # copilot worker (agent worker/meeting.py) blocks on. The worker reaps immediately on that marker
-        # (exit 0 → container reaped), instead of sitting idle for its VEXA_IDLE_TIMEOUT_SEC (default 4h)
-        # when the bot never emitted its own `session_end` — e.g. it was SIGKILLed, or stopped in the
-        # waiting room (Bug 2) before it could. Idempotent: a redundant session_end (the bot already sent
-        # one via the collector) just reasserts the reap. Best-effort; never fails the lifecycle callback.
+        # the meeting copilot transcript feed — the EXACT stream the meeting copilot worker
+        # (agent worker/meeting.py, via VEXA_TRANSCRIPT_STREAM) blocks on. The worker reaps immediately
+        # on that marker (exit 0 → container reaped), instead of sitting idle for its
+        # VEXA_IDLE_TIMEOUT_SEC (default 4h) when the bot never emitted its own `session_end` — e.g. it
+        # was SIGKILLed, or stopped in the waiting room (Bug 2) before it could. Idempotent: a redundant
+        # session_end (the bot already sent one via the collector) just reasserts the reap. Best-effort;
+        # never fails the lifecycle callback.
         #
-        # KEYING — the collector (collector/ingest.py) owns this same `tc:meeting:{native}` feed and its
-        # session_end marker; we mirror its key derivation (prefer the producer-stamped native id) so both
-        # writers agree. NB (coordination with P0 fix/transcript-cross-tenant-leak, session xtenant): if
-        # P0 row-scopes the copilot carrier key, this derivation must follow the same helper the collector
-        # + transcription_watcher settle on — this stays a pure LIFECYCLE reap on the agreed key.
+        # KEYING (P0 fix/transcript-cross-tenant-leak, now merged): the carrier is ROW-scoped
+        # `tc:meeting:{meeting_row_id}` — the numeric meetings-domain ROW id, NOT the native id (which
+        # collides across tenants/rows and is never a data key post-P0). The collector
+        # (collector/ingest.py `_transcript_stream`) writes its session_end on the same row key and the
+        # worker tails the row key (agent dispatch.py sets VEXA_TRANSCRIPT_STREAM=tc:meeting:{row_id}),
+        # so this lifecycle reap must key by the row id to land on the live stream the worker blocks on.
         if (
             redis is not None
             and not change.no_op
@@ -389,18 +391,24 @@ def _mount_lifecycle(
             and isinstance(meeting_row, dict)
             and hasattr(redis, "xadd")
         ):
+            meeting_row_id = meeting_row.get("id")
             native = meeting_row.get("native_meeting_id") or rec.connection_id
-            if native:
+            if meeting_row_id is not None:
                 try:
-                    await redis.xadd(f"tc:meeting:{native}", {"type": "session_end", "uid": native})
+                    await redis.xadd(
+                        f"tc:meeting:{meeting_row_id}",
+                        {"type": "session_end", "uid": str(native or meeting_row_id)},
+                    )
                     log_event(
                         "meeting_copilot_reap_signalled", audience="system", span="lifecycle.callback",
                         meeting_id=rec.connection_id,
-                        fields={"native": native, "meeting_status": rec.status.value},
+                        fields={"meeting_row_id": meeting_row_id, "native": native,
+                                "meeting_status": rec.status.value},
                     )
                 except Exception as e:  # noqa: BLE001 — the worker's idle timeout is the backstop
                     log_event("meeting_copilot_reap_failed", audience="system", level="warning",
-                              span="lifecycle.callback", fields={"native": native, "error": str(e)})
+                              span="lifecycle.callback",
+                              fields={"meeting_row_id": meeting_row_id, "error": str(e)})
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,
