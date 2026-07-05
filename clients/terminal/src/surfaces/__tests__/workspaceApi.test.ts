@@ -29,6 +29,19 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
     await listWorkspaceTree({ hidden: true });
     expect(lastUrl()).toBe("/api/workspace/tree?hidden=1");
   });
+  it("Lane A: listWorkspaceTree({slug}) scopes to a shared workspace (?slug=…)", async () => {
+    mock(true, 200, { files: ["kg/x.md"] });
+    await listWorkspaceTree({ slug: "wsA" });
+    expect(lastUrl()).toBe("/api/workspace/tree?slug=wsA");
+    mock(true, 200, { files: [] });
+    await listWorkspaceTree({ hidden: true, slug: "ws b" });
+    expect(lastUrl()).toBe("/api/workspace/tree?hidden=1&slug=ws+b");
+  });
+  it("Lane A: readWorkspaceFile(path,{slug}) appends &slug=… (shared read)", async () => {
+    mock(true, 200, { content: "shared" });
+    expect(await readWorkspaceFile("kg/x.md", { slug: "wsA" })).toBe("shared");
+    expect(lastUrl()).toBe("/api/workspace/file?path=kg%2Fx.md&slug=wsA");
+  });
   it("readWorkspaceGit returns a valid GitState on 200", async () => {
     mock(true, 200, { branch: "main", changes: [], commits: [] });
     expect((await readWorkspaceGit()).branch).toBe("main");

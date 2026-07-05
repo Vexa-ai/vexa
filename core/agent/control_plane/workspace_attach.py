@@ -42,6 +42,10 @@ SEED_BACKUP_SLOT = "seed-prev"  # where 'start fresh' tucks the displaced defaul
 # slug in the active set is whatever ``state.active`` points at (the seed by default). This slug marks
 # the workspace that lives at the legacy in-place path and is ALWAYS active + non-deactivatable.
 PRIVATE_ROLE = "private"
+# A SHARED workspace mount (Lane A): a workspace the subject is a MEMBER of (not their own), resolved from
+# the membership index + authoritatively re-checked against the workspace's own policy/members.json. Write
+# access is gated by the member's role (contributor/owner write; viewer is read-only).
+SHARED_ROLE = "shared"
 
 # Inject the actual clone for tests (a local file repo, no network). Signature: (repo_url, ref, dest, token).
 CloneFn = Callable[[str, str, Path, Optional[str]], None]
@@ -362,6 +366,45 @@ def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
             path=str(_slug_dir(rootp, subject, state, slug)),
             write=True,
             primary=(slug == primary),
+        ))
+    return mounts
+
+
+def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]) -> list[ActiveMount]:
+    """The SHARED workspaces the subject is a MEMBER of (Lane A) — the seam that turns a membership grant
+    into a mount in the active set. ``memberships`` is the derived index ``users.data.memberships[]`` (each
+    ``{workspace_id, role, ...}``), used ONLY to ENUMERATE candidate workspaces; the role that gates WRITE
+    is re-read AUTHORITATIVELY from each workspace's own ``policy/members.json`` (via ``is_member``), because
+    the index is a convenience copy and must never be trusted for authorization.
+
+    A candidate is dropped (never mounted) when: it is the subject's own baseline, a reserved/dot slug, its
+    repo is not materialized on this node, or the authoritative check says the subject is NOT a member (a
+    stale index entry). Surviving members mount READ-ONLY for viewers, READ-WRITE for contributor/owner.
+    Pure + path-driven (no DB, no network) so the mapping is unit-tested offline."""
+    # Deferred import to keep the module-load order clean (workspace_membership owns the authoritative
+    # policy/members.json read + the reserved-slug set); neither module imports the other at top level.
+    from control_plane import workspace_membership as membership
+
+    rootp = Path(root).resolve()  # resolve up front so the traversal guard compares like-for-like (macOS /var→/private/var)
+    mounts: list[ActiveMount] = []
+    for entry in memberships:
+        ws_id = (entry.get("workspace_id") or "").strip() if isinstance(entry, dict) else ""
+        if not ws_id or ws_id == subject or ws_id.startswith(".") or ws_id in membership.RESERVED_SLUGS:
+            continue  # own baseline / reserved / dot-namespaced are never shared mounts
+        ws_dir = (rootp / ws_id).resolve()
+        if not ws_dir.exists() or rootp not in ws_dir.parents:
+            continue  # not materialized on this node, or a traversal attempt — skip, never raise
+        role = membership.is_member(rootp, ws_id, subject)  # AUTHORITATIVE (git), not the index copy
+        if role is None:
+            continue  # index is stale — the authoritative member list disagrees; do not mount
+        mounts.append(ActiveMount(
+            slug=ws_id,
+            repo=None,
+            ref=None,
+            role=SHARED_ROLE,
+            path=str(ws_dir),
+            write=role in ("contributor", "owner"),  # viewer = read-only; the write gate lands here
+            primary=False,  # a shared workspace is never the private baseline
         ))
     return mounts
 

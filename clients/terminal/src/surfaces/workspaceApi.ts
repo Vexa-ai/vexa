@@ -8,10 +8,12 @@ import { ApiError, getJson } from "./apiClient";
 
 export interface GitState { branch: string; changes: { path: string; kind: string }[]; commits: { sha: string; msg: string; when: string }[] }
 
-/** Read a file's content. A 404 → null (legit "not found"); ANY other failure throws (loud). */
-export async function readWorkspaceFile(path: string): Promise<string | null> {
+/** Read a file's content. A 404 → null (legit "not found"); ANY other failure throws (loud).
+ *  `slug` (Lane A) targets a SHARED workspace the caller is a member of; omitted → the caller's own ws. */
+export async function readWorkspaceFile(path: string, opts?: { slug?: string }): Promise<string | null> {
+  const q = opts?.slug ? `&slug=${encodeURIComponent(opts.slug)}` : "";
   try {
-    const data = await getJson<{ content?: string }>(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+    const data = await getJson<{ content?: string }>(`/api/workspace/file?path=${encodeURIComponent(path)}${q}`);
     return data.content ?? "";
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return null;
@@ -119,8 +121,14 @@ export async function renameWorkspace(slug: string, name: string): Promise<Attac
   });
 }
 
-export async function listWorkspaceTree(opts?: { hidden?: boolean }): Promise<string[]> {
-  const data = await getJson<{ files?: string[] }>(`/api/workspace/tree${opts?.hidden ? "?hidden=1" : ""}`);
+/** List a workspace's files. `slug` (Lane A) targets a SHARED workspace the caller is a member of;
+ *  omitted → the caller's own (primary) workspace. */
+export async function listWorkspaceTree(opts?: { hidden?: boolean; slug?: string }): Promise<string[]> {
+  const params = new URLSearchParams();
+  if (opts?.hidden) params.set("hidden", "1");
+  if (opts?.slug) params.set("slug", opts.slug);
+  const qs = params.toString();
+  const data = await getJson<{ files?: string[] }>(`/api/workspace/tree${qs ? `?${qs}` : ""}`);
   return data.files ?? [];
 }
 

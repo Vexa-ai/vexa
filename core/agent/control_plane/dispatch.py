@@ -14,9 +14,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from typing import Optional
 
 import contracts
-from control_plane.workspace_attach import active_workspaces
+from control_plane.workspace_attach import active_workspaces, shared_active_mounts
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared.ports import IdentityPort, RuntimePort
@@ -25,7 +26,7 @@ from shared.units import chat_session, dispatch_id, input_topic, output_topic
 logger = logging.getLogger("agent_api.dispatch")
 
 
-def build_active_set(settings: Settings, subject: str) -> list[dict]:
+def build_active_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None) -> list[dict]:
     """The subject's NORMAL active workspaces (the MIDDLE tier of the stack — WP-A1.1/A2.1): one entry
     per ACTIVE workspace in the additive set. Each entry: ``{slug, path, role, write, primary}`` with
     ``path`` the ABSOLUTE container path under the bound store root (the private baseline at the legacy
@@ -33,6 +34,11 @@ def build_active_set(settings: Settings, subject: str) -> list[dict]:
 
     Deterministic (primary first), generalizes to N mounts. A subject with no activated extras yields
     exactly the private baseline — identical to today's single-workspace behavior.
+
+    ``memberships`` (Lane A) = the subject's ``users.data.memberships[]`` index (the dispatcher resolves it
+    once and passes the data in). When present, the SHARED workspaces the subject is a member of are
+    appended after their private set. Slice 1: shared mounts are READ-ONLY regardless of the member's role —
+    shared WRITES require the serialized attributed writer (Lane W); until it lands, ``write=False`` here.
 
     Fails SOFT: any error resolving the on-disk set (a never-seeded subject, a store hiccup) falls back to
     the lone private-baseline mount so a dispatch never dies on mount resolution."""
@@ -43,14 +49,28 @@ def build_active_set(settings: Settings, subject: str) -> list[dict]:
         logger.warning("active-set resolution failed for subject=%s — mounting the private baseline only", subject)
         mounts = []
     if not mounts:
-        return [{"slug": subject, "path": f"{root}/{subject}", "role": "private", "write": True, "primary": True}]
-    return [
-        {"slug": m.slug, "path": m.path, "role": m.role, "write": m.write, "primary": m.primary}
-        for m in mounts
+        private = [{"slug": subject, "path": f"{root}/{subject}", "role": "private", "write": True, "primary": True}]
+    else:
+        private = [
+            {"slug": m.slug, "path": m.path, "role": m.role, "write": m.write, "primary": m.primary}
+            for m in mounts
+        ]
+    if not memberships:
+        return private
+    # Lane A: append the shared workspaces the subject is a member of — mounted READ-ONLY for Slice 1
+    # (the write gate opens with Lane W). A shared-mount hiccup must never break the dispatch → fall soft.
+    try:
+        shared = shared_active_mounts(root, subject, memberships)
+    except Exception:  # noqa: BLE001
+        logger.warning("shared-mount resolution failed for subject=%s — mounting private workspaces only", subject)
+        shared = []
+    return private + [
+        {"slug": s.slug, "path": s.path, "role": s.role, "write": False, "primary": False}
+        for s in shared
     ]
 
 
-def build_mount_set(settings: Settings, subject: str) -> list[dict]:
+def build_mount_set(settings: Settings, subject: str, memberships: Optional[list[dict]] = None) -> list[dict]:
     """The full THREE-TIER mount STACK (AMENDMENT 4) the worker materializes — an ORDERED LIST, never
     special-cased slots, so it generalizes uniformly across all three runtime backends:
 
@@ -64,7 +84,7 @@ def build_mount_set(settings: Settings, subject: str) -> list[dict]:
     (barring an unconfigured/absent _global); the normal active workspaces sit between them. Both system
     tiers fail SOFT into the active set so a dispatch never dies on system-mount resolution — but a
     system-tier failure is LOGGED loudly (it degrades the model's base behaviour / private memory)."""
-    active = build_active_set(settings, subject)
+    active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
     # Tier 1 — GLOBAL SYSTEM (read-only), when configured + present. Absent → skip (the stack still runs).
@@ -105,7 +125,8 @@ MODEL_AUTH_ENV_ALLOWLIST = (
 )
 
 
-def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str) -> dict[str, str]:
+def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str,
+                   memberships: Optional[list[dict]] = None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -116,7 +137,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
     # + roles the turn respects), not a per-mount bind — it generalizes uniformly across all three backends.
-    mounts = build_mount_set(settings, subject)
+    mounts = build_mount_set(settings, subject, memberships)
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -252,10 +273,15 @@ class Dispatcher:
     """Turns a ``unit.v1`` dispatch into a runtime.v1 agent workload — the one path every trigger funnels
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
 
-    def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort) -> None:
+    def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort,
+                 membership_index=None) -> None:
         self._settings = settings
         self._runtime = runtime
         self._identity = identity
+        # Lane A: the derived memberships index (users.data.memberships[]). Used to resolve, per dispatch,
+        # the SHARED workspaces the subject is a member of so they enter the mount set. None → no shared
+        # mounts (the private stack still dispatches exactly as before).
+        self._membership_index = membership_index
         self.dispatched: list[dict] = []  # observability — the dispatches that fired
 
     @property
@@ -275,7 +301,16 @@ class Dispatcher:
         token = self._identity.mint(
             identity["subject"], identity["launcher"], invocation["workspaces"], invocation.get("tools", []),
         )
-        env = build_unit_env(self._settings, invocation, unit_id=uid, token=token)
+        # Lane A: resolve the subject's shared memberships once (fail soft — a membership-index hiccup must
+        # never break a dispatch; the private stack still mounts). Passed as data into the mount builder.
+        memberships = None
+        if self._membership_index is not None:
+            try:
+                memberships = self._membership_index.list(identity["subject"])
+            except Exception:  # noqa: BLE001
+                logger.warning("membership-index lookup failed for subject=%s — dispatching private mounts only",
+                               identity["subject"])
+        env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships)
         acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
         logger.info(
             "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s",
