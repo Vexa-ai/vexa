@@ -18,6 +18,7 @@ from control_plane.workspace_publish import (
     PublishError,
     RepoExistsError,
     publish_workspace,
+    published_remote_url,
 )
 
 TOKEN = "ghp_SECRET_token_123"
@@ -189,3 +190,36 @@ def test_bad_inputs_are_value_errors(tmp_path):
         publish_workspace(root, "u2", token=TOKEN, repo_name="bad name!")  # invalid repo name
     with pytest.raises(ValueError):
         publish_workspace(root, "u2", token=TOKEN)  # neither repo_name nor remote_url
+
+# ── published_remote_url — the read-side probe the terminal renders the published state from ────────
+
+
+def test_published_remote_url_reflects_publish_state(tmp_path):
+    """None before a publish; the token-free remote URL (``.git`` stripped, like PublishResult) after."""
+    root = tmp_path / "workspaces"
+    ws = _workspace(root, "u1")
+    assert published_remote_url(ws) is None                     # never published
+
+    bare = _bare(tmp_path / "remote.git")
+    publish_workspace(root, "u1", token=TOKEN, remote_url=str(bare))
+
+    url = published_remote_url(ws)
+    assert url == str(bare)[: -len(".git")]                     # the display URL of the publish remote
+    assert TOKEN not in url                                     # P15: never a credential in the read path
+
+
+def test_published_remote_url_strips_embedded_credentials(tmp_path):
+    """Defense in depth (P15): even a credential somehow persisted in the remote URL never reaches the
+    client — user:token@ is stripped, and the URL is the human (no ``.git``) form."""
+    root = tmp_path / "workspaces"
+    ws = _workspace(root, "u1")
+    _run(ws, "remote", "add", PUBLISH_REMOTE, f"https://x-access-token:{TOKEN}@github.com/u/repo.git")
+    assert published_remote_url(ws) == "https://github.com/u/repo"
+
+
+def test_published_remote_url_quiet_on_non_repo(tmp_path):
+    """A state probe, not an operation: a missing dir / non-repo is simply 'not published' (None)."""
+    assert published_remote_url(tmp_path / "nope") is None
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert published_remote_url(plain) is None

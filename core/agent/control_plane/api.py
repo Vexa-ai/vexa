@@ -35,7 +35,7 @@ from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from control_plane.workspace_attach import CloneError, attached_workspaces, rename_workspace, swap_workspace
-from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace
+from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from shared.ports import SchedulerPort, StreamReader
@@ -770,11 +770,17 @@ def create_app(
 
     @app.get("/api/workspace/attached")
     def ws_attached(request: Request):
-        """The subject's attachment view: the active slug + the parked workspaces available to swap back to."""
+        """The subject's attachment view: the active slug + the parked workspaces available to swap back
+        to, plus ``published_url`` — where the ACTIVE workspace was published (the ``vexa-publish``
+        remote's token-free URL), or null when it never was. The client renders a published workspace
+        with a link to its GitHub home instead of the publish action."""
+        subject = subject_of(request)
         try:
-            return attached_workspaces(wsr.root, subject_of(request))
+            state = attached_workspaces(wsr.root, subject)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
+        state["published_url"] = published_remote_url(wsr.workspace_dir(subject))
+        return state
 
     @app.post("/api/workspace/swap")
     def ws_swap(request: Request, body: WorkspaceSwapBody = Body(default=WorkspaceSwapBody())):

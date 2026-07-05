@@ -130,6 +130,28 @@ def _display_url(remote_url: str) -> str:
     return re.sub(r"\.git$", "", remote_url)
 
 
+# Credentials embedded in an http(s) URL (``proto://user[:token]@host/…``) — stripped defensively
+# before a remote URL is ever returned to a client. push_with_token already scrubs the remote back to
+# the token-free URL after every push (P15); this is belt-and-braces for the read path.
+_URL_CREDENTIAL_RE = re.compile(r"^([a-z][a-z0-9+.-]*://)[^/@]+@", re.IGNORECASE)
+
+
+def published_remote_url(ws: str | Path) -> Optional[str]:
+    """Where this workspace was published — the ``vexa-publish`` remote's token-free human URL, or
+    ``None`` when it was never published (no remote / not a git repo). Read-only and quiet: this is
+    a state probe, not an operation, so nothing raises. Any credential somehow present in the stored
+    URL is stripped before returning (P15)."""
+    wsp = Path(ws)
+    if not (wsp / ".git").exists():
+        return None
+    proc = subprocess.run(["git", "-C", str(wsp), "remote", "get-url", PUBLISH_REMOTE],
+                          capture_output=True, text=True, env=scrubbed_git_env())
+    url = proc.stdout.strip()
+    if proc.returncode != 0 or not url:
+        return None
+    return _display_url(_URL_CREDENTIAL_RE.sub(r"\1", url))
+
+
 def publish_workspace(
     root: str | Path,
     subject: str,

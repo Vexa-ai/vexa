@@ -268,7 +268,8 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<{ repo: string; ref: string; token: string } | null>(null);  // non-null = attach form shown
-  const [pubForm, setPubForm] = useState<{ name: string; priv: boolean; token: string } | null>(null);  // non-null = publish form shown
+  // non-null = publish form shown; remoteUrl set = PUSH-UPDATES mode (plain push to the published home)
+  const [pubForm, setPubForm] = useState<{ name: string; priv: boolean; token: string; remoteUrl?: string } | null>(null);
   const [published, setPublished] = useState<PublishResult | null>(null);  // last publish success (repo URL shown)
   const [renaming, setRenaming] = useState<string | null>(null);  // slug whose name is being edited inline
   const cancelled = useRef(false);  // Escape vs Enter/blur on the rename input (blur fires for both)
@@ -293,10 +294,12 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
   };
 
   // Publish the vexa-born ACTIVE workspace to GitHub — repo created with the per-call token (never
-  // stored, P15), full history pushed. Success shows the repo URL; failure shows the (redacted) error.
-  const doPublish = async (name: string, priv: boolean, token: string) => {
+  // stored, P15), full history pushed. `remoteUrl` set = push updates to the already-published home
+  // (plain push, never force). Success shows the repo URL and reloads the view so the row flips to
+  // its published state (link + push); failure shows the (redacted) error.
+  const doPublish = async (f: { name: string; priv: boolean; token: string; remoteUrl?: string }) => {
     setBusy(true); setErr(null);
-    try { setPublished(await publishWorkspace(name, priv, token)); setPubForm(null); }
+    try { setPublished(await publishWorkspace(f.name.trim(), f.priv, f.token.trim(), f.remoteUrl)); setPubForm(null); load(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
@@ -350,6 +353,24 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
                   title={active ? "Active workspace" : "Swap to this workspace"}
                   style={{ flex: 1, color: active ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: active ? "default" : "pointer" }}>{display}</span>
               )}
+              {/* Published-state affordances — ON the active row (publish is an action on THIS workspace,
+                  not a list item): published → a link to its GitHub home (+ a secondary push-updates
+                  action, re-publish is a plain push); not yet published (vexa-born only) → the publish
+                  action itself. An attached workspace shows neither — it already has a home. */}
+              {!isRenaming && active && view.published_url && (
+                <a href={view.published_url} target="_blank" rel="noreferrer"
+                  title={`Published — open on GitHub (${view.published_url})`}
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
+                  <Icon name="github" size={12} />
+                </a>
+              )}
+              {!isRenaming && active && activeBorn && !busy && (
+                <span onClick={() => { setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "", remoteUrl: view.published_url ?? undefined }); }}
+                  title={view.published_url ? "Push updates to GitHub" : "Publish this workspace to GitHub…"}
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
+                  <Icon name="upload" size={12} />
+                </span>
+              )}
               {!isRenaming && (
                 <span onClick={() => setRenaming(slug)} title="Rename (display label only)"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 11 }}>✎</span>
@@ -385,30 +406,41 @@ function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {
             </div>
           </div>
         )}
-        {activeBorn && (pubForm === null ? (
-          <div onClick={() => { setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "" }); }} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-            <Icon name="plus" size={12} /> Publish to GitHub…
-          </div>
-        ) : (
-          <div style={{ padding: "6px 9px", display: "flex", flexDirection: "column", gap: 6 }}>
-            <input autoFocus value={pubForm.name} placeholder="repo name" disabled={busy}
-              onChange={(e) => setPubForm({ ...pubForm, name: e.target.value })}
-              onKeyDown={(e) => { if (e.key === "Enter" && pubForm.name.trim() && pubForm.token.trim()) void doPublish(pubForm.name.trim(), pubForm.priv, pubForm.token.trim()); if (e.key === "Escape") setPubForm(null); }}
-              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--t2)", cursor: "pointer" }}>
-              <input type="checkbox" checked={pubForm.priv} disabled={busy} onChange={(e) => setPubForm({ ...pubForm, priv: e.target.checked })} />
-              private repo
-            </label>
-            <input type="password" value={pubForm.token} placeholder="GitHub token (repo scope — used once, never stored)" disabled={busy}
-              onChange={(e) => setPubForm({ ...pubForm, token: e.target.value })}
-              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
-            <div style={{ display: "flex", gap: 8 }}>
-              <button disabled={busy || !pubForm.name.trim() || !pubForm.token.trim()} onClick={() => void doPublish(pubForm.name.trim(), pubForm.priv, pubForm.token.trim())}
-                style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !pubForm.name.trim() || !pubForm.token.trim() ? 0.5 : 1 }}>{busy ? "Publishing…" : "Publish"}</button>
-              <button disabled={busy} onClick={() => setPubForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+        {/* Publish / push-updates form — opened from the ACTIVE row's ↑ action (no list-level trigger:
+            publish is an action on the active workspace, not a new list entry). Push-updates mode
+            (remoteUrl set) skips repo creation: token only, plain push to the published home. */}
+        {pubForm !== null && (() => {
+          const pushMode = !!pubForm.remoteUrl;
+          const ready = !!pubForm.token.trim() && (pushMode || !!pubForm.name.trim());
+          const onKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" && ready) void doPublish(pubForm); if (e.key === "Escape") setPubForm(null); };
+          return (
+            <div style={{ padding: "6px 9px", display: "flex", flexDirection: "column", gap: 6 }}>
+              {pushMode ? (
+                <div title={pubForm.remoteUrl} style={{ fontSize: 12, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  push updates → {pubForm.remoteUrl}
+                </div>
+              ) : (<>
+                <input autoFocus value={pubForm.name} placeholder="repo name" disabled={busy}
+                  onChange={(e) => setPubForm({ ...pubForm, name: e.target.value })} onKeyDown={onKey}
+                  style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--t2)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={pubForm.priv} disabled={busy} onChange={(e) => setPubForm({ ...pubForm, priv: e.target.checked })} />
+                  private repo
+                </label>
+              </>)}
+              <input autoFocus={pushMode} type="password" value={pubForm.token} placeholder="GitHub token (repo scope — used once, never stored)" disabled={busy}
+                onChange={(e) => setPubForm({ ...pubForm, token: e.target.value })} onKeyDown={onKey}
+                style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button disabled={busy || !ready} onClick={() => void doPublish(pubForm)}
+                  style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !ready ? 0.5 : 1 }}>
+                  {busy ? (pushMode ? "Pushing…" : "Publishing…") : (pushMode ? "Push updates" : "Publish")}
+                </button>
+                <button disabled={busy} onClick={() => setPubForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })()}
         {published && (
           <div style={{ padding: "4px 9px", fontSize: 12, color: "var(--t2)", display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ color: "var(--green)" }}>✓</span> published →&nbsp;

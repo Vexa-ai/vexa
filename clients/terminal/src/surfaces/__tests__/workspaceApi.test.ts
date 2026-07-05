@@ -2,7 +2,7 @@
  *  error throws, a malformed git body throws (never reaches GitSection as a fake GitState), and a 404
  *  file read is the one legit "empty" → null. */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, swapWorkspace, renameWorkspace, publishWorkspace } from "../workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, swapWorkspace, renameWorkspace, publishWorkspace } from "../workspaceApi";
 import { ApiError } from "../apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -71,6 +71,20 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
     await expect(publishWorkspace("w", true, "TOK")).rejects.toBeInstanceOf(ApiError);
     mock(false, 502, { detail: "git push failed" });
     await expect(publishWorkspace("w", false, "TOK")).rejects.toBeInstanceOf(ApiError);
+  });
+  it("publishWorkspace with a remoteUrl POSTs {remote_url,token} — PUSH UPDATES to the published home, no repo creation", async () => {
+    mock(true, 200, { repo_url: "https://github.com/u/w", pushed_ref: "main", head_sha: "def456", created: false });
+    const res = await publishWorkspace("ignored", true, "TOK", "https://github.com/u/w");
+    expect(lastUrl()).toBe("/api/workspace/publish");
+    expect(lastBody()).toEqual({ remote_url: "https://github.com/u/w", token: "TOK" });
+    expect(res.created).toBe(false);
+  });
+  it("readAttachedWorkspaces surfaces published_url (the active workspace's GitHub home, or null)", async () => {
+    mock(true, 200, { active: null, slots: {}, published_url: "https://github.com/u/w" });
+    expect((await readAttachedWorkspaces()).published_url).toBe("https://github.com/u/w");
+    expect(lastUrl()).toBe("/api/workspace/attached");
+    mock(true, 200, { active: null, slots: {}, published_url: null });
+    expect((await readAttachedWorkspaces()).published_url).toBeNull();
   });
   it("renameWorkspace POSTs {slug,name} to /api/workspace/rename", async () => {
     mock(true, 200, { active: "seed", slots: {} });
