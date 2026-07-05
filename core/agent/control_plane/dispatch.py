@@ -77,6 +77,13 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env["VEXA_MEETING_PLATFORM"] = str(meeting["platform"])
         if meeting.get("transcript_start_id"):
             env["VEXA_TRANSCRIPT_START_ID"] = str(meeting["transcript_start_id"])
+        if meeting.get("numeric_meeting_id"):
+            # The meetings-domain ROW id (unique per meeting run). The worker keys its
+            # processed-notes stream by it (proc:meeting:{numeric}) so a re-sent bot on the same
+            # native link cannot mix/clobber a previous meeting's processed doc — and the
+            # meeting-api db-writer (which knows its own row ids) drains that stream into the
+            # meeting row's data JSONB for durability.
+            env["VEXA_MEETING_NUMERIC_ID"] = str(meeting["numeric_meeting_id"])
     elif meeting and meeting.get("native_id"):
         # Chat GROUNDED in a live meeting (cookbook #1): no numeric meeting_id, but the meeting-scoped
         # tool needs the native id + platform to target meetings' published /transcripts. (The
@@ -87,6 +94,14 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     return env
 
 
+# Internal routing hints that ride on context.meeting but are NOT part of the sealed MeetingRef
+# (additionalProperties: false) — stripped before the unit.v1 contract check, like ctx.session.
+# ``numeric_meeting_id`` is the meetings-domain ROW id (unique per meeting run, unlike the native
+# id a re-sent bot reuses) — the worker keys its processed-notes stream by it so re-sends can never
+# clobber a previous meeting's processed doc.
+_INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id"})
+
+
 def _without_chat_session(invocation: dict) -> dict:
     """A shallow copy with internal routing hints removed for the unit.v1 contract check."""
     ctx = invocation.get("context")
@@ -94,14 +109,14 @@ def _without_chat_session(invocation: dict) -> dict:
         return invocation
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
     needs_clean = "session" in ctx or (
-        isinstance(meeting, dict) and "transcript_start_id" in meeting
+        isinstance(meeting, dict) and bool(_INTERNAL_MEETING_HINTS & meeting.keys())
     )
     if not needs_clean:
         return invocation
     clean = dict(invocation)
     clean_ctx = {k: v for k, v in ctx.items() if k != "session"}
-    if isinstance(meeting, dict) and "transcript_start_id" in meeting:
-        clean_ctx["meeting"] = {k: v for k, v in meeting.items() if k != "transcript_start_id"}
+    if isinstance(meeting, dict) and (_INTERNAL_MEETING_HINTS & meeting.keys()):
+        clean_ctx["meeting"] = {k: v for k, v in meeting.items() if k not in _INTERNAL_MEETING_HINTS}
     clean["context"] = clean_ctx
     return clean
 

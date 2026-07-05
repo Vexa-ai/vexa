@@ -57,6 +57,11 @@ def create_app(
     command_publisher: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
+    # completion finalizer — awaited with the NUMERIC meeting id when the FSM lands on a TERMINAL
+    # status (completed/failed). Production wires collector/db_writer.finalize_meeting: flush the
+    # meeting's remaining redis segments to Postgres + persist the processed doc into meeting.data,
+    # so a finished meeting's transcript is durable IMMEDIATELY. Best-effort — never fails the callback.
+    transcript_finalizer: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -87,7 +92,7 @@ def create_app(
     app.state.webhook_sink = webhook_sink
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
-    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis)
+    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer)
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
@@ -126,6 +131,7 @@ def _mount_lifecycle(
     meeting_repo: "_bot_spawn.MeetingRepo",
     webhook_sink: "object" = None,
     redis: "object" = None,
+    transcript_finalizer: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -252,6 +258,27 @@ def _mount_lifecycle(
             except Exception as e:  # noqa: BLE001 — persistence is best-effort
                 log_event("lifecycle_persist_failed", audience="system", level="warning",
                           span="lifecycle.callback", fields={"error": str(e)})
+        # COMPLETION FINALIZATION — the moment the FSM lands on a terminal status, flush the
+        # meeting's remaining live redis segments to the durable store (threshold 0: the mutable
+        # tail included, no more updates are coming) and persist the processed doc into
+        # meeting.data, via the injected finalizer (prod: collector/db_writer.finalize_meeting).
+        # This guarantees a completed meeting's transcript is durable even if the periodic
+        # db-writer never gets another tick (crash/restart right after completion). Best-effort:
+        # the periodic loop retries anything this misses; never fail the bot's callback.
+        if (
+            transcript_finalizer is not None
+            and not change.no_op
+            and rec.status is not None
+            and rec.status.value in ("completed", "failed")
+            and isinstance(meeting_row, dict)
+            and meeting_row.get("id") is not None
+        ):
+            try:
+                await transcript_finalizer(meeting_row["id"])
+            except Exception as e:  # noqa: BLE001 — the db-writer loop is the retry path
+                log_event("transcript_finalize_failed", audience="system", level="warning",
+                          span="lifecycle.callback",
+                          fields={"meeting_id": meeting_row.get("id"), "error": str(e)})
         # Build the TYPED event the transition maps to (meeting.started on active,
         # meeting.completed with the post-meeting envelope on completion, bot.failed on terminal
         # failure) — additive alongside meeting.status_change, never instead of it. Built AFTER the

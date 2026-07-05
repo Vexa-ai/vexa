@@ -6,6 +6,10 @@ control-plane background loops alongside the HTTP app via the FastAPI lifespan:
 
   * **collector segment consumer** — drains the ``transcription_segments`` redis stream
     (``consume_segments`` → ``ingest`` → publish ``tc:…:mutable``) on a poll interval.
+  * **db-writer** — the RESTORED parent flush loop (0.10 ``process_redis_to_postgres``): each tick
+    moves immutable live segments from the redis hash ``meeting:{id}:segments`` into the
+    ``transcriptions`` table (upsert on segment identity; redis trimmed only after the confirmed
+    write) and drains the copilot's ``proc:meeting:{id}`` notes into ``meeting.data`` JSONB.
   * **webhook retry-drain** — one ``drain_retry_queue`` sweep per interval over the redis retry
     queue (failed ``meeting.status_change`` deliveries are retried with backoff).
   * **scheduler tick** — fires due ``schedule.v1`` jobs (this also drives the join-retry re-spawns
@@ -116,6 +120,15 @@ def build_production_app():
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
 
+    # Completion finalization: when the lifecycle FSM lands on a terminal status the callback runs
+    # this — flush the meeting's remaining redis segments to Postgres (threshold 0) + persist the
+    # processed doc into meeting.data, so a finished meeting is durable IMMEDIATELY (not `whenever
+    # the next db-writer tick happens to run`).
+    from .collector.db_writer import finalize_meeting
+
+    async def _transcript_finalizer(meeting_id: int) -> None:
+        await finalize_meeting(redis_client, transcript_store, meeting_id)
+
     app = create_app(
         transcript_store=transcript_store,
         redis=segment_bus,
@@ -128,6 +141,7 @@ def build_production_app():
         # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
         command_publisher=redis_client,
         webhook_sink=webhook_sink,
+        transcript_finalizer=_transcript_finalizer,
     )
 
     _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client)
@@ -150,6 +164,10 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     seg_interval = float(os.getenv("SEGMENT_CONSUMER_INTERVAL", "0.5"))
     webhook_interval = float(os.getenv("WEBHOOK_DRAIN_INTERVAL", "5"))
     scheduler_interval = float(os.getenv("SCHEDULER_TICK_INTERVAL", "1"))
+    # The db-writer cadence — the parent's BACKGROUND_TASK_INTERVAL (10s); either env name works.
+    db_writer_interval = float(
+        os.getenv("DB_WRITER_INTERVAL_S", os.getenv("BACKGROUND_TASK_INTERVAL", "10"))
+    )
     # Stop-reconcile backstop: a meeting whose bot was told to leave but never sent its own terminal
     # callback would stay `stopping` forever. After a grace window, complete it through the same
     # lifecycle callback the bot uses — so the FSM, webhook, and ws status frame all fire identically.
@@ -174,6 +192,26 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             except Exception:
                 log.exception("segment consumer tick failed")
             await asyncio.sleep(seg_interval)
+
+    async def _db_writer_loop() -> None:
+        # The RESTORED parent db-writer (0.10 process_redis_to_postgres): each tick, flush every
+        # active meeting's IMMUTABLE redis-hash segments into the transcriptions table (upsert on
+        # (meeting_id, segment_id)) and drain its processed-notes stream into meeting.data JSONB.
+        # Redis is trimmed only AFTER the confirmed durable write. Without this loop nothing ever
+        # moved segments to Postgres — the transcriptions table stayed EMPTY and a redis eviction
+        # was unrecoverable transcript loss (the 0.12 release blocker).
+        from .collector.db_writer import db_writer_tick
+
+        if not hasattr(transcript_store, "upsert_segments"):
+            return  # a store without a durable sink (bare fake) — nothing to flush into
+        while True:
+            try:
+                await db_writer_tick(redis_client, transcript_store)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("db-writer tick failed")
+            await asyncio.sleep(db_writer_interval)
 
     async def _webhook_drain_loop() -> None:
         import httpx
@@ -261,6 +299,7 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     async def lifespan(_app):
         tasks = [
             asyncio.create_task(_segment_consumer_loop(), name="segment-consumer"),
+            asyncio.create_task(_db_writer_loop(), name="db-writer"),
             asyncio.create_task(_webhook_drain_loop(), name="webhook-drain"),
             asyncio.create_task(_scheduler_tick_loop(), name="scheduler-tick"),
             asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
