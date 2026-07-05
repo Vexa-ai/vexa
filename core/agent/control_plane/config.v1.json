@@ -58,7 +58,10 @@
       "class": "defaulted",
       "default": "agent-workspaces",
       "description": "host path / docker named volume the runtime binds into the worker as the workspace store backing",
-      "targets": ["compose", "helm"]
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_AGENT_DEFAULT_SUBJECT",
@@ -116,21 +119,27 @@
       "class": "defaulted",
       "default": "(openai-compat)",
       "description": "llm-module CompletionPort adapter key forwarded into workers by dispatch",
-      "targets": ["compose"]
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "VEXA_LLM_MODEL",
       "class": "defaulted",
       "default": "(adapter default)",
       "description": "llm-module deployment-default model forwarded into workers by dispatch",
-      "targets": ["compose"]
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "VEXA_MODEL_ALLOWLIST",
       "class": "defaulted",
       "default": "(empty — allow any workspace-pinned model)",
       "description": "operator gate on workspace-pinned models (comma-separated)",
-      "targets": ["compose"]
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "VEXA_MEETING_IDLE_TIMEOUT_SEC",
@@ -187,7 +196,10 @@
       "capability": "model_inference",
       "secret": true,
       "description": "DOCKER-HOST path to a claude credentials JSON. agent-api does not use it itself — the RUNTIME bind-mounts it into every spawned worker at /root/.claude/.credentials.json (see the runtime's config.v1) — but the agent plane's /health surfaces whether ANY model-credential path is configured, because that is where the operator looks when chat fails",
-      "targets": ["compose", "lite"]
+      "targets": [
+        "compose",
+        "lite"
+      ]
     },
     {
       "key": "ANTHROPIC_API_KEY",
@@ -216,20 +228,42 @@
       "capability": "model_inference",
       "secret": true,
       "description": "llm-module completion-adapter credential — dispatch stamps it into every worker spec env (adapters fall back ANTHROPIC_AUTH_TOKEN → ANTHROPIC_API_KEY when unset)",
-      "targets": ["compose"]
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "VEXA_LLM_BASE_URL",
       "class": "defaulted",
       "default": "(unset — adapter default; openai-compat requires one via this or ANTHROPIC_BASE_URL)",
       "description": "llm-module completion endpoint — an endpoint selector, not a credential alternative; dispatch stamps it into every worker spec env",
-      "targets": ["compose"]
+      "targets": [
+        "compose"
+      ]
     },
     {
       "key": "ANTHROPIC_BASE_URL",
       "class": "defaulted",
       "default": "(unset — api.anthropic.com)",
       "description": "claude-CLI/gateway endpoint — an endpoint selector, not a credential alternative; dispatch stamps it (with the credential it pairs with) into every worker spec env"
+    },
+    {
+      "key": "VEXA_ADMIN_API_URL",
+      "class": "defaulted",
+      "default": "(unset — in-memory membership index)",
+      "description": "Lane M: identity admin-api base URL for the users.data.memberships[] index mirror; empty = in-memory index (policy/members.json in the workspace git repo stays authoritative)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_INTERNAL_API_SECRET",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "Lane M: X-Internal-Secret for the admin-api membership-index internal edge (same value the gateway uses)",
+      "targets": [
+        "compose"
+      ]
     }
   ],
   "capabilities": {

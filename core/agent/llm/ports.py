@@ -99,6 +99,63 @@ def _git(work: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
+
+# The platform-write-only subtree of every workspace repo. Agent turns must NEVER modify it
+# (membership/invites live here — see control_plane.workspace_membership). Kept as a bare string so
+# this module stays product-import-free (it is liftable into a standalone brick). The control plane's
+# membership writer commits policy/ directly; a turn that touches it is reverted here before the commit.
+_POLICY_DIR = "policy"
+
+
+def _revert_policy_writes(work: Path) -> list[str]:
+    """Revert any agent-turn change under ``policy/`` before the turn commit — policy/ is
+    PLATFORM-WRITE-ONLY (the Q3 write-guard, default: post-turn validation + revert). Returns the
+    reverted paths so the caller can flag them. Tracked policy/ files are checked out back to HEAD;
+    newly-added / untracked ones are unstaged and removed."""
+    status = _git(work, "status", "--porcelain", "--", _POLICY_DIR)
+    if not status:
+        return []
+    import shutil
+    reverted: list[str] = []
+    for raw in status.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        untracked = line.lstrip().startswith("??")
+        # Porcelain is "XY<space>PATH"; the shared _git strips the first line's leading space, so parse
+        # tolerantly: the path starts at the first _POLICY_DIR occurrence (policy/ never appears in the
+        # 2-char status code). Renames "old -> new" keep the destination.
+        idx = line.find(_POLICY_DIR)
+        if idx < 0:
+            continue
+        path = line[idx:].strip()
+        if " -> " in path:  # rename
+            path = path.split(" -> ", 1)[1].strip()
+        if not path.startswith(_POLICY_DIR):
+            continue
+        if untracked:
+            target = work / path
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+            except OSError:
+                pass
+        else:
+            try:
+                _git(work, "checkout", "HEAD", "--", path)
+            except subprocess.CalledProcessError:
+                # not in HEAD (agent ADDED it) — unstage + delete
+                try:
+                    _git(work, "reset", "--", path)
+                except subprocess.CalledProcessError:
+                    pass
+                (work / path).unlink(missing_ok=True)
+        reverted.append(path)
+    return reverted
+
+
 def run_harness_turn(
     work: Path | str,
     prompt: str,
@@ -115,8 +172,11 @@ def run_harness_turn(
 
     The workspace is a FREE ZONE: governance is PROMPT-ONLY (workspace conventions guide the
     agent). After the turn we do not validate or revert writes — if the tree changed, commit and
-    emit ``{"type":"commit","sha":...}``. (Hard enforcement is available upstream via
-    ``shared.governance`` if it needs to come back.)
+    emit ``{"type":"commit","sha":...}`` — with ONE exception: ``policy/`` is PLATFORM-WRITE-ONLY
+    (membership/invites live there; see ``control_plane.workspace_membership``). Any agent-turn
+    change under ``policy/`` is reverted before the commit (emitting ``{"type":"policy-reverted",
+    "paths":[…]}``). (Hard enforcement is available upstream via ``shared.governance`` if it needs
+    to come back.)
 
     ``commit=False`` is the propose-only path (e.g. a read-only turn): NO git is touched — never
     contend on a workspace another agent may be committing to (the index.lock collision).
@@ -131,6 +191,10 @@ def run_harness_turn(
 
     if not commit:
         return
+
+    reverted = _revert_policy_writes(work)  # policy/ is PLATFORM-WRITE-ONLY (Q3 guard)
+    if reverted:
+        yield {"type": "policy-reverted", "paths": reverted}
 
     if _git(work, "status", "--porcelain"):
         _git(work, "add", "-A")

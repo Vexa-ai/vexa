@@ -288,6 +288,74 @@ def create_app() -> FastAPI:
                 resp["webhook_events"] = data_blob["webhook_events"]
         return resp
 
+    # --- internal tier: workspace membership index (Lane M) — the DERIVED users.data.memberships[]
+    #     mirror of the authoritative policy/members.json in each shared workspace's git repo. agent-api
+    #     (no DB) POSTs mirror updates here over the same X-Internal-Secret internal edge as /internal/
+    #     validate. The git file is the source of truth (Q6): this index is a rebuildable listing cache.
+    def _check_internal(request: Request) -> None:
+        secret = _internal_secret()
+        if not _dev_mode() and not secret:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="INTERNAL_API_SECRET not configured")
+        if secret:
+            provided = request.headers.get("X-Internal-Secret", "")
+            if not hmac.compare_digest(provided, secret):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+
+    async def _load_user(user_id: str, db: AsyncSession) -> User:
+        try:
+            uid = int(user_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
+        user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
+        return user
+
+    @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
+    async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        user = await _load_user(user_id, db)
+        data = user.data if isinstance(user.data, dict) else {}
+        return {"memberships": data.get("memberships", [])}
+
+    @app.post("/internal/users/{user_id}/memberships", include_in_schema=False)
+    async def upsert_membership(user_id: str, payload: dict, request: Request,
+                                db: AsyncSession = Depends(get_db)):
+        """Upsert {workspace_id, role, added_at} into the user's memberships[] (idempotent per ws)."""
+        _check_internal(request)
+        from sqlalchemy.orm import attributes
+        user = await _load_user(user_id, db)
+        ws_id = payload.get("workspace_id")
+        if not ws_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="workspace_id required")
+        entry = {"workspace_id": ws_id, "role": payload.get("role", "viewer"),
+                 "added_at": payload.get("added_at")}
+        data = dict(user.data or {})
+        memberships = [m for m in (data.get("memberships") or []) if m.get("workspace_id") != ws_id]
+        memberships.append(entry)
+        data["memberships"] = memberships
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return {"memberships": memberships}
+
+    @app.delete("/internal/users/{user_id}/memberships/{workspace_id}", include_in_schema=False)
+    async def remove_membership(user_id: str, workspace_id: str, request: Request,
+                                db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        from sqlalchemy.orm import attributes
+        user = await _load_user(user_id, db)
+        data = dict(user.data or {})
+        memberships = [m for m in (data.get("memberships") or []) if m.get("workspace_id") != workspace_id]
+        data["memberships"] = memberships
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return {"memberships": memberships}
+
     @app.get("/")
     async def root():
         return {"message": "Vexa Admin API (v0.12)"}
