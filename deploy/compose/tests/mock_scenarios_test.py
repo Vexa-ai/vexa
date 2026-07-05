@@ -258,8 +258,13 @@ def test_mock_speak_ack(stack):
     deadline = time.time() + 25
     spoke = False
     while time.time() < deadline:
+        # The db-writer (#53) may have already flushed the marker to postgres and trimmed the
+        # hash between polls — the durable truth is hash OR transcriptions row.
         vals = stack.redis_cli("HVALS", f"meeting:{m['id']}:segments")
-        if "[mock spoke" in vals:
+        durable = stack.psql(
+            f"SELECT count(*) FROM transcriptions WHERE meeting_id = {int(m['id'])} AND text LIKE '%[mock spoke%'"
+        )
+        if "[mock spoke" in vals or (durable.strip().isdigit() and int(durable) >= 1):
             spoke = True
             break
         time.sleep(2)
