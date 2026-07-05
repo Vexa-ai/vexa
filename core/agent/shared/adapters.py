@@ -356,3 +356,60 @@ class SchedulerHttpClient(SchedulerPort):
             if e.code == 404:
                 return None
             raise
+
+
+class AdminApiMembershipIndex:
+    """A ``MembershipIndex`` (control_plane.workspace_membership) over the identity admin-api's internal
+    edge — the DERIVED ``users.data.memberships[]`` mirror of the authoritative ``policy/members.json``.
+
+    agent-api has no DB; the memberships index lives in the identity service's Postgres. This adapter
+    POSTs the mirror updates over the admin-api's internal tier (``X-Internal-Secret``, same shape as the
+    gateway→admin-api authz oracle). Best-effort by contract: the caller catches and logs failures — the
+    git file is the recovery source (Q6), so a down index never loses a grant. Stdlib urllib (no dep).
+    """
+
+    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 10.0) -> None:
+        self._base = base_url.rstrip("/")
+        self._secret = internal_secret
+        self._timeout = timeout
+
+    def _headers(self) -> dict[str, str]:
+        h = {"Content-Type": "application/json"}
+        if self._secret:
+            h["X-Internal-Secret"] = self._secret
+        return h
+
+    def add(self, subject: str, workspace_id: str, role: str, added_at: str) -> None:
+        body = json.dumps({"workspace_id": workspace_id, "role": role, "added_at": added_at}).encode()
+        req = urllib.request.Request(
+            f"{self._base}/internal/users/{subject}/memberships",
+            data=body, headers=self._headers(), method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self._timeout):
+            pass
+
+    def remove(self, subject: str, workspace_id: str) -> None:
+        req = urllib.request.Request(
+            f"{self._base}/internal/users/{subject}/memberships/{workspace_id}",
+            headers=self._headers(), method="DELETE",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout):
+                pass
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+
+    def list(self, subject: str) -> list[dict]:
+        req = urllib.request.Request(
+            f"{self._base}/internal/users/{subject}/memberships",
+            headers=self._headers(), method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                data = json.loads(r.read())
+            return data.get("memberships", []) if isinstance(data, dict) else (data or [])
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return []
+            raise

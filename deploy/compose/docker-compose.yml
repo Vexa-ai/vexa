@@ -205,6 +205,10 @@ services:
       - VEXA_AGENT_API_SELF_URL=http://agent-api:8100
       - VEXA_AGENT_PROFILE=agent
       - VEXA_WORKSPACES_DIR=/workspaces
+      # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
+      # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
       # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
       # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts

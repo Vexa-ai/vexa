@@ -17,6 +17,8 @@ honestly. Built lazily (PEP 562) so ``uvicorn control_plane.api:app`` wires the 
 """
 from __future__ import annotations
 
+import os
+
 import hashlib
 import json
 import logging
@@ -44,6 +46,8 @@ from control_plane.workspace_attach import (
     swap_workspace,
 )
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
+from control_plane import workspace_membership as membership_mod
+from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from shared.ports import SchedulerPort, StreamReader
@@ -254,6 +258,29 @@ class WorkspaceRenameBody(BaseModel):
     name: Optional[str] = None
 
 
+class InviteCreateBody(BaseModel):
+    """Mint a scoped invite for a shared workspace (owner/contributor only). Returns the token ONCE."""
+    model_config = {"extra": "forbid"}
+    workspace_id: str
+    role: str = "viewer"                 # viewer | contributor (never owner)
+    expires_in_sec: int = 604800         # 7 days
+    max_uses: int = 1
+    mode: str = "open"                   # open (anyone-with-link) | restricted (allowed_emails only)
+    allowed_emails: Optional[list[str]] = None  # restricted mode: the verified emails permitted to redeem
+
+
+class InviteAcceptBody(BaseModel):
+    """Redeem an invite token (any logged-in user). Idempotent per user."""
+    model_config = {"extra": "forbid"}
+    token: str
+
+
+class RoleSetBody(BaseModel):
+    """Flip a member's role (owner only) — the "change read/write permissions" DoD item."""
+    model_config = {"extra": "forbid"}
+    role: str                            # viewer | contributor | owner
+
+
 class WorkspaceActivateBody(BaseModel):
     """ADD a workspace to the subject's active set (the additive mount set — WP-A2.1). Pass ``repo`` to
     clone/restore a git repo, or ``slug`` to activate an already-parked slot. Unlike swap it does NOT park
@@ -404,6 +431,7 @@ def create_app(
     scheduler: Optional[SchedulerPort] = None,
     invocations_url: Optional[str] = None,
     redis_url: Optional[str] = None,
+    membership_index: Optional[MembershipIndex] = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -415,6 +443,7 @@ def create_app(
         sess = _Sessions()
     live = _LiveMeetings()
     wsr = reader or WorkspaceReader("/workspaces")
+    mindex: MembershipIndex = membership_index if membership_index is not None else InMemoryMembershipIndex()
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
@@ -422,11 +451,31 @@ def create_app(
     app.state.scheduler = scheduler
     settings = dispatcher.settings if dispatcher is not None else None
 
+    # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
+    # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
+    # x-user-id/x-user-email and re-injects the values it resolved from the verified api-key. In the
+    # current dev/direct topology the terminal and host-local clients reach agent-api WITHOUT the gateway
+    # hop (compose loopback + VEXA_AGENT_DEFAULT_SUBJECT fallback), so those headers are spoofable and
+    # restricted-mode invites MUST NOT be relied on as a security boundary here. A hardened deploy sets
+    # VEXA_REQUIRE_GATEWAY_IDENTITY=1: agent-api then rejects any request lacking the gateway's signed
+    # identity marker (X-Gateway-Verified), so identity headers are only honored when the gateway put
+    # them there. OFF by default so the dev/direct topology keeps working. Full fix = route the terminal
+    # through the gateway (Stage 4) and make the gateway the only thing that can reach agent-api.
+    _require_gateway_identity = os.environ.get("VEXA_REQUIRE_GATEWAY_IDENTITY", "").strip().lower() in ("1", "true", "yes")
+
     def subject_of(request: Request) -> str:
         """The authenticated subject (P20). The gateway resolves the api-key → user_id and injects
         ``X-User-Id``; agent-api derives the workspace/chat/quota partition from THAT, never from the
         client body/query. Fail-closed (401) when the header is absent, unless a single-user fallback
-        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front."""
+        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front.
+
+        When ``VEXA_REQUIRE_GATEWAY_IDENTITY`` is set, the request must additionally carry the gateway's
+        signed identity marker (``X-Gateway-Verified``) — a hardened deploy enforces that identity headers
+        were injected by the gateway, not forged by a direct/host-local caller (see the TOPOLOGY BOUNDARY
+        note above). This does NOT change the default dev/direct topology."""
+        if _require_gateway_identity and not request.headers.get("x-gateway-verified"):
+            raise HTTPException(status_code=401,
+                                detail="gateway-signed identity required (VEXA_REQUIRE_GATEWAY_IDENTITY)")
         uid = request.headers.get("x-user-id")
         if uid:
             return uid
@@ -1030,12 +1079,154 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+
+    # ── workspace membership + invites + roles (Lane M) ───────────────────────────────────────────
+    # The access layer for SHARED workspaces. Authoritative store = policy/members.json + policy/
+    # invites.json in the workspace's OWN git repo (PLATFORM-WRITE-ONLY, committed via
+    # membership_mod.policy_commit); mirror = users.data.memberships[] over the injected index.
+    # is_member(workspace_id, subject) -> role|None is the seam Lane A calls for mount/subscribe authz.
+    def _pc(ws, message):
+        return membership_mod.policy_commit(ws, message)
+
+    def _member_error(exc: MembershipError):
+        return HTTPException(status_code=exc.status, detail=str(exc))
+
+    @app.post("/api/workspace/invites", status_code=201)
+    def ws_invite_create(request: Request, body: InviteCreateBody = Body(...)):
+        """Mint a scoped invite token for a shared workspace. Auth: owner OR contributor of the target.
+        The workspace must be shareable (reserved/own-private refused). The token is returned ONCE; only
+        its hash is persisted in policy/invites.json."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, body.workspace_id, subject, "contributor")
+            minted = membership_mod.mint_invite(
+                wsr.root, body.workspace_id, role=body.role, created_by=subject,
+                expires_in_sec=body.expires_in_sec, max_uses=body.max_uses,
+                mode=body.mode, allowed_emails=body.allowed_emails, commit_fn=_pc,
+            )
+        except MembershipError as exc:
+            raise _member_error(exc)
+        # The client composes the accept URL; we hand back the token + id + terms once.
+        return {
+            "id": minted.id, "token": minted.token, "role": minted.role,
+            "workspace_id": body.workspace_id, "expires_at": minted.expires_at,
+            "max_uses": minted.max_uses, "mode": body.mode,
+            "accept_path": "/api/workspace/invites/accept",
+        }
+
+    @app.post("/api/workspace/invites/accept")
+    def ws_invite_accept(request: Request, body: InviteAcceptBody = Body(...)):
+        """Redeem an invite token (any logged-in user) → membership in BOTH stores, use-count bumped.
+        Idempotent per user (accepting twice = one membership, no extra use consumed). The token carries
+        NO workspace id — we resolve it by scanning the shareable workspaces' invites for its hash.
+        Post-auth redeem (AMENDMENT 5): the caller is an already-authenticated user (X-User-Id); a
+        RESTRICTED invite additionally requires their VERIFIED email (X-User-Email, gateway-injected)
+        to be in the invite's allowed_emails."""
+        subject = subject_of(request)
+        # SECURITY BOUNDARY: X-User-Email is trusted as the caller's VERIFIED email ONLY because the
+        # gateway strips any client-sent x-user-email and re-injects the value it resolved from the
+        # api-key. That invariant holds solely when the gateway is agent-api's SOLE ingress. Today the
+        # terminal / host-local clients reach agent-api directly (no gateway hop), so on the direct edge
+        # this header is spoofable — restricted-mode invites are NOT a security boundary until agent-api
+        # is gateway-fronted (Stage 4). VEXA_REQUIRE_GATEWAY_IDENTITY (checked in subject_of) lets a
+        # hardened deploy reject non-gateway callers. See the TOPOLOGY BOUNDARY note in create_app.
+        subject_email = request.headers.get("x-user-email")
+        h = membership_mod.hash_token(body.token)
+        # Resolve which shared workspace this token belongs to by hash (never trust a client-declared id).
+        target_ws = None
+        root = wsr.root
+        for child in sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
+            slug = child.name
+            if slug.startswith(".") or slug in membership_mod.RESERVED_SLUGS:
+                continue
+            for inv in membership_mod._read_json_list(child, membership_mod.INVITES_FILE):
+                if inv.get("hash") == h:
+                    target_ws = slug
+                    break
+            if target_ws:
+                break
+        if target_ws is None:
+            raise HTTPException(status_code=404, detail="invalid invite")
+        try:
+            result = membership_mod.accept_invite(
+                wsr.root, target_ws, token=body.token, subject=subject, subject_email=subject_email,
+                index=mindex, commit_fn=_pc,
+            )
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return result
+
+    @app.delete("/api/workspace/invites/{invite_id}")
+    def ws_invite_revoke(invite_id: str, request: Request, workspace_id: str):
+        """Revoke an invite (owner/contributor of the workspace)."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+            membership_mod.revoke_invite(wsr.root, workspace_id, invite_id, commit_fn=_pc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return {"ok": True, "invite_id": invite_id}
+
+    @app.get("/api/workspace/invites")
+    def ws_invites_list(request: Request, workspace_id: str):
+        """List a workspace's invites (owner/contributor). Hashes are never surfaced."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+            return {"invites": membership_mod.list_invites(wsr.root, workspace_id)}
+        except MembershipError as exc:
+            raise _member_error(exc)
+
+    @app.get("/api/workspace/members")
+    def ws_members_list(request: Request, workspace_id: str):
+        """List a workspace's members (owner/contributor)."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+            return {"members": membership_mod.read_members(wsr.root, workspace_id)}
+        except MembershipError as exc:
+            raise _member_error(exc)
+
+    @app.delete("/api/workspace/members/{member_subject}")
+    def ws_member_remove(member_subject: str, request: Request, workspace_id: str):
+        """Remove a member (owner only)."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
+            membership_mod.remove_member(wsr.root, workspace_id, member_subject, index=mindex, commit_fn=_pc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return {"ok": True, "subject": member_subject}
+
+    @app.post("/api/workspace/members/{member_subject}/role")
+    def ws_member_role(member_subject: str, request: Request, workspace_id: str,
+                       body: RoleSetBody = Body(...)):
+        """Flip a member's role (owner only) — read <-> read/write permissions."""
+        subject = subject_of(request)
+        try:
+            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
+            rec = membership_mod.set_role(
+                wsr.root, workspace_id, member_subject, body.role,
+                changed_by=subject, index=mindex, commit_fn=_pc,
+            )
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return rec
+
+    @app.get("/api/workspace/shared")
+    def ws_shared_list(request: Request):
+        """The "workspaces shared with me" listing from the index (users.data.memberships[])."""
+        subject = subject_of(request)
+        try:
+            return {"memberships": mindex.list(subject)}
+        except Exception:
+            return {"memberships": []}
     return app
 
 
 # ── ASGI entrypoint (PEP 562) — `uvicorn control_plane.api:app` resolves this lazily ──────────────────
 def _build_production_app() -> FastAPI:
-    from shared.adapters import LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
+    from shared.adapters import AdminApiMembershipIndex, LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
     from shared.config import load_settings
     from control_plane.config_preflight import preflight
     from control_plane.workspace_routines import start_workspace_routine_reconciler
@@ -1052,6 +1243,14 @@ def _build_production_app() -> FastAPI:
     identity = LocalIdentityMinter(settings.dispatch_signing_key.get_secret_value())
     dispatcher = Dispatcher(settings, runtime, identity)
     invocations_url = settings.agent_api_self_url.rstrip("/") + "/invocations"
+    # Lane M: the membership index mirror (users.data.memberships[]) over the admin-api internal edge.
+    # Empty admin_api_url → the in-memory index (git files stay authoritative; only "shared with me"
+    # listing is degraded, per Q6). create_app defaults to InMemoryMembershipIndex when None is passed.
+    membership_index = None
+    if settings.admin_api_url:
+        membership_index = AdminApiMembershipIndex(
+            settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
+        )
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),
@@ -1059,6 +1258,7 @@ def _build_production_app() -> FastAPI:
         scheduler=scheduler,
         invocations_url=invocations_url,
         redis_url=settings.redis_url,
+        membership_index=membership_index,
     )
     app.state.workspace_routine_reconciler = start_workspace_routine_reconciler(
         scheduler=scheduler,

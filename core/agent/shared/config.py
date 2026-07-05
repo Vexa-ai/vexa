@@ -84,12 +84,21 @@ class Settings(BaseSettings):
     # runtime scheduler. Set to 0 to disable the background reconciler.
     routine_reconcile_interval_sec: int = Field(default=60, ge=0)
 
+    # ── membership index seam (Lane M) — users.data.memberships[] lives in Postgres, reachable ONLY
+    # from the identity admin-api; agent-api holds the AUTHORITATIVE store (policy/members.json in the
+    # workspace git repo) and mirrors the derived index over this internal edge. Empty base URL = the
+    # in-memory index (git files stay authoritative; only the "shared with me" listing is degraded).
+    admin_api_url: str = ""                       # e.g. http://admin-api:8001; empty = no index mirror
+    # The X-Internal-Secret the admin-api's internal tier checks (same value the gateway uses). SecretStr.
+
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
     agent_identity_token: SecretStr = SecretStr("")
     # The shared key the Identity service signs per-dispatch tokens with (dev tier); every boundary
     # verifies with the same key. k8s replaces this with SPIRE-issued SVIDs behind the same interface.
     dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
+    # Internal-tier shared secret for the admin-api membership-index edge (Lane M).
+    internal_api_secret: SecretStr = SecretStr("")
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""
