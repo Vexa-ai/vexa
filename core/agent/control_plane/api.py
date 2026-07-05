@@ -44,6 +44,7 @@ from control_plane.workspace_attach import (
     create_shared_workspace_dir,
     create_workspace,
     deactivate_workspace,
+    ensure_workspace_shareable,
     rename_workspace,
     set_shared_active,
     shared_active_mounts,
@@ -1267,6 +1268,25 @@ def create_app(
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid workspace")
         return {"workspace_id": workspace_id, "active": body.active}
+
+    @app.post("/api/workspace/{slug}/share-enable")
+    def ws_share_enable(slug: str, request: Request):
+        """Make one of the caller's OWN workspaces shareable (promote a private workspace to a top-level
+        shared one if needed) and ensure the caller is its owner. Returns the shareable workspace_id — the
+        caller then mints invites against it. This is what lets ANY workspace be shared AFTER creation, with
+        no share-vs-not decision at create time."""
+        subject = subject_of(request)
+        try:
+            workspace_id, promoted = ensure_workspace_shareable(wsr.root, subject, slug)
+            if promoted:
+                membership_mod.ensure_owner(wsr.root, workspace_id, subject, index=mindex, commit_fn=_pc)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except KeyError:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return {"workspace_id": workspace_id, "promoted": promoted}
 
     @app.post("/api/workspace/shared/new", status_code=201)
     def ws_shared_new(request: Request, body: SharedNewBody = Body(default=SharedNewBody())):

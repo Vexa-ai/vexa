@@ -236,6 +236,42 @@ def test_share_flow_create_mint_accept(tmp_path, monkeypatch):
     assert shared and shared[0]["role"] == SHARED_ROLE
 
 
+# ── any workspace can be shared AFTER creation (promote a private one to shared) ──────────────────
+def test_share_enable_promotes_a_private_workspace(tmp_path, monkeypatch):
+    from control_plane.workspace_attach import create_workspace, ensure_workspace_shareable, active_workspaces
+    seed = tmp_path / "_seed"; (seed / "kg").mkdir(parents=True); (seed / "index.md").write_text("# seed\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+
+    # a normal private workspace (the ONE kind of create) in the subject's .attached store
+    created = create_workspace(tmp_path, "u1", name="Harari")
+    slug = created.slug
+    assert (tmp_path / ".attached" / "u1" / slug).exists()
+    assert slug in [m.slug for m in active_workspaces(tmp_path, "u1")]
+
+    # share it AFTER the fact → promoted to a top-level shared workspace, private slot gone
+    new_id, promoted = ensure_workspace_shareable(tmp_path, "u1", slug)
+    assert promoted is True
+    assert new_id.startswith("harari-")
+    assert (tmp_path / new_id).exists() and not (tmp_path / ".attached" / "u1" / slug).exists()
+    assert slug not in [m.slug for m in active_workspaces(tmp_path, "u1")]   # left the private set
+
+    # record ownership → it's now a real shareable workspace
+    m.ensure_owner(tmp_path, new_id, "u1", index=m.InMemoryMembershipIndex())
+    assert m.is_member(tmp_path, new_id, "u1") == "owner"
+
+    # idempotent: sharing an already-shared workspace is a no-op
+    again, promoted2 = ensure_workspace_shareable(tmp_path, "u1", new_id)
+    assert again == new_id and promoted2 is False
+
+
+def test_cannot_share_the_private_baseline(tmp_path):
+    import pytest
+    from control_plane.workspace_attach import ensure_workspace_shareable
+    # a never-swapped subject's baseline slug is "seed" (the primary) — refused
+    with pytest.raises(ValueError):
+        ensure_workspace_shareable(tmp_path, "u1", "seed")
+
+
 # ── the reader can read ANY workspace dir under root by path (own .attached slots + shared ws) ─────
 def test_reader_reads_any_dir_under_root_and_guards_traversal(tmp_path):
     import pytest

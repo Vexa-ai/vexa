@@ -427,6 +427,48 @@ def set_shared_active(root: str | Path, subject: str, workspace_id: str, active:
     _save_state(store, state)
 
 
+def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tuple[str, bool]:
+    """Make ONE of the subject's OWN workspaces shareable — the "any workspace can be shared after" op, so
+    there is no share-vs-not decision at CREATE time. Returns ``(workspace_id, promoted)``:
+
+    - Already a top-level shared workspace the subject belongs to → returns ``(slug, False)`` (no-op).
+    - A private NON-PRIMARY workspace (a ``.attached`` slot) → PROMOTES it: moves its tree to a fresh
+      top-level ``<root>/<workspace_id>``, drops the private slot from the subject's active set, and returns
+      ``(new_id, True)`` so the caller records the owner membership. The tree (git history) is preserved.
+    - The PRIVATE BASELINE (primary) is refused — it is the subject's personal home; create a new workspace
+      to share instead.
+    """
+    from control_plane import workspace_membership as membership
+
+    rootp = Path(root).resolve()
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    primary = _primary_slug(state)
+
+    if slug == primary:
+        raise ValueError("the baseline workspace can't be shared — create a new workspace to share")
+    # already a top-level shared workspace the caller is a member of → nothing to do
+    if (rootp / slug).exists() and membership.is_member(rootp, slug, subject) is not None:
+        return slug, False
+
+    src = _slug_dir(rootp, subject, state, slug)  # the private slot's real on-disk path (.attached/…)
+    if not src.exists():
+        raise KeyError(slug)
+
+    base = _slugify_name((state["slots"].get(slug, {}).get("name") or slug))
+    new_id = f"{base}-{secrets.token_hex(3)}"
+    while (rootp / new_id).exists():
+        new_id = f"{base}-{secrets.token_hex(3)}"
+    shutil.move(str(src), str(rootp / new_id))  # re-home the tree top-level (git history intact)
+
+    # drop the now-migrated private slot from the subject's state — it re-enters as a shared MEMBERSHIP.
+    state["slots"].pop(slug, None)
+    state["active_set"] = [s for s in state.get("active_set", []) if s != slug]
+    _save_state(store, state)
+    return new_id, True
+
+
 def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]) -> list[ActiveMount]:
     """The SHARED workspaces the subject is a MEMBER of (Lane A) — the seam that turns a membership grant
     into a mount in the active set. ``memberships`` is the derived index ``users.data.memberships[]`` (each

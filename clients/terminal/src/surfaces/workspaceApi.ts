@@ -102,6 +102,12 @@ export async function mintTranscriptShare(opts: { platform: string; native_meeti
   });
 }
 
+/** Make one of YOUR workspaces shareable (promote a private one to shared if needed) → returns the
+ *  shareable workspace_id. Lets ANY workspace be shared after creation — no share-vs-not at create time. */
+export async function shareEnableWorkspace(slug: string): Promise<{ workspace_id: string; promoted: boolean }> {
+  return getJson(`/api/workspace/${encodeURIComponent(slug)}/share-enable`, { method: "POST" });
+}
+
 /** Switch a shared workspace ON (mount) or OFF (hide) in your active set — membership is unchanged. */
 export async function setSharedActive(workspace_id: string, active: boolean): Promise<{ workspace_id: string; active: boolean }> {
   return getJson(`/api/workspace/shared/${encodeURIComponent(workspace_id)}/active`, {

@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, createSharedWorkspace, mintInvite, listSharedMemberships, setSharedActive, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -343,7 +343,6 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const cancelled = useRef(false);  // Escape vs Enter/blur on the rename input (blur fires for both)
   // Share dialog (Lane M/A): non-null = the workspace_id being shared; carries the invite terms + the minted link.
   const [share, setShare] = useState<{ wsId: string; role: string; mode: string; emails: string; ttlDays: number; link: string | null } | null>(null);
-  const [newSharedName, setNewSharedName] = useState<string | null>(null);  // non-null = the "new shared workspace" name form is shown
   const load = () => {
     void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
     void readActiveSet().then((s) => setActiveSet(s.active)).catch(() => { /* active-set is additive UI; a failure just leaves the toggles at the baseline */ });
@@ -408,12 +407,13 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     finally { setBusy(false); }
   };
 
-  // CREATE a shared workspace (caller becomes owner) and immediately open the Share dialog for it.
-  const doNewShared = async (name: string) => {
+  // Share ANY of your workspaces: make it shareable (promote a private one to shared if needed), then open
+  // the Share dialog. There is NO share-vs-not choice at create time — every workspace can be shared after.
+  const doShareWorkspace = async (slug: string) => {
     setBusy(true); setErr(null);
     try {
-      const { workspace_id } = await createSharedWorkspace(name.trim() || "Shared workspace");
-      setNewSharedName(null); load(); onSwapped();
+      const { workspace_id } = await shareEnableWorkspace(slug);
+      load(); onSwapped();
       setShare({ wsId: workspace_id, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null });
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
@@ -503,6 +503,12 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   <Icon name="upload" size={12} />
                 </span>
               )}
+              {!isRenaming && !isPrimary && !busy && (
+                <span onClick={() => void doShareWorkspace(slug)} title="Share this workspace — create an invite link"
+                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
+                  <Icon name="upload" size={12} />
+                </span>
+              )}
               {!isRenaming && (
                 <span onClick={() => setRenaming(slug)} title="Rename (display label only)"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 11 }}>✎</span>
@@ -573,23 +579,6 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
           <Icon name="plus" size={12} /> New workspace…
         </div>
-        {/* New SHARED workspace — creates a workspace you own that others can be invited to, then opens Share. */}
-        {newSharedName === null ? (
-          <div onClick={() => { if (!busy) setNewSharedName(""); }}
-            title="New shared workspace — create one you own and invite others"
-            style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
-            <Icon name="plus" size={12} /> New shared workspace…
-          </div>
-        ) : (
-          <div style={{ padding: "6px 9px", display: "flex", gap: 6 }}>
-            <input autoFocus value={newSharedName} placeholder="shared workspace name" disabled={busy}
-              onChange={(e) => setNewSharedName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") void doNewShared(newSharedName); if (e.key === "Escape") setNewSharedName(null); }}
-              style={{ flex: 1, fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
-            <button disabled={busy} onClick={() => void doNewShared(newSharedName)}
-              style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>Create</button>
-          </div>
-        )}
         {/* SHARE dialog — mint an invite link (open/restricted · role · TTL) and copy it. */}
         {share !== null && (
           <div style={{ padding: "8px 9px", display: "flex", flexDirection: "column", gap: 7, borderTop: "1px solid var(--line)", marginTop: 4 }}>
