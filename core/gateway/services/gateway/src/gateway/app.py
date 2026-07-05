@@ -295,6 +295,12 @@ def create_app(
     async def transcript_by_id(meeting_id: int, request: Request):
         return await _forward("GET", _meeting(f"/transcripts/by-id/{meeting_id}"), request)
 
+    # Redeem an INDEPENDENT transcript share token (Lane A / M0). Declared BEFORE the {platform}/{native}
+    # GET so `share/accept` is not matched as a 2-segment transcript path.
+    @app.post("/transcripts/share/accept")
+    async def accept_transcript_share(request: Request):
+        return await _forward("POST", _meeting("/transcripts/share/accept"), request)
+
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
         return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)
@@ -331,6 +337,16 @@ def create_app(
 
     # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
     # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
+    # Mint an INDEPENDENT transcript share link for a meeting (owner) — Lane A / M0.
+    @app.post("/meetings/{platform}/{native_meeting_id}/share")
+    async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+
+    # Bind a meeting to a shared workspace (owner) — Lane A (optional convenience).
+    @app.post("/meetings/{platform}/{native_meeting_id}/workspace")
+    async def bind_meeting_workspace(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/workspace"), request)
+
     @app.put("/meetings/{platform}/{native_meeting_id}/intent")
     async def set_meeting_intent(platform: str, native_meeting_id: str, request: Request):
         return await _forward(
