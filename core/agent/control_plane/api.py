@@ -36,7 +36,15 @@ from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
-from control_plane.workspace_attach import CloneError, attached_workspaces, rename_workspace, swap_workspace
+from control_plane.workspace_attach import (
+    CloneError,
+    activate_workspace,
+    active_workspaces,
+    attached_workspaces,
+    deactivate_workspace,
+    rename_workspace,
+    swap_workspace,
+)
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane import workspace_membership as membership_mod
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
@@ -271,6 +279,24 @@ class RoleSetBody(BaseModel):
     """Flip a member's role (owner only) — the "change read/write permissions" DoD item."""
     model_config = {"extra": "forbid"}
     role: str                            # viewer | contributor | owner
+
+
+class WorkspaceActivateBody(BaseModel):
+    """ADD a workspace to the subject's active set (the additive mount set — WP-A2.1). Pass ``repo`` to
+    clone/restore a git repo, or ``slug`` to activate an already-parked slot. Unlike swap it does NOT park
+    the others — the private baseline and any other active workspaces stay mounted."""
+    model_config = {"extra": "forbid"}
+    repo: Optional[str] = None   # git URL to clone (first time) / restore (thereafter)
+    ref: Optional[str] = None    # branch/tag/sha (defaults to main)
+    slug: Optional[str] = None   # activate an already-parked slot directly (no repo needed)
+    token: Optional[str] = None  # access token for a PRIVATE repo — clone only, never stored (P15)
+
+
+class WorkspaceDeactivateBody(BaseModel):
+    """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot be
+    deactivated (it is the subject's durable memory root)."""
+    model_config = {"extra": "forbid"}
+    slug: str
 
 
 class MeetingStart(BaseModel):
@@ -591,16 +617,20 @@ def create_app(
 
     @app.post("/api/chat")
     def chat(body: ChatBody, request: Request):
-        """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE."""
+        """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE.
+
+        RESUMABLE (mirrors /api/meeting/stream): every SSE event carries an ``id:`` = the unit output
+        Stream cursor. A dropped view (per-dispatch worker cold-start races the SSE, a transient proxy
+        drop) reconnects with ``Last-Event-ID`` — we then RE-ATTACH to the SAME warm unit and resume the
+        read from that cursor (gapless) WITHOUT dispatching a second turn. The turn was never lost (the
+        worker completes + commits regardless); resume just re-shows the output the client missed."""
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         session = body.session or units.DEFAULT_CHAT_SESSION
-        # Upsert the durable index on use: a new thread is titled by its first prompt; an existing one
-        # just bumps last_active (title preserved).
-        is_new = not any(r["session"] == session for r in sess.list(subject))
-        sess.upsert(subject, session,
-                    title=_truncate_title(body.prompt) if is_new else None)
+        # A reconnect carries Last-Event-ID (the last Stream cursor the client rendered). On resume we
+        # DON'T re-dispatch — we re-attach to the existing warm unit and read from the cursor onward.
+        resume = request.headers.get("last-event-id") or None
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
         # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the copilot tails) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
@@ -610,9 +640,19 @@ def create_app(
             subject=subject, trigger="message",
             start=units.entrypoint(inline=prompt), context=ctx, tools=tools,
         )
-        unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
+        if resume:
+            # Re-attach only — the warm unit id is deterministic from (subject, session); resume reads
+            # its durable output Stream from the cursor. No new turn, no session re-title.
+            unit_id = units.dispatch_id(inv)
+        else:
+            # Upsert the durable index on first use of a thread: a new thread is titled by its first
+            # prompt; an existing one just bumps last_active (title preserved).
+            is_new = not any(r["session"] == session for r in sess.list(subject))
+            sess.upsert(subject, session,
+                        title=_truncate_title(body.prompt) if is_new else None)
+            unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
         return StreamingResponse(
-            _sse(stream_reader.read(unit_id)),
+            _sse(stream_reader.read(unit_id, resume=resume)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                      "X-Unit-Id": unit_id, "X-Chat-Session": session},
@@ -860,6 +900,56 @@ def create_app(
             "parked": result.parked_slug,
             "nested": result.nested,
         }
+
+    # ── the additive mount set (WP-A2.1): ACTIVE-SET membership over swap's park/restore machinery ──────
+    @app.get("/api/workspace/active")
+    def ws_active(request: Request):
+        """The subject's ordered ACTIVE SET — the workspaces the next dispatch mounts (the private baseline
+        first, then any activated extras). Each: ``slug, repo, ref, role, path, write, primary``."""
+        subject = subject_of(request)
+        try:
+            mounts = active_workspaces(wsr.root, subject)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        return {
+            "subject": subject,
+            "active": [
+                {"slug": m.slug, "repo": m.repo, "ref": m.ref, "role": m.role,
+                 "path": m.path, "write": m.write, "primary": m.primary}
+                for m in mounts
+            ],
+        }
+
+    @app.post("/api/workspace/activate")
+    def ws_activate(request: Request, body: WorkspaceActivateBody = Body(default=WorkspaceActivateBody())):
+        """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
+        Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
+        subject = subject_of(request)
+        try:
+            result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
+                                        slug=body.slug or None, token=body.token or None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown workspace")
+        except CloneError as exc:
+            raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
+        return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
+                "cloned": result.cloned, "nested": result.nested}
+
+    @app.post("/api/workspace/deactivate")
+    def ws_deactivate(request: Request, body: WorkspaceDeactivateBody = Body(...)):
+        """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot
+        be deactivated (409). Idempotent — a not-active slug is a no-op."""
+        subject = subject_of(request)
+        try:
+            result = deactivate_workspace(wsr.root, subject, body.slug)
+        except ValueError as exc:
+            # invalid subject vs the non-deactivatable baseline — distinguish by message
+            if "baseline" in str(exc):
+                raise HTTPException(status_code=409, detail="the private baseline workspace is always active")
+            raise HTTPException(status_code=400, detail="invalid subject")
+        return {"subject": result.subject, "slug": result.slug, "changed": result.changed}
 
     @app.post("/api/workspace/publish")
     def ws_publish(request: Request, body: WorkspacePublishBody = Body(...)):

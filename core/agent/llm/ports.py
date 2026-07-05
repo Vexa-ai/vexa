@@ -90,12 +90,16 @@ class HarnessPort(Protocol):
         ...
 
 
-def _git(work: Path, *args: str) -> str:
+def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
     """Local git runner (trimmed stdout). Deliberately NOT shared.adapters._git — this module owns
     zero product imports so it stays liftable. Scrubbed env: the turn commit must land on ``work``,
-    never on a repo a hook exported via GIT_DIR."""
+    never on a repo a hook exported via GIT_DIR. ``env`` (optional) layers extra vars (the principal
+    ``GIT_AUTHOR_*``) over the scrubbed base."""
+    run_env = scrubbed_git_env()
+    if env:
+        run_env.update(env)
     proc = subprocess.run(["git", *args], cwd=work, capture_output=True, text=True, check=True,
-                          env=scrubbed_git_env())
+                          env=run_env)
     return proc.stdout.strip()
 
 
@@ -208,6 +212,34 @@ def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
                     pass
 
     return sorted(affected)
+def _commit_env(author: Optional[tuple[str, str]]) -> dict:
+    """Git env for one attributed commit (D4 / WP-A1.2): AUTHOR = the dispatch principal (the
+    authenticated human whose input drove the turn), COMMITTER = the platform. Both must be set or git
+    falls back to config/global identity — so we always stamp a committer, and the author when known."""
+    env = {
+        "GIT_COMMITTER_NAME": "Vexa",
+        "GIT_COMMITTER_EMAIL": "platform@vexa.ai",
+    }
+    if author:
+        name, email = author
+        env["GIT_AUTHOR_NAME"] = name
+        env["GIT_AUTHOR_EMAIL"] = email
+    return env
+
+
+def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]) -> Optional[str]:
+    """Commit ``work`` if its tree changed, attributed to ``author`` (committer = platform). Returns the
+    new HEAD sha, or None on a clean tree. A path with no ``.git`` is skipped (a mount not yet seeded).
+    Best-effort per mount: one mount failing to commit must not abort the others."""
+    if not (work / ".git").exists():
+        return None
+    if not _git(work, "status", "--porcelain"):
+        return None
+    env = _commit_env(author)
+    _git(work, "add", "-A", env=env)
+    _git(work, "commit", "-m", (message.splitlines()[0][:72] if message else "agent turn"), env=env)
+    return _git(work, "rev-parse", "HEAD", env=env)
+
 
 
 def run_harness_turn(
@@ -221,25 +253,51 @@ def run_harness_turn(
     mcp_config: Optional[str] = None,
     commit_message: Optional[str] = None,
     commit: bool = True,
+    author: Optional[tuple[str, str]] = None,
+    extra_mounts: Optional[Iterable[Path | str]] = None,
 ) -> Iterator[dict]:
-    """Run one harness turn over ``work``, streaming normalized UnitEvents, then commit.
+    """Run one harness turn over ``work``, streaming normalized UnitEvents, then commit EACH mount.
 
     The workspace is a FREE ZONE: governance is PROMPT-ONLY (workspace conventions guide the
-    agent). After the turn we do not validate or revert writes — if the tree changed, commit and
-    emit ``{"type":"commit","sha":...}`` — with ONE exception: ``policy/`` is PLATFORM-WRITE-ONLY
-    (membership/invites live there; see ``control_plane.workspace_membership``). Any agent-turn
-    change under ``policy/`` is reverted before the commit (emitting ``{"type":"policy-reverted",
-    "paths":[…]}``). (Hard enforcement is available upstream via ``shared.governance`` if it needs
-    to come back.)
+    agent). After the turn, for EVERY writable mount in the active set (``work`` first, then each of
+    ``extra_mounts``) whose tree changed, commit INDEPENDENTLY and emit ``{"type":"commit","sha":...}``
+    (WP-A1.2: one commit per changed mount). Attribution (D4): the ``author`` (the dispatch principal)
+    authors each commit; the committer is always the platform.
+
+    COMPOSED with the policy guard (Lane M / Q3): ``policy/`` is PLATFORM-WRITE-ONLY (membership/invites
+    live there; see ``control_plane.workspace_membership``). Each mount is a separate workspace repo that
+    may carry its own ``policy/`` subtree, so the guard runs PER MOUNT: we capture that mount's HEAD
+    policy tree BEFORE the turn (the platform's last policy commit, before any agent tool — Bash included
+    — can move it), and AFTER the turn we rebuild that mount's ``policy/`` from its baseline BEFORE its
+    commit (emitting ``{"type":"policy-reverted","paths":[…]}``). Net invariant: no agent-authored change
+    to ANY mount's ``policy/`` can ever be committed — on the private baseline OR any shared workspace —
+    while every other change commits, authored by the principal. ``_global`` (read-only) is never in the
+    commit set. A mount with no ``policy/`` makes the guard a no-op. (Hard enforcement is available
+    upstream via ``shared.governance`` if it needs to come back.)
 
     ``commit=False`` is the propose-only path (e.g. a read-only turn): NO git is touched — never
     contend on a workspace another agent may be committing to (the index.lock collision).
     """
     work = Path(work)
-    # Capture HEAD BEFORE the turn — while it still reflects the PLATFORM's last policy commit and no
-    # agent tool (Bash included) has had a chance to move it. This is the baseline the policy guard
-    # restores policy/ to, so an agent self-commit of a policy tamper cannot survive.
-    base_sha = _policy_head_sha(work) if commit else None
+    # Build the ordered, de-duped commit set NOW — the primary mount first, then every additional
+    # writable mount — so we can capture each mount's policy baseline BEFORE the turn runs. Each mount
+    # is a separate workspace repo; ``_global`` (read-only) is never passed in extra_mounts.
+    mounts: list[Path] = []
+    _seen_pre: set[str] = set()
+    for _m in [work, *(Path(m) for m in (extra_mounts or ()))]:
+        _key = str(Path(_m).resolve())
+        if _key in _seen_pre:
+            continue
+        _seen_pre.add(_key)
+        mounts.append(Path(_m))
+    # Capture HEAD's policy tree PER MOUNT, BEFORE the turn — while each still reflects the PLATFORM's
+    # last policy commit and no agent tool (Bash included) has had a chance to move it. These are the
+    # baselines the per-mount policy guard restores policy/ to, so an agent self-commit of a policy
+    # tamper in ANY mount cannot survive.
+    policy_baselines: dict[str, Optional[str]] = {}
+    if commit:
+        for _mount in mounts:
+            policy_baselines[str(_mount.resolve())] = _policy_head_sha(_mount)
     done: Optional[dict] = None
     for ev in harness.run_turn(work, prompt, allowed_tools=allowed_tools, session=session,
                                model=model, mcp_config=mcp_config):
@@ -250,12 +308,23 @@ def run_harness_turn(
     if not commit:
         return
 
-    reverted = _revert_policy_writes(work, base_sha)  # policy/ is PLATFORM-WRITE-ONLY (Q3 guard)
-    if reverted:
-        yield {"type": "policy-reverted", "paths": reverted}
-
-    if _git(work, "status", "--porcelain"):
-        _git(work, "add", "-A")
-        msg = commit_message or ((done or {}).get("reply") or "agent turn")
-        _git(work, "commit", "-m", msg.splitlines()[0][:72] if msg else "agent turn")
-        yield {"type": "commit", "sha": _git(work, "rev-parse", "HEAD")}
+    msg = commit_message or ((done or {}).get("reply") or "agent turn")
+    # Per-mount: (1) rebuild policy/ from THIS mount's pre-turn baseline — the security guard, applied to
+    # every workspace mount so no agent-authored policy/ change survives anywhere (a no-op on a mount with
+    # no policy/); (2) commit the mount's remaining (legitimate) changes, authored by the principal. Each
+    # mount is a SEPARATE repo → its own attributed commit; one mount failing must not abort the rest.
+    # ``mounts`` is already the ordered, de-duped set captured before the turn.
+    for mount in mounts:
+        base_sha = policy_baselines.get(str(mount.resolve()))
+        try:
+            reverted = _revert_policy_writes(mount, base_sha)  # policy/ is PLATFORM-WRITE-ONLY (Q3 guard)
+        except subprocess.CalledProcessError:
+            reverted = []
+        if reverted:
+            yield {"type": "policy-reverted", "paths": reverted}
+        try:
+            sha = _commit_mount(mount, message=msg, author=author)
+        except subprocess.CalledProcessError:
+            continue  # one mount's commit failing must not abort the rest of the set
+        if sha:
+            yield {"type": "commit", "sha": sha}

@@ -84,8 +84,14 @@ class StreamReader(Protocol):
     ``XREAD``; the eval fakes it with a list.
     """
 
-    def read(self, unit_id: str) -> Iterable[dict]:
-        """Yield the UnitEvents on ``unit:<unit_id>:out`` as they arrive, until the turn completes."""
+    def read(self, unit_id: str, *, resume: str | None = None) -> Iterable[dict]:
+        """Yield the UnitEvents on ``unit:<unit_id>:out`` as they arrive, until the turn completes.
+
+        Each yielded item is either a bare event ``dict`` or a ``(event, cursor)`` tuple — the cursor
+        being the durable Stream id the SSE view surfaces as ``id:`` so a dropped reader RESUMES from
+        exactly there. ``resume`` is that cursor echoed back on reconnect (Last-Event-ID): read picks up
+        right after it (gapless), instead of from ``$`` (which would miss everything already emitted while
+        a per-dispatch worker was cold-starting — the 'No chat output' false failure)."""
         ...
 
 

@@ -15,6 +15,7 @@ import tempfile
 from typing import Optional
 
 from .backend import WorkloadHandle
+from .mounts import mount_set
 from .profiles import Runnable
 
 log = logging.getLogger("runtime_kernel.process")
@@ -50,6 +51,14 @@ class ProcessBackend:
     def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
         if not runnable.command:
             raise ValueError("process backend requires a command")
+        # Workspace mount set (WP-A1.1): the lite/process backend shares the HOST filesystem, so there is
+        # nothing to bind — every active workspace in the set is already reachable at its absolute path.
+        # We still resolve the set (VEXA_MOUNTS) for observability + parity with docker/k8s so the mount
+        # plumbing is N-mount-aware on all three backends, not special-cased to one.
+        mounts = mount_set(env)
+        if len(mounts) > 1:
+            log.info("workload %s: %d active workspace mounts (host-shared): %s",
+                     workload_id, len(mounts), ", ".join(m.get("slug", "?") for m in mounts))
         # Capture the child's output to a per-workload file (both streams interleaved, like
         # `docker logs`). Fail-open: if the log dir is unwritable we fall back to DEVNULL rather
         # than refusing to start the workload.

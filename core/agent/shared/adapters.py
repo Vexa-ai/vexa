@@ -293,12 +293,16 @@ class RedisStreamReader(StreamReader):
         self._block = block_ms
         self._giveup = idle_giveup_ms
 
-    def read(self, unit_id: str):
+    def read(self, unit_id: str, *, resume: str | None = None):
         import redis
 
         client = redis.from_url(self._url, decode_responses=True)
         topic = f"unit:{unit_id}:out"
-        last_id = "$"  # only events from now on — never replay a prior turn's stream
+        # Fresh connect → ``$`` (only events from now on). Reconnect → the client's last-seen Stream id
+        # (Last-Event-ID): XREAD gaplessly delivers everything published while the reader was gone —
+        # crucial when a per-dispatch worker cold-starts AFTER the SSE dropped (the false 'No chat
+        # output arrived' failure was the reader giving up / the stream ending before any resume).
+        last_id = resume or "$"
         waited = 0
         while True:
             resp = client.xread({topic: last_id}, count=50, block=self._block)
@@ -312,7 +316,8 @@ class RedisStreamReader(StreamReader):
                 for entry_id, fields in entries:
                     last_id = entry_id
                     ev = json.loads(fields.get("event", "{}"))
-                    yield ev
+                    # Surface the Stream id as the SSE cursor (``id:``) so a dropped view resumes here.
+                    yield (ev, entry_id)
                     # `turn-complete` is the worker's terminal marker — it comes AFTER `done` + `commit`,
                     # so stopping on `done` would drop the commit. Close the view only on turn-complete.
                     if ev.get("type") == "turn-complete":

@@ -474,6 +474,50 @@ def test_policy_guard_defeats_agent_self_commit(tmp_path):
     assert m.is_member(tmp_path, "wsA", "owner1") == "owner"
 
 
+def test_policy_guard_holds_across_multiple_workspace_mounts(tmp_path):
+    """The composition invariant (policy guard x per-mount commit): with MULTIPLE writable workspace
+    mounts active, an agent policy/ tamper in a SHARED (extra) mount is reverted to that mount's baseline
+    while a LEGIT content change in the PRIVATE (primary) mount commits normally. Proves the guard is
+    applied PER MOUNT, not just to the primary — a shared workspace cannot be a self-escalation hole."""
+    from llm.ports import run_harness_turn
+
+    # Two independent workspace repos, each with a committed policy/members.json baseline.
+    private = _init_ws(tmp_path, "private")
+    shared = _init_ws(tmp_path, "shared")
+    m.ensure_owner(tmp_path, "private", "owner1", index=m.InMemoryMembershipIndex(), commit_fn=m.policy_commit)
+    m.ensure_owner(tmp_path, "shared", "owner1", index=m.InMemoryMembershipIndex(), commit_fn=m.policy_commit)
+    shared_original = (shared / m.MEMBERS_FILE).read_text()
+
+    class _Harness:
+        def run_turn(self, work, prompt, *, allowed_tools, session, model, mcp_config=None):
+            # legit content change in the PRIVATE mount (the cwd the turn ran in)
+            (Path(work) / "note.md").write_text("legit private note\n")
+            # tamper policy/ in the SHARED mount AND self-commit it (the Bash-capable agent's move)
+            (shared / m.MEMBERS_FILE).write_text('[{"subject":"attacker","role":"owner"}]\n')
+            (shared / "policy" / "evil.json").write_text("{}\n")
+            _git(shared, "add", "-A")
+            _git(shared, "-c", "user.email=a@a", "-c", "user.name=a", "commit", "-q", "-m", "pwn-shared")
+            yield {"type": "done", "reply": "did work", "sessionId": "s1", "ok": True}
+
+    events = list(run_harness_turn(private, "go", _Harness(), extra_mounts=[shared]))
+
+    # the SHARED mount's policy tamper was reverted (a policy-reverted event fired for it)
+    reverted_paths = [pth for e in events if e["type"] == "policy-reverted" for pth in e["paths"]]
+    assert m.MEMBERS_FILE in reverted_paths
+    assert "policy/evil.json" in reverted_paths
+    # shared working tree + HEAD tree restored to the platform baseline; no escalation survives
+    assert (shared / m.MEMBERS_FILE).read_text() == shared_original
+    assert not (shared / "policy" / "evil.json").exists()
+    assert "attacker" not in _git(shared, "show", "HEAD:policy/members.json")
+    assert m.is_member(tmp_path, "shared", "attacker") is None
+    assert m.is_member(tmp_path, "shared", "owner1") == "owner"
+    # the PRIVATE mount's legit change DID commit (author=principal path)
+    assert (private / "note.md").exists()
+    assert "note.md" in _git(private, "show", "--name-only", "--format=", "HEAD")
+    # private mount's own policy/ baseline is untouched
+    assert m.is_member(tmp_path, "private", "owner1") == "owner"
+
+
 def test_policy_guard_defeats_uncommitted_tamper(tmp_path):
     """The committed-tamper sibling: an UNcommitted forged members.json is equally reverted to baseline."""
     from llm.ports import run_harness_turn

@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # `seeding.resolve_seed_dir` is the selection seam (honors the VEXA_WORKSPACE_SEED_DIR override).
     workspace_seeds_dir: str = "/app/workspace-seeds"
     default_template: str = "finos"  # FINOS-ecosystem KG seed; override with VEXA_DEFAULT_TEMPLATE=default for the bare scaffold
+    # ── three-tier mount stack (AMENDMENT 4) — the GLOBAL SYSTEM tier (_global) ──
+    # The platform-owned, READ-ONLY _global workspace mounted into EVERY worker (behaviour/skills/tools).
+    # A host path / repo dir; empty = no _global mount (the stack degrades to _system + the active set).
+    # A live MOUNT (updating this ONE repo propagates to all agents next turn), not a copy-once seed.
+    global_system_workspace_path: str = ""
+    # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).
+    global_system_workspace_ref: str = ""
     agent_model: str = ""
     meeting_model: str = ""
     # ── llm module dials (provider-agnostic; see core/agent/llm/README.md) ────
