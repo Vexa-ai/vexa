@@ -250,6 +250,37 @@ def build_router(
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
         return JSONResponse(content=meeting)
 
+    # --- POST /meetings/{platform}/{native_meeting_id}/workspace → BIND the meeting to a shared workspace
+    # (meetings.data.workspace_id). Owner-scoped. Members of that workspace can then subscribe to this
+    # meeting's live transcript feed (authorize_subscribe branch b). Many meetings → one workspace. ---
+    @router.post("/meetings/{platform}/{native_meeting_id}/workspace")
+    async def bind_workspace(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        workspace_id = str(payload.get("workspace_id", "")).strip() if isinstance(payload, dict) else ""
+        if not workspace_id:
+            raise HTTPException(status_code=422, detail="'workspace_id' is required")
+        bound = await store.bind_workspace(user_id, platform, native_meeting_id, workspace_id)
+        if bound is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        log_event(
+            "meeting_workspace_bound", audience="user", span="meetings.workspace.bind",
+            user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",
+            fields={"workspace_id": workspace_id},
+        )
+        return JSONResponse(content={"workspace_id": bound})
+
     # --- POST /meetings/{platform}/{native_meeting_id}/docs → connect a workspace doc to a meeting.
     # Appends {workspace, path, title?, kind?} to meeting.data['docs'], deduped by path (idempotent).
     # Owner-scoped. Returns the updated docs array. Doc bodies live in the agent workspace — only the
@@ -401,8 +432,12 @@ def build_router(
     async def ws_authorize_subscribe(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
+        # Lane A: the gateway-injected set of shared workspaces the caller is a member of — authorizes a
+        # subscribe to any meeting BOUND to one of them (not just meetings they own). Comma-separated ids.
+        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
         try:
             payload = await request.json()
         except Exception:
@@ -426,7 +461,7 @@ def build_router(
                     f"meetings[{idx}] invalid native_meeting_id for platform '{platform_value}'"
                 )
                 continue
-            meeting_id = await store.authorize_subscribe(user_id, platform_value, native_id)
+            meeting_id = await store.authorize_subscribe(user_id, platform_value, native_id, member_workspaces)
             if meeting_id is None:
                 errors.append(f"meetings[{idx}] not authorized or not found for user")
                 continue

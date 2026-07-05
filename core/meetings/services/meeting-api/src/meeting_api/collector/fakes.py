@@ -197,8 +197,23 @@ class InMemoryTranscriptStore:
             for mid, m in rows
         ]
 
-    async def authorize_subscribe(self, user_id, platform, native_meeting_id) -> Optional[int]:
-        return self._find(user_id, platform, native_meeting_id)
+    async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is not None:
+            return mid  # (a) owner
+        if member_workspaces:  # (b) member of the meeting's bound shared workspace
+            for m_id, m in self._meetings.items():
+                if (m.get("platform") == platform and m.get("native_meeting_id") == native_meeting_id
+                        and isinstance(m.get("data"), dict) and m["data"].get("workspace_id") in member_workspaces):
+                    return m_id
+        return None
+
+    async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id):
+        mid = self._find(user_id, platform, native_meeting_id)
+        if mid is None:
+            return None
+        self._meetings[mid]["data"]["workspace_id"] = workspace_id
+        return workspace_id
 
     async def connect_doc(self, user_id, platform, native_meeting_id, doc):
         from .adapters import _upsert_doc

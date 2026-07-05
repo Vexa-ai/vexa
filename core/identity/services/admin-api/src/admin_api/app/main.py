@@ -286,6 +286,12 @@ def create_app() -> FastAPI:
                 resp["webhook_secret"] = data_blob["webhook_secret"]
             if data_blob.get("webhook_events"):
                 resp["webhook_events"] = data_blob["webhook_events"]
+        # Lane A: the caller's shared-workspace membership ids (from the derived users.data.memberships[]),
+        # so the gateway can inject x-user-workspaces → meeting-api authorizes a member's transcript subscribe.
+        memberships = data_blob.get("memberships")
+        if isinstance(memberships, list):
+            resp["workspaces"] = [m["workspace_id"] for m in memberships
+                                  if isinstance(m, dict) and m.get("workspace_id")]
         return resp
 
     # --- internal tier: workspace membership index (Lane M) — the DERIVED users.data.memberships[]

@@ -189,7 +189,7 @@ def create_app(
         # Strip any client-supplied identity headers first (anti-spoofing, main.py:294-296).
         excluded = {"host", "content-length", "transfer-encoding"}
         headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
-        for h in ("x-user-id", "x-user-email", "x-user-scopes", "x-user-limits",
+        for h in ("x-user-id", "x-user-email", "x-user-scopes", "x-user-limits", "x-user-workspaces",
                   "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"):
             headers.pop(h, None)
         headers["x-api-key"] = client_key
@@ -200,6 +200,10 @@ def create_app(
             headers["x-user-email"] = str(user_data["email"])
         headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
         headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
+        # Lane A: the RESOLVED shared-workspace membership ids (never client-declared; /internal/validate
+        # returns them). meeting-api authorizes a member's live-transcript subscribe against this set.
+        if user_data.get("workspaces"):
+            headers["x-user-workspaces"] = ",".join(str(w) for w in user_data["workspaces"])
         # Per-user webhook config (identity owns it; /internal/validate returns it from user.data).
         # Forwarded so bot_spawn persists it into meeting.data → the lifecycle callback delivers from
         # there, with NO cross-domain users-table read (the carve's principled path; main read the user

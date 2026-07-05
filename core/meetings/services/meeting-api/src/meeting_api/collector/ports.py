@@ -65,11 +65,20 @@ class TranscriptStore(Protocol):
         ...
 
     async def authorize_subscribe(
-        self, user_id: int, platform: str, native_meeting_id: str
+        self, user_id: int, platform: str, native_meeting_id: str,
+        member_workspaces: "Optional[set[str]]" = None,
     ) -> Optional[int]:
-        """Resolve ``(user, platform, native_id)`` → the internal ``meeting_id`` the caller owns,
-        or ``None`` when not owned/found. The DB ownership check IS the authorization boundary
-        (``collector/endpoints.py`` ``ws_authorize_subscribe``)."""
+        """Resolve ``(user, platform, native_id)`` → the internal ``meeting_id`` the caller may subscribe
+        to, or ``None``. Two branches: OWNERSHIP (the caller owns the meeting) OR MEMBERSHIP (the meeting is
+        bound — ``data.workspace_id`` — to a shared workspace in ``member_workspaces``, the caller's set).
+        The authorization boundary (``ws_authorize_subscribe``)."""
+        ...
+
+    async def bind_workspace(
+        self, user_id: int, platform: str, native_meeting_id: str, workspace_id: str
+    ) -> "Optional[str]":
+        """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
+        subscribe to the live feed. Returns the bound id, or ``None`` when the user owns no such meeting."""
         ...
 
     async def append_segment(self, meeting_id: int, segment: dict) -> None:

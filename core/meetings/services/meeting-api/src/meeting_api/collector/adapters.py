@@ -318,24 +318,66 @@ class SqlAlchemyTranscriptStore:
                 for m in rows
             ]
 
-    async def authorize_subscribe(self, user_id, platform, native_meeting_id) -> Optional[int]:
+    async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
+        """Authorize a live-transcript subscribe → the meeting ROW id, or None. TWO branches:
+        (a) OWNERSHIP (unchanged) — the meeting's owner may always subscribe;
+        (b) MEMBERSHIP (Lane A) — any meeting BOUND (``data.workspace_id``) to a shared workspace the
+            caller is a member of. ``member_workspaces`` is the caller's workspace-id set (gateway-injected
+            x-user-workspaces). The binding IS the authorization: a member of the bound workspace sees the
+            feed. Native-id collisions across tenants are handled by scanning candidates and matching the
+            binding, never by picking a row blindly."""
         from sqlalchemy import select
 
         from .models import Meeting
 
         async with self._session_factory() as db:
-            stmt = (
-                select(Meeting)
-                .where(
+            owned = (await db.execute(
+                select(Meeting).where(
                     Meeting.user_id == user_id,
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
-                )
-                .order_by(Meeting.created_at.desc())
-                .limit(1)
+                ).order_by(Meeting.created_at.desc()).limit(1)
+            )).scalars().first()
+            if owned:
+                return owned.id  # (a) owner
+            if member_workspaces:
+                rows = (await db.execute(
+                    select(Meeting).where(
+                        Meeting.platform == platform,
+                        Meeting.platform_specific_id == native_meeting_id,
+                    )
+                )).scalars().all()
+                for mtg in rows:  # (b) member of the meeting's bound shared workspace
+                    if isinstance(mtg.data, dict) and mtg.data.get("workspace_id") in member_workspaces:
+                        return mtg.id
+            return None
+
+    async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> "Optional[str]":
+        """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
+        subscribe to the live transcript feed (authorize_subscribe branch b). Many meetings → one workspace
+        (Amendment 6). Returns the bound workspace_id, or None if the caller owns no such meeting."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting).where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                ).order_by(Meeting.created_at.desc()).limit(1).with_for_update()
             )
             meeting = (await db.execute(stmt)).scalars().first()
-            return meeting.id if meeting else None
+            if not meeting:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            data["workspace_id"] = workspace_id
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return workspace_id
 
     async def append_segment(self, meeting_id, segment) -> None:
         # Live segments land in the Redis hash (``meeting:{id}:segments``), flushed to Postgres by
