@@ -7,7 +7,7 @@ import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
-import { Icon } from "../ui-kit";
+import { Icon, Checkbox } from "../ui-kit";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocNavContext, type DocNavigate } from "../ui-kit/MdxDoc";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
@@ -352,22 +352,25 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
       {open && (<>
         {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
-          // The per-row toggle reflects ACTIVE-SET membership (WP-A2.1): ● = MOUNTED into the agent turn,
-          // ○ = AVAILABLE (parked, click to mount). The private baseline is always mounted + can't be
-          // dropped (a never-swapped subject is on the seed, so the seed row is the baseline).
+          // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
+          // into the agent turn, UNCHECKED = AVAILABLE (parked, check to mount). Multiple rows can be
+          // checked at once — the mount set is ADDITIVE, so a checkbox (multi-select) is the right
+          // affordance; a filled/hollow dot read as a single-select radio. The private baseline is always
+          // mounted + can't be unchecked (a never-swapped subject is on the seed, so the seed row is the
+          // baseline) — its checkbox is checked + disabled.
           const mounted = mountedSlugs.has(slug) || (mountedSlugs.size === 0 && slug === primarySlug);
           const isPrimary = slug === primarySlug;
           const isRenaming = renaming === slug;
           const display = meta.name || label(slug, meta.repo);
-          const toggleTitle = isPrimary ? "Your private baseline — always mounted"
-            : mounted ? "Mounted into the agent — click to unmount (park)" : "Available — click to mount into the agent";
+          const toggleTitle = isPrimary ? "always active (your private workspace)"
+            : mounted ? "Mounted into the agent — uncheck to unmount (park)" : "Available — check to mount into the agent";
           return (
             <div key={slug}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
               onMouseEnter={(e) => { if (!isRenaming) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-              <span onClick={() => !isPrimary && !busy && void toggleActive(slug, mounted)}
-                title={toggleTitle}
-                style={{ width: 14, flex: "none", color: mounted ? "var(--green)" : "var(--t3)", cursor: isPrimary || busy ? "default" : "pointer" }}>{mounted ? "●" : "○"}</span>
+              <Checkbox checked={mounted} disabled={isPrimary || busy}
+                onChange={() => void toggleActive(slug, mounted)}
+                title={toggleTitle} label={`${display} — ${mounted ? "mounted into the agent" : "available (parked)"}`} />
               {isRenaming ? (
                 <input autoFocus defaultValue={meta.name ?? ""} placeholder="display name" disabled={busy}
                   onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}

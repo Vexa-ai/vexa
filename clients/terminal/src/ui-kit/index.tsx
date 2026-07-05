@@ -53,3 +53,33 @@ export function Icon({ name, size = 18, style }: { name: string; size?: number; 
     </svg>
   );
 }
+
+// Accessible checkbox painted from the terminal tokens. A real `role="checkbox"` with `aria-checked`
+// and keyboard support (Space/Enter toggles) — used where a MULTI-select set is the mental model (a
+// filled/hollow dot reads as a single-select radio). `disabled` locks it (e.g. an always-on member).
+export function Checkbox({ checked, onChange, disabled = false, label, title, size = 14 }: {
+  checked: boolean; onChange?: () => void; disabled?: boolean; label?: string; title?: string; size?: number;
+}) {
+  const toggle = () => { if (!disabled) onChange?.(); };
+  return (
+    <span
+      role="checkbox"
+      aria-checked={checked}
+      aria-disabled={disabled || undefined}
+      aria-label={label}
+      title={title}
+      tabIndex={disabled ? -1 : 0}
+      onClick={(e) => { e.stopPropagation(); toggle(); }}
+      onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); toggle(); } }}
+      style={{
+        boxSizing: "border-box", width: size, height: size, flex: "none",
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        borderRadius: 4, border: `1.5px solid ${checked ? "var(--green)" : "var(--line)"}`,
+        background: checked ? "var(--green)" : "transparent",
+        color: "var(--bg)", cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.7 : 1, transition: "background .12s, border-color .12s",
+      }}>
+      {checked && <Icon name="check" size={size - 4} style={{ color: "var(--bg)" }} />}
+    </span>
+  );
+}
