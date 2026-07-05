@@ -159,8 +159,10 @@ function MountSection({ mount }: { mount: ActiveMount }) {
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mount.name || mount.slug}</span>
         {mount.role === "shared" && (
-          <span style={{ marginLeft: "auto", fontSize: 9.5, letterSpacing: 0, textTransform: "none", color: "var(--t3)",
-            border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared · {mount.write ? "read-write" : "read-only"}</span>
+          <span title={mount.write ? "Shared · read-write" : "Shared · read-only"}
+            style={{ marginLeft: "auto", display: "flex", alignItems: "center", color: mount.write ? "var(--accent)" : "var(--t3)" }}>
+            <Icon name={mount.write ? "user" : "eye"} size={12} />
+          </span>
         )}
       </div>
       {open && (<>
@@ -542,8 +544,9 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 label={`${wsId} — shared (${mem.role})`} />
               <span onClick={() => void toggleShared(wsId, !mounted)}
                 style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}>{wsId}</span>
-              <span style={{ flex: "none", fontSize: 9.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>
-                shared · {canWrite ? "read-write" : "read-only"}
+              <span title={canWrite ? "Shared · read-write" : "Shared · read-only"}
+                style={{ flex: "none", display: "flex", alignItems: "center", color: canWrite ? "var(--accent)" : "var(--t3)" }}>
+                <Icon name={canWrite ? "user" : "eye"} size={12} />
               </span>
               {canWrite && (
                 <span onClick={() => setShare({ wsId, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null })}
