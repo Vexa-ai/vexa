@@ -971,3 +971,228 @@ def test_bot_callback_mid_window_cancels_escalation():
     _make_stale(repo, m["id"])
     assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
     assert repo._meetings[m["id"]]["status"] == "active"
+
+
+# ── Bug 1: runtime `destroyed` callback for a `stopping` meeting is TERMINAL EVIDENCE ────────────
+# The reaper-loop incident: DELETE /bots → runtime deletes the workload (DELETE /workloads/{id} →
+# 200) and posts a runtime callback with state=destroyed — but meeting-api NEVER advanced the meeting
+# out of `stopping`. It re-logged `runtime_callback ... destroyed` and re-issued DELETE (now 404)
+# every ~15s FOREVER. The runtime's confirmed destroy IS terminal evidence (#50's principle: real
+# evidence, not a bare 404) → advance the meeting: `completed` if it ever reached active (`stopping`/
+# `active`/`needs_help`), `failed` if it never did (pre-active). The /runtime/callback route consumes
+# it via synthesize_terminal_for_dead_workload, driven through the bot's OWN lifecycle callback (POST
+# to /bots/internal/callback/lifecycle — exercised in-process here, like _run_general_sweep_rt).
+
+from meeting_api.lifecycle.reconcile import synthesize_terminal_for_dead_workload  # noqa: E402
+
+
+def _consume_runtime_terminal(client, repo, workload_id, state):
+    """Drive synthesize_terminal_for_dead_workload with the bot's OWN lifecycle callback wired to the
+    in-process FSM endpoint (the prod _drive_terminal POSTs to 127.0.0.1:PORT, unreachable under the
+    TestClient — so we inject the client.post here, exactly as the reconcile-sweep tests do)."""
+    import logging
+
+    async def _drive(body: dict):
+        return client.post(ENDPOINT, json=body).status_code
+
+    return asyncio.run(synthesize_terminal_for_dead_workload(
+        repo, workload_id, state, _drive, log=logging.getLogger("test.runtime-cb"),
+    ))
+
+
+def test_runtime_destroyed_completes_stopping_meeting_and_stops_reaper():
+    """A `stopping` meeting whose workload the runtime confirms `destroyed` (its bot never sent its own
+    terminal callback — e.g. SIGKILLed at teardown) advances to `completed` on that evidence. On the
+    PRE-FIX code this FAILED: the runtime callback only handled pre-active rows, so the meeting stayed
+    `stopping` and the stop-reconcile sweep re-DELETEd forever. Once terminal it leaves the stale-
+    stopping listing → the reaper loop stops."""
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-stop"
+    client = TestClient(create_app(meeting_repo=repo))
+
+    # The reaper WOULD list this meeting while it is `stopping` …
+    assert repo.list_stale_stopping_sync() == [(m["id"], "sess-uid", "wl-stop")]
+
+    # … until the runtime's destroy evidence advances it out of `stopping`.
+    assert _consume_runtime_terminal(client, repo, "wl-stop", "destroyed") is True
+    assert repo._meetings[m["id"]]["status"] == "completed"
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "stopped"
+
+    # Reaper loop stops: a completed row is no longer stale-stopping.
+    assert repo.list_stale_stopping_sync() == []
+
+
+def test_runtime_destroyed_completes_active_meeting():
+    """An `active` meeting whose workload is runtime-confirmed `destroyed` WITHOUT its own terminal
+    callback (killed before it could POST `completed`) also completes — it reached active, so
+    `completed` (reason left_alone: the workload simply vanished while live)."""
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-act"
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _consume_runtime_terminal(client, repo, "wl-act", "destroyed") is True
+    assert repo._meetings[m["id"]]["status"] == "completed"
+    assert repo._meetings[m["id"]]["data"].get("completion_reason") == "left_alone"
+
+
+def test_runtime_exited_also_completes_stopping():
+    """`exited` is terminal evidence too (not just `destroyed`) — the runtime reports the workload gone."""
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-exit"
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _consume_runtime_terminal(client, repo, "wl-exit", "exited") is True
+    assert repo._meetings[m["id"]]["status"] == "completed"
+
+
+def test_runtime_destroyed_fails_pre_active_meeting():
+    """Distinguish never-active from was-active: a PRE-ACTIVE row (`awaiting_admission` — killed in the
+    waiting room before it could report active) → `failed`, not `completed` (CC5 preserved)."""
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="awaiting_admission")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-wait"
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _consume_runtime_terminal(client, repo, "wl-wait", "destroyed") is True
+    assert repo._meetings[m["id"]]["status"] == "failed"
+    assert repo._meetings[m["id"]]["data"].get("failure_stage") == "awaiting_admission"
+
+
+def test_runtime_destroyed_noop_on_already_terminal_meeting():
+    """A normal teardown destroys the workload AFTER the bot's own `completed` already landed — the
+    runtime callback must be a no-op there (never re-open or re-fail a terminal meeting)."""
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="active")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-done"
+    client = TestClient(create_app(meeting_repo=repo))
+    # The bot completes it itself first.
+    client.post(ENDPOINT, json={"connection_id": "sess-uid", "status": "completed",
+                                "completion_reason": "left_alone"})
+    assert repo._meetings[m["id"]]["status"] == "completed"
+
+    # The trailing runtime destroy is a no-op (stays completed, drives nothing).
+    assert _consume_runtime_terminal(client, repo, "wl-done", "destroyed") is False
+    assert repo._meetings[m["id"]]["status"] == "completed"
+
+
+def test_runtime_nonterminal_state_does_not_advance_meeting():
+    """A non-terminal runtime state (`running`) is NOT evidence of anything — the meeting is untouched."""
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-run"
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _consume_runtime_terminal(client, repo, "wl-run", "running") is False
+    assert repo._meetings[m["id"]]["status"] == "stopping"
+
+
+def test_runtime_destroyed_unknown_workload_is_noop():
+    """A `destroyed` for a workload id no meeting owns → no-op (never fabricate a terminal)."""
+    repo = _ReconcileRepo()
+    m = _seed(repo, status="stopping")
+    repo._meetings[m["id"]]["bot_container_id"] = "wl-known"
+    client = TestClient(create_app(meeting_repo=repo))
+
+    assert _consume_runtime_terminal(client, repo, "ghost-wl", "destroyed") is False
+    assert repo._meetings[m["id"]]["status"] == "stopping"
+
+
+# ── Bug 3: a TERMINAL meeting emits `session_end` on tc:meeting:{native} → the copilot worker reaps ─
+# Six vexa-worker-meet-<native> copilot workers stayed up for HOURS after their meetings ended: the
+# ONLY reap signal the worker honours is a `session_end` marker on its transcript feed
+# `tc:meeting:{native}` (agent worker/meeting.py) OR its VEXA_IDLE_TIMEOUT_SEC (default 4h). When the
+# bot never emitted `session_end` (SIGKILLed, or stopped in the waiting room — Bug 2), the worker sat
+# idle for the full 4h. The lifecycle fix: on a terminal FSM advance, meeting-api emits the session_end
+# marker onto the same feed, reaping the copilot immediately regardless of how the bot died.
+
+class _StreamRecordingRedis:
+    """A redis fake that records BOTH publishes and xadds (the copilot-reap path uses xadd)."""
+
+    def __init__(self):
+        self.published: list[tuple[str, dict]] = []
+        self.streams: dict[str, list[dict]] = {}
+
+    async def publish(self, channel: str, data: str):
+        self.published.append((channel, json.loads(data)))
+        return 1
+
+    async def xadd(self, stream: str, payload: dict):
+        self.streams.setdefault(stream, []).append(payload)
+        return f"{len(self.streams[stream])}-0"
+
+
+def _drive_terminal_seam(client, connection_id="sess-uid", *, terminal="completed"):
+    """Drive a fresh record joining→active→terminal (or joining→failed) over the HTTP seam."""
+    hops = (["joining", "active", "completed"] if terminal == "completed" else ["joining", "failed"])
+    for st in hops:
+        ev = {"connection_id": connection_id, "status": st}
+        if st == "completed":
+            ev["completion_reason"] = "stopped"
+        if st == "failed":
+            ev["completion_reason"] = "join_failure"
+            ev["exit_code"] = 1
+        r = _post(client, **ev)
+        assert r.status_code == 200, r.text
+
+
+def test_terminal_meeting_emits_session_end_to_reap_copilot():
+    """On `completed`, meeting-api xadds a session_end marker to tc:meeting:{native} — the copilot
+    worker's reap signal. Keyed by the meeting's native id (matches the collector + worker feed key)."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo, status="requested")   # native_meeting_id == "m1" (per _seed)
+    redis = _StreamRecordingRedis()
+    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+
+    _drive_terminal_seam(client, terminal="completed")
+
+    stream = "tc:meeting:m1"
+    assert stream in redis.streams, f"no session_end emitted; streams={list(redis.streams)}"
+    markers = [p for p in redis.streams[stream] if p.get("type") == "session_end"]
+    assert len(markers) == 1
+    assert markers[0]["uid"] == "m1"
+
+
+def test_failed_meeting_also_reaps_copilot():
+    """A meeting that terminates `failed` (e.g. the bot never got admitted) ALSO emits session_end —
+    a copilot armed for it must not linger for the idle window either."""
+    repo = InMemoryMeetingRepo()
+    _seed(repo, status="requested")
+    redis = _StreamRecordingRedis()
+    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+
+    _drive_terminal_seam(client, terminal="failed")
+
+    markers = [p for p in redis.streams.get("tc:meeting:m1", []) if p.get("type") == "session_end"]
+    assert len(markers) == 1
+
+
+def test_non_terminal_advance_does_not_emit_session_end():
+    """A non-terminal advance (joining/active) must NOT reap the copilot — the meeting is still live."""
+    repo = InMemoryMeetingRepo()
+    _seed(repo, status="requested")
+    redis = _StreamRecordingRedis()
+    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+
+    _post(client, connection_id="sess-uid", status="joining")
+    _post(client, connection_id="sess-uid", status="active")
+
+    assert "tc:meeting:m1" not in redis.streams, "session_end emitted while the meeting is still live"
+
+
+def test_idempotent_terminal_replay_does_not_double_reap():
+    """A redelivered terminal (no_op) must NOT xadd a second session_end (the reap is once-per-advance)."""
+    repo = InMemoryMeetingRepo()
+    _seed(repo, status="requested")
+    redis = _StreamRecordingRedis()
+    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+
+    _drive_terminal_seam(client, terminal="completed")
+    # Redeliver the terminal (the bot retries its terminal callback up to 3x) — an idempotent 200 no-op.
+    r = _post(client, connection_id="sess-uid", status="completed", completion_reason="stopped")
+    assert r.status_code == 200
+
+    markers = [p for p in redis.streams.get("tc:meeting:m1", []) if p.get("type") == "session_end"]
+    assert len(markers) == 1, f"double reap on idempotent replay: {markers}"

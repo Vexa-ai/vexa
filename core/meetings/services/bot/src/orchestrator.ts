@@ -85,6 +85,15 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   let signalEnd: ((r: CompletionReason) => void) | null = null;
   const ended = new Promise<CompletionReason>((res) => { signalEnd = res; });
 
+  // The PRE-ACTIVE abort signal (Bug 2 — the waiting-room-orphan fix): a stop/SIGTERM that arrives
+  // while the bot is still `joining`/`awaiting_admission` (blocked inside `deps.join.join()`, waiting
+  // in the lobby) must not merely arm the force-exit watchdog and SIGKILL — that leaves the join
+  // request live, so Google Meet still shows the bot "asking to join". `stop()` resolves this before
+  // `active`; `run()` races the join phase against it and, on abort, WITHDRAWS (cancel the ask-to-join
+  // / close the pre-join tab) before emitting terminal.
+  let signalAbort: ((r: CompletionReason) => void) | null = null;
+  const aborted = new Promise<CompletionReason>((res) => { signalAbort = res; });
+
   // acts.v1 dispatch. `leave` ends the run; reconfigure + voice acts are handled by the
   // live pipeline adapter (no-op for the machine; voice agent is DEFERRED this increment).
   async function handle(act: Act): Promise<void> {
@@ -107,7 +116,31 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     };
     let outcome: JoinOutcome;
     try {
-      outcome = await deps.join.join(report);
+      // Race the (possibly long, lobby-blocked) join against a pre-active abort. A stop/SIGTERM in the
+      // waiting room resolves `aborted` → we stop waiting, WITHDRAW the join request, and terminate —
+      // rather than SIGKILLing a bot that is still asking to join (the waiting-room orphan). The race
+      // yields a tagged result so the abort branch narrows cleanly (no symbol-vs-JoinOutcome union).
+      const raced = await Promise.race<{ aborted: false; outcome: JoinOutcome } | { aborted: true }>([
+        deps.join.join(report).then((o) => ({ aborted: false as const, outcome: o })),
+        aborted.then(() => ({ aborted: true as const })),
+      ]);
+      if (raced.aborted) {
+        // WITHDRAW before exit (Bug 2): cancel the ask-to-join / close the pre-join tab so the join
+        // request is dropped — bounded + best-effort (the platform withdraw itself caps its clicks;
+        // the guaranteed fallback closes the page). The bot never reached active, so the terminal is
+        // `failed` (stage = the pre-active stage it was stopped in), attributed to the user stop.
+        await Promise.race([
+          deps.join.withdraw('stopped').catch(() => { /* best-effort */ }),
+          new Promise<void>((resolve) => setTimeout(resolve, 8000)),
+        ]);
+        const stage = cur === 'awaiting_admission' ? 'awaiting_admission' : 'joining';
+        await emit('failed', {
+          failure_stage: stage, completion_reason: 'stopped',
+          reason: 'stopped while awaiting admission (withdrew the join request)', exit_code: 0,
+        });
+        return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
+      }
+      outcome = raced.outcome;
       await reportChain;   // flush in-flight reports before deciding admission
     } catch (e) {
       await emit('failed', { failure_stage: 'joining', completion_reason: 'join_failure', reason: String(e), exit_code: 1 });
@@ -164,11 +197,19 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     return { exitCode: 0, status: 'completed', completionReason: reason };
   }
 
-  /** Trigger a graceful end of the active phase — wired to SIGTERM/SIGINT at the composition
-   *  root so the worker is disposable (P7). No-op before `active` resolves the run early;
-   *  after the run ended it's a no-op (the resolver already fired). */
+  /** Trigger a graceful end — wired to SIGTERM/SIGINT at the composition root so the worker is
+   *  disposable (P7). If the bot is already `active`, this ends the active phase (leave → flush →
+   *  completed). If it is still PRE-ACTIVE (`joining`/`awaiting_admission`, blocked in the lobby),
+   *  it instead aborts the join so `run()` WITHDRAWS the waiting-room request rather than being
+   *  SIGKILLed into a lobby orphan (Bug 2). After the run ended both are no-ops (resolvers fired). */
   function stop(reason: CompletionReason = 'stopped'): void {
-    signalEnd?.(reason);
+    if (cur === 'active') {
+      signalEnd?.(reason);
+    } else {
+      // Pre-active: unblock the lobby wait so run() can withdraw + terminate. (Idempotent: a promise
+      // resolver only fires once, and once active this branch is never taken.)
+      signalAbort?.(reason);
+    }
   }
 
   return { run, handle, stop };

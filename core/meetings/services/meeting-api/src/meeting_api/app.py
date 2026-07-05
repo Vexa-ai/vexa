@@ -368,6 +368,39 @@ def _mount_lifecycle(
                         log_event("user_meeting_status_publish_failed", audience="system",
                                   level="warning", span="lifecycle.callback",
                                   fields={"error": str(e)})
+        # COPILOT REAP (Bug 3): the moment a meeting lands TERMINAL, emit the `session_end` marker onto
+        # the meeting's native transcript feed `tc:meeting:{native}` — the EXACT stream the meeting
+        # copilot worker (agent worker/meeting.py) blocks on. The worker reaps immediately on that marker
+        # (exit 0 → container reaped), instead of sitting idle for its VEXA_IDLE_TIMEOUT_SEC (default 4h)
+        # when the bot never emitted its own `session_end` — e.g. it was SIGKILLed, or stopped in the
+        # waiting room (Bug 2) before it could. Idempotent: a redundant session_end (the bot already sent
+        # one via the collector) just reasserts the reap. Best-effort; never fails the lifecycle callback.
+        #
+        # KEYING — the collector (collector/ingest.py) owns this same `tc:meeting:{native}` feed and its
+        # session_end marker; we mirror its key derivation (prefer the producer-stamped native id) so both
+        # writers agree. NB (coordination with P0 fix/transcript-cross-tenant-leak, session xtenant): if
+        # P0 row-scopes the copilot carrier key, this derivation must follow the same helper the collector
+        # + transcription_watcher settle on — this stays a pure LIFECYCLE reap on the agreed key.
+        if (
+            redis is not None
+            and not change.no_op
+            and rec.status is not None
+            and rec.status.value in ("completed", "failed")
+            and isinstance(meeting_row, dict)
+            and hasattr(redis, "xadd")
+        ):
+            native = meeting_row.get("native_meeting_id") or rec.connection_id
+            if native:
+                try:
+                    await redis.xadd(f"tc:meeting:{native}", {"type": "session_end", "uid": native})
+                    log_event(
+                        "meeting_copilot_reap_signalled", audience="system", span="lifecycle.callback",
+                        meeting_id=rec.connection_id,
+                        fields={"native": native, "meeting_status": rec.status.value},
+                    )
+                except Exception as e:  # noqa: BLE001 — the worker's idle timeout is the backstop
+                    log_event("meeting_copilot_reap_failed", audience="system", level="warning",
+                              span="lifecycle.callback", fields={"native": native, "error": str(e)})
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,
@@ -391,9 +424,17 @@ def _mount_lifecycle(
     async def runtime_callback(request: Request) -> JSONResponse:
         """ACK the runtime kernel's workload-level callback (state/terminal events). The bot's own
         ``lifecycle.v1`` callback is the meeting-status source of truth for a STARTED bot; this route
-        also drives a synthetic ``failed`` (CC5) when a workload reaches a TERMINAL state while its
-        meeting is still PRE-ACTIVE — i.e. the bot never started/reported and never will, so the meeting
-        would otherwise hang ``requested``/``joining`` forever."""
+        ALSO consumes a runtime-confirmed TERMINAL workload state as evidence the run is over, driving a
+        synthetic terminal through the bot's OWN lifecycle callback (POST-to-self):
+
+          * PRE-ACTIVE meeting → ``failed`` (CC5): the bot never started/reported and never will, so the
+            meeting would otherwise hang ``requested``/``joining`` forever.
+          * WAS-ACTIVE meeting (``stopping``/``active``/``needs_help``) → ``completed``: the bot reached
+            the meeting but its workload is now runtime-confirmed gone WITHOUT its own terminal callback
+            (e.g. SIGKILLed at teardown before it could POST ``completed``, or killed in the waiting room
+            on a stop). Without this the meeting stays ``stopping`` and the stop-reconcile sweep re-DELETEs
+            (now 404) every 15s FOREVER — the reaper loop. The confirmed destroy IS the terminal evidence
+            (#50's principle: real evidence, not a bare 404) → complete it and stop the loop."""
         try:
             body = await request.json()
         except Exception:  # noqa: BLE001
@@ -404,17 +445,17 @@ def _mount_lifecycle(
             "runtime_callback", audience="system", span="runtime.callback",
             fields={"workload_id": workload_id, "state": state},
         )
-        # CC5 — never-started workload → meeting failed. Reuse the bot's OWN lifecycle callback (POST to
-        # self) so the FSM/persist/webhook/ws path fires identically; the decision is best-effort + only
-        # fires for a PRE-ACTIVE meeting (a normal teardown destroys the workload AFTER the meeting is
-        # already terminal → no-op). Imported lazily to keep the prod import path lean.
+        # Consume a runtime-confirmed TERMINAL workload as evidence (pre-active → failed / was-active →
+        # completed). Reuse the bot's OWN lifecycle callback (POST to self) so the FSM/persist/webhook/ws
+        # path fires identically; best-effort — a non-terminal state or an already-terminal meeting is a
+        # no-op. Imported lazily to keep the prod import path lean.
         try:
             import logging as _logging
             import os as _os
 
-            from .lifecycle.reconcile import synthesize_failed_for_dead_workload
+            from .lifecycle.reconcile import synthesize_terminal_for_dead_workload
 
-            async def _drive_failed(event: dict):
+            async def _drive_terminal(event: dict):
                 import httpx
 
                 port = int(_os.getenv("PORT", "8080"))
@@ -426,12 +467,12 @@ def _mount_lifecycle(
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     return (await client.post(url, json=event, headers=headers)).status_code
 
-            await synthesize_failed_for_dead_workload(
-                meeting_repo, workload_id, state, _drive_failed,
+            await synthesize_terminal_for_dead_workload(
+                meeting_repo, workload_id, state, _drive_terminal,
                 log=_logging.getLogger("meeting_api.runtime.callback"),
             )
-        except Exception as e:  # noqa: BLE001 — the runtime ACK must never fail on the CC5 backstop
-            log_event("runtime_callback_cc5_error", audience="system", level="warning",
+        except Exception as e:  # noqa: BLE001 — the runtime ACK must never fail on the terminal backstop
+            log_event("runtime_callback_terminal_error", audience="system", level="warning",
                       span="runtime.callback", fields={"error": str(e)})
         return JSONResponse(status_code=200, content={"status": "accepted"})
 

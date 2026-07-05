@@ -59,7 +59,22 @@ const mockJoin = (outcome: JoinOutcome, onRemovalRef?: (fire: () => void) => voi
   async join(report) { await report('awaiting_admission'); if (outcome === 'admitted') await report('active'); return outcome; },
   onRemoval(cb) { onRemovalRef?.(cb); return () => { /* */ }; },
   async leave() { /* */ },
+  async withdraw() { /* */ },
 });
+
+/** A join that BLOCKS in the waiting room (awaiting_admission) until aborted — models the real lobby
+ *  wait. `join()` never resolves on its own; only a pre-active stop (which resolves the orchestrator's
+ *  abort race) ends it. Records whether `withdraw`/`leave` were invoked. */
+const lobbyBlockingJoin = () => {
+  const calls = { withdraw: 0, leave: 0, withdrawReason: '' as string };
+  const driver: JoinDriver = {
+    async join(report) { await report('awaiting_admission'); return new Promise<JoinOutcome>(() => { /* never resolves */ }); },
+    onRemoval() { return () => { /* */ }; },
+    async leave() { calls.leave++; },
+    async withdraw(reason) { calls.withdraw++; calls.withdrawReason = reason; },
+  };
+  return { driver, calls };
+};
 
 const seq = (e: LifecycleEvent[]) => e.map((x) => x.status);
 const last = (e: LifecycleEvent[]) => e[e.length - 1];
@@ -100,7 +115,7 @@ async function main(): Promise<void> {
   // ── join throws → failed(joining/join_failure) ──
   {
     const lc = recordingSink();
-    const join: JoinDriver = { async join() { throw new Error('navigation failed'); }, onRemoval() { return () => {}; }, async leave() {} };
+    const join: JoinDriver = { async join() { throw new Error('navigation failed'); }, onRemoval() { return () => {}; }, async leave() {}, async withdraw() {} };
     const res = await createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs() }).run();
     check('join-error: failed / exit 1', res.status === 'failed' && res.exitCode === 1);
     check('join-error: failure_stage=joining', last(lc.events).failure_stage === 'joining');
@@ -192,7 +207,7 @@ async function main(): Promise<void> {
     let left = 0;
     const join: JoinDriver = {
       async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
-      onRemoval() { return () => {}; }, async leave() { left++; },
+      onRemoval() { return () => {}; }, async leave() { left++; }, async withdraw() {},
     };
     const pipe: Pipeline = { async start() { throw new Error('capture init failed'); }, async stop() {} };
     const res = await createOrchestrator(inv(), { lifecycle: lc, join, pipeline: pipe, acts: noopActs() }).run();
@@ -220,7 +235,7 @@ async function main(): Promise<void> {
     } };
     const join: JoinDriver = {   // fires BOTH reports without awaiting
       async join(report) { void report('awaiting_admission'); void report('active'); return 'admitted'; },
-      onRemoval() { return () => {}; }, async leave() {},
+      onRemoval() { return () => {}; }, async leave() {}, async withdraw() {},
     };
     const o = createOrchestrator(inv(), { lifecycle: slowLc, join, pipeline: noopPipeline(), acts: noopActs() });
     const runP = o.run();
@@ -228,6 +243,43 @@ async function main(): Promise<void> {
     await runP;
     check('reports: serialized in emit order despite a slow awaiting_admission sink',
       JSON.stringify(seq(events).slice(0, 3)) === JSON.stringify(['joining', 'awaiting_admission', 'active']), JSON.stringify(seq(events)));
+  }
+
+  // ── Bug 2: stop() at AWAITING_ADMISSION → WITHDRAW the join request (no waiting-room orphan) ──
+  // A stop/SIGTERM while the bot is still in the lobby must not merely arm the force-exit watchdog and
+  // SIGKILL — that leaves the "asking to join" request live. The orchestrator races the (lobby-blocked)
+  // join against a pre-active abort; stop() resolves it, run() calls join.withdraw() to cancel/close the
+  // pre-join screen, then terminates failed(awaiting_admission / stopped, exit 0 — a clean user stop).
+  {
+    const lc = recordingSink();
+    const { driver, calls } = lobbyBlockingJoin();
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: driver, pipeline: noopPipeline(), acts: noopActs() });
+    const runP = o.run();
+    setTimeout(() => o.stop(), 5);   // stop WHILE blocked in the waiting room
+    const res = await runP;
+    check('withdraw: join.withdraw() invoked exactly once (join request cancelled)', calls.withdraw === 1, `withdraw=${calls.withdraw}`);
+    check('withdraw: reason forwarded to the withdraw', calls.withdrawReason === 'stopped', calls.withdrawReason);
+    check('withdraw: reached awaiting_admission then terminated (no active)', seq(lc.events).includes('awaiting_admission') && !seq(lc.events).includes('active'), JSON.stringify(seq(lc.events)));
+    check('withdraw: terminal failed(awaiting_admission / stopped), exit 0', res.status === 'failed' && res.exitCode === 0 && last(lc.events).failure_stage === 'awaiting_admission' && last(lc.events).completion_reason === 'stopped', JSON.stringify(last(lc.events)));
+    check('withdraw: sequence legal + conforms', allLegal(seq(lc.events)) && allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+    check('withdraw: did NOT SIGKILL-orphan — the run resolved on its own (no watchdog needed)', true);
+  }
+
+  // ── Bug 2 (invariant): stop() while ACTIVE still uses the existing active-leave path, NOT withdraw ──
+  {
+    const lc = recordingSink();
+    // mockJoin('admitted') reports active; withdraw must never be called on the active-stop path.
+    let withdrew = 0;
+    const join: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; }, async leave() {}, async withdraw() { withdrew++; },
+    };
+    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs() });
+    const runP = o.run();
+    setTimeout(() => o.stop(), 5);
+    const res = await runP;
+    check('active-stop: completed(stopped) via the active-leave path (unchanged)', res.status === 'completed' && last(lc.events).completion_reason === 'stopped');
+    check('active-stop: withdraw NOT invoked (active leave, not a waiting-room withdraw)', withdrew === 0, `withdrew=${withdrew}`);
   }
 
   if (failed) { console.error(`\n❌ orchestrator (L2): ${failed} check(s) FAILED.`); process.exit(1); }
