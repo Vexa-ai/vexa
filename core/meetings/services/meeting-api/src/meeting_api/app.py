@@ -188,9 +188,24 @@ def _mount_lifecycle(
     app.state.status_change_webhooks = []
     app.state.typed_webhooks = []
 
-    @app.post("/bots/internal/callback/lifecycle")
-    async def lifecycle_callback(request: Request) -> JSONResponse:
-        body = await request.json()
+    async def _apply_lifecycle_event(
+        body: dict,
+        *,
+        transition_source: "TransitionSource" = TransitionSource.BOT_CALLBACK,
+        force_terminal_on_destroy: bool = False,
+    ) -> tuple[int, dict]:
+        """Apply ONE lifecycle.v1 event to the FSM + run every side effect (persist, finalize,
+        webhook deliver, ws publish, copilot reap), returning ``(status_code, content)``.
+
+        This is the SINGLE in-process entry the FSM advance flows through — the HTTP endpoint
+        ``POST /bots/internal/callback/lifecycle`` (the bot's own callback) is a thin wrapper around
+        it, and the runtime-callback synthetic-terminal path calls it DIRECTLY (no HTTP self-POST).
+        The prior implementation POSTed to ``http://127.0.0.1:PORT/…`` to re-enter this logic; that
+        loopback round-trip was fragile (a rehydration race made the synthetic terminal 409, and
+        under any harness that cannot reach the loopback it silently dropped) — the direct in-process
+        call removes the network hop entirely, so the synthetic terminal advances the SAME FSM
+        instance deterministically. ``force_terminal_on_destroy`` rides through to the sink so a
+        runtime-confirmed destroy can force the terminal edge from a stale non-terminal state."""
         try:
             conforms(body, "LifecycleEvent")
         except jsonschema.ValidationError as e:
@@ -199,9 +214,9 @@ def _mount_lifecycle(
                 span="lifecycle.callback",
                 fields={"reason": "schema_violation", "detail": e.message},
             )
-            return JSONResponse(
-                status_code=422,
-                content={"status": "error", "detail": f"lifecycle.v1 schema violation: {e.message}"},
+            return (
+                422,
+                {"status": "error", "detail": f"lifecycle.v1 schema violation: {e.message}"},
             )
         # LIFECYCLE-409 fix: rehydrate the in-memory FSM record from the DB's CURRENT status before
         # applying the event. The in-memory MeetingStore is non-durable — after a meeting-api restart
@@ -223,11 +238,15 @@ def _mount_lifecycle(
                 if persisted:
                     sink.store.rehydrate(connection_id, persisted)
         try:
-            change = sink.apply_change(body, transition_source=TransitionSource.BOT_CALLBACK)
+            change = sink.apply_change(
+                body,
+                transition_source=transition_source,
+                force_terminal_on_destroy=force_terminal_on_destroy,
+            )
         except IllegalTransition as e:
-            return JSONResponse(
-                status_code=409,
-                content={
+            return (
+                409,
+                {
                     "status": "error", "detail": str(e),
                     "connection_id": e.connection_id,
                     "from": e.frm.value if e.frm is not None else None,
@@ -414,9 +433,9 @@ def _mount_lifecycle(
             meeting_id=rec.connection_id,
             fields={"meeting_status": rec.status.value if rec.status else None},
         )
-        return JSONResponse(
-            status_code=200,
-            content={
+        return (
+            200,
+            {
                 "status": "accepted",
                 "connection_id": rec.connection_id,
                 "meeting_status": rec.status.value if rec.status else None,
@@ -428,12 +447,24 @@ def _mount_lifecycle(
             },
         )
 
+    # Expose the in-process entry so the runtime-callback synthetic-terminal path can advance the FSM
+    # DIRECTLY (no HTTP self-POST to 127.0.0.1:PORT). Same instance, same store, same side effects.
+    app.state.apply_lifecycle_event = _apply_lifecycle_event
+
+    @app.post("/bots/internal/callback/lifecycle")
+    async def lifecycle_callback(request: Request) -> JSONResponse:
+        body = await request.json()
+        status_code, content = await _apply_lifecycle_event(
+            body, transition_source=TransitionSource.BOT_CALLBACK
+        )
+        return JSONResponse(status_code=status_code, content=content)
+
     @app.post("/runtime/callback")
     async def runtime_callback(request: Request) -> JSONResponse:
         """ACK the runtime kernel's workload-level callback (state/terminal events). The bot's own
         ``lifecycle.v1`` callback is the meeting-status source of truth for a STARTED bot; this route
         ALSO consumes a runtime-confirmed TERMINAL workload state as evidence the run is over, driving a
-        synthetic terminal through the bot's OWN lifecycle callback (POST-to-self):
+        synthetic terminal through the SAME in-process lifecycle logic (no HTTP self-POST):
 
           * PRE-ACTIVE meeting → ``failed`` (CC5): the bot never started/reported and never will, so the
             meeting would otherwise hang ``requested``/``joining`` forever.
@@ -442,7 +473,16 @@ def _mount_lifecycle(
             (e.g. SIGKILLed at teardown before it could POST ``completed``, or killed in the waiting room
             on a stop). Without this the meeting stays ``stopping`` and the stop-reconcile sweep re-DELETEs
             (now 404) every 15s FOREVER — the reaper loop. The confirmed destroy IS the terminal evidence
-            (#50's principle: real evidence, not a bare 404) → complete it and stop the loop."""
+            (#50's principle: real evidence, not a bare 404) → complete it and stop the loop.
+
+        THE FIX (live 409): the synthetic terminal is applied by calling the in-process lifecycle entry
+        (``app.state.apply_lifecycle_event``) DIRECTLY with ``transition_source=RUNTIME_DESTROY`` and
+        ``force_terminal_on_destroy=True`` — NOT an httpx POST to ``127.0.0.1:PORT``. The old self-POST
+        409'd whenever the in-process FSM record was a stale non-terminal state the DB had already moved
+        past (e.g. store still ``joining`` while the DB user-stop set ``stopping`` — ``joining →
+        completed`` is illegal for a bot-driven edge). The direct in-process call advances the SAME FSM
+        instance, and the runtime-destroy source forces the terminal edge on real teardown evidence, so
+        the meeting reaches terminal, the reaper stops, and the copilot ``session_end`` reap fires."""
         try:
             body = await request.json()
         except Exception:  # noqa: BLE001
@@ -454,26 +494,24 @@ def _mount_lifecycle(
             fields={"workload_id": workload_id, "state": state},
         )
         # Consume a runtime-confirmed TERMINAL workload as evidence (pre-active → failed / was-active →
-        # completed). Reuse the bot's OWN lifecycle callback (POST to self) so the FSM/persist/webhook/ws
-        # path fires identically; best-effort — a non-terminal state or an already-terminal meeting is a
+        # completed). Drive it through the SAME in-process lifecycle logic (FSM/persist/webhook/ws/reap
+        # all fire identically) — best-effort; a non-terminal state or an already-terminal meeting is a
         # no-op. Imported lazily to keep the prod import path lean.
         try:
             import logging as _logging
-            import os as _os
 
+            from .lifecycle.machine import TransitionSource as _TS
             from .lifecycle.reconcile import synthesize_terminal_for_dead_workload
 
             async def _drive_terminal(event: dict):
-                import httpx
-
-                port = int(_os.getenv("PORT", "8080"))
-                url = f"http://127.0.0.1:{port}/bots/internal/callback/lifecycle"
-                headers = {"content-type": "application/json"}
-                secret = _os.getenv("INTERNAL_API_SECRET")
-                if secret:
-                    headers["x-internal-secret"] = secret
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    return (await client.post(url, json=event, headers=headers)).status_code
+                # In-process — no network hop. The runtime-destroy source forces the terminal edge past
+                # a stale non-terminal FSM record; returns the HTTP-equivalent status code for the log.
+                status_code, _content = await _apply_lifecycle_event(
+                    event,
+                    transition_source=_TS.RUNTIME_DESTROY,
+                    force_terminal_on_destroy=True,
+                )
+                return status_code
 
             await synthesize_terminal_for_dead_workload(
                 meeting_repo, workload_id, state, _drive_terminal,
