@@ -41,6 +41,7 @@ from control_plane.workspace_attach import (
     activate_workspace,
     active_workspaces,
     attached_workspaces,
+    create_workspace,
     deactivate_workspace,
     rename_workspace,
     swap_workspace,
@@ -290,6 +291,14 @@ class WorkspaceActivateBody(BaseModel):
     ref: Optional[str] = None    # branch/tag/sha (defaults to main)
     slug: Optional[str] = None   # activate an already-parked slot directly (no repo needed)
     token: Optional[str] = None  # access token for a PRIVATE repo — clone only, never stored (P15)
+
+
+class WorkspaceNewBody(BaseModel):
+    """CREATE a brand-new BLANK workspace (seeded from the template) at a fresh slug and ADD it to the
+    active set — the additive-model "new workspace" action. NOT a swap: nothing is parked/rebuilt/backed
+    up. ``name`` (optional) → the new workspace's display label (default a unique "New workspace")."""
+    model_config = {"extra": "forbid"}
+    name: Optional[str] = None
 
 
 class WorkspaceDeactivateBody(BaseModel):
@@ -1008,6 +1017,19 @@ def create_app(
             raise HTTPException(status_code=502, detail=f"git clone failed: {exc}")
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
                 "cloned": result.cloned, "nested": result.nested}
+
+    @app.post("/api/workspace/new", status_code=201)
+    def ws_new(request: Request, body: WorkspaceNewBody = Body(default=WorkspaceNewBody())):
+        """CREATE a brand-new BLANK workspace (seeded from the template) at a fresh unique slug and ADD it
+        to the active set (additive — the "new workspace" action). Nothing is parked/rebuilt/backed up: the
+        private baseline and every other active workspace stay exactly as they were."""
+        subject = subject_of(request)
+        try:
+            result = create_workspace(wsr.root, subject, name=body.name or None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
+                "added": True}
 
     @app.post("/api/workspace/deactivate")
     def ws_deactivate(request: Request, body: WorkspaceDeactivateBody = Body(...)):

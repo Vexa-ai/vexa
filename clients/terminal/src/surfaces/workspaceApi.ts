@@ -59,6 +59,18 @@ export async function activateWorkspace(opts: { repo?: string; ref?: string; slu
   });
 }
 
+/** CREATE a brand-new BLANK workspace (seeded from the template) at a fresh slug and ADD it to the active
+ *  set — the additive-model "new workspace" action. NOT a swap: nothing is parked, rebuilt, or backed up;
+ *  the private baseline and every other active workspace stay exactly as they were. `name` (optional) sets
+ *  the new workspace's display label (default a unique "New workspace"). The new row appears CHECKED. */
+export async function createWorkspace(name?: string): Promise<{ subject: string; slug: string; changed: boolean; added: boolean }> {
+  return getJson(`/api/workspace/new`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name ?? null }),
+  });
+}
+
 /** REMOVE a workspace from the active set (park it — never destroyed; the tree stays, ready to re-activate).
  *  The private baseline cannot be deactivated (the server answers 409). Idempotent — a not-active slug is a no-op. */
 export async function deactivateWorkspace(slug: string): Promise<{ subject: string; slug: string; changed: boolean }> {
