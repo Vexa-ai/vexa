@@ -272,6 +272,16 @@ export function Workbench() {
     return () => window.removeEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
   }, [layout]);
 
+  // Auto-open a shared meeting's live feed when landing from a ?tshare= link — InviteRedeemer stashed the
+  // meeting id before reload. One hop → zero hops. Reveal the meetings list, then open the meeting tab.
+  useEffect(() => {
+    let mid: string | null = null;
+    try { mid = localStorage.getItem("vexa.openMeeting"); if (mid) localStorage.removeItem("vexa.openMeeting"); } catch { /* noop */ }
+    if (!mid) return;
+    if (!meetOnly) layout.setActiveList("meetings");
+    layout.openTab({ id: `meeting:${mid}`, title: "Shared meeting", kind: "meeting", params: { meetingId: mid } });
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
   // service never operates on a disposed grid.
   const apiRef = useRef<DockviewApi | null>(null);

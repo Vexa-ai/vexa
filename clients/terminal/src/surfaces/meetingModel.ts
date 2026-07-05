@@ -13,6 +13,7 @@ export interface MeetingMock {
   when: string;
   status: "live" | "past";
   live_status?: string;       // the RAW meeting-api status — drives the status badge + action dropdown
+  shared?: boolean;           // surfaced via a share/membership (not owned by the caller) — badged in the list
   scheduled_at?: string;      // when a `scheduled` meeting is due (data.scheduled_at)
   platform: string;
   participants: Participant[];

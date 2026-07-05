@@ -14,6 +14,7 @@ interface MeetingRowDTO {
   platform: string;
   native_meeting_id: string;
   status: string;
+  shared?: boolean;   // surfaced via a share/membership (not owned by the caller)
   start_time?: string | null;
   end_time?: string | null;
   data?: { recordings?: unknown[]; docs?: { workspace: string; path: string; title?: string; kind?: string }[]; scheduled_at?: string; stop_requested?: boolean } | null;
@@ -147,6 +148,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     when: whenLabel(d, live),
     status: live ? "live" : "past",
     live_status: raw,
+    shared: !!d.shared,   // owned by someone else, surfaced via a share/membership (data.shared)
     scheduled_at: d.data?.scheduled_at ?? undefined,
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),

@@ -31,7 +31,9 @@ function InviteRedeemer() {
     if (!invite && !tshare) return;
     const jobs: Promise<unknown>[] = [];
     if (invite) jobs.push(acceptInvite(invite).catch((e) => console.error("workspace invite redeem failed:", e)));
-    if (tshare) jobs.push(acceptTranscriptShare(tshare).catch((e) => console.error("transcript share redeem failed:", e)));
+    if (tshare) jobs.push(acceptTranscriptShare(tshare)
+      .then((r) => { if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id)); })  // auto-open the feed post-reload
+      .catch((e) => console.error("transcript share redeem failed:", e)));
     void Promise.allSettled(jobs).finally(() => window.location.replace(window.location.pathname));
   }, []);
   return null;
