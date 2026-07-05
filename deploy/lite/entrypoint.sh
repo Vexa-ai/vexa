@@ -65,6 +65,7 @@ export VEXA_MEETING_MODEL="${VEXA_MEETING_MODEL:-}"
 # the worker reads the file directly; the runtime's config.v1 file probe verifies it on /health.
 # Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
 export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
+export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-}"
 export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-}"
