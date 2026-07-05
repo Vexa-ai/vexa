@@ -26,7 +26,9 @@ export async function initWorkspace(): Promise<{ workspace: string; seeded: bool
 }
 
 export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; nested?: boolean }
-export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot> }
+/** `published_url`: where the ACTIVE workspace was published (the token-free URL of its GitHub home),
+ *  or null when it never was — a published workspace renders a link instead of the publish action. */
+export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null }
 export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null; nested: boolean }
 
 /** The subject's attachment view: which workspace is active + the parked ones available to swap back to. */
@@ -52,12 +54,13 @@ export interface PublishResult { repo_url: string; pushed_ref: string; head_sha:
 /** Publish the vexa-born ACTIVE workspace to GitHub — the counterpart of attach: create the repo under
  *  the caller's account (private by default) and push the current branch's FULL history. `token` is the
  *  caller's PAT — used server-side for this one call (repo creation + push), NEVER stored (P15).
- *  Re-publish to the same repo is a plain push (fast-forward, or a clear error — never a force push). */
-export async function publishWorkspace(repoName: string, priv: boolean, token: string): Promise<PublishResult> {
+ *  Re-publish to the same repo is a plain push (fast-forward, or a clear error — never a force push):
+ *  pass `remoteUrl` (the workspace's published home) to PUSH UPDATES there instead of creating a repo. */
+export async function publishWorkspace(repoName: string, priv: boolean, token: string, remoteUrl?: string): Promise<PublishResult> {
   return getJson(`/api/workspace/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repo_name: repoName, private: priv, token }),
+    body: JSON.stringify(remoteUrl ? { remote_url: remoteUrl, token } : { repo_name: repoName, private: priv, token }),
   });
 }
 
