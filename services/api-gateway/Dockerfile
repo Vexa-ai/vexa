@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir /app/services/meeting-api
 # Copy application code and requirements
 COPY ./services/api-gateway/requirements.txt /app/
 COPY ./services/api-gateway/main.py /app/
+COPY ./services/api-gateway/guard_config.py /app/
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
