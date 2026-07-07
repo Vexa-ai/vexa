@@ -29,7 +29,11 @@ profiles:
       # during admission-verification + graceful leave. Exit 137 observed
       # on helm meetings 9+10 + compose 18 after 10-20s active. 2.5× headroom
       # absorbs Teams-side memory spikes without affecting bot scheduling.
-      memory_limit: "2560Mi"
+      # Bumped 2560Mi → 4Gi (2026-07-07 meeting-113): Chrome tab OOM-killed at
+      # 26m5s on a 2-participant gmeet. Peak sampled 2.68Gi before crash — the
+      # 2.5Gi cap was too tight for ≥30 min meetings with WebRTC + Meet SPA +
+      # Whisper queue. 4Gi gives ~30% headroom for ≥60 min meetings.
+      memory_limit: "4Gi"
       shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 0          # managed by meeting-api (scheduler + bot-side timers)
     auto_remove: false

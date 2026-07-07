@@ -2511,8 +2511,20 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const isMain = frame === page!.mainFrame();
     log(`[Frame] ${isMain ? 'MAIN-FRAME' : 'sub-frame'} navigated: ${frame.url()}`);
   });
-  page.on('crash', () => {
+  page.on('crash', async () => {
     log(`[Page] !!! TAB CRASHED — Chromium tab process died. Likely OOM or sandbox kill. Last URL: ${page?.url() || '(unknown)'}`);
+    // Node kept running after Chrome died on 2026-07-07 meeting-113: telemetry
+    // stayed alive, no exit callback fired, Vexa stayed status=active. Trigger
+    // graceful leave so meeting-api learns it's over and Aimable's completion
+    // pipeline (FINAL transcript batch, webhook, workbench) actually fires.
+    if (!isShuttingDown) {
+      try {
+        await performGracefulLeave(page, 1, "chrome_tab_crashed");
+      } catch (err: any) {
+        log(`[Page] performGracefulLeave after crash failed: ${err?.message || err}`);
+        process.exit(1);
+      }
+    }
   });
   page.on('close', () => {
     log(`[Page] PAGE CLOSED — last URL: ${page?.url() || '(unknown)'}`);
