@@ -45,6 +45,12 @@ def _block_text(content) -> str:
 # default but surfaced when the caller opts in via ``hidden=True``.
 _ALWAYS_HIDDEN = {".git"}
 
+# Commit authors that are platform/seed PLUMBING, not a member's agent — classified ``system`` so the
+# activity feed never mistakes a policy or seed commit for a member push. The per-mount turn-commit stamps
+# a member's principal instead (name=<subject>, email=<subject>@vexa.local — see worker/engine.py, D4).
+_SYSTEM_AUTHOR_EMAILS = {"platform@vexa.ai", "agent@vexa"}
+_SYSTEM_AUTHOR_NAMES = {"vexa-platform", "vexa-agent"}
+
 
 class WorkspaceReader:
     def __init__(self, workspaces_dir: str) -> None:
@@ -225,20 +231,32 @@ class WorkspaceReader:
         return removed
 
     def git_state(self, subject: str) -> dict:
-        """Real source-control state of the subject's workspace: branch, working changes, recent commits
-        (the governed git knowledge graph the agent commits to). Empty shape if not yet a repo."""
+        """Real source-control state of the subject's OWN (primary) workspace — thin wrapper over
+        ``git_state_at`` with the caller as viewer (so their own commits classify as ``you``)."""
+        return self.git_state_at(self._ws(subject), viewer=subject)
+
+    def git_state_at(self, base: Path, viewer: Optional[str] = None) -> dict:
+        """Author-attributed source-control state (branch · working changes · recent commits) of the
+        workspace at ``base`` — which may be the caller's own repo OR a SHARED workspace they're a member
+        of (resolved+authorized by the API's ``_read_target``). Empty shape if not yet a repo.
+
+        Each commit carries ``author`` (the committing principal's display id, stamped by the per-mount
+        turn-commit — D4) and ``kind`` ∈ {``you``, ``member``, ``system``} so the terminal can surface
+        OTHER members' agent pushes to a shared workspace distinctly from the viewer's own writes and from
+        platform/seed plumbing. ``viewer`` (the caller's subject id) is what makes ``you`` resolvable — the
+        turn-commit stamps author email ``<subject>@vexa.local`` (see ``worker/engine.py`` principal)."""
         import subprocess
 
         from shared.gitenv import scrubbed_git_env
 
-        ws = self._ws(subject)
-        if not (ws / ".git").exists():
+        base = self._guard_under_root(base)
+        if not (base / ".git").exists():
             return {"branch": "", "changes": [], "commits": []}
 
         def git(*args: str) -> str:
             # scrubbed env: a hook-exported GIT_DIR would report the HOOK's repo, not this workspace
             return subprocess.run(
-                ["git", "-C", str(ws), *args], capture_output=True, text=True, env=scrubbed_git_env()
+                ["git", "-C", str(base), *args], capture_output=True, text=True, env=scrubbed_git_env()
             ).stdout.strip()
 
         changes = []
@@ -249,9 +267,19 @@ class WorkspaceReader:
                     continue  # hide the agent's internal .git/.claude session plumbing
                 flag = line[:2].strip()[:1] or "M"
                 changes.append({"path": path, "kind": "A" if flag in ("A", "?") else flag})
+        viewer_email = f"{viewer}@vexa.local" if viewer else None
         commits = []
-        for line in git("log", "-8", "--pretty=%h\x1f%s\x1f%cr").splitlines():
+        # %an·%ae carry the D4 attribution: a member's agent commit is authored as its principal
+        # (name=<subject>, email=<subject>@vexa.local); platform/seed commits are the plumbing authors.
+        for line in git("log", "-8", "--pretty=%h\x1f%s\x1f%cr\x1f%an\x1f%ae").splitlines():
             parts = line.split("\x1f")
-            if len(parts) == 3:
-                commits.append({"sha": parts[0], "msg": parts[1], "when": parts[2]})
+            if len(parts) == 5:
+                sha, msg, when, an, ae = parts
+                if ae in _SYSTEM_AUTHOR_EMAILS or an in _SYSTEM_AUTHOR_NAMES:
+                    kind = "system"          # policy/seed plumbing — never a member's agent push
+                elif viewer_email and ae == viewer_email:
+                    kind = "you"             # the caller's own agent write
+                else:
+                    kind = "member"          # ANOTHER member's agent pushed this
+                commits.append({"sha": sha, "msg": msg, "when": when, "author": an, "kind": kind})
         return {"branch": git("rev-parse", "--abbrev-ref", "HEAD") or "main", "changes": changes, "commits": commits}

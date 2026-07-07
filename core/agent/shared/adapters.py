@@ -12,10 +12,12 @@ logged, never written into the repo's persisted remote (we strip it afterward, a
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -72,6 +74,59 @@ def _git(cwd: Path, *args: str, token: str | None = None) -> str:
     return proc.stdout.strip()
 
 
+# ── Lane W: the per-shared-workspace merge-coordinator WRITE point ────────────────────────────────
+# A shared workspace is ONE git repo at <root>/<id> that every member's dispatch mounts (see
+# control_plane/workspace_attach.shared_active_mounts) — NOT a per-member clone. So two members' agent
+# turns commit the SAME repo concurrently, and without serialization their stage+commit race on git's
+# index.lock and a turn's write can be lost (the "concurrent shared writes are not yet serialized"
+# gap in control_plane/dispatch.py). This flock is that serialization point: it gives cross-process
+# mutual exclusion for the commit critical section on ONE node (the shared workspace volume is a POSIX
+# fs, so flock is the right primitive — the same reasoning workspace_membership.py uses for policy/,
+# lifted from a process-local threading.Lock to a cross-process file lock).
+#
+# SCOPE (honest): this makes concurrent commits SAFE (no index corruption / lost turn). It does NOT yet
+# isolate overlapping edits to the SAME entity — two turns editing one file still last-writer-wins at
+# the file level; true per-turn isolation (worktree-per-turn + git three-way on merge) is the next step.
+# MULTI-NODE: an flock is node-local; a multi-replica agent-api additionally needs a shared lock
+# (redis/advisory) or push-as-CAS (documented gap — workspace_membership.py MULTI-REPLICA NOTE).
+WRITE_LOCK_TIMEOUT_S = float(os.environ.get("VEXA_WS_WRITE_LOCK_TIMEOUT_S", "30"))
+
+
+class WorkspaceBusyError(RuntimeError):
+    """The per-workspace write lock could not be acquired within the timeout — the coordinator is busy
+    with another member's commit. Retryable: the caller re-attempts the turn-commit."""
+
+
+@contextlib.contextmanager
+def workspace_write_lock(work_dir: Path, timeout: float = WRITE_LOCK_TIMEOUT_S):
+    """Serialize the commit critical section for the workspace repo at ``work_dir`` across processes on
+    this node (Lane W). Blocks up to ``timeout`` seconds, then raises ``WorkspaceBusyError`` so a wedged
+    holder can never stall a workspace forever (liveness). A no-op-safe wrapper: releases on any exit."""
+    import fcntl  # POSIX-only; imported lazily so non-Linux dev hosts import the module fine
+
+    # Lockfile lives in .git (never staged/committed) when the repo exists, else beside the tree.
+    git_dir = work_dir / ".git"
+    lock_path = (git_dir if git_dir.exists() else work_dir) / ".vexa-writer.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        start = time.monotonic()
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() - start > timeout:
+                    raise WorkspaceBusyError(f"workspace write lock busy after {timeout}s: {work_dir}")
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 class GitPushError(RuntimeError):
     """A token-authenticated push failed. The message is REDACTED of the token (P15) so it is safe
     to surface in an API error body / log."""
@@ -126,6 +181,9 @@ class RealGitWorkspace(WorkspacePort):
     def __init__(self, work_dir: str | Path) -> None:
         self.work_dir = Path(work_dir)
         self._identity = ("vexa", "vexa@system")  # the parent's commit identity
+        # Paths written this session. Staging is DEFERRED to commit() (under the Lane W write lock) so a
+        # concurrent member's turn on a SHARED repo can't race us on git's index.lock — see write/commit.
+        self._pending: list[str] = []
 
     def clone(self, repo_url: str, ref: str) -> None:
         self.work_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -154,14 +212,35 @@ class RealGitWorkspace(WorkspacePort):
         f = self.work_dir / write.path
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(render_entity(write))
-        _git(self.work_dir, "add", "--", write.path)
+        # NOTE: deliberately no ``git add`` here. On a SHARED repo, staging grabs .git/index.lock and
+        # would race a concurrent member's turn (proven: writes get dropped with "index.lock: File
+        # exists"). Record the path; commit() stages it under the write lock (Lane W).
+        if write.path not in self._pending:
+            self._pending.append(write.path)
 
     def commit(self, message: str) -> str:
-        # Mirror the parent's "if [ -n "$STATUS" ]" guard: a clean tree → no-op commit returns "".
-        if not _git(self.work_dir, "status", "--porcelain"):
-            return ""
-        _git(self.work_dir, "commit", "-m", message)
-        return _git(self.work_dir, "rev-parse", "HEAD")
+        # Lane W: ALL index mutation (stage + commit) happens under the per-workspace write lock, so a
+        # concurrent member's turn on the SAME shared repo can never race us on git's index.lock.
+        with workspace_write_lock(self.work_dir):
+            paths = list(self._pending)
+            if paths:
+                # Stage + commit ONLY this worker's own paths (pathspec) so a commit carries exactly its
+                # writes — never a concurrent member's half-written file, even sharing one working tree.
+                _git(self.work_dir, "add", "--", *paths)
+                dirty = _git(self.work_dir, "status", "--porcelain", "--", *paths)
+            else:
+                # Back-compat: no deferred writes → fall back to the whole-index behavior (e.g. a caller
+                # that staged externally). Mirrors the parent's "if [ -n "$STATUS" ]" no-op guard.
+                dirty = _git(self.work_dir, "status", "--porcelain")
+            if not dirty:                 # nothing of ours changed vs HEAD → the no-op contract ("")
+                self._pending.clear()
+                return ""
+            if paths:
+                _git(self.work_dir, "commit", "-m", message, "--", *paths)
+            else:
+                _git(self.work_dir, "commit", "-m", message)
+            self._pending.clear()
+            return _git(self.work_dir, "rev-parse", "HEAD")
 
 
 class SecretsBrokerProtocol(Protocol):

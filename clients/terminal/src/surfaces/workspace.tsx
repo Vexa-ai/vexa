@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -68,6 +68,93 @@ async function readFile(path: string, slug?: string): Promise<string> {
 // ── session-persisted UI flags ───────────────────────────────────────────────────
 const readSS = (k: string): string | null => { try { return sessionStorage.getItem(k); } catch { return null; } };
 const writeSS = (k: string, v: string) => { try { sessionStorage.setItem(k, v); } catch { /* noop */ } };
+// localStorage (persists across reloads) — the "seen" watermark for shared-workspace activity so the
+// unread badge survives a page refresh, unlike the session-scoped UI flags above.
+const readLS = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
+const writeLS = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* noop */ } };
+
+// ── shared-workspace activity feed (Lane W read-side) ─────────────────────────────
+// One commit row: message + an author chip coloured by `kind` — a MEMBER push (another user's agent)
+// stands out in --accent; the caller's own writes and platform/seed plumbing stay muted. `unread` dots
+// the commits that landed since the viewer last opened this workspace's activity.
+function CommitRow({ c, unread }: { c: GitCommit; unread?: boolean }) {
+  const kind = c.kind ?? "you";
+  const isMember = kind === "member";
+  const who = kind === "you" ? "you" : kind === "system" ? "system" : (c.author || "member");
+  const whoColor = isMember ? "var(--accent)" : "var(--t3)";
+  return (
+    <div style={{ padding: "4px 9px", fontSize: 12, display: "flex", gap: 7, alignItems: "flex-start" }}>
+      <span title={unread ? "new since you last looked" : undefined}
+        style={{ width: 6, height: 6, borderRadius: 3, marginTop: 5, flex: "none",
+          background: unread ? "var(--accent)" : "transparent" }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
+        <div style={{ fontSize: 11, color: "var(--t3)", display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: whoColor, fontWeight: isMember ? 600 : 400 }}>
+            {isMember && <Icon name="user" size={11} />}{who}
+          </span>
+          <span style={{ fontFamily: "var(--mono)", color: "var(--green)" }}>{c.sha}</span>
+          <span>{c.when}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Count MEMBER commits newer than the seen watermark. git log is newest-first, so walk until the watermark
+// sha; every `member` commit before it is unread (own/system writes never raise the badge).
+function unreadMemberShas(commits: GitCommit[], seenSha: string): Set<string> {
+  const unread = new Set<string>();
+  for (const c of commits) {
+    if (c.sha === seenSha) break;
+    if ((c.kind ?? "") === "member") unread.add(c.sha);
+  }
+  return unread;
+}
+
+/** The "Activity" strip under a shared workspace: recent commits with author attribution, and an unread
+ *  badge for pushes from OTHER members' agents since the viewer last expanded it. Polls the same
+ *  /api/workspace/git the primary source-control panel uses, scoped to this shared workspace's slug. */
+function MountActivity({ slug }: { slug: string }) {
+  const [open, setOpen] = useState(false);
+  const [commits, setCommits] = useState<GitCommit[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [seen, setSeen] = useState<string>(() => readLS(`vexa.ws.seen.${slug}`) ?? "");
+  useEffect(() => {
+    const load = () => void readWorkspaceGit({ slug })
+      .then((g) => { setCommits(g.commits); setErr(null); })
+      .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+    load();
+    const id = setInterval(() => { if (!document.hidden) load(); }, 6000);  // reflect members' pushes as they land
+    window.addEventListener("focus", load);
+    return () => { clearInterval(id); window.removeEventListener("focus", load); };
+  }, [slug]);
+  const unread = unreadMemberShas(commits, seen);
+  const markSeen = () => { const top = commits[0]?.sha; if (top) { writeLS(`vexa.ws.seen.${slug}`, top); setSeen(top); } };
+  const toggle = () => setOpen((v) => { const n = !v; if (n) markSeen(); return n; });  // opening = "I've seen these"
+  return (
+    <div style={{ marginTop: 2 }}>
+      <div onClick={toggle}
+        style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 22px", cursor: "pointer",
+          fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+        <Icon name="chevR" size={11} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+        <Icon name="git" size={11} />activity
+        {unread.size > 0 && (
+          <span title={`${unread.size} new change${unread.size > 1 ? "s" : ""} from other members`}
+            style={{ marginLeft: "auto", background: "var(--accent)", color: "var(--bg)", fontSize: 9.5,
+              fontWeight: 700, borderRadius: 8, padding: "0 5px", lineHeight: "15px", textTransform: "none" }}>
+            {unread.size} new
+          </span>
+        )}
+      </div>
+      {open && (
+        err ? <div role="alert" style={{ padding: "2px 9px 4px 22px", fontSize: 11.5, color: "var(--live)" }}>⚠ {err}</div>
+        : commits.length === 0 ? <div style={{ padding: "2px 9px 4px 22px", fontSize: 12, color: "var(--t3)" }}>No commits yet.</div>
+        : <div style={{ paddingLeft: 13 }}>{commits.map((c) => <CommitRow key={c.sha} c={c} unread={unread.has(c.sha)} />)}</div>
+      )}
+    </div>
+  );
+}
 
 // ── tree model: fold the flat path list into nested folder/file nodes ─────────────
 interface TreeNode { name: string; path: string; isDir: boolean; children: TreeNode[] }
@@ -170,6 +257,8 @@ function MountSection({ mount }: { mount: ActiveMount }) {
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggleDir}
           openFile={openDoc} pinFile={pinDoc} openMenu={() => {}} />)}
         {!error && tree.length === 0 && <div style={{ padding: "3px 12px", color: "var(--t3)", fontSize: 12 }}>Empty.</div>}
+        {/* Lane W read-side: recent commits + a badge for OTHER members' agent pushes to this shared ws. */}
+        {mount.role === "shared" && <MountActivity slug={mount.slug} />}
       </>)}
     </div>
   );
@@ -767,12 +856,7 @@ function GitSection() {
         </div>
       ))}
       {git.commits.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "8px 9px 2px" }}>RECENT COMMITS</div>}
-      {git.commits.map((c) => (
-        <div key={c.sha} style={{ padding: "4px 9px", fontSize: 12 }}>
-          <div style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
-          <div style={{ fontSize: 11, color: "var(--t3)", display: "flex", gap: 8 }}><span style={{ fontFamily: "var(--mono)", color: "var(--green)" }}>{c.sha}</span><span>{c.when}</span></div>
-        </div>
-      ))}
+      {git.commits.map((c) => <CommitRow key={c.sha} c={c} />)}
       </>)}
     </div>
   );

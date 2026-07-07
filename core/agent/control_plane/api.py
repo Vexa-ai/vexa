@@ -958,10 +958,14 @@ def create_app(
         return {"path": path, "content": content}
 
     @app.get("/api/workspace/git")
-    def ws_git(request: Request):
-        """Real source-control state (branch · working changes · recent commits) of the workspace."""
+    def ws_git(request: Request, slug: Optional[str] = None):
+        """Author-attributed source-control state (branch · working changes · recent commits) of a
+        workspace. No ``slug`` → the caller's own primary. A ``slug`` addresses a SHARED workspace the
+        caller is a member of (same authorized resolution as tree/file reads) — its commits carry
+        ``author`` + ``kind`` so the terminal can show OTHER members' agent pushes as they land."""
         try:
-            return wsr.git_state(subject_of(request))
+            target = _read_target(request, slug)  # authorizes: a slug outside the caller's mount set → 403
+            return wsr.git_state_at(target, viewer=subject_of(request))
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
 

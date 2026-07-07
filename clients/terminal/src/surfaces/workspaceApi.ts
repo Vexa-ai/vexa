@@ -6,7 +6,11 @@
  *  except a genuine 404 on a file read, which is a legit "no such file" → null. Proven in workspaceApi.test.ts. */
 import { ApiError, getJson } from "./apiClient";
 
-export interface GitState { branch: string; changes: { path: string; kind: string }[]; commits: { sha: string; msg: string; when: string }[] }
+// `kind` classifies the committing principal (server-side, D4 attribution): `you` = the caller's own
+// agent write · `member` = ANOTHER member's agent push to a shared workspace · `system` = platform/seed
+// plumbing. `author` is the principal's display id. Optional so a pre-upgrade agent-api still parses.
+export interface GitCommit { sha: string; msg: string; when: string; author?: string; kind?: "you" | "member" | "system" }
+export interface GitState { branch: string; changes: { path: string; kind: string }[]; commits: GitCommit[] }
 
 /** Read a file's content. A 404 → null (legit "not found"); ANY other failure throws (loud).
  *  `slug` (Lane A) targets a SHARED workspace the caller is a member of; omitted → the caller's own ws. */
@@ -215,8 +219,11 @@ export async function listWorkspaceTree(opts?: { hidden?: boolean; slug?: string
   return data.files ?? [];
 }
 
-export async function readWorkspaceGit(): Promise<GitState> {
-  const g = await getJson<GitState>(`/api/workspace/git`);
+/** Source-control state of a workspace. No `slug` → the caller's own primary; a `slug` → a SHARED
+ *  workspace the caller is a member of (its commits carry author + kind for the activity feed). */
+export async function readWorkspaceGit(opts?: { slug?: string }): Promise<GitState> {
+  const qs = opts?.slug ? `?slug=${encodeURIComponent(opts.slug)}` : "";
+  const g = await getJson<GitState>(`/api/workspace/git${qs}`);
   // A 200 with the WRONG shape (an error/degraded body) is still a failure — throw loud rather than
   // hand the surface a malformed GitState (the GitSection crash). The surface shows it; never crashes.
   if (!g || !Array.isArray(g.changes) || !Array.isArray(g.commits)) {
