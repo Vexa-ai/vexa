@@ -10,7 +10,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { WorkspaceSwitcher } from "../workspace";
+import { ServicesProvider, createContainer, reg } from "../../platform";
+import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 import * as api from "../workspaceApi";
+
+// WorkspaceSwitcher now opens the MANAGE tab via the LayoutService — provide a real one so it renders.
+const withServices = (node: React.ReactNode) => (
+  <ServicesProvider container={createContainer([reg(LayoutServiceId, () => createLayoutService("files"))])}>{node}</ServicesProvider>
+);
 
 vi.mock("../workspaceApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspaceApi")>()),
@@ -45,7 +52,7 @@ async function renderOpenSwitcher(overrideActive?: Awaited<ReturnType<typeof api
   vi.mocked(api.deactivateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true });
   vi.mocked(api.createWorkspace).mockResolvedValue({ subject: "u1", slug: "workspace-1", changed: true, added: true });
   const onSwapped = vi.fn();
-  render(<WorkspaceSwitcher onSwapped={onSwapped} />);
+  render(withServices(<WorkspaceSwitcher onSwapped={onSwapped} />));
   await screen.findByText("leo"); // slots loaded
   return { onSwapped };
 }
@@ -115,11 +122,14 @@ describe("WorkspaceSwitcher — '+ New workspace…' CREATES + ADDS (additive), 
   });
 });
 
+// The toggle affordance is the row CHECKBOX (the row LABEL now opens the manage tab — see the last block).
+const rowCb = (name: string) => screen.getByText(name).closest("div")!.querySelector<HTMLElement>('[role="checkbox"]')!;
+
 describe("WorkspaceSwitcher — additive active set (WP-A2.1)", () => {
   it("a parked workspace's toggle ACTIVATES it (adds to the mount set, no swap/park)", async () => {
     const { onSwapped } = await renderOpenSwitcher();
-    // `seed` is parked (○) — clicking its label activates it WITHOUT parking `leo` (the additive path)
-    fireEvent.click(screen.getByText("default (previous)"));
+    // `seed` is parked — its checkbox activates it WITHOUT parking `leo` (the additive path)
+    fireEvent.click(rowCb("default (previous)"));
     await waitFor(() => expect(api.activateWorkspace).toHaveBeenCalledWith({ slug: "seed" }));
     expect(api.swapWorkspace).not.toHaveBeenCalled();  // additive, not swap-park
     await waitFor(() => expect(onSwapped).toHaveBeenCalled());
@@ -134,13 +144,13 @@ describe("WorkspaceSwitcher — additive active set (WP-A2.1)", () => {
         { slug: "seed", repo: null, ref: null, role: "private", path: "/w/.attached/u1/seed", write: true, primary: false },
       ],
     } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
-    fireEvent.click(screen.getByText("default (previous)"));
+    fireEvent.click(rowCb("default (previous)"));
     await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("seed"));
   });
 
   it("the PRIMARY baseline CAN now be switched off (deactivate on the primary)", async () => {
     await renderOpenSwitcher();
-    fireEvent.click(screen.getByText("leo"));  // the primary — switching it OFF
+    fireEvent.click(rowCb("leo"));  // the primary — switching it OFF via its checkbox
     await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("leo"));
     expect(api.activateWorkspace).not.toHaveBeenCalled();
   });
@@ -212,7 +222,7 @@ describe("WorkspaceSwitcher — active set uses CHECKBOXES, not radio-style dots
     vi.mocked(api.readAttachedWorkspaces).mockResolvedValue({ ...view, baseline_hidden: true } as unknown as Awaited<ReturnType<typeof api.readAttachedWorkspaces>>);
     vi.mocked(api.readActiveSet).mockResolvedValue({ subject: "u1", active: [] } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
     vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "leo", changed: true, cloned: false, nested: false });
-    render(<WorkspaceSwitcher onSwapped={vi.fn()} />);
+    render(withServices(<WorkspaceSwitcher onSwapped={vi.fn()} />));
     await screen.findByText("leo");
     const cb = rowCheckbox("leo");
     expect(cb.getAttribute("aria-checked")).toBe("false");       // switched off → unchecked
@@ -238,5 +248,20 @@ describe("WorkspaceSwitcher — active set uses CHECKBOXES, not radio-style dots
     expect(cb.getAttribute("tabindex")).toBe("0");
     fireEvent.keyDown(cb, { key: " " });
     await waitFor(() => expect(api.activateWorkspace).toHaveBeenCalledWith({ slug: "seed" }));
+  });
+});
+
+describe("WorkspaceSwitcher — selecting a row opens the MANAGE tab (not a toggle)", () => {
+  it("clicking a row's NAME opens the 'workspace' manage tab; it does NOT toggle active", async () => {
+    const openTab = vi.fn();
+    sessionStorage.setItem("ws.attach.open", "1");
+    vi.mocked(api.readAttachedWorkspaces).mockResolvedValue(view);
+    vi.mocked(api.readActiveSet).mockResolvedValue(activeSet);
+    const container = createContainer([reg(LayoutServiceId, () => ({ ...createLayoutService("files"), openTab }))]);
+    render(<ServicesProvider container={container}><WorkspaceSwitcher onSwapped={vi.fn()} /></ServicesProvider>);
+    await screen.findByText("leo");
+    fireEvent.click(screen.getByText("leo"));  // the row NAME (not its checkbox)
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ kind: "workspace", params: expect.objectContaining({ slug: "leo" }) })));
+    expect(api.deactivateWorkspace).not.toHaveBeenCalled();  // the name no longer toggles
   });
 });

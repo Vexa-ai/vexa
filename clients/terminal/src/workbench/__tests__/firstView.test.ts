@@ -3,7 +3,7 @@ import { firstViewPlan } from "../firstView";
 
 /** The landing priority: what the user sees on first view, by what's SHARED with them. */
 describe("firstViewPlan — landing priority resolution", () => {
-  const base = { sharedMeetingId: null, sharedSlug: null, liveMeetingId: null, fresh: true } as const;
+  const base = { sharedMeetingId: null, acceptedSlug: null, sharedSlug: null, liveMeetingId: null, fresh: true } as const;
 
   it("nothing shared, fresh dock → the user's own README-onboarding", () => {
     expect(firstViewPlan({ ...base })).toEqual({ kind: "own-readme" });
@@ -51,6 +51,21 @@ describe("firstViewPlan — landing priority resolution", () => {
 
     it("an explicit shared meeting + a shared workspace applies even when not fresh", () => {
       expect(firstViewPlan({ ...returning, sharedMeetingId: "m7", sharedSlug: "deal-ab12" }))
+        .toEqual({ kind: "meeting-and-workspace", meetingId: "m7", slug: "deal-ab12" });
+    });
+
+    it("a JUST-ACCEPTED invite pins the shared workspace README even when not fresh", () => {
+      expect(firstViewPlan({ ...returning, acceptedSlug: "deal-ab12" }))
+        .toEqual({ kind: "workspace-readme", slug: "deal-ab12" });
+    });
+
+    it("an accepted invite outranks the passive active-set sharedSlug", () => {
+      expect(firstViewPlan({ ...returning, acceptedSlug: "deal-ab12", sharedSlug: "other-99" }))
+        .toEqual({ kind: "workspace-readme", slug: "deal-ab12" });
+    });
+
+    it("an accepted invite + an accepted shared meeting → both (README uses the accepted slug)", () => {
+      expect(firstViewPlan({ ...returning, sharedMeetingId: "m7", acceptedSlug: "deal-ab12" }))
         .toEqual({ kind: "meeting-and-workspace", meetingId: "m7", slug: "deal-ab12" });
     });
   });

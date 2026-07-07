@@ -79,6 +79,22 @@ export async function createSharedWorkspace(name: string): Promise<{ workspace_i
   });
 }
 
+/** The caller's SAVED reusable GitHub token — server-side only. `masked` is `••••abcd` (never the clear
+ *  value); `set` says whether one is stored. Used as the fallback credential for every git op. */
+export interface SavedGitToken { set: boolean; masked: string | null }
+
+/** Read whether a reusable GitHub token is saved (masked preview only — the clear value never leaves the server). */
+export async function getGitToken(): Promise<SavedGitToken> {
+  return getJson(`/api/workspace/git-token`);
+}
+
+/** Save (non-empty) or CLEAR (empty/null) the caller's reusable GitHub token. Returns the masked state. */
+export async function setGitToken(token: string | null): Promise<SavedGitToken> {
+  return getJson(`/api/workspace/git-token`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: token ?? "" }),
+  });
+}
+
 /** MINT a scoped invite for a shared workspace (owner/contributor). The token is returned ONCE. */
 export async function mintInvite(opts: { workspace_id: string; role?: string; mode?: string; expires_in_sec?: number; max_uses?: number; allowed_emails?: string[] }): Promise<MintedInvite> {
   return getJson(`/api/workspace/invites`, {
@@ -89,6 +105,19 @@ export async function mintInvite(opts: { workspace_id: string; role?: string; mo
       allowed_emails: opts.allowed_emails ?? null,
     }),
   });
+}
+
+/** A read-only PREVIEW of an invite (the pre-join consent screen). `valid=false` ⇒ `reason` says why
+ *  (revoked/expired/used_up). `shared_by` is the sharer's email when known, else their subject id. */
+export interface InvitePreview {
+  workspace_id: string; name: string; purpose: string; role: string; mode: string;
+  expires_at?: number | null; shared_by?: string | null; valid: boolean; reason?: string | null;
+}
+
+/** PREVIEW an invite token → what workspace it is + the terms, WITHOUT joining. Works before login
+ *  (the proxy's fallback service key reaches agent-api; the token itself is the capability). */
+export async function previewInvite(token: string): Promise<InvitePreview> {
+  return getJson(`/api/workspace/invites/preview?token=${encodeURIComponent(token)}`);
 }
 
 /** REDEEM an invite token (any logged-in user) → membership. Idempotent per user. */
@@ -193,7 +222,7 @@ export interface PublishResult { repo_url: string; pushed_ref: string; head_sha:
  *  caller's PAT — used server-side for this one call (repo creation + push), NEVER stored (P15).
  *  Re-publish to the same repo is a plain push (fast-forward, or a clear error — never a force push):
  *  pass `remoteUrl` (the workspace's published home) to PUSH UPDATES there instead of creating a repo. */
-export async function publishWorkspace(repoName: string, priv: boolean, token: string, remoteUrl?: string): Promise<PublishResult> {
+export async function publishWorkspace(repoName: string, priv: boolean, token?: string, remoteUrl?: string): Promise<PublishResult> {
   return getJson(`/api/workspace/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -233,6 +262,86 @@ export async function readWorkspaceGit(opts?: { slug?: string }): Promise<GitSta
     throw new ApiError(200, "malformed git state (missing changes/commits)", "/api/workspace/git");
   }
   return g;
+}
+
+// ── GitHub sync (any workspace with a home remote) — push · pull · ahead/behind status ────────────
+/** The GitHub-sync state of a workspace: its home remote (origin for attached clones, vexa-publish for
+ *  published vexa-born), the branch, and ahead/behind counts vs the last-fetched tracking ref. No token. */
+export interface GitRemoteStatus { has_home: boolean; remote: string | null; url: string | null; branch: string | null; tracked: boolean; ahead: number; behind: number }
+export async function gitRemoteStatus(opts?: { slug?: string }): Promise<GitRemoteStatus> {
+  const qs = opts?.slug ? `?slug=${encodeURIComponent(opts.slug)}` : "";
+  return getJson<GitRemoteStatus>(`/api/workspace/git-remote-status${qs}`);
+}
+
+export interface PushSyncResult { remote: string; url: string; branch: string; head_sha: string }
+/** PUSH a workspace's current branch to its GitHub home (fast-forward only, never force). `token` is the
+ *  caller's PAT — used for this push only, never stored (P15). A diverged remote fails loud (pull first). */
+export async function pushWorkspace(opts: { slug?: string; token?: string }): Promise<PushSyncResult> {
+  return getJson(`/api/workspace/push`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: opts.slug ?? null, token: opts.token }),
+  });
+}
+
+export interface PullSyncResult { remote: string; url: string; branch: string; head_sha: string; updated: boolean; behind_before: number }
+/** PULL a workspace from its GitHub home — fetch + fast-forward only. `token` (optional for public repos)
+ *  is used for the fetch only, never stored (P15). A divergence is refused (no merge/rebase/force). */
+export async function pullWorkspace(opts?: { slug?: string; token?: string }): Promise<PullSyncResult> {
+  return getJson(`/api/workspace/pull`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: opts?.slug ?? null, token: opts?.token ?? null }),
+  });
+}
+
+// ── per-workspace purpose (travels when shared; feeds the agent's mount preamble) ─────────────────
+/** Read a workspace's PURPOSE one-liner ("" when unset). `slug` omitted → the caller's primary. */
+export async function readWorkspacePurpose(opts?: { slug?: string }): Promise<string> {
+  const qs = opts?.slug ? `?slug=${encodeURIComponent(opts.slug)}` : "";
+  const data = await getJson<{ purpose?: string }>(`/api/workspace/purpose${qs}`);
+  return data.purpose ?? "";
+}
+/** Set (or clear, with "") a workspace's PURPOSE. Returns the normalized purpose actually stored. */
+export async function writeWorkspacePurpose(purpose: string, opts?: { slug?: string }): Promise<string> {
+  const data = await getJson<{ purpose?: string }>(`/api/workspace/purpose`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: opts?.slug ?? null, purpose }),
+  });
+  return data.purpose ?? "";
+}
+
+// ── participants (shared workspace membership) — list · role · remove · leave · invites ───────────
+/** One member of a shared workspace (authoritative policy/members.json). `role` owner = the CREATOR;
+ *  contributor = a read/write member (the single member rank). `subject` is the synthetic user id;
+ *  `email` is their verified email when known (stamped at grant / on first manage-panel view) — the
+ *  human label the roster prefers over the opaque subject. */
+export interface WorkspaceMember { subject: string; role: string; email?: string; added_by?: string; added_at?: string }
+export async function listWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
+  const data = await getJson<{ members?: WorkspaceMember[] }>(`/api/workspace/members?workspace_id=${encodeURIComponent(workspaceId)}`);
+  return data.members ?? [];
+}
+/** Remove a member (owner only). */
+export async function removeWorkspaceMember(workspaceId: string, memberSubject: string): Promise<{ ok: boolean }> {
+  return getJson(`/api/workspace/members/${encodeURIComponent(memberSubject)}?workspace_id=${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
+}
+/** Flip a member's role (owner only) — contributor ↔ owner. */
+export async function setWorkspaceMemberRole(workspaceId: string, memberSubject: string, role: string): Promise<WorkspaceMember> {
+  return getJson(`/api/workspace/members/${encodeURIComponent(memberSubject)}/role?workspace_id=${encodeURIComponent(workspaceId)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }),
+  });
+}
+/** LEAVE a shared workspace — remove yourself (any role; a sole creator is refused, must unshare). */
+export async function leaveWorkspace(workspaceId: string): Promise<{ ok: boolean; left: string }> {
+  return getJson(`/api/workspace/${encodeURIComponent(workspaceId)}/leave`, { method: "POST" });
+}
+/** A live invite for a shared workspace (owner/contributor). Hashes are never surfaced. */
+export interface WorkspaceInvite { id: string; role: string; mode: string; expires_at?: string; max_uses?: number; uses?: number; revoked?: boolean; allowed_emails?: string[] }
+export async function listWorkspaceInvites(workspaceId: string): Promise<WorkspaceInvite[]> {
+  const data = await getJson<{ invites?: WorkspaceInvite[] }>(`/api/workspace/invites?workspace_id=${encodeURIComponent(workspaceId)}`);
+  return data.invites ?? [];
+}
+/** Revoke an invite (owner/contributor). */
+export async function revokeWorkspaceInvite(workspaceId: string, inviteId: string): Promise<{ ok: boolean }> {
+  return getJson(`/api/workspace/invites/${encodeURIComponent(inviteId)}?workspace_id=${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
 }
 
 export interface GitDiff { sha: string; path?: string; diff: string; truncated?: boolean }

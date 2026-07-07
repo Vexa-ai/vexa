@@ -17,6 +17,7 @@ import "./entities";   // EntityList helpers
 import "./meeting";    // list "meetings" + tab-kind "meeting"
 import "./canvas";     // tab-kind "canvas" + command "Open Meeting Canvas"
 import "./workspace";  // list "files" (+ git) + tab-kind "doc"       (gated in meetings mode)
+import "./workspaceManage"; // tab-kind "workspace" — the manage hub  (gated in meetings mode)
 import "./routines";   // list "routines" + tab-kind "routines"       (gated in meetings mode)
 import "./tokens";     // list "tokens" — API-token self-serve (registers in EVERY mode)
 // tasks deferred — surfaces as quick-action cards in chat later (see roadmap)

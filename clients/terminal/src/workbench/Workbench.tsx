@@ -323,6 +323,10 @@ export function Workbench() {
     // an explicit shared meeting from a ?tshare= link (InviteRedeemer stashed it before the reload)
     let sharedMeetingId: string | null = null;
     try { sharedMeetingId = localStorage.getItem("vexa.openMeeting"); if (sharedMeetingId) localStorage.removeItem("vexa.openMeeting"); } catch { /* noop */ }
+    // a workspace whose invite the user just accepted (InviteRedeemer stashed its id before the reload) —
+    // pin its README regardless of a saved dock, so an accepted share always lands on the shared workspace.
+    let acceptedSlug: string | null = null;
+    try { acceptedSlug = localStorage.getItem("vexa.openWorkspace"); if (acceptedSlug) localStorage.removeItem("vexa.openWorkspace"); } catch { /* noop */ }
     // a shared workspace connected to this user (a non-primary 'shared' mount in the active set)
     let sharedSlug: string | null = null;
     try {
@@ -343,7 +347,7 @@ export function Workbench() {
       layout.openTab({ id: slug ? `doc:${slug}:README.md` : "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md", slug } });
     };
 
-    const plan = firstViewPlan({ sharedMeetingId, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
+    const plan = firstViewPlan({ sharedMeetingId, acceptedSlug, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
     switch (plan.kind) {
       case "meeting-and-workspace": openMeeting(plan.meetingId, false); pinReadme(plan.slug); break;  // README pinned last → focused
       case "meeting":               openMeeting(plan.meetingId, true); break;

@@ -8,6 +8,7 @@ import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
+import { Modal } from "../ui-kit/Modal";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocNavContext, type DocNavigate } from "../ui-kit/MdxDoc";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
@@ -15,6 +16,7 @@ import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
 import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readWorkspaceGitDiff, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { manageTabDescriptor } from "./workspaceManage";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -431,6 +433,10 @@ function FilesList() {
 // ── Workspaces (attach/swap a custom git repo) — over /api/workspace/swap + /attached ──────────────
 const SS_WS_OPEN = "ws.attach.open";
 export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  // exported for the surface test
+  const layout = useService(LayoutServiceId);
+  // Selecting a workspace row opens the MANAGE hub as a center tab (rename · on/off · GitHub · purpose ·
+  // participants). The row's checkbox stays the quick on/off; the name opens the panel.
+  const openManage = (slug: string, opts?: { shared?: boolean; name?: string }) => layout.openTab(manageTabDescriptor(slug, opts));
   const [open, setOpen] = useState<boolean>(() => readSS(SS_WS_OPEN) === "1");  // default collapsed
   const [view, setView] = useState<AttachedWorkspaces>({ active: null, slots: {} });
   // The ADDITIVE active set (WP-A2.1): the slugs currently MOUNTED into the agent turn. Distinct from
@@ -614,42 +620,13 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(null); } else { void doRename(slug, e.currentTarget.value); } }}
                   style={{ flex: 1, fontSize: 12, padding: "3px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, color: "var(--t1)" }} />
               ) : (
-                <span onClick={() => !busy && void toggleActive(slug, mounted)}
-                  title={toggleTitle}
+                <span onClick={() => !busy && openManage(slug, { name: display })}
+                  title="Open the manage panel (rename · on/off · GitHub · purpose · participants)"
                   style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: busy ? "default" : "pointer" }}>{display}</span>
               )}
-              {/* Published-state affordances — ON the active row (publish is an action on THIS workspace,
-                  not a list item): published → a link to its GitHub home (+ a secondary push-updates
-                  action, re-publish is a plain push); not yet published (vexa-born only) → the publish
-                  action itself. An attached workspace shows neither — it already has a home. */}
-              {!isRenaming && isSeed && view.published_url && (
-                <a href={view.published_url} target="_blank" rel="noreferrer"
-                  title={`Published — open on GitHub (${view.published_url})`}
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-                  <Icon name="github" size={12} />
-                </a>
-              )}
-              {!isRenaming && isSeed && activeBorn && !busy && (
-                <span onClick={() => { setShare(null); setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "", remoteUrl: view.published_url ?? undefined }); }}
-                  title={view.published_url ? "Push updates to GitHub" : "Publish this workspace to GitHub…"}
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-                  <Icon name="github" size={12} />
-                </span>
-              )}
-              {!isRenaming && !isSeed && !busy && (
-                <span onClick={() => void doShareWorkspace(slug)} title="Share this workspace — create an invite link"
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-                  <Icon name="link" size={12} />
-                </span>
-              )}
-              {!isRenaming && (
-                <span onClick={() => setRenaming(slug)} title="Rename (display label only)"
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 11 }}>✎</span>
-              )}
-              {!isRenaming && !isSeed && (
-                <span onClick={(e) => setRowMenu({ slug, display, x: e.clientX, y: e.clientY })} title="More — archive · delete"
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 13, lineHeight: 1 }}>⋯</span>
-              )}
+              {/* Row is intentionally minimal: the CHECKBOX mounts/parks, the NAME opens the manage
+                  panel. Every management action (rename · publish/push/pull · share · archive · delete)
+                  now lives in that panel, so the old per-row action icons were removed. */}
             </div>
           );
         })}
@@ -659,7 +636,6 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         {sharedMemberships.map((mem) => {
           const wsId = mem.workspace_id;
           const mounted = activeSet.some((m) => m.role === "shared" && m.slug === wsId);
-          const canWrite = mem.role === "contributor" || mem.role === "owner";
           return (
             <div key={`shared:${wsId}`}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
@@ -668,48 +644,44 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 onChange={() => void toggleShared(wsId, !mounted)}
                 title={mounted ? "Mounted — uncheck to switch off (you stay a member)" : "Switched off — check to mount"}
                 label={`${wsId} — shared (${mem.role})`} />
-              <span onClick={() => void toggleShared(wsId, !mounted)}
+              <span onClick={() => openManage(wsId, { shared: true, name: wsId })}
+                title="Open the manage panel (GitHub · purpose · participants)"
                 style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}>{wsId}</span>
-              <span title={canWrite ? "Shared · read-write" : "Shared · read-only"}
-                style={{ flex: "none", display: "flex", alignItems: "center", color: canWrite ? "var(--accent)" : "var(--t3)" }}>
-                <Icon name={canWrite ? "user" : "eye"} size={12} />
-              </span>
-              {canWrite && (
-                <span onClick={() => { setPubForm(null); setShare({ wsId, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null }); }}
-                  title="Share this workspace — create an invite link"
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
-                  <Icon name="link" size={12} />
-                </span>
-              )}
-              {mem.role === "owner" && (
-                <span onClick={() => void doUnshare(wsId)} title="Stop sharing — make it a private workspace again"
-                  style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 13, lineHeight: 1 }}>×</span>
-              )}
+              {/* Management (role · share · unshare · participants) lives in the manage panel opened by
+                  the name — no per-row action icons. */}
             </div>
           );
         })}
-        {form === null ? (
-          <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-            <Icon name="plus" size={12} /> Attach repo…
-          </div>
-        ) : (
-          <div style={{ padding: "6px 9px", display: "flex", flexDirection: "column", gap: 6 }}>
-            <input autoFocus value={form.repo} placeholder="git repo URL" disabled={busy}
-              onChange={(e) => setForm({ ...form, repo: e.target.value })}
-              onKeyDown={(e) => { if (e.key === "Enter" && form.repo.trim()) void doAttach(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined); if (e.key === "Escape") setForm(null); }}
-              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
-            <input value={form.ref} placeholder="ref (optional, default main)" disabled={busy}
-              onChange={(e) => setForm({ ...form, ref: e.target.value })}
-              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
-            <input type="password" value={form.token} placeholder="access token (optional, for private repos)" disabled={busy}
-              onChange={(e) => setForm({ ...form, token: e.target.value })}
-              style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
-            <div style={{ display: "flex", gap: 8 }}>
-              <button disabled={busy || !form.repo.trim()} onClick={() => void doAttach(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined)}
-                style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
-              <button disabled={busy} onClick={() => setForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
-            </div>
-          </div>
+        {/* Attach repo is a LIST-LEVEL action; the FORM opens in a modal (portaled overlay) rather than
+            expanding inline in the sidebar — see the Modal block below. */}
+        <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          <Icon name="plus" size={12} /> Attach repo…
+        </div>
+        {form !== null && (
+          <Modal title="Attach a git repo" onClose={() => setForm(null)}>
+            {(() => {
+              const field: CSSProperties = { width: "100%", fontSize: 13, padding: "8px 10px", background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 8, color: "var(--t1)" };
+              const submit = () => { if (form.repo.trim()) void doAttach(form.repo.trim(), form.ref.trim() || undefined, form.token.trim() || undefined); };
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                  <input autoFocus value={form.repo} placeholder="git repo URL" disabled={busy}
+                    onChange={(e) => setForm({ ...form, repo: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === "Enter") submit(); }} style={field} />
+                  <input value={form.ref} placeholder="ref (optional, default main)" disabled={busy}
+                    onChange={(e) => setForm({ ...form, ref: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === "Enter") submit(); }} style={field} />
+                  <input type="password" value={form.token} placeholder="access token (optional, for private repos)" disabled={busy}
+                    onChange={(e) => setForm({ ...form, token: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === "Enter") submit(); }} style={field} />
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <button disabled={busy || !form.repo.trim()} onClick={submit}
+                      style={{ fontSize: 13, padding: "8px 16px", background: "var(--accent)", color: "#1a1200", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
+                    <button disabled={busy} onClick={() => setForm(null)} style={{ fontSize: 13, padding: "8px 16px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+                  </div>
+                </div>
+              );
+            })()}
+          </Modal>
         )}
         {/* New workspace is a LIST-LEVEL action (not a row icon): it CREATES a fresh blank workspace
             (seeded from the template) and ADDS it to the mount set — additive, so it destroys nothing and

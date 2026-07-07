@@ -8,6 +8,10 @@
 export interface FirstViewInputs {
   /** an explicit shared meeting from a ?tshare= link (InviteRedeemer stashed it before the reload) */
   sharedMeetingId: string | null;
+  /** a workspace whose invite the user JUST accepted (?invite= link — InviteRedeemer stashed its id
+   *  before the reload). Like an accepted shared meeting, this is an EXPLICIT act: pin its README even
+   *  for a returning user with a saved layout (they clicked the invite; the shared ws must show). */
+  acceptedSlug: string | null;
   /** a shared workspace connected to the user (a non-primary 'shared' mount in the active set) */
   sharedSlug: string | null;
   /** a meeting currently live (best-effort — the cache may be cold on a brand-new landing) */
@@ -28,8 +32,12 @@ export type FirstViewPlan =
  *  (they clicked a share link); the default README/live-meeting arms only assert on a fresh dock so a
  *  returning user's saved layout is never disturbed. */
 export function firstViewPlan(i: FirstViewInputs): FirstViewPlan {
-  if (i.sharedMeetingId && i.sharedSlug) return { kind: "meeting-and-workspace", meetingId: i.sharedMeetingId, slug: i.sharedSlug };
+  // A just-accepted invite is an explicit shared workspace — it outranks the passive active-set `sharedSlug`
+  // and, like an accepted shared meeting, applies even to a returning (non-fresh) user.
+  const slug = i.acceptedSlug ?? i.sharedSlug;
+  if (i.sharedMeetingId && slug) return { kind: "meeting-and-workspace", meetingId: i.sharedMeetingId, slug };
   if (i.sharedMeetingId) return { kind: "meeting", meetingId: i.sharedMeetingId };
+  if (i.acceptedSlug) return { kind: "workspace-readme", slug: i.acceptedSlug };  // explicit accept → pin regardless of a saved dock
   if (!i.fresh) return { kind: "noop" };
   if (i.sharedSlug) return { kind: "workspace-readme", slug: i.sharedSlug };
   if (i.liveMeetingId) return { kind: "live-meeting", meetingId: i.liveMeetingId };
