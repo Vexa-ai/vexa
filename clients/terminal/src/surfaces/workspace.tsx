@@ -240,7 +240,7 @@ function MountSection({ mount }: { mount: ActiveMount }) {
 }
 
 // ── Files LIST (left) ───────────────────────────────────────────────────────────
-const SS_EXPANDED = "ws.tree.expanded", SS_HIDDEN = "ws.tree.hidden";
+const SS_EXPANDED = "ws.tree.expanded", SS_HIDDEN = "ws.tree.hidden", SS_SYSTEM = "ws.system.show";
 function FilesList() {
   const layout = useService(LayoutServiceId);
   const [tree, setTree] = useState<string[]>([]);
@@ -252,6 +252,9 @@ function FilesList() {
   // Default: show the ENTIRE workspace (a normal workspace IS the knowledge — full context to share &
   // collaborate on, not kg-only). The eye toggle can still collapse to just the knowledge graph.
   const [kgOnly, setKgOnly] = useState<boolean>(() => readSS(SS_HIDDEN) === "1");
+  // _system (the user's private system workspace — chats/settings/routines, RW) is HIDDEN BY DEFAULT;
+  // a toggle surfaces it as a section in the files panel.
+  const [showSystem, setShowSystem] = useState<boolean>(() => readSS(SS_SYSTEM) === "1");
   // Lane A: every NON-PRIMARY active mount (other private workspaces + shared) — rendered as sections
   // beneath the primary tree, so KNOWLEDGE mirrors the agent's full mount set, not just the primary.
   const [extraMounts, setExtraMounts] = useState<ActiveMount[]>([]);
@@ -365,6 +368,11 @@ function FilesList() {
           style={{ display: "flex", cursor: "pointer", color: kgOnly ? "var(--accent)" : "var(--t3)" }}>
           <Icon name={kgOnly ? "eye" : "eyeOff"} size={13} />
         </span>
+        <span onClick={() => setShowSystem((v) => { const n = !v; writeSS(SS_SYSTEM, n ? "1" : "0"); return n; })}
+          title={showSystem ? "Hide the private system workspace" : "Show the private system workspace (_system)"}
+          style={{ display: "flex", cursor: "pointer", color: showSystem ? "var(--accent)" : "var(--t3)" }}>
+          <Icon name="key" size={13} />
+        </span>
       </div>
       <div style={{ padding: "0 4px 8px", position: "relative" }}>
         <Icon name="search" size={12} style={{ position: "absolute", left: 13, top: 8, color: "var(--t3)", pointerEvents: "none" }} />
@@ -405,6 +413,8 @@ function FilesList() {
       )}
       {/* Lane A: every non-primary mount (other private + shared) as a KNOWLEDGE section — mirrors the mount set. */}
       {!q && extraMounts.map((mount) => <MountSection key={mount.slug} mount={mount} />)}
+      {/* The private SYSTEM workspace (_system, RW) — hidden by default, surfaced via the key toggle. */}
+      {!q && showSystem && <MountSection key="_system" mount={{ slug: "_system", repo: null, ref: null, role: "system", path: "", write: true, primary: false, name: "System · private" }} />}
       <WorkspaceSwitcher onSwapped={() => setReloadKey((k) => k + 1)} />
       <GitSection />
     </div>

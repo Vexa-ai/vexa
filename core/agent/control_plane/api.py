@@ -55,6 +55,7 @@ from control_plane.workspace_attach import (
 )
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
 from control_plane import workspace_membership as membership_mod
+from control_plane import system_mounts
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
@@ -900,6 +901,11 @@ def create_app(
         lets the KNOWLEDGE panel render one section per active mount without leaking arbitrary workspaces."""
         subject = subject_of(request)
         target = (slug or "").strip()
+        # _system — the caller's OWN private-system workspace (RW, surfaced hidden-by-default in the files
+        # panel). It's a per-subject dispatch mount, not in the active set, so authorize it directly here:
+        # it can only ever resolve to THIS subject's own .system store — never another user's.
+        if target == system_mounts.SYSTEM_SLUG:
+            return system_mounts.system_store_path(wsr.root, subject)
         mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
         try:
             mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))

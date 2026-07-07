@@ -81,6 +81,12 @@ def _system_store(root: Path, subject: str) -> Path:
     return root / SYSTEM_STORE_DIRNAME / subject
 
 
+def system_store_path(root: str | Path, subject: str) -> Path:
+    """Public accessor for the caller's OWN private-system workspace path — so the read API can surface
+    ``_system`` (RW, hidden-by-default) in the files panel without exposing the store layout."""
+    return _system_store(Path(root), subject)
+
+
 def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path] = None) -> Path:
     """CREATE-IF-ABSENT the subject's PRIVATE SYSTEM workspace and return its on-disk path. Idempotent:
     an existing ``.system/<subject>`` is returned untouched. Materialized from a THIN template (layout
