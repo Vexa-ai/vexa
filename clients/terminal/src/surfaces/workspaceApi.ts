@@ -9,7 +9,7 @@ import { ApiError, getJson } from "./apiClient";
 // `kind` classifies the committing principal (server-side, D4 attribution): `you` = the caller's own
 // agent write · `member` = ANOTHER member's agent push to a shared workspace · `system` = platform/seed
 // plumbing. `author` is the principal's display id. Optional so a pre-upgrade agent-api still parses.
-export interface GitCommit { sha: string; msg: string; when: string; author?: string; kind?: "you" | "member" | "system" }
+export interface GitCommit { sha: string; msg: string; when: string; author?: string; kind?: "you" | "member" | "system"; files?: string[]; ts?: number }
 export interface GitState { branch: string; changes: { path: string; kind: string }[]; commits: GitCommit[] }
 
 /** Read a file's content. A 404 → null (legit "not found"); ANY other failure throws (loud).
@@ -230,4 +230,14 @@ export async function readWorkspaceGit(opts?: { slug?: string }): Promise<GitSta
     throw new ApiError(200, "malformed git state (missing changes/commits)", "/api/workspace/git");
   }
   return g;
+}
+
+export interface GitDiff { sha: string; path?: string; diff: string; truncated?: boolean }
+/** Unified diff of a single commit (optionally one file) — for highlighting exactly what changed.
+ *  `slug` targets a shared workspace the caller is a member of; omitted → the caller's own primary. */
+export async function readWorkspaceGitDiff(opts: { sha: string; slug?: string; path?: string }): Promise<GitDiff> {
+  const qs = new URLSearchParams({ sha: opts.sha });
+  if (opts.slug) qs.set("slug", opts.slug);
+  if (opts.path) qs.set("path", opts.path);
+  return getJson<GitDiff>(`/api/workspace/git/show?${qs.toString()}`);
 }

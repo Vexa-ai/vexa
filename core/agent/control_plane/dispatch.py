@@ -252,21 +252,28 @@ _INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id"
 
 
 def _without_chat_session(invocation: dict) -> dict:
-    """A shallow copy with internal routing hints removed for the unit.v1 contract check."""
+    """A shallow copy with internal routing hints removed for the unit.v1 contract check. Also strips
+    ``identity.principal`` — an internal attribution hint (the human editor's display id/email) that
+    ``build_unit_env`` reads off the in-memory dispatch, but which the sealed identity schema
+    (additionalProperties: false) forbids on the wire."""
     ctx = invocation.get("context")
-    if not isinstance(ctx, dict):
-        return invocation
-    meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
-    needs_clean = "session" in ctx or (
-        isinstance(meeting, dict) and bool(_INTERNAL_MEETING_HINTS & meeting.keys())
-    )
+    identity = invocation.get("identity")
+    has_principal = isinstance(identity, dict) and "principal" in identity
+    ctx_dict = ctx if isinstance(ctx, dict) else None
+    meeting = ctx_dict.get("meeting") if ctx_dict and ctx_dict.get("kind") == "meeting" else None
+    needs_clean = has_principal or (ctx_dict is not None and (
+        "session" in ctx_dict or (isinstance(meeting, dict) and bool(_INTERNAL_MEETING_HINTS & meeting.keys()))
+    ))
     if not needs_clean:
         return invocation
     clean = dict(invocation)
-    clean_ctx = {k: v for k, v in ctx.items() if k != "session"}
-    if isinstance(meeting, dict) and (_INTERNAL_MEETING_HINTS & meeting.keys()):
-        clean_ctx["meeting"] = {k: v for k, v in meeting.items() if k not in _INTERNAL_MEETING_HINTS}
-    clean["context"] = clean_ctx
+    if has_principal:
+        clean["identity"] = {k: v for k, v in identity.items() if k != "principal"}
+    if ctx_dict is not None:
+        clean_ctx = {k: v for k, v in ctx_dict.items() if k != "session"}
+        if isinstance(meeting, dict) and (_INTERNAL_MEETING_HINTS & meeting.keys()):
+            clean_ctx["meeting"] = {k: v for k, v in meeting.items() if k not in _INTERNAL_MEETING_HINTS}
+        clean["context"] = clean_ctx
     return clean
 
 

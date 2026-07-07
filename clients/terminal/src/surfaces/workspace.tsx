@@ -14,7 +14,7 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readWorkspaceGitDiff, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -77,7 +77,54 @@ const writeLS = (k: string, v: string) => { try { localStorage.setItem(k, v); } 
 // One commit row: message + an author chip coloured by `kind` — a MEMBER push (another user's agent)
 // stands out in --accent; the caller's own writes and platform/seed plumbing stay muted. `unread` dots
 // the commits that landed since the viewer last opened this workspace's activity.
-function CommitRow({ c, unread }: { c: GitCommit; unread?: boolean }) {
+// A unified-diff block with +/- line highlighting — shows EXACTLY what a commit changed.
+function DiffView({ text }: { text: string }) {
+  return (
+    <pre style={{ margin: "2px 0 4px 15px", padding: "6px 8px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, fontSize: 11, fontFamily: "var(--mono)", overflowX: "auto", whiteSpace: "pre", lineHeight: 1.5 }}>
+      {text.split("\n").map((line, i) => {
+        const h = line[0];
+        const meta = line.startsWith("@@") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ");
+        const color = meta ? "var(--accent)" : h === "+" ? "var(--green)" : h === "-" ? "var(--live)" : "var(--t3)";
+        const bg = !meta && h === "+" ? "color-mix(in srgb, var(--green) 14%, transparent)" : !meta && h === "-" ? "color-mix(in srgb, var(--live) 14%, transparent)" : "transparent";
+        return <div key={i} style={{ color, background: bg, padding: "0 3px" }}>{line || " "}</div>;
+      })}
+    </pre>
+  );
+}
+
+// One changed-file row that expands to its inline highlighted diff (lazy-fetched from git show).
+function DiffRow({ sha, path, slug }: { sha: string; path: string; slug?: string }) {
+  const [open, setOpen] = useState(false);
+  const [diff, setDiff] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const toggle = () => setOpen((v) => {
+    const n = !v;
+    if (n && diff === null && !err) {
+      void readWorkspaceGitDiff({ sha, slug, path })
+        .then((d) => setDiff(d.diff || "(no textual changes)"))
+        .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+    }
+    return n;
+  });
+  return (
+    <div>
+      <div onClick={toggle} title={`Show changes in ${path}`}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
+        onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t2)")}
+        style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <Icon name="chevR" size={10} style={{ color: "var(--t3)", flex: "none", transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+        <Icon name="file" size={11} style={{ color: "var(--t3)", flex: "none" }} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{path}</span>
+      </div>
+      {open && (err
+        ? <div style={{ margin: "2px 0 4px 15px", fontSize: 11, color: "var(--live)" }}>⚠ {err}</div>
+        : diff === null ? <div style={{ margin: "2px 0 4px 15px", fontSize: 11, color: "var(--t3)" }}>loading…</div>
+        : <DiffView text={diff} />)}
+    </div>
+  );
+}
+
+function CommitRow({ c, unread, wsLabel, slug }: { c: GitCommit; unread?: boolean; wsLabel?: string; slug?: string }) {
   const kind = c.kind ?? "you";
   const isMember = kind === "member";
   const who = kind === "you" ? "you" : kind === "system" ? "system" : (c.author || "member");
@@ -90,12 +137,19 @@ function CommitRow({ c, unread }: { c: GitCommit; unread?: boolean }) {
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
         <div style={{ fontSize: 11, color: "var(--t3)", display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: whoColor, fontWeight: isMember ? 600 : 400 }}>
+          <span title={isMember ? `edited by ${c.author}` : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 3, color: whoColor, fontWeight: isMember ? 600 : 400, maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {isMember && <Icon name="user" size={11} />}{who}
           </span>
-          <span style={{ fontFamily: "var(--mono)", color: "var(--green)" }}>{c.sha}</span>
-          <span>{c.when}</span>
+          <span style={{ fontFamily: "var(--mono)", color: "var(--green)", flex: "none" }}>{c.sha}</span>
+          <span style={{ flex: "none" }}>{c.when}</span>
+          {wsLabel && <span title={`in ${wsLabel}`} style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "40%", textTransform: "uppercase", letterSpacing: ".03em" }}>{wsLabel}</span>}
         </div>
+        {/* the files this commit touched — click to expand the exact highlighted diff */}
+        {(c.files?.length ?? 0) > 0 && (
+          <div style={{ marginTop: 2, display: "flex", flexDirection: "column", gap: 1 }}>
+            {c.files!.map((f) => <DiffRow key={f} sha={c.sha} path={f} slug={slug} />)}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -150,7 +204,7 @@ function MountActivity({ slug }: { slug: string }) {
       {open && (
         err ? <div role="alert" style={{ padding: "2px 9px 4px 22px", fontSize: 11.5, color: "var(--live)" }}>⚠ {err}</div>
         : commits.length === 0 ? <div style={{ padding: "2px 9px 4px 22px", fontSize: 12, color: "var(--t3)" }}>No commits yet.</div>
-        : <div style={{ paddingLeft: 13 }}>{commits.map((c) => <CommitRow key={c.sha} c={c} unread={unread.has(c.sha)} />)}</div>
+        : <div style={{ paddingLeft: 13 }}>{commits.map((c) => <CommitRow key={c.sha} c={c} unread={unread.has(c.sha)} slug={slug} />)}</div>
       )}
     </div>
   );
@@ -234,7 +288,9 @@ function MountSection({ mount }: { mount: ActiveMount }) {
     window.addEventListener("focus", load);
     return () => { clearInterval(id); window.removeEventListener("focus", load); };
   }, [mount.slug, open]);
-  const nodes = buildTree(tree.filter((p) => p.startsWith("kg/")));  // kg-only, same default as the primary
+  // Show the FULL workspace tree (not kg-only) so files the agent writes anywhere — notes/, drafts/,
+  // README.md — are visible and openable, matching the changed-files a member sees in the activity feed.
+  const nodes = buildTree(tree);
   const toggleDir = (p: string) => setExpanded((prev) => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
   const openDoc = (p: string) => layout.openPreview(docTab(p, mount.slug));
   const pinDoc = (p: string) => layout.openTab(docTab(p, mount.slug));
@@ -278,6 +334,9 @@ function FilesList() {
   // Lane A: every NON-PRIMARY active mount (other private workspaces + shared) — rendered as sections
   // beneath the primary tree, so KNOWLEDGE mirrors the agent's full mount set, not just the primary.
   const [extraMounts, setExtraMounts] = useState<ActiveMount[]>([]);
+  // per-mount trees (keyed by slug) so the Find-file search can reach shared/other workspaces, not just
+  // the primary — otherwise a file a member's agent wrote in a SHARED ws is invisible to search.
+  const [mountTrees, setMountTrees] = useState<Record<string, string[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { const a = JSON.parse(readSS(SS_EXPANDED) ?? "null"); return new Set(Array.isArray(a) ? a : []); } catch { return new Set(); }
   });
@@ -294,7 +353,16 @@ function FilesList() {
     // Lane A: resolve the non-primary mounts in the active set (best-effort — a failure just hides the
     // extra sections, never the primary tree).
     const loadExtra = () => void readActiveSet()
-      .then((s) => setExtraMounts(s.active.filter((m) => !m.primary)))
+      .then(async (s) => {
+        const mounts = s.active.filter((m) => !m.primary);
+        setExtraMounts(mounts);
+        // fetch each mount's full tree so the search index spans every active workspace
+        const entries = await Promise.all(mounts.map(async (m) => {
+          try { return [m.slug, await listWorkspaceTree({ hidden: false, slug: m.slug })] as const; }
+          catch { return [m.slug, [] as string[]] as const; }
+        }));
+        setMountTrees(Object.fromEntries(entries));
+      })
       .catch(() => { /* extra sections are additive; ignore */ });
     load();
     loadExtra();
@@ -345,17 +413,24 @@ function FilesList() {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const scoped = kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree;
+  // search spans the primary tree AND every active mount (shared / other private), each hit tagged with
+  // its slug + workspace label — so a file a member's agent wrote in a SHARED workspace is findable and
+  // opens against the right mount, not just the caller's own primary.
+  type Hit = { p: string; name: string; slug?: string; ws?: string };
+  const index: Hit[] = [
+    ...scoped.map((p) => ({ p, name: base(p).toLowerCase() } as Hit)),
+    ...extraMounts.flatMap((m) => (mountTrees[m.slug] || []).map((p) =>
+      ({ p, name: base(p).toLowerCase(), slug: m.slug, ws: m.name || m.slug } as Hit))),
+  ];
   // filename match ranks above path match, shorter names first — the exact file you typed floats up
-  const matches = q
-    ? scoped
-        .map((p) => ({ p, name: base(p).toLowerCase() }))
+  const matches: Hit[] = q
+    ? index
         .filter(({ p, name }) => name.includes(q) || p.toLowerCase().includes(q))
         .sort((a, b) => {
           const an = a.name.includes(q) ? 0 : 1, bn = b.name.includes(q) ? 0 : 1;
           return an !== bn ? an - bn : a.name.length - b.name.length || a.p.localeCompare(b.p);
         })
         .slice(0, 60)
-        .map(({ p }) => p)
     : [];
   return (
     <div style={{ padding: "6px 8px" }}>
@@ -377,7 +452,7 @@ function FilesList() {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Escape") { e.stopPropagation(); setQuery(""); e.currentTarget.blur(); }
-            if (e.key === "Enter" && matches[0]) layout.openPreview(docTab(matches[0]));
+            if (e.key === "Enter" && matches[0]) layout.openPreview(docTab(matches[0].p, matches[0].slug));
           }}
           placeholder="Find file…"
           spellCheck={false}
@@ -386,13 +461,14 @@ function FilesList() {
       </div>
       {error && <div role="alert" style={{ margin: "0 8px 8px", fontSize: 12, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 10px" }}>⚠ Couldn’t load the workspace — {error}</div>}
       {q ? (<>
-        {matches.map((p) => (
-          <div key={p} onClick={() => layout.openPreview(docTab(p))} onDoubleClick={() => layout.openTab(docTab(p))} onContextMenu={(e) => openMenu(e, p)}
+        {matches.map((h) => (
+          <div key={(h.slug || "") + ":" + h.p} onClick={() => layout.openPreview(docTab(h.p, h.slug))} onDoubleClick={() => layout.openTab(docTab(h.p, h.slug))} onContextMenu={(e) => openMenu(e, h.p)}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             style={{ padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <Icon name="file" size={13} style={{ color: "var(--t3)", flex: "none" }} />
-            <span style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "none", maxWidth: "60%" }}>{base(p)}</span>
-            <span style={{ color: "var(--t3)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", direction: "rtl" }}>{p.slice(0, -base(p).length).replace(/\/$/, "")}</span>
+            <span style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "none", maxWidth: h.ws ? "45%" : "60%" }}>{base(h.p)}</span>
+            <span style={{ color: "var(--t3)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", direction: "rtl", flex: 1, minWidth: 0 }}>{h.p.slice(0, -base(h.p).length).replace(/\/$/, "")}</span>
+            {h.ws && <span title={`in shared workspace ${h.ws}`} style={{ flex: "none", color: "var(--accent)", fontSize: 10, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: ".03em" }}>{h.ws}</span>}
           </div>
         ))}
         {matches.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No files match “{query.trim()}”.</div>}
@@ -826,13 +902,32 @@ const SS_GIT_OPEN = "ws.git.open";
 function GitSection() {
   const layout = useService(LayoutServiceId);
   const [open, setOpen] = useState<boolean>(() => readSS(SS_GIT_OPEN) === "1");  // default collapsed
-  const [git, setGit] = useState<GitState>({ branch: "", changes: [], commits: [] });
+  const [git, setGit] = useState<GitState>({ branch: "", changes: [], commits: [] });  // primary (branch + working changes)
+  // RECENT ACTIVITY spans EVERY active workspace (primary + shared/other mounts), merged by recency — so
+  // the freshest thing (a member's push to a shared ws) shows here, not a stale primary-only commit.
+  const [feed, setFeed] = useState<Array<GitCommit & { slug?: string; ws?: string }>>([]);
   const [gitError, setGitError] = useState<string | null>(null);  // fail-loud (P18): show git failures, never crash/blank
   useEffect(() => {
     if (!open) return;  // only poll while expanded
-    const load = () => { void readWorkspaceGit().then((g) => { setGit(g); setGitError(null); }).catch((e: unknown) => setGitError(e instanceof Error ? e.message : String(e))); };
-    load();
-    const id = setInterval(load, 5000);  // reflect the agent's commits as they land
+    const load = async () => {
+      try {
+        const primary = await readWorkspaceGit();
+        setGit(primary); setGitError(null);
+        let mounts: ActiveMount[] = [];
+        try { mounts = (await readActiveSet()).active.filter((m) => !m.primary); } catch { /* additive — ignore */ }
+        const mg = await Promise.all(mounts.map(async (m) => {
+          try { return { m, g: await readWorkspaceGit({ slug: m.slug }) }; } catch { return null; }
+        }));
+        const merged: Array<GitCommit & { slug?: string; ws?: string }> = [
+          ...primary.commits.map((c) => ({ ...c })),
+          ...mg.filter((x): x is { m: ActiveMount; g: GitState } => x !== null)
+              .flatMap(({ m, g }) => g.commits.map((c) => ({ ...c, slug: m.slug, ws: m.name || m.slug }))),
+        ].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)).slice(0, 12);
+        setFeed(merged);
+      } catch (e: unknown) { setGitError(e instanceof Error ? e.message : String(e)); }
+    };
+    void load();
+    const id = setInterval(() => void load(), 5000);  // reflect commits as they land, across workspaces
     return () => clearInterval(id);
   }, [open]);
   const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_GIT_OPEN, n ? "1" : "0"); return n; });
@@ -844,7 +939,7 @@ function GitSection() {
         {git.branch && <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", color: "var(--t2)", textTransform: "none" }}>{git.branch}</span>}
       </div>
       {open && gitError && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ git unavailable — {gitError}</div>}
-      {!open || gitError ? null : (!git.branch && git.commits.length === 0) ? (
+      {!open || gitError ? null : (!git.branch && feed.length === 0) ? (
         <div style={{ padding: "2px 9px", fontSize: 12, color: "var(--t3)" }}>Not a repo yet.</div>
       ) : (<>
       {git.changes.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "2px 9px" }}>CHANGES</div>}
@@ -855,8 +950,8 @@ function GitSection() {
           <span style={{ color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{base(c.path)}</span>
         </div>
       ))}
-      {git.commits.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "8px 9px 2px" }}>RECENT COMMITS</div>}
-      {git.commits.map((c) => <CommitRow key={c.sha} c={c} />)}
+      {feed.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "8px 9px 2px" }}>RECENT ACTIVITY</div>}
+      {feed.map((c) => <CommitRow key={(c.slug || "") + ":" + c.sha} c={c} wsLabel={c.ws} slug={c.slug} />)}
       </>)}
     </div>
   );

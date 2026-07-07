@@ -271,15 +271,48 @@ class WorkspaceReader:
         commits = []
         # %an·%ae carry the D4 attribution: a member's agent commit is authored as its principal
         # (name=<subject>, email=<subject>@vexa.local); platform/seed commits are the plumbing authors.
-        for line in git("log", "-8", "--pretty=%h\x1f%s\x1f%cr\x1f%an\x1f%ae").splitlines():
-            parts = line.split("\x1f")
-            if len(parts) == 5:
-                sha, msg, when, an, ae = parts
-                if ae in _SYSTEM_AUTHOR_EMAILS or an in _SYSTEM_AUTHOR_NAMES:
-                    kind = "system"          # policy/seed plumbing — never a member's agent push
-                elif viewer_email and ae == viewer_email:
-                    kind = "you"             # the caller's own agent write
-                else:
-                    kind = "member"          # ANOTHER member's agent pushed this
-                commits.append({"sha": sha, "msg": msg, "when": when, "author": an, "kind": kind})
+        # --name-only appends each commit's changed files (so the terminal can make them clickable);
+        # \x1e prefixes each commit record so we can split records and separate meta from the file list.
+        # %ct = committer unix timestamp — a sortable key so a cross-workspace activity feed can merge
+        # commits from several mounts by recency (the %cr relative string can't be sorted).
+        raw = git("log", "-8", "--name-only", "--pretty=format:%x1e%h\x1f%s\x1f%cr\x1f%an\x1f%ae\x1f%ct")
+        for rec in raw.split("\x1e"):
+            rec = rec.strip("\n")
+            if not rec:
+                continue
+            lines = rec.split("\n")
+            parts = lines[0].split("\x1f")
+            if len(parts) != 6:
+                continue
+            sha, msg, when, an, ae, ct = parts
+            if ae in _SYSTEM_AUTHOR_EMAILS or an in _SYSTEM_AUTHOR_NAMES:
+                kind = "system"          # policy/seed plumbing — never a member's agent push
+            elif viewer_email and ae == viewer_email:
+                kind = "you"             # the caller's own agent write
+            else:
+                kind = "member"          # ANOTHER member's agent pushed this
+            files = [
+                f.strip() for f in lines[1:]
+                if f.strip() and f.split("/", 1)[0].lstrip(".") not in ("git", "claude")
+            ][:20]                       # cap: a root/seed commit can touch hundreds
+            commits.append({"sha": sha, "msg": msg, "when": when, "author": an, "kind": kind,
+                            "files": files, "ts": int(ct) if ct.isdigit() else 0})
         return {"branch": git("rev-parse", "--abbrev-ref", "HEAD") or "main", "changes": changes, "commits": commits}
+
+    def git_diff_at(self, base: Path, sha: str, path: Optional[str] = None) -> dict:
+        """Unified diff of ONE commit (optionally scoped to a single file) in the workspace at ``base`` —
+        so the terminal can HIGHLIGHT exactly what changed. Capped so a huge commit can't flood the UI."""
+        import re
+        import subprocess
+
+        from shared.gitenv import scrubbed_git_env
+
+        base = self._guard_under_root(base)
+        if not (base / ".git").exists() or not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
+            return {"sha": sha, "path": path, "diff": "", "truncated": False}  # bad sha never hits git
+        args = ["git", "-C", str(base), "show", "--no-color", "--format=", sha]
+        if path:
+            args += ["--", path]
+        out = subprocess.run(args, capture_output=True, text=True, env=scrubbed_git_env()).stdout
+        lines = out.splitlines()
+        return {"sha": sha, "path": path, "diff": "\n".join(lines[:600]), "truncated": len(lines) > 600}

@@ -60,9 +60,12 @@ def make_dispatch(
     launcher: str | None = None,
     runner: str = RUNNER,
     token: str | None = None,
+    principal: dict | None = None,
 ) -> dict:
     """Build a conformant ``unit.v1`` dispatch. Defaults the workspace list to the subject's personal
-    workspace at the trust-derived mode; the caller may pass an explicit list (system ro + user rw …)."""
+    workspace at the trust-derived mode; the caller may pass an explicit list (system ro + user rw …).
+    ``principal`` (e.g. ``{"name": "<email>"}``) attributes the turn's commits to the human editor —
+    dispatch stamps it as the git author (see dispatch.py D4)."""
     inv: dict = {
         "identity": {"subject": subject, "launcher": launcher or launcher_for(trigger, subject)},
         "runner": runner,
@@ -72,6 +75,8 @@ def make_dispatch(
     }
     if token is not None:
         inv["identity"]["token"] = token
+    if principal:
+        inv["identity"]["principal"] = principal
     if tools:
         inv["tools"] = list(tools)
     if context is not None:

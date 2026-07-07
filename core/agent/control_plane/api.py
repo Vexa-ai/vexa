@@ -744,9 +744,14 @@ def create_app(
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
         # rides the prompt to the worker — no file, no cross-domain HTTP, no user key in the worker (P15).
         ctx, tools, prompt = _meeting_grounding(body.active, session, body.prompt, redis_url)
+        # Attribute this turn's commits to the human editor by EMAIL (gateway-injected, trusted) rather
+        # than the bare subject id — the git author NAME becomes the email; the synthetic author email
+        # (<subject>@vexa.local) stays for the you/member classification (workspace_reader.git_state_at).
+        _email = (request.headers.get("x-user-email") or "").strip()
         inv = units.make_dispatch(
             subject=subject, trigger="message",
             start=units.entrypoint(inline=prompt), context=ctx, tools=tools,
+            principal={"name": _email} if _email else None,
         )
         if resume:
             # Re-attach only — the warm unit id is deterministic from (subject, session); resume reads
@@ -966,6 +971,16 @@ def create_app(
         try:
             target = _read_target(request, slug)  # authorizes: a slug outside the caller's mount set → 403
             return wsr.git_state_at(target, viewer=subject_of(request))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+
+    @app.get("/api/workspace/git/show")
+    def ws_git_show(request: Request, sha: str, slug: Optional[str] = None, path: Optional[str] = None):
+        """Unified diff of ONE commit (optionally one file) — same authorized resolution as ws_git — so
+        the terminal can highlight exactly what a commit changed."""
+        try:
+            target = _read_target(request, slug)  # authorizes: a slug outside the caller's mount set → 403
+            return wsr.git_diff_at(target, sha, path)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
 
