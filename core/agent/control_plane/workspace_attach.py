@@ -448,6 +448,9 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
 
     if slug == primary:
         raise ValueError("the baseline workspace can't be shared — create a new workspace to share")
+    # the invisible system tiers (_global / _system) are platform-owned, never a shareable user workspace
+    if slug in membership.RESERVED_SLUGS:
+        raise ValueError(f"'{slug}' is a system workspace and can't be shared")
     # already a top-level shared workspace the caller is a member of → nothing to do
     if (rootp / slug).exists() and membership.is_member(rootp, slug, subject) is not None:
         return slug, False

@@ -72,7 +72,7 @@ DEFAULT_INVITE_MODE = "open"
 # Reserved workspace slugs that are NEVER shareable: the per-user SYSTEM workspace + the attach store's
 # dot-namespace + the seed slot. A subject's OWN private workspace is refused separately (see
 # ``assert_shareable``): sharing is opt-in via an owner membership record, not implicit on a bare subject.
-RESERVED_SLUGS = frozenset({"sys", "_system", "system", "seed", "seed-prev"})
+RESERVED_SLUGS = frozenset({"sys", "_system", "system", "_global", "global", "seed", "seed-prev"})
 
 
 class MembershipError(RuntimeError):
