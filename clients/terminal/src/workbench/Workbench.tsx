@@ -4,7 +4,7 @@
  *  CENTER: dockview TABS — a "tab" host resolves each panel by params.kind via the tab registry.
  *  RIGHT (resizable/collapsible): the persistent workspace chat, grounded by the active center tab.
  *  Reuses the Phase-C ⌘K palette + keybindings; the kernel's services do the rest. */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps, type IDockviewPanelHeaderProps, themeAbyss } from "dockview-react";
@@ -18,6 +18,8 @@ import { LayoutServiceId } from "./layout";
 import { CommandPalette } from "./CommandPalette";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
+import { updatesBadge, markUpdatesSeen, updatesSeenTs } from "../surfaces/updatesBadge";
+import { readActiveSet, readWorkspaceGit } from "../surfaces/workspaceApi";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
 import { listWorkspaceTree } from "../surfaces/workspaceApi";
@@ -149,6 +151,29 @@ function LeftPane() {
   const lists = registry.lists();
   const active = registry.list(activeList) ?? lists[0];
   const Comp = active?.component;
+  // "new updates" badge on the Knowledge nav — OTHER members' commits across the caller's active
+  // workspaces since Knowledge was last opened. Polled here (always mounted) so it updates even when the
+  // user is on Meetings/Sessions; opening Knowledge clears it.
+  const badge = useSyncExternalStore(updatesBadge.subscribe, updatesBadge.count, () => 0);
+  const newestRef = useRef(0);
+  useEffect(() => {
+    const poll = async () => {
+      if (document.hidden) return;
+      try {
+        const mounts = (await readActiveSet()).active;
+        const gits = await Promise.all(mounts.map((m) => readWorkspaceGit(m.primary ? undefined : { slug: m.slug }).catch(() => null)));
+        const member = gits.flatMap((g) => (g ? g.commits : [])).filter((c) => c.kind === "member" && (c.ts ?? 0) > 0);
+        newestRef.current = member.reduce((mx, c) => Math.max(mx, c.ts ?? 0), 0);
+        updatesBadge.set(member.filter((c) => (c.ts ?? 0) > updatesSeenTs()).length);
+      } catch { /* additive — a poll failure just leaves the badge as-is */ }
+    };
+    void poll();
+    const iv = setInterval(() => void poll(), 6000);
+    const onFocus = () => void poll();
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(iv); window.removeEventListener("focus", onFocus); };
+  }, []);
+  useEffect(() => { if (activeList === "files") markUpdatesSeen(newestRef.current || Math.floor(Date.now() / 1000)); }, [activeList]);
   const seg = (on: boolean): CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 7, fontSize: 12.5, cursor: "pointer", border: "none", color: on ? "var(--t1)" : "var(--t2)", background: on ? "var(--panel2)" : "transparent", flex: "none", whiteSpace: "nowrap" });
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--sidebar)", borderRight: "1px solid var(--line)", minHeight: 0 }}>
@@ -163,6 +188,12 @@ function LeftPane() {
         {lists.map((l) => (
           <button key={l.id} style={seg(l.id === active?.id)} onClick={() => layout.setActiveList(l.id)} title={l.label}>
             <Icon name={l.icon} size={13} />{l.label}
+            {l.id === "files" && badge > 0 && (
+              <span title={`${badge} new update${badge > 1 ? "s" : ""} from other members`}
+                style={{ marginLeft: "auto", background: "var(--accent)", color: "var(--bg)", fontSize: 10, fontWeight: 700, borderRadius: 9, minWidth: 16, textAlign: "center", padding: "0 5px", lineHeight: "16px", flex: "none" }}>
+                {badge}
+              </span>
+            )}
           </button>
         ))}
       </div>

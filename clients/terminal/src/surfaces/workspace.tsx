@@ -68,15 +68,7 @@ async function readFile(path: string, slug?: string): Promise<string> {
 // ── session-persisted UI flags ───────────────────────────────────────────────────
 const readSS = (k: string): string | null => { try { return sessionStorage.getItem(k); } catch { return null; } };
 const writeSS = (k: string, v: string) => { try { sessionStorage.setItem(k, v); } catch { /* noop */ } };
-// localStorage (persists across reloads) — the "seen" watermark for shared-workspace activity so the
-// unread badge survives a page refresh, unlike the session-scoped UI flags above.
-const readLS = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
-const writeLS = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* noop */ } };
-
-// ── shared-workspace activity feed (Lane W read-side) ─────────────────────────────
-// One commit row: message + an author chip coloured by `kind` — a MEMBER push (another user's agent)
-// stands out in --accent; the caller's own writes and platform/seed plumbing stay muted. `unread` dots
-// the commits that landed since the viewer last opened this workspace's activity.
+// ── shared-workspace activity (Lane W read-side) — rendered in ONE aggregated RECENT ACTIVITY feed ──
 // A unified-diff block with +/- line highlighting — shows EXACTLY what a commit changed.
 function DiffView({ text }: { text: string }) {
   return (
@@ -92,119 +84,36 @@ function DiffView({ text }: { text: string }) {
   );
 }
 
-// One changed-file row that expands to its inline highlighted diff (lazy-fetched from git show).
-function DiffRow({ sha, path, slug }: { sha: string; path: string; slug?: string }) {
-  const [open, setOpen] = useState(false);
-  const [diff, setDiff] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const toggle = () => setOpen((v) => {
-    const n = !v;
-    if (n && diff === null && !err) {
-      void readWorkspaceGitDiff({ sha, slug, path })
-        .then((d) => setDiff(d.diff || "(no textual changes)"))
-        .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
-    }
-    return n;
-  });
-  return (
-    <div>
-      <div onClick={toggle} title={`Show changes in ${path}`}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
-        onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t2)")}
-        style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        <Icon name="chevR" size={10} style={{ color: "var(--t3)", flex: "none", transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-        <Icon name="file" size={11} style={{ color: "var(--t3)", flex: "none" }} />
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{path}</span>
-      </div>
-      {open && (err
-        ? <div style={{ margin: "2px 0 4px 15px", fontSize: 11, color: "var(--live)" }}>⚠ {err}</div>
-        : diff === null ? <div style={{ margin: "2px 0 4px 15px", fontSize: 11, color: "var(--t3)" }}>loading…</div>
-        : <DiffView text={diff} />)}
-    </div>
-  );
-}
-
-function CommitRow({ c, unread, wsLabel, slug }: { c: GitCommit; unread?: boolean; wsLabel?: string; slug?: string }) {
+function CommitRow({ c, wsLabel, onOpen }: { c: GitCommit; wsLabel?: string; onOpen?: (path: string) => void }) {
   const kind = c.kind ?? "you";
   const isMember = kind === "member";
   const who = kind === "you" ? "you" : kind === "system" ? "system" : (c.author || "member");
   const whoColor = isMember ? "var(--accent)" : "var(--t3)";
   return (
-    <div style={{ padding: "4px 9px", fontSize: 12, display: "flex", gap: 7, alignItems: "flex-start" }}>
-      <span title={unread ? "new since you last looked" : undefined}
-        style={{ width: 6, height: 6, borderRadius: 3, marginTop: 5, flex: "none",
-          background: unread ? "var(--accent)" : "transparent" }} />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
-        <div style={{ fontSize: 11, color: "var(--t3)", display: "flex", gap: 8, alignItems: "center" }}>
-          <span title={isMember ? `edited by ${c.author}` : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 3, color: whoColor, fontWeight: isMember ? 600 : 400, maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {isMember && <Icon name="user" size={11} />}{who}
-          </span>
-          <span style={{ fontFamily: "var(--mono)", color: "var(--green)", flex: "none" }}>{c.sha}</span>
-          <span style={{ flex: "none" }}>{c.when}</span>
-          {wsLabel && <span title={`in ${wsLabel}`} style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "40%", textTransform: "uppercase", letterSpacing: ".03em" }}>{wsLabel}</span>}
+    <div style={{ padding: "4px 9px", fontSize: 12 }}>
+      <div style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
+      <div style={{ fontSize: 11, color: "var(--t3)", display: "flex", gap: 8, alignItems: "center" }}>
+        <span title={isMember ? `edited by ${c.author}` : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 3, color: whoColor, fontWeight: isMember ? 600 : 400, maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {isMember && <Icon name="user" size={11} />}{who}
+        </span>
+        <span style={{ fontFamily: "var(--mono)", color: "var(--green)", flex: "none" }}>{c.sha}</span>
+        <span style={{ flex: "none" }}>{c.when}</span>
+        {wsLabel && <span title={`in ${wsLabel}`} style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "40%", textTransform: "uppercase", letterSpacing: ".03em" }}>{wsLabel}</span>}
+      </div>
+      {/* the files this commit touched — clickable links that OPEN the file (its exact diff is one click
+          away in the doc header's "Changes"). */}
+      {onOpen && (c.files?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 2, display: "flex", flexDirection: "column", gap: 1 }}>
+          {c.files!.map((f) => (
+            <div key={f} onClick={() => onOpen(f)} title={`Open ${f}`}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t2)")}
+              style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 11.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <Icon name="file" size={11} style={{ color: "var(--t3)", flex: "none" }} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{f}</span>
+            </div>
+          ))}
         </div>
-        {/* the files this commit touched — click to expand the exact highlighted diff */}
-        {(c.files?.length ?? 0) > 0 && (
-          <div style={{ marginTop: 2, display: "flex", flexDirection: "column", gap: 1 }}>
-            {c.files!.map((f) => <DiffRow key={f} sha={c.sha} path={f} slug={slug} />)}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Count MEMBER commits newer than the seen watermark. git log is newest-first, so walk until the watermark
-// sha; every `member` commit before it is unread (own/system writes never raise the badge).
-function unreadMemberShas(commits: GitCommit[], seenSha: string): Set<string> {
-  const unread = new Set<string>();
-  for (const c of commits) {
-    if (c.sha === seenSha) break;
-    if ((c.kind ?? "") === "member") unread.add(c.sha);
-  }
-  return unread;
-}
-
-/** The "Activity" strip under a shared workspace: recent commits with author attribution, and an unread
- *  badge for pushes from OTHER members' agents since the viewer last expanded it. Polls the same
- *  /api/workspace/git the primary source-control panel uses, scoped to this shared workspace's slug. */
-function MountActivity({ slug }: { slug: string }) {
-  const [open, setOpen] = useState(false);
-  const [commits, setCommits] = useState<GitCommit[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-  const [seen, setSeen] = useState<string>(() => readLS(`vexa.ws.seen.${slug}`) ?? "");
-  useEffect(() => {
-    const load = () => void readWorkspaceGit({ slug })
-      .then((g) => { setCommits(g.commits); setErr(null); })
-      .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
-    load();
-    const id = setInterval(() => { if (!document.hidden) load(); }, 6000);  // reflect members' pushes as they land
-    window.addEventListener("focus", load);
-    return () => { clearInterval(id); window.removeEventListener("focus", load); };
-  }, [slug]);
-  const unread = unreadMemberShas(commits, seen);
-  const markSeen = () => { const top = commits[0]?.sha; if (top) { writeLS(`vexa.ws.seen.${slug}`, top); setSeen(top); } };
-  const toggle = () => setOpen((v) => { const n = !v; if (n) markSeen(); return n; });  // opening = "I've seen these"
-  return (
-    <div style={{ marginTop: 2 }}>
-      <div onClick={toggle}
-        style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 22px", cursor: "pointer",
-          fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
-        <Icon name="chevR" size={11} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-        <Icon name="git" size={11} />activity
-        {unread.size > 0 && (
-          <span title={`${unread.size} new change${unread.size > 1 ? "s" : ""} from other members`}
-            style={{ marginLeft: "auto", background: "var(--accent)", color: "var(--bg)", fontSize: 9.5,
-              fontWeight: 700, borderRadius: 8, padding: "0 5px", lineHeight: "15px", textTransform: "none" }}>
-            {unread.size} new
-          </span>
-        )}
-      </div>
-      {open && (
-        err ? <div role="alert" style={{ padding: "2px 9px 4px 22px", fontSize: 11.5, color: "var(--live)" }}>⚠ {err}</div>
-        : commits.length === 0 ? <div style={{ padding: "2px 9px 4px 22px", fontSize: 12, color: "var(--t3)" }}>No commits yet.</div>
-        : <div style={{ paddingLeft: 13 }}>{commits.map((c) => <CommitRow key={c.sha} c={c} unread={unread.has(c.sha)} slug={slug} />)}</div>
       )}
     </div>
   );
@@ -313,8 +222,8 @@ function MountSection({ mount }: { mount: ActiveMount }) {
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggleDir}
           openFile={openDoc} pinFile={pinDoc} openMenu={() => {}} />)}
         {!error && tree.length === 0 && <div style={{ padding: "3px 12px", color: "var(--t3)", fontSize: 12 }}>Empty.</div>}
-        {/* Lane W read-side: recent commits + a badge for OTHER members' agent pushes to this shared ws. */}
-        {mount.role === "shared" && <MountActivity slug={mount.slug} />}
+        {/* No per-workspace activity strip — all members' pushes surface in the ONE aggregated RECENT
+            ACTIVITY feed (GitSection) + the "new updates" badge on the Knowledge nav. */}
       </>)}
     </div>
   );
@@ -951,7 +860,7 @@ function GitSection() {
         </div>
       ))}
       {feed.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "8px 9px 2px" }}>RECENT ACTIVITY</div>}
-      {feed.map((c) => <CommitRow key={(c.slug || "") + ":" + c.sha} c={c} wsLabel={c.ws} slug={c.slug} />)}
+      {feed.map((c) => <CommitRow key={(c.slug || "") + ":" + c.sha} c={c} wsLabel={c.ws} onOpen={(f) => layout.openPreview(docTab(f, c.slug))} />)}
       </>)}
     </div>
   );
@@ -1083,12 +992,47 @@ function DocTab({ id, params }: TabProps) {
   // retargeted from OUTSIDE (preview swap, layout restore) → a different doc: reset history
   useEffect(() => { setNav((n) => (n.stack[n.idx] === docked ? n : { stack: [docked], idx: 0 })); }, [docked]);
   const [content, setContent] = useState<string | null>(null);
+  const [updated, setUpdated] = useState(false);           // the file changed under us (a member's push)
+  const [showDiff, setShowDiff] = useState(false);
+  const [diff, setDiff] = useState<string | null>(null);
+  const prevRef = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
+  // initial load on doc switch — reset the change/diff affordances
   useEffect(() => {
-    setContent(null);
+    setContent(null); setUpdated(false); setShowDiff(false); setDiff(null); prevRef.current = null;
     scroller.current?.scrollTo(0, 0);
-    void readFile(path, slug).then(setContent);
+    void readFile(path, slug).then((c) => { prevRef.current = c; setContent(c); });
   }, [path, slug]);
+  // LIVE: poll the file while open so an OPEN doc auto-reloads when a member's agent updates it — folks
+  // see updates without reopening. A real content change flags the "updated" banner (→ view exact lines).
+  useEffect(() => {
+    const reload = () => {
+      if (document.hidden) return;
+      void readFile(path, slug).then((c) => {
+        if (prevRef.current !== null && prevRef.current !== c) setUpdated(true);
+        prevRef.current = c;
+        setContent(c);
+      });
+    };
+    const iv = setInterval(reload, 5000);
+    window.addEventListener("focus", reload);
+    return () => { clearInterval(iv); window.removeEventListener("focus", reload); };
+  }, [path, slug]);
+  // Exact lines changed: the diff of the most recent commit that touched THIS file.
+  const loadDiff = () => {
+    setShowDiff((v) => !v);
+    setUpdated(false);
+    if (diff !== null) return;
+    setDiff("");
+    void readWorkspaceGit(slug ? { slug } : undefined)
+      .then(async (g) => {
+        const c = g.commits.find((k) => (k.files ?? []).includes(path));
+        if (!c) { setDiff("(no recent commit touched this file)"); return; }
+        const d = await readWorkspaceGitDiff({ sha: c.sha, slug, path });
+        setDiff(d.diff || "(no textual changes)");
+      })
+      .catch((e: unknown) => setDiff(`⚠ ${e instanceof Error ? e.message : String(e)}`));
+  };
   const show = (p: string) => layout.retargetTab(id, docTab(p, slug));
   const navigate: DocNavigate = (detail) => {
     void (async () => {
@@ -1115,7 +1059,20 @@ function DocTab({ id, params }: TabProps) {
               <NavArrow dir={1} enabled={nav.idx < nav.stack.length - 1} onGo={() => go(1)} />
             </span>
             <div style={{ minWidth: 0, flex: 1 }}><PathBreadcrumb path={path} /></div>
+            <span onClick={loadDiff} title="Show the exact lines changed in the latest commit"
+              style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11.5, color: showDiff ? "var(--accent)" : "var(--t3)" }}>
+              <Icon name="git" size={12} />Changes
+            </span>
           </div>
+          {updated && (
+            <div onClick={loadDiff} role="status"
+              style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, padding: "5px 10px", cursor: "pointer", background: "var(--panel)", border: "1px solid var(--accent)", borderRadius: 7, fontSize: 12, color: "var(--accent)" }}>
+              <Icon name="zap" size={12} />Updated just now — view the exact lines changed
+            </div>
+          )}
+          {showDiff && (diff === null || diff === ""
+            ? <div style={{ fontSize: 12, color: "var(--t3)", marginBottom: 10 }}>loading changes…</div>
+            : <div style={{ marginBottom: 12 }}><DiffView text={diff} /></div>)}
           {fm.length > 0 && <FrontmatterCard fm={fm} />}
           <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <MdxDoc>{body}</MdxDoc>}</div>
         </div>
