@@ -54,11 +54,13 @@ POLICY_DIR = "policy"
 MEMBERS_FILE = f"{POLICY_DIR}/members.json"
 INVITES_FILE = f"{POLICY_DIR}/invites.json"
 
-# Role lattice: owner > contributor > viewer. viewer = read; contributor = read + write (dispatch);
-# owner = + invites/policy. Ordering by rank so ``require_role`` is a single ``>=``.
+# Role lattice: owner > contributor > viewer. SINGLE-RANK model (owner ruling 2026-07-07): normal
+# workspaces have ONE member rank — every member is read/write and can share; the ``owner`` is just the
+# CREATOR (the only one who can unshare/delete). ``viewer`` (read-only) is retained in the lattice for
+# back-compat but is NO LONGER invitable — you never mint a read-only or owner invite, only a member.
 ROLES = ("viewer", "contributor", "owner")
 _RANK = {r: i for i, r in enumerate(ROLES)}
-INVITABLE_ROLES = ("viewer", "contributor")  # you never mint an "owner" invite
+INVITABLE_ROLES = ("contributor",)  # single-rank: mint a read/write MEMBER (never viewer/owner)
 
 DEFAULT_EXPIRES_IN_SEC = 604800  # 7 days
 DEFAULT_MAX_USES = 1

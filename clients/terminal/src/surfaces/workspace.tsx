@@ -565,7 +565,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   if (!allSlots.some(([s]) => s === "seed")) allSlots.unshift(["seed", { repo: null, ref: null }]);
   const slots = allSlots.filter(([, meta]) => !meta.archived);           // live rows
   const archivedSlots = allSlots.filter(([, meta]) => meta.archived);    // collapsed 'Archived' group
-  const label = (slug: string, repo: string | null) => (slug === "seed" ? "default (seed)" : repo ?? slug);
+  const label = (slug: string, repo: string | null) => (slug === "seed" ? "Personal" : repo ?? slug);
 
   // Publish applies to a VEXA-BORN active workspace only — one attached from an external repo already
   // has a home (the backend refuses it too). Default repo name: the workspace's display name, slugified.
