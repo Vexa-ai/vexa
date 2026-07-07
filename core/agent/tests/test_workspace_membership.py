@@ -120,19 +120,76 @@ def list_invites_has_no_hash(root: Path) -> bool:
 def test_accept_grants_membership_both_stores(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="owner1")
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="owner1")
     res = m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)
-    assert res == {"workspace_id": "wsA", "role": "viewer", "already_member": False}
-    assert m.is_member(tmp_path, "wsA", "u2") == "viewer"
+    assert res == {"workspace_id": "wsA", "role": "contributor", "already_member": False}
+    assert m.is_member(tmp_path, "wsA", "u2") == "contributor"
     assert idx.list("u2")[0]["workspace_id"] == "wsA"
     # a use was consumed
     assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 1
 
 
+def test_member_records_carry_verified_email(tmp_path):
+    """The roster shows human labels, not opaque ids: owner + redeemed member both persist their
+    verified email into members.json, and a re-grant refreshes a changed one."""
+    _init_ws(tmp_path, "wsA")
+    idx = m.InMemoryMembershipIndex()
+    m.ensure_owner(tmp_path, "wsA", "u1", index=idx, email="Owner@Vexa.AI")
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="u1")
+    m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx,
+                    subject_email="member@acme.com")
+    by_subject = {rec["subject"]: rec for rec in m.read_members(tmp_path, "wsA")}
+    # normalized (case-folded/trimmed) and stored
+    assert by_subject["u1"]["email"] == "owner@vexa.ai"
+    assert by_subject["u2"]["email"] == "member@acme.com"
+    # re-grant with a newer email refreshes the label in place (still one membership)
+    m.grant_membership(tmp_path, "wsA", "u2", "contributor", added_by="u1", index=idx,
+                       email="member@newco.com")
+    assert m.read_members(tmp_path, "wsA")[-1]["email"] == "member@newco.com"
+
+
+def test_backfill_member_email_self_heals_legacy_records(tmp_path):
+    """A member granted before emails were stored fills in on first manage-panel view; the backfill is a
+    no-op for a non-member and for an already-current email."""
+    _init_ws(tmp_path, "wsA")
+    idx = m.InMemoryMembershipIndex()
+    m.ensure_owner(tmp_path, "wsA", "u1", index=idx)  # legacy owner, no email
+    assert "email" not in m.read_members(tmp_path, "wsA")[0]
+    assert m.backfill_member_email(tmp_path, "wsA", "u1", "u1@vexa.ai") is True
+    assert m.read_members(tmp_path, "wsA")[0]["email"] == "u1@vexa.ai"
+    # idempotent (same value) and safe for a stranger / empty email
+    assert m.backfill_member_email(tmp_path, "wsA", "u1", "u1@vexa.ai") is False
+    assert m.backfill_member_email(tmp_path, "wsA", "ghost", "x@y.z") is False
+    assert m.backfill_member_email(tmp_path, "wsA", "u1", None) is False
+
+
+def test_preview_invite_reads_terms_without_granting(tmp_path):
+    """The consent-screen preview resolves a token → workspace + terms, grants nothing, consumes no use."""
+    _init_ws(tmp_path, "wsA")
+    idx = m.InMemoryMembershipIndex()
+    m.ensure_owner(tmp_path, "wsA", "owner1", index=idx, email="owner1@vexa.ai")
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="owner1", max_uses=3)
+    pv = m.preview_invite(tmp_path, minted.token)
+    assert pv["workspace_id"] == "wsA" and pv["role"] == "contributor" and pv["valid"] is True
+    assert pv["created_by"] == "owner1"
+    # no membership was created and no use consumed
+    assert m.is_member(tmp_path, "wsA", "someone") is None
+    assert json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["uses"] == 0
+    # unknown token → None (never enumerates workspaces)
+    assert m.preview_invite(tmp_path, "not-a-real-token") is None
+
+
+def test_preview_invite_flags_expired(tmp_path):
+    _init_ws(tmp_path, "wsA")
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="owner1", expires_in_sec=1)
+    pv = m.preview_invite(tmp_path, minted.token, now=10_000_000_000)  # far future → expired
+    assert pv is not None and pv["valid"] is False and pv["reason"] == "expired"
+
+
 def test_accept_expired_invite_fails(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="o", expires_in_sec=100, now=1000.0)
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o", expires_in_sec=100, now=1000.0)
     with pytest.raises(m.MembershipError) as e:
         m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx, now=2000.0)
     assert e.value.status == 410
@@ -141,7 +198,7 @@ def test_accept_expired_invite_fails(tmp_path):
 def test_max_uses_enforced(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="o", max_uses=1)
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o", max_uses=1)
     m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)
     with pytest.raises(m.MembershipError) as e:
         m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u3", index=idx)
@@ -151,7 +208,7 @@ def test_max_uses_enforced(tmp_path):
 def test_double_accept_is_idempotent(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="o", max_uses=1)
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o", max_uses=1)
     m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)
     # same user accepts again — no error, still ONE membership, use NOT re-consumed
     res = m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)
@@ -164,7 +221,7 @@ def test_double_accept_is_idempotent(tmp_path):
 def test_revoked_invite_rejected(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="o")
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o")
     invite_id = json.loads((tmp_path / "wsA" / m.INVITES_FILE).read_text())[0]["id"]
     m.revoke_invite(tmp_path, "wsA", invite_id)
     with pytest.raises(m.MembershipError) as e:
@@ -214,7 +271,7 @@ def test_reserved_slugs_not_shareable(tmp_path, slug):
 
 def test_mint_on_reserved_refused(tmp_path):
     with pytest.raises(m.MembershipError) as e:
-        m.mint_invite(tmp_path, "sys", role="viewer", created_by="o")
+        m.mint_invite(tmp_path, "sys", role="contributor", created_by="o")
     assert e.value.status == 403
 
 
@@ -329,11 +386,11 @@ def test_policy_write_guard_reverts_agent_write(tmp_path):
 def test_open_mode_lets_anyone_with_link_in(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="o", mode="open")
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o", mode="open")
     # no email needed for open mode
     res = m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)
-    assert res["role"] == "viewer"
-    assert m.is_member(tmp_path, "wsA", "u2") == "viewer"
+    assert res["role"] == "contributor"
+    assert m.is_member(tmp_path, "wsA", "u2") == "contributor"
 
 
 def test_restricted_requires_allowed_emails_at_mint(tmp_path):
@@ -365,7 +422,7 @@ def test_restricted_refuses_non_listed_admits_listed(tmp_path):
 def test_restricted_missing_email_refused(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="o",
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="o",
                            mode="restricted", allowed_emails=["alice@vexa.ai"])
     with pytest.raises(m.MembershipError) as e:
         m.accept_invite(tmp_path, "wsA", token=minted.token, subject="u2", index=idx)  # no email
@@ -378,7 +435,7 @@ def test_api_restricted_invite_checks_x_user_email(tmp_path):
     m.ensure_owner(tmp_path, "wsA", "owner1", index=idx)
     c = _client(tmp_path, idx)
     minted = c.post("/api/workspace/invites", headers=_h("owner1"),
-                    json={"workspace_id": "wsA", "role": "viewer", "mode": "restricted",
+                    json={"workspace_id": "wsA", "role": "contributor", "mode": "restricted",
                           "allowed_emails": ["alice@vexa.ai"]}).json()
     assert minted["mode"] == "restricted"
     # wrong email → 403
@@ -390,7 +447,7 @@ def test_api_restricted_invite_checks_x_user_email(tmp_path):
     ok = c.post("/api/workspace/invites/accept",
                 headers={"X-User-Id": "u_alice", "X-User-Email": "alice@vexa.ai"},
                 json={"token": minted["token"]})
-    assert ok.status_code == 200 and ok.json()["role"] == "viewer"
+    assert ok.status_code == 200 and ok.json()["role"] == "contributor"
 
 
 # ── ATTACK: concurrent accept of a max_uses=1 invite must grant AT MOST 1 (vector 1, the race) ─────
@@ -403,7 +460,7 @@ def test_concurrent_accept_max_uses_one_grants_exactly_one(tmp_path):
     _init_ws(tmp_path, "wsA")
     idx = m.InMemoryMembershipIndex()
     m.ensure_owner(tmp_path, "wsA", "owner1", index=idx, commit_fn=m.policy_commit)
-    minted = m.mint_invite(tmp_path, "wsA", role="viewer", created_by="owner1", max_uses=1,
+    minted = m.mint_invite(tmp_path, "wsA", role="contributor", created_by="owner1", max_uses=1,
                            commit_fn=m.policy_commit)
 
     N = 8

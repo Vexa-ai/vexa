@@ -52,9 +52,13 @@ from control_plane.workspace_attach import (
     set_shared_active,
     shared_active_mounts,
     swap_workspace,
+    workspace_dir_for,
 )
 from control_plane.workspace_publish import PublishError, RepoExistsError, publish_workspace, published_remote_url
+from control_plane.workspace_git_sync import RemoteSyncError, pull_origin, push_origin, remote_status
+from control_plane.workspace_purpose import read_purpose, write_purpose
 from control_plane import workspace_membership as membership_mod
+from control_plane import git_credentials as git_creds
 from control_plane import system_mounts
 from control_plane.workspace_membership import MembershipError, MembershipIndex, InMemoryMembershipIndex
 from control_plane.dispatch import Dispatcher
@@ -255,7 +259,7 @@ class WorkspacePublishBody(BaseModel):
     model_config = {"extra": "forbid"}
     repo_name: Optional[str] = None    # name of the repo to create (required unless remote_url is given)
     private: bool = True               # create the repo private (default) or public
-    token: str                         # GitHub PAT — repo-creation + push only, never persisted (P15)
+    token: Optional[str] = None        # GitHub PAT (repo-creation + push); OPTIONAL — falls back to the caller's SAVED token
     org: Optional[str] = None          # create under this org instead of the user's account
     remote_url: Optional[str] = None   # skip creation and push to this (pre-created/empty) repo
 
@@ -265,6 +269,41 @@ class WorkspaceRenameBody(BaseModel):
     model_config = {"extra": "forbid"}
     slug: str
     name: Optional[str] = None
+
+
+class WorkspacePushBody(BaseModel):
+    """Push a workspace's current branch to its GitHub home (origin / vexa-publish), fast-forward only.
+    ``slug`` targets one of the caller's workspaces (default = the primary); ``token`` is the caller's PAT.
+    OPTIONAL — when omitted, the caller's SAVED reusable GitHub token (git_credentials) is used. Whichever
+    token applies is used for this push only and NEVER stored on the workspace remote (P15)."""
+    model_config = {"extra": "forbid"}
+    slug: Optional[str] = None
+    token: Optional[str] = None
+
+
+class GitTokenBody(BaseModel):
+    """Save (or, with an empty/omitted ``token``, CLEAR) the caller's reusable GitHub token — stored ONCE,
+    server-side, and reused as the fallback credential for every git op across all their repos."""
+    model_config = {"extra": "forbid"}
+    token: Optional[str] = None
+
+
+class WorkspacePullBody(BaseModel):
+    """Fetch + fast-forward a workspace from its GitHub home. ``slug`` targets one of the caller's
+    workspaces (default = primary); ``token`` (optional — public repos need none) is used for the fetch
+    only and NEVER stored (P15). A divergence is refused, not merged/rebased/forced."""
+    model_config = {"extra": "forbid"}
+    slug: Optional[str] = None
+    token: Optional[str] = None
+
+
+class WorkspacePurposeBody(BaseModel):
+    """Set a workspace's PURPOSE — a one-line statement of what it's for, stored IN the workspace so it
+    travels when shared and is read into the agent's mount preamble. ``slug`` targets one of the caller's
+    workspaces (default = primary); an empty ``purpose`` clears it."""
+    model_config = {"extra": "forbid"}
+    slug: Optional[str] = None
+    purpose: str = ""
 
 
 class InviteCreateBody(BaseModel):
@@ -919,6 +958,22 @@ def create_app(
                 return Path(m.path)
         raise HTTPException(status_code=403, detail="not authorized for this workspace")
 
+    def _manage_dir(subject: str, slug: Optional[str]) -> Path:
+        """Resolve a workspace dir for a MANAGEMENT op (git sync, purpose) — unlike ``_read_target`` this
+        also reaches the caller's PARKED slots (a workspace need not be mounted to manage it). Own slots
+        first (active or parked); a slug that isn't one of them but IS a shared workspace the caller belongs
+        to resolves to the shared dir. Neither path can ever reach another user's private workspace."""
+        try:
+            return workspace_dir_for(wsr.root, subject, slug)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
+        except KeyError:
+            pass
+        target = (slug or "").strip()
+        if target and membership_mod.is_member(wsr.root, target, subject) is not None:
+            return membership_mod._ws_dir(wsr.root, target)
+        raise HTTPException(status_code=404, detail="workspace not found")
+
     @app.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False, slug: Optional[str] = None):
         try:
@@ -1045,9 +1100,10 @@ def create_app(
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
         subject = subject_of(request)
+        _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
         try:
             result = swap_workspace(wsr.root, subject, body.repo, body.ref or "main",
-                                    slug=body.slug or None, fresh=body.fresh, token=body.token or None)
+                                    slug=body.slug or None, fresh=body.fresh, token=_tok or None)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
@@ -1097,9 +1153,10 @@ def create_app(
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
         Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
         subject = subject_of(request)
+        _tok = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
         try:
             result = activate_workspace(wsr.root, subject, body.repo, body.ref or "main",
-                                        slug=body.slug or None, token=body.token or None)
+                                        slug=body.slug or None, token=_tok or None)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
@@ -1143,10 +1200,13 @@ def create_app(
         or a clear error on divergence — never a force push). The token is used server-side for this
         call only and never stored; every error is token-redacted (P15)."""
         subject = subject_of(request)
+        token = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        if not token:
+            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token")
         try:
             result = publish_workspace(
                 wsr.root, subject,
-                token=body.token, repo_name=body.repo_name, private=body.private,
+                token=token, repo_name=body.repo_name, private=body.private,
                 org=body.org or None, remote_url=body.remote_url or None,
             )
         except ValueError as exc:
@@ -1173,6 +1233,90 @@ def create_app(
             raise HTTPException(status_code=400, detail="invalid subject")
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workspace")
+
+    @app.get("/api/workspace/git-token")
+    def ws_git_token_get(request: Request):
+        """Whether the caller has a SAVED reusable GitHub token, and a masked (last-4) preview of it. The
+        clear value is NEVER returned — server-side only (git_credentials)."""
+        subject = subject_of(request)
+        return {"set": git_creds.read_github_token(wsr.root, subject) is not None,
+                "masked": git_creds.masked_github_token(wsr.root, subject)}
+
+    @app.post("/api/workspace/git-token")
+    def ws_git_token_set(request: Request, body: GitTokenBody = Body(default=GitTokenBody())):
+        """Save (or CLEAR, with an empty token) the caller's reusable GitHub token — stored once, server-
+        side, and applied as the fallback credential for every git op across all their repos. Returns the
+        masked state, never the clear value."""
+        subject = subject_of(request)
+        try:
+            stored = git_creds.set_github_token(wsr.root, subject, body.token)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"set": stored, "masked": git_creds.masked_github_token(wsr.root, subject)}
+
+    @app.get("/api/workspace/git-remote-status")
+    def ws_git_remote_status(request: Request, slug: Optional[str] = None):
+        """The GitHub-sync state of a workspace (default = the caller's primary; ``slug`` = one of their
+        own or shared workspaces). Read-only + no network: reports the home remote (origin / vexa-publish),
+        its URL, the branch, and ahead/behind counts vs the last-fetched tracking ref. No token needed."""
+        subject = subject_of(request)
+        ws = _manage_dir(subject, slug)
+        s = remote_status(ws)
+        return {
+            "has_home": s.has_home, "remote": s.remote, "url": s.url, "branch": s.branch,
+            "tracked": s.tracked, "ahead": s.ahead, "behind": s.behind,
+        }
+
+    @app.post("/api/workspace/push")
+    def ws_push(request: Request, body: WorkspacePushBody = Body(...)):
+        """Push a workspace's current branch to its GitHub home (origin for attached clones, vexa-publish
+        for published vexa-born), fast-forward only — NEVER a force push. The token authenticates the push
+        and is never stored; a diverged remote fails loud (pull first). Every error is token-redacted (P15)."""
+        subject = subject_of(request)
+        ws = _manage_dir(subject, body.slug)
+        token = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        if not token:
+            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token")
+        try:
+            r = push_origin(ws, token=token)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RemoteSyncError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))  # already token-redacted (P15)
+        return {"remote": r.remote, "url": r.url, "branch": r.branch, "head_sha": r.head_sha}
+
+    @app.post("/api/workspace/pull")
+    def ws_pull(request: Request, body: WorkspacePullBody = Body(default=WorkspacePullBody())):
+        """Fetch + FAST-FORWARD a workspace from its GitHub home. A divergence (local commits the remote
+        lacks) is refused — no merge/rebase/force — so it is resolved deliberately. The token (optional for
+        public repos) is used for the fetch only and never stored (P15)."""
+        subject = subject_of(request)
+        ws = _manage_dir(subject, body.slug)
+        token = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)  # None ⇒ public-repo fetch
+        try:
+            r = pull_origin(ws, token=token)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RemoteSyncError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))  # already token-redacted (P15)
+        return {"remote": r.remote, "url": r.url, "branch": r.branch, "head_sha": r.head_sha,
+                "updated": r.updated, "behind_before": r.behind_before}
+
+    @app.get("/api/workspace/purpose")
+    def ws_purpose_get(request: Request, slug: Optional[str] = None):
+        """Read a workspace's PURPOSE one-liner (default = the caller's primary; ``slug`` = one of their
+        own or shared workspaces). ``""`` when unset."""
+        subject = subject_of(request)
+        ws = _manage_dir(subject, slug)
+        return {"purpose": read_purpose(ws)}
+
+    @app.post("/api/workspace/purpose")
+    def ws_purpose_set(request: Request, body: WorkspacePurposeBody = Body(default=WorkspacePurposeBody())):
+        """Set (or clear) a workspace's PURPOSE — stored in the workspace + committed so it travels when
+        shared and feeds the mount preamble. Returns the normalized purpose actually stored."""
+        subject = subject_of(request)
+        ws = _manage_dir(subject, body.slug)
+        return {"purpose": write_purpose(ws, body.purpose)}
 
     @app.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):
@@ -1363,7 +1507,8 @@ def create_app(
         try:
             workspace_id, promoted = ensure_workspace_shareable(wsr.root, subject, slug)
             if promoted:
-                membership_mod.ensure_owner(wsr.root, workspace_id, subject, index=mindex, commit_fn=_pc)
+                membership_mod.ensure_owner(wsr.root, workspace_id, subject, index=mindex,
+                                            email=request.headers.get("x-user-email"), commit_fn=_pc)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except KeyError:
@@ -1380,7 +1525,8 @@ def create_app(
         subject = subject_of(request)
         try:
             wid = create_shared_workspace_dir(wsr.root, body.name)
-            membership_mod.ensure_owner(wsr.root, wid, subject, index=mindex, commit_fn=_pc)
+            membership_mod.ensure_owner(wsr.root, wid, subject, index=mindex,
+                                        email=request.headers.get("x-user-email"), commit_fn=_pc)
         except MembershipError as exc:
             raise _member_error(exc)
         except Exception as exc:  # noqa: BLE001 — surface a clean 500 (dir/seed failure) rather than a stack
@@ -1409,6 +1555,31 @@ def create_app(
             "workspace_id": body.workspace_id, "expires_at": minted.expires_at,
             "max_uses": minted.max_uses, "mode": body.mode,
             "accept_path": "/api/workspace/invites/accept",
+        }
+
+    @app.get("/api/workspace/invites/preview")
+    def ws_invite_preview(request: Request, token: str):
+        """READ-ONLY preview of an invite — the target workspace + terms — WITHOUT granting anything.
+        Powers the pre-join CONSENT screen: the invitee sees what the workspace is (its purpose), the role
+        they'd get, and who shared it BEFORE they log in / join. Capability-gated by the token (whoever
+        holds the link may preview it); no membership is checked or created, no use is consumed. 404 for a
+        token that matches nothing (never enumerates workspaces)."""
+        info = membership_mod.preview_invite(wsr.root, token)
+        if info is None:
+            raise HTTPException(status_code=404, detail="invalid invite")
+        wsid = info["workspace_id"]
+        # Human context for the card: the workspace's purpose + who shared it (their email when we've
+        # stored it — see the members roster; else the opaque subject as a last resort).
+        purpose = read_purpose(membership_mod._ws_dir(wsr.root, wsid))
+        shared_by = info.get("created_by")
+        for m in membership_mod.read_members(wsr.root, wsid):
+            if m.get("subject") == info.get("created_by") and m.get("email"):
+                shared_by = m["email"]
+                break
+        return {
+            "workspace_id": wsid, "name": wsid, "purpose": purpose,
+            "role": info["role"], "mode": info["mode"], "expires_at": info["expires_at"],
+            "shared_by": shared_by, "valid": info["valid"], "reason": info["reason"],
         }
 
     @app.post("/api/workspace/invites/accept")
@@ -1476,10 +1647,18 @@ def create_app(
 
     @app.get("/api/workspace/members")
     def ws_members_list(request: Request, workspace_id: str):
-        """List a workspace's members (owner/contributor)."""
+        """List a workspace's members (owner/contributor). Opportunistically records the CALLER's own
+        verified email onto their member row (self-healing for members granted before emails were stored)
+        so the roster shows human labels, not opaque subject ids."""
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
+            try:  # best-effort label refresh — never fail the list on a backfill hiccup
+                membership_mod.backfill_member_email(
+                    wsr.root, workspace_id, subject,
+                    request.headers.get("x-user-email"), commit_fn=_pc)
+            except Exception:  # noqa: BLE001
+                logger.debug("member email backfill skipped for %s in %s", subject, workspace_id, exc_info=True)
             return {"members": membership_mod.read_members(wsr.root, workspace_id)}
         except MembershipError as exc:
             raise _member_error(exc)
@@ -1509,6 +1688,20 @@ def create_app(
         except MembershipError as exc:
             raise _member_error(exc)
         return rec
+
+    @app.post("/api/workspace/{workspace_id}/leave")
+    def ws_member_leave(workspace_id: str, request: Request):
+        """LEAVE a shared workspace — the caller removes THEMSELVES (any role; no owner gate). The
+        last-owner guard still applies: a sole creator must unshare or hand off ownership rather than
+        orphan the workspace, so their leave is refused (409) with that message."""
+        subject = subject_of(request)
+        if membership_mod.is_member(wsr.root, workspace_id, subject) is None:
+            raise HTTPException(status_code=404, detail="not a member of this workspace")
+        try:
+            membership_mod.remove_member(wsr.root, workspace_id, subject, index=mindex, commit_fn=_pc)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        return {"ok": True, "left": workspace_id}
 
     @app.get("/api/workspace/shared")
     def ws_shared_list(request: Request):

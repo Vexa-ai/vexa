@@ -109,6 +109,11 @@ def mounts_preamble(mounts: list[dict]) -> str:
              ""]
     for m in mounts:
         lines.append(f"- `{m['path']}` — **{m.get('slug')}** ({_tier_label(m)})")
+        # A per-workspace PURPOSE (stored in the workspace, travels when shared) tells the agent what THIS
+        # workspace is for — so a composition (Personal + a deal ws + a dept ws) self-explains where to write.
+        purpose = (m.get("purpose") or "").strip()
+        if purpose:
+            lines.append(f"    - Purpose: {purpose}")
     lines += [
         "",
         "Write-routing policy:",
@@ -120,6 +125,8 @@ def mounts_preamble(mounts: list[dict]) -> str:
         "- Personal notes/drafts and anything the user marks private → your PRIVATE baseline mount.",
         "- Content produced FOR a shared/community space (shared notes, common docs, shared entities) →"
         " the matching shared mount (only if it is read-write).",
+        "- When a workspace states a Purpose (above), let it decide where content belongs — write material"
+        " that matches a workspace's purpose into THAT workspace.",
         "- Never write to a READ-ONLY mount.",
         "Always use ABSOLUTE paths under the mount you intend — do not guess or invent mount paths.",
         "",

@@ -18,6 +18,7 @@ from typing import Optional
 
 import contracts
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
+from control_plane.workspace_purpose import read_purpose
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared.ports import IdentityPort, RuntimePort
@@ -56,7 +57,8 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
         # A resolved-but-EMPTY set is intentional (the subject switched their baseline OFF and has no other
         # private workspace active) — respect it; the turn simply carries no private mount. NOT the error path.
         private = [
-            {"slug": m.slug, "path": m.path, "role": m.role, "write": m.write, "primary": m.primary}
+            {"slug": m.slug, "path": m.path, "role": m.role, "write": m.write, "primary": m.primary,
+             "purpose": read_purpose(m.path)}
             for m in mounts
         ]
     if not memberships:
@@ -69,7 +71,8 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
         logger.warning("shared-mount resolution failed for subject=%s — mounting private workspaces only", subject)
         shared = []
     return private + [
-        {"slug": s.slug, "path": s.path, "role": s.role, "write": s.write, "primary": False}
+        {"slug": s.slug, "path": s.path, "role": s.role, "write": s.write, "primary": False,
+         "purpose": read_purpose(s.path)}
         for s in shared
     ]
 

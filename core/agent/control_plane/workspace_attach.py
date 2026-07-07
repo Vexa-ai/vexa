@@ -249,6 +249,23 @@ def attached_workspaces(root: str | Path, subject: str) -> dict:
     return state
 
 
+def workspace_dir_for(root: str | Path, subject: str, slug: Optional[str]) -> Path:
+    """Resolve one of the subject's OWN workspace slots — ACTIVE or PARKED — to its on-disk dir, so a
+    management op (git push/pull/status, purpose) can address a workspace by slug without it having to be
+    mounted. The seed-slot occupant resolves in place at ``<root>/<subject>``; every other slug to its
+    store slot. An empty slug / the subject / the seed sentinel all resolve to the seed slot. Raises
+    ``KeyError`` for a slug that is not one of the subject's slots (never another user's workspace)."""
+    rootp = Path(root)
+    state = _load_state(_store(rootp, subject))
+    seed = _seed_slot_slug(state)
+    target = (slug or "").strip()
+    if not target or target in (subject, SEED_SLOT, seed):
+        return _safe_subject_dir(rootp, subject)
+    if target in state.get("slots", {}):
+        return _slug_dir(rootp, subject, state, target)
+    raise KeyError(target)
+
+
 def swap_workspace(
     root: str | Path,
     subject: str,

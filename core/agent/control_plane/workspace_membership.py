@@ -252,6 +252,27 @@ def read_members(root: Path, workspace_id: str) -> list[dict]:
     return _read_json_list(_ws_dir(root, workspace_id), MEMBERS_FILE)
 
 
+def backfill_member_email(root: Path, workspace_id: str, subject: str, email: Optional[str], *,
+                          commit_fn: Optional[CommitFn] = None) -> bool:
+    """Best-effort: stamp ``subject``'s VERIFIED email onto their EXISTING member record when it's missing
+    or stale. Self-heals members granted before emails were stored — each member's row fills in the first
+    time they open the manage panel (which carries their gateway-verified ``X-User-Email``). Returns True
+    iff it wrote. Never creates a membership and never raises for a non-member — purely a label refresh."""
+    _email = _normalize_email(email)
+    if not _email:
+        return False
+    ws = _ws_dir(root, workspace_id)
+    with _ws_lock(workspace_id):
+        members = _read_json_list(ws, MEMBERS_FILE)
+        target = next((m for m in members if m.get("subject") == subject), None)
+        if target is None or target.get("email") == _email:
+            return False
+        target["email"] = _email
+        _write_json_list(ws, MEMBERS_FILE, members)
+        _commit(commit_fn, ws, f"policy: email for {subject} in {workspace_id}")
+    return True
+
+
 def is_member(root: Path, workspace_id: str, subject: str) -> Optional[str]:
     """**The Lane A seam.** The subject's role in the workspace (``owner``/``contributor``/``viewer``),
     or ``None`` if not a member. Resolved from the authoritative git file — the one call Lane A uses to
@@ -285,38 +306,52 @@ def _commit(commit_fn: Optional[CommitFn], ws: Path, message: str) -> None:
 
 
 def ensure_owner(root: Path, workspace_id: str, owner_subject: str, *,
-                 index: MembershipIndex, commit_fn: Optional[CommitFn] = None) -> None:
+                 index: MembershipIndex, email: Optional[str] = None,
+                 commit_fn: Optional[CommitFn] = None) -> None:
     """Idempotently record ``owner_subject`` as the workspace's owner — the bootstrap that turns a bare
-    private workspace into a SHARED workspace (the first grant). Safe to call repeatedly."""
+    private workspace into a SHARED workspace (the first grant). Safe to call repeatedly. ``email`` is the
+    owner's VERIFIED email (when the caller has it), stored on the record for a human-readable roster."""
     ws = _ws_dir(root, workspace_id)
     with _ws_lock(workspace_id):
-        _ensure_owner_locked(root, workspace_id, owner_subject, ws=ws, index=index, commit_fn=commit_fn)
+        _ensure_owner_locked(root, workspace_id, owner_subject, ws=ws, index=index, email=email,
+                             commit_fn=commit_fn)
 
 
 def _ensure_owner_locked(root: Path, workspace_id: str, owner_subject: str, *, ws: Path,
-                         index: MembershipIndex, commit_fn: Optional[CommitFn] = None) -> None:
+                         index: MembershipIndex, email: Optional[str] = None,
+                         commit_fn: Optional[CommitFn] = None) -> None:
     members = _read_json_list(ws, MEMBERS_FILE)
-    if any(m.get("subject") == owner_subject and m.get("role") == "owner" for m in members):
+    _email = _normalize_email(email)
+    existing = next((m for m in members if m.get("subject") == owner_subject), None)
+    already_owner = existing is not None and existing.get("role") == "owner"
+    # Nothing to do only when the record is already an owner AND its email is already current.
+    if already_owner and (not _email or existing.get("email") == _email):
         return
     now = _now_iso()
-    # An existing entry for the subject is upgraded to owner; else appended.
-    for m in members:
-        if m.get("subject") == owner_subject:
-            m["role"] = "owner"
-            break
+    # An existing entry for the subject is upgraded to owner; else appended. Store the verified email
+    # (when known) so members.json — the authoritative, portable store — carries a human label, not
+    # just the opaque subject id.
+    if existing is not None:
+        existing["role"] = "owner"
+        if _email:
+            existing["email"] = _email
     else:
-        members.append({"subject": owner_subject, "role": "owner",
-                        "added_by": owner_subject, "added_at": now})
+        rec = {"subject": owner_subject, "role": "owner", "added_by": owner_subject, "added_at": now}
+        if _email:
+            rec["email"] = _email
+        members.append(rec)
     _write_json_list(ws, MEMBERS_FILE, members)
     _commit(commit_fn, ws, f"policy: owner {owner_subject} for {workspace_id}")
-    _index_add(index, owner_subject, workspace_id, "owner", now)
+    _index_add(index, owner_subject, workspace_id, "owner", (existing or {}).get("added_at", now))
 
 
 def grant_membership(root: Path, workspace_id: str, subject: str, role: str, *,
-                     added_by: str, index: MembershipIndex,
+                     added_by: str, index: MembershipIndex, email: Optional[str] = None,
                      commit_fn: Optional[CommitFn] = None) -> dict:
     """Grant (or re-grant) ``subject`` the given ``role`` — writes BOTH stores. Idempotent per subject:
-    an existing member is updated in place (accepting an invite twice = still one membership)."""
+    an existing member is updated in place (accepting an invite twice = still one membership). ``email``
+    is the grantee's VERIFIED email (from the redeem request), stored so the roster shows a human label
+    rather than the opaque subject id; a re-grant refreshes it when a newer value is supplied."""
     if role not in ROLES:
         raise MembershipError(f"unknown role {role!r}", status=400)
     if not _valid_subject(subject):
@@ -324,13 +359,18 @@ def grant_membership(root: Path, workspace_id: str, subject: str, role: str, *,
     ws = assert_shareable(root, workspace_id)
     members = _read_json_list(ws, MEMBERS_FILE)
     now = _now_iso()
+    _email = _normalize_email(email)
     for m in members:
         if m.get("subject") == subject:
             m["role"] = role  # role flip / idempotent re-accept
+            if _email:
+                m["email"] = _email
             record = m
             break
     else:
         record = {"subject": subject, "role": role, "added_by": added_by, "added_at": now}
+        if _email:
+            record["email"] = _email
         members.append(record)
     _write_json_list(ws, MEMBERS_FILE, members)
     _commit(commit_fn, ws, f"policy: {role} for {subject} in {workspace_id}")
@@ -444,6 +484,39 @@ def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
                         expires_at=rec["expires_at"], max_uses=rec["max_uses"])
 
 
+def preview_invite(root: Path, token: str, *, now: Optional[float] = None) -> Optional[dict]:
+    """Resolve an invite TOKEN to a READ-ONLY preview — the target workspace + terms (role · mode ·
+    expiry · validity) — WITHOUT granting membership. Capability-gated by the token itself: whoever holds
+    the link may see what they are being invited to, which is exactly what the pre-join consent screen
+    needs (it renders before login). Returns ``None`` when no invite matches the token (never leaks which
+    workspaces exist). Read-only: no writes, no use-count change, no membership."""
+    t = now if now is not None else time.time()
+    h = hash_token(token)
+    if not root.exists():
+        return None
+    for child in sorted(p for p in root.iterdir() if p.is_dir()):
+        slug = child.name
+        if slug.startswith(".") or slug in RESERVED_SLUGS:
+            continue
+        for rec in _read_json_list(child, INVITES_FILE):
+            if rec.get("hash") != h:
+                continue
+            expired = int(rec.get("expires_at", 0)) < t
+            used_up = int(rec.get("uses", 0)) >= int(rec.get("max_uses", 1))
+            reason = ("revoked" if rec.get("revoked") else "expired" if expired
+                      else "used_up" if used_up else None)
+            return {
+                "workspace_id": slug,
+                "role": rec.get("role", "viewer"),
+                "mode": rec.get("mode", DEFAULT_INVITE_MODE),
+                "expires_at": rec.get("expires_at"),
+                "created_by": rec.get("created_by"),
+                "valid": reason is None,
+                "reason": reason,
+            }
+    return None
+
+
 def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
                   index: MembershipIndex, subject_email: Optional[str] = None,
                   commit_fn: Optional[CommitFn] = None, now: Optional[float] = None) -> dict:
@@ -487,7 +560,7 @@ def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
 
         role = rec.get("role", "viewer")
         grant_membership(root, workspace_id, subject, role, added_by=rec.get("created_by", "invite"),
-                         index=index, commit_fn=commit_fn)
+                         index=index, email=subject_email, commit_fn=commit_fn)
         if not already:
             # Consume a use only for a NEW membership — re-accept is a no-op on the counter (idempotent).
             # This write + commit lands the increment durably before the lock is released, so the next
