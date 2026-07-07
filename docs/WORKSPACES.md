@@ -1,10 +1,12 @@
 # Workspaces & live collaboration
 
-The workspace model an agent turn sees, how workspaces are shared, and how members
-collaborate live during a meeting. This is the canonical explainer; the code lives in
-`core/agent/control_plane/` (membership, mounts, reader), `core/agent/worker/` (the turn +
-mount preamble), `core/runtime/` (the binds), and `clients/terminal/src/surfaces/workspace.tsx`
-(the UI). Status is marked ✅ done / 🟡 partial / ⬜ planned throughout.
+The workspace model an agent turn sees, how workspaces are shared, how a user joins and manages
+them, and how members collaborate live during a meeting. This is the canonical explainer; the code
+lives in `core/agent/control_plane/` (membership, invites, mounts, purpose, git-sync, git-credentials),
+`core/agent/worker/` (the turn + mount preamble), `core/runtime/` (the binds), and
+`clients/terminal/src/` — `surfaces/workspace.tsx` (sidebar), `surfaces/workspaceManage.tsx` (the manage
+panel), `app/App.tsx` (invite consent), `surfaces/tokens.tsx` (the GitHub token). Status is marked
+✅ done / 🟡 partial / ⬜ planned throughout.
 
 ## The mount model — three tiers
 
@@ -57,16 +59,29 @@ Every agent turn mounts an ordered set `[_global?, *normal, _system]`:
   ("what's in here and what matters"), not developer docs. Convention: **the README is every
   workspace's dashboard**, kept current by the agent (stated in the seed `CLAUDE.md`). FINOS stays an
   opt-in template (`VEXA_DEFAULT_TEMPLATE=finos`).
-- **First-view / landing** (✅, `clients/terminal/src/workbench/firstView.ts`) — on login the pinned
+- **First-view / landing** (✅, `firstView.ts` + `Workbench.resolveFirstView`) — on login the pinned
   first tab is chosen by what's shared: **nothing → own README-onboarding**, **shared workspace → that
   workspace's README**, **shared meeting → the meeting**, **meeting + workspace → the workspace README
   + the meeting** (its live badge). One resolver, replacing the old racing auto-opens.
+  - A **just-accepted invite is explicit** and outranks a saved layout: it **pins the shared workspace's
+    README AND forces the Knowledge section open** so the joiner actually sees the shared workspace's
+    tree (`pinReadme(slug, forceKnowledge)`). **Gotcha handled:** the default Sessions view is *chat-only*
+    (the dockview grid isn't mounted, so the resolver's `onReady` never fires) — an early effect
+    un-chat-onlys the layout when a pending landing (`vexa.openWorkspace` / `vexa.openMeeting`) exists, so
+    the grid mounts and the resolver runs. Without it an accepted invite silently dropped onto the session
+    chat instead of the workspace.
 - **Normal workspaces are single rank** (sharing roles — see below). Created blank + additive; every
   workspace has a root `README.md`.
-- ⬜ planned — **per-workspace purpose/policy**: each workspace carries a clear statement of what it's
-  for / what the agent should write there, wired into the mount preamble — so an agent with a
-  *composition* mounted (Personal + a customer-deal shared ws + a sales-dept ws) knows what belongs
-  where. This is the key next capability.
+- **Per-workspace PURPOSE** (✅, `workspace_purpose.py`) — the capability that makes the flat model
+  *usable*. Each workspace carries a one-line statement of what it's **for / what the agent should write
+  there**, stored as a plain `PURPOSE` file at the workspace root (committed to its git, so it **travels
+  when the workspace is shared** — a member who mounts a `customer-deal` workspace inherits its purpose).
+  The dispatcher reads each mount's purpose (`dispatch.py`) and `engine.mounts_preamble` declares it to
+  the model with a routing instruction — so an agent with a *composition* mounted (Personal + a
+  customer-deal shared ws + a sales-dept ws) **knows what belongs where** instead of dumping everything in
+  one place. Editable in the manage panel (below); capped to a one-liner (`MAX_PURPOSE_LEN`) so it stays a
+  cheap preamble line, not a document. **Why:** flat mounting is the *mechanism*; purpose is what keeps a
+  multi-workspace mount set from becoming a junk drawer.
 
 ## Sharing model (Lane M — `workspace_membership.py`)
 
@@ -84,10 +99,19 @@ Every agent turn mounts an ordered set `[_global?, *normal, _system]`:
 
 **Two stores, written together** (git authoritative, index derived):
 - Authoritative: the workspace's own git repo — `policy/members.json`
-  (`[{subject, role, added_by, added_at}]`) + `policy/invites.json` (sha256 **hash** of each token +
-  `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked}`).
+  (`[{subject, role, added_by, added_at, email?}]`) + `policy/invites.json` (sha256 **hash** of each token
+  + `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked}`).
 - Index: `users.data.memberships[]` for "shared with me" — via the injected `MembershipIndex`
   (admin-api `/internal/users/{id}/memberships`; in-memory fake in tests).
+
+**Human roster — members show emails, not opaque ids** (✅). The participant list needs a human label, but
+`agent-api` has no user directory. Solution: **persist the gateway-verified `X-User-Email` into the member
+record at every grant point** — owner bootstrap (`ensure_owner`) and invite redeem (`accept_invite` →
+`grant_membership`). For **legacy** rows granted before this, `ws_members_list` **self-heals** by stamping
+the *requesting* member's own email onto their row the first time they open the manage panel (each member's
+email fills in on their next view). The email is committed to `members.json`, so it **travels with the
+workspace** to every member. **Why here (not `admin-api`/user.data):** the email is already in-hand on every
+request and only this store needs it — no cross-service directory lookup.
 
 **Access modes:** `open` (anyone-with-link, authenticated) or `restricted` (verified `X-User-Email`
 in `allowed_emails`). Redeem is **post-auth, no guest** — `POST /api/workspace/invites/accept`.
@@ -95,6 +119,68 @@ in `allowed_emails`). Redeem is **post-auth, no guest** — `POST /api/workspace
 **`policy/` is PLATFORM-WRITE-ONLY:** an agent turn may never write `policy/`; the worker's turn-commit
 reverts any `policy/` change (`_revert_policy_writes` → `{"type":"policy-reverted"}`). Membership is
 written only by `workspace_membership.policy_commit` (platform git identity).
+
+## Joining a workspace — invite link → preview → consent → land (✅)
+
+The full path from an invite link to seeing the shared workspace. **Why a consent step:** joining mounts
+someone else's workspace into your agent — you should see *what it is* and *how you're joining* before
+committing, not silently get opted in.
+
+1. **Mint** — a member creates an invite in the manage panel; the link is `…/?invite=<token>`.
+2. **Login** — `AuthGate` signs the user in first (the `?invite=` query survives the OAuth round-trip via
+   the callback URL). **Consent is placed AFTER login** — the terminal's only path to `agent-api` is the
+   **fail-closed gateway**, which 401s anonymous calls (the terminal has no service key), so a *pre-login*
+   preview can't authenticate. `InviteGate` renders **inside** `AuthGate`'s authed subtree.
+3. **Preview (no grant)** — `GET /api/workspace/invites/preview?token=` → `preview_invite` resolves the
+   token to `{workspace_id, purpose, role, shared_by, mode, expires_at, valid}` **without** granting,
+   consuming a use, or checking membership (capability-gated by the token; 404 if it matches nothing, so it
+   never enumerates workspaces). Powers the consent card: **workspace name · purpose · your access ·
+   shared-by**.
+4. **Consent → redeem** — "Continue to join" calls `POST …/invites/accept`, stashes `vexa.openWorkspace`,
+   and reloads to a clean URL. "Not now" drops the invite.
+5. **Land** — the first-view resolver pins the shared workspace's **README** and forces the **Knowledge**
+   section open (see First-view above).
+
+Restricted invites still enforce `allowed_emails` at *accept* time — the preview only reveals name/purpose/
+role to whoever already holds the token (the same trust boundary as the link itself). Code:
+`workspace_membership.preview_invite`, `api.py` (`ws_invite_preview`), `App.tsx` (`InviteGate`,
+`InviteConsent`).
+
+## Managing a workspace — the manage panel (✅)
+
+Every workspace opens a **center-tab manage hub** (click the workspace name in the WORKSPACES sidebar).
+One place for everything about that workspace, so the sidebar row stays minimal (just a **checkbox** =
+mount/park + the **name** = open panel; the old per-row action icons were removed). `workspaceManage.tsx`:
+
+- **Rename** (display label) · **on/off** toggle (mount into the agent or park).
+- **PURPOSE** — view/edit the one-liner that steers what the agent writes here (see Per-workspace PURPOSE).
+- **GitHub** — publish (create repo + push), **push** / **pull** (fast-forward only, ahead/behind counts),
+  Open-on-GitHub. Uses the saved GitHub token (below) so it doesn't re-prompt.
+- **Participants** — the roster (emails), **invite link**, **add by email**, remove member, **leave**
+  (self), **unshare** (creator), **archive** / **delete**.
+
+Create flows are also panel/modal-based, not inline: **Attach repo** opens a portaled `Modal`
+(`ui-kit/Modal.tsx`); **New workspace** creates a blank additive workspace. Code:
+`clients/terminal/src/surfaces/workspaceManage.tsx`, `workspace.tsx` (sidebar rows), `ui-kit/Modal.tsx`.
+
+## Reusable GitHub token (✅)
+
+Save a GitHub PAT **once** and reuse it for every git op across **all** repos, instead of re-entering it
+per push/pull/publish/attach. Set it in **API Tokens → GitHub**; the git-op forms then don't prompt.
+
+**Security model** (parity with the webhook secret — access-controlled, not encrypted at rest):
+- **Server-side only** — stored under the workspaces store root at `.secrets/<subject>.ghtoken` (`0600`, a
+  dot-dir the workspace scanners skip, **outside any git tree** so it never lands in a commit).
+- **Browser-isolated** — never returned to the client; a read yields only a `••••abcd` mask.
+- **Never transits the gateway as a header** and never leaves the one service that uses it (smaller blast
+  radius than routing it through `admin-api`/user.data — and no governed-service change).
+- **Applied then scrubbed** — git ops fall back to it when no per-call token is given; it rides the push
+  URL for that op only, is **redacted from every error/log** (P15), and is never written to `.git/config`.
+- **Plaintext at rest** (the chosen level) → use a **minimally-scoped, revocable fine-grained PAT**; a
+  stored PAT is password-equivalent and a full server compromise can use it.
+
+Code: `git_credentials.py` (`set`/`read`/`masked_github_token`), `api.py`
+(`GET`/`POST /api/workspace/git-token`; push/pull/publish/attach fallback), `tokens.tsx` (the card).
 
 ## Live collaboration (during a meeting) — all ✅
 
@@ -133,13 +219,18 @@ path (`dispatch.py` comment) — drive concurrent shared writes **sequentially**
 - ⬜ **Full seed-slot de-specialization** — relocate Personal's tree out of the fixed `<root>/<subject>`
   seed slot into a normal store slot, so share/archive/delete work on it like any workspace (removes the
   last residual specialness; the rank is already gone).
-- ⬜ **Per-workspace purpose/policy** (the key next capability — see above) and **owner-restricted
-  invite mode (deferred decision)**.
+- ⬜ **Owner-restricted invite mode (deferred decision)** — whether to also offer creator-only invites.
+- ⬜ **At-rest encryption for the saved GitHub token** — today it's plaintext-at-rest (webhook-secret
+  parity); envelope encryption with a server-held key would harden against DB/disk/backup leaks.
 - ⬜ **Routine can send a bot** (`routine.v1` gains a `target: agent|meeting`).
 - ⬜ **Chat migration (M1)** into `_system` (today `_system` holds `identity.md` + a README marker).
 - ✅ done since the last revision: **flat equal-rank model** (no baseline), **cwd follows the active
   set**, **light default seed + onboarding-dashboard README**, **first-view landing resolver**,
-  **`_system` light identity**, **eager provision on account creation**.
+  **`_system` light identity**, **eager provision on account creation**, **per-workspace PURPOSE →
+  mount preamble**, **the manage panel** (rename · on/off · GitHub · purpose · participants), **invite
+  preview + post-login consent screen**, **participant roster shows emails (+ self-heal)**, **accepted
+  invite lands on the shared README + Knowledge**, **reusable save-once GitHub token**, **minimal sidebar
+  rows + attach-repo modal**.
 
 ## Related docs
 - `core/agent/control_plane/README.md` — Lane M membership/invites + the policy write-guard.
