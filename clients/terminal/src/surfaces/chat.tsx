@@ -727,11 +727,18 @@ export function Chat({ params = {} }: ChatProps) {
         },
         { signal: ctrl.signal },
       );
-      if (!result.aborted && !result.sawVisibleOutput && !result.terminal) {
-        // No output AND no clean end after resume + the hard cap → a genuinely stuck/failed turn.
-        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") || "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." }));
+      if (!result.aborted && !result.terminal) {
+        // The turn never reached a clean end even after resuming past the hard cap — the connection is
+        // genuinely lost. Say so (fail-loud, P18): append a note if there was partial output, else the
+        // timeout copy. The worker may still finish server-side, so point the user at a reopen.
+        patchAgentTurn(key, agentId, (t) => {
+          const base = t.text ?? "";
+          return { ...t, status: null, text: base
+            ? base + "\n\n_Connection lost before the reply finished — reopen the chat to see the rest if it lands._"
+            : "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." };
+        });
       } else {
-        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null }));  // drop any lingering status line
+        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null }));  // clean end — drop any lingering status line
       }
     } catch (e) {
       if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));

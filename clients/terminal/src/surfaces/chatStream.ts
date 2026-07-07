@@ -153,19 +153,41 @@ export async function streamChatTurn(
   const drainOnce = async (): Promise<"closed" | "terminal"> => {
     // On a RECONNECT, Last-Event-ID makes agent-api re-attach to the SAME warm unit and resume from the
     // cursor — NO second turn is dispatched. The first attempt sends no cursor (fresh dispatch).
-    const r = await fetchImpl("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}) },
-      body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active }),
-      signal,
-    });
-    if (!r.ok) throw new Error(`Chat request failed (${r.status})`);
+    let r: Response;
+    try {
+      r = await fetchImpl("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}) },
+        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active }),
+        signal,
+      });
+    } catch (e) {
+      if (signal.aborted) throw e;      // user stop → propagate
+      return "closed";                  // the POST itself failed (a network blip) → resume from the cursor
+    }
+    if (!r.ok) {
+      // 4xx is a real client/terminal error — surface it, don't retry for the whole hard cap. A 5xx
+      // (transient gateway/upstream) is resumable → reconnect from the cursor.
+      if (r.status < 500) { terminal = true; cb.onError(`Chat request failed (${r.status})`); return "terminal"; }
+      return "closed";
+    }
     const reader = r.body?.getReader();
     if (!reader) return "closed";
     const dec = new TextDecoder();
     let buf = "";
     for (;;) {
-      const res = await readOrStall(reader);
+      let res: { done: boolean; value?: Uint8Array } | "stalled";
+      try {
+        res = await readOrStall(reader);
+      } catch (e) {
+        if (signal.aborted) throw e;    // user stop → propagate
+        // A mid-stream read/network error (reader.read() rejected) is NOT the end of the turn — the worker
+        // is still running server-side and its output Stream is durable. Reconnect from the cursor instead
+        // of surfacing a raw "network error"; the outer loop's hard cap bounds the retries.
+        cb.onStatus?.("reconnecting");
+        try { await reader.cancel("stream-error"); } catch { /* ignore */ }
+        return terminal ? "terminal" : "closed";
+      }
       if (res === "stalled") {
         // Open stream, no bytes for idleReconnectMs → force a reconnect from the cursor rather than hang.
         cb.onStatus?.("stalled");

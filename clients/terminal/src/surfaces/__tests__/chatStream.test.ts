@@ -24,6 +24,20 @@ function sseResponse(chunks: string[], ok = true, status = 200): Response {
   return { ok, status, body } as unknown as Response;
 }
 
+/** A Response whose body streams the given SSE text, then ERRORS the stream (reader.read() rejects) —
+ *  models a mid-stream network drop, distinct from a clean close. */
+function sseThenError(chunks: string[]): Response {
+  const enc = new TextEncoder();
+  let i = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i < chunks.length) controller.enqueue(enc.encode(chunks[i++]));
+      else controller.error(new Error("network error"));
+    },
+  });
+  return { ok: true, status: 200, body } as unknown as Response;
+}
+
 function ev(o: Record<string, unknown>, id?: string): string {
   return (id ? `id: ${id}\n` : "") + `data: ${JSON.stringify(o)}\n\n`;
 }
@@ -146,6 +160,60 @@ describe("streamChatTurn — cold start & resume", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);      // the stall FORCED a reconnect (not a hang)
     expect(statuses).toContain("stalled");           // the pane was told the stream stalled
     expect(statuses[statuses.length - 1]).toBe(null); // cleared at the end
+  });
+
+  it("resumes on a MID-STREAM network error instead of surfacing 'network error'", async () => {
+    // Attempt 1: a delta arrives (cursor 5-0), then the stream ERRORS (reader.read() rejects). The old
+    // code let that throw out → the pane showed "network error" and lost the turn. Now it reconnects.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseThenError([ev({ type: "message-delta", text: "par" }, "5-0")]))
+      .mockResolvedValueOnce(sseResponse([ev({ type: "message-delta", text: "tial done" }, "6-0"), ev({ type: "turn-complete" }, "7-0")]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.text).toBe("partial done");   // resumed and completed — not cut off
+    expect(state.error).toBe("");              // the network drop was NOT surfaced as a terminal error
+    expect(result.terminal).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect((fetchImpl.mock.calls[1][1] as RequestInit).headers as Record<string, string>).toMatchObject({ "Last-Event-ID": "5-0" });
+  });
+
+  it("resumes when the POST itself fails (transient), not a terminal error", async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(sseResponse([ev({ type: "message-delta", text: "ok" }, "1-0"), ev({ type: "turn-complete" }, "2-0")]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.text).toBe("ok");
+    expect(state.error).toBe("");
+    expect(result.terminal).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);  // the failed POST was retried, not surfaced
+  });
+
+  it("surfaces a 4xx as terminal (a real client error — does not retry forever)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce({ ok: false, status: 401, body: null } as unknown as Response);
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.error).toContain("401");
+    expect(result.terminal).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);  // 4xx is terminal — no resume loop
   });
 
   it("stops resuming when the caller aborts", async () => {
