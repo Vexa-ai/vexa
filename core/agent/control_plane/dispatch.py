@@ -129,6 +129,22 @@ MODEL_AUTH_ENV_ALLOWLIST = (
 )
 
 
+def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
+    """The worker's CWD — the workspace it 'lives in', whose ``CLAUDE.md`` auto-loads as project memory.
+
+    Normally the private baseline (the primary mount). But the baseline can be switched OFF, in which case
+    it is absent from the mount set — the cwd must then FOLLOW the active set (the first NORMAL writable
+    workspace, never a system tier), not stay pinned to the disconnected baseline home (which would make the
+    agent describe/read a workspace the user turned off). Falls back to the baseline home only when nothing
+    normal is active (a degenerate turn with only the system tiers)."""
+    primary = next((m for m in mounts if m.get("primary") and m.get("path")), None)
+    if primary:
+        return primary["path"]
+    normal = next((m for m in mounts
+                   if m.get("write") and m.get("role") not in ("global", "system") and m.get("path")), None)
+    return normal["path"] if normal else f"{root}/{subject}"
+
+
 def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str,
                    memberships: Optional[list[dict]] = None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
@@ -155,7 +171,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_START": json.dumps(invocation["start"]),            # entrypoint(inline|path) | session(ref)
         "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
         "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
-        "VEXA_WORKSPACE_PATH": f"{root}/{subject}",               # the worker's cwd (the PRIVATE baseline — mount set primary)
+        "VEXA_WORKSPACE_PATH": _worker_cwd(root, subject, mounts),  # the worker's cwd — the primary baseline, or (if it's switched off) the first active normal workspace
         "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
