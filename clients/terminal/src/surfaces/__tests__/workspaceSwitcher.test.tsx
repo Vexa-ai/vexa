@@ -108,10 +108,10 @@ describe("WorkspaceSwitcher — '+ New workspace…' CREATES + ADDS (additive), 
     const newRow = await screen.findByText("New workspace");
     const cb = newRow.closest("div")!.querySelector<HTMLElement>('[role="checkbox"]')!;
     await waitFor(() => expect(cb.getAttribute("aria-checked")).toBe("true"));  // new row is CHECKED
-    // the baseline (leo) is still checked+disabled — untouched by the create
+    // the baseline (leo) is still checked (mounted) — untouched by the create; it's toggleable now
     const leoCb = screen.getByText("leo").closest("div")!.querySelector<HTMLElement>('[role="checkbox"]')!;
     expect(leoCb.getAttribute("aria-checked")).toBe("true");
-    expect(leoCb.getAttribute("aria-disabled")).toBe("true");
+    expect(leoCb.getAttribute("aria-disabled")).not.toBe("true");
   });
 });
 
@@ -138,12 +138,10 @@ describe("WorkspaceSwitcher — additive active set (WP-A2.1)", () => {
     await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("seed"));
   });
 
-  it("the PRIMARY baseline can't be toggled off (no activate/deactivate call)", async () => {
+  it("the PRIMARY baseline CAN now be switched off (deactivate on the primary)", async () => {
     await renderOpenSwitcher();
-    fireEvent.click(screen.getByText("leo"));  // the primary
-    // give any async a tick; the primary click is a no-op
-    await new Promise((r) => setTimeout(r, 0));
-    expect(api.deactivateWorkspace).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("leo"));  // the primary — switching it OFF
+    await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("leo"));
     expect(api.activateWorkspace).not.toHaveBeenCalled();
   });
 
@@ -196,17 +194,30 @@ describe("WorkspaceSwitcher — active set uses CHECKBOXES, not radio-style dots
     await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("seed"));
   });
 
-  it("the private baseline's checkbox is CHECKED and DISABLED (can't be unchecked)", async () => {
+  it("the private baseline's checkbox is CHECKED + ENABLED — clicking switches it off (deactivate)", async () => {
     await renderOpenSwitcher();
     const cb = rowCheckbox("leo");  // the primary baseline
-    expect(cb.getAttribute("aria-checked")).toBe("true");
-    expect(cb.getAttribute("aria-disabled")).toBe("true");
-    expect(cb.getAttribute("title")).toContain("always active");
-    // clicking it is a no-op (no activate/deactivate)
+    expect(cb.getAttribute("aria-checked")).toBe("true");        // mounted by default
+    expect(cb.getAttribute("aria-disabled")).not.toBe("true");   // no longer pinned — it's switchable
+    // clicking it switches the baseline OFF
     fireEvent.click(cb);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(api.deactivateWorkspace).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.deactivateWorkspace).toHaveBeenCalledWith("leo"));
     expect(api.activateWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("a baseline switched OFF (baseline_hidden) renders UNCHECKED and re-activates on click", async () => {
+    // Own mock setup (renderOpenSwitcher would overwrite the attached-view mock): baseline switched OFF,
+    // and the active set no longer carries the baseline (nothing primary in the list).
+    sessionStorage.setItem("ws.attach.open", "1");
+    vi.mocked(api.readAttachedWorkspaces).mockResolvedValue({ ...view, baseline_hidden: true } as unknown as Awaited<ReturnType<typeof api.readAttachedWorkspaces>>);
+    vi.mocked(api.readActiveSet).mockResolvedValue({ subject: "u1", active: [] } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
+    vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "leo", changed: true, cloned: false, nested: false });
+    render(<WorkspaceSwitcher onSwapped={vi.fn()} />);
+    await screen.findByText("leo");
+    const cb = rowCheckbox("leo");
+    expect(cb.getAttribute("aria-checked")).toBe("false");       // switched off → unchecked
+    fireEvent.click(cb);
+    await waitFor(() => expect(api.activateWorkspace).toHaveBeenCalledWith({ slug: "leo" }));  // switch back on
   });
 
   it("MULTIPLE rows can be checked at once (the UI reflects >1 mounted — additive, not radio)", async () => {

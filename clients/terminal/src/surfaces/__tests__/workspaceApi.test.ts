@@ -144,8 +144,12 @@ describe("workspaceApi — scoped (no subject) + fail-loud", () => {
     expect(lastUrl()).toBe("/api/workspace/deactivate");
     expect(lastBody()).toEqual({ slug: "shared-x" });
   });
-  it("FAIL-LOUD: deactivating the private baseline throws (409 from the backend)", async () => {
-    mock(false, 409, { detail: "the private baseline workspace is always active" });
+  it("deactivating the private baseline now SUCCEEDS (switched off — 200, changed)", async () => {
+    mock(true, 200, { subject: "u1", slug: "seed", changed: true });
+    await expect(deactivateWorkspace("seed")).resolves.toEqual({ subject: "u1", slug: "seed", changed: true });
+  });
+  it("FAIL-LOUD: a genuine backend error still throws (e.g. 400 invalid subject)", async () => {
+    mock(false, 400, { detail: "invalid subject" });
     await expect(deactivateWorkspace("seed")).rejects.toBeInstanceOf(ApiError);
   });
 });

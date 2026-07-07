@@ -52,6 +52,8 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     expect(calls.some((c) => c.includes("/admin/users/email/"))).toBe(true);
     expect(calls.some((c) => c.startsWith("POST") && c.endsWith("/admin/users"))).toBe(false);
     expect(calls.some((c) => c.includes("/tokens"))).toBe(true);
+    // an EXISTING user is not re-provisioned (eager provisioning fires only on account creation)
+    expect(calls.some((c) => c.includes("/agent/workspace/init"))).toBe(false);
 
     const tok = setCookies.find((c) => c.name === "vexa-token");
     const info = setCookies.find((c) => c.name === "vexa-user-info");
@@ -87,6 +89,11 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     expect(res.status).toBe(200);
     expect(calls.some((c) => c.startsWith("POST") && c.endsWith("/admin/users"))).toBe(true);
     expect(setCookies.find((c) => c.name === "vexa-token")?.value).toBe("tok-7");
+    // a NEW account eagerly provisions the agent workspace over the gateway (best-effort — a 500 here
+    // is swallowed, so sign-in still succeeds above); it authenticates with the freshly minted token
+    const provision = calls.find((c) => c.includes("/agent/workspace/init"));
+    expect(provision).toBeTruthy();
+    expect(provision!.startsWith("POST")).toBe(true);
   });
 
   it("rejects a malformed email without calling admin-api", async () => {

@@ -115,6 +115,31 @@ export function revokeToken(tokenId: string | number): Promise<AdminResult<void>
   return adminRequest<void>(`/admin/tokens/${encodeURIComponent(String(tokenId))}`, { method: "DELETE" });
 }
 
+// One authenticated edge: provisioning goes through the gateway (which resolves the api-key → user_id and
+// injects X-User-Id), never agent-api directly. Mirrors the workspace proxy route's GATEWAY_URL default.
+const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
+
+/** EAGERLY provision the user's agent workspace tiers (Personal baseline + private `_system`) so they
+ *  exist from account creation instead of being lazily seeded on the first chat. BEST-EFFORT: the call is
+ *  idempotent server-side and the lazy first-dispatch path is a full fallback, so any failure here (agent
+ *  down, slow, misconfig) is logged and swallowed — it must NEVER block sign-in. Authenticates with the
+ *  freshly minted api-key over the gateway's `/agent/workspace/*` edge. */
+async function provisionUserWorkspace(token: string): Promise<void> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/agent/workspace/init`, {
+      method: "POST",
+      headers: { "X-API-Key": token, "Content-Type": "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) {
+      console.warn(`[terminal-auth] eager workspace provisioning returned ${res.status} (lazy seeding will cover it)`);
+    }
+  } catch (err) {
+    console.warn("[terminal-auth] eager workspace provisioning failed (lazy seeding will cover it):", (err as Error).message);
+  }
+}
+
 /** Find the user by email, creating them if they don't exist, then mint an APIToken.
  *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface. */
 export async function findOrCreateUserToken(
@@ -123,6 +148,7 @@ export async function findOrCreateUserToken(
   const found = await findUserByEmail(email);
 
   let user: AdminUser | undefined;
+  let justCreated = false;
   if (found.ok && found.data) {
     user = found.data;
   } else if (found.notFound) {
@@ -131,6 +157,7 @@ export async function findOrCreateUserToken(
       return { ok: false, status: created.status || 500, error: created.error || "Failed to create user" };
     }
     user = created.data;
+    justCreated = true;
   } else {
     return { ok: false, status: found.status || 503, error: found.error || "Failed to look up user" };
   }
@@ -138,6 +165,11 @@ export async function findOrCreateUserToken(
   const minted = await createUserToken(user.id);
   if (!minted.ok || !minted.data?.token) {
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
+  }
+  // On genuine account creation ("account start"), eagerly provision the user's workspace tiers so the
+  // Personal baseline + `_system` exist before their first chat. Best-effort (idempotent + lazy fallback).
+  if (justCreated) {
+    await provisionUserWorkspace(minted.data.token);
   }
   return { ok: true, user, token: minted.data.token };
 }

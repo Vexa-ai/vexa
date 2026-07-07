@@ -46,7 +46,9 @@ export async function deleteWorkspace(slug: string): Promise<{ slug: string; del
 }
 /** `published_url`: where the ACTIVE workspace was published (the token-free URL of its GitHub home),
  *  or null when it never was — a published workspace renders a link instead of the publish action. */
-export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null }
+/** `baseline_hidden`: the subject switched their private baseline ("Personal") OFF — it's unmounted from
+ *  the agent turn (its home tree is untouched, re-activate to switch it back on). */
+export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null; baseline_hidden?: boolean }
 export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null; nested: boolean }
 
 /** The subject's attachment view: which workspace is active + the parked ones available to swap back to. */
@@ -55,7 +57,7 @@ export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
 }
 
 /** One member of the ADDITIVE active set (the mount stack the next agent turn mounts — WP-A2.1). The
- *  `primary` member is the private baseline (always active, never deactivatable). */
+ *  `primary` member is the private baseline (active by default; can be switched off via `baseline_hidden`). */
 export interface ActiveMount { slug: string; repo: string | null; ref: string | null; role: string; path: string; write: boolean; primary: boolean; name?: string | null }
 export interface ActiveSet { subject: string; active: ActiveMount[] }
 
@@ -161,7 +163,8 @@ export async function createWorkspace(name?: string): Promise<{ subject: string;
 }
 
 /** REMOVE a workspace from the active set (park it — never destroyed; the tree stays, ready to re-activate).
- *  The private baseline cannot be deactivated (the server answers 409). Idempotent — a not-active slug is a no-op. */
+ *  The private baseline can be switched off too (server sets `baseline_hidden`; re-activate to switch back on).
+ *  Idempotent — an already-off / not-active slug is a no-op. */
 export async function deactivateWorkspace(slug: string): Promise<{ subject: string; slug: string; changed: boolean }> {
   return getJson(`/api/workspace/deactivate`, {
     method: "POST",

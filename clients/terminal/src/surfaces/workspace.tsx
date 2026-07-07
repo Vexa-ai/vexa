@@ -428,7 +428,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const [view, setView] = useState<AttachedWorkspaces>({ active: null, slots: {} });
   // The ADDITIVE active set (WP-A2.1): the slugs currently MOUNTED into the agent turn. Distinct from
   // `view.active` (the single private-baseline primary) — a workspace can be MOUNTED (in the set) or just
-  // AVAILABLE (parked). Drives the per-row toggle; the baseline is always in the set and non-deactivatable.
+  // AVAILABLE (parked). Drives the per-row toggle; the baseline is in the set by default but can be switched off.
   const [activeSet, setActiveSet] = useState<ActiveMount[]>([]);
   const [sharedMemberships, setSharedMemberships] = useState<Membership[]>([]);  // ALL shared (incl switched-off)
   const [err, setErr] = useState<string | null>(null);
@@ -452,11 +452,14 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_WS_OPEN, n ? "1" : "0"); return n; });
   const mountedSlugs = new Set(activeSet.map((m) => m.slug));
   const primarySlug = activeSet.find((m) => m.primary)?.slug ?? view.active ?? "seed";
+  // The baseline ("Personal") can be switched OFF (deactivated) — it's then absent from the active set, so
+  // its row reflects `baseline_hidden` directly rather than active-set membership.
+  const baselineHidden = view.baseline_hidden ?? false;
 
   // Per-row active toggle (WP-A2.1): ADD a parked workspace to the mount set (activate) or REMOVE it
-  // (deactivate — parked, never destroyed). The private baseline is always mounted + cannot be dropped.
+  // (deactivate — parked, never destroyed). The private baseline can be switched off too — the backend
+  // toggles `baseline_hidden` (its home tree is untouched); re-activating it switches it back on.
   const toggleActive = async (slug: string, mounted: boolean) => {
-    if (slug === primarySlug) return;  // the private baseline is always active
     setBusy(true); setErr(null);
     try { if (mounted) { await deactivateWorkspace(slug); } else { await activateWorkspace({ slug }); } load(); onSwapped(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
@@ -586,20 +589,18 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
           // into the agent turn, UNCHECKED = AVAILABLE (parked, check to mount). Multiple rows can be
           // checked at once — the mount set is ADDITIVE, so a checkbox (multi-select) is the right
-          // affordance; a filled/hollow dot read as a single-select radio. The private baseline is always
-          // mounted + can't be unchecked (a never-swapped subject is on the seed, so the seed row is the
-          // baseline) — its checkbox is checked + disabled.
-          const mounted = mountedSlugs.has(slug) || (mountedSlugs.size === 0 && slug === primarySlug);
+          // affordance; a filled/hollow dot read as a single-select radio. The private baseline is NOT a
+          // normal active-set member, so its checkbox follows `baseline_hidden` (switched off → unchecked).
           const isPrimary = slug === primarySlug;
+          const mounted = isPrimary ? !baselineHidden : mountedSlugs.has(slug);
           const isRenaming = renaming === slug;
           const display = meta.name || label(slug, meta.repo);
-          const toggleTitle = isPrimary ? "always active (your private workspace)"
-            : mounted ? "Mounted into the agent — uncheck to unmount (park)" : "Available — check to mount into the agent";
+          const toggleTitle = mounted ? "Mounted into the agent — uncheck to unmount (park)" : "Available — check to mount into the agent";
           return (
             <div key={slug}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
               onMouseEnter={(e) => { if (!isRenaming) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-              <Checkbox checked={mounted} disabled={isPrimary || busy}
+              <Checkbox checked={mounted} disabled={busy}
                 onChange={() => void toggleActive(slug, mounted)}
                 title={toggleTitle} label={`${display} — ${mounted ? "mounted into the agent" : "available (parked)"}`} />
               {isRenaming ? (
@@ -608,9 +609,9 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(null); } else { void doRename(slug, e.currentTarget.value); } }}
                   style={{ flex: 1, fontSize: 12, padding: "3px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, color: "var(--t1)" }} />
               ) : (
-                <span onClick={() => !isPrimary && !busy && void toggleActive(slug, mounted)}
+                <span onClick={() => !busy && void toggleActive(slug, mounted)}
                   title={toggleTitle}
-                  style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: isPrimary ? "default" : "pointer" }}>{display}</span>
+                  style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: busy ? "default" : "pointer" }}>{display}</span>
               )}
               {/* Published-state affordances — ON the active row (publish is an action on THIS workspace,
                   not a list item): published → a link to its GitHub home (+ a secondary push-updates

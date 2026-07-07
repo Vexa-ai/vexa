@@ -13,7 +13,7 @@ import "dockview/dist/styles/dockview.css";
 const PANES_KEY = "vexa.terminal.panes.v2";
 const savedSizes = (): number[] | undefined => { try { const s = localStorage.getItem(PANES_KEY); const a = s ? JSON.parse(s) : null; return Array.isArray(a) && a.length === 3 ? a : undefined; } catch { return undefined; } };
 const persistSizes = (s: number[]) => { try { localStorage.setItem(PANES_KEY, JSON.stringify(s)); } catch { /* noop */ } };
-import { useService, useStore, KeybindingServiceId, CommandServiceId } from "../platform";
+import { useService, useStore, KeybindingServiceId } from "../platform";
 import { LayoutServiceId } from "./layout";
 import { CommandPalette } from "./CommandPalette";
 import { registry } from "../contributions";
@@ -23,6 +23,8 @@ import { readActiveSet, readWorkspaceGit } from "../surfaces/workspaceApi";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
 import { listWorkspaceTree } from "../surfaces/workspaceApi";
+import { liveMeetingsNow } from "../surfaces/liveMeetings";
+import { firstViewPlan } from "./firstView";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
 import { meetingsOnly } from "../app/mode";
@@ -279,7 +281,6 @@ export function Workbench() {
   // activeList must not flip it into chat-only either; that list doesn't register in this mode).
   const meetOnly = meetingsOnly();
   const chatOnly = !meetOnly && activeList === "sessions";
-  const commands = useService(CommandServiceId);
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
   // Clicking an entity link in chat opens its doc. Reveal the center (leave chat-only → Knowledge view),
@@ -303,27 +304,62 @@ export function Workbench() {
     return () => window.removeEventListener(OPEN_ENTITY_EVENT, onOpenEntity);
   }, [layout]);
 
-  // Auto-open a shared meeting's live feed when landing from a ?tshare= link — InviteRedeemer stashed the
-  // meeting id before reload. One hop → zero hops. Reveal the meetings list, then open the meeting tab.
-  useEffect(() => {
-    let mid: string | null = null;
-    try { mid = localStorage.getItem("vexa.openMeeting"); if (mid) localStorage.removeItem("vexa.openMeeting"); } catch { /* noop */ }
-    if (!mid) return;
-    if (!meetOnly) layout.setActiveList("meetings");
-    layout.openTab({ id: `meeting:${mid}`, title: "Shared meeting", kind: "meeting", params: { meetingId: mid } });
-  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
-
   // detach the dockview api on unmount (navigation/HMR dispose it) so the layout
   // service never operates on a disposed grid.
   const apiRef = useRef<DockviewApi | null>(null);
   useEffect(() => () => { if (apiRef.current) layout.detach(apiRef.current); }, [layout]);
 
+  // ── FIRST-VIEW RESOLVER — on landing, pick ONE arrangement by what's SHARED with the user, replacing
+  // the scattered self-firing auto-opens (the old tshare effect + the empty-dock live-open + the shared-
+  // README pin that only fired once Knowledge was opened). Priority (the product spec):
+  //   shared meeting + shared workspace → pin the workspace README, open the meeting (its live badge shows)
+  //   shared meeting only               → open the meeting
+  //   shared workspace only             → pin the shared workspace README
+  //   nothing shared (fresh dock)       → the user's own README-onboarding (or a known live meeting)
+  // `fresh` = the dock restored no tabs (a genuine first landing). A returning user with a saved layout
+  // gets ONLY the explicit shared-meeting arm (they clicked a share link) — never a surprise re-pin.
+  const firstViewDone = useRef(false);
+  const resolveFirstView = async (fresh: boolean) => {
+    // an explicit shared meeting from a ?tshare= link (InviteRedeemer stashed it before the reload)
+    let sharedMeetingId: string | null = null;
+    try { sharedMeetingId = localStorage.getItem("vexa.openMeeting"); if (sharedMeetingId) localStorage.removeItem("vexa.openMeeting"); } catch { /* noop */ }
+    // a shared workspace connected to this user (a non-primary 'shared' mount in the active set)
+    let sharedSlug: string | null = null;
+    try {
+      const set = await readActiveSet();
+      sharedSlug = set.active.find((m) => !m.primary && m.role === "shared")?.slug ?? null;
+    } catch { /* active-set read failed — treat as no shared workspace */ }
+    if (!apiRef.current) return;  // grid torn down while we awaited — nothing to arrange
+
+    const revealCenter = () => { if (!meetOnly && layout.store.getState().activeList === "sessions") layout.setActiveList("files"); };
+    const openMeeting = (mid: string, reveal: boolean) => {
+      if (reveal && !meetOnly) layout.setActiveList("meetings");
+      layout.openTab({ id: `meeting:${mid}`, title: "Shared meeting", kind: "meeting", params: { meetingId: mid } });
+    };
+    const pinReadme = (slug?: string) => {
+      revealCenter();
+      // coordinate with MountSection's once-per-session pin (workspace.tsx) so it doesn't double-pin later
+      if (slug) { try { sessionStorage.setItem(`vexa.readme.pinned.${slug}`, "1"); } catch { /* noop */ } }
+      layout.openTab({ id: slug ? `doc:${slug}:README.md` : "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md", slug } });
+    };
+
+    const plan = firstViewPlan({ sharedMeetingId, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
+    switch (plan.kind) {
+      case "meeting-and-workspace": openMeeting(plan.meetingId, false); pinReadme(plan.slug); break;  // README pinned last → focused
+      case "meeting":               openMeeting(plan.meetingId, true); break;
+      case "workspace-readme":      pinReadme(plan.slug); break;
+      case "live-meeting":          openMeeting(plan.meetingId, true); break;
+      case "own-readme":            pinReadme(); break;
+      case "noop":                  break;
+    }
+  };
+
   const onReady = (e: DockviewReadyEvent) => {
     apiRef.current = e.api;
     layout.attach(e.api);
-    if (e.api.panels.length === 0 && !chatOnly) {
-      void commands.execute("meeting.openLive"); // auto-open the current live meeting as a tab, if any
-    }
+    if (firstViewDone.current) return;             // once per app load (guards remounts / HMR)
+    firstViewDone.current = true;
+    void resolveFirstView(e.api.panels.length === 0);
   };
 
   return (
