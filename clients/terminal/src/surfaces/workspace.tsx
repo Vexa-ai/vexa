@@ -200,6 +200,16 @@ function MountSection({ mount }: { mount: ActiveMount }) {
   // Show the FULL workspace tree (not kg-only) so files the agent writes anywhere — notes/, drafts/,
   // README.md — are visible and openable, matching the changed-files a member sees in the activity feed.
   const nodes = buildTree(tree);
+  // When a SHARED workspace is connected, pin its README by default (once per session) so collaborators
+  // land on the doc — you're sharing a RICH workspace as meeting context, not a single brief.
+  useEffect(() => {
+    if (mount.role !== "shared") return;
+    const key = `vexa.readme.pinned.${mount.slug}`;
+    if (readSS(key)) return;
+    if (!tree.some((p) => p === "README.md" || p.endsWith("/README.md"))) return;  // wait until it exists
+    writeSS(key, "1");
+    layout.openTab(docTab("README.md", mount.slug));
+  }, [mount.role, mount.slug, tree, layout]);
   const toggleDir = (p: string) => setExpanded((prev) => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
   const openDoc = (p: string) => layout.openPreview(docTab(p, mount.slug));
   const pinDoc = (p: string) => layout.openTab(docTab(p, mount.slug));
@@ -239,7 +249,9 @@ function FilesList() {
   const [reloadKey, setReloadKey] = useState(0);  // bumped after a workspace swap → re-fetch the tree
   // Knowledge view defaults to ONLY the knowledge graph (kg/); the eye toggle reveals the rest of the
   // workspace scaffold (CLAUDE.md, agents/, skills/, views/, …). Default ON = kg-only.
-  const [kgOnly, setKgOnly] = useState<boolean>(() => readSS(SS_HIDDEN) !== "0");
+  // Default: show the ENTIRE workspace (a normal workspace IS the knowledge — full context to share &
+  // collaborate on, not kg-only). The eye toggle can still collapse to just the knowledge graph.
+  const [kgOnly, setKgOnly] = useState<boolean>(() => readSS(SS_HIDDEN) === "1");
   // Lane A: every NON-PRIMARY active mount (other private workspaces + shared) — rendered as sections
   // beneath the primary tree, so KNOWLEDGE mirrors the agent's full mount set, not just the primary.
   const [extraMounts, setExtraMounts] = useState<ActiveMount[]>([]);
