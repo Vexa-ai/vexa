@@ -487,10 +487,11 @@ def test_active_set_back_compat_when_state_has_no_active_set_field(tmp_path):
     _seed_active(root, "u1")
     origin = _make_repo(tmp_path / "origin", "CUSTOM")
     slug = swap_workspace(root, "u1", origin, "main").active_slug     # legacy single-active swap
-    # simulate a legacy state.json: drop the active_set field
+    # simulate a legacy (pre-flat) state.json: drop the active_set field AND the flat-model marker, so the
+    # migration re-derives the set from the single active workspace (the seed-slot occupant).
     import json as _json
     sf = root / ".attached" / "u1" / "state.json"
-    data = _json.loads(sf.read_text()); data.pop("active_set", None); sf.write_text(_json.dumps(data))
+    data = _json.loads(sf.read_text()); data.pop("active_set", None); data.pop("_flat_v1", None); sf.write_text(_json.dumps(data))
 
     mounts = active_workspaces(root, "u1")
     assert [m.slug for m in mounts] == [slug] and mounts[0].primary is True

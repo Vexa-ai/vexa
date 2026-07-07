@@ -46,9 +46,9 @@ export async function deleteWorkspace(slug: string): Promise<{ slug: string; del
 }
 /** `published_url`: where the ACTIVE workspace was published (the token-free URL of its GitHub home),
  *  or null when it never was — a published workspace renders a link instead of the publish action. */
-/** `baseline_hidden`: the subject switched their private baseline ("Personal") OFF — it's unmounted from
- *  the agent turn (its home tree is untouched, re-activate to switch it back on). */
-export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null; baseline_hidden?: boolean }
+/** `active`: the slug occupying the seed slot (`<root>/<subject>`) — a storage detail, not a rank. Every
+ *  workspace is equal-rank; `active_set` (from readActiveSet) is the source of truth for what's mounted. */
+export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null }
 export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null; nested: boolean }
 
 /** The subject's attachment view: which workspace is active + the parked ones available to swap back to. */

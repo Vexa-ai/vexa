@@ -82,7 +82,7 @@ class ActiveMount:
     role: str           # 'private' (the subject's own baseline / attached repos) — 'shared'/'system' land in later WPs
     path: str           # ABSOLUTE on-disk path inside the mounted store root (<root>/<subject> or <root>/.attached/<subject>/<slug>)
     write: bool = True  # the subject may always write their own private workspaces; membership gates land later
-    primary: bool = False  # True == the private baseline at <root>/<subject> (always active, never deactivatable)
+    primary: bool = False  # True == the DEFAULT HOME (first active workspace = the turn's cwd); dynamic, not a rank
     name: Optional[str] = None  # the DISPLAY label (switcher rename), so KNOWLEDGE shows the same name as the switcher — not the raw slug
 
 
@@ -98,10 +98,10 @@ class ActiveResult:
 
 
 def _slug_dir(root: Path, subject: str, state: dict, slug: str) -> Path:
-    """Where a slug's workspace tree lives on disk: the PRIMARY (the private baseline) is in place at
+    """Where a slug's workspace tree lives on disk: the SEED-SLOT occupant sits in place at
     ``<root>/<subject>``; every other slug lives in its store slot ``<root>/.attached/<subject>/<slug>``.
-    Active-but-secondary and parked members share the store slot — the only difference is set membership."""
-    if slug == _primary_slug(state):
+    A pure storage-location detail (not a rank) — active + parked members alike resolve through here."""
+    if slug == _seed_slot_slug(state):
         return _safe_subject_dir(root, subject)
     return _store(root, subject) / slug
 
@@ -177,47 +177,58 @@ def _store(root: Path, subject: str) -> Path:
 
 def _load_state(store: Path) -> dict:
     f = store / STATE_FILENAME
-    if not f.exists():
-        return {"active": None, "slots": {}, "active_set": []}
-    try:
-        data = json.loads(f.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {"active": None, "slots": {}, "active_set": []}
-    if not isinstance(data, dict):
-        return {"active": None, "slots": {}, "active_set": []}
+    data: dict = {"active": None, "slots": {}, "active_set": []}
+    if f.exists():
+        try:
+            loaded = json.loads(f.read_text())
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError):
+            pass
     data.setdefault("active", None)
     data.setdefault("slots", {})
-    # ``active_set`` (the additive mount set — WP-A2.1) is an ORDERED list of active slugs. A state.json
-    # written before this field existed carries none; back-compat is derive-from-``active``: the single
-    # active workspace becomes the sole member of the set. The private baseline (``active`` / the seed)
-    # is always the FIRST member (normalized on every read/write). Unknown/duplicate slugs are dropped.
+    # ``active_set`` (the mount set) is an ORDERED list of active slugs, all EQUAL RANK.
     if not isinstance(data.get("active_set"), list):
         data["active_set"] = []
+    # ── MIGRATION to the FLAT, equal-rank model ────────────────────────────────────────────────────────
+    # There is no "baseline"/"primary". Every workspace is the same rank; the seed-slot workspace (the one
+    # whose tree lives at <root>/<subject>) is just a NORMAL member of ``active_set``, auto-added at startup.
+    # Older states never listed it explicitly (it was an implicit always-first baseline) and switched it off
+    # with a ``baseline_hidden`` flag. Rewrite (in-memory, idempotent) to the flat form: the seed slug is a
+    # member unless it was deliberately switched off; the legacy flag is dropped.
+    # ONE-TIME (``_flat_v1`` marker): once migrated, ``active_set`` is authoritative — never re-inject the
+    # seed, or a deliberate deactivation of Personal would be silently undone on the next read.
+    if not data.get("_flat_v1"):
+        seed_slot = data.get("active") or SEED_SLOT
+        hidden = bool(data.pop("baseline_hidden", False))
+        aset = [s for s in data["active_set"] if isinstance(s, str)]
+        if hidden:
+            aset = [s for s in aset if s != seed_slot]      # was deliberately off → not a member
+        elif seed_slot not in aset:
+            aset = [seed_slot, *aset]                        # active by default → make it an explicit member
+        data["active_set"] = aset
+        data["_flat_v1"] = True
     return data
 
 
-def _primary_slug(state: dict) -> str:
-    """The PRIVATE baseline slug — the workspace that lives at ``<root>/<subject>`` and is always active
-    + non-deactivatable. A never-swapped subject (``active`` is None) is on the seed."""
+def _seed_slot_slug(state: dict) -> str:
+    """PATH RESOLUTION ONLY (not a rank): the slug whose tree lives at ``<root>/<subject>`` — the seed, or
+    whatever repo has been swapped into that slot. Every OTHER slug lives under ``.attached/<subject>/<slug>``.
+    A never-swapped subject (``active`` is None) has the seed there."""
     return state.get("active") or SEED_SLOT
 
 
 def _normalized_active_set(state: dict) -> list[str]:
-    """The ordered active set with the private baseline FORCED first and present, duplicates and unknown
-    slugs (no parked tree, not the primary) dropped. Back-compat: an empty set (pre-``active_set`` state)
-    yields just the primary — exactly today's single-active behavior.
-
-    The baseline can be SWITCHED OFF by the subject (``baseline_hidden`` — the counterpart of
-    ``hidden_shared`` for shared workspaces). When off it leaves the mount set entirely; its home tree
-    (``<root>/<subject>``) is untouched, ready to switch back on. The set may then be empty, or lead with a
-    secondary active workspace."""
-    primary = _primary_slug(state)
-    ordered: list[str] = [] if state.get("baseline_hidden") else [primary]
+    """The subject's ACTIVE SET — a FLAT list of EQUAL-RANK workspaces (no baseline, no forced-first, no
+    primary). The seed-slot workspace is a normal member like any other; switching it off simply removes it
+    from the list (``_load_state`` migrates older states into this shape). Duplicates and unknown slugs (no
+    slot record and not the seed-slot occupant) are dropped; order is the subject's own."""
+    seed_slot = _seed_slot_slug(state)
+    ordered: list[str] = []
     for slug in state.get("active_set", []):
-        if slug == primary or slug in ordered:
+        if slug in ordered:
             continue
-        # a secondary member must have a parked tree (its on-disk home) OR a slot record (repo to restore)
-        if slug in state.get("slots", {}):
+        if slug == seed_slot or slug in state.get("slots", {}):
             ordered.append(slug)
     return ordered
 
@@ -228,15 +239,13 @@ def _save_state(store: Path, state: dict) -> None:
 
 
 def attached_workspaces(root: str | Path, subject: str) -> dict:
-    """The subject's attachment view: which slug is active (the private baseline), the parked slots
-    (slug → repo/ref), and the ordered ``active_set`` (the mount set — WP-A2.1). Read-only; safe to call
-    before any swap (returns the empty shape). The ``active_set`` is normalized (primary first) so the
-    terminal can render the per-row active toggle directly off it."""
+    """The subject's attachment view: the parked slots (slug → repo/ref) and the ordered ``active_set`` (the
+    flat, equal-rank mount set). Read-only; safe to call before any attach (returns the empty shape). The
+    terminal renders the per-row active toggle directly off ``active_set``."""
     rootp = Path(root)
     _safe_subject_dir(rootp, subject)
     state = _load_state(_store(rootp, subject))
     state["active_set"] = _normalized_active_set(state)
-    state["baseline_hidden"] = bool(state.get("baseline_hidden"))  # always present so the UI can render the toggle
     return state
 
 
@@ -338,13 +347,15 @@ def swap_workspace(
         slot.update({"repo": repo_url, "ref": ref, "nested": nested})
         state["slots"][target_slug] = slot
 
+    # Flat model: a swap replaces the SEED-SLOT occupant. In the active set, the new occupant takes the old
+    # one's place; the displaced workspace is parked (drops out of the set — it survives as a parked slot).
+    # Every OTHER active member is untouched (a swap must not silently drop the rest of the mount set).
+    old_seed_slot = _seed_slot_slug(state)
     state["active"] = target_slug
-    # The PRIMARY moved: the new active is the private baseline (first in the set). Any SECONDARY active
-    # members (added via ``activate_workspace``) survive the swap — a swap only re-homes the primary, it
-    # must not silently drop the rest of the mount set. ``_normalized_active_set`` re-orders with the new
-    # primary first and prunes the old primary if it is no longer a set member.
-    prior_secondaries = [s for s in state.get("active_set", []) if s != target_slug]
-    state["active_set"] = _normalized_active_set({**state, "active_set": prior_secondaries})
+    new_set = [target_slug if s == old_seed_slot else s for s in state.get("active_set", [])]
+    if target_slug not in new_set:
+        new_set.append(target_slug)
+    state["active_set"] = _normalized_active_set({**state, "active_set": new_set, "_flat_v1": True})
     _save_state(store, state)
     slot = state["slots"].get(target_slug, {})
     return SwapResult(subject, target_slug, slot.get("repo"), slot.get("ref"),
@@ -362,9 +373,12 @@ def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
     state = _load_state(store)
-    primary = _primary_slug(state)
+    ordered = _normalized_active_set(state)
+    # No baseline: ``primary`` marks the DEFAULT HOME — the first active workspace (the cwd a turn opens in).
+    # It is dynamic (moves as workspaces are activated/deactivated), not a fixed rank; empty set ⇒ no home.
+    home = ordered[0] if ordered else None
     mounts: list[ActiveMount] = []
-    for slug in _normalized_active_set(state):
+    for slug in ordered:
         slot = state["slots"].get(slug, {})
         mounts.append(ActiveMount(
             slug=slug,
@@ -373,7 +387,7 @@ def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
             role=PRIVATE_ROLE,   # every workspace a subject owns is 'private' for now; 'shared'/'system' land later
             path=str(_slug_dir(rootp, subject, state, slug)),
             write=True,
-            primary=(slug == primary),
+            primary=(slug == home),
             name=(slot.get("name") or "").strip() or None,   # the switcher's display label (rename), if set
         ))
     return mounts
@@ -450,7 +464,7 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
     state = _load_state(store)
-    primary = _primary_slug(state)
+    primary = _seed_slot_slug(state)
 
     if slug == primary:
         raise ValueError("the baseline workspace can't be shared — create a new workspace to share")
@@ -486,7 +500,7 @@ def set_archived(root: str | Path, subject: str, slug: str, archived: bool) -> N
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
     state = _load_state(store)
-    if slug == _primary_slug(state):
+    if slug == _seed_slot_slug(state):
         raise ValueError("the baseline workspace can't be archived")
     slot = state["slots"].get(slug)
     if slot is None:
@@ -506,7 +520,7 @@ def delete_workspace(root: str | Path, subject: str, slug: str) -> None:
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
     state = _load_state(store)
-    if slug in (_primary_slug(state), SEED_SLOT):
+    if slug in (_seed_slot_slug(state), SEED_SLOT):
         raise ValueError("the baseline workspace can't be deleted")
     if slug not in state["slots"]:
         raise KeyError(slug)
@@ -608,19 +622,18 @@ def activate_workspace(
     state = _load_state(store)
 
     target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
-    primary = _primary_slug(state)
 
-    # The private baseline: re-activating it SWITCHES IT BACK ON (clears ``baseline_hidden``). When it isn't
-    # hidden the baseline is unconditionally active, so activating it (or the seed on a never-swapped
-    # subject) is a true no-op — never a destructive re-clone into the store slot.
-    if target_slug == primary:
-        if state.get("baseline_hidden"):
-            state["baseline_hidden"] = False
-            _save_state(store, state)
-            return ActiveResult(subject, target_slug, changed=True)
-        return ActiveResult(subject, target_slug, changed=False)
     if target_slug in _normalized_active_set(state):
-        return ActiveResult(subject, target_slug, changed=False)
+        return ActiveResult(subject, target_slug, changed=False)   # already active — uniform for every slug
+
+    # The seed-slot occupant's tree already lives at <root>/<subject> — re-activating it (e.g. Personal
+    # switched back on) just re-adds it to the set; never a destructive re-clone into a store slot.
+    if target_slug == _seed_slot_slug(state):
+        state["active_set"] = _normalized_active_set(
+            {**state, "active_set": [*state.get("active_set", []), target_slug]}
+        )
+        _save_state(store, state)
+        return ActiveResult(subject, target_slug, changed=True)
 
     # Materialize the slot tree OUT OF PLACE if it isn't already parked — a clone failure raises here
     # leaving the active set untouched (mirrors swap's phase-1 discipline).
@@ -659,7 +672,7 @@ def _unique_new_slug(state: dict) -> str:
     """Mint a fresh, never-used slug for a brand-new blank workspace: ``workspace-<n>`` with ``n`` the
     lowest positive integer whose slug isn't already a known slot (avoids colliding with a parked/active
     workspace, the seed, or a repo slug). Deterministic and filesystem-safe."""
-    taken = set(state.get("slots", {})) | {SEED_SLOT, SEED_BACKUP_SLOT, _primary_slug(state)}
+    taken = set(state.get("slots", {})) | {SEED_SLOT, SEED_BACKUP_SLOT, _seed_slot_slug(state)}
     n = 1
     while f"{NEW_SLUG_PREFIX}-{n}" in taken:
         n += 1
@@ -723,29 +736,18 @@ def create_workspace(
 
 
 def deactivate_workspace(root: str | Path, subject: str, slug: str) -> ActiveResult:
-    """REMOVE a workspace from the subject's active set (park it — never destroyed). The parked tree stays
-    in its store slot, ready to re-activate. Idempotent: deactivating a not-active slug is a no-op.
-
-    The private baseline (``<root>/<subject>``) can be SWITCHED OFF too — it sets ``baseline_hidden`` rather
-    than moving anything (its home tree is <root>/<subject>, not a store slot). Switched off it leaves the
-    mount set; ``activate_workspace`` switches it back on. Its durable memory tree is never destroyed."""
+    """REMOVE a workspace from the subject's active set (park it — never destroyed). UNIFORM for every
+    workspace, including the seed-slot one (Personal): dropping it from the set is all 'park' means; the
+    tree stays on disk (a store slot, or <root>/<subject> for the seed slot), ready to re-activate.
+    Idempotent: deactivating a not-active slug is a no-op."""
     rootp = Path(root)
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
     state = _load_state(store)
     slug = (slug or "").strip()
 
-    if slug == _primary_slug(state):
-        if state.get("baseline_hidden"):
-            return ActiveResult(subject, slug, changed=False)
-        state["baseline_hidden"] = True
-        _save_state(store, state)
-        return ActiveResult(subject, slug, changed=True)
     if slug not in _normalized_active_set(state):
         return ActiveResult(subject, slug, changed=False)
-
-    # The secondary member already lives in its store slot (activate materialized it there) — dropping it
-    # from the set is all that 'park' means here; nothing to move, nothing destroyed.
     state["active_set"] = [s for s in _normalized_active_set(state) if s != slug]
     _save_state(store, state)
     return ActiveResult(subject, slug, changed=True)

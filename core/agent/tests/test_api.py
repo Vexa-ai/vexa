@@ -818,13 +818,13 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
     assert d.status_code == 200 and d.json()["changed"] is True
     assert [m["slug"] for m in c.get("/api/workspace/active", headers=h).json()["active"]] == ["seed"]
 
-    # the private baseline CAN be switched off — it leaves the set (empty now) but its tree is untouched
+    # the seed is a NORMAL workspace — switching it off leaves the set (empty now); its tree is untouched
     off = c.post("/api/workspace/deactivate", headers=h, json={"slug": "seed"})
     assert off.status_code == 200 and off.json()["changed"] is True
     assert c.get("/api/workspace/active", headers=h).json()["active"] == []
-    assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"   # durable memory root kept
-    assert c.get("/api/workspace/attached", headers=h).json()["baseline_hidden"] is True
-    # re-activating the baseline switches it back on (primary, first again)
+    assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"   # durable memory tree kept
+    assert "seed" not in [s for s in c.get("/api/workspace/attached", headers=h).json()["active_set"]]
+    # re-activating the seed switches it back on (home again)
     on = c.post("/api/workspace/activate", headers=h, json={"slug": "seed"})
     assert on.status_code == 200 and on.json()["changed"] is True
     assert [m["slug"] for m in c.get("/api/workspace/active", headers=h).json()["active"]] == ["seed"]

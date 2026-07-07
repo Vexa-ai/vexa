@@ -258,10 +258,10 @@ function FilesList() {
   // Lane A: every NON-PRIMARY active mount (other private workspaces + shared) — rendered as sections
   // beneath the primary tree, so KNOWLEDGE mirrors the agent's full mount set, not just the primary.
   const [extraMounts, setExtraMounts] = useState<ActiveMount[]>([]);
-  // The baseline ("Personal") is a NORMAL workspace — when switched off it leaves the active set, so its
-  // own tree + Find-file hits must vanish too (not linger). Driven off the active set (which omits a hidden
-  // baseline), exactly like every other mount; defaults true so a slow active-set read never blanks it.
-  const [baselineActive, setBaselineActive] = useState(true);
+  // The top tree + Find-file show the HOME workspace (the first active one, read with no slug). Switch a
+  // workspace off and it leaves the active set so its files vanish; when NOTHING is active there is no home
+  // and the tree is empty. Driven off the active set; defaults true so a slow read never blanks it.
+  const [hasHome, setHasHome] = useState(true);
   // per-mount trees (keyed by slug) so the Find-file search can reach shared/other workspaces, not just
   // the primary — otherwise a file a member's agent wrote in a SHARED ws is invisible to search.
   const [mountTrees, setMountTrees] = useState<Record<string, string[]>>({});
@@ -282,7 +282,7 @@ function FilesList() {
     // extra sections, never the primary tree).
     const loadExtra = () => void readActiveSet()
       .then(async (s) => {
-        setBaselineActive(s.active.some((m) => m.primary));  // baseline present in the set ⇒ not switched off
+        setHasHome(s.active.some((m) => m.primary));  // baseline present in the set ⇒ not switched off
         const mounts = s.active.filter((m) => !m.primary);
         setExtraMounts(mounts);
         // fetch each mount's full tree so the search index spans every active workspace
@@ -300,7 +300,7 @@ function FilesList() {
     return () => { clearInterval(id); window.removeEventListener("focus", load); };
   }, [reloadKey]);
   // Baseline switched off ⇒ its own tree is not part of the finder (its files leave with it, like any mount).
-  const nodes = baselineActive ? buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree) : [];
+  const nodes = hasHome ? buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree) : [];
   // default expansion: top-level folders open, deeper folders collapsed (only when no saved state yet)
   useEffect(() => {
     if (readSS(SS_EXPANDED) != null || nodes.length === 0) return;
@@ -342,7 +342,7 @@ function FilesList() {
   // ── instant file-name search: pure client-side filter over the already-loaded tree ──
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const scoped = !baselineActive ? [] : (kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree);
+  const scoped = !hasHome ? [] : (kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree);
   // search spans the primary tree AND every active mount (shared / other private), each hit tagged with
   // its slug + workspace label — so a file a member's agent wrote in a SHARED workspace is findable and
   // opens against the right mount, not just the caller's own primary.
@@ -409,8 +409,8 @@ function FilesList() {
         {matches.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No files match “{query.trim()}”.</div>}
       </>) : (<>
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} openMenu={openMenu} />)}
-        {!error && !baselineActive && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Personal is switched off — turn it back on in Workspaces below.</div>}
-        {!error && baselineActive && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+        {!error && !hasHome && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No active workspace — turn one on in Workspaces below.</div>}
+        {!error && hasHome && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
       </>)}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
@@ -458,14 +458,13 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   useEffect(() => { if (open) load(); }, [open]);
   const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_WS_OPEN, n ? "1" : "0"); return n; });
   const mountedSlugs = new Set(activeSet.map((m) => m.slug));
-  const primarySlug = activeSet.find((m) => m.primary)?.slug ?? view.active ?? "seed";
-  // The baseline ("Personal") can be switched OFF (deactivated) — it's then absent from the active set, so
-  // its row reflects `baseline_hidden` directly rather than active-set membership.
-  const baselineHidden = view.baseline_hidden ?? false;
+  // The seed-slot workspace ("Personal") whose tree lives at <root>/<subject>. Its share/archive/delete are
+  // still refused server-side (it's the seed home slot), so we hide those affordances — but it is a NORMAL,
+  // EQUAL-RANK workspace for activation: switching it off just removes it from the set, like any workspace.
+  const seedSlug = view.active ?? "seed";
 
-  // Per-row active toggle (WP-A2.1): ADD a parked workspace to the mount set (activate) or REMOVE it
-  // (deactivate — parked, never destroyed). The private baseline can be switched off too — the backend
-  // toggles `baseline_hidden` (its home tree is untouched); re-activating it switches it back on.
+  // Per-row active toggle: ADD a workspace to the mount set (activate) or REMOVE it (deactivate — parked,
+  // never destroyed). UNIFORM for every workspace, seed included — membership in the active set is the truth.
   const toggleActive = async (slug: string, mounted: boolean) => {
     setBusy(true); setErr(null);
     try { if (mounted) { await deactivateWorkspace(slug); } else { await activateWorkspace({ slug }); } load(); onSwapped(); }
@@ -594,12 +593,11 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
           // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
-          // into the agent turn, UNCHECKED = AVAILABLE (parked, check to mount). Multiple rows can be
-          // checked at once — the mount set is ADDITIVE, so a checkbox (multi-select) is the right
-          // affordance; a filled/hollow dot read as a single-select radio. The private baseline is NOT a
-          // normal active-set member, so its checkbox follows `baseline_hidden` (switched off → unchecked).
-          const isPrimary = slug === primarySlug;
-          const mounted = isPrimary ? !baselineHidden : mountedSlugs.has(slug);
+          // into the agent turn, UNCHECKED = AVAILABLE (parked, check to mount). Multiple rows can be checked
+          // at once — the mount set is a flat, equal-rank list, so a checkbox (multi-select) is the right
+          // affordance. EVERY workspace (seed included) follows active-set membership uniformly.
+          const isSeed = slug === seedSlug;   // the seed-slot occupant — share/archive/delete are still refused for it
+          const mounted = mountedSlugs.has(slug);
           const isRenaming = renaming === slug;
           const display = meta.name || label(slug, meta.repo);
           const toggleTitle = mounted ? "Mounted into the agent — uncheck to unmount (park)" : "Available — check to mount into the agent";
@@ -624,21 +622,21 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   not a list item): published → a link to its GitHub home (+ a secondary push-updates
                   action, re-publish is a plain push); not yet published (vexa-born only) → the publish
                   action itself. An attached workspace shows neither — it already has a home. */}
-              {!isRenaming && isPrimary && view.published_url && (
+              {!isRenaming && isSeed && view.published_url && (
                 <a href={view.published_url} target="_blank" rel="noreferrer"
                   title={`Published — open on GitHub (${view.published_url})`}
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
                   <Icon name="github" size={12} />
                 </a>
               )}
-              {!isRenaming && isPrimary && activeBorn && !busy && (
+              {!isRenaming && isSeed && activeBorn && !busy && (
                 <span onClick={() => { setShare(null); setPublished(null); setPubForm({ name: defaultRepoName, priv: true, token: "", remoteUrl: view.published_url ?? undefined }); }}
                   title={view.published_url ? "Push updates to GitHub" : "Publish this workspace to GitHub…"}
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
                   <Icon name="github" size={12} />
                 </span>
               )}
-              {!isRenaming && !isPrimary && !busy && (
+              {!isRenaming && !isSeed && !busy && (
                 <span onClick={() => void doShareWorkspace(slug)} title="Share this workspace — create an invite link"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", display: "flex", alignItems: "center" }}>
                   <Icon name="link" size={12} />
@@ -648,7 +646,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 <span onClick={() => setRenaming(slug)} title="Rename (display label only)"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 11 }}>✎</span>
               )}
-              {!isRenaming && !isPrimary && (
+              {!isRenaming && !isSeed && (
                 <span onClick={(e) => setRowMenu({ slug, display, x: e.clientX, y: e.clientY })} title="More — archive · delete"
                   style={{ flex: "none", color: "var(--t3)", cursor: "pointer", padding: "0 3px", fontSize: 13, lineHeight: 1 }}>⋯</span>
               )}
