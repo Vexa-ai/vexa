@@ -283,6 +283,21 @@ export function Workbench() {
   const chatOnly = !meetOnly && activeList === "sessions";
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
 
+  // A pending SHARED landing — an accepted invite (`vexa.openWorkspace`) or a shared meeting
+  // (`vexa.openMeeting`), stashed by InviteGate before the reload — must place a tab in the DOCKVIEW. But
+  // the default Sessions view is CHAT-ONLY: the dockview isn't mounted, so its onReady (→ resolveFirstView)
+  // would never fire and the share would silently land on the session chat instead. Flip OFF chat-only
+  // EARLY here (peek only — resolveFirstView consumes the stash) so the grid mounts and the resolver runs.
+  useEffect(() => {
+    if (meetOnly || layout.store.getState().activeList !== "sessions") return;
+    try {
+      if (localStorage.getItem("vexa.openWorkspace")) layout.setActiveList("files");
+      else if (localStorage.getItem("vexa.openMeeting")) layout.setActiveList("meetings");
+    } catch { /* noop — a locked-down localStorage just means no early reveal */ }
+    // once, on mount (a fresh page load after the redeem reload) — deps intentionally empty
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Clicking an entity link in chat opens its doc. Reveal the center (leave chat-only → Knowledge view),
   // resolve a [[wikilink]] title to its kg/entities/*.md path, then open the doc tab.
   useEffect(() => {
@@ -340,8 +355,11 @@ export function Workbench() {
       if (reveal && !meetOnly) layout.setActiveList("meetings");
       layout.openTab({ id: `meeting:${mid}`, title: "Shared meeting", kind: "meeting", params: { meetingId: mid } });
     };
-    const pinReadme = (slug?: string) => {
-      revealCenter();
+    // `forceKnowledge` = land ON the Knowledge section unconditionally (an accepted invite is explicit —
+    // the shared workspace's tree must show, even for a returning user whose saved rail was Meetings/etc).
+    // Otherwise just reveal the center out of chat-only (sessions → files).
+    const pinReadme = (slug?: string, forceKnowledge = false) => {
+      if (forceKnowledge && !meetOnly) layout.setActiveList("files"); else revealCenter();
       // coordinate with MountSection's once-per-session pin (workspace.tsx) so it doesn't double-pin later
       if (slug) { try { sessionStorage.setItem(`vexa.readme.pinned.${slug}`, "1"); } catch { /* noop */ } }
       layout.openTab({ id: slug ? `doc:${slug}:README.md` : "doc:README.md", title: "README.md", kind: "doc", params: { path: "README.md", slug } });
@@ -349,9 +367,9 @@ export function Workbench() {
 
     const plan = firstViewPlan({ sharedMeetingId, acceptedSlug, sharedSlug, liveMeetingId: liveMeetingsNow()[0]?.id ?? null, fresh });
     switch (plan.kind) {
-      case "meeting-and-workspace": openMeeting(plan.meetingId, false); pinReadme(plan.slug); break;  // README pinned last → focused
+      case "meeting-and-workspace": openMeeting(plan.meetingId, false); pinReadme(plan.slug, !!acceptedSlug); break;  // README pinned last → focused
       case "meeting":               openMeeting(plan.meetingId, true); break;
-      case "workspace-readme":      pinReadme(plan.slug); break;
+      case "workspace-readme":      pinReadme(plan.slug, !!acceptedSlug); break;  // accepted invite → force Knowledge open
       case "live-meeting":          openMeeting(plan.meetingId, true); break;
       case "own-readme":            pinReadme(); break;
       case "noop":                  break;
