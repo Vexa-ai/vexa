@@ -27,7 +27,10 @@ services:
     command: ["node","server.mjs"]
     environment:
       - NODE_ENV=development
-      - NEXTAUTH_URL=http://localhost:15300
+      # Inherit the public origin from .env (e.g. https://terminal.dev.vexa.ai on the
+      # served eyeball); fall back to localhost only for a local-tunnel dev loop.
+      # A hardcoded localhost here breaks NextAuth sign-in for any publicly-served host.
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:15300}
     volumes:
       - ../../clients/terminal/src:/app/src
       - ../../clients/terminal/public:/app/public
