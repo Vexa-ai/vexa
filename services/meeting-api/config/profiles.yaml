@@ -8,7 +8,12 @@ profiles:
       cpu_request: "500m"
       cpu_limit: "2000m"
       memory_request: "512Mi"
-      memory_limit: "2Gi"
+      # 2Gi killed Chrome via OOM ~26 min into meeting-113 (2026-07-07). Chrome
+      # baseline ~1 GB + Meet SPA + WebRTC buffers + Node/VAD/Whisper queue
+      # exceeded 2 GB well before the 30 min mark. 4 GB gives ~30% headroom for
+      # ≥60 min meetings without leaking Scaleway host RAM (4 parallel bots =
+      # 16 GB, host has plenty).
+      memory_limit: "4Gi"
       shm_size: 2147483648   # 2GB shared memory (Chrome/Chromium)
     idle_timeout: 0           # managed by meeting-api, not idle loop
     auto_remove: false
