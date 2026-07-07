@@ -13,8 +13,19 @@ Every agent turn mounts an ordered set `[_global?, *normal, _system]`:
 | Tier | Slug | Access | Always mounted | Purpose |
 |---|---|---|---|---|
 | **Global system** | `_global` | **read-only** (fs `:ro`) | yes (when configured) | Platform-owned self-awareness: a synced **Vexa branch** (code + docs) + behaviour/skills. One copy, central. |
-| **Normal** | `<id>` / `.attached/<subject>/<slug>` | read-write | the primary baseline is; others are opt-in | The user's own + shared knowledge workspaces (see below). |
-| **Private system** | `_system` | **read-write** | yes | Per-user private store — chats/sessions, settings, routines, membership/attachment records. Never shared. |
+| **Normal** | `<id>` / `.attached/<subject>/<slug>` | read-write | opt-in (flat, equal rank) | The user's own + shared knowledge workspaces — all the **same rank** (see below). |
+| **Private system** | `_system` | **read-write** | yes | Per-user private store — **who you're helping** (`identity.md`), chats/sessions, settings, routines, membership/attachment records. Never shared. |
+
+- **There is NO "baseline"/"primary" rank** (2026-07-07 flat model). The normal tier is a **flat,
+  equal-rank list** (`active_set`) — every workspace activates/deactivates the same way. The mount
+  set's `primary` flag marks only the **dynamic default HOME** (the *first active* normal workspace =
+  the turn's cwd, whose `CLAUDE.md` auto-loads); it moves as workspaces are switched on/off, and is
+  absent when nothing normal is active. Code: `workspace_attach._normalized_active_set` (flat, with a
+  one-time `_flat_v1` migration off the legacy baseline state), `dispatch._worker_cwd`.
+- **`_system` carries the light self-identity** (`identity.md`): the user's **name** + a pointer to the
+  full `self: true` profile in their Personal workspace. Always mounted, so the agent knows who it's
+  helping even when Personal is switched off; the worker preamble routes identity here and **asks for
+  the name until it's set** (✅). Full profile (company/role/relationships) stays in Personal.
 
 - `_global` and `_system` are **"system possessions" always attached** to a user's agent. They are
   **invisible** in the workspace lists and **non-sharable** — both are in `RESERVED_SLUGS` and
@@ -29,14 +40,29 @@ Every agent turn mounts an ordered set `[_global?, *normal, _system]`:
 
 ## Personal + normal workspaces
 
-- **Personal** — the user's private baseline (`<root>/<subject>`), always mounted, **non-detachable
-  by design** (deactivate/share/archive/delete all refuse the baseline — it's the guaranteed personal
-  RW home). Shown as **"Personal"** in the UI (✅). ⬜ planned: provision it named `personal` on
-  **account creation** (identity ↔ agent seam) and retire the legacy `seed` slug.
-- **Normal workspaces** are **single rank** (owner ruling): one flat **member** rank. Any member can
-  **switch on/off** (activate/deactivate), **share**, and read/write. Created blank + additive; seeded
-  from a template with a root `README.md` (✅). ⬜ planned: the default seed becomes a **mock tutorial**
-  (not FINOS) + **README pinned on init**.
+- **Personal is just a normal workspace** — no special rank. It's the workspace **auto-seeded at
+  account creation** and shown as **"Personal"** in the UI; beyond that it activates/deactivates,
+  reads/writes, and behaves exactly like any other normal workspace (✅). Switch it off and it leaves
+  the active set — **its files drop from the finder** and the agent stops working in it, same as any
+  workspace. Its tree still physically lives at `<root>/<subject>` (the "seed slot" — a **storage
+  detail, not a rank**); code resolves that path via `_seed_slot_slug` / `_slug_dir`.
+  - 🟡 residual: **share/archive/delete of the seed slot are still refused** (you can't yet delete/
+    share the exact slot whose tree sits at `<root>/<subject>`). Making Personal *fully* like others
+    means relocating that tree out of the seed slot — a ⬜ follow-up (see Deferred).
+- **Provisioned eagerly on account creation** (✅): first login provisions BOTH Personal (light seed)
+  and `_system` via `POST /api/workspace/init` (idempotent; the lazy first-dispatch seed remains a
+  fallback). Wired from the terminal's `findOrCreateUserToken`.
+- **Light default seed** (✅): a new workspace seeds from the light `default` template (**not** FINOS —
+  `DEFAULT_TEMPLATE`/`default_template` flipped), whose **`README.md` is a human onboarding-dashboard**
+  ("what's in here and what matters"), not developer docs. Convention: **the README is every
+  workspace's dashboard**, kept current by the agent (stated in the seed `CLAUDE.md`). FINOS stays an
+  opt-in template (`VEXA_DEFAULT_TEMPLATE=finos`).
+- **First-view / landing** (✅, `clients/terminal/src/workbench/firstView.ts`) — on login the pinned
+  first tab is chosen by what's shared: **nothing → own README-onboarding**, **shared workspace → that
+  workspace's README**, **shared meeting → the meeting**, **meeting + workspace → the workspace README
+  + the meeting** (its live badge). One resolver, replacing the old racing auto-opens.
+- **Normal workspaces are single rank** (sharing roles — see below). Created blank + additive; every
+  workspace has a root `README.md`.
 - ⬜ planned — **per-workspace purpose/policy**: each workspace carries a clear statement of what it's
   for / what the agent should write there, wired into the mount preamble — so an agent with a
   *composition* mounted (Personal + a customer-deal shared ws + a sales-dept ws) knows what belongs
@@ -104,10 +130,16 @@ path (`dispatch.py` comment) — drive concurrent shared writes **sequentially**
 - ⬜ **Filesystem isolation** — today the whole store is bound once at `/workspaces`, so a turn can
   `cd ..` to other workspaces; per-mount binds are the fix (`workspace_binds`), decoupled as a
   presentation remap. (Security hardening for multi-tenant ship.)
-- ⬜ **Per-workspace purpose/policy**, **mock-tutorial seed + README-on-init**, **provision `personal`
-  on account-create**, **owner-restricted invite mode (deferred decision)** — see above.
+- ⬜ **Full seed-slot de-specialization** — relocate Personal's tree out of the fixed `<root>/<subject>`
+  seed slot into a normal store slot, so share/archive/delete work on it like any workspace (removes the
+  last residual specialness; the rank is already gone).
+- ⬜ **Per-workspace purpose/policy** (the key next capability — see above) and **owner-restricted
+  invite mode (deferred decision)**.
 - ⬜ **Routine can send a bot** (`routine.v1` gains a `target: agent|meeting`).
-- ⬜ **Chat migration (M1)** into `_system` (today `_system` holds only a README marker).
+- ⬜ **Chat migration (M1)** into `_system` (today `_system` holds `identity.md` + a README marker).
+- ✅ done since the last revision: **flat equal-rank model** (no baseline), **cwd follows the active
+  set**, **light default seed + onboarding-dashboard README**, **first-view landing resolver**,
+  **`_system` light identity**, **eager provision on account creation**.
 
 ## Related docs
 - `core/agent/control_plane/README.md` — Lane M membership/invites + the policy write-guard.
