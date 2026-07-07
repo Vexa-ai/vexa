@@ -258,6 +258,10 @@ function FilesList() {
   // Lane A: every NON-PRIMARY active mount (other private workspaces + shared) — rendered as sections
   // beneath the primary tree, so KNOWLEDGE mirrors the agent's full mount set, not just the primary.
   const [extraMounts, setExtraMounts] = useState<ActiveMount[]>([]);
+  // The baseline ("Personal") is a NORMAL workspace — when switched off it leaves the active set, so its
+  // own tree + Find-file hits must vanish too (not linger). Driven off the active set (which omits a hidden
+  // baseline), exactly like every other mount; defaults true so a slow active-set read never blanks it.
+  const [baselineActive, setBaselineActive] = useState(true);
   // per-mount trees (keyed by slug) so the Find-file search can reach shared/other workspaces, not just
   // the primary — otherwise a file a member's agent wrote in a SHARED ws is invisible to search.
   const [mountTrees, setMountTrees] = useState<Record<string, string[]>>({});
@@ -278,6 +282,7 @@ function FilesList() {
     // extra sections, never the primary tree).
     const loadExtra = () => void readActiveSet()
       .then(async (s) => {
+        setBaselineActive(s.active.some((m) => m.primary));  // baseline present in the set ⇒ not switched off
         const mounts = s.active.filter((m) => !m.primary);
         setExtraMounts(mounts);
         // fetch each mount's full tree so the search index spans every active workspace
@@ -294,7 +299,8 @@ function FilesList() {
     window.addEventListener("focus", load);
     return () => { clearInterval(id); window.removeEventListener("focus", load); };
   }, [reloadKey]);
-  const nodes = buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree);
+  // Baseline switched off ⇒ its own tree is not part of the finder (its files leave with it, like any mount).
+  const nodes = baselineActive ? buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree) : [];
   // default expansion: top-level folders open, deeper folders collapsed (only when no saved state yet)
   useEffect(() => {
     if (readSS(SS_EXPANDED) != null || nodes.length === 0) return;
@@ -336,7 +342,7 @@ function FilesList() {
   // ── instant file-name search: pure client-side filter over the already-loaded tree ──
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const scoped = kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree;
+  const scoped = !baselineActive ? [] : (kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree);
   // search spans the primary tree AND every active mount (shared / other private), each hit tagged with
   // its slug + workspace label — so a file a member's agent wrote in a SHARED workspace is findable and
   // opens against the right mount, not just the caller's own primary.
@@ -403,7 +409,8 @@ function FilesList() {
         {matches.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No files match “{query.trim()}”.</div>}
       </>) : (<>
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} openMenu={openMenu} />)}
-        {!error && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+        {!error && !baselineActive && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Personal is switched off — turn it back on in Workspaces below.</div>}
+        {!error && baselineActive && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
       </>)}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
