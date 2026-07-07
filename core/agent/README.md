@@ -10,6 +10,10 @@ and coding-agent CLIs only through the provider-agnostic [`llm`](llm) module (co
 harness ports; `claude-code` is the default harness adapter, selected by `VEXA_RUNNER`).
 Agents never run in the control plane; isolation *is* the enforcement of governance.
 
+**The workspace model an agent turn sees** — the three tiers (`_global` RO / normal / `_system` RW),
+personal + normal single-rank workspaces, the sharing model, and live in-meeting collaboration — is
+documented in **[`docs/WORKSPACES.md`](../../docs/WORKSPACES.md)**.
+
 ## Boundary (SoC)
 **This domain is about:** the copilot lifecycle, chat, the user's `workspace.v1`, notes/cards, and agent
 config. **It is never about:** bot lifecycle, the meeting row, or *owning* the **transcript carrier**.

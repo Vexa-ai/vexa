@@ -4,9 +4,15 @@ The agent control plane: the FastAPI app (`api.py`) and orchestration that dispa
 
 ## Workspace membership + invites + roles (Lane M — the access layer for shared workspaces)
 
-`workspace_membership.py` is the access layer that lets a workspace **owner** grant another user
-**viewer** (read) or **contributor** (read/write) access — the foundation for shared workspaces and
-shared meeting sessions.
+> **The full workspace + collaboration model (tiers, personal, sharing, live collaboration, deferred)
+> is documented in [`docs/WORKSPACES.md`](../../../docs/WORKSPACES.md).** This section is the Lane M
+> membership/invite mechanism.
+
+`workspace_membership.py` is the access layer for shared workspaces. **Single-rank model (owner ruling
+2026-07-07):** a shared workspace has ONE member rank — every member is read/write and can share
+(mint/revoke invites); the **`owner` is just the CREATOR** (the only one who can unshare / remove
+members / change role). The read-only `viewer` role stays in the lattice for back-compat but is **not
+invitable** — `INVITABLE_ROLES = ("contributor",)`.
 
 **Two stores, written together (git is authoritative, the index is derived):**
 - **Authoritative** — the workspace's OWN git repo at `policy/members.json`
@@ -33,8 +39,13 @@ shared meeting sessions.
   the "change read/write permissions" DoD item) · `GET /shared` = the "shared with me" listing.
 
 **Role enforcement** — `require_role(root, workspace_id, subject, min_role)` (owner > contributor >
-viewer) is the ONE gate every shared route uses. The SYSTEM workspace + reserved/own-private slugs are
-never shareable (`assert_shareable`: dot-prefixed / `sys` / `_system` / `seed` refused).
+viewer) is the ONE gate every shared route uses. Under single-rank: **mint/revoke/list invites +
+list members = any member** (`require_role("contributor")`); **unshare / remove member / change role
+= creator only** (`require_role("owner")`). The system tiers + reserved/own-private slugs are never
+shareable (`RESERVED_SLUGS` = `sys` / `_system` / `system` / `_global` / `global` / `seed` /
+`seed-prev`; `ensure_workspace_shareable` refuses them and the private baseline).
+**DEFERRED DECISION** (owner's call): whether to also offer an owner-restricted invite mode — see
+`docs/WORKSPACES.md`.
 
 **`is_member(root, workspace_id, subject) -> role|None`** is the seam Lane A calls for mount-resolution
 and transcript-subscribe-by-membership. This lane provides membership DATA + APIs only — it does NOT

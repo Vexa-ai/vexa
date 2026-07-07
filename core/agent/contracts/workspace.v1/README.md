@@ -13,4 +13,6 @@ owns only two things, both light:
    (`additionalProperties: true`) — the entity *schema* is config, not platform (P11).
 
 The agent clones/commits this repo itself (via `env`, see `runtime.v1`); the kernel never sees "workspace".
-Access/sharing of the workspace is deferred (ADR-0003). Goldens validated by `gate:schema`.
+Access/sharing + the tier model (`_global`/normal/`_system`) + live collaboration are **delivered** —
+see [`docs/WORKSPACES.md`](../../../../docs/WORKSPACES.md) (ADR-0003 is the original data/sharing policy).
+Goldens validated by `gate:schema`.
