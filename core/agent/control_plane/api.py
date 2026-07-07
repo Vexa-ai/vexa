@@ -996,9 +996,12 @@ def create_app(
     # surfaces them here and wires the slim-client init_workspace()/use_workspace().
     @app.post("/api/workspace/init", status_code=201)
     def ws_init(request: Request):
-        """Materialize this subject's workspace from the VALIDATED workspace-seed template via the single
-        seed primitive (shared.seeding.seed_workspace). Idempotent — an existing workspace (`.git`) is
-        returned untouched. The seam the worker uses on first dispatch, surfaced as a control."""
+        """EAGERLY provision this subject's workspace tiers — the "on account creation" seam (so the
+        Personal baseline + the private `_system` tier exist BEFORE the first dispatch, instead of being
+        lazily seeded on first turn). Materializes the baseline from the VALIDATED workspace-seed template
+        (shared.seeding.seed_workspace) and ensures `_system` (system_mounts.ensure_system_workspace).
+        Idempotent — existing tiers (`.git` present) are returned untouched, so it's safe to call on every
+        login. The same seams the worker uses lazily on first dispatch, surfaced as a control."""
         subject = subject_of(request)
         ws = wsr.workspace_dir(subject)
         # Select the seed out of the registry root (default template for now; per-request template
@@ -1012,7 +1015,12 @@ def create_app(
             raise HTTPException(status_code=500, detail="invalid workspace seed: " + "; ".join(problems))
         existed = (ws / ".git").exists()
         seed_workspace(ws, seed_dir)
-        return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed}
+        # The PRIVATE SYSTEM tier (`_system`) — always-mounted, holds the light identity reference. Ensure
+        # it up front too so identity + chats/settings have a home from the very first turn. Idempotent.
+        system_existed = (system_mounts.system_store_path(wsr.root, subject) / ".git").exists()
+        system_mounts.ensure_system_workspace(str(wsr.root), subject)
+        return {"workspace": str(ws), "seeded": not existed, "already_initialized": existed,
+                "system_seeded": not system_existed}
 
     @app.get("/api/workspace/attached")
     def ws_attached(request: Request):
@@ -1116,15 +1124,13 @@ def create_app(
 
     @app.post("/api/workspace/deactivate")
     def ws_deactivate(request: Request, body: WorkspaceDeactivateBody = Body(...)):
-        """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot
-        be deactivated (409). Idempotent — a not-active slug is a no-op."""
+        """REMOVE a workspace from the active set (park it — never destroyed). The private baseline can be
+        switched off too (sets ``baseline_hidden``; its home tree is untouched, re-activate to switch it back
+        on). Idempotent — an already-off / not-active slug is a no-op."""
         subject = subject_of(request)
         try:
             result = deactivate_workspace(wsr.root, subject, body.slug)
-        except ValueError as exc:
-            # invalid subject vs the non-deactivatable baseline — distinguish by message
-            if "baseline" in str(exc):
-                raise HTTPException(status_code=409, detail="the private baseline workspace is always active")
+        except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed}
 

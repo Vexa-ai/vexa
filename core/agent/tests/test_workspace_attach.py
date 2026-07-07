@@ -443,15 +443,26 @@ def test_deactivate_parks_the_secondary_without_destroying_it(tmp_path):
     assert slug in [m.slug for m in active_workspaces(root, "u1")]
 
 
-def test_seed_is_always_active_and_cannot_be_deactivated(tmp_path):
+def test_seed_is_active_by_default_and_can_be_switched_off_and_back_on(tmp_path):
     root = tmp_path / "workspaces"
-    _seed_active(root, "u1")
+    seed_ws = _seed_active(root, "u1")
     # never-swapped subject: the set is exactly the private baseline (the seed), marked primary
     mounts = active_workspaces(root, "u1")
     assert len(mounts) == 1 and mounts[0].slug == "seed" and mounts[0].primary is True
     assert mounts[0].write is True and Path(mounts[0].path) == root / "u1"
-    with pytest.raises(ValueError):
-        deactivate_workspace(root, "u1", "seed")
+
+    # SWITCH THE BASELINE OFF — it leaves the mount set (empty now), but its home tree is UNTOUCHED
+    res = deactivate_workspace(root, "u1", "seed")
+    assert res.changed is True
+    assert active_workspaces(root, "u1") == []                         # the turn carries no private mount
+    assert (seed_ws / "CLAUDE.md").read_text() == "SEED"              # durable memory root never destroyed
+    assert deactivate_workspace(root, "u1", "seed").changed is False  # idempotent (already off)
+
+    # SWITCH IT BACK ON — re-activating the baseline clears the flag; it returns as primary, first
+    back = activate_workspace(root, "u1", None, slug="seed")
+    assert back.changed is True
+    mounts = active_workspaces(root, "u1")
+    assert [m.slug for m in mounts] == ["seed"] and mounts[0].primary is True
 
 
 def test_active_set_survives_a_swap_of_the_primary(tmp_path):

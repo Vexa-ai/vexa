@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # Registry of workspace templates (workspace-seeds/<name>/); `default_template` selects one.
     # `seeding.resolve_seed_dir` is the selection seam (honors the VEXA_WORKSPACE_SEED_DIR override).
     workspace_seeds_dir: str = "/app/workspace-seeds"
-    default_template: str = "finos"  # FINOS-ecosystem KG seed; override with VEXA_DEFAULT_TEMPLATE=default for the bare scaffold
+    default_template: str = "default"  # light ready-to-go scaffold (README = onboarding-dashboard); override with VEXA_DEFAULT_TEMPLATE=finos for the FINOS KG seed
     # ── three-tier mount stack (AMENDMENT 4) — the GLOBAL SYSTEM tier (_global) ──
     # The platform-owned, READ-ONLY _global workspace mounted into EVERY worker (behaviour/skills/tools).
     # A host path / repo dir; empty = no _global mount (the stack degrades to _system + the active set).

@@ -46,6 +46,25 @@ SYSTEM_SLUG = "_system"
 # rides the single store-root bind (no extra bind) exactly like the private baseline.
 SYSTEM_STORE_DIRNAME = ".system"
 
+# The LIGHT self-identity reference the _system tier ships with. It is deliberately minimal — just enough
+# for the agent to know who it's helping on EVERY turn (even when the Personal workspace is switched off).
+# The FULL profile (company, role, relationships, history) lives in the user's Personal workspace as the
+# `self: true` person entity; this file links to it. The agent fills `name` by asking the user (and keeps
+# asking until it's set — see worker/engine.py mounts_preamble).
+_IDENTITY_STUB = (
+    "# Who you're helping\n\n"
+    "Your LIGHT, always-available reference for who the user is. It lives in the private system\n"
+    "workspace so you know who you're talking to on every turn — even when the user's Personal\n"
+    "workspace is switched off. Keep it to the essentials; the FULL profile (company, role,\n"
+    "relationships, history) lives in the user's **Personal** workspace as the `self: true` person\n"
+    "entity under `kg/entities/person/`. Link to it from here once it exists.\n\n"
+    "## User\n\n"
+    "- **name:** _(unknown — ask the user, then record it here)_\n"
+    "- **personal profile:** _(link to the `self: true` person entity in Personal once created)_\n\n"
+    "> If **name** is still unknown, ask the user their name early and record it here. It is the one\n"
+    "> fact you should not leave blank — everything else can be researched or deferred.\n"
+)
+
 
 def global_mount(settings, root: str) -> Optional[dict]:
     """The GLOBAL SYSTEM tier (``_global``) — READ-ONLY, mounted into every worker when configured and
@@ -106,13 +125,16 @@ def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path]
             else:
                 shutil.copy2(item, dst)
     else:
-        # The thin template: a single marker so the repo is non-empty + self-describing. Chats/sessions,
-        # settings, routines, membership records land here in later WPs.
+        # The thin template: a marker + the LIGHT identity reference so the repo is non-empty and the
+        # agent always knows who it is helping. Chats/sessions, settings, routines, membership records
+        # land here in later WPs.
         (home / "README.md").write_text(
             "# Private system workspace\n\n"
-            "Per-user, read-write, always mounted. Holds chats/sessions, settings, routines,\n"
-            "membership/attachment records, and credential refs. Private — never shareable.\n"
+            "Per-user, read-write, always mounted. Holds who you're helping (`identity.md`),\n"
+            "chats/sessions, settings, routines, membership/attachment records, and credential refs.\n"
+            "Private — never shareable.\n"
         )
+        (home / "identity.md").write_text(_IDENTITY_STUB)
     env = scrubbed_git_env()
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
         subprocess.run(["git", *args], cwd=str(home), check=True, capture_output=True, text=True, env=env)

@@ -725,8 +725,15 @@ def test_workspace_init_seeds_from_template(tmp_path, monkeypatch):
     assert (ws / "CLAUDE.md").read_text() == "root\n"          # from the template
     assert (ws / "agents" / "meeting.md").exists()
 
-    r2 = c.post("/api/workspace/init", headers={"X-User-Id": "u_jane"})   # idempotent
+    # init EAGERLY provisions the private _system tier too (identity + chats home), not just the baseline
+    assert r.json()["system_seeded"] is True
+    system_home = workspaces / ".system" / "u_jane"
+    assert (system_home / ".git").exists()
+    assert (system_home / "identity.md").exists()             # the light self-identity reference
+
+    r2 = c.post("/api/workspace/init", headers={"X-User-Id": "u_jane"})   # idempotent (both tiers)
     assert r2.json()["already_initialized"] is True
+    assert r2.json()["system_seeded"] is False
 
 
 def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatch):
@@ -774,7 +781,7 @@ def test_workspace_swap_attaches_custom_repo_and_swaps_back(tmp_path, monkeypatc
 
 def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path, monkeypatch):
     """POST /api/workspace/activate ADDS a repo to the active set without parking the private baseline;
-    GET /api/workspace/active lists the ordered set; deactivate parks it; the baseline is non-deactivatable."""
+    GET /api/workspace/active lists the ordered set; deactivate parks it; the baseline can be switched off."""
     import subprocess
     from control_plane.workspace_reader import WorkspaceReader
 
@@ -811,8 +818,16 @@ def test_workspace_activate_adds_without_parking_then_deactivate_parks(tmp_path,
     assert d.status_code == 200 and d.json()["changed"] is True
     assert [m["slug"] for m in c.get("/api/workspace/active", headers=h).json()["active"]] == ["seed"]
 
-    # the private baseline cannot be deactivated
-    assert c.post("/api/workspace/deactivate", headers=h, json={"slug": "seed"}).status_code == 409
+    # the private baseline CAN be switched off — it leaves the set (empty now) but its tree is untouched
+    off = c.post("/api/workspace/deactivate", headers=h, json={"slug": "seed"})
+    assert off.status_code == 200 and off.json()["changed"] is True
+    assert c.get("/api/workspace/active", headers=h).json()["active"] == []
+    assert (workspaces / "u_jane" / "CLAUDE.md").read_text() == "SEED\n"   # durable memory root kept
+    assert c.get("/api/workspace/attached", headers=h).json()["baseline_hidden"] is True
+    # re-activating the baseline switches it back on (primary, first again)
+    on = c.post("/api/workspace/activate", headers=h, json={"slug": "seed"})
+    assert on.status_code == 200 and on.json()["changed"] is True
+    assert [m["slug"] for m in c.get("/api/workspace/active", headers=h).json()["active"]] == ["seed"]
 
 
 def test_workspace_new_creates_a_blank_workspace_and_adds_it_without_swapping(tmp_path, monkeypatch):

@@ -48,10 +48,13 @@ def build_active_set(settings: Settings, subject: str, memberships: Optional[lis
         mounts = active_workspaces(root, subject)
     except Exception:  # noqa: BLE001 — mount resolution must never break a dispatch; fall back to the baseline
         logger.warning("active-set resolution failed for subject=%s — mounting the private baseline only", subject)
-        mounts = []
-    if not mounts:
+        mounts = None
+    if mounts is None:
+        # Resolution ERROR → safe fallback to the lone baseline (a dispatch never dies with no home on a hiccup).
         private = [{"slug": subject, "path": f"{root}/{subject}", "role": "private", "write": True, "primary": True}]
     else:
+        # A resolved-but-EMPTY set is intentional (the subject switched their baseline OFF and has no other
+        # private workspace active) — respect it; the turn simply carries no private mount. NOT the error path.
         private = [
             {"slug": m.slug, "path": m.path, "role": m.role, "write": m.write, "primary": m.primary}
             for m in mounts

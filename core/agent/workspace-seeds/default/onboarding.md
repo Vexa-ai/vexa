@@ -32,8 +32,10 @@ Exhaust search before you ask. Do not bounce a findable fact back to the user.
 ## The discovery loop — run AT LEAST 2 full cycles
 
 1. **Seed.** Get the minimum to start: the user's **name + (LinkedIn URL or company)**. One short ask,
-   *after* you've said what you're building. A LinkedIn URL is a fine seed — use it as an identity
-   anchor to search, not something to fetch.
+   *after* you've said what you're building. The **name is the one fact you must not leave blank** —
+   record it immediately in `_system/identity.md` (the light, always-available identity reference), and
+   keep asking until you have it. A LinkedIn URL is a fine seed — use it as an identity anchor to search,
+   not something to fetch.
 2. **Research — exhaustively, autonomously.** Fire MANY `WebSearch` calls and cast wide for this cycle:
    - **the person** — role, background, location, current focus, public posts/talks/interviews
    - **their company** — what it does, stage/size, product, tech, funding, domain
@@ -42,9 +44,11 @@ Exhaust search before you ask. Do not bounce a findable fact back to the user.
    - **derive** what you can (e.g. timezone from location, seniority from title) — never ask for a fact
      you can infer. Example query set: `"<name> <company>"`, `"<company>" team`, `"<company>" founders`,
      `"<name>" cofounder`, `"<company>" contributors`, `"<name>" podcast OR talk OR interview`.
-3. **Write.** Scaffold/refresh entities from what you found (a person entity for the user + each
-   discovered person; a company entity for each org) and a personalized `CLAUDE.md` header. See shapes
-   below.
+3. **Write.** Scaffold/refresh entities from what you found: a `person` entity for the user **marked
+   `self: true`** holding the FULL profile + each discovered person; a company entity for each org. Also
+   **update `_system/identity.md`** so its light reference links to that `self: true` node (the name is
+   already recorded from step 1), and **refresh `README.md` as the workspace dashboard** so the pinned
+   page reflects who the user is and the key people/companies. See shapes below.
 4. **Report + gaps.** Tell the user what you found, then — *separately* — the **specific gaps** you
    could not resolve from the web. Ask only those, **batched**, each with a one-line *why it matters*.
 5. **Incorporate → loop.** Treat each human answer as a **new seed** (a named investor/colleague is a
@@ -69,19 +73,25 @@ want help with, anything the web missed). More cycles are welcome while they're 
 Typed entity files at `kg/entities/<type>/<slug>.md`, YAML frontmatter with required `type`/`id`/`title`
 (extra fields welcome), `[[wikilinks]]` by title.
 
-- `kg/entities/person/<slug>.md` — the user + every discovered person:
+- `kg/entities/person/<slug>.md` — the user (the OWNER, marked `self: true`) + every discovered person.
+  The user's OWN node carries `self: true` and holds the full profile; everyone else is a plain person
+  node (no `self`):
 
   ```
   ---
   type: person
   id: jane-liu
   title: Jane Liu
+  self: true                                       # ← the workspace owner (the user); EXACTLY one node
   company: Acme
   role: VP Eng
   location: Lisbon
+  linkedin: https://www.linkedin.com/in/janeliu/   # the URL THEY gave you (their own profile)
   ---
   One line on who they are and why they matter to the user. Works at [[Acme]].
   ```
+
+  Discovered people use the same shape **without** `self` or `linkedin`.
 
 - `kg/entities/company/<slug>.md` — the company + notable orgs:
 

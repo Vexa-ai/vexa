@@ -70,6 +70,9 @@ def test_system_workspace_is_created_if_absent_as_a_git_repo(tmp_path):
     home = ensure_system_workspace(str(tmp_path / "ws"), "u1")
     assert home == tmp_path / "ws" / ".system" / "u1"
     assert (home / ".git").exists() and (home / "README.md").exists()  # thin template, committed
+    # the LIGHT self-identity reference ships in the template (the agent fills the name by asking)
+    identity = (home / "identity.md").read_text()
+    assert (home / "identity.md").exists() and "name:" in identity and "self: true" in identity
     # HEAD exists so a turn can commit onto it
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(home), capture_output=True, text=True)
     assert head.returncode == 0 and head.stdout.strip()

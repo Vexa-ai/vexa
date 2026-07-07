@@ -205,9 +205,14 @@ def _primary_slug(state: dict) -> str:
 def _normalized_active_set(state: dict) -> list[str]:
     """The ordered active set with the private baseline FORCED first and present, duplicates and unknown
     slugs (no parked tree, not the primary) dropped. Back-compat: an empty set (pre-``active_set`` state)
-    yields just the primary — exactly today's single-active behavior."""
+    yields just the primary — exactly today's single-active behavior.
+
+    The baseline can be SWITCHED OFF by the subject (``baseline_hidden`` — the counterpart of
+    ``hidden_shared`` for shared workspaces). When off it leaves the mount set entirely; its home tree
+    (``<root>/<subject>``) is untouched, ready to switch back on. The set may then be empty, or lead with a
+    secondary active workspace."""
     primary = _primary_slug(state)
-    ordered: list[str] = [primary]
+    ordered: list[str] = [] if state.get("baseline_hidden") else [primary]
     for slug in state.get("active_set", []):
         if slug == primary or slug in ordered:
             continue
@@ -231,6 +236,7 @@ def attached_workspaces(root: str | Path, subject: str) -> dict:
     _safe_subject_dir(rootp, subject)
     state = _load_state(_store(rootp, subject))
     state["active_set"] = _normalized_active_set(state)
+    state["baseline_hidden"] = bool(state.get("baseline_hidden"))  # always present so the UI can render the toggle
     return state
 
 
@@ -604,10 +610,16 @@ def activate_workspace(
     target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
     primary = _primary_slug(state)
 
-    # The private baseline is unconditionally active — activating it (or the seed on a never-swapped
-    # subject) is a no-op, never a destructive re-clone into the store slot.
-    already = target_slug in _normalized_active_set(state)
-    if target_slug == primary or already:
+    # The private baseline: re-activating it SWITCHES IT BACK ON (clears ``baseline_hidden``). When it isn't
+    # hidden the baseline is unconditionally active, so activating it (or the seed on a never-swapped
+    # subject) is a true no-op — never a destructive re-clone into the store slot.
+    if target_slug == primary:
+        if state.get("baseline_hidden"):
+            state["baseline_hidden"] = False
+            _save_state(store, state)
+            return ActiveResult(subject, target_slug, changed=True)
+        return ActiveResult(subject, target_slug, changed=False)
+    if target_slug in _normalized_active_set(state):
         return ActiveResult(subject, target_slug, changed=False)
 
     # Materialize the slot tree OUT OF PLACE if it isn't already parked — a clone failure raises here
@@ -714,8 +726,9 @@ def deactivate_workspace(root: str | Path, subject: str, slug: str) -> ActiveRes
     """REMOVE a workspace from the subject's active set (park it — never destroyed). The parked tree stays
     in its store slot, ready to re-activate. Idempotent: deactivating a not-active slug is a no-op.
 
-    The private baseline (``<root>/<subject>``) is ALWAYS active and cannot be deactivated — that is the
-    subject's durable memory root; attempting it raises ``ValueError``."""
+    The private baseline (``<root>/<subject>``) can be SWITCHED OFF too — it sets ``baseline_hidden`` rather
+    than moving anything (its home tree is <root>/<subject>, not a store slot). Switched off it leaves the
+    mount set; ``activate_workspace`` switches it back on. Its durable memory tree is never destroyed."""
     rootp = Path(root)
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
@@ -723,7 +736,11 @@ def deactivate_workspace(root: str | Path, subject: str, slug: str) -> ActiveRes
     slug = (slug or "").strip()
 
     if slug == _primary_slug(state):
-        raise ValueError("cannot deactivate the private baseline workspace")
+        if state.get("baseline_hidden"):
+            return ActiveResult(subject, slug, changed=False)
+        state["baseline_hidden"] = True
+        _save_state(store, state)
+        return ActiveResult(subject, slug, changed=True)
     if slug not in _normalized_active_set(state):
         return ActiveResult(subject, slug, changed=False)
 

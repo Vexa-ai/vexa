@@ -37,10 +37,12 @@ Exhaust search before you ask. Do not bounce a findable fact back to the user.
 
 ## The discovery loop — run AT LEAST 2 full cycles
 
-1. **Seed — ask for their LinkedIn URL.** After you've said what you're building, make ONE short ask:
-   **"Paste your LinkedIn URL"** — the URL itself, not a typed-out bio. That single link is how the user
-   positions who they are, and it's your identity anchor: use it to **search** from, don't try to *fetch*
-   the page. If they'd rather not share LinkedIn, fall back to **name + company**.
+1. **Seed — get their NAME, then their LinkedIn URL.** After you've said what you're building, make ONE
+   short ask: **their name, and their LinkedIn URL** (the URL itself, not a typed-out bio). The **name is
+   the one fact you must not leave blank** — record it immediately in `_system/identity.md` (the light,
+   always-available identity reference), then use the LinkedIn link as your identity anchor to **search**
+   from (don't try to *fetch* the page). If they'd rather not share LinkedIn, fall back to **name +
+   company**. Keep asking for the name until you have it.
 2. **Research — exhaustively, autonomously.** Fire MANY `WebSearch` calls and cast wide for this cycle:
    - **the person** — role, background, location, current focus, public posts/talks/interviews
    - **their company** — what it does, stage/size, product, tech, funding, domain
@@ -49,11 +51,14 @@ Exhaust search before you ask. Do not bounce a findable fact back to the user.
    - **derive** what you can (e.g. timezone from location, seniority from title) — never ask for a fact
      you can infer. Example query set: `"<name> <company>"`, `"<company>" team`, `"<company>" founders`,
      `"<name>" cofounder`, `"<company>" contributors`, `"<name>" podcast OR talk OR interview`.
-3. **Write — and SAVE THE USER as the owner node.** Scaffold/refresh entities from what you found: a
-   `person` entity for the user **marked `self: true`** (exactly ONE node ever carries this — it is what
-   distinguishes the user from the FINOS people and every other person in the graph), storing the
-   LinkedIn URL they gave you on that node; plus a person entity for each discovered person and a company
-   entity for each org; and a personalized `CLAUDE.md` header. See shapes below.
+3. **Write — SAVE THE USER as the owner node + keep the light reference + refresh the dashboard.**
+   Scaffold/refresh entities from what you found: a `person` entity for the user **marked `self: true`**
+   (exactly ONE node ever carries this — it is what distinguishes the user from the FINOS people and every
+   other person in the graph) holding the FULL profile and the LinkedIn URL they gave you; plus a person
+   entity for each discovered person and a company entity for each org. Also: **update `_system/identity.md`**
+   so its light reference links to this `self: true` node (the name is already recorded from step 1), and
+   **refresh `README.md` as the workspace dashboard** — reflect who the user is and the key people/companies
+   so the pinned page shows what matters. See shapes below.
 4. **Report + gaps.** Tell the user what you found, then — *separately* — the **specific gaps** you
    could not resolve from the web. Ask only those, **batched**, each with a one-line *why it matters*.
 5. **Incorporate → loop.** Treat each human answer as a **new seed** (a named investor/colleague is a

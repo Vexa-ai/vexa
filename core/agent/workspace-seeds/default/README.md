@@ -1,17 +1,42 @@
-# workspace-seed
+# Your workspace
 
-The per-person workspace template a new chat/unit workspace is seeded from (`SubprocessChatRunner`
-copies it, then `git init`s). `CLAUDE.md` carries the entity conventions the agent writes to —
-`kg/entities/<type>/<slug>.md` with required frontmatter (`type`, `id`, `title`) plus type-specific
-fields (e.g. a `task` carries `status`/`priority`/`due`/`source`). Every write is re-validated against
-`workspace.v1` before commit, so these conventions are guidance; the contract is the gate.
+This is your **Personal workspace** — your durable memory. Everything you and your agent capture
+(people, companies, meetings, notes, tasks) lives here as files, and **this README is its dashboard**:
+a living, at-a-glance view of what matters in this workspace. Your agent keeps it current — as the
+workspace fills in, so does this page.
 
-`agents/`, `skills/`, and `routines/` are the per-workspace agent-extension homes — all VISIBLE,
-non-dotfile, git-tracked. `agents/meeting.md` steers the live copilot; `skills/<name>/SKILL.md` are
-Claude Code skills the worker auto-discovers (the governed `skills/` tree is symlinked into
-`.claude/skills` per turn). `routines/<name>.md` files compile to durable Vexa Scheduler jobs for
-recurring work, using frontmatter `enabled`, `cron`, and `prompt` plus optional body text.
-`skills/scheduling/` is the discoverable skill that teaches the agent to author those routine files
-(so the durable-scheduling capability is learned on demand rather than living in always-on `CLAUDE.md`);
-`skills/hello-workspace/` is a minimal example — replace or delete it. Skill helper scripts run under
-whatever `--allowedTools` the turn already grants (no separate skills gate).
+> **New here?** On your first message your agent runs a short, research-driven setup. The one thing it
+> needs from you is your **name** — everything else it can research or fill in over time.
+
+## You
+
+_Who this workspace belongs to. Your full profile lives as the `self: true` person entity in
+`kg/entities/person/`; your agent links it here once it exists._
+
+- _(your agent fills this in)_
+
+## People
+
+_The people in your world — colleagues, collaborators, contacts. Resolved live during meetings._
+
+- _(empty — grows as you meet people)_
+
+## Companies & organizations
+
+- _(empty)_
+
+## Recent meetings
+
+_Meeting notes land in `kg/entities/meeting/`._
+
+- _(empty)_
+
+## Tasks & follow-ups
+
+- _(empty)_
+
+---
+
+_This dashboard is maintained by your agent — the **README is the essence of the workspace**: the few
+things that matter, kept current. Ask it to "update the README" any time, or just let it keep this fresh
+as the workspace grows._

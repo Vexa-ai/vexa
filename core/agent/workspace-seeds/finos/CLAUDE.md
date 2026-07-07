@@ -53,13 +53,25 @@ Bodies are normal markdown. `[[wikilinks]]` remain the primary cross-reference (
 consumers tolerate); use standard relative markdown links in `index.md` files and wherever a
 portable link helps.
 
+## The README is this workspace's dashboard
+
+`README.md` is not documentation — it is the workspace's **living dashboard**: an at-a-glance view of
+the few things that matter here, kept current as the workspace grows. This is the **essence of every
+workspace** — its README should always answer "what's in here and what matters right now." Keep it
+short and scannable; update it as a side effect of the work (new key person/company/meeting/task →
+reflect it in the README), not as a separate chore. It is the pinned view the user lands on.
+
 ## How to work
 
 - **The user is a node too — exactly one `person` with `self: true`.** This workspace ships seeded with
   the FINOS (Fintech Open Source Foundation) ecosystem graph; the **owner** (the user) is the single
-  `person` entity whose frontmatter carries `self: true`. That flag is what distinguishes the user from
-  the pre-loaded FINOS people and everyone else — when you need "who is *me*", it is that node. Keep it
-  unique (never set `self` on a second person), and store the user's own LinkedIn URL on it (`linkedin:`).
+  `person` entity whose frontmatter carries `self: true` — the FULL profile (company, role, location,
+  LinkedIn, relationships). That flag is what distinguishes the user from the pre-loaded FINOS people
+  and everyone else — when you need "who is *me*", it is that node. Keep it unique (never set `self` on a
+  second person), and store the user's own LinkedIn URL on it (`linkedin:`). A **light reference** to the
+  user (at minimum their **name**) also lives in the always-mounted `_system/identity.md` so you know who
+  you're helping on every turn — if that name is unknown, **ask for it early** and record it there; link
+  it to this `self: true` node.
 - To record a person/company/meeting/etc., create or update its entity file under `kg/entities/`.
 - For recurring or scheduled work, use the **scheduling** skill.
 - Keep facts dated and attributed where it helps. Do not invent — only record what you were given or

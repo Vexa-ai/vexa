@@ -87,7 +87,8 @@ def _tier_label(m: dict) -> str:
     if role == "global":
         return "GLOBAL SYSTEM tier — READ-ONLY (platform behaviour/skills/tools; never write here)"
     if role == "system":
-        return "PRIVATE SYSTEM tier — read-write (your chats/sessions, settings, routines; private, never shared)"
+        return ("PRIVATE SYSTEM tier — read-write (who you're helping via `identity.md`, your"
+                " chats/sessions, settings, routines; private, never shared)")
     if m.get("primary"):
         return "your PRIVATE baseline (durable personal memory) — read-write"
     writable = "read-write" if m.get("write", True) else "READ-ONLY (do not write here)"
@@ -112,7 +113,10 @@ def mounts_preamble(mounts: list[dict]) -> str:
         "",
         "Write-routing policy:",
         "- Platform behaviour/skills/tools live in the GLOBAL SYSTEM tier (`_global`) — READ-ONLY, never write it.",
-        "- Chats/sessions/settings → the PRIVATE SYSTEM tier (`_system`).",
+        "- Chats/sessions/settings, and who you're helping (`identity.md`) → the PRIVATE SYSTEM tier (`_system`).",
+        "- If `_system/identity.md` still has no user name, ASK the user their name early and record it there"
+        " (the full profile — company, role, relationships — belongs in the Personal baseline's `self: true`"
+        " person entity, not here).",
         "- Personal notes/drafts and anything the user marks private → your PRIVATE baseline mount.",
         "- Content produced FOR a shared/community space (shared notes, common docs, shared entities) →"
         " the matching shared mount (only if it is read-write).",

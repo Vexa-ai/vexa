@@ -22,11 +22,12 @@ from shared.gitenv import scrubbed_git_env
 REQUIRED_SEED_PATHS = ("CLAUDE.md",)
 
 # The seeds ROOT is a registry of named templates — one validated seed per subdir
-# (``workspace-seeds/<name>/``). Flavors today: ``finos`` (the default — a FINOS-ecosystem knowledge
-# graph) and ``default`` (a bare scaffold, still selectable via ``VEXA_DEFAULT_TEMPLATE=default`` or an
-# explicit ``VEXA_WORKSPACE_SEED_DIR``). Adding a flavor is a new subdir, no code change.
-# ``resolve_seed_dir`` is the single selection seam.
-DEFAULT_TEMPLATE = "finos"
+# (``workspace-seeds/<name>/``). Flavors today: ``default`` (the default — a LIGHT, ready-to-go scaffold
+# whose README is the onboarding-dashboard the user first sees) and ``finos`` (the default scaffold PLUS a
+# pre-loaded FINOS-ecosystem knowledge graph, selectable via ``VEXA_DEFAULT_TEMPLATE=finos`` or an explicit
+# ``VEXA_WORKSPACE_SEED_DIR``). Adding a flavor is a new subdir, no code change. ``resolve_seed_dir`` is the
+# single selection seam.
+DEFAULT_TEMPLATE = "default"
 DEFAULT_SEEDS_ROOT = "/app/workspace-seeds"
 
 
