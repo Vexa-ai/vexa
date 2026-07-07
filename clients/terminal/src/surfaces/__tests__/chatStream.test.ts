@@ -124,6 +124,30 @@ describe("streamChatTurn — cold start & resume", () => {
     expect(state.error).toBe("");           // the caller (Chat.send) renders the timeout copy, not onError
   });
 
+  it("reconnects when an OPEN stream STALLS (no bytes, no close) — recovers a silently-broken SSE", async () => {
+    // Attempt 1: the stream opens but never sends a byte and never closes (half-open / stalled SSE). The
+    // old code would block on reader.read() forever; now the idle deadline forces a cursor-resume.
+    const stalled = { ok: true, status: 200, body: new ReadableStream<Uint8Array>({ pull() { return new Promise<void>(() => {}); } }) } as unknown as Response;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(stalled)
+      .mockResolvedValueOnce(sseResponse([ev({ type: "message-delta", text: "recovered" }, "1-0"), ev({ type: "turn-complete" }, "2-0")]));
+    const statuses: (string | null)[] = [];
+    const { state, cb } = recorder();
+    cb.onStatus = (p) => statuses.push(p);
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, idleReconnectMs: 8, heartbeatMs: 3, reconnectBackoffMs: 0, now: () => Date.now() },
+    );
+
+    expect(state.text).toBe("recovered");           // attempt 2 delivered after the stall reconnect
+    expect(result.terminal).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);      // the stall FORCED a reconnect (not a hang)
+    expect(statuses).toContain("stalled");           // the pane was told the stream stalled
+    expect(statuses[statuses.length - 1]).toBe(null); // cleared at the end
+  });
+
   it("stops resuming when the caller aborts", async () => {
     const ctrl = new AbortController();
     const fetchImpl = vi.fn().mockImplementation(async () => { ctrl.abort(); return sseResponse([]); });

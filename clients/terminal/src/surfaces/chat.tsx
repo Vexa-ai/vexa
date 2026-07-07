@@ -12,7 +12,7 @@ import { Icon } from "../ui-kit";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
-import { streamChatTurn } from "./chatStream";
+import { streamChatTurn, type ChatPhase } from "./chatStream";
 import { useLiveMeetings } from "./liveMeetings";
 import { type MeetingMock } from "./meetingModel";
 import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
@@ -693,10 +693,13 @@ export function Chat({ params = {} }: ChatProps) {
     // per-dispatch worker (docker backend) that takes seconds to boot, and the turn is NEVER lost even
     // if the SSE closes early (durable, resumable output Stream). So instead of "No chat output arrived"
     // the instant a stream ends, it RESUMES from the last SSE cursor (Last-Event-ID) and keeps rendering.
-    // While no output has shown we keep an italic "starting" marker so the pane never looks dead — cleared
-    // the instant the first real delta arrives (deltas append, so we must not concat onto it).
-    const STARTING = "_Starting agent…_";
-    const clearStarting = (t: AgentTurn): AgentTurn => (t.text === STARTING ? { ...t, text: "" } : t);
+    // A live STATUS LINE (turn.status, driven by onStatus below) keeps the pane VERBOSE about what's
+    // happening — "Starting agent…", "Working · 12s", "Reconnecting…" — so a long think / tool run / a
+    // broken SSE reads as alive, never a frozen blank. Real output (a delta / tool / terminal) clears it.
+    // `since` is per-gap: cleared on output, re-stamped when the next quiet stretch begins, so the counter
+    // measures the CURRENT wait (the useful "is it stuck?" signal), not total turn time.
+    const setStatus = (phase: ChatPhase | null) =>
+      patchAgentTurn(key, agentId, (t) => ({ ...t, status: phase ? { phase, since: t.status?.since ?? Date.now() } : null }));
     const p = ground ? promptWithActiveContext(basePrompt, contextRef, activeMeeting) : basePrompt;
     // The active center tab grounds the turn: a meeting passes {kind, platform, native_id, meeting_id} so
     // agent-api folds its live transcript into the prompt server-side; a file passes {kind, ref}.
@@ -712,26 +715,27 @@ export function Chat({ params = {} }: ChatProps) {
       const result = await streamChatTurn(
         { prompt: p, session: sessionForSend, active },
         {
-          onStarting: () => patchAgentTurn(key, agentId, (t) => (t.text || t.ops.length ? t : { ...t, text: STARTING })),
-          onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...clearStarting(t), text: (clearStarting(t).text ?? "") + text })),
-          onTool: (tool) => patchAgentTurn(key, agentId, (t) => ({ ...clearStarting(t), ops: [...t.ops, toolOp(tool)] })),
+          onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
+          onStatus: (phase) => setStatus(phase),
+          onDelta: (text) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + text })),
+          onTool: (tool) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, ops: [...t.ops, toolOp(tool)] })),
           onCommit: (sha) => patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha })),
-          onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, rejected: "workspace.v1 violation — reverted" })),
-          onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` }; }),
-          onError: (msg) => patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + msg }; }),
+          onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
+          onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
+          onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + msg })),
           onProgress: () => { if (stickToBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); },
         },
         { signal: ctrl.signal },
       );
       if (!result.aborted && !result.sawVisibleOutput && !result.terminal) {
         // No output AND no clean end after resume + the hard cap → a genuinely stuck/failed turn.
-        patchAgentTurn(key, agentId, (t) => ({ ...clearStarting(t), text: (clearStarting(t).text ?? "") || "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." }));
+        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") || "The agent didn't respond before timing out. Reopen the chat to see the reply if it lands." }));
       } else {
-        patchAgentTurn(key, agentId, (t) => clearStarting(t));  // drop any lingering starting marker
+        patchAgentTurn(key, agentId, (t) => ({ ...t, status: null }));  // drop any lingering status line
       }
     } catch (e) {
-      if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + "_stopped_" }; });
-      else patchAgentTurn(key, agentId, (t) => { const c = clearStarting(t); return { ...c, text: (c.text ?? "") + (c.text ? "\n\n" : "") + ((e as Error)?.message || "Chat request failed.") }; });
+      if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
+      else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + ((e as Error)?.message || "Chat request failed.") }));
     } finally {
       updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
     }

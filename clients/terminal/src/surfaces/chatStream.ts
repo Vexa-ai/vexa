@@ -22,6 +22,13 @@ export type ChatStreamEvent = {
   message?: string;
 };
 
+/** The live phase of a turn, surfaced so the pane is VERBOSE about what's happening instead of going
+ *  silently stale: `connecting` (cold-starting the worker, no output yet) · `working` (output seen, but
+ *  quiet right now — the agent is thinking / a tool is running) · `reconnecting` (the stream dropped, we
+ *  are resuming from the cursor) · `stalled` (the stream is open but sending nothing — we're forcing a
+ *  reconnect). `null` clears the indicator (real output is flowing or the turn ended). */
+export type ChatPhase = "connecting" | "working" | "reconnecting" | "stalled";
+
 export type ChatStreamCallbacks = {
   /** an agent message-delta with non-empty text (the first one clears the "starting" placeholder) */
   onDelta: (text: string) => void;
@@ -37,6 +44,9 @@ export type ChatStreamCallbacks = {
   onError: (message: string) => void;
   /** we are (re)connecting and no output has shown yet — show/keep a "starting agent…" affordance */
   onStarting: () => void;
+  /** the live phase changed (or a heartbeat fired while quiet) — drive a verbose status line. `null`
+   *  clears it. Optional so existing callers/tests need not implement it. */
+  onStatus?: (phase: ChatPhase | null) => void;
   /** a chunk was consumed — a hook for autoscroll */
   onProgress?: () => void;
 };
@@ -59,6 +69,12 @@ export type ChatStreamOptions = {
   hardTimeoutMs?: number;
   /** delay between resume attempts after an early close */
   reconnectBackoffMs?: number;
+  /** while a read is outstanding, emit a `working`/`connecting` heartbeat every this-many ms so the pane
+   *  never looks frozen during a long think / tool run */
+  heartbeatMs?: number;
+  /** no bytes for this long on an OPEN stream ⇒ treat it as STALLED and reconnect from the cursor (the
+   *  fix for a silently-broken SSE that would otherwise freeze until the hard cap) */
+  idleReconnectMs?: number;
   /** injected for tests so a fake clock/no real wait is possible */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -75,6 +91,8 @@ export type ChatStreamResult = {
 
 const DEFAULT_HARD_TIMEOUT_MS = 90000;   // >> a normal cold start
 const DEFAULT_RECONNECT_BACKOFF_MS = 800;
+const DEFAULT_HEARTBEAT_MS = 3500;       // "still working…" cadence during a quiet read
+const DEFAULT_IDLE_RECONNECT_MS = 18000; // an OPEN-but-silent stream this long ⇒ stalled → reconnect
 
 /** Split accumulated SSE text into complete lines, returning [lines, remainder]. */
 function takeLines(buf: string): [string[], string] {
@@ -98,6 +116,8 @@ export async function streamChatTurn(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const hardTimeoutMs = opts.hardTimeoutMs ?? DEFAULT_HARD_TIMEOUT_MS;
   const backoffMs = opts.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
+  const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const idleReconnectMs = opts.idleReconnectMs ?? DEFAULT_IDLE_RECONNECT_MS;
   const signal = opts.signal;
 
   let sawVisibleOutput = false;
@@ -106,6 +126,29 @@ export async function streamChatTurn(
   const startedAt = now();
 
   cb.onStarting();
+  cb.onStatus?.("connecting");
+
+  /** Read the next chunk, but never block forever: emit a `working`/`connecting` heartbeat every
+   *  `heartbeatMs` while waiting, and if an OPEN stream sends NOTHING for `idleReconnectMs`, return
+   *  `"stalled"` so the caller reconnects from the cursor (recovers a silently-broken SSE). Uses real
+   *  timers — in tests the faked reads resolve immediately, so the timers are set-then-cleared and never
+   *  fire. */
+  const readOrStall = async (
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+  ): Promise<{ done: boolean; value?: Uint8Array } | "stalled"> => {
+    let hb: ReturnType<typeof setInterval> | undefined;
+    let to: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const guard = new Promise<"stalled">((resolve) => {
+        hb = setInterval(() => cb.onStatus?.(sawVisibleOutput ? "working" : "connecting"), heartbeatMs);
+        to = setTimeout(() => resolve("stalled"), idleReconnectMs);
+      });
+      return await Promise.race([reader.read(), guard]);
+    } finally {
+      if (hb !== undefined) clearInterval(hb);
+      if (to !== undefined) clearTimeout(to);
+    }
+  };
 
   const drainOnce = async (): Promise<"closed" | "terminal"> => {
     // On a RECONNECT, Last-Event-ID makes agent-api re-attach to the SAME warm unit and resume from the
@@ -122,7 +165,14 @@ export async function streamChatTurn(
     const dec = new TextDecoder();
     let buf = "";
     for (;;) {
-      const { value: chunk, done } = await reader.read();
+      const res = await readOrStall(reader);
+      if (res === "stalled") {
+        // Open stream, no bytes for idleReconnectMs → force a reconnect from the cursor rather than hang.
+        cb.onStatus?.("stalled");
+        try { await reader.cancel("idle"); } catch { /* ignore */ }
+        return terminal ? "terminal" : "closed";
+      }
+      const { value: chunk, done } = res;
       if (done) return terminal ? "terminal" : "closed";
       buf += dec.decode(chunk, { stream: true });
       const [lines, remainder] = takeLines(buf);
@@ -171,8 +221,10 @@ export async function streamChatTurn(
     if (outcome === "terminal" || terminal) break;
     if (now() - startedAt > hardTimeoutMs) break;
     cb.onStarting();  // still waiting on the worker — keep the pane honest between attempts
+    cb.onStatus?.("reconnecting");
     await sleep(backoffMs);
   }
 
+  cb.onStatus?.(null);  // turn ended (or gave up) — drop the live indicator
   return { sawVisibleOutput, terminal, aborted: signal.aborted };
 }
