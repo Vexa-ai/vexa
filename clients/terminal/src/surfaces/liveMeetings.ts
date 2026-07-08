@@ -231,6 +231,13 @@ function applyFrame(f: { meeting_id?: number | string; native?: string; status: 
     (m) => (f.meeting_id != null && m.id === String(f.meeting_id)) || (f.native != null && f.meeting_id == null && m.native_id === f.native),
   );
   if (i < 0) { void snapshot(); return; }
+  // a DELETED row (calendar sync retiring a planned meeting) leaves the store — patching it in
+  // place made a cancelled future meeting masquerade as "Recorded" until the next snapshot
+  if (f.status === "deleted") {
+    meetings = [...meetings.slice(0, i), ...meetings.slice(i + 1)];
+    subs.forEach((fn) => fn());
+    return;
+  }
   const live = LIVE_STATUSES.has(f.status);
   const cur = meetings[i];
   const nextRow: MeetingMock = {

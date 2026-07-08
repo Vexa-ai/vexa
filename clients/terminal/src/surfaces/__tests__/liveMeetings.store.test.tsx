@@ -139,4 +139,15 @@ describe("liveMeetings store", () => {
     const snapshotCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings"));
     expect(snapshotCalls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("(d) a 'deleted' frame REMOVES the row (a retired plan never masquerades as Recorded)", async () => {
+    const { hook } = await startStore();
+    expect(hook.result.current.length).toBe(1);
+
+    await act(async () => {
+      FakeWebSocket.last!.push({ ...golden, status: "deleted", when: null });
+    });
+
+    await waitFor(() => expect(hook.result.current.length).toBe(0));
+  });
 });
