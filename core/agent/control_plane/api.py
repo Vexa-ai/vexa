@@ -192,6 +192,11 @@ class _Sessions:
 # guard was papering over.
 LIVE_SILENCE_TTL_SEC = 60.0
 
+# The processing desired-state flag's set-time backstop TTL (the watcher refreshes a rolling TTL per
+# armed batch while segments flow — transcription_watcher.PROC_FLAG_ROLLING_TTL_SEC). Bounds a flag
+# whose meeting never produces a segment; generous because the toggle is only offered on live rows.
+PROC_FLAG_BACKSTOP_TTL_SEC = 4 * 3600
+
 
 class _LiveMeetings:
     """In-memory registry of meeting copilots — the terminal's 'meetings' feed. Keyed by session_uid (the
@@ -915,7 +920,12 @@ def create_app(
         subject_of(request)  # identity gate (P20) — kept even though nothing dispatches from here
         cursor: str | None = None
         try:
-            r.set(flag, "1")
+            # TTL'd desired state (P21/P22 — verified on the eyeball: NO session_end frame ever
+            # crosses the wire on the stop path, so the watcher's reap there is belt-only and the
+            # flag used to persist forever). This backstop bounds a flag that never sees a segment;
+            # the watcher REFRESHES a rolling TTL while segments actually flow, so the flag outlives
+            # any real meeting and self-cleans within ~an hour of the flow stopping.
+            r.set(flag, "1", ex=PROC_FLAG_BACKSTOP_TTL_SEC)
             cursor = r.get(cursor_key)
         except Exception:  # noqa: BLE001
             cursor = None

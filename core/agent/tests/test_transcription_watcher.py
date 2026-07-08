@@ -24,8 +24,12 @@ class _FakeRedis:
     def get(self, key):
         return self.kv.get(key)
 
-    def set(self, key, value):
+    def set(self, key, value, ex=None):
         self.kv[key] = value
+
+    def expire(self, key, ttl):
+        self.expires = getattr(self, "expires", {})
+        self.expires[key] = ttl
 
     def delete(self, key):
         self.kv.pop(key, None)
@@ -202,6 +206,23 @@ def test_arm_resumes_from_the_frozen_cursor(monkeypatch):
     meeting = disp.dispatched[0]["context"]["meeting"]
     assert meeting["transcript_start_id"] == "1-0"                # the frozen cursor — gap-fill, no skip
     assert len(r.streams["tc:meeting:42"]) == 2                   # unchanged — the agent appended nothing
+
+
+def test_arm_refreshes_the_flag_rolling_ttl(monkeypatch):
+    """The flag's REAL end-of-life is its rolling TTL (verified on the eyeball: NO session_end frame
+    crosses the wire on the stop path, so the reap branch is belt-only). While segments flow, each
+    throttled arm refreshes proc:meeting:{row}:on to PROC_FLAG_ROLLING_TTL_SEC; when the flow stops,
+    the flag expires instead of persisting forever."""
+    _reset_module_caches()
+    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
+
+    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
+    r.set("proc:meeting:42:on", "1")
+
+    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
+
+    assert len(disp.dispatched) == 1
+    assert getattr(r, "expires", {}).get("proc:meeting:42:on") == w.PROC_FLAG_ROLLING_TTL_SEC
 
 
 def test_arm_without_cursor_backfills_full_history(monkeypatch):

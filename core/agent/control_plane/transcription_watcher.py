@@ -38,6 +38,11 @@ logger = logging.getLogger("agent_api.tx_watch")
 SRC = "transcription_segments"           # the wire every bot publishes to (configurable upstream)
 GROUP = "agent_copilot"                  # our consumer group — independent of the collector's
 REARM_SEC = 30.0                         # re-touch a meeting's dispatch at most this often (keep-alive)
+# Rolling TTL the arm block refreshes on the ``proc:meeting:{row}:on`` flag while segments flow —
+# the flag's REAL end-of-life (the wire carries no session_end on the stop path, so the reap branch
+# is belt-only). Refresh cadence == REARM_SEC, so anything ≥ a few minutes is safe; an hour also
+# rides out long mid-meeting silences without silently disarming an active toggle.
+PROC_FLAG_ROLLING_TTL_SEC = 3600
 _BRIEF = (
     "You are the live meeting copilot. Watch the meeting transcript as it streams in and surface the "
     "people, companies, products, and projects worth tagging."
@@ -348,6 +353,14 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
     # ``proc:meeting:{key}`` (a GET on that stream raises WRONGTYPE and would crash this arm loop).
     if r.get(f"proc:meeting:{key}:on") and now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
+        # Rolling TTL refresh (P21/P22 — the flag's REAL end-of-life): segments flowing = the flag
+        # stays; flow stopped = it expires within the hour. Needed because NO session_end frame
+        # crosses this wire on the stop path (verified on the eyeball) — the reap branch below only
+        # covers bots that do publish one; without this, an armed flag persisted forever.
+        try:
+            r.expire(f"proc:meeting:{key}:on", PROC_FLAG_ROLLING_TTL_SEC)
+        except Exception:  # noqa: BLE001 — refresh is hygiene; never block the arm
+            pass
         _arm(dispatcher, subject, key, platform, transcript_start_id=_resume_cursor(r, key),
              numeric_meeting_id=mid if mid.isdigit() else None, native_id=native)
 

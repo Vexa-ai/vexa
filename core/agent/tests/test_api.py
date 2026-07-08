@@ -281,8 +281,10 @@ def test_meeting_process_on_sets_desired_state_only(monkeypatch):
         def __init__(self):
             self.kv = {"proc:meeting:m9:cursor": "37-0"}  # we cleaned up to 37-0 last time
 
-        def set(self, k, v):
+        def set(self, k, v, ex=None):
             self.kv[k] = v
+            if ex is not None:
+                self.ttls = getattr(self, "ttls", {}); self.ttls[k] = ex
 
         def get(self, k):
             return self.kv.get(k)
@@ -313,7 +315,7 @@ def test_meeting_process_no_cursor_reports_full_history(monkeypatch):
     class FakeRedis:
         kv: dict = {}
 
-        def set(self, k, v):
+        def set(self, k, v, ex=None):
             type(self).kv[k] = v
 
         def get(self, k):
@@ -342,8 +344,10 @@ def test_meeting_process_off_freezes_cursor(monkeypatch):
         def __init__(self):
             self.kv = {"proc:meeting:m9:on": "1", "proc:meeting:m9:cursor": "37-0"}
 
-        def set(self, k, v):
+        def set(self, k, v, ex=None):
             self.kv[k] = v
+            if ex is not None:
+                self.ttls = getattr(self, "ttls", {}); self.ttls[k] = ex
 
         def get(self, k):
             return self.kv.get(k)
