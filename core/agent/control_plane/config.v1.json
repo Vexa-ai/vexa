@@ -117,6 +117,13 @@
       "description": "the per-subject workspace tree this control plane reads (WorkspaceReader) and seeds"
     },
     {
+      "key": "VEXA_WS_WRITE_LOCK_TIMEOUT_S",
+      "class": "defaulted",
+      "default": "30",
+      "description": "Lane W: seconds a turn-commit waits on the per-shared-workspace write lock (cross-process flock serializing concurrent members' commits, shared/adapters.py) before raising WorkspaceBusyError — bounded so a wedged holder can never stall a workspace forever",
+      "targets": []
+    },
+    {
       "key": "VEXA_WORKSPACE_SEEDS_DIR",
       "class": "defaulted",
       "default": "/app/workspace-seeds",

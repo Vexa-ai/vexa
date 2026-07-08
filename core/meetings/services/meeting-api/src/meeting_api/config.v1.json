@@ -216,6 +216,13 @@
    "targets": []
   },
   {
+   "key": "PROC_PENDING_GRACE_SEC",
+   "class": "defaulted",
+   "default": "120",
+   "description": "bounded grace (s) for draining a finalized meeting's processed_pending entries after its view_end marker — the copilot's final post-session beat must land within this window or the drain is abandoned with a warning (ADR-0027 Train 2)",
+   "targets": []
+  },
+  {
    "key": "WEBHOOK_DRAIN_INTERVAL",
    "class": "defaulted",
    "default": "5",
