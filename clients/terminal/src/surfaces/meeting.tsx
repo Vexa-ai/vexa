@@ -475,90 +475,51 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   );
 }
 
-// ── "+ Plan a meeting" — create a PLANNED row (intent status, no bot): title, optional time
-//    (defaults +1h), optional link, optional workspace bind. Submit → POST /api/meetings. ─────────
-const planField = { fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" } as const;
-
-function PlanMeetingForm({ onPlanned }: { onPlanned: (id: number) => void }) {
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [when, setWhen] = useState(() => {
-    const d = new Date(Date.now() + 3600_000); d.setSeconds(0, 0);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  });
-  const [link, setLink] = useState("");
-  const [wsId, setWsId] = useState("");
-  const [shares, setShares] = useState<Membership[]>([]);
+// ── "+ Plan a meeting" — ONE CLICK: create the planned row (idle, untitled) and open its PREP
+//    TAB, where the real form lives (title, modern date/time picker, link, workspace, share). No
+//    inline sidebar form — the center tab is the editing surface. ─────────────────────────────────
+function PlanMeetingButton() {
+  const layout = useService(LayoutServiceId);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    void listSharedMemberships().then((ms) => setShares(ms.filter((s) => s.role === "owner" || s.role === "contributor"))).catch(() => {});
-  }, [open]);
-  const submit = async () => {
+  const plan = async () => {
     if (busy) return;
-    if (link.trim() && !parseMeetingInput(link.trim())) { setErr("That doesn't look like a Meet / Zoom / Teams link."); return; }
     setBusy(true); setErr(null);
     try {
-      const row = await createPlannedMeeting({
-        title: title.trim() || null,
-        scheduled_at: when ? new Date(when).toISOString() : null,
-        meeting_url: link.trim() || null,
-        workspace_id: wsId || null,
-      });
+      const row = await createPlannedMeeting({});          // idle, untitled — the prep tab edits it
       refreshMeetings();
-      setOpen(false); setTitle(""); setLink(""); setWsId("");
-      onPlanned(row.id);
+      layout.openTab(prepTabDescriptor({ id: String(row.id), title: "New meeting" }));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
-  if (!open) {
-    return (
-      <button onClick={() => setOpen(true)}
-        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginBottom: 2 }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-        + Plan a meeting
-      </button>
-    );
-  }
   return (
-    <div style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 6, marginBottom: 2 }}>
-      <input autoFocus value={title} placeholder="Title (e.g. Q3 kickoff with Acme)" disabled={busy}
-        onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} style={planField} />
-      <input type="datetime-local" value={when} disabled={busy} onChange={(e) => setWhen(e.target.value)} style={planField} />
-      <input value={link} placeholder="Meeting link (optional — attach later)" disabled={busy}
-        onChange={(e) => setLink(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} style={planField} />
-      {shares.length > 0 && (
-        <select value={wsId} disabled={busy} onChange={(e) => setWsId(e.target.value)} style={planField} title="Bind a prep workspace — its members see this meeting">
-          <option value="">no workspace (bind later)</option>
-          {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>workspace: {s.workspace_id}</option>)}
-        </select>
-      )}
-      {err && <div role="alert" style={{ fontSize: 11, color: "var(--live)", lineHeight: 1.4 }}>⚠ {err}</div>}
-      <div style={{ display: "flex", gap: 6 }}>
-        <button disabled={busy} onClick={() => void submit()}
-          style={{ flex: 1, background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, padding: "5px 0", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>
-          {busy ? "Planning…" : "Plan"}
-        </button>
-        <button disabled={busy} onClick={() => { setOpen(false); setErr(null); }}
-          style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--t3)", borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: "pointer" }}>
-          Cancel
-        </button>
-      </div>
-    </div>
+    <>
+      <button onClick={() => void plan()} disabled={busy}
+        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginBottom: 2, opacity: busy ? 0.6 : 1 }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+        {busy ? "Planning…" : "+ Plan a meeting"}
+      </button>
+      {err && <div role="alert" style={{ fontSize: 11, color: "var(--live)", marginTop: 4, lineHeight: 1.4 }}>⚠ {err}</div>}
+    </>
   );
 }
 
 // ── Calendar sync — the secret ICS URL + the GLOBAL auto-join default for imported meetings.
-//    The URL is a secret: reads come back MASKED (host + tail). Synced meetings land under Upcoming. ──
-function CalendarSyncButton() {
+//    The URL is a secret: reads come back MASKED (host + tail). Synced meetings land under Upcoming.
+//    Two skins over ONE popover: `icon` (the quiet header icon, always there) and `row` (a
+//    discoverable "Connect your calendar" row that hides itself once a feed is connected). ──
+function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) {
   const [open, setOpen] = useState(false);
   const [cfg, setCfg] = useState<CalendarConfig | null>(null);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  // the row skin needs the connected-state up front (it hides once connected)
+  useEffect(() => {
+    if (variant !== "row") return;
+    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
+  }, [variant]);
   useEffect(() => {
     if (!open) return;
     void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
@@ -572,12 +533,21 @@ function CalendarSyncButton() {
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
+  if (variant === "row" && cfg?.ics_url_set) return null;   // connected → manage via the header icon
   return (
-    <div ref={ref} style={{ position: "relative", flex: "none" }}>
-      <button onClick={() => setOpen((v) => !v)} title="Calendar sync — import upcoming meetings from your calendar"
-        style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: cfg?.ics_url_set ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
-        <Icon name="cal" size={13} />
-      </button>
+    <div ref={ref} style={{ position: "relative", flex: variant === "row" ? "initial" : "none" }}>
+      {variant === "row" ? (
+        <button onClick={() => setOpen((v) => !v)}
+          style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginTop: 6 }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+          <Icon name="cal" size={12} /> Connect your calendar
+        </button>
+      ) : (
+        <button onClick={() => setOpen((v) => !v)} title="Calendar sync — import upcoming meetings from your calendar"
+          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: cfg?.ics_url_set ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
+          <Icon name="cal" size={13} />
+        </button>
+      )}
       {open && (
         <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Calendar sync</div>
@@ -690,13 +660,8 @@ function MeetingsList() {
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
         {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
         <div style={{ marginTop: 8 }}>
-          <PlanMeetingForm onPlanned={(id) => {
-            // open the new plan's prep tab once the refreshed list carries it
-            window.setTimeout(() => {
-              const row = liveMeetingsNow().find((x) => x.id === String(id));
-              if (row) layout.openTab(meetingTab(row));
-            }, 400);
-          }} />
+          <PlanMeetingButton />
+          <CalendarSyncButton variant="row" />
         </div>
       </div>
       {all.length === 0 && <div style={{ padding: "8px 9px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>No meetings yet — paste a Meet link above and I&apos;ll send the bot.</div>}

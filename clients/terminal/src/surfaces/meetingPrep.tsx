@@ -13,6 +13,7 @@ import { registerTab, type TabProps } from "../contributions";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
+import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
 import { useLiveMeetings, refreshMeetings } from "./liveMeetings";
 import type { MeetingMock } from "./meetingModel";
@@ -25,14 +26,6 @@ const field = {
   borderRadius: 7, color: "var(--t1)", outline: "none",
 } as const;
 const label = { fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 600 } as const;
-
-function toLocalInput(iso?: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 /** The bound workspace's README preview — the shared prep context the attendees will land in. */
 function WorkspaceReadme({ slug }: { slug: string }) {
@@ -59,7 +52,6 @@ function MeetingPrepTab({ params }: TabProps) {
   const isIntent = m?.live_status === "idle" || m?.live_status === "scheduled";
 
   const [title, setTitle] = useState("");
-  const [when, setWhen] = useState("");
   const [link, setLink] = useState("");
   const [seeded, setSeeded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -71,7 +63,6 @@ function MeetingPrepTab({ params }: TabProps) {
   useEffect(() => {
     if (seeded || !m) return;
     setTitle(m.title_custom ?? "");
-    setWhen(toLocalInput(m.scheduled_at));
     setLink(m.meeting_url ?? "");
     setSeeded(true);
   }, [m, seeded]);
@@ -177,18 +168,18 @@ function MeetingPrepTab({ params }: TabProps) {
               onBlur={() => { if ((m.title_custom ?? "") !== title.trim()) void patch({ title: title.trim() || null }); }}
               style={field} />
           </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: "none" }}>
               <span style={label}>When</span>
-              <input type="datetime-local" value={when} disabled={readOnly || busy}
-                onChange={(e) => setWhen(e.target.value)}
-                onBlur={() => {
-                  const iso = when ? new Date(when).toISOString() : null;
-                  if (toLocalInput(m.scheduled_at) !== when) void patch({ scheduled_at: iso });
-                }}
-                style={field} />
+              <DateTimePicker
+                value={m.scheduled_at}
+                disabled={readOnly || busy}
+                placeholder="Pick a date & time"
+                onChange={(iso) => void patch({ scheduled_at: iso })}
+                onClear={() => void patch({ scheduled_at: null })}
+              />
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1.4 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 220 }}>
               <span style={label}>Meeting link</span>
               <input value={link} disabled={readOnly || busy} placeholder="https://meet.google.com/…"
                 onChange={(e) => setLink(e.target.value)}
