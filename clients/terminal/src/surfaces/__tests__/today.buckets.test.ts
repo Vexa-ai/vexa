@@ -1,8 +1,9 @@
-/** Today-tab v4 flow-queue zones + the shared meeting-phase source (design-spec §v4, mockup §08b). */
+/** Today-tab v5 agenda timeline + the shared meeting-phase source
+ *  (design-spec today-v5-agenda-timeline; supersedes the v4 zones tests). */
 import { describe, expect, it } from "vitest";
 import { meetingPhase, type MeetingMock } from "../meetingModel";
 import { groupMeetings } from "../meetingGroups";
-import { endOfWeek, todayZones } from "../today";
+import { agendaWindow, pastFeed, deviationPhrase } from "../today";
 
 const m = (over: Partial<MeetingMock>): MeetingMock => ({
   id: over.id ?? Math.random().toString(36).slice(2),
@@ -11,10 +12,9 @@ const m = (over: Partial<MeetingMock>): MeetingMock => ({
   ...over,
 });
 
-// Wed 2026-07-08 (local) — the coming Sunday is 2026-07-12
+// Wed 2026-07-08 (local)
 const NOW = new Date("2026-07-08T12:00:00");
-const zones = (rows: MeetingMock[], reviewed: Set<string> = new Set()) =>
-  todayZones(groupMeetings(rows), NOW, reviewed);
+const window0 = (rows: MeetingMock[], offset = 0) => agendaWindow(groupMeetings(rows), NOW, offset);
 
 describe("meetingPhase", () => {
   it("maps the raw lifecycle onto prep/live/post", () => {
@@ -31,67 +31,79 @@ describe("meetingPhase", () => {
   });
 });
 
-describe("endOfWeek", () => {
-  it("ends the week on the coming Sunday (today, when today IS Sunday)", () => {
-    expect(endOfWeek(new Date("2026-07-08T12:00:00")).getDay()).toBe(0);
-    expect(endOfWeek(new Date("2026-07-08T12:00:00")).getDate()).toBe(12);
-    expect(endOfWeek(new Date("2026-07-12T12:00:00")).getDate()).toBe(12);  // Sunday stays
+describe("agendaWindow", () => {
+  it("groups upcoming meetings by day inside the 7-day window; today always renders", () => {
+    const thu = m({ id: "A", live_status: "scheduled", scheduled_at: "2026-07-09T10:00:00", native_id: "aaa" });
+    const thu2 = m({ id: "B", live_status: "scheduled", scheduled_at: "2026-07-09T15:00:00", native_id: "bbb" });
+    const mon = m({ id: "C", live_status: "scheduled", scheduled_at: "2026-07-13T09:00:00", native_id: "ccc" });
+    const beyond = m({ id: "X", live_status: "scheduled", scheduled_at: "2026-07-20T09:00:00", native_id: "xxx" });
+    const days = window0([mon, thu2, thu, beyond]);
+    expect(days.map((d) => d.key)).toEqual(["2026-07-08", "2026-07-09", "2026-07-13"]);
+    expect(days[0].groups).toEqual([]);                                    // today: "No events today"
+    expect(days[1].groups.map((g) => g.current.id)).toEqual(["A", "B"]);   // time-sorted
+    expect(days[2].groups.map((g) => g.current.id)).toEqual(["C"]);
+  });
+
+  it("pages weeks: the beyond-Sunday meeting appears at offset 1, today's rows don't", () => {
+    const near = m({ id: "A", live_status: "scheduled", scheduled_at: "2026-07-09T10:00:00", native_id: "aaa" });
+    const far = m({ id: "X", live_status: "scheduled", scheduled_at: "2026-07-20T09:00:00", native_id: "xxx" });
+    const days = window0([near, far], 1);
+    expect(days.map((d) => d.key)).toEqual(["2026-07-20"]);
+    expect(days[0].groups.map((g) => g.current.id)).toEqual(["X"]);
+  });
+
+  it("a live meeting shows IN PLACE — and a stale schedule clamps onto today so it can't vanish", () => {
+    const live = m({ id: "L", live_status: "active", status: "live", native_id: "lll", scheduled_at: "2026-07-07T10:00:00" });
+    const days = window0([live]);
+    expect(days.map((d) => d.key)).toEqual(["2026-07-08"]);
+    expect(days[0].groups.map((g) => g.current.id)).toEqual(["L"]);
+  });
+
+  it("unscheduled plans attach to today on the current week only", () => {
+    const loose = m({ id: "U", live_status: "idle", native_id: "uuu" });
+    expect(window0([loose])[0].groups.map((g) => g.current.id)).toEqual(["U"]);
+    expect(window0([loose], 1)).toEqual([]);
+  });
+
+  it("BUG-1 carry-over: a future synced meeting with old runs shows ONCE as upcoming", () => {
+    const scheduled = m({ id: "S", live_status: "scheduled", calendar_uid: "u1", scheduled_at: "2026-07-09T10:00:00" });
+    const oldRun = m({ id: "R", live_status: "completed", calendar_uid: "u1", start_time: "2026-07-01T10:00:00Z", has_recording: true });
+    const days = window0([scheduled, oldRun]);
+    const all = days.flatMap((d) => d.groups.map((g) => g.current.id));
+    expect(all).toEqual(["S"]);
   });
 });
 
-describe("todayZones", () => {
-  it("splits now / next / this week / later / to review", () => {
-    const live = m({ id: "L", live_status: "active", status: "live", native_id: "lll" });
-    const next = m({ id: "N", live_status: "scheduled", scheduled_at: "2026-07-09T10:00:00Z", native_id: "nnn" });
-    const week = m({ id: "W", live_status: "scheduled", scheduled_at: "2026-07-11T10:00:00Z", native_id: "www" });
-    const later = m({ id: "X", live_status: "scheduled", scheduled_at: "2026-07-15T10:00:00Z", native_id: "xxx" });
-    const done = m({ id: "D", live_status: "completed", has_recording: true, start_time: "2026-07-08T09:00:00Z", native_id: "ddd" });
-    const z = zones([done, later, week, next, live]);
-    expect(z.now.map((g) => g.current.id)).toEqual(["L"]);
-    expect(z.next?.current.id).toBe("N");
-    expect(z.thisWeek.map((g) => g.current.id)).toEqual(["W"]);
-    expect(z.later.map((g) => g.current.id)).toEqual(["X"]);
-    expect(z.toReview.map((g) => g.pastRuns[0].id)).toEqual(["D"]);
+describe("pastFeed", () => {
+  it("newest finished run per meeting, newest first, day-grouped, capped", () => {
+    const a = m({ id: "A", live_status: "completed", start_time: "2026-07-08T09:00:00Z", has_recording: true, native_id: "aaa" });
+    const b = m({ id: "B", live_status: "completed", start_time: "2026-07-07T09:00:00Z", has_recording: true, native_id: "bbb" });
+    const days = pastFeed(groupMeetings([b, a]));
+    expect(days.map((d) => d.entries.map((e) => e.run.id))).toEqual([["A"], ["B"]]);
   });
-
-  it("BUG-1: a future synced meeting with old runs shows ONCE as upcoming, never under review-as-duplicate", () => {
-    const scheduled = m({ id: "S", live_status: "scheduled", calendar_uid: "u1", scheduled_at: "2026-07-09T10:00:00Z" });
-    const oldRun = m({ id: "R", live_status: "completed", calendar_uid: "u1", start_time: "2026-07-01T10:00:00Z", has_recording: true });
-    const z = zones([scheduled, oldRun]);
-    expect(z.next?.current.id).toBe("S");
-    // the finished run is still owed a review — via the SAME group, not a duplicate meeting
-    expect(z.toReview.map((g) => g.key)).toEqual(["cal:u1"]);
-    expect(z.toReview[0].pastRuns[0].id).toBe("R");
+  it("cap trims oldest", () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      m({ id: `P${i}`, live_status: "completed", start_time: `2026-07-0${i + 1}T09:00:00Z`, has_recording: true, native_id: `n${i}` }));
+    const days = pastFeed(groupMeetings(rows), 2);
+    expect(days.flatMap((d) => d.entries.map((e) => e.run.id))).toEqual(["P4", "P3"]);
   });
+});
 
-  it("an unscheduled plan stays visible in this week (it needs attention), after timed ones", () => {
-    const timed = m({ id: "T", live_status: "scheduled", scheduled_at: "2026-07-09T10:00:00Z", native_id: "ttt" });
-    const timed2 = m({ id: "T2", live_status: "scheduled", scheduled_at: "2026-07-10T10:00:00Z", native_id: "t2" });
-    const noTime = m({ id: "U", live_status: "idle" });
-    const z = zones([noTime, timed2, timed]);
-    expect(z.next?.current.id).toBe("T");
-    expect(z.thisWeek.map((g) => g.current.id)).toEqual(["T2", "U"]);
+describe("deviationPhrase (the one-phrase law)", () => {
+  const g = (rows: MeetingMock[]) => groupMeetings(rows)[0];
+  it("live wins", () => {
+    expect(deviationPhrase(g([m({ live_status: "active", status: "live", native_id: "x" })]))?.tone).toBe("live");
   });
-
-  it("a reviewed recap leaves TO REVIEW; unreviewable empty runs never enter", () => {
-    const done = m({ id: "D", live_status: "completed", has_recording: true, start_time: "2026-07-08T09:00:00Z", native_id: "d" });
-    const emptyFailed = m({ id: "F", live_status: "failed" });   // nothing captured
-    expect(zones([done, emptyFailed]).toReview.map((g) => g.pastRuns[0].id)).toEqual(["D"]);
-    expect(zones([done, emptyFailed], new Set(["D"])).toReview).toEqual([]);
+  it("import failure is loud", () => {
+    expect(deviationPhrase(g([m({ live_status: "scheduled", auto_join_error: "no link" })]))?.tone).toBe("danger");
   });
-
-  it("to review is newest-first and capped at 8", () => {
-    const rows = Array.from({ length: 12 }, (_, i) =>
-      m({ id: `r${i}`, live_status: "completed", native_id: `n${i}`, has_recording: true,
-        start_time: `2026-07-0${(i % 7) + 1}T0${i % 9}:00:00Z` }));
-    const z = zones(rows);
-    expect(z.toReview.length).toBe(8);
-    const times = z.toReview.map((g) => g.pastRuns[0].start_time!);
-    expect([...times].sort().reverse()).toEqual(times);
+  it("link-less plan is loud", () => {
+    expect(deviationPhrase(g([m({ live_status: "scheduled" })]))?.tone).toBe("danger");
   });
-
-  it("a stopped run with a transcript still reaches to review (stopped ≠ discarded)", () => {
-    const stopped = m({ id: "S", live_status: "stopped", start_time: "2026-07-08T10:00:00Z", native_id: "s" });
-    expect(zones([stopped]).toReview.map((g) => g.pastRuns[0].id)).toEqual(["S"]);
+  it("unbound workspace nudges toward the brief", () => {
+    expect(deviationPhrase(g([m({ live_status: "scheduled", native_id: "x" })]))?.text).toBe("no brief yet");
+  });
+  it("a prepared meeting is QUIET — no phrase", () => {
+    expect(deviationPhrase(g([m({ live_status: "scheduled", native_id: "x", workspace_id: "oenb" })]))).toBeNull();
   });
 });
