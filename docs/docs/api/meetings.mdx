@@ -114,6 +114,32 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar"
 { "ics_url_set": true, "ics_url_masked": "calendar.google.com/…s.ics", "auto_join": true }
 ```
 
+Pasting the wrong kind of URL fails at save: a calendar *page* (e.g. Google's `/calendar/embed`)
+is rejected with a `422` that points at the right field — the **Secret address in iCal format**
+(on Google Workspace domains an admin policy can hide that field; see
+[Calendar sync](/how-to/calendar-sync#1-find-your-secret-ics-address) for the unlock).
+
+**Sync feedback** — connecting from the Terminal runs a sync immediately; over the API the same
+two edges are yours:
+
+```bash POST /user/calendar/sync — run the sync NOW, get the result
+curl -X POST "$API_BASE/user/calendar/sync" -H "X-API-Key: $API_KEY"
+```
+
+```json Response
+{ "last_sync": "2026-07-08T15:30:00+00:00", "last_error": null,
+  "counts": { "created": 3, "updated": 0, "cancelled": 0 } }
+```
+
+```bash GET /user/calendar/sync — the last sync's status
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar/sync"
+```
+
+`last_error`, when set, is a human-readable reason (wrong-URL kind, HTTP status, oversize,
+redirect, not-ICS content) — the same strings the Terminal panel shows. `404` on the POST means no
+feed is connected; `503` means the deployment has calendar sync disabled (see
+[Configuration](/configuration#auto-join--calendar-sync)).
+
 Disconnect with `{"ics_url": null}`. See [Calendar sync](/how-to/calendar-sync) for where to find
 the secret address.
 

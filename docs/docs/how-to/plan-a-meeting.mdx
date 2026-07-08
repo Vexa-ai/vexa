@@ -13,9 +13,11 @@ the [API](/api/meetings#plan-a-meeting); both are shown.
 
 ## 1. Plan the meeting
 
-In the Terminal's **Meetings** list, click **+ Plan a meeting**: give it a title, a time, and —
-if you already have it — the Meet/Zoom/Teams link. The link is optional; attach it later from the
-meeting's prep view.
+In the Terminal's **Meetings** list, click **+ Plan a meeting** — one click creates the meeting
+and opens its **prep view**, which is where everything is edited: type the title, pick the time
+(quick chips like *Tomorrow 09:00*, or the calendar picker), and paste the Meet/Zoom/Teams link if
+you already have it. Everything saves as you go; the link is optional and can be attached any time
+before start.
 
 ```bash Via the API
 curl -X POST "$API_BASE/meetings" \
@@ -24,12 +26,13 @@ curl -X POST "$API_BASE/meetings" \
        "meeting_url":"https://meet.google.com/abc-defg-hij"}'
 ```
 
-The meeting appears under **Upcoming** with a `Scheduled` badge. Clicking it opens its **prep
-view** — title, time, link, the auto-join toggle, and the workspace section below.
+The meeting sits under **Upcoming** with a `Scheduled` badge (or `Planned` until it has a time);
+clicking it re-opens the prep view — title, time, link, the auto-join toggle, and the workspace
+section below.
 
 <Note>
-Meetings on your calendar can create these records for you — see
-[Calendar sync](/how-to/calendar-sync).
+Meetings on your calendar can create these records for you — the **Connect your calendar** row
+sits right under the plan button. See [Calendar sync](/how-to/calendar-sync).
 </Note>
 
 ## 2. Prepare the knowledge space

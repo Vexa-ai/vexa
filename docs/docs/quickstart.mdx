@@ -97,8 +97,11 @@ frames mark anything the agent recorded. See the [Agent API](/api/agent).
 ## 4. Third win — connect your calendar
 
 Stop pasting links: give Vexum your calendar's **secret ICS address** (Google Calendar → Settings →
-*Secret address in iCal format*) and every upcoming meeting with a Meet/Zoom/Teams link imports on
-its own — and the bot **auto-joins at start time**.
+your calendar → *Integrate calendar* → **Secret address in iCal format**, the `…/private-…/basic.ics`
+one — *not* the public address above it) and every upcoming meeting with a Meet/Zoom/Teams link
+imports on its own — and the bot **auto-joins at start time**. Connecting syncs immediately and
+tells you what it imported; on a Google **Workspace** domain the secret-address field may need a
+one-time admin unlock ([how](/how-to/calendar-sync#1-find-your-secret-ics-address)).
 
 ```bash
 curl -X PUT "$API_BASE/user/calendar" \

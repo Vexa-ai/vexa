@@ -44,16 +44,29 @@ meeting's row in the Terminal — auto-join failures are stamped **onto the meet
 
 ## Calendar isn't syncing
 
+**Start with the panel's status line** — the calendar panel shows the last sync's outcome and
+every failure names itself (`⚠ Last sync failed: …`). **Sync now** re-runs it on demand, and the
+API mirrors both: `GET /user/calendar/sync` (last status), `POST /user/calendar/sync` (run now).
+The full message-by-message reference is in
+[Calendar sync → Reading the sync status](/how-to/calendar-sync#reading-the-sync-status). The
+usual causes:
+
 - **Wrong URL kind** — you need the **secret ICS address** (Google: *Secret address in iCal
-  format*; Outlook: the published **ICS** link), not the calendar's public/share URL. Reads via
-  `GET /user/calendar` show the connected feed masked.
+  format*, `…/private-…/basic.ics`; Outlook: the published **ICS** link). The **public** iCal
+  address of a private calendar answers `HTTP 401`/`404`; a calendar *page* URL (embed/share) is
+  rejected at save. Reads via `GET /user/calendar` show the connected feed masked.
+- **The secret-address field is missing** (Google Workspace) — a restrictive Workspace sharing
+  policy hides it. An admin unlocks it: **admin.google.com → Apps → Google Workspace → Calendar →
+  Sharing settings → External sharing options for primary calendars → "Share all information…"**.
+  Details in [Calendar sync](/how-to/calendar-sync#1-find-your-secret-ics-address).
 - **The event has no meeting link** — only events with a recognizable Meet/Zoom/Teams link import;
-  everything else is skipped by design.
-- **Patience, then the interval** — the sweep runs every `CALENDAR_SYNC_INTERVAL_S` (default 5
-  min). On a self-host also confirm `ADMIN_API_URL` and `INTERNAL_API_SECRET` are set for
-  meeting-api — without them the sync loop is disabled.
-- **Feed too large / unreachable** — feeds over 2 MB or behind redirects are refused; the sync
-  state records the fetch error.
+  everything else is skipped by design. A healthy feed with none of those reads
+  `✓ Synced — no meetings with joinable links found`.
+- **Self-host wiring** — confirm `ADMIN_API_URL` and `INTERNAL_API_SECRET` are set for
+  meeting-api; without them the sync loop is disabled (and `POST /user/calendar/sync` answers
+  `503`).
+- **Feed too large / unreachable / redirecting** — feeds over 2 MB, behind redirects, or resolving
+  to blocked/internal addresses are refused; the status line records which.
 
 ## Bot joins but there's no transcript
 

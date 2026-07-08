@@ -39,7 +39,10 @@ later; a plan without a time sits in `idle` until you schedule it.
 ### Import — calendar sync
 
 Connect your calendar with its **secret ICS address** (Google Calendar and Outlook both provide
-one — see [Calendar sync](/how-to/calendar-sync)); no OAuth needed. A background sweep re-fetches
+one — see [Calendar sync](/how-to/calendar-sync)); no OAuth needed. Connecting syncs immediately
+and answers with the result — every sync failure is stamped as a human-readable status
+(`GET /user/calendar/sync`, shown in the Terminal's calendar panel), never swallowed — failures
+are loud here, like everywhere in the lifecycle. A background sweep re-fetches
 the feed (default every 5 minutes) and upserts planned meetings:
 
 - **Only events with a recognizable meeting link** import — a dentist appointment is not a
