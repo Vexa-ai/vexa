@@ -86,19 +86,23 @@ function MeetingPrepTab({ params }: TabProps) {
 
   const [title, setTitle] = useState("");
   const [link, setLink] = useState("");
-  const [seeded, setSeeded] = useState(false);
+  // seed marker is the MEETING ID, not a boolean: the shared preview panel swaps params to a
+  // DIFFERENT meeting without remounting — a boolean kept the previous meeting's title/link on
+  // screen, and a blur would PATCH them onto the wrong row (observed live 2026-07-08).
+  const [seededFor, setSeededFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [shares, setShares] = useState<Membership[]>([]);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
 
-  // seed the form ONCE from the row (later live refreshes must not clobber in-progress edits)
+  // seed the form once PER MEETING (live refreshes must not clobber in-progress edits; a
+  // preview swap to another meeting must re-seed)
   useEffect(() => {
-    if (seeded || !m) return;
+    if (!m || seededFor === m.id) return;
     setTitle(m.title_custom ?? "");
     setLink(m.meeting_url ?? "");
-    setSeeded(true);
-  }, [m, seeded]);
+    setSeededFor(m.id);
+  }, [m, seededFor]);
 
   useEffect(() => {
     void listSharedMemberships()
