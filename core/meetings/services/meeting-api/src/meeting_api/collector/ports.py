@@ -151,6 +151,8 @@ class TranscriptStore(Protocol):
         workspace_id: Optional[str] = None,
         auto_join: bool = True,
         calendar_uid: Optional[str] = None,
+        workspace_source: Optional[str] = None,
+        attendees: Optional[list] = None,
     ) -> dict:
         """Create a PLANNED meeting row — status ``scheduled`` (when ``scheduled_at`` is set) or
         ``idle`` — with NO bot spawned. Link-less plans use ``platform='unknown'`` +

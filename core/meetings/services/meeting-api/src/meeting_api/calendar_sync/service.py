@@ -81,6 +81,35 @@ def _next_occurrence(comp, *, window_start: datetime, window_end: datetime) -> O
     return None
 
 
+def _attendees(comp) -> list[dict]:
+    """The event's human attendees — ``[{email, name?, partstat?}]`` from ATTENDEE lines.
+    Rooms/resources (CUTYPE=RESOURCE|ROOM) are dropped; emails lowercase (they are the stable
+    identity key for people-sets and kg person entities — NEVER an audience to contact)."""
+    props = comp.get("ATTENDEE")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for a in (props if isinstance(props, list) else [props] if props is not None else []):
+        params = getattr(a, "params", {}) or {}
+        if str(params.get("CUTYPE", "INDIVIDUAL")).upper() in ("RESOURCE", "ROOM"):
+            continue
+        email = str(a).strip()
+        if email.lower().startswith("mailto:"):
+            email = email[7:].strip()
+        email = email.lower()
+        if "@" not in email or email in seen:
+            continue
+        seen.add(email)
+        entry: dict = {"email": email}
+        cn = str(params.get("CN", "")).strip()
+        if cn and cn.lower() != email:
+            entry["name"] = cn
+        partstat = str(params.get("PARTSTAT", "")).strip()
+        if partstat:
+            entry["partstat"] = partstat.lower()
+        out.append(entry)
+    return out
+
+
 def parse_ics(text: str, *, now: datetime,
               horizon_days: int = DEFAULT_HORIZON_DAYS,
               lookback_s: float = DEFAULT_LOOKBACK_S) -> dict:
@@ -128,6 +157,7 @@ def parse_ics(text: str, *, now: datetime,
             "platform": platform,
             "native_meeting_id": native_id,
             "meeting_url": url,
+            "attendees": _attendees(comp),
         })
     return {"events": events, "cancelled_uids": cancelled}
 
@@ -144,11 +174,24 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
     rows = await store.list_meetings(user_id)
     by_uid: dict[str, dict] = {}
     by_native: dict[tuple, dict] = {}
+    # Series workspace map (prep-v3 slice a): a NEW occurrence of a known calendar UID inherits
+    # the workspace of the series' newest row that carries one — recurring meetings keep their
+    # room without asking. An explicit unbind writes `workspace_unbound` on the row, which the
+    # newest-wins scan respects as a tombstone (inheritance stops until the user binds again).
+    series_ws: dict[str, Optional[str]] = {}
+    series_stamp: dict[str, str] = {}
     for row in rows:
-        if row.get("status") in _TERMINAL or row.get("shared"):
-            continue
+        if row.get("shared"):
+            continue  # another user's meeting mounted in — never a series/identity source here
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
         uid = data.get("calendar_uid")
+        if uid and (data.get("workspace_id") or data.get("workspace_unbound")):
+            stamp = str(row.get("start_time") or data.get("scheduled_at") or "")
+            if uid not in series_stamp or stamp >= series_stamp[uid]:
+                series_stamp[uid] = stamp
+                series_ws[uid] = None if data.get("workspace_unbound") else data.get("workspace_id")
+        if row.get("status") in _TERMINAL:
+            continue
         if uid and uid not in by_uid:
             by_uid[uid] = row
         if row.get("native_meeting_id"):
@@ -173,6 +216,9 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 updates["platform"] = ev["platform"]
                 updates["native_meeting_id"] = ev["native_meeting_id"]
                 updates["constructed_meeting_url"] = ev["meeting_url"]
+            # attendees follow the feed both ways — an invite list changes right up to the call
+            if (data.get("attendees") or []) != (ev.get("attendees") or []):
+                updates["attendees"] = ev.get("attendees") or []
             if not updates:
                 continue
             updated = await store.update_planned_meeting(user_id, row["id"], updates)
@@ -199,6 +245,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                                            "when": (adopted.get("data") or {}).get("scheduled_at")})
             continue  # an FSM row on that link → leave it alone; next sweep reconciles
 
+        inherited_ws = series_ws.get(ev["uid"])  # None = no binding OR tombstoned — both mean "don't"
         created = await store.create_planned_meeting(
             user_id,
             platform=ev["platform"] or "unknown",   # link-less imports use the link-less-plan shape
@@ -208,6 +255,9 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             meeting_url=ev["meeting_url"],
             auto_join=auto_join_default,
             calendar_uid=ev["uid"],
+            workspace_id=inherited_ws,
+            workspace_source="series" if inherited_ws else None,
+            attendees=ev.get("attendees") or None,
         )
         if isinstance(created, dict) and not created.get("error"):
             by_native[(ev["platform"], ev["native_meeting_id"])] = created

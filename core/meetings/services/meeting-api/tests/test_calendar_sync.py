@@ -50,6 +50,7 @@ def test_parse_single_event_with_meet_link():
         "scheduled_at": "2026-07-08T15:00:00+00:00",
         "platform": "google_meet", "native_meeting_id": "abc-defg-hij",
         "meeting_url": "https://meet.google.com/abc-defg-hij",
+        "attendees": [],
     }
 
 
@@ -242,3 +243,104 @@ async def test_sync_vanished_linkless_uid_retires_row():
     result = await sync_user(store, USER, parse_ics(_ics(), now=NOW))
     assert result["counts"]["cancelled"] == 1
     assert await store.list_meetings(USER) == []
+
+
+# ---- attendees + series workspace inheritance (prep-v3 slices a+b) -------------------
+
+def _attendee_lines() -> str:
+    return ("ATTENDEE;CN=Marvin Hanke;PARTSTAT=ACCEPTED:mailto:marvin.hanke@oenb.at\r\n"
+            "ATTENDEE;CN=Roland Ramp:mailto:Roland.Ramp@oenb.at\r\n"
+            "ATTENDEE;CUTYPE=ROOM;CN=Vienna 4F:mailto:room4f@oenb.at\r\n"
+            "ATTENDEE:mailto:marvin.hanke@oenb.at\r\n")
+
+
+def _event_with_attendees(uid="uid-1", **kw) -> str:
+    ev = _event(uid=uid, **kw)
+    return ev.replace("END:VEVENT", _attendee_lines() + "END:VEVENT")
+
+
+def test_parse_extracts_attendees_filtering_rooms_and_dupes():
+    parsed = parse_ics(_ics(_event_with_attendees()), now=NOW)
+    (ev,) = parsed["events"]
+    assert ev["attendees"] == [
+        {"email": "marvin.hanke@oenb.at", "name": "Marvin Hanke", "partstat": "accepted"},
+        {"email": "roland.ramp@oenb.at", "name": "Roland Ramp"},
+    ]
+
+
+def test_parse_event_without_attendee_lines_has_empty_list():
+    parsed = parse_ics(_ics(_event()), now=NOW)
+    assert parsed["events"][0]["attendees"] == []
+
+
+async def test_sync_stores_attendees_on_create_and_follows_feed_changes():
+    store = InMemoryTranscriptStore()
+    await sync_user(store, USER, parse_ics(_ics(_event_with_attendees()), now=NOW))
+    (row,) = await store.list_meetings(USER)
+    assert [a["email"] for a in row["data"]["attendees"]] == [
+        "marvin.hanke@oenb.at", "roland.ramp@oenb.at"]
+    # feed drops one attendee → the row follows (invite lists change up to the call)
+    result = await sync_user(store, USER, parse_ics(_ics(
+        _event(uid="uid-1").replace(
+            "END:VEVENT",
+            "ATTENDEE;CN=Marvin Hanke:mailto:marvin.hanke@oenb.at\r\nEND:VEVENT")), now=NOW))
+    assert result["counts"]["updated"] == 1
+    (row,) = await store.list_meetings(USER)
+    assert [a["email"] for a in row["data"]["attendees"]] == ["marvin.hanke@oenb.at"]
+
+
+async def test_sync_new_occurrence_inherits_series_workspace():
+    store = InMemoryTranscriptStore()
+    # last week's occurrence of the series ran and completed, bound to the series room
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-07-01T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_id": "oenb-1424e3"},
+    )
+    result = await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    assert result["counts"]["created"] == 1
+    new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
+    assert new["data"]["workspace_id"] == "oenb-1424e3"
+    assert new["data"]["workspace_source"] == "series"
+
+
+async def test_sync_inherit_respects_unbind_tombstone():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-07-01T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_unbound": True},
+    )
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
+    assert "workspace_id" not in new["data"]
+
+
+async def test_sync_inherit_newest_row_wins():
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-06-24T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_id": "old-room"},
+    )
+    # the newer occurrence was explicitly unbound — inheritance must stop
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-07-01T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_unbound": True},
+    )
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
+    assert "workspace_id" not in new["data"]
+
+
+async def test_unbind_writes_tombstone_and_rebind_lifts_it():
+    store = InMemoryTranscriptStore()
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    (row,) = await store.list_meetings(USER)
+    updated = await store.update_planned_meeting(USER, row["id"], {"workspace_id": None})
+    assert updated["data"].get("workspace_unbound") is True
+    rebound = await store.update_planned_meeting(USER, row["id"], {"workspace_id": "oenb-1424e3"})
+    assert rebound["data"]["workspace_id"] == "oenb-1424e3"
+    assert rebound["data"]["workspace_source"] == "user"
+    assert "workspace_unbound" not in rebound["data"]

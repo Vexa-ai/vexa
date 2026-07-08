@@ -354,7 +354,8 @@ class InMemoryTranscriptStore:
 
     async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
                                      title=None, scheduled_at=None, meeting_url=None,
-                                     workspace_id=None, auto_join=True, calendar_uid=None):
+                                     workspace_id=None, auto_join=True, calendar_uid=None,
+                                     workspace_source=None, attendees=None):
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
         data: dict = {"auto_join": bool(auto_join)}
@@ -366,8 +367,12 @@ class InMemoryTranscriptStore:
             data["constructed_meeting_url"] = meeting_url
         if workspace_id:
             data["workspace_id"] = workspace_id
+            if workspace_source:
+                data["workspace_source"] = workspace_source
         if calendar_uid:
             data["calendar_uid"] = calendar_uid
+        if attendees:
+            data["attendees"] = attendees
         mid = self.seed_meeting(
             user_id=user_id, platform=platform, native_meeting_id=native_meeting_id,
             status="scheduled" if scheduled_at else "idle",
@@ -413,8 +418,18 @@ class InMemoryTranscriptStore:
         if "workspace_id" in updates:
             if updates["workspace_id"]:
                 data["workspace_id"] = updates["workspace_id"]
+                data["workspace_source"] = "user"
+                data.pop("workspace_unbound", None)
             else:
                 data.pop("workspace_id", None)
+                data.pop("workspace_source", None)
+                if data.get("calendar_uid"):
+                    data["workspace_unbound"] = True
+        if "attendees" in updates:
+            if updates["attendees"]:
+                data["attendees"] = updates["attendees"]
+            else:
+                data.pop("attendees", None)
         if "auto_join" in updates:
             data["auto_join"] = bool(updates["auto_join"])
         if "calendar_uid" in updates:
