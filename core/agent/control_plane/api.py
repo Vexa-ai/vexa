@@ -24,6 +24,7 @@ import hmac
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -183,10 +184,20 @@ class _Sessions:
         self._mem.get(subject, {}).pop(session, None)
 
 
+# P21 (ADR 0027 family — the panel's stale-live finding): a registry entry is "live" only while
+# segments actually FLOW. The watcher re-adds on every batch (~2s apart), so this much silence
+# means the meeting is over even when the session_end frame was lost (e.g. a hot-reload racing the
+# wire leaves it pending-unacked) — the server-side stale-"live" the terminal's durableTerminal
+# guard was papering over.
+LIVE_SILENCE_TTL_SEC = 60.0
+
+
 class _LiveMeetings:
     """In-memory registry of meeting copilots — the terminal's 'meetings' feed. Keyed by session_uid (the
     native Meet code). A stopped/ended meeting is KEPT (``status='stopped'``) so the terminal can offer to
-    send the bot back; ``add`` (re)marks it live. The dev-tier foundation."""
+    send the bot back; ``add`` (re)marks it live. Liveness is EVIDENCE, not a latch: ``add`` stamps
+    ``last_seen`` and ``list`` demotes an entry silent past LIVE_SILENCE_TTL_SEC to stopped (P21 —
+    absence of the expected signal is itself a reportable state). The dev-tier foundation."""
 
     def __init__(self) -> None:
         self._by_uid: dict[str, dict] = {}
@@ -194,6 +205,7 @@ class _LiveMeetings:
     def add(self, meeting: dict) -> None:
         m = dict(meeting)
         m["status"] = "live"
+        m["last_seen"] = time.monotonic()
         self._by_uid[meeting["session_uid"]] = m
 
     def stop(self, session_uid: str) -> None:
@@ -206,6 +218,10 @@ class _LiveMeetings:
         self.stop(session_uid)
 
     def list(self) -> list[dict]:
+        now = time.monotonic()
+        for m in self._by_uid.values():
+            if m.get("status") == "live" and now - m.get("last_seen", now) > LIVE_SILENCE_TTL_SEC:
+                m["status"] = "stopped"  # earned liveness expired — the segment flow went silent
         return list(self._by_uid.values())
 
 

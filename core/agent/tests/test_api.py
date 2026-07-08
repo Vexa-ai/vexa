@@ -665,6 +665,29 @@ def test_session_history_tolerant_of_missing(tmp_path):
     assert r.json() == {"turns": []}
 
 
+# ── live registry: liveness is EVIDENCE, not a latch (P21 — the stale-"live" server-side root) ──────
+
+def test_live_registry_demotes_silent_entries(monkeypatch):
+    """An entry is "live" only while segments flow (the watcher re-adds every ~2s batch). Past
+    LIVE_SILENCE_TTL_SEC of silence, list() reports it stopped — even when the session_end frame was
+    LOST (hot-reload racing the wire), the registry can't claim a live meeting forever. A fresh add
+    re-earns liveness."""
+    from control_plane.api import LIVE_SILENCE_TTL_SEC, _LiveMeetings
+    from control_plane import api as api_mod
+
+    t = {"now": 1000.0}
+    monkeypatch.setattr(api_mod.time, "monotonic", lambda: t["now"])
+    live = _LiveMeetings()
+    live.add({"session_uid": "42", "meeting_id": "42", "title": "m"})
+    assert live.list()[0]["status"] == "live"
+
+    t["now"] += LIVE_SILENCE_TTL_SEC + 1          # the segment flow went silent past the TTL
+    assert live.list()[0]["status"] == "stopped"  # demoted from evidence, no session_end needed
+
+    live.add({"session_uid": "42", "meeting_id": "42", "title": "m"})  # segments flow again
+    assert live.list()[0]["status"] == "live"     # liveness re-earned
+
+
 # ── live SSE resume (the real-time transcript-loss fix) ────────────────────────────────────────────
 
 def test_sse_cursor_encode_decode_roundtrip():
