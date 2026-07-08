@@ -533,6 +533,28 @@ def test_active_mounts_reads_the_set_and_falls_back_to_baseline(monkeypatch, tmp
     assert len(base) == 1 and base[0]["primary"] is True and base[0]["path"] == "/workspaces/u1"
 
 
+def test_adopt_legacy_continuity_migrates_pointer_and_transcript(tmp_path, monkeypatch):
+    """A thread recorded BEFORE continuity anchored to _system (pointer+transcript under the then-cwd)
+    must be ADOPTED into the anchor on next resume — otherwise turn 2 answers 'this is the first
+    message I'm seeing' (the carrier moved and forked the fact)."""
+    from worker import engine
+    monkeypatch.delenv("VEXA_MOUNTS", raising=False)
+    work = tmp_path / "ws"
+    sysroot = tmp_path / ".system" / "28"
+    (work / ".claude" / "sessions").mkdir(parents=True)
+    (work / ".claude" / "sessions" / "chat-a.session").write_text("sid-old\n")
+    proj = work / ".claude" / "projects" / "-ws-slug"
+    proj.mkdir(parents=True)
+    (proj / "sid-old.jsonl").write_text('{"type":"user"}\n')
+    engine._adopt_legacy_continuity(sysroot, work, "chat-a")
+    assert (sysroot / ".claude" / "sessions" / "chat-a.session").read_text().strip() == "sid-old"
+    assert (sysroot / ".claude" / "projects" / "-ws-slug" / "sid-old.jsonl").exists()
+    # idempotent: an anchored pointer is never overwritten by a legacy one
+    (work / ".claude" / "sessions" / "chat-a.session").write_text("sid-other\n")
+    engine._adopt_legacy_continuity(sysroot, work, "chat-a")
+    assert (sysroot / ".claude" / "sessions" / "chat-a.session").read_text().strip() == "sid-old"
+
+
 def test_kg_links_preamble_ships_the_wikilink_rule():
     """Entity mentions must render as ACTIONABLE chips in the client, so the [[Title]] referencing
     rule is declared on EVERY turn — single-mount legacy turns included (their seeded CLAUDE.md

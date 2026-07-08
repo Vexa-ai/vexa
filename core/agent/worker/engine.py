@@ -22,6 +22,7 @@ import itertools
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
@@ -106,6 +107,39 @@ def _continuity_root(work: Path) -> Path:
         if m.get("role") == "system" and m.get("path"):
             return Path(m["path"])
     return work
+
+
+def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
+    """MIGRATE-ON-READ for the continuity-carrier move (ADR-0028's write-side twin): threads recorded
+    BEFORE chats anchored to ``_system`` live under the turn's then-cwd. When the anchored pointer is
+    absent, adopt the thread — pointer AND transcript — from the first mount dir that has it, so
+    moving the carrier never forks a conversation ("this is the first message I'm seeing" on turn 2).
+    Same adoption discipline ``_session_file`` already applies to the legacy single-thread file."""
+    target = chat_root / ".claude" / "sessions" / f"{session}.session"
+    if target.exists():
+        return
+    candidates = [work] + [Path(m["path"]) for m in active_mounts() if m.get("path")]
+    for root in candidates:
+        if root == chat_root:
+            continue
+        src = root / ".claude" / "sessions" / f"{session}.session"
+        try:
+            if not src.exists():
+                continue
+            sid = src.read_text().strip()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(sid + "\n" if sid else "")
+            # the transcript must move WITH the pointer — a resumed sid whose jsonl is missing under
+            # the new projects link is an alien id (the stale-resume retry silently starts fresh)
+            if sid:
+                for t in (root / ".claude" / "projects").glob(f"*/{sid}.jsonl"):
+                    dst = chat_root / ".claude" / "projects" / t.parent.name / t.name
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if not dst.exists():
+                        shutil.copyfile(t, dst)
+            return
+        except OSError:
+            continue
 
 
 def kg_links_preamble() -> str:
@@ -275,6 +309,8 @@ def run_turn_over_workspace(
     harness: HarnessPort = factory()
     chat_root = _continuity_root(work)  # chats are PRIVATE: _system when mounted, never a shared cwd
     harness.prepare(work, chat_root=chat_root)  # harness-specific continuity/skills wiring (durable)
+    if session and session_continuity:
+        _adopt_legacy_continuity(chat_root, work, session)  # migrate-on-read: pre-anchoring threads
     sess_file = _session_file(chat_root, session)
     # session_continuity=False (the meeting copilot): never read/write the shared chat session — its
     # card-extraction beats must NOT pollute the user's chat conversation memory.
