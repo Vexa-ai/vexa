@@ -173,7 +173,9 @@ function ProbeStrip() {
 function WorkloadsTab({ workloads, error }: { workloads: Workload[]; error?: string }) {
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | "bot" | "agent-worker">("all");
-  const [state, setState] = useState<"all" | "running" | "stopped">("all");
+  // default = all kinds, RUNNING only — the admin's first question is "what's up right now";
+  // stopped/exited history is one click away (Any state)
+  const [state, setState] = useState<"all" | "running" | "stopped">("running");
   const shown = useMemo(() => workloads.filter((w) =>
     (kind === "all" || w.kind === kind) &&
     (state === "all" || w.state === state) &&
@@ -214,7 +216,11 @@ function WorkloadsTab({ workloads, error }: { workloads: Workload[]; error?: str
               </tr>
             ))}
             {shown.length === 0 && !error && (
-              <tr><td style={{ ...td, color: "var(--t3)", paddingLeft: 14 }} colSpan={6}>{workloads.length ? "nothing matches the filters" : "no managed containers"}</td></tr>
+              <tr><td style={{ ...td, color: "var(--t3)", paddingLeft: 14 }} colSpan={6}>
+                {workloads.length === 0 ? "no managed containers"
+                  : state === "running" && !q && kind === "all" ? "nothing running — Any state shows stopped containers"
+                    : "nothing matches the filters"}
+              </td></tr>
             )}
           </tbody>
         </table>
