@@ -18,7 +18,7 @@ import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { Icon } from "../ui-kit";
 import { meetingsOnly } from "../app/mode";
 
-interface StreamStat { len?: number; last_id?: string | null }
+interface StreamStat { len?: number; last_id?: string | null; last_type?: string }
 interface PipelineRow {
   meeting_id: string;
   row_keyed?: boolean;
@@ -27,6 +27,7 @@ interface PipelineRow {
   copilot_cursor?: string | null;
   proc_stream?: StreamStat;
   transcript_stream?: StreamStat;
+  pending_drain?: { deadline: number; overdue: boolean };
   live?: { native_id?: string; platform?: string; title?: string; status?: string };
 }
 interface Workload {
@@ -73,13 +74,22 @@ const TONE: Record<Tone, { fg: string; bg: string }> = {
   danger: { fg: "var(--live)", bg: "var(--livebg)" },
 };
 
-/** One health verdict per meeting row: native keying (S2) beats the undrained-tail
- *  approximation (proc entries newer than the bot's stop, meeting out of the sweep — the S1
- *  signature, approximated until the durable source_cursor is exposed via meeting-api). */
+/** One health verdict per meeting row, most severe first (ADR-0027 Train-2-aware):
+ *  native keying (S2) → a processed_pending member past its drain deadline (the run-46 S1
+ *  signature, LIVE and exact) → still-draining (in the zset, within deadline — expected for
+ *  ~2 db-writer ticks after a stop) → the undrained-tail approximation (proc entries newer
+ *  than the bot's stop with no view_end marker and out of the sweep) → ok. A proc tail that IS
+ *  the worker's view_end marker completed cleanly, so it suppresses the approximation. */
 function healthOf(m: PipelineRow, botStopMs: number | null): { label: string; tone: Tone } {
   if (m.row_keyed === false) return { label: "native key (S2)", tone: "danger" };
+  if (m.pending_drain) {
+    return m.pending_drain.overdue
+      ? { label: "stuck drain (S1)", tone: "danger" }
+      : { label: "draining…", tone: "warn" };
+  }
   const procMs = idMs(m.proc_stream?.last_id);
-  if (botStopMs && procMs && procMs > botStopMs && !m.in_active_meetings) {
+  if (m.proc_stream?.last_type !== "view_end" &&
+      botStopMs && procMs && procMs > botStopMs && !m.in_active_meetings) {
     return { label: "undrained tail?", tone: "warn" };
   }
   return { label: "ok", tone: "ok" };
@@ -222,7 +232,8 @@ function PipelineTab({ meetings, botStops, error }: { meetings: PipelineRow[]; b
     (mode === "all" || (mode === "on" && m.processing_on) || (mode === "live" && m.live?.status === "live") || (mode === "issues" && health.tone !== "ok")) &&
     (!q || `${m.meeting_id} ${m.live?.native_id ?? ""} ${m.live?.title ?? ""}`.toLowerCase().includes(q.toLowerCase())),
   ), [rows, q, mode]);
-  const stat = (s?: StreamStat) => (s ? `${s.len} @ …${(s.last_id ?? "").slice(-6) || "—"}` : "—");
+  const stat = (s?: StreamStat) =>
+    s ? `${s.len} @ …${(s.last_id ?? "").slice(-6) || "—"}${s.last_type === "view_end" ? " · view_end" : ""}` : "—";
   return (
     <div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 14px", flexWrap: "wrap" }}>

@@ -27,6 +27,10 @@ _BOT_ID = re.compile(r"^mtg-(?P<meeting>.+)-(?P<conn>[0-9a-zA-Z]{1,8})$")
 # The meetings-domain carrier keys (single shared redis). Kept in sync with
 # collector/db_writer.py (proc_stream_key / ACTIVE_MEETINGS_KEY) and worker/meeting.py.
 ACTIVE_MEETINGS_KEY = "active_meetings"
+# ADR-0027 Train 2: meetings finalized but not yet drained through the worker's view_end marker
+# (zset: member = meeting row id, score = drain deadline epoch). Healthy = members clear within
+# ~2 db-writer ticks of a stop; a member past its deadline = the run-46 S1 signature, live.
+PROCESSED_PENDING_KEY = "processed_pending"
 
 
 def classify_workload(status: dict) -> dict:
@@ -55,19 +59,26 @@ def fetch_workloads(runtime_api_url: str, *, timeout: float = 5.0) -> list[dict]
 
 
 def _stream_stat(r, key: str) -> dict:
-    """XLEN + last entry id of a stream, WRONGTYPE/missing-safe (``{}`` when not a stream)."""
+    """XLEN + last entry id/type of a stream, WRONGTYPE/missing-safe (``{}`` when not a stream).
+    ``last_type`` surfaces the entry's ``type`` field when stamped — a proc stream whose tail is
+    the worker's ``view_end`` marker completed cleanly (ADR-0027 Train 2)."""
     try:
         length = r.xlen(key)
     except Exception:  # noqa: BLE001 — missing key or a non-stream type: report nothing, don't crash the sweep
         return {}
-    last_id = None
+    out: dict = {"len": length, "last_id": None}
     try:
         tail = r.xrevrange(key, count=1)
         if tail:
-            last_id = tail[0][0]
+            entry_id, fields = tail[0]
+            out["last_id"] = entry_id
+            decoded = {(k if isinstance(k, str) else k.decode()): (v if isinstance(v, str) else v.decode())
+                       for k, v in (fields or {}).items()}
+            if decoded.get("type"):
+                out["last_type"] = decoded["type"]
     except Exception:  # noqa: BLE001
         pass
-    return {"len": length, "last_id": last_id}
+    return out
 
 
 def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
@@ -100,7 +111,13 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
         active = {m if isinstance(m, str) else m.decode() for m in (r.smembers(ACTIVE_MEETINGS_KEY) or set())}
     except Exception:  # noqa: BLE001
         pass
-    ids |= active | set(live_by_id)
+    pending: dict[str, float] = {}
+    try:
+        for member, score in r.zrange(PROCESSED_PENDING_KEY, 0, -1, withscores=True) or []:
+            pending[member if isinstance(member, str) else member.decode()] = float(score)
+    except Exception:  # noqa: BLE001 — pre-Train-2 stacks have no zset; the column just stays empty
+        pass
+    ids |= active | set(live_by_id) | set(pending)
 
     rows: list[dict] = []
     for mid in sorted(ids):
@@ -109,6 +126,8 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
             "row_keyed": mid.isdigit(),  # False = a native-keyed carrier the db-writer never drains (S2)
             "in_active_meetings": mid in active,
         }
+        if mid in pending:
+            row["pending_drain"] = {"deadline": pending[mid], "overdue": pending[mid] < time.time()}
         try:
             row["processing_on"] = bool(r.get(f"proc:meeting:{mid}:on"))
             row["copilot_cursor"] = r.get(f"proc:meeting:{mid}:cursor")

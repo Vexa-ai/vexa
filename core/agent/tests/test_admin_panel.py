@@ -86,10 +86,15 @@ class _FakeRedis:
     """Just enough of redis for pipeline_snapshot + the probe's carrier round-trip: streams as
     {key: [(id, fields)]}, plain KV, a set."""
 
-    def __init__(self, streams=None, kv=None, active=None):
+    def __init__(self, streams=None, kv=None, active=None, pending=None):
         self._streams = streams or {}
         self._kv = kv or {}
         self._active = active or set()
+        self._pending = pending or {}
+
+    def zrange(self, key, start, stop, withscores=False):
+        items = sorted(self._pending.items(), key=lambda kv: kv[1])
+        return items if withscores else [k for k, _ in items]
 
     def set(self, key, value, ex=None):
         self._kv[key] = value
@@ -149,6 +154,20 @@ def test_pipeline_snapshot_includes_live_registry():
     )
     by_id = {row["meeting_id"]: row for row in rows}
     assert "7" in by_id and by_id["7"]["live"]["native_id"] == "xyz"
+
+
+def test_pipeline_snapshot_surfaces_pending_drain_and_view_end():
+    import time as _time
+    now = _time.time()
+    r = _FakeRedis(
+        streams={"proc:meeting:46": [("1-0", {"note": "{}"}), ("2-0", {"type": "view_end", "cursor": "1-0"})]},
+        pending={"46": now + 60, "44": now - 60},  # 46 draining (within deadline), 44 overdue = S1 live
+    )
+    rows = {row["meeting_id"]: row for row in admin_panel.pipeline_snapshot(r)}
+    assert set(rows) == {"46", "44"}  # 44 discovered via the zset alone (no streams left)
+    assert rows["46"]["pending_drain"]["overdue"] is False
+    assert rows["44"]["pending_drain"]["overdue"] is True
+    assert rows["46"]["proc_stream"]["last_type"] == "view_end"
 
 
 # ── the golden smoke probe ────────────────────────────────────────────────────────────────────
