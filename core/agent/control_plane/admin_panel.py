@@ -119,6 +119,18 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
         pass
     ids |= active | set(live_by_id) | set(pending)
 
+    # A live-registry row is keyed under BOTH its numeric row id and its native aliases. When the
+    # numeric row exists, an alias id with no real carriers of its own is registry echo, not an S2
+    # native-keyed stream — listing it would wear the danger chip for nothing (seen live: meeting
+    # 53's `byr-sqng-mek` alias with empty streams). Real S2 rows keep showing: they have content.
+    aliased: set[str] = set()
+    for m in live_meetings or []:
+        if m.get("numeric_meeting_id"):
+            for key_field in ("meeting_id", "native_id", "session_uid"):
+                v = m.get(key_field)
+                if v and str(v) != str(m["numeric_meeting_id"]):
+                    aliased.add(str(v))
+
     rows: list[dict] = []
     for mid in sorted(ids):
         row: dict = {
@@ -139,6 +151,11 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
             row["proc_stream"] = proc
         if tc:
             row["transcript_stream"] = tc
+        if mid in aliased and not (
+            proc.get("len") or tc.get("len") or row.get("processing_on") or row.get("copilot_cursor")
+            or mid in active or mid in pending
+        ):
+            continue  # registry echo of a numeric row — no carriers of its own, nothing to report
         live_row = live_by_id.get(mid)
         if live_row:
             row["live"] = {k: live_row.get(k) for k in
@@ -188,9 +205,12 @@ def _health_stage(sid: str, label: str, url: str, http_health) -> dict:
 
 
 def run_probe(settings, r, live_meetings: list[dict] | None = None, *,
-              relay_health: dict | None = None, http_health=_http_health) -> dict:
+              relay_health: dict | None = None, http_health=_http_health,
+              workloads: list[dict] | None = None) -> dict:
     """Run the golden smoke probe. ``r`` may be None (redis stage reports fail).
-    Overall: fail > warn > pass across stages."""
+    Overall: fail > warn > pass across stages. ``workloads`` (when known) cross-checks the
+    in-memory live registry: a registry entry can outlive its meeting (stale live flag — seen
+    live on meeting 53), so quiet-with-"live" only FAILS when a bot container actually runs."""
     t0 = time.monotonic()
     stages: list[dict] = []
 
@@ -233,7 +253,11 @@ def run_probe(settings, r, live_meetings: list[dict] | None = None, *,
     rh = relay_health or {}
     resolve = rh.get("native_resolve") or {}
     ingest = rh.get("ingest") or {}
-    live_now = any(m.get("status") == "live" for m in (live_meetings or []))
+    registry_live = any(m.get("status") == "live" for m in (live_meetings or []))
+    bot_running = (None if workloads is None else
+                   any(w.get("kind") == "bot" and w.get("state") == "running" for w in workloads))
+    live_now = registry_live and bot_running is not False
+    stale_live = registry_live and bot_running is False
     if resolve and not resolve.get("ok", True):
         stages.append(_stage("relay", "transcript relay", "fail",
                              detail=f"native resolve: {resolve.get('kind')}: {resolve.get('detail')}"))
@@ -244,9 +268,15 @@ def run_probe(settings, r, live_meetings: list[dict] | None = None, *,
             stages.append(_stage("relay", "transcript relay", "pass", detail=f"segments flowing ({int(age)}s ago)"))
         else:
             quiet = f"no segments for {int(age / 60)}m" if age is not None else "no segments seen since start"
-            # quiet ≠ broken: with a live meeting the silence is a fault; idle it's just idle
-            stages.append(_stage("relay", "transcript relay", "fail" if live_now else "warn",
-                                 detail=quiet + (" with a LIVE meeting" if live_now else " (nothing live)")))
+            # quiet ≠ broken: with a live meeting the silence is a fault; idle it's just idle.
+            # A registry-live entry with NO running bot is a stale flag, not a live meeting.
+            if live_now:
+                suffix = " with a LIVE meeting"
+            elif stale_live:
+                suffix = " (registry says live but no bot container runs — stale live flag)"
+            else:
+                suffix = " (nothing live)"
+            stages.append(_stage("relay", "transcript relay", "fail" if live_now else "warn", detail=quiet + suffix))
 
     worst = "pass"
     if any(s["status"] == "warn" for s in stages):

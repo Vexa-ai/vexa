@@ -154,6 +154,19 @@ def test_pipeline_snapshot_includes_live_registry():
     )
     by_id = {row["meeting_id"]: row for row in rows}
     assert "7" in by_id and by_id["7"]["live"]["native_id"] == "xyz"
+    # the native ALIAS of the numeric row has no carriers of its own — registry echo, not an S2
+    # native-keyed stream; it must NOT appear as a separate (danger-chip) row
+    assert "xyz" not in by_id
+
+
+def test_pipeline_snapshot_keeps_real_native_carriers_despite_alias():
+    """A native id that HAS content (a real mis-keyed stream) still shows even when the live
+    registry also aliases it to a numeric row — real S2 evidence is never suppressed."""
+    r = _FakeRedis(streams={"proc:meeting:xyz": [("1-0", {"note": "{}"})]})
+    rows = admin_panel.pipeline_snapshot(
+        r, [{"numeric_meeting_id": "7", "native_id": "xyz", "status": "live"}])
+    by_id = {row["meeting_id"]: row for row in rows}
+    assert "xyz" in by_id and by_id["xyz"]["row_keyed"] is False
 
 
 def test_pipeline_snapshot_surfaces_pending_drain_and_view_end():
@@ -202,6 +215,27 @@ def test_probe_quiet_relay_is_warn_when_nothing_live_but_fail_when_live():
     busy = _probe(relay=stale_relay, live=[{"status": "live"}])
     assert busy["status"] == "fail"
     assert "LIVE" in next(s for s in busy["stages"] if s["id"] == "relay")["detail"]
+
+
+def test_probe_stale_live_flag_downgrades_fail_to_warn():
+    """A registry-live entry with NO running bot (seen live: meeting 53) is a stale flag —
+    relay quiet must be a WARN naming the staleness, not a false FAIL."""
+    stale_relay = {"native_resolve": {"ok": True}, "ingest": {"ok": True, "last_segment_at": None}}
+    live = [{"status": "live"}]
+    no_bots = [{"workloadId": "agent-28-chat-x", "kind": "agent-worker", "state": "running"}]
+    result = _probe(relay=stale_relay, live=live)
+    assert result["status"] == "fail"  # workloads unknown → trust the registry (unchanged)
+
+    result = admin_panel.run_probe(load_settings(), _FakeRedis(), live,
+                                   relay_health=stale_relay, http_health=_ok_http, workloads=no_bots)
+    stage = next(s for s in result["stages"] if s["id"] == "relay")
+    assert result["status"] == "warn" and stage["status"] == "warn"
+    assert "stale live flag" in stage["detail"]
+
+    with_bot = no_bots + [{"workloadId": "mtg-53-abcd1234", "kind": "bot", "state": "running"}]
+    result = admin_panel.run_probe(load_settings(), _FakeRedis(), live,
+                                   relay_health=stale_relay, http_health=_ok_http, workloads=with_bot)
+    assert result["status"] == "fail"  # a real live bot with no segments IS a fault
 
 
 def test_probe_native_resolve_fault_fails_relay_stage():

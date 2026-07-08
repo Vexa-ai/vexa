@@ -761,7 +761,14 @@ def create_app(
                 r = _redis.from_url(redis_url, decode_responses=True)
             except Exception:  # noqa: BLE001 — the probe's redis stage reports the fault
                 r = None
-        return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health())
+        # Workloads cross-check the in-memory live registry (a stale "live" entry must not turn
+        # relay quiet into a false FAIL). Unknown (kernel unreachable) → None = trust the registry.
+        try:
+            workloads = admin_panel.fetch_workloads(settings.runtime_api_url)
+        except Exception:  # noqa: BLE001
+            workloads = None
+        return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health(),
+                                     workloads=workloads)
 
     @app.post("/api/meeting/process", status_code=202)
     def meeting_process(body: MeetingProcess, request: Request):
