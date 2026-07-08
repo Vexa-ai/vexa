@@ -238,3 +238,21 @@ def test_downstream_target_url_matches_route_table():
     assert "meeting-api" in downstream.last["url"]
     client.get("/bots/status", headers=AUTH)
     assert "meeting-api" in downstream.last["url"]
+
+
+def test_user_models_and_transcription_routes_forward_to_admin_api():
+    """Self-serve model + transcription prefs (Settings → Models): PUT/GET proxy to admin-api
+    (which masks api_key/token on read-back), same idiom as /user/webhook."""
+    client, downstream = _client()
+    for path in ("/user/models", "/user/transcription"):
+        r = client.put(path, headers=AUTH, json={})
+        assert r.status_code == 200
+        assert downstream.last["method"] == "PUT"
+        assert downstream.last["url"] == f"http://admin-api{path}"
+        assert downstream.last["headers"]["x-user-id"] == "7"
+
+        client.get(path, headers=AUTH)
+        assert downstream.last["method"] == "GET"
+        assert downstream.last["url"] == f"http://admin-api{path}"
+
+        assert client.get(path).status_code == 401  # no key → the edge refuses

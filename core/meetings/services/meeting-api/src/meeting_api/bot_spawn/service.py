@@ -53,6 +53,32 @@ _URL_TEMPLATES = {
 }
 
 
+async def _resolve_transcription_backend(user_id: int) -> dict:
+    """The Settings-configured transcription backend for this spawn: admin-api's bot-context
+    resolves user pref > platform setting into ``{"transcription": {url, token}}``. Best-effort
+    by contract — identity unreachable / unset ADMIN_API_URL degrades to the process env (the
+    pre-Settings behaviour), never blocks a spawn. The token crosses ONLY this internal hop."""
+    admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
+    internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
+    if not (admin_api_url and internal_secret):
+        return {}
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(
+                f"{admin_api_url}/internal/users/{user_id}/bot-context",
+                headers={"X-Internal-Secret": internal_secret},
+            )
+        if r.status_code != 200:
+            return {}
+        body = r.json()
+        transcription = body.get("transcription") if isinstance(body, dict) else None
+        return transcription if isinstance(transcription, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def construct_meeting_url(platform: str, native_meeting_id: str) -> Optional[str]:
     """Best-effort meeting URL for ``(platform, native_id)`` (zoom needs more than the id →
     None; the caller may pass an explicit ``meeting_url`` instead)."""
@@ -206,12 +232,19 @@ async def request_bot(
     internal_secret = internal_secret if internal_secret is not None else os.getenv(
         "INTERNAL_API_SECRET"
     )
-    # STT creds the bot transcribes with — sourced from the meeting-api process env (the parent's
-    # request_bot did the same). Without these the bot joins + captures but cannot transcribe (the
-    # invocation has no STT). None-safe: omitted from the invocation when unset (transcribe still
-    # gated by transcribe_enabled).
+    # STT creds the bot transcribes with — the process env (the parent's request_bot did the
+    # same) is the bottom fallback; a configured backend from Settings (user pref > platform
+    # setting, resolved by admin-api's bot-context) overrides it per spawn. Without either the
+    # bot joins + captures but cannot transcribe (the invocation has no STT). None-safe: omitted
+    # from the invocation when unset (transcribe still gated by transcribe_enabled).
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
+    configured = await _resolve_transcription_backend(user_id)
+    if configured.get("url"):
+        transcription_service_url = configured["url"]
+        # A configured backend's token replaces the env token even when empty — the env token
+        # belongs to the ENV backend, never to a user-supplied endpoint.
+        transcription_service_token = configured.get("token") or None
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
     # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
     token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)

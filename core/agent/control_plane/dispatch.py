@@ -132,6 +132,54 @@ MODEL_AUTH_ENV_ALLOWLIST = (
 )
 
 
+def _allowlisted(model: str, allowlist: str) -> bool:
+    """The operator's model gate (``VEXA_MODEL_ALLOWLIST``, comma-separated): empty = anything goes."""
+    allowed = {m.strip() for m in allowlist.split(",") if m.strip()}
+    return not allowed or model in allowed
+
+
+def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = "") -> None:
+    """Overlay the subject's effective model config (Settings → Models: user pref > platform
+    setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
+    env defaults, which stay the bottom fallback for anything unset.
+
+    ``mode: custom`` points BOTH call shapes at the supplied gateway (an Anthropic-/OpenAI-
+    compatible endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model): the
+    claude-code harness via ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN`` and the completion
+    adapters via ``VEXA_LLM_PROVIDER=openai-compat`` + ``VEXA_LLM_BASE_URL``/``VEXA_LLM_API_KEY``.
+    ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
+    Claude Code subscription / deployment key — and only the model names apply.
+
+    Dispatch-stamped values WIN downstream (the runtime copies its own env only for keys absent
+    here — docker_backend's ``key not in spawn_env``). Models are gated by the operator's
+    allowlist: a non-allowlisted model is DROPPED (deployment default applies), never an error —
+    a stale pref must not brick a turn."""
+    model = (config.get("model") or "").strip()
+    if model and _allowlisted(model, allowlist):
+        env["VEXA_AGENT_MODEL"] = model     # harness turns (chat/docs/routines)
+        env["VEXA_LLM_MODEL"] = model       # completion beats' default (meeting_model beats it)
+    elif model:
+        logger.warning("model %r not in VEXA_MODEL_ALLOWLIST — using deployment default", model)
+    meeting_model = (config.get("meeting_model") or "").strip()
+    if meeting_model and _allowlisted(meeting_model, allowlist):
+        env["VEXA_MEETING_MODEL"] = meeting_model
+    elif meeting_model:
+        logger.warning("meeting model %r not in VEXA_MODEL_ALLOWLIST — using deployment default",
+                       meeting_model)
+    if (config.get("mode") or "").strip() != "custom":
+        return
+    base_url = (config.get("base_url") or "").strip()
+    api_key = (config.get("api_key") or "").strip()
+    if not base_url:
+        return  # custom mode without an endpoint is inert — deployment credentials still apply
+    env["ANTHROPIC_BASE_URL"] = base_url
+    env["VEXA_LLM_PROVIDER"] = "openai-compat"
+    env["VEXA_LLM_BASE_URL"] = base_url
+    if api_key:
+        env["ANTHROPIC_AUTH_TOKEN"] = api_key
+        env["VEXA_LLM_API_KEY"] = api_key
+
+
 def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
     """The worker's CWD — the workspace it 'lives in', whose ``CLAUDE.md`` auto-loads as project memory.
 
@@ -149,7 +197,8 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
 
 
 def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token: str,
-                   memberships: Optional[list[dict]] = None) -> dict[str, str]:
+                   memberships: Optional[list[dict]] = None,
+                   model_config: Optional[dict] = None) -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -202,6 +251,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         env["VEXA_LLM_MODEL"] = settings.llm_model
     if settings.model_allowlist:
         env["VEXA_MODEL_ALLOWLIST"] = settings.model_allowlist
+    # Settings → Models (per-user/platform config from admin-api) beats the deployment env
+    # defaults stamped above, field-by-field; anything it leaves unset falls through unchanged.
+    if model_config:
+        overlay_model_config(env, model_config, allowlist=settings.model_allowlist)
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
@@ -304,7 +357,7 @@ class Dispatcher:
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
 
     def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort,
-                 membership_index=None) -> None:
+                 membership_index=None, model_config=None) -> None:
         self._settings = settings
         self._runtime = runtime
         self._identity = identity
@@ -312,6 +365,10 @@ class Dispatcher:
         # the SHARED workspaces the subject is a member of so they enter the mount set. None → no shared
         # mounts (the private stack still dispatches exactly as before).
         self._membership_index = membership_index
+        # Settings → Models: the subject's effective model config resolver (shared.adapters.
+        # AdminApiModelConfig — user pref > platform setting over the admin-api internal edge).
+        # None → deployment env defaults only, exactly as before.
+        self._model_config = model_config
         self.dispatched: list[dict] = []  # observability — the dispatches that fired
 
     @property
@@ -340,7 +397,17 @@ class Dispatcher:
             except Exception:  # noqa: BLE001
                 logger.warning("membership-index lookup failed for subject=%s — dispatching private mounts only",
                                identity["subject"])
-        env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships)
+        # Settings → Models: resolve the subject's effective model config (fail soft — a down
+        # identity service must never block a turn; the deployment env defaults still dispatch).
+        model_config = None
+        if self._model_config is not None:
+            try:
+                model_config = self._model_config.resolve(identity["subject"])
+            except Exception:  # noqa: BLE001
+                logger.warning("model-config lookup failed for subject=%s — dispatching on env defaults",
+                               identity["subject"])
+        env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
+                             model_config=model_config)
         acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
         logger.info(
             "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s",

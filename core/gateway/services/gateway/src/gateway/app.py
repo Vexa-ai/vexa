@@ -406,6 +406,24 @@ def create_app(
     async def get_user_calendar(request: Request):
         return await _forward("GET", _admin("/user/calendar"), request)
 
+    # ---- user self-serve model + transcription prefs (identity owns them, same shape as
+    # /user/webhook: secrets masked by admin-api on every read-back, no ROUTE_SCOPES entry). ----
+    @app.put("/user/models")
+    async def set_user_models(request: Request):
+        return await _forward("PUT", _admin("/user/models"), request)
+
+    @app.get("/user/models")
+    async def get_user_models(request: Request):
+        return await _forward("GET", _admin("/user/models"), request)
+
+    @app.put("/user/transcription")
+    async def set_user_transcription(request: Request):
+        return await _forward("PUT", _admin("/user/transcription"), request)
+
+    @app.get("/user/transcription")
+    async def get_user_transcription(request: Request):
+        return await _forward("GET", _admin("/user/transcription"), request)
+
     # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under the canonical /agent/*
     # prefix so the SAME edge resolves key → user and injects X-User-Id; agent-api derives `subject`
     # from it (never the client). The terminal therefore talks ONLY to the gateway (one authenticated

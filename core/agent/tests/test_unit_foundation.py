@@ -309,3 +309,91 @@ def test_dispatcher_principal_env_wins_over_subject(monkeypatch):
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_PRINCIPAL_NAME"] == "Jane Doe"
     assert env["VEXA_PRINCIPAL_EMAIL"] == "jane@example.com"
+
+
+# ── Settings → Models: the per-subject model-config overlay (user pref > platform > env) ──────
+
+class _FakeModelConfig:
+    def __init__(self, config=None, error=None):
+        self._config, self._error = config or {}, error
+        self.asked: list[str] = []
+
+    def resolve(self, subject):
+        self.asked.append(subject)
+        if self._error:
+            raise self._error
+        return self._config
+
+
+def test_dispatcher_model_config_overrides_deployment_models():
+    """The subject's configured models beat the deployment defaults (Settings → Models wins)."""
+    settings = load_settings(agent_model="deployment-default", meeting_model="deployment-meeting")
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"model": "my-model", "meeting_model": "my-meeting"})
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    assert mc.asked == ["u_jane"]
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_AGENT_MODEL"] == "my-model"
+    assert env["VEXA_LLM_MODEL"] == "my-model"          # completion default follows the chat model
+    assert env["VEXA_MEETING_MODEL"] == "my-meeting"
+
+
+def test_dispatcher_model_config_custom_mode_stamps_both_call_shapes():
+    """mode:custom points the harness (ANTHROPIC_*) AND the completion adapters (VEXA_LLM_*) at
+    the supplied gateway. Dispatch-stamped keys WIN downstream (docker_backend copies its own env
+    only for keys absent here)."""
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
+                           "api_key": "sk-user", "model": "qwen3"})
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.com"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-user"
+    assert env["VEXA_LLM_PROVIDER"] == "openai-compat"
+    assert env["VEXA_LLM_BASE_URL"] == "https://gw.example.com"
+    assert env["VEXA_LLM_API_KEY"] == "sk-user"
+    assert env["VEXA_AGENT_MODEL"] == "qwen3"
+
+
+def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(monkeypatch):
+    """mode:subscription (or unset) never stamps endpoint/credential env — the deployment's
+    brokered credential (mounted subscription / deployment key) stays in charge."""
+    for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:  # isolate from the test-runner's own env
+        monkeypatch.delenv(key, raising=False)
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"mode": "subscription", "model": "opus",
+                           "base_url": "https://ignored.example.com", "api_key": "sk-ignored"})
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_AGENT_MODEL"] == "opus"
+    assert "ANTHROPIC_BASE_URL" not in env
+    assert "VEXA_LLM_API_KEY" not in env
+
+
+def test_dispatcher_model_config_allowlist_gates_models_not_endpoint():
+    """A non-allowlisted model is DROPPED (deployment default applies) — never an error; the
+    custom endpoint itself is not the allowlist's business."""
+    settings = load_settings(agent_model="deployment-default", model_allowlist="sonnet,haiku")
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
+                           "model": "not-allowed", "meeting_model": "haiku"})
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_AGENT_MODEL"] == "deployment-default"   # gated pref falls through
+    assert env["VEXA_MEETING_MODEL"] == "haiku"              # allowlisted pref applies
+    assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.com"
+
+
+def test_dispatcher_model_config_failure_dispatches_on_env_defaults():
+    """A down identity service must never block a turn (fail soft, like the membership index)."""
+    settings = load_settings(agent_model="deployment-default")
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig(error=RuntimeError("identity down"))
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_AGENT_MODEL"] == "deployment-default"

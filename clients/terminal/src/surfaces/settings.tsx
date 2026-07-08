@@ -9,10 +9,12 @@ import { registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
 import { getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
+import { getModelPrefs, setModelPrefs, getTranscriptionPrefs, setTranscriptionPrefs, getGlobalSetting, setGlobalSetting } from "./settingsApi";
 
-type SectionId = "calendar" | "tokens" | "github" | "account";
+type SectionId = "calendar" | "models" | "tokens" | "github" | "account";
 const SECTIONS: Array<{ id: SectionId; label: string; icon: string }> = [
   { id: "calendar", label: "Calendar", icon: "cal" },
+  { id: "models", label: "Models", icon: "spark" },
   { id: "tokens", label: "API tokens", icon: "key" },
   { id: "github", label: "GitHub", icon: "github" },
   { id: "account", label: "Account", icon: "user" },
@@ -89,6 +91,135 @@ function CalendarSection() {
   );
 }
 
+/** One models/transcription config form — the SAME fields serve the per-user prefs and (for
+ *  admins) the global platform defaults; only load/save differ. Secrets arrive MASKED
+ *  (********abcd): an untouched masked value is never sent back, typing replaces it, emptying a
+ *  previously-set field clears it (empty string = clear, the API's contract). */
+function ConfigForm({ fields, load, save, note }: {
+  fields: Array<{ key: string; label: string; placeholder?: string; secret?: boolean; options?: Array<{ value: string; label: string }>; showIf?: (v: Record<string, string>) => boolean }>;
+  load: () => Promise<Record<string, string>>;
+  save: (update: Record<string, string>) => Promise<Record<string, string>>;
+  note?: string;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [initial, setInitial] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let on = true;
+    load().then((v) => { if (on) { setValues(v); setInitial(v); } })
+      .catch((e: unknown) => on && setErr(e instanceof Error ? e.message : String(e)));
+    return () => { on = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const dirty = fields.some((f) => (values[f.key] ?? "") !== (initial[f.key] ?? ""));
+  const doSave = async () => {
+    setBusy(true); setErr(null); setSaved(false);
+    // Send only what changed; an untouched masked secret stays server-side.
+    const update: Record<string, string> = {};
+    for (const f of fields) {
+      if ((values[f.key] ?? "") !== (initial[f.key] ?? "")) update[f.key] = values[f.key] ?? "";
+    }
+    try { const v = await save(update); setValues(v); setInitial(v); setSaved(true); }
+    catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 460 }}>
+      {note && <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5 }}>{note}</div>}
+      {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</div>}
+      {fields.map((f) => (f.showIf && !f.showIf(values)) ? null : (
+        <label key={f.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--t2)" }}>
+          <span style={{ width: 110, flex: "none", color: "var(--t3)" }}>{f.label}</span>
+          {f.options ? (
+            <select value={values[f.key] ?? ""}
+              onChange={(e) => { setSaved(false); setValues((v) => ({ ...v, [f.key]: e.target.value })); }}
+              style={{ ...field, width: "auto", flex: 1 }}>
+              {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          ) : (
+            <input value={values[f.key] ?? ""} placeholder={f.placeholder}
+              type={f.secret && (values[f.key] ?? "") !== (initial[f.key] ?? "") ? "password" : "text"}
+              onChange={(e) => { setSaved(false); setValues((v) => ({ ...v, [f.key]: e.target.value })); }}
+              style={field} />
+          )}
+        </label>
+      ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button disabled={busy || !dirty} onClick={() => void doSave()}
+          style={{ ...btn, background: dirty ? "var(--accent)" : "var(--panel2)", color: dirty ? "var(--on-accent)" : "var(--t3)", border: dirty ? "none" : btn.border, opacity: busy ? 0.5 : 1 }}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        {saved && <span style={{ fontSize: 11.5, color: "var(--green)" }}>Saved — next agent turn uses it</span>}
+      </div>
+    </div>
+  );
+}
+
+/** Models — which LLM the agent runs on and which STT backend the bot transcribes with; your own
+ *  settings first, the deployment-wide defaults below for admins. Empty fields = the level below
+ *  decides (global settings, then the deployment env). */
+function ModelsSection() {
+  const [globalAdmin, setGlobalAdmin] = useState(false);
+  useEffect(() => {
+    let on = true;
+    // Admin probe: the global card renders only when /api/admin/settings answers (404 = not admin).
+    getGlobalSetting("models").then((v) => on && setGlobalAdmin(v !== null)).catch(() => undefined);
+    return () => { on = false; };
+  }, []);
+
+  const modelFields = [
+    { key: "mode", label: "Provider", options: [
+      { value: "", label: "Deployment default" },
+      { value: "subscription", label: "Claude subscription (deployment credentials)" },
+      { value: "custom", label: "Custom endpoint (open-source / gateway)" },
+    ] },
+    { key: "base_url", label: "Base URL", placeholder: "https://… (Anthropic/OpenAI-compatible gateway)", showIf: (v: Record<string, string>) => v.mode === "custom" },
+    { key: "api_key", label: "API key", placeholder: "unchanged unless typed", secret: true, showIf: (v: Record<string, string>) => v.mode === "custom" },
+    { key: "model", label: "Chat model", placeholder: "deployment default (e.g. sonnet)" },
+    { key: "meeting_model", label: "Meeting model", placeholder: "defaults to chat model" },
+  ];
+  const transcriptionFields = [
+    { key: "url", label: "Service URL", placeholder: "deployment default" },
+    { key: "token", label: "Token", placeholder: "unchanged unless typed", secret: true },
+  ];
+  const asStrings = (v: Record<string, unknown>): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v)) if (typeof val === "string" && val) out[k] = val;
+    return out;
+  };
+  const head: CSSProperties = { fontSize: 12, fontWeight: 600, color: "var(--t1)", margin: "14px 0 6px" };
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 12, maxWidth: 460 }}>
+        Which model the agent runs on, and which transcription service meeting bots use. Provider
+        &ldquo;subscription&rdquo; rides the deployment&rsquo;s Claude credentials; &ldquo;custom&rdquo; points at your own
+        Anthropic/OpenAI-compatible endpoint (a LiteLLM/OpenRouter gateway serves open-source
+        models). Empty fields inherit the deployment defaults.
+      </div>
+      <div style={head}>Your models</div>
+      <ConfigForm fields={modelFields} load={async () => asStrings(await getModelPrefs())}
+        save={async (u) => asStrings(await setModelPrefs(u))} />
+      <div style={head}>Your transcription backend</div>
+      <ConfigForm fields={transcriptionFields} load={async () => asStrings(await getTranscriptionPrefs())}
+        save={async (u) => asStrings(await setTranscriptionPrefs(u))} />
+      {globalAdmin && <>
+        <div style={{ ...head, marginTop: 22, color: "var(--accent)" }}>Global defaults (admin — every user without own settings)</div>
+        <ConfigForm fields={modelFields} load={async () => (await getGlobalSetting("models")) ?? {}}
+          save={(u) => setGlobalSetting("models", u)} />
+        <div style={head}>Global transcription backend</div>
+        <ConfigForm fields={transcriptionFields} load={async () => (await getGlobalSetting("transcription")) ?? {}}
+          save={(u) => setGlobalSetting("transcription", u)} />
+      </>}
+    </div>
+  );
+}
+
 function AccountSection() {
   const [user, setUser] = useState<{ email?: string | null; name?: string | null } | null>(null);
   useEffect(() => {
@@ -112,6 +243,7 @@ function SettingsView() {
   const [section, setSection] = useState<SectionId>("calendar");
   const bodies: Record<SectionId, ReactNode> = {
     calendar: <CalendarSection />,
+    models: <ModelsSection />,
     tokens: <TokensPanel />,
     github: <GitHubTokenCard />,
     account: <AccountSection />,

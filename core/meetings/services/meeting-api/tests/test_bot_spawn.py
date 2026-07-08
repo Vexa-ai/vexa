@@ -164,3 +164,46 @@ def test_post_bots_401_without_identity(monkeypatch):
     client = _client()
     r = client.post("/bots", json={"platform": "google_meet", "native_meeting_id": "x"})
     assert r.status_code == 401
+
+
+# ── Settings → transcription backend: the configured STT (user pref > platform) beats the env ────
+
+async def test_request_bot_configured_transcription_backend_overrides_env(monkeypatch):
+    """A backend configured in Settings (resolved by admin-api's bot-context: user pref >
+    platform setting) rides the invocation INSTEAD of the process env — including the token:
+    the env token belongs to the ENV backend, never to a user-supplied endpoint."""
+    from meeting_api.bot_spawn import service as spawn_service
+
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-env")
+
+    async def fake_resolve(user_id):
+        assert user_id == USER
+        return {"url": "https://stt-mine.example.com"}
+
+    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["transcriptionServiceUrl"] == "https://stt-mine.example.com"
+    assert "transcriptionServiceToken" not in inv  # env token does NOT leak to the custom backend
+
+
+async def test_request_bot_env_transcription_stays_without_settings(monkeypatch):
+    """No configured backend (unset ADMIN_API_URL / nothing stored) → the pre-Settings env path,
+    unchanged."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-env")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["transcriptionServiceUrl"] == "https://stt-env.vexa.ai"
+    assert inv["transcriptionServiceToken"] == "tok-env"

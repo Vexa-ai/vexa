@@ -500,3 +500,37 @@ class AdminApiMembershipIndex:
             if e.code == 404:
                 return []
             raise
+
+
+class AdminApiModelConfig:
+    """The subject's EFFECTIVE model config (user pref > platform setting, resolved by admin-api's
+    ``/internal/users/{id}/model-config``) over the same internal edge as the membership index.
+
+    Dispatch-time seam for the Settings → Models surface: the returned
+    ``{mode, model, meeting_model, base_url, api_key}`` (all optional) overlays the deployment env
+    defaults in ``build_unit_env``. Best-effort by contract: the caller catches failures and
+    dispatches on env defaults — a down identity service must never block a turn. The ``api_key``
+    is a SECRET riding one internal hop into the worker's brokered env; never log the payload."""
+
+    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 3.0) -> None:
+        self._base = base_url.rstrip("/")
+        self._secret = internal_secret
+        self._timeout = timeout
+
+    def resolve(self, subject: str) -> dict:
+        headers = {"Content-Type": "application/json"}
+        if self._secret:
+            headers["X-Internal-Secret"] = self._secret
+        req = urllib.request.Request(
+            f"{self._base}/internal/users/{subject}/model-config",
+            headers=headers, method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                data = json.loads(r.read())
+            models = data.get("models") if isinstance(data, dict) else None
+            return models if isinstance(models, dict) else {}
+        except urllib.error.HTTPError as e:
+            if e.code == 404:  # unknown subject (e.g. a dev default-subject) → env defaults
+                return {}
+            raise

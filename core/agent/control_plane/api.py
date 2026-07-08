@@ -2173,7 +2173,7 @@ def create_app(
 
 # ── ASGI entrypoint (PEP 562) — `uvicorn control_plane.api:app` resolves this lazily ──────────────────
 def _build_production_app() -> FastAPI:
-    from shared.adapters import AdminApiMembershipIndex, LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
+    from shared.adapters import AdminApiMembershipIndex, AdminApiModelConfig, LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
     from shared.config import load_settings
     from control_plane.config_preflight import preflight
     from control_plane.workspace_routines import start_workspace_routine_reconciler
@@ -2193,13 +2193,20 @@ def _build_production_app() -> FastAPI:
     # Empty admin_api_url → the in-memory index (git files stay authoritative; only "shared with me"
     # listing is degraded, per Q6). create_app defaults to InMemoryMembershipIndex when None is passed.
     membership_index = None
+    model_config = None
     if settings.admin_api_url:
         membership_index = AdminApiMembershipIndex(
             settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
         )
+        # Settings → Models: per-subject effective model config (user pref > platform setting)
+        # over the same internal edge; None (no admin-api) → deployment env defaults only.
+        model_config = AdminApiModelConfig(
+            settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
+        )
     # Lane A: the Dispatcher takes the SAME index so shared workspaces the subject is a member of enter
     # the dispatch mount set (read-only for Slice 1), not just the /active listing.
-    dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index)
+    dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,
+                            model_config=model_config)
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),

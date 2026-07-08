@@ -46,6 +46,18 @@ class User(Base):
     api_tokens = relationship("APIToken", back_populates="user")
 
 
+class PlatformSetting(Base):
+    """Deployment-wide runtime config, one JSONB value per key (`models`, `transcription`).
+    The DB layer between per-user prefs (users.data) and the process env: services resolve
+    user > platform_settings > env. Written only over the internal tier (the terminal's
+    admin-gated settings editor fronts it); read over the same edge by agent-api/meeting-api."""
+    __tablename__ = "platform_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class APIToken(Base):
     __tablename__ = "api_tokens"
 

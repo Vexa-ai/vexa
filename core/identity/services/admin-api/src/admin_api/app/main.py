@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..schema.models import APIToken, User
+from ..schema.models import APIToken, PlatformSetting, User
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
 
@@ -120,6 +120,91 @@ class CalendarUpdate(BaseModel):
     + the GLOBAL auto-join default stamped onto every imported meeting."""
     ics_url: Optional[str] = None
     auto_join: Optional[bool] = None
+
+
+# ── model + transcription config (per-user prefs and the platform-wide defaults) ──
+# One vocabulary everywhere: a MODELS config is {mode, model, meeting_model, base_url, api_key}
+# (mode "subscription" = the deployment's brokered credential — the mounted Claude Code
+# subscription or a deployment API key; mode "custom" = a user/operator-supplied
+# Anthropic-/OpenAI-compatible endpoint + key, e.g. a LiteLLM/OpenRouter gateway in front of an
+# open-source model). A TRANSCRIPTION config is {url, token} — the STT service the bot invocation
+# rides. Per-user copies live in users.data["model_prefs"] / ["transcription_prefs"]; the
+# platform defaults live in platform_settings rows "models" / "transcription". Effective config
+# resolves FIELD-BY-FIELD user > platform; the process env stays the bottom fallback downstream
+# (dispatch/bot_spawn only override what is set here).
+MODEL_MODES = ("subscription", "custom")
+_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key")
+_TRANSCRIPTION_FIELDS = ("url", "token")
+SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS}
+
+
+class ModelPrefsUpdate(BaseModel):
+    """Partial update — only fields the caller SENDS change; an empty string clears a field."""
+    mode: Optional[str] = None
+    model: Optional[str] = None
+    meeting_model: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
+class TranscriptionPrefsUpdate(BaseModel):
+    url: Optional[str] = None
+    token: Optional[str] = None
+
+
+def _mask_secret(secret: Optional[str]) -> Optional[str]:
+    """The webhook-secret masking rule: never echo a stored secret in the clear — last 4 chars
+    behind asterisks, enough to recognize WHICH secret is set."""
+    if not secret:
+        return None
+    return "********" + (secret[-4:] if len(secret) > 8 else "")
+
+
+def _validate_config_fields(update: dict, *, kind: str) -> dict:
+    """Shared field validation for both the per-user prefs and the platform settings writers
+    (one rulebook, whichever tier writes). Returns the cleaned update dict."""
+    from urllib.parse import urlparse
+
+    cleaned: dict = {}
+    for field, raw in update.items():
+        value = (raw or "").strip() if isinstance(raw, str) else raw
+        if value in (None, ""):
+            cleaned[field] = ""  # explicit clear
+            continue
+        if not isinstance(value, str) or len(value) > 2048:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"{field} must be a string under 2048 chars")
+        if field == "mode" and value not in MODEL_MODES:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"mode must be one of {sorted(MODEL_MODES)}")
+        if field in ("base_url", "url"):
+            parsed = urlparse(value)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail=f"{field} must be an http(s) URL")
+        cleaned[field] = value
+    return cleaned
+
+
+def _apply_config_update(stored: dict, cleaned: dict) -> dict:
+    """Overlay a cleaned partial update onto a stored config: set non-empty, drop cleared."""
+    out = dict(stored or {})
+    for field, value in cleaned.items():
+        if value == "":
+            out.pop(field, None)
+        else:
+            out[field] = value
+    return out
+
+
+def _resolve_effective(user_cfg: dict, platform_cfg: dict, fields: tuple) -> dict:
+    """FIELD-BY-FIELD user > platform. Only set fields appear — env fallback stays downstream."""
+    out: dict = {}
+    for field in fields:
+        value = user_cfg.get(field) or platform_cfg.get(field)
+        if value:
+            out[field] = value
+    return out
 
 
 def create_app() -> FastAPI:
@@ -308,6 +393,61 @@ def create_app() -> FastAPI:
             "auto_join": data.get("calendar_auto_join", True),
         }
 
+    # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
+    async def _put_user_prefs(update_fields: dict, data_key: str, user: User,
+                              db: AsyncSession) -> dict:
+        from sqlalchemy.orm import attributes
+        cleaned = _validate_config_fields(update_fields, kind=data_key)
+        data = dict(user.data or {})
+        data[data_key] = _apply_config_update(data.get(data_key) or {}, cleaned)
+        if not data[data_key]:
+            data.pop(data_key, None)  # fully cleared → back to platform/env defaults
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return data.get(data_key) or {}
+
+    @app.put("/user/models")
+    async def set_user_models(update: ModelPrefsUpdate,
+                              user: User = Depends(get_current_user),
+                              db: AsyncSession = Depends(get_db)):
+        """Set the caller's model config (partial; empty string clears a field). ``api_key``
+        is a SECRET — stored, never echoed in the clear."""
+        await _put_user_prefs(update.model_dump(exclude_unset=True), "model_prefs", user, db)
+        return await get_user_models(user)
+
+    @app.get("/user/models")
+    async def get_user_models(user: User = Depends(get_current_user)):
+        data = user.data if isinstance(user.data, dict) else {}
+        prefs = data.get("model_prefs") or {}
+        return {
+            "mode": prefs.get("mode"),
+            "model": prefs.get("model"),
+            "meeting_model": prefs.get("meeting_model"),
+            "base_url": prefs.get("base_url"),
+            "api_key_set": bool(prefs.get("api_key")),
+            "api_key": _mask_secret(prefs.get("api_key")),
+        }
+
+    @app.put("/user/transcription")
+    async def set_user_transcription(update: TranscriptionPrefsUpdate,
+                                     user: User = Depends(get_current_user),
+                                     db: AsyncSession = Depends(get_db)):
+        """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read."""
+        await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
+        return await get_user_transcription(user)
+
+    @app.get("/user/transcription")
+    async def get_user_transcription(user: User = Depends(get_current_user)):
+        data = user.data if isinstance(user.data, dict) else {}
+        prefs = data.get("transcription_prefs") or {}
+        return {
+            "url": prefs.get("url"),
+            "token_set": bool(prefs.get("token")),
+            "token": _mask_secret(prefs.get("token")),
+        }
+
     # --- internal tier: the gateway's authz oracle (FAIL-CLOSED) ---
     @app.post("/internal/validate", include_in_schema=False)
     async def validate_token(request: Request, payload: dict, db: AsyncSession = Depends(get_db)):
@@ -453,6 +593,10 @@ def create_app() -> FastAPI:
     # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
     #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
     #     Same shape /internal/validate returns for those fields, keyed by user id. ---
+    async def _platform_setting(key: str, db: AsyncSession) -> dict:
+        row = await db.get(PlatformSetting, key)
+        return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
         _check_internal(request)
@@ -465,7 +609,62 @@ def create_app() -> FastAPI:
                 resp["webhook_secret"] = data["webhook_secret"]
             if data.get("webhook_events"):
                 resp["webhook_events"] = data["webhook_events"]
+        # The effective transcription backend (user pref > platform setting) — bot_spawn overrides
+        # its env-derived TRANSCRIPTION_SERVICE_URL/TOKEN with this when present. The token crosses
+        # ONLY this internal hop.
+        transcription = _resolve_effective(
+            data.get("transcription_prefs") or {},
+            await _platform_setting("transcription", db),
+            _TRANSCRIPTION_FIELDS,
+        )
+        if transcription:
+            resp["transcription"] = transcription
         return resp
+
+    # --- internal tier: platform-wide settings (the DB layer under per-user prefs) — written by
+    #     the terminal's ADMIN-GATED settings editor over this edge, read by agent-api/meeting-api.
+    @app.get("/internal/settings/{key}", include_in_schema=False)
+    async def get_platform_setting(key: str, request: Request, db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        if key not in SETTING_KEYS:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
+        return {"key": key, "value": await _platform_setting(key, db)}
+
+    @app.put("/internal/settings/{key}", include_in_schema=False)
+    async def put_platform_setting(key: str, payload: dict, request: Request,
+                                   db: AsyncSession = Depends(get_db)):
+        """Partial update, same field rules + clear semantics as the user-tier writers."""
+        _check_internal(request)
+        fields = SETTING_KEYS.get(key)
+        if fields is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
+        update = {f: payload.get(f) for f in fields if f in payload}
+        cleaned = _validate_config_fields(update, kind=key)
+        row = await db.get(PlatformSetting, key)
+        merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)
+        if row is None:
+            row = PlatformSetting(key=key, value=merged)
+        else:
+            row.value = merged
+        db.add(row)
+        await db.commit()
+        return {"key": key, "value": merged}
+
+    # --- internal tier: the dispatch-time model config — agent-api resolves the subject's
+    #     effective model setup (user pref > platform setting) in ONE call. Secrets (api_key)
+    #     cross ONLY this internal hop, straight into the worker's brokered env.
+    @app.get("/internal/users/{user_id}/model-config", include_in_schema=False)
+    async def get_model_config(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        user = await _load_user(user_id, db)
+        data = user.data if isinstance(user.data, dict) else {}
+        return {"models": _resolve_effective(
+            data.get("model_prefs") or {},
+            await _platform_setting("models", db),
+            _MODELS_FIELDS,
+        )}
 
     @app.get("/")
     async def root():
