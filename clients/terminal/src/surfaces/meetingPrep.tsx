@@ -253,6 +253,37 @@ function MeetingPrepTab({ params }: TabProps) {
           )}
         </div>
 
+        {/* ── attendees (calendar ATTENDEE lines → data.attendees, prep-v3 slice b) ── */}
+        {(m.attendees?.length ?? 0) > 0 && (
+          <div style={{ margin: "0 0 22px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 8px" }}>
+              <span style={label}>Attendees</span>
+              <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
+            </div>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
+              {m.attendees!.map((a) => {
+                const display = a.name || a.email;
+                const initials = (a.name
+                  ? a.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("")
+                  : a.email.slice(0, 2)).toUpperCase();
+                const declined = a.partstat === "declined";
+                return (
+                  <span key={a.email} title={a.email + (a.partstat ? ` · ${a.partstat}` : "")}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 7,
+                      border: "1px solid var(--line)", borderRadius: 14, padding: "2px 11px 2px 3px",
+                      fontSize: 12.5, color: declined ? "var(--t3)" : "var(--t1)",
+                      textDecoration: declined ? "line-through" : undefined }}>
+                    <span style={{ width: 19, height: 19, borderRadius: "50%", background: "var(--panel2)",
+                      color: "var(--t2)", display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 8.5, fontWeight: 700 }}>{initials}</span>
+                    {display}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── prep workspace = the sharing surface ────────────────── */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px" }}>
           <span style={label}>Prep workspace</span>

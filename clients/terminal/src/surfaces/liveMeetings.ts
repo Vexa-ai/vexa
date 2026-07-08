@@ -30,6 +30,7 @@ interface MeetingRowDTO {
     auto_join?: boolean;
     auto_join_error?: string;
     constructed_meeting_url?: string;
+    attendees?: { email: string; name?: string; partstat?: string }[];
   } | null;
 }
 
@@ -177,6 +178,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     scheduled_at: d.data?.scheduled_at ?? undefined,
     workspace_id: d.data?.workspace_id ?? undefined,
     calendar_uid: d.data?.calendar_uid ?? undefined,
+    attendees: d.data?.attendees ?? undefined,
     auto_join: d.data?.auto_join,
     auto_join_error: d.data?.auto_join_error ?? undefined,
     meeting_url: d.constructed_meeting_url ?? d.data?.constructed_meeting_url ?? undefined,
@@ -208,7 +210,7 @@ async function snapshot() {
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) =>
-      `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}`,
+      `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
     ).join(",");
     if (key(next) !== key(meetings)) {
       meetings = next;
