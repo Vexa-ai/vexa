@@ -94,6 +94,19 @@ def test_planned_meeting_grounds_prep_even_with_statusless_client_focus():
     assert "acme-deal" in prompt
 
 
+def test_linkless_planned_row_enriches_via_row_id_in_native_slot():
+    """The terminal's tab param is the ROW id; a link-less planned meeting has NO native id, so
+    the id arrives in native_id — enrichment must still find the row (the live-verify gap)."""
+    row = {"id": 76, "status": "scheduled", "platform": "unknown", "native_meeting_id": None,
+           "data": {"title": "Context bundle smoke", "scheduled_at": "2026-07-09T10:00:00Z"},
+           "end_time": None, "start_time": None, "updated_at": None}
+    focus = {"kind": "meeting", "native_id": "76", "platform": "google_meet"}
+    body = _body(context={"surface": {"tab": {"kind": "meetingPrep"}}, "focus": focus})
+    _c, _t, prompt = _ground(body, rows=[row])
+    assert "PREPARE" in prompt and "Context bundle smoke" in prompt
+    assert "live meeting" not in prompt
+
+
 def test_client_status_loses_to_server_row():
     focus = {"kind": "meeting", "native_id": "abc-defg-hij", "platform": "google_meet",
              "status": "active"}              # client asserts live; server says scheduled

@@ -704,9 +704,13 @@ def _enriched_meeting_focus(focus: dict, rows: "list[dict]") -> dict:
     """Overlay the SERVER row's truth onto the client-sent meeting focus — status/title/
     scheduled_at/workspace_id come from the meetings domain when the row is found; the client's
     values remain only as the fallback (legacy clients / row not fetched)."""
+    nid = focus.get("native_id") or focus.get("ref")
     row = schedule_digest_mod.find_row(
-        rows, meeting_id=focus.get("meeting_id"),
-        platform=focus.get("platform"), native_id=focus.get("native_id") or focus.get("ref"))
+        rows, meeting_id=focus.get("meeting_id"), platform=focus.get("platform"), native_id=nid)
+    if row is None and nid is not None:
+        # The terminal's tab param is the ROW id for planned meetings without a link (native is
+        # NULL there) — it rides in native_id, so retry it as the row id before giving up.
+        row = schedule_digest_mod.find_row(rows, meeting_id=nid)
     if row is None:
         return focus
     data = row.get("data") or {}
