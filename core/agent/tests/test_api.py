@@ -408,7 +408,63 @@ def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatc
     assert '"text": "tail"' in body
     assert '"processed tail"' in body
     assert '"meeting-end"' in body
-    assert fake.first_xread == {"tc:meeting:abc": "9-0", "unit:agent-meet-abc:out": "4-0"}
+    # transcript/output resume from their seeded tails; the proc stream from 0-0 (full replay —
+    # notes upsert by id client-side, and the whole processed view must render on connect).
+    assert fake.first_xread == {
+        "tc:meeting:abc": "9-0", "unit:agent-meet-abc:out": "4-0", "proc:meeting:abc": "0-0",
+    }
+
+
+def test_meeting_stream_relays_proc_notes_and_closes_on_view_end(monkeypatch):
+    """ADR 0027: the SSE tails proc:meeting:{row} directly — baseline cleaned notes arrive as `note`
+    events without waiting for an out-stream LLM beat — and it CLOSES on the worker's view_end
+    marker (evidence of completion, P21), not on a quiet-poll guess. The final beat's post-
+    session_end notes therefore reach the live view before meeting-end."""
+    import json
+    import redis
+
+    class FakeRedis:
+        def __init__(self):
+            self.calls = 0
+
+        def xrevrange(self, stream, count=1):
+            return []
+
+        def exists(self, key):
+            return 1  # the copilot wrote — the close must WAIT for view_end, not a quiet poll
+
+        def xread(self, streams, count=500, block=15000):
+            self.calls += 1
+            if self.calls == 1:
+                return [
+                    ("tc:meeting:42", [("5-0", {"payload": json.dumps({"type": "transcription", "segments": [{"speaker": "J", "text": "um hi", "start": 1, "segment_id": "s1"}]})})]),
+                    ("proc:meeting:42", [("6-0", {"note": json.dumps({"id": "s1", "text": "Hi.", "speaker": "J"})})]),
+                ]
+            if self.calls == 2:
+                return [("tc:meeting:42", [("7-0", {"payload": json.dumps({"type": "session_end"})})])]
+            if self.calls == 3:
+                # the final beat lands AFTER session_end — still relayed, then the marker
+                return [("proc:meeting:42", [
+                    ("8-0", {"note": json.dumps({"id": "s1", "text": "Hi, polished."})}),
+                    ("9-0", {"type": "view_end", "cursor": "7-0"}),
+                ])]
+            return []  # the empty poll after the marker closes the stream
+
+    fake = FakeRedis()
+    monkeypatch.setattr(redis, "from_url", lambda *_args, **_kwargs: fake)
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
+        meeting_owner_lookup=_fake_owner_lookup({("u_owner", "42"): "42"}),
+    ))
+
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "42", "session_uid": "42"},
+                  headers={"X-User-Id": "u_owner"}) as r:
+        body = "".join(r.iter_text())
+
+    assert '"Hi."' in body                       # baseline note straight off the proc stream
+    assert '"Hi, polished."' in body             # the final beat's note, AFTER session_end
+    assert '"meeting-end"' in body
+    assert fake.calls == 4                       # closed ON the marker — no 45s cap, no early cut
 
 
 def test_workspace_read_and_traversal_guard(tmp_path):
@@ -613,17 +669,21 @@ def test_session_history_tolerant_of_missing(tmp_path):
 
 def test_sse_cursor_encode_decode_roundtrip():
     from control_plane.api import _decode_sse_cursor, _encode_sse_cursor
-    last = {"tc:meeting:m1": "12-0", "unit:agent-meet-m1:out": "5-0"}
-    sid = _encode_sse_cursor(last, "tc:meeting:m1", "unit:agent-meet-m1:out")
-    assert sid == "12-0|5-0"
-    assert _decode_sse_cursor(sid) == ("12-0", "5-0")
-    assert _decode_sse_cursor(None) == (None, None)          # fresh connect
-    assert _decode_sse_cursor("-|-") == (None, None)         # nothing read yet on either stream
-    assert _decode_sse_cursor("9-0|-") == ("9-0", None)
+    last = {"tc:meeting:m1": "12-0", "unit:agent-meet-m1:out": "5-0", "proc:meeting:m1": "7-0"}
+    sid = _encode_sse_cursor(last, "tc:meeting:m1", "unit:agent-meet-m1:out", "proc:meeting:m1")
+    assert sid == "12-0|5-0|7-0"
+    assert _decode_sse_cursor(sid) == ("12-0", "5-0", "7-0")
+    assert _decode_sse_cursor(None) == (None, None, None)          # fresh connect
+    assert _decode_sse_cursor("-|-|-") == (None, None, None)       # nothing read yet on any stream
+    assert _decode_sse_cursor("9-0|-|-") == ("9-0", None, None)
+    # PAD tolerance (ADR 0027 rollout): a pre-three-part id from an in-flight client decodes with
+    # processed_id None — the SSE then replays the proc stream from 0-0 (idempotent client upsert).
+    assert _decode_sse_cursor("12-0|5-0") == ("12-0", "5-0", None)
+    assert _decode_sse_cursor("9-0|-") == ("9-0", None, None)
     # Resilience: a malformed Last-Event-ID must degrade to a fresh connect, never crash the SSE.
-    assert _decode_sse_cursor("") == (None, None)            # empty header
-    assert _decode_sse_cursor("garbage-no-pipe") == (None, None)   # no separator → fresh connect
-    assert _decode_sse_cursor("-|5-0") == (None, "5-0")      # only the output stream was read
+    assert _decode_sse_cursor("") == (None, None, None)            # empty header
+    assert _decode_sse_cursor("garbage-no-pipe") == (None, None, None)   # no separator → fresh connect
+    assert _decode_sse_cursor("-|5-0") == (None, "5-0", None)      # only the output stream was read
 
 
 def _stream_client(fake_redis, monkeypatch):

@@ -71,6 +71,10 @@ logger = logging.getLogger("agent_api.api")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MEETING_STREAM_TRANSCRIPT_REPLAY = 80
 MEETING_STREAM_OUTPUT_REPLAY = 160
+# How long the SSE keeps draining after session_end when the copilot HAS written notes but its
+# view_end marker hasn't arrived (the final beat is ~10s of LLM; a dead worker never marks) —
+# the bounded cap that replaces the old one-empty-poll guess (ADR 0027).
+MEETING_STREAM_ENDING_CAP_SEC = 45.0
 
 
 def _upload_filename(name: str | None) -> str:
@@ -409,18 +413,25 @@ _MEETING_BRIEF = (
 )
 
 
-def _encode_sse_cursor(last: dict, tkey: str, okey: str) -> str:
+def _encode_sse_cursor(last: dict, tkey: str, okey: str, pkey: str | None = None) -> str:
     """Pack the per-stream redis cursors into ONE SSE event id (the browser echoes it as
-    Last-Event-ID on reconnect → we resume EXACTLY from here, gapless). '-' = not-yet-read."""
-    return f"{last.get(tkey, '-')}|{last.get(okey, '-')}"
+    Last-Event-ID on reconnect → we resume EXACTLY from here, gapless). '-' = not-yet-read.
+    Three parts since ADR 0027 (transcript|output|processed); the third is the proc-stream cursor."""
+    parts = [last.get(tkey, "-"), last.get(okey, "-")]
+    if pkey is not None:
+        parts.append(last.get(pkey, "-"))
+    return "|".join(str(p) for p in parts)
 
 
-def _decode_sse_cursor(raw: str | None) -> "tuple[str | None, str | None]":
-    """Last-Event-ID → (transcript_id, output_id). None when absent/malformed (fresh connect)."""
+def _decode_sse_cursor(raw: str | None) -> "tuple[str | None, str | None, str | None]":
+    """Last-Event-ID → (transcript_id, output_id, processed_id). None when absent/malformed (fresh
+    connect). PAD-tolerant: a pre-ADR-0027 two-part id decodes with processed_id None — the caller
+    replays the proc stream from the start (notes upsert by id client-side, so replay is idempotent
+    and never drops the reconnect gap)."""
     if not raw or "|" not in raw:
-        return (None, None)
-    t, _, o = raw.partition("|")
-    return (t if t and t != "-" else None, o if o and o != "-" else None)
+        return (None, None, None)
+    parts = (raw.split("|") + [None, None, None])[:3]
+    return tuple(p if p and p != "-" else None for p in parts)  # type: ignore[return-value]
 
 
 def _sse(events) -> Iterator[str]:
@@ -1388,22 +1399,32 @@ def create_app(
         if session_uid not in (owned_native, str(meeting_id)):
             raise HTTPException(status_code=403, detail="session_uid does not match this meeting")
 
-        resume_t, resume_o = _decode_sse_cursor(request.headers.get("last-event-id"))
+        resume_t, resume_o, resume_p = _decode_sse_cursor(request.headers.get("last-event-id"))
 
         def gen():
+            import time as _time
+
             import redis
 
             r = redis.from_url(redis_url, decode_responses=True)
             tkey = f"tc:meeting:{meeting_id}"
             okey = f"unit:agent-meet-{session_uid}:out"
+            # ADR 0027: the SSE tails the processed-notes stream DIRECTLY (processed-notes.v1) —
+            # baseline cleaned notes reach the view seconds after a segment instead of waiting for
+            # an LLM beat on the out-stream, and the worker's `view_end` marker (not a quiet-poll
+            # guess) tells us processing is complete.
+            pkey = f"proc:meeting:{meeting_id}"
             # Resume EXACTLY from the client's last-seen cursors when present (gapless reconnect);
-            # otherwise seed a bounded recent tail then live-tail (fresh connect).
-            last = {tkey: resume_t or "$", okey: resume_o or "$"}
+            # otherwise seed then live-tail (fresh connect). A missing proc cursor (old 2-part id)
+            # resumes from 0-0 — a full replay the client's upsert-by-id absorbs, never a gap.
+            last = {tkey: resume_t or "$", okey: resume_o or "$", pkey: resume_p or "0-0"}
             idle = 0
-            ending = False  # transcript hit session_end — drain trailing cards before meeting-end
+            ending = False        # transcript hit session_end — drain notes/cards before meeting-end
+            ending_at = 0.0       # when the drain started (monotonic) — bounds a markerless worker
+            view_end_seen = False  # the worker's completion marker arrived on the proc stream
 
             def cursor():
-                return _encode_sse_cursor(last, tkey, okey)
+                return _encode_sse_cursor(last, tkey, okey, pkey)
 
             def seg_events(payload):
                 for seg in payload.get("segments", []):
@@ -1413,6 +1434,20 @@ def create_app(
                             "completed": seg.get("completed", True),
                             "id": seg.get("segment_id")}, cursor())
 
+            def note_events(entry_fields):
+                """One proc-stream entry → the SAME `note` SSE event the out-stream used to carry
+                (meetingLive.ts upserts by note.id). The `view_end` marker flips completion instead."""
+                nonlocal view_end_seen
+                if entry_fields.get("type") == "view_end":
+                    view_end_seen = True
+                    return
+                try:
+                    note = json.loads(entry_fields.get("note") or "null")
+                except (json.JSONDecodeError, ValueError):
+                    return
+                if isinstance(note, dict) and note.get("id") and note.get("text"):
+                    yield ({"type": "note", "note": note}, cursor())
+
             if resume_t is None:   # fresh connect → seed the bounded recent transcript tail
                 seed_rows = list(reversed(r.xrevrange(tkey, count=MEETING_STREAM_TRANSCRIPT_REPLAY) or []))
                 for entry_id, fields in seed_rows:
@@ -1420,23 +1455,38 @@ def create_app(
                     payload = json.loads(fields.get("payload", "{}"))
                     if payload.get("type") == "session_end":
                         ending = True
+                        ending_at = _time.monotonic()
                         last.pop(tkey, None)
                         continue
                     yield from seg_events(payload)
-            if resume_o is None:   # fresh connect → seed the output (cards/notes) replay
+            if resume_o is None:   # fresh connect → seed the output (cards/agent-activity) replay
                 output_seed_rows = list(reversed(r.xrevrange(okey, count=MEETING_STREAM_OUTPUT_REPLAY) or []))
                 for entry_id, fields in output_seed_rows:
                     last[okey] = entry_id
                     yield (json.loads(fields.get("event", "{}")), cursor())
+            # The proc stream needs no separate seed pass: the 0-0 resume cursor makes the first
+            # xread below deliver its ENTIRE history (bounded by the notes' 1:1 segment cardinality),
+            # so a mid-meeting connect renders the complete processed view.
 
             while True:
-                # once the transcript ends, poll ONLY the out-stream (briefly) to flush trailing cards.
+                # once the transcript ends, keep polling briefly — the copilot's FINAL beat is still
+                # running (~10s of LLM); its notes + the view_end marker arrive on the proc stream.
                 resp = r.xread(last, count=500, block=1500 if ending else 15000)
                 if not resp:
-                    if ending:               # out-stream drained → now it's safe to end
-                        live.drop(session_uid)  # leaves the terminal's live-meetings feed
-                        yield ({"type": "meeting-end"}, cursor())
-                        return
+                    if ending:
+                        # End when processing is COMPLETE (view_end drained — evidence, P21), when no
+                        # copilot ever wrote (empty proc stream — nothing to wait for), or at the
+                        # bounded cap (a worker that died markerless must not hold the view open).
+                        try:
+                            has_proc = bool(r.exists(pkey))
+                        except Exception:  # noqa: BLE001 — an unreadable stream must not wedge the close
+                            has_proc = False
+                        if (view_end_seen or not has_proc
+                                or _time.monotonic() - ending_at > MEETING_STREAM_ENDING_CAP_SEC):
+                            live.drop(session_uid)  # leaves the terminal's live-meetings feed
+                            yield ({"type": "meeting-end"}, cursor())
+                            return
+                        continue  # the final beat is still writing — keep draining
                     idle += 15000
                     if idle >= 600000:
                         return
@@ -1449,10 +1499,13 @@ def create_app(
                         if stream == tkey:
                             payload = json.loads(fields.get("payload", "{}"))
                             if payload.get("type") == "session_end":
-                                ending = True            # don't end yet — finish draining the out-stream
+                                ending = True            # don't end yet — drain the final beat first
+                                ending_at = _time.monotonic()
                                 last.pop(tkey, None)     # session_end is the last transcript entry
                                 break
                             yield from seg_events(payload)
+                        elif stream == pkey:
+                            yield from note_events(fields)
                         else:
                             yield (json.loads(fields.get("event", "{}")), cursor())
 
