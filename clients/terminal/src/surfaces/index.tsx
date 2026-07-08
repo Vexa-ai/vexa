@@ -15,6 +15,7 @@ import "./chat";       // right-rail Chat export + /-skills          (commands g
 import "./sessions";   // list "sessions" (→ focuses right-rail chat) (gated in meetings mode)
 import "./entities";   // EntityList helpers
 import "./meeting";    // list "meetings" + tab-kind "meeting"
+import "./meetingPrep"; // tab-kind "meetingPrep" — a planned meeting's prep/share hub
 import "./canvas";     // tab-kind "canvas" + command "Open Meeting Canvas"
 import "./workspace";  // list "files" (+ git) + tab-kind "doc"       (gated in meetings mode)
 import "./workspaceManage"; // tab-kind "workspace" — the manage hub  (gated in meetings mode)

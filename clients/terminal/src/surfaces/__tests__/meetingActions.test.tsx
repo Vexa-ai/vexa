@@ -44,8 +44,13 @@ afterEach(() => vi.restoreAllMocks());
 describe("actionsFor — offered action sets per status", () => {
   const ids = (s: string) => actionsFor(row(s)).map((a) => a.id);
 
-  it("idle → Schedule + Send now", () => expect(ids("idle")).toEqual(["schedule", "send"]));
-  it("scheduled → Send now + Cancel", () => expect(ids("scheduled")).toEqual(["send", "cancel"]));
+  it("idle → Schedule + Send now + Delete", () => expect(ids("idle")).toEqual(["schedule", "send", "delete"]));
+  it("scheduled → Send now + Cancel + Delete", () => expect(ids("scheduled")).toEqual(["send", "cancel", "delete"]));
+  it("link-less planned rows → row-id actions only (no native path exists)", () => {
+    const linkless = (s: string) => actionsFor({ ...row(s), native_id: undefined, id: "42" });
+    expect(linkless("idle").map((a) => a.id)).toEqual(["delete"]);
+    expect(linkless("scheduled").map((a) => a.id)).toEqual(["cancel", "delete"]);
+  });
   it("active → Stop only", () => expect(ids("active")).toEqual(["stop"]));
   it("joining/awaiting/needs_help/stopping → Stop only", () => {
     for (const s of ["requested", "joining", "awaiting_admission", "needs_help", "stopping"]) {
@@ -120,5 +125,29 @@ describe("actionsFor — each action fires the correct endpoint+body", () => {
     actionsFor(row("completed")).find((a) => a.id === "resend")!.run();
     const { url } = lastFetch();
     expect(url).toBe("/api/bots");
+  });
+
+  it("planned→Delete DELETEs by ROW id (works link-less)", () => {
+    actionsFor({ ...row("idle"), native_id: undefined, id: "42" }).find((a) => a.id === "delete")!.run();
+    const { url, init } = lastFetch();
+    expect(url).toBe("/api/meetings/42");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("link-less scheduled→Cancel PATCHes scheduled_at:null by ROW id", () => {
+    actionsFor({ ...row("scheduled"), native_id: undefined, id: "42" }).find((a) => a.id === "cancel")!.run();
+    const { url, init, body } = lastFetch();
+    expect(url).toBe("/api/meetings/42");
+    expect(init.method).toBe("PATCH");
+    expect(body).toEqual({ scheduled_at: null });
+  });
+
+  it("send uses the row's REAL meeting_url when present (zoom/teams need it)", () => {
+    actionsFor({ ...row("scheduled"), platform: "zoom", native_id: "1234567890", meeting_url: "https://us02web.zoom.us/j/1234567890?pwd=x" })
+      .find((a) => a.id === "send")!.run();
+    const { url, body } = lastFetch();
+    expect(url).toBe("/api/bots");
+    expect(body.platform).toBe("zoom");
+    expect(body.meeting_url).toBe("https://us02web.zoom.us/j/1234567890?pwd=x");
   });
 });

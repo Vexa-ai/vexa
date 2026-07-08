@@ -15,6 +15,8 @@ import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeeting
 import { usePreviewPinTab } from "./previewPinTab";
 import { parseMeetingInput } from "./meetingId";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
+import { createPlannedMeeting, deletePlannedMeeting, getCalendarConfig, setCalendarConfig, type CalendarConfig } from "./plannedApi";
+import { prepTabDescriptor } from "./meetingPrep";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
 //    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
@@ -311,12 +313,29 @@ export function actionsFor(m: MeetingMock): RowAction[] {
   // 404s ("No active meeting for this bot") for a live Teams/Zoom bot.
   const platformSlug = m.platform === "Google Meet" ? "google_meet" : m.platform.toLowerCase().replace(/\s+/g, "_");
   const intent = (state: "idle" | "scheduled", at?: string, onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: state === "idle" ? "cancel" : "schedule", actionLabel: state === "idle" ? "Cancel" : "Schedule", native }, fetch(`/api/meetings/google_meet/${encodeURIComponent(native)}/intent`, {
+    runMeetingAction({ actionId: state === "idle" ? "cancel" : "schedule", actionLabel: state === "idle" ? "Cancel" : "Schedule", native }, fetch(`/api/meetings/${platformSlug}/${encodeURIComponent(native)}/intent`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ intent: state, ...(at ? { at } : {}) }),
     }), onFailure);
   const send = (onFailure?: MeetingActionFailureHandler) =>
-    runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/bots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: "google_meet", native_meeting_id: native, meeting_url: `https://meet.google.com/${native}`, bot_name: "Vexa" }) }), onFailure);
+    runMeetingAction({ actionId: "send", actionLabel: "Send now", native }, fetch("/api/bots", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        platform: platformSlug, native_meeting_id: native,
+        // the row's real link when it has one (zoom/teams NEED it); gmeet can be constructed
+        ...(m.meeting_url ? { meeting_url: m.meeting_url }
+          : platformSlug === "google_meet" ? { meeting_url: `https://meet.google.com/${native}` } : {}),
+        bot_name: "Vexa",
+      }),
+    }), onFailure);
+  // Delete a PLANNED row — ROW-id addressed (a link-less plan has no platform/native path).
+  const del = (onFailure?: MeetingActionFailureHandler) =>
+    runMeetingAction({ actionId: "delete", actionLabel: "Delete", native }, fetch(`/api/meetings/${encodeURIComponent(m.id)}`, { method: "DELETE" }), onFailure);
+  // Cancel (clear the time) on a LINK-LESS planned row — PATCH by row id (no native path exists).
+  const cancelById = (onFailure?: MeetingActionFailureHandler) =>
+    runMeetingAction({ actionId: "cancel", actionLabel: "Cancel", native }, fetch(`/api/meetings/${encodeURIComponent(m.id)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scheduled_at: null }),
+    }), onFailure);
   // Stop = the gateway-backed user-stop route DELETE /bots/{platform}/{native} (meeting-api lifecycle/stop_router).
   const stop = (onFailure?: MeetingActionFailureHandler) =>
     runMeetingAction({ actionId: "stop", actionLabel: "Stop", native }, fetch(`/api/bots/${platformSlug}/${encodeURIComponent(native)}`, { method: "DELETE" }), onFailure);
@@ -330,11 +349,22 @@ export function actionsFor(m: MeetingMock): RowAction[] {
   };
 
   const raw = m.live_status ?? (m.status === "live" ? "active" : "completed");
+  const hasLink = !!m.native_id;
   switch (raw) {
     case "idle":
-      return [{ id: "schedule", label: "Schedule", tone: "accent", run: schedule }, { id: "send", label: "Send now", tone: "accent", run: send }];
+      return [
+        ...(hasLink ? [
+          { id: "schedule", label: "Schedule", tone: "accent", run: schedule } as RowAction,
+          { id: "send", label: "Send now", tone: "accent", run: send } as RowAction,
+        ] : []),
+        { id: "delete", label: "Delete", tone: "muted", run: del },
+      ];
     case "scheduled":
-      return [{ id: "send", label: "Send now", tone: "accent", run: send }, { id: "cancel", label: "Cancel", tone: "muted", run: (onFailure) => intent("idle", undefined, onFailure) }];
+      return [
+        ...(hasLink ? [{ id: "send", label: "Send now", tone: "accent", run: send } as RowAction] : []),
+        { id: "cancel", label: "Cancel", tone: "muted", run: (onFailure?: MeetingActionFailureHandler) => hasLink ? intent("idle", undefined, onFailure) : cancelById(onFailure) },
+        { id: "delete", label: "Delete", tone: "muted", run: del },
+      ];
     case "requested": case "joining": case "awaiting_admission": case "needs_help": case "active": case "stopping":
       return [{ id: "stop", label: "Stop", tone: "live", run: stop }];
     case "completed": case "failed": case "stopped": default:
@@ -386,7 +416,12 @@ function RowActions({ m, showBadge, reveal, onActionStart, onActionFailure }: { 
   );
 }
 
+const INTENT_STATUSES = new Set(["idle", "scheduled"]);
+
 export function meetingTab(m: MeetingMock): TabDescriptor {
+  // A PLANNED (intent-status) row opens its PREP tab — title/time/link editing, workspace bind,
+  // share. Once the bot claims the row (requested→…), the same row opens the live meeting view.
+  if (INTENT_STATUSES.has(m.live_status ?? "")) return prepTabDescriptor({ id: m.id, title: m.title_custom || m.title });
   return { id: `meeting:${m.id}`, title: m.title.split(" — ")[0], kind: "meeting", params: { meetingId: m.id } };
 }
 
@@ -402,9 +437,10 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   const native = m.native_id ?? m.id;
   const live = m.status === "live";
   const inRoom = m.live_status === "active";   // actually live = green dot + a quiet "live", no badge
-  // Just the meeting code — the platform is implicit (the list + subline already say Google Meet).
-  const label = (m.native_id ?? m.title).replace(/^Google Meet · /, "");
+  // A planned meeting's user-given title wins; else just the meeting code — the platform is implicit.
+  const label = m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "");
   const showBadge = BADGE_STATUSES.has(m.live_status ?? "");
+  const isIntent = INTENT_STATUSES.has(m.live_status ?? "");
   useEffect(() => {
     if (!actionFailure) return;
     const t = window.setTimeout(() => setActionFailure(null), 6000);
@@ -417,9 +453,14 @@ function MeetingRow({ m }: { m: MeetingMock }) {
         {inRoom && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />}
         <span style={{ fontSize: 13, color: live ? "var(--t1)" : "var(--t2)", fontWeight: live ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
         {m.shared && <span title="Shared with you (you don't own this meeting)" style={{ flex: "none", fontSize: 9.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared</span>}
-        {m.native_id && !m.shared && <RowActions m={m} showBadge={showBadge} reveal={hover} onActionStart={() => setActionFailure(null)} onActionFailure={setActionFailure} />}
+        {(m.native_id || isIntent) && !m.shared && <RowActions m={m} showBadge={showBadge} reveal={hover} onActionStart={() => setActionFailure(null)} onActionFailure={setActionFailure} />}
       </div>
       <div style={{ fontSize: 11, color: inRoom ? "var(--green)" : "var(--t3)", marginTop: 1, paddingLeft: inRoom ? 13 : 0 }}>{inRoom ? "live" : m.when}</div>
+      {isIntent && m.auto_join_error && (
+        <div role="alert" style={{ fontSize: 11, color: "var(--live)", marginTop: 3, lineHeight: 1.35 }}>
+          ⚠ Auto-join failed: {m.auto_join_error}
+        </div>
+      )}
       {actionFailure && (
         <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--live)", marginTop: 4, lineHeight: 1.35 }}>
           {actionFailure.actionLabel} failed: {actionFailure.message}
@@ -429,6 +470,149 @@ function MeetingRow({ m }: { m: MeetingMock }) {
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, onSelect: () => copyText(`@meeting:${native}`) },
         ]} />
+      )}
+    </div>
+  );
+}
+
+// ── "+ Plan a meeting" — create a PLANNED row (intent status, no bot): title, optional time
+//    (defaults +1h), optional link, optional workspace bind. Submit → POST /api/meetings. ─────────
+const planField = { fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" } as const;
+
+function PlanMeetingForm({ onPlanned }: { onPlanned: (id: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [when, setWhen] = useState(() => {
+    const d = new Date(Date.now() + 3600_000); d.setSeconds(0, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
+  const [link, setLink] = useState("");
+  const [wsId, setWsId] = useState("");
+  const [shares, setShares] = useState<Membership[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    void listSharedMemberships().then((ms) => setShares(ms.filter((s) => s.role === "owner" || s.role === "contributor"))).catch(() => {});
+  }, [open]);
+  const submit = async () => {
+    if (busy) return;
+    if (link.trim() && !parseMeetingInput(link.trim())) { setErr("That doesn't look like a Meet / Zoom / Teams link."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const row = await createPlannedMeeting({
+        title: title.trim() || null,
+        scheduled_at: when ? new Date(when).toISOString() : null,
+        meeting_url: link.trim() || null,
+        workspace_id: wsId || null,
+      });
+      refreshMeetings();
+      setOpen(false); setTitle(""); setLink(""); setWsId("");
+      onPlanned(row.id);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginBottom: 2 }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+        + Plan a meeting
+      </button>
+    );
+  }
+  return (
+    <div style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 6, marginBottom: 2 }}>
+      <input autoFocus value={title} placeholder="Title (e.g. Q3 kickoff with Acme)" disabled={busy}
+        onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} style={planField} />
+      <input type="datetime-local" value={when} disabled={busy} onChange={(e) => setWhen(e.target.value)} style={planField} />
+      <input value={link} placeholder="Meeting link (optional — attach later)" disabled={busy}
+        onChange={(e) => setLink(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} style={planField} />
+      {shares.length > 0 && (
+        <select value={wsId} disabled={busy} onChange={(e) => setWsId(e.target.value)} style={planField} title="Bind a prep workspace — its members see this meeting">
+          <option value="">no workspace (bind later)</option>
+          {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>workspace: {s.workspace_id}</option>)}
+        </select>
+      )}
+      {err && <div role="alert" style={{ fontSize: 11, color: "var(--live)", lineHeight: 1.4 }}>⚠ {err}</div>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button disabled={busy} onClick={() => void submit()}
+          style={{ flex: 1, background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, padding: "5px 0", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>
+          {busy ? "Planning…" : "Plan"}
+        </button>
+        <button disabled={busy} onClick={() => { setOpen(false); setErr(null); }}
+          style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--t3)", borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: "pointer" }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Calendar sync — the secret ICS URL + the GLOBAL auto-join default for imported meetings.
+//    The URL is a secret: reads come back MASKED (host + tail). Synced meetings land under Upcoming. ──
+function CalendarSyncButton() {
+  const [open, setOpen] = useState(false);
+  const [cfg, setCfg] = useState<CalendarConfig | null>(null);
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const save = async (body: { ics_url?: string | null; auto_join?: boolean }) => {
+    setBusy(true); setErr(null);
+    try { setCfg(await setCalendarConfig(body)); setUrl(""); refreshMeetings(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div ref={ref} style={{ position: "relative", flex: "none" }}>
+      <button onClick={() => setOpen((v) => !v)} title="Calendar sync — import upcoming meetings from your calendar"
+        style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: cfg?.ics_url_set ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
+        <Icon name="cal" size={13} />
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Calendar sync</div>
+          {cfg?.ics_url_set ? (
+            <>
+              <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
+                Connected: <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{cfg.ics_url_masked}</span>
+              </div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
+                <input type="checkbox" checked={cfg.auto_join} disabled={busy}
+                  onChange={(e) => void save({ auto_join: e.target.checked })} />
+                Auto-join imported meetings
+              </label>
+              <button disabled={busy} onClick={() => void save({ ics_url: null })}
+                style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--live)", borderRadius: 6, cursor: "pointer" }}>
+                Disconnect
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+                Paste your calendar&apos;s <b>secret ICS address</b> (Google Calendar → Settings → &quot;Secret address in iCal format&quot;).
+                Upcoming meetings with a Meet/Zoom/Teams link appear under Upcoming and auto-join at start.
+              </div>
+              <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
+                onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void save({ ics_url: url.trim() }); }}
+                style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
+              <button disabled={busy || !url.trim()} onClick={() => void save({ ics_url: url.trim() })}
+                style={{ fontSize: 12, padding: "5px 10px", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--bg)" : "var(--t3)", border: "none", borderRadius: 6, cursor: url.trim() ? "pointer" : "default" }}>
+                {busy ? "Connecting…" : "Connect"}
+              </button>
+            </>
+          )}
+          {err && <div role="alert" style={{ fontSize: 11, color: "var(--live)" }}>⚠ {err}</div>}
+        </div>
       )}
     </div>
   );
@@ -490,7 +674,10 @@ function MeetingsList() {
   };
   return (
     <div style={{ padding: "8px" }}>
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 6px" }}>meetings</div>
+      <div style={{ display: "flex", alignItems: "center", padding: "6px 4px 6px" }}>
+        <span style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", flex: 1 }}>meetings</span>
+        <CalendarSyncButton />
+      </div>
       <div style={{ padding: "0 4px 10px" }}>
         <div style={{ display: "flex", gap: 6 }}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addBot(); }}
@@ -502,6 +689,15 @@ function MeetingsList() {
         </div>
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
         {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
+        <div style={{ marginTop: 8 }}>
+          <PlanMeetingForm onPlanned={(id) => {
+            // open the new plan's prep tab once the refreshed list carries it
+            window.setTimeout(() => {
+              const row = liveMeetingsNow().find((x) => x.id === String(id));
+              if (row) layout.openTab(meetingTab(row));
+            }, 400);
+          }} />
+        </div>
       </div>
       {all.length === 0 && <div style={{ padding: "8px 9px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>No meetings yet — paste a Meet link above and I&apos;ll send the bot.</div>}
       {upcomingOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Upcoming</div>}

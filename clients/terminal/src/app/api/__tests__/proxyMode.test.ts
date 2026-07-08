@@ -28,4 +28,13 @@ describe("proxyMode — meetings-only server gate", () => {
     expect(MEETINGS_DOMAIN.test("meetingsomething")).toBe(false);
     expect(MEETINGS_DOMAIN.test("botsy")).toBe(false);
   });
+
+  it("user self-serve configs route to the gateway ROOT (calendar/webhook live in identity)", () => {
+    expect(MEETINGS_DOMAIN.test("user/calendar")).toBe(true);
+    expect(MEETINGS_DOMAIN.test("user/webhook")).toBe(true);
+    expect(MEETINGS_DOMAIN.test("userdata")).toBe(false);
+    // …and they stay reachable in meetings-only mode (the ICS popover lives on the Meetings surface)
+    process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
+    expect(refusedInMeetingsMode("user/calendar")).toBe(false);
+  });
 });

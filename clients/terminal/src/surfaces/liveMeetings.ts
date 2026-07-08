@@ -12,12 +12,25 @@ import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
 interface MeetingRowDTO {
   id: number | string;
   platform: string;
-  native_meeting_id: string;
+  native_meeting_id: string | null;   // null on a link-less PLANNED meeting (platform 'unknown')
   status: string;
   shared?: boolean;   // surfaced via a share/membership (not owned by the caller)
   start_time?: string | null;
   end_time?: string | null;
-  data?: { recordings?: unknown[]; docs?: { workspace: string; path: string; title?: string; kind?: string }[]; scheduled_at?: string; stop_requested?: boolean } | null;
+  constructed_meeting_url?: string | null;
+  data?: {
+    recordings?: unknown[];
+    docs?: { workspace: string; path: string; title?: string; kind?: string }[];
+    scheduled_at?: string;
+    stop_requested?: boolean;
+    // planned-meeting keys (POST /meetings / calendar sync)
+    title?: string;
+    workspace_id?: string;
+    calendar_uid?: string;
+    auto_join?: boolean;
+    auto_join_error?: string;
+    constructed_meeting_url?: string;
+  } | null;
 }
 
 /** `stopped` is not a DB enum value — it's derived from a terminal `completed` row that the user stopped
@@ -123,6 +136,13 @@ let storeRevision = 0;
 
 function whenLabel(d: MeetingRowDTO, live: boolean): string {
   if (live) return "Now · live";
+  // a PLANNED meeting's row shows its planned time, not "Recorded"
+  if ((d.status === "scheduled" || d.status === "idle") && !d.start_time) {
+    const at = d.data?.scheduled_at;
+    if (!at) return "No time set";
+    try { return new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+    catch { return "Scheduled"; }
+  }
   if (!d.start_time) return "Recorded";
   try { return new Date(d.start_time).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
   catch { return "Recorded"; }
@@ -142,14 +162,22 @@ function toMock(d: MeetingRowDTO): MeetingMock {
   const id = String(d.id);
   return {
     id,
-    native_id: native,
+    native_id: native ?? undefined,
     session_uid: live ? id : undefined,  // only live meetings subscribe to the copilot stream — by ROW id
-    title: `${d.platform === "google_meet" ? "Google Meet" : d.platform} · ${native}`,
+    // a planned meeting's user-given title wins; otherwise the platform·native fallback
+    title: d.data?.title
+      || `${d.platform === "google_meet" ? "Google Meet" : d.platform} · ${native ?? "(no link)"}`,
+    title_custom: d.data?.title ?? undefined,
     when: whenLabel(d, live),
     status: live ? "live" : "past",
     live_status: raw,
     shared: !!d.shared,   // owned by someone else, surfaced via a share/membership (data.shared)
     scheduled_at: d.data?.scheduled_at ?? undefined,
+    workspace_id: d.data?.workspace_id ?? undefined,
+    calendar_uid: d.data?.calendar_uid ?? undefined,
+    auto_join: d.data?.auto_join,
+    auto_join_error: d.data?.auto_join_error ?? undefined,
+    meeting_url: d.constructed_meeting_url ?? d.data?.constructed_meeting_url ?? undefined,
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
@@ -175,7 +203,9 @@ async function snapshot() {
     // duplicated row in the list (idempotent), never to merge distinct rows sharing a native.
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
-    const key = (m: MeetingMock[]) => m.map((x) => `${x.id}|${x.live_status}|${x.has_recording}`).join(",");
+    const key = (m: MeetingMock[]) => m.map((x) =>
+      `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}`,
+    ).join(",");
     if (key(next) !== key(meetings)) {
       meetings = next;
       subs.forEach((f) => f());
