@@ -70,7 +70,7 @@ const idMs = (id?: string | null): number | null => {
 type Tone = "ok" | "warn" | "danger";
 const TONE: Record<Tone, { fg: string; bg: string }> = {
   ok: { fg: "var(--green)", bg: "var(--greenbg)" },
-  warn: { fg: "var(--accent)", bg: "var(--accentbg)" },
+  warn: { fg: "var(--warn)", bg: "var(--warnbg)" },
   danger: { fg: "var(--danger)", bg: "var(--dangerbg)" },
 };
 
