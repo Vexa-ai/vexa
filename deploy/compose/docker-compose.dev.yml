@@ -6,7 +6,7 @@
 #
 # Layer it LAST, on the same project:
 #   docker compose -p vexa-dash \
-#     -f docker-compose.yml -f docker-compose.dashboard.yml -f docker-compose.stt.yml \
+#     -f docker-compose.yml -f docker-compose.stt.yml \
 #     -f docker-compose.dev.yml up -d --no-build --no-deps admin-api runtime meeting-api gateway
 #
 # The four control-plane services are interpreted Python (`python -m <pkg>`, src on PYTHONPATH=/app/src)
