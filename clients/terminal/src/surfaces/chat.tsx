@@ -956,24 +956,29 @@ export function Chat({ params = {} }: ChatProps) {
                 + schedule
               </button>
             ) : null}
-            {contextRef && contextRef.kind === "meeting" && activeMeeting && (() => {
+            {/* B4 carve: the meeting focus is ONE chip — `Preparing · Title ×` — never a mono
+                uppercase label plus a second raw-id Focus chip for the same meeting. */}
+            {contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
               const mode = MODE_CHIP[meetingPhase(activeMeeting)];
               return (
                 <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
-                  style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)",
-                    fontSize: 10, letterSpacing: ".07em", textTransform: "uppercase", color: mode.color,
-                    background: mode.bg, borderRadius: 999, padding: "2px 9px", maxWidth: 220 }}>
-                  {mode.label} · <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none", letterSpacing: 0 }}>{meetingLabel(activeMeeting)}</span>
+                  style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5,
+                    fontWeight: 600, color: mode.color, background: mode.bg, borderRadius: 999,
+                    padding: "2px 5px 2px 10px", maxWidth: 260, minWidth: 0 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                    {mode.label} · {meetingLabel(activeMeeting)}
+                  </span>
+                  <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)}
+                    style={{ background: "none", border: "none", color: mode.color, opacity: 0.7, cursor: "pointer", display: "flex", padding: 2, flex: "none" }}><Icon name="x" size={10} /></button>
                 </span>
               );
-            })()}
-            {contextRef && (
+            })() : contextRef ? (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
                 <ReferenceChip refToken={contextRef} />
                 <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
               </>
-            )}
+            ) : null}
             {!contextRef && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
               <>
                 <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
