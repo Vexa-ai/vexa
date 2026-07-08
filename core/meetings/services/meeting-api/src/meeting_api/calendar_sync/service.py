@@ -47,9 +47,12 @@ def _event_text(comp, key: str) -> str:
     return str(v) if v is not None else ""
 
 
-def _next_occurrence(comp, *, window_start: datetime, window_end: datetime) -> Optional[datetime]:
+def _next_occurrence(comp, *, window_start: datetime, window_end: datetime,
+                     skip: Optional[set] = None) -> Optional[datetime]:
     """The event's next occurrence inside the window — DTSTART for a one-off, RRULE-expanded
-    (EXDATE-respecting) for a recurring event. ``None`` when nothing falls in the window."""
+    (EXDATE-respecting) for a recurring event. ``None`` when nothing falls in the window.
+    ``skip`` = occurrence datetimes claimed by RECURRENCE-ID override components — those
+    instances belong to the overrides, never to the master's expansion."""
     dtstart = _as_utc(comp.get("DTSTART") and comp.get("DTSTART").dt)
     if dtstart is None:
         return None
@@ -63,7 +66,7 @@ def _next_occurrence(comp, *, window_start: datetime, window_end: datetime) -> O
         rule = rrulestr(rrule_prop.to_ical().decode(), dtstart=dtstart)
     except (ValueError, TypeError):
         return None
-    exdates: set[datetime] = set()
+    exdates: set[datetime] = set(skip or ())
     ex_prop = comp.get("EXDATE")
     for ex in (ex_prop if isinstance(ex_prop, list) else [ex_prop] if ex_prop else []):
         for d in getattr(ex, "dts", []):
@@ -126,20 +129,59 @@ def parse_ics(text: str, *, now: datetime,
     window_end = now + timedelta(days=horizon_days)
     events: list[dict] = []
     cancelled: list[str] = []
-    seen: set[str] = set()
 
+    # Group VEVENTs by UID FIRST: a recurring series arrives as one RRULE master plus any number
+    # of RECURRENCE-ID override instances sharing the UID, in ARBITRARY feed order. The next
+    # occurrence must be resolved across the WHOLE group — first-component-wins silently dropped
+    # a series whenever a past override happened to precede its master in the walk (observed live:
+    # the OeNB bi-weekly vanished while its siblings imported fine).
     cal = Calendar.from_ical(text)
+    groups: dict[str, list] = {}
+    order: list[str] = []
     for comp in cal.walk("VEVENT"):
         uid = _event_text(comp, "UID").strip()
-        if not uid or uid in seen:
+        if not uid:
             continue
-        seen.add(uid)
-        if _event_text(comp, "STATUS").upper() == "CANCELLED":
+        if uid not in groups:
+            groups[uid] = []
+            order.append(uid)
+        groups[uid].append(comp)
+
+    for uid in order:
+        comps = groups[uid]
+        master = next((c for c in comps if c.get("RECURRENCE-ID") is None), None)
+        overrides = [c for c in comps if c.get("RECURRENCE-ID") is not None]
+        is_cancelled = lambda c: _event_text(c, "STATUS").upper() == "CANCELLED"  # noqa: E731
+
+        # the SERIES is cancelled only when its master is (or when there IS no master and every
+        # override is) — a single cancelled occurrence must never retire the whole series row
+        if (master is not None and is_cancelled(master)) or (master is None and comps and all(map(is_cancelled, comps))):
             cancelled.append(uid)
             continue
-        occurrence = _next_occurrence(comp, window_start=window_start, window_end=window_end)
-        if occurrence is None:
+
+        # instances claimed by overrides never come from the master's expansion (moved OR cancelled)
+        override_marks: set[datetime] = set()
+        for c in overrides:
+            rid = _as_utc(c.get("RECURRENCE-ID") and c.get("RECURRENCE-ID").dt)
+            if rid:
+                override_marks.add(rid)
+
+        candidates: list[tuple[datetime, Any]] = []
+        if master is not None:
+            occ = _next_occurrence(master, window_start=window_start, window_end=window_end,
+                                   skip=override_marks)
+            if occ is not None:
+                candidates.append((occ, master))
+        for c in overrides:
+            if is_cancelled(c):
+                continue
+            dt = _as_utc(c.get("DTSTART") and c.get("DTSTART").dt)
+            if dt is not None and window_start <= dt <= window_end:
+                candidates.append((dt, c))
+        if not candidates:
             continue
+        occurrence, comp = min(candidates, key=lambda t: t[0])
+
         # the joinable link: Google's conference property first, then LOCATION, then DESCRIPTION
         link = None
         for source in (_event_text(comp, "X-GOOGLE-CONFERENCE"),

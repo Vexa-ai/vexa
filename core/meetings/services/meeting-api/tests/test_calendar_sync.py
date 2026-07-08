@@ -344,3 +344,54 @@ async def test_unbind_writes_tombstone_and_rebind_lifts_it():
     assert rebound["data"]["workspace_id"] == "oenb-1424e3"
     assert rebound["data"]["workspace_source"] == "user"
     assert "workspace_unbound" not in rebound["data"]
+
+
+# ---- recurring series with RECURRENCE-ID overrides (OeNB-vanish regression) ----------
+
+def _override(uid: str, rec_id: str, start: str, summary="Weekly sync",
+              location="https://meet.google.com/abc-defg-hij", status=None) -> str:
+    ev = _event(uid=uid, summary=summary, start=start, location=location, status=status)
+    return ev.replace("DTSTART:", f"RECURRENCE-ID:{rec_id}\r\nDTSTART:", 1)
+
+
+def test_parse_series_survives_past_overrides_walking_before_master():
+    """The live OeNB bug: past RECURRENCE-ID instances precede the RRULE master in the feed —
+    first-component-wins consumed the UID on a dead override and dropped the whole series."""
+    parsed = parse_ics(_ics(
+        _override("uid-1", "20260622T150000Z", "20260622T150000Z"),   # past instance, walks FIRST
+        _override("uid-1", "20260629T150000Z", "20260629T150000Z"),   # another past instance
+        _event(uid="uid-1", start="20260223T150000Z", rrule="FREQ=WEEKLY;INTERVAL=2;BYDAY=MO"),
+    ), now=NOW)
+    (ev,) = parsed["events"]
+    assert ev["scheduled_at"] == "2026-07-13T15:00:00+00:00"  # the master's next Monday-biweekly
+
+
+def test_parse_moved_override_wins_over_master_expansion():
+    """An occurrence moved via RECURRENCE-ID replaces the master's instance — the override's
+    NEW time imports, and the master must not re-emit the claimed slot."""
+    parsed = parse_ics(_ics(
+        _event(uid="uid-1", start="20260622T150000Z", rrule="FREQ=WEEKLY;BYDAY=MO"),
+        _override("uid-1", "20260713T150000Z", "20260710T090000Z"),   # Jul 13 moved to Jul 10
+    ), now=NOW)
+    (ev,) = parsed["events"]
+    assert ev["scheduled_at"] == "2026-07-10T09:00:00+00:00"
+
+
+def test_parse_cancelled_override_skips_occurrence_not_series():
+    """STATUS:CANCELLED on ONE instance skips that occurrence; the series lives on."""
+    parsed = parse_ics(_ics(
+        _event(uid="uid-1", start="20260622T150000Z", rrule="FREQ=WEEKLY;BYDAY=MO"),
+        _override("uid-1", "20260713T150000Z", "20260713T150000Z", status="CANCELLED"),
+    ), now=NOW)
+    assert parsed["cancelled_uids"] == []
+    (ev,) = parsed["events"]
+    assert ev["scheduled_at"] == "2026-07-20T15:00:00+00:00"  # next non-cancelled Monday
+
+
+def test_parse_cancelled_master_retires_series():
+    parsed = parse_ics(_ics(
+        _override("uid-1", "20260713T150000Z", "20260713T150000Z"),
+        _event(uid="uid-1", start="20260622T150000Z", rrule="FREQ=WEEKLY;BYDAY=MO", status="CANCELLED"),
+    ), now=NOW)
+    assert parsed["cancelled_uids"] == ["uid-1"]
+    assert parsed["events"] == []
