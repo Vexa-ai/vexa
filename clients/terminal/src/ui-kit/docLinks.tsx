@@ -94,6 +94,19 @@ export interface DocRef { path?: string; wikilink?: string }
 export interface DocMeta { path?: string; slug?: string }
 export interface ResolvedDoc { path: string; slug?: string; type?: string }
 
+/** Map a WORKER-VISIBLE absolute path to a workspace ref. The agent is instructed to quote
+ *  its mount paths VERBATIM in chat (engine.py mounts_preamble: "Always use ABSOLUTE
+ *  paths"), so chat links arrive as `<root>/<subject>/kg/...` (home) or
+ *  `<root>/.attached/<subject>/<slug>/kg/...` (an attached workspace). */
+function fromWorkerPath(p: string): { path: string; slug?: string } | undefined {
+  if (!p.startsWith("/")) return undefined;
+  const att = p.match(/\/\.attached\/[^/]+\/([^/]+)\/(.+)$/);
+  if (att) return { slug: att[1], path: att[2] };
+  const kg = p.match(/\/(kg\/.+)$/);  // home mount — only the kg/ tail is workspace-addressable
+  if (kg) return { path: kg[1] };
+  return undefined;
+}
+
 const wikilinkMatcher = (title: string) => {
   const slug = entitySlug(title);
   return new RegExp(`(?:^|/)kg/entities/([^/]+)/${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.md$`);
@@ -103,6 +116,17 @@ const wikilinkMatcher = (title: string) => {
  *  [[wikilink]] matches no entity doc in any mounted workspace. */
 export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<ResolvedDoc | undefined> {
   if (ref.path) {
+    // A worker-visible ABSOLUTE path (quoted verbatim by the agent in chat) carries its own
+    // workspace: translate to {slug, relative} and verify against THAT workspace's tree.
+    const worker = fromWorkerPath(ref.path);
+    if (worker) {
+      const tree = await workspaceTree(worker.slug);
+      if (tree.includes(worker.path)) return { path: worker.path, slug: worker.slug };
+      // attached-store slug didn't resolve (e.g. the user's own store viewed as home) —
+      // fall through to home before giving up
+      if (worker.slug && (await workspaceTree(undefined)).includes(worker.path)) return { path: worker.path, slug: undefined };
+      return { path: worker.path, slug: worker.slug };
+    }
     // Try root-relative first, then doc-relative (authors write both `kg/x.md` and `entities/x.md`
     // meaning a sibling) — pick whichever actually exists in the doc's workspace.
     const root = normalizeDocPath(ref.path, meta.path);
@@ -188,8 +212,10 @@ export function Wikilink({ title }: { title: string }) {
 export function InternalLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
+  // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it
+  const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (
-    <span role="link" onClick={() => openEntity({ path: normalizeDocPath(href.replace(/^\.\//, ""), meta.path) })}
+    <span role="link" onClick={() => openEntity({ path })}
       style={{ color: "var(--blue)", textDecoration: "underline", cursor: "pointer" }}>{children}</span>
   );
 }

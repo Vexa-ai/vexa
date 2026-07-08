@@ -75,3 +75,23 @@ describe("resolveDocRef — paths", () => {
     expect(r).toEqual({ path: "kg/gone.md", slug: "dna" });
   });
 });
+
+describe("resolveDocRef — worker-visible absolute paths (chat links)", () => {
+  it("translates an attached-mount path to {slug, relative}", async () => {
+    trees["dna"] = ["kg/entities/project/dna.md"];
+    const r = await resolveDocRef(
+      { path: "/workspaces/user1/.attached/user1/dna/kg/entities/project/dna.md" }, {});
+    expect(r).toEqual({ path: "kg/entities/project/dna.md", slug: "dna" });
+  });
+  it("translates a home-mount path to its kg/ tail", async () => {
+    trees[""] = ["kg/entities/person/x.md"];
+    const r = await resolveDocRef({ path: "/workspaces/user1/kg/entities/person/x.md" }, {});
+    expect(r).toEqual({ path: "kg/entities/person/x.md", slug: undefined });
+  });
+  it("falls back to home when the attached slug's tree doesn't have the file", async () => {
+    trees["dna"] = [];
+    trees[""] = ["kg/notes.md"];
+    const r = await resolveDocRef({ path: "/w/.attached/u/dna/kg/notes.md" }, {});
+    expect(r).toEqual({ path: "kg/notes.md", slug: undefined });
+  });
+});

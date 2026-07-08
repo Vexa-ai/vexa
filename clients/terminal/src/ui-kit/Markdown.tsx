@@ -9,8 +9,11 @@
 import { Fragment, type ReactNode } from "react";
 import { InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 
-// An entity-doc path (e.g. kg/entities/person/dmitry-grankin.md) → clickable to open the doc.
-const ENTITY_PATH = /^[\w./-]*kg\/entities\/[\w./-]+\.md$/;
+// A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
+// spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
+// `<root>/<subject>/kg/...`) plus any doc inside an attached-workspace mount
+// (`<root>/.attached/<subject>/<slug>/...md`) — resolveDocRef translates all of them.
+const ENTITY_PATH = /^(?:(?:[\w./-]*\/)?kg\/[\w./-]+\.md|\/[\w./-]*\.attached\/[\w./-]+\.md)$/;
 // Clickable `kg/entities/...` inline code — a component so it can read the doc's
 // workspace context (DocMeta/DocNav) via useOpenEntity, same as every other link.
 function EntityCode({ code }: { code: string }) {

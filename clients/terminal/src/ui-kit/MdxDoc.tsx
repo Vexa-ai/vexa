@@ -51,7 +51,7 @@ function Card({ title, icon, href, children }: { title?: string; icon?: string; 
     // scheme allowlist: http(s) opens externally, scheme-less opens in-workspace,
     // anything else (javascript:, data:, //host) is untrusted-doc content — ignore
     if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
-    else if (isInternalHref(href)) openEntity({ path: normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
+    else if (isInternalHref(href)) openEntity({ path: href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
   };
   return (
     <div onClick={clickable ? open : undefined} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
