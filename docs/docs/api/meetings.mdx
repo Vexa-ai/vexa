@@ -1,10 +1,11 @@
 ---
 title: "Meetings API"
-description: "Send a bot to a meeting, get the real-time transcript, manage the bot, retrieve per-speaker audio."
+description: "Plan meetings ahead, sync your calendar, send a bot, get the real-time transcript, manage the bot, retrieve recordings."
 ---
 
-The Meetings API sends a bot into a call and returns its transcript in real time. It is the public Vexum
-API — the same surface whether you use the hosted service or self-host.
+The Meetings API covers a meeting's whole life: **plan** it ahead (or import it from a calendar),
+**send a bot** into the call (or let auto-join do it), and read the **transcript in real time**. It
+is the public Vexum API — the same surface whether you use the hosted service or self-host.
 
 ## Base URL & auth
 
@@ -31,6 +32,91 @@ Pass one of these as `platform`:
 
 The bot joins like any participant — no plugins, no host configuration.
 
+## Meeting statuses
+
+A meeting is **one record from plan to transcript**:
+
+| Phase | `status` values | Who owns it |
+|---|---|---|
+| Planned (intent) | `idle` (no time) · `scheduled` (time set) | you — freely editable |
+| Live (bot FSM) | `requested` · `joining` · `awaiting_admission` · `needs_help` · `active` · `stopping` | the bot lifecycle |
+| Terminal | `completed` · `failed` | — |
+
+Sending a bot to a planned meeting (yours or auto-join's) **upgrades the same record in place** —
+its title, workspace binding, and transcript stay together. `PATCH`/`DELETE` work only while the
+record is still planned; once the bot lifecycle owns it they answer `409`.
+
+## Plan a meeting
+
+Create a meeting **before it happens** — no bot is spawned. All fields are optional: a plan can be
+just a title, and the link can be attached later.
+
+<ParamField body="title" type="string">What the meeting is about — shown in the Meetings list.</ParamField>
+<ParamField body="scheduled_at" type="string">ISO-8601 start time. Present → status `scheduled` (and [auto-join](#auto-join) arms); absent → `idle`.</ParamField>
+<ParamField body="meeting_url" type="string">A Meet/Zoom/Teams link — parsed server-side into `platform` + `native_meeting_id`. Unrecognized links are rejected with `422`.</ParamField>
+<ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript.</ParamField>
+<ParamField body="auto_join" type="boolean">Send the bot automatically at start time. Default `true`.</ParamField>
+
+```bash POST /meetings
+curl -X POST "$API_BASE/meetings" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"title":"Q3 kickoff with Acme","scheduled_at":"2026-07-10T15:00:00Z",
+       "meeting_url":"https://meet.google.com/abc-defg-hij","workspace_id":"ws-acme"}'
+```
+
+Returns `201` with the meeting record. `409` when a non-terminal meeting already exists for the
+same link.
+
+### Edit or delete a plan
+
+Planned meetings are addressed **by record id** (a plan without a link has no platform/native
+path). Send only the fields you're changing; `null` clears a field (`scheduled_at: null` flips the
+status back to `idle`, `meeting_url: null` detaches the link, `workspace_id: null` unbinds).
+
+```bash PATCH /meetings/{meeting_id}
+curl -X PATCH "$API_BASE/meetings/12345" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"scheduled_at":"2026-07-10T16:00:00Z","auto_join":false}'
+```
+
+```bash DELETE /meetings/{meeting_id}
+curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
+```
+
+Both answer `404` for a record you don't own and `409` once the bot lifecycle owns the record.
+
+## Auto-join
+
+A `scheduled` meeting **with a link** is joined automatically: a background sweep sends the bot
+~60 s before `scheduled_at` (never more than 10 min after — a stale plan is skipped, not joined
+late). Opt out per meeting with `auto_join: false`. Failures are loud: a concurrency-cap or spawn
+failure stamps `auto_join_error` into the meeting's `data` and retries after a backoff. Timing is
+tunable on a self-host — see [Configuration](/configuration).
+
+## Calendar sync
+
+Connect a calendar's **secret ICS address** and upcoming meetings import as planned records
+automatically (only events carrying a recognizable Meet/Zoom/Teams link; one record per event —
+the next occurrence of a recurring series). The URL is a secret: read-backs return it **masked**.
+`auto_join` here is the **global default** stamped onto imported meetings.
+
+```bash PUT /user/calendar
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics","auto_join":true}'
+```
+
+```bash GET /user/calendar
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar"
+```
+
+```json Response
+{ "ics_url_set": true, "ics_url_masked": "calendar.google.com/…s.ics", "auto_join": true }
+```
+
+Disconnect with `{"ics_url": null}`. See [Calendar sync](/how-to/calendar-sync) for where to find
+the secret address.
+
 ## Send a bot to a meeting
 
 <ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
@@ -44,6 +130,10 @@ curl -X POST "$API_BASE/bots" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa","language":"en"}'
 ```
+
+If a **planned** meeting exists for the same link, the spawn **claims it**: the same record moves
+to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
+already active on that link; `429` past your concurrency limit.
 
 ## Get the transcript
 

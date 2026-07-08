@@ -23,6 +23,38 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 
+## A scheduled meeting didn't auto-join
+
+Auto-join sends the bot ~60 s before the scheduled time (see
+[Configuration](/configuration#auto-join--calendar-sync)). If the bot never appeared, check the
+meeting's row in the Terminal — auto-join failures are stamped **onto the meeting** as a visible
+`auto_join_error`, never swallowed. The usual causes:
+
+- **No meeting link** — a plan without a Meet/Zoom/Teams link has nothing to join. Attach the link
+  in the meeting's prep view.
+- **Auto-join is off** — the per-meeting toggle (prep view), or for imported meetings the global
+  switch in the calendar popover.
+- **Concurrency cap** — you were already running `max_concurrent_bots` bots at start time. The row
+  shows the cap error and retries after a backoff (default 5 min).
+- **The start time is long past** — a meeting more than the grace window (default 10 min) past its
+  start is skipped deliberately; the bot never joins hours late.
+- **STT not configured** — like a manual spawn, an auto-spawn refuses to launch a bot that could
+  never transcribe; the row shows the unset keys. See
+  [Bot joins but there's no transcript](#bot-joins-but-theres-no-transcript).
+
+## Calendar isn't syncing
+
+- **Wrong URL kind** — you need the **secret ICS address** (Google: *Secret address in iCal
+  format*; Outlook: the published **ICS** link), not the calendar's public/share URL. Reads via
+  `GET /user/calendar` show the connected feed masked.
+- **The event has no meeting link** — only events with a recognizable Meet/Zoom/Teams link import;
+  everything else is skipped by design.
+- **Patience, then the interval** — the sweep runs every `CALENDAR_SYNC_INTERVAL_S` (default 5
+  min). On a self-host also confirm `ADMIN_API_URL` and `INTERNAL_API_SECRET` are set for
+  meeting-api — without them the sync loop is disabled.
+- **Feed too large / unreachable** — feeds over 2 MB or behind redirects are refused; the sync
+  state records the fetch error.
+
 ## Bot joins but there's no transcript
 
 The bot is capturing audio, but transcription isn't configured.

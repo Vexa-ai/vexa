@@ -26,3 +26,10 @@ We adopt **[kagenti](https://github.com/kagenti/kagenti)**: **SPIRE** (workload 
 
 <Note>The agent (LLM) is outside the trust boundary. Compromise it via prompt injection and it still
 cannot exceed the token's scope — the boundaries enforce, not the model.</Note>
+
+The same posture covers **user-supplied secrets and URLs**. A calendar's ICS address is a
+credential: it is stored server-side, every user-facing read returns it **masked**, and it crosses
+in the clear only on the internal, secret-gated hop the sync poller calls. And because the poller
+dereferences a user-controlled URL, the fetch runs on the same **IP-pinned, SSRF-guarded
+transport** as webhook delivery — re-resolved and validated at connect time, so a DNS-rebinding
+flip can never turn calendar sync into an internal-network probe.

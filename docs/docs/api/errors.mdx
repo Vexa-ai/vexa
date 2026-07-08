@@ -33,9 +33,16 @@ failures (`422`).
 - `404` minting a token for a non-existent user id.
 - `422` minting with an invalid scope (valid: `bot`, `tx`, `browser`).
 
-**Meetings API** (`/bots`, `/transcripts/*`)
+**Meetings API** (`/meetings`, `/bots`, `/transcripts/*`)
 - `401` on a missing or invalid `X-API-Key`; `403` when the key lacks the route's scope.
 - `404` reading a transcript for a meeting that was never started.
+- `POST /meetings` (plan) → `409` when a non-terminal meeting already exists for that link; `422`
+  on an unrecognizable `meeting_url`.
+- `PATCH`/`DELETE /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting
+  is only editable while it's still planned); `409` on `PATCH` when the new link collides with
+  another active meeting.
+- `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
+  fine — the spawn claims it); `429` past your concurrency limit.
 - A bot that fails to join surfaces in `GET /bots/status` rather than as an HTTP error on `POST /bots`
   — see [Troubleshooting](/troubleshooting#bot-wont-join).
 

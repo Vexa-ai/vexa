@@ -59,6 +59,22 @@ Point the agent at your own model so no inference leaves the network.
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers. |
 | `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
 
+## Auto-join & calendar sync
+
+Timing knobs for the two meeting-api background sweeps ([auto-join](/core/meetings#auto-join--scheduled-means-the-bot-comes)
+and [calendar sync](/how-to/calendar-sync)). Both degrade gracefully: without `ADMIN_API_URL` +
+`INTERNAL_API_SECRET`, calendar sync no-ops and auto-join spawns without per-user context — the
+stack still boots.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUTO_JOIN_SWEEP_INTERVAL_S` | `30` | How often scheduled meetings are checked for a due start. |
+| `AUTO_JOIN_LEAD_S` | `60` | The bot is sent this many seconds *before* the scheduled time. |
+| `AUTO_JOIN_GRACE_S` | `600` | A meeting whose start passed longer ago than this is skipped — never joined hours late. |
+| `AUTO_JOIN_RETRY_BACKOFF_S` | `300` | Wait after a loud auto-join failure (cap/quota/spawn) before retrying that meeting. |
+| `CALENDAR_SYNC_INTERVAL_S` | `300` | How often connected ICS feeds are re-fetched and upserted. |
+| `ADMIN_API_URL` | — | admin-api base URL for the sweeps' internal lookups (spawn context, calendar configs). |
+
 ## Images & runtime
 
 | Variable | Default | Purpose |

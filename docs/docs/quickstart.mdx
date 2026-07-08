@@ -94,9 +94,27 @@ curl -N -X POST "$API_BASE/agent/chat" \
 The response streams back as Server-Sent Events — `message-delta` frames carry the reply, `commit`
 frames mark anything the agent recorded. See the [Agent API](/api/agent).
 
+## 4. Third win — connect your calendar
+
+Stop pasting links: give Vexum your calendar's **secret ICS address** (Google Calendar → Settings →
+*Secret address in iCal format*) and every upcoming meeting with a Meet/Zoom/Teams link imports on
+its own — and the bot **auto-joins at start time**.
+
+```bash
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics"}'
+```
+
+Your meetings appear under **Upcoming** in the Terminal within a sync cycle. Full walkthrough
+(Outlook too, what imports, per-meeting opt-out): [Calendar sync](/how-to/calendar-sync).
+
 ## Next steps
 
 <CardGroup cols={2}>
+  <Card title="Plan and share a meeting" icon="calendar-check" href="/how-to/plan-a-meeting">
+    Prepare a shared knowledge space and invite the people you're meeting.
+  </Card>
   <Card title="Get a report after every meeting" icon="file-lines" href="/how-to/post-meeting-report">
     A routine that writes notes, decisions, and follow-ups when a call ends.
   </Card>

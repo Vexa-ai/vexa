@@ -39,6 +39,13 @@ Optional: `language` (ISO code, omit to auto-detect) and `task` (`transcribe` de
 
 On Meet and Teams the bot may wait in the lobby until a host admits it.
 
+<Note>
+You often don't need this call at all: a [**planned** meeting](/how-to/plan-a-meeting) with a time
+and a link **auto-joins** at start, and [calendar sync](/how-to/calendar-sync) plans them for you.
+Sending a bot to a link you already planned upgrades the same meeting record (title and workspace
+binding survive) — it never creates a duplicate.
+</Note>
+
 ## 2. Read the transcript
 
 Segments stream in as the meeting runs. Poll:

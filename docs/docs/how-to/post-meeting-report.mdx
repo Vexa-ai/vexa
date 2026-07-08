@@ -8,6 +8,10 @@ Once a meeting produces a transcript, an [agent](/core/agents) can read it **thr
 the deal — and commit a report. Because the transcript is trusted input, the agent both reads and writes;
 git is the undo.
 
+For a [planned meeting](/how-to/plan-a-meeting) with a bound workspace this closes the loop: the
+transcript lands on the same meeting record the plan started as, and the report lands in the same
+workspace the attendees already share.
+
 ## Option A — dispatch a report when the meeting ends
 
 Fire a one-shot [dispatch](/core/agents) the moment a call wraps (e.g. from your own meeting-end hook):

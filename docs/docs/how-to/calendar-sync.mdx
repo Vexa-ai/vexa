@@ -1,0 +1,76 @@
+---
+title: "Calendar sync"
+description: "Connect your calendar with its secret ICS address — upcoming meetings import automatically and the bot joins them at start."
+---
+
+Connect a calendar once and Vexum keeps your **Upcoming** meetings in sync: every calendar event
+with a Meet/Zoom/Teams link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
+and the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start
+time. No OAuth, no calendar permissions — it works off the **secret ICS address** your calendar
+already provides.
+
+## 1. Find your secret ICS address
+
+<Tabs>
+  <Tab title="Google Calendar">
+    1. Open [Google Calendar settings](https://calendar.google.com/calendar/r/settings) → pick your
+       calendar under **Settings for my calendars**.
+    2. Scroll to **Integrate calendar**.
+    3. Copy **Secret address in iCal format** (ends in `basic.ics`).
+  </Tab>
+  <Tab title="Outlook / Microsoft 365">
+    1. Outlook on the web → **Settings → Calendar → Shared calendars**.
+    2. Under **Publish a calendar**, pick your calendar, permissions **Can view all details**, and
+       click **Publish**.
+    3. Copy the **ICS** link.
+  </Tab>
+</Tabs>
+
+<Warning>
+The ICS address is a **secret** — anyone holding it can read your calendar. Vexum stores it
+accordingly: it is never shown back in full (reads return a masked form), and the sync fetch runs
+through the same server-side request guard as webhooks. Revoke it anytime from your calendar's
+settings ("Reset" in Google Calendar) — then reconnect with the new address.
+</Warning>
+
+## 2. Connect it
+
+In the Terminal's **Meetings** list, click the **calendar icon** in the header, paste the address,
+and hit **Connect**. Or over the API:
+
+```bash
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics"}'
+```
+
+Within one sync cycle (default 5 minutes) your upcoming meetings appear under **Upcoming**.
+
+## What imports (and what doesn't)
+
+- **Only events with a recognizable meeting link** — Meet, Zoom, or Teams, found in the event's
+  conferencing field, location, or description. Events without one (lunches, focus blocks) are
+  ignored.
+- **One meeting per event — the next occurrence only.** A recurring series tracks its next
+  upcoming occurrence; the one after imports once the current completes.
+- **Moves and cancellations follow the feed.** A rescheduled event moves its meeting; a cancelled
+  or deleted event removes it — unless the bot already joined, in which case sync never touches it.
+- **Your manual plans are respected.** If you already planned a meeting on the same link, the
+  calendar event links up with it instead of creating a duplicate — your title and workspace
+  binding win.
+
+## Auto-join for imported meetings
+
+The calendar popover has one global switch — **Auto-join imported meetings** (default on). It sets
+the default for every meeting the sync creates; you can still flip auto-join per meeting in its
+prep view. Turn the global switch off if you want the calendar only to *populate* Upcoming while
+you send the bot by hand.
+
+## Disconnect
+
+Calendar icon → **Disconnect** (or `PUT /user/calendar` with `{"ics_url": null}`). Already-imported
+meetings stay; they just stop following the feed.
+
+## It's not syncing?
+
+See [Troubleshooting → Calendar isn't syncing](/troubleshooting#calendar-isnt-syncing).

@@ -1,0 +1,74 @@
+---
+title: "Plan and share a meeting"
+description: "Create a meeting before it happens, prepare a shared knowledge space with the agent, invite the people you're meeting, and let the bot join at start."
+---
+
+This is the **prepare-for-a-meeting** flow end to end: plan the meeting, build shared context in a
+workspace, hand that context to your attendees, and have the bot show up on time — so everyone
+walks in prepared and walks out with the transcript in the same place.
+
+It composes both planes: the meeting record lives in the [meetings domain](/core/meetings), the
+prep space is an [agent workspace](/core/agents). You can drive everything from the Terminal UI or
+the [API](/api/meetings#plan-a-meeting); both are shown.
+
+## 1. Plan the meeting
+
+In the Terminal's **Meetings** list, click **+ Plan a meeting**: give it a title, a time, and —
+if you already have it — the Meet/Zoom/Teams link. The link is optional; attach it later from the
+meeting's prep view.
+
+```bash Via the API
+curl -X POST "$API_BASE/meetings" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"title":"Q3 kickoff with Acme","scheduled_at":"2026-07-10T15:00:00Z",
+       "meeting_url":"https://meet.google.com/abc-defg-hij"}'
+```
+
+The meeting appears under **Upcoming** with a `Scheduled` badge. Clicking it opens its **prep
+view** — title, time, link, the auto-join toggle, and the workspace section below.
+
+<Note>
+Meetings on your calendar can create these records for you — see
+[Calendar sync](/how-to/calendar-sync).
+</Note>
+
+## 2. Prepare the knowledge space
+
+In the prep view, **bind a workspace**: pick an existing one (say, the client's deal workspace) or
+click **+ Create a prep workspace**. This workspace is where the preparation lives — brief, agenda,
+open questions, background research.
+
+Now put the agent to work in it: open the workspace and ask for what you need — research the
+company from the open web, pull context from your other workspaces, summarize the last meeting's
+notes, draft the agenda. Everything it produces is Markdown files in the workspace — reviewable,
+editable, versioned.
+
+## 3. Share it with the people you're meeting
+
+Click **Share with attendees** in the prep view. It mints a workspace **invite link** — send it to
+your colleagues or the client. Anyone who accepts becomes a member of the prep workspace and gets:
+
+- the **prepared context**, live — workspace edits sync in real time, so you can keep refining it
+  together right up to (and during) the call;
+- **the meeting itself** — a meeting bound to a workspace is visible to every member: the upcoming
+  plan in their Meetings list, the live transcript feed once the bot joins, and the finished
+  transcript after.
+
+There is nothing extra to share when the meeting starts — the binding already carries it.
+
+## 4. The bot joins on its own
+
+At start time the bot auto-joins (the **Auto-join** toggle is on by default for any scheduled
+meeting with a link — flip it off for meetings you want to keep bot-free, or click **Send bot
+now** to bring it in early). Admit the bot like any participant; the transcript starts streaming
+to every workspace member.
+
+If the bot *didn't* appear, the meeting row says why — see
+[Troubleshooting](/troubleshooting#a-scheduled-meeting-didnt-auto-join).
+
+## 5. After the meeting
+
+The transcript lands on the **same meeting record** you planned — with the title and workspace
+binding intact. From here the usual post-meeting composition applies: run a
+[post-meeting report](/how-to/post-meeting-report) into the bound workspace, and the notes join
+the context the attendees already share.

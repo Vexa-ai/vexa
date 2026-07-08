@@ -29,7 +29,8 @@ mechanism, the redis scheduler.
 ## Delivery tracker
 
 The planned features, the [modules](/architecture/modules) each touches, and status. The
-core features are **⬜ planned**; Calendar is **deferred**. See [Identity](/core/identity) for the auth and
+core features are **⬜ planned**; planned meetings, auto-join, and ICS calendar sync are **✅ done**
+(OAuth calendars are **deferred**). See [Identity](/core/identity) for the auth and
 encryption detail.
 
 | Feature | Status | Module(s) it touches |
@@ -43,4 +44,6 @@ encryption detail.
 | **Bucket encryption** — per-workspace envelope encryption; keys brokered, decrypted only in-container | ⬜ planned | core/identity, core/agent (workspace.v1), core/runtime |
 | **Transcript encryption** — encrypt transcripts at rest in the meetings database (the SSOT); protect the redis carrier (auth/TLS/ACLs) | ⬜ planned | core/meetings, core/identity |
 | **User-token encryption** — store API tokens hashed/encrypted at rest, not cleartext | ⬜ planned | core/identity (admin-api) |
-| **Calendar** _(deferred)_ — calendar-driven auto-join | 🟦 deferred | core/runtime, core/meetings |
+| **Planned meetings + auto-join** — plan ahead (`POST /meetings`), one record plan→transcript, the bot joins scheduled meetings at start | ✅ done | core/meetings, core/gateway, clients/terminal |
+| **Calendar sync** — secret-ICS import → planned meetings, auto-join by default | ✅ done | core/meetings, core/identity, clients/terminal |
+| **Calendar (OAuth)** — Google/Microsoft OAuth calendars (two-way, invite-aware) | 🟦 deferred | core/identity, core/meetings |

@@ -39,8 +39,8 @@ them.
 
 <CardGroup cols={2}>
   <Card title="Meetings" icon="video" href="/core/meetings">
-    Capture, store, and access meetings — real-time transcripts from Google Meet, Zoom, and Teams. Usable
-    standalone as a meeting-capture API.
+    Plan, capture, and share meetings — calendar sync, auto-joining bots, real-time transcripts from
+    Google Meet, Zoom, and Teams. Usable standalone as a meeting API.
   </Card>
   <Card title="Agents" icon="robot" href="/core/agents">
     Sandboxed, scalable agents over your workspace. Put them to work on any knowledge — with or without
@@ -55,7 +55,7 @@ them.
     Self-host the full stack with one `make all`. Up in minutes on a single Linux host.
   </Card>
   <Card title="Concepts" icon="cube" href="/concepts">
-    The five primitives everything composes from — workspace, agent, container, identity, scheduler.
+    The primitives everything composes from — workspace, meeting, agent, container, identity, scheduler.
   </Card>
   <Card title="API reference" icon="code" href="/api/agent">
     Dispatch agents, stream meetings, manage routines over HTTP.
@@ -68,6 +68,7 @@ them.
 ## What it does
 
 - **Captures meetings natively** — real-time transcripts from [Google Meet, Zoom, and Teams](/core/meetings), no plugins or recorders. **Whisper included**.
+- **Meets you at your calendar** — [connect a secret ICS address](/how-to/calendar-sync) and upcoming meetings import automatically; the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start. [Plan a meeting](/how-to/plan-a-meeting) ahead and share its prep workspace with the people you're meeting.
 - **Turns knowledge into code** — meetings and emails become a living, Markdown [workspace](/concepts#workspace) that agents treat as their working directory.
 - **Runs agents safely** — every [agent](/core/agents) executes in an isolated, ephemeral [container](/concepts#container): no egress except through brokered tools, thousands in parallel, no lateral movement.
 - **Cloud-native deployment** — self-host the whole stack with [Docker Compose](/deployment) on a single Linux host.

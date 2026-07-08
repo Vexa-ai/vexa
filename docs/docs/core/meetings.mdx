@@ -1,41 +1,91 @@
 ---
 title: "Meetings"
-description: "A standalone service that captures, stores, and serves meeting data in real time — usable on its own or with agents."
+description: "A standalone service that plans, captures, stores, and serves meeting data in real time — usable on its own or with agents."
 ---
 
 **Meetings is a separate, self-contained service** — a detached domain with its own
-[API](/api/meetings). It does one job end to end: **capture, store, and access** meeting data, delivered
-in real time from the platforms. Run it entirely on its own as a meeting-capture backend — no agents
-required.
-
-A bot joins the call and captures it natively in real time; the transcript is stored and served over the
-API as it happens — live and historical, speaker-attributed, from
-[Google Meet, Zoom, and Teams](/api/meetings#platforms). That is the whole product on its own.
+[API](/api/meetings). It covers a meeting's **whole life**: plan it (or import it from your
+calendar), auto-join it when it starts, capture it natively in real time, and share it — the
+transcript stored and served over the API as it happens. Run it entirely on its own as a
+meeting-capture backend — no agents required.
 
 It also **composes** with the [agent domain](/core/agents) — the transcript becomes knowledge agents act
 on — but that is a composition, not a dependency: meetings stands alone. How the two connect (the
 `transcript.v1` → agent bridge) lives in one place: [Modules & seams](/architecture/modules).
 
-Mechanically, the bot is a **browser [container](/concepts#container) spawned by the
-[runtime](/core/runtime)** — the same runtime an agent runs in.
+## The lifecycle — one meeting, one row
 
-## Platforms
+A meeting is **one record from plan to transcript**. It is born in a user-owned *intent* status,
+is claimed by the bot lifecycle when the bot joins, and ends terminal — the plan's title, its
+workspace binding, and the eventual transcript all live together:
 
-Vexum joins natively, in real time, with no plugins or host configuration — the bot attends like any
-participant:
+| Phase | Statuses | Owned by |
+|---|---|---|
+| **Planned** | `idle` (no time) · `scheduled` (time set) | you — create/edit/delete freely |
+| **Live** | `requested → joining → awaiting_admission → active → stopping` | the bot lifecycle FSM |
+| **Done** | `completed` · `failed` | terminal |
 
-- [**Google Meet**](/api/meetings#platforms)
-- [**Zoom**](/api/meetings#platforms)
-- [**Microsoft Teams**](/api/meetings#platforms)
+Sending a bot to a planned meeting (manually or via auto-join) **upgrades the same record in
+place** — it is never duplicated, and a planned record can be edited or deleted only while it is
+still planned (the FSM is never fought).
 
-Drive it programmatically with the [**Meetings API**](/api/meetings) — send a bot, then stream the
-speaker-attributed (diarized) transcript.
+### Plan
+
+Create a meeting before it happens with [`POST /meetings`](/api/meetings#plan-a-meeting): a title,
+an optional start time, an optional meeting link (Meet/Zoom/Teams — parsed server-side), an
+optional [workspace](/concepts#workspace) binding. A plan without a link is fine — attach the link
+later; a plan without a time sits in `idle` until you schedule it.
+
+### Import — calendar sync
+
+Connect your calendar with its **secret ICS address** (Google Calendar and Outlook both provide
+one — see [Calendar sync](/how-to/calendar-sync)); no OAuth needed. A background sweep re-fetches
+the feed (default every 5 minutes) and upserts planned meetings:
+
+- **Only events with a recognizable meeting link** import — a dentist appointment is not a
+  joinable meeting.
+- **One meeting per calendar event, next occurrence only** — a weekly meeting reuses one link, so
+  the importer tracks the next upcoming occurrence; the following one imports after the current
+  completes.
+- Moves and cancellations follow the feed; a meeting the bot already joined is never touched.
+- A meeting you planned manually on the same link is **adopted** (linked to the calendar event),
+  not duplicated.
+
+### Auto-join — "scheduled" means the bot comes
+
+A `scheduled` meeting with a link is joined **automatically**: a sweep sends the bot shortly
+before the start time (default 60 s lead). Control it per meeting with the **auto-join toggle**
+(default on) and globally for imported meetings with the calendar's **auto-join switch**. Two
+guarantees:
+
+- **Never hours late** — a meeting whose start passed the grace window (default 10 min) is
+  skipped, not joined absurdly late.
+- **Failures are loud** — a concurrency-cap or spawn failure stamps a visible error on the
+  meeting (`auto_join_error`) instead of silently not showing up. See
+  [Troubleshooting](/troubleshooting#a-scheduled-meeting-didnt-auto-join).
+
+### Capture
+
+The bot joins natively, in real time, with no plugins or host configuration — it attends like any
+participant, on [**Google Meet**, **Zoom**, and **Microsoft Teams**](/api/meetings#platforms).
+Mechanically it is a **browser [container](/concepts#container) spawned by the
+[runtime](/core/runtime)** — the same runtime an agent runs in. The speaker-attributed (diarized)
+transcript streams live over the [API](/api/meetings) and WebSocket.
+
+### Share — workspaces carry the meeting
+
+Bind a meeting to a shared [workspace](/core/agents) and **every member of that workspace sees
+it**: the upcoming plan, the live transcript feed, and the finished transcript. That makes the
+prep workflow one motion — prepare context in a workspace, invite the people you're meeting, and
+the meeting itself rides along. See [Plan and share a meeting](/how-to/plan-a-meeting).
+(Independent one-off transcript share links exist too — no workspace required.)
 
 ## From transcript to knowledge
 
 1. The bot captures audio; transcription produces a real-time `transcript.v1` stream.
 2. The transcript compiles into the person's [workspace](/concepts#workspace) as Markdown.
 3. Agents read it like any other file — and act on it:
+   - **Before the meeting** — prepare a briefing in the bound workspace; attendees see it live.
    - **After the meeting** — a dispatch writes notes, decisions, and action items as workspace files.
    - **During the meeting** — a live dispatch surfaces proactive cards (new person, action item,
      decision); see [Meeting copilot](/how-to/live-copilot).

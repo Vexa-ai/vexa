@@ -184,6 +184,11 @@ Code: `git_credentials.py` (`set`/`read`/`masked_github_token`), `api.py`
 
 ## Live collaboration (during a meeting) — all ✅
 
+Meetings BIND to workspaces (`meetings.data.workspace_id`): a member of the bound workspace sees the
+meeting — the upcoming PLAN (planned meetings + auto-join + ICS calendar sync, 2026-07-08), the live
+feed, and the transcript. The user-facing story is `docs/docs/core/meetings.mdx` +
+`docs/docs/how-to/plan-a-meeting.mdx`; the prep tab is `clients/terminal/src/surfaces/meetingPrep.tsx`.
+
 A member's edits in a shared workspace surface live to the other members:
 
 - **One aggregated activity feed** — the SOURCE CONTROL panel merges commits across ALL active

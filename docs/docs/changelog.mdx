@@ -11,6 +11,17 @@ notable line and the migration notes between majors.
 
 0.12 reorganizes the backend around a single front door and server-derived identity.
 
+- **Planned meetings.** A meeting is now one record from plan to transcript: create it ahead with
+  `POST /meetings` (title, time, optional link, optional workspace binding), edit/delete while
+  planned, and the eventual bot spawn claims the same record. Members of a bound workspace see the
+  plan, the live feed, and the transcript. See [Meetings](/core/meetings) and
+  [Plan and share a meeting](/how-to/plan-a-meeting).
+- **Auto-join.** `scheduled` means the bot joins: a sweep sends the bot at start time (per-meeting
+  toggle, loud failures). See [the Meetings API](/api/meetings#auto-join).
+- **Calendar sync.** Paste a secret ICS address (`PUT /user/calendar`) and upcoming meetings with
+  Meet/Zoom/Teams links import as planned meetings — no OAuth. See
+  [Calendar sync](/how-to/calendar-sync).
+
 - **One gateway.** All public traffic enters through the gateway (`API_GATEWAY_HOST_PORT`, default
   `18056`); it carries authentication and per-route scopes and routes to the internal services.
 - **Server-derived identity.** The gateway resolves your `X-API-Key` → user and injects identity

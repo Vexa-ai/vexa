@@ -2,17 +2,26 @@
   "$schema": "https://mintlify.com/docs.json",
   "name": "Vexum",
   "theme": "mint",
-  "colors": { "primary": "#0d9488", "light": "#2dd4bf", "dark": "#0f766e" },
+  "colors": {
+    "primary": "#0d9488",
+    "light": "#2dd4bf",
+    "dark": "#0f766e"
+  },
   "navigation": {
     "groups": [
       {
         "group": "Start here",
-        "pages": ["index", "quickstart", "authentication"]
+        "pages": [
+          "index",
+          "quickstart",
+          "authentication"
+        ]
       },
       {
         "group": "How-to: Meetings",
         "pages": [
           "how-to/overview",
+          "how-to/calendar-sync",
           "how-to/send-a-bot",
           "how-to/stream-transcript",
           "how-to/recordings"
@@ -30,6 +39,7 @@
       {
         "group": "How-to: Meetings + agents",
         "pages": [
+          "how-to/plan-a-meeting",
           "how-to/live-copilot",
           "how-to/post-meeting-report"
         ]
@@ -45,7 +55,9 @@
       },
       {
         "group": "Concepts",
-        "pages": ["concepts"]
+        "pages": [
+          "concepts"
+        ]
       },
       {
         "group": "Architecture",
@@ -61,11 +73,21 @@
       },
       {
         "group": "API reference",
-        "pages": ["api/meetings", "api/agent", "api/errors"]
+        "pages": [
+          "api/meetings",
+          "api/agent",
+          "api/errors"
+        ]
       },
       {
         "group": "Deployment & operations",
-        "pages": ["deployment", "configuration", "troubleshooting", "sdks", "changelog"]
+        "pages": [
+          "deployment",
+          "configuration",
+          "troubleshooting",
+          "sdks",
+          "changelog"
+        ]
       },
       {
         "group": "Roadmap",
