@@ -73,11 +73,15 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
           </a>,
       );
     } else if (m[3]) {
-      // **bold** / __bold__
-      out.push(<strong key={`${key}-b${i}`} style={{ fontWeight: 600, color: "var(--t1)" }}>{tok.slice(2, -2)}</strong>);
+      // **bold** / __bold__ — recurse so **[[wikilink]]** renders the chip, not literal brackets
+      const inner: ReactNode[] = [];
+      emphasis(tok.slice(2, -2), `${key}-b${i}`, inner);
+      out.push(<strong key={`${key}-b${i}`} style={{ fontWeight: 600, color: "var(--t1)" }}>{inner}</strong>);
     } else if (m[4]) {
-      // *italic* / _italic_
-      out.push(<em key={`${key}-i${i}`} style={{ fontStyle: "italic" }}>{tok.slice(1, -1)}</em>);
+      // *italic* / _italic_ — recurse for the same reason
+      const innerI: ReactNode[] = [];
+      emphasis(tok.slice(1, -1), `${key}-i${i}`, innerI);
+      out.push(<em key={`${key}-i${i}`} style={{ fontStyle: "italic" }}>{innerI}</em>);
     }
     last = re.lastIndex;
     i++;

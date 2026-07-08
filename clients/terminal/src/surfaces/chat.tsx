@@ -21,10 +21,15 @@ import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARD
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string): Op {
   const t = tool.toLowerCase();
-  const icon = /read|cat|open/.test(t) ? opIcon.read : /search|grep|find/.test(t) ? opIcon.search
-    : /edit|write|append/.test(t) ? opIcon.edit : /git|commit/.test(t) ? opIcon.git
-    : /web|fetch|http/.test(t) ? opIcon.web : opIcon.tool;
-  return { icon, label: tool, status: "done" };
+  // verb-first labels: the op line reads as what the agent is DOING, not an internal tool name
+  const [icon, verb] = /read|cat|open/.test(t) ? [opIcon.read, "Reading"]
+    : /glob|search|grep|find|ls\b/.test(t) ? [opIcon.search, "Searching"]
+    : /edit|write|append/.test(t) ? [opIcon.edit, "Writing"]
+    : /git|commit/.test(t) ? [opIcon.git, "Committing"]
+    : /web|fetch|http/.test(t) ? [opIcon.web, "Browsing"]
+    : /bash|exec|run/.test(t) ? [opIcon.tool, "Running"]
+    : [opIcon.tool, tool];
+  return { icon, label: verb === tool ? tool : `${verb} · ${tool}`, status: "done" };
 }
 
 /** the backend history turn shape (GET /api/sessions/:session/history) */
@@ -89,8 +94,9 @@ function patchAgentTurn(key: string, agentId: string, fn: (turn: AgentTurn) => A
 }
 
 /** map a backend op label (read/search/edit/git/web/tool) to a frontend Op (icon from opIcon) */
+const OP_VERB: Record<string, string> = { read: "Reading", search: "Searching", edit: "Writing", git: "Committing", web: "Browsing", tool: "Working" };
 function historyOp(op: { label: string }): Op {
-  return { icon: opIcon[op.label] ?? opIcon.tool, label: op.label, status: "done" };
+  return { icon: opIcon[op.label] ?? opIcon.tool, label: OP_VERB[op.label] ?? op.label, status: "done" };
 }
 
 type ReferenceToken = { kind: "file" | "meeting"; value: string; raw: string };
@@ -177,8 +183,38 @@ function meetingTokenFromTitle(title: string): ReferenceToken {
   return { kind: "meeting", value, raw: `@meeting:${value}` };
 }
 
+// Server-side grounding preambles (kg-links, mount stack, meeting phase, schedule digest,
+// workspace focus) are PART of the stored prompt — plumbing, not something the user typed.
+// Each known block is stripped start→terminator so history shows only the user's words
+// (fail-soft: an unrecognized shape renders untouched). Mirrors worker/engine.py + meeting_steering.py.
+const CONTEXT_BLOCKS: Array<[RegExp, RegExp]> = [
+  [/^## Referencing knowledge \(always\)/, /or use plain text\.\s*/],
+  [/^## Your mounted workspaces/, /do not guess or invent mount paths\.\s*/],
+  [/^<schedule>/, /<\/schedule>\s*/],
+  [/^The user's meeting schedule is in <schedule>/, /notes files or ask\.\s*/],
+  [/^You are assisting in a live meeting/, /(?:<\/transcript>\s*|no transcript yet\.\s*)/],
+  [/^You are helping the user PREPARE/, /don't have prior context\.\s*/],
+  [/^The meeting "/, /(?:<\/transcript>\s*|invent its content\.\s*)/],
+  [/^The user is looking at the workspace/, /(?:<\/readme>\s*|context is missing\.\s*)/],
+];
+
+export function stripContextBlocks(raw: string): string {
+  let text = raw;
+  let guard = 0;
+  outer: while (guard++ < 12) {
+    for (const [start, end] of CONTEXT_BLOCKS) {
+      if (start.test(text)) {
+        const m = end.exec(text);
+        if (m) { text = text.slice(m.index + m[0].length).trimStart(); continue outer; }
+      }
+    }
+    break;
+  }
+  return text === raw ? raw : (text.trim() || raw);
+}
+
 function compactStoredUserText(text: string): string {
-  const raw = text.trim();
+  const raw = stripContextBlocks(text.trim());
   // An onboarding first reply is stored as `<grounding>[reply]<user text>` — show only the user's text.
   if (raw.includes(ONBOARDING_KICKOFF_MARK)) {
     const i = raw.indexOf(ONBOARDING_REPLY_SEP);
