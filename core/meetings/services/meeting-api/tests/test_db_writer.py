@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from meeting_api.collector import consume_segments
 from meeting_api.collector.db_writer import (
     ACTIVE_MEETINGS_KEY,
+    PROC_PENDING_KEY,
     PROC_VIEW_ID,
     db_writer_tick,
     finalize_meeting,
@@ -331,6 +332,61 @@ async def test_db_writer_tick_also_drains_processed_notes(store, bus, redis_c):
 
     await db_writer_tick(redis_c, store, now=LATER)
     assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Cleaned mid-meeting."]
+
+
+# ── the end-of-processing protocol (ADR 0027 / processed-notes.v1 view_end) ─────────────────────
+# The copilot's final beat lands ~10s AFTER session_end, i.e. AFTER finalize_meeting's inline drain
+# — and the meeting then leaves the tick's sweep, so those notes were stranded in redis forever
+# (run-46: durable cursor froze below the stream tail). The protocol: finalize PARKS an
+# incomplete meeting in `processed_pending`; the tick re-drains it until the worker's `view_end`
+# marker is drained-through (or a bounded deadline passes — the dead-worker guarantee).
+
+async def _pending_ids(redis_c):
+    return [m.decode() if isinstance(m, bytes) else m
+            for m in await redis_c.zrange(PROC_PENDING_KEY, 0, -1)]
+
+
+async def test_late_final_beat_notes_land_after_finalize_via_view_end(store, redis_c):
+    """The run-46 regression: notes written AFTER the completion flush reach the durable row on the
+    next tick, and the parking clears exactly when the view_end marker is drained-through."""
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Mid-meeting note."))})
+    await finalize_meeting(redis_c, store, 1)
+    assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Mid-meeting note."]
+    assert await _pending_ids(redis_c) == ["1"]        # no marker yet → parked, not forgotten
+
+    # The final post-session_end beat lands AFTER the finalize drain — then the marker.
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Final polished note."))})
+    marker_id = await redis_c.xadd(proc_stream_key(1), {"type": "view_end", "cursor": "9-0"})
+
+    await db_writer_tick(redis_c, store, now=LATER)
+    view = _view(store, 1)
+    assert [n["text"] for n in view["doc"]["notes"]] == ["Final polished note."]  # upgraded in place
+    assert view["source_cursor"] == (marker_id.decode() if isinstance(marker_id, bytes) else marker_id)
+    assert await _pending_ids(redis_c) == []           # drained-through the marker → unparked
+
+
+async def test_finalize_already_marker_complete_does_not_park(store, redis_c):
+    """A worker that finished BEFORE the terminal callback (marker already on the stream): the
+    finalize drain goes through the marker in one pass — nothing parks."""
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Done early."))})
+    await redis_c.xadd(proc_stream_key(1), {"type": "view_end"})
+
+    await finalize_meeting(redis_c, store, 1)
+    assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Done early."]
+    assert await _pending_ids(redis_c) == []
+
+
+async def test_pending_redrain_gives_up_at_deadline_keeping_what_arrived(store, redis_c):
+    """A worker that died markerless: the parking expires at its deadline (bounded, P22's hard
+    guarantee) — everything that DID arrive is durable, the zset never grows unbounded."""
+    await redis_c.xadd(proc_stream_key(1), {"note": json.dumps(_note("s1", "Only note."))})
+    await finalize_meeting(redis_c, store, 1)
+    assert await _pending_ids(redis_c) == ["1"]
+
+    past_deadline = datetime.now(timezone.utc) + timedelta(seconds=600)  # > PROC_PENDING_GRACE_SEC
+    await db_writer_tick(redis_c, store, now=past_deadline)
+    assert await _pending_ids(redis_c) == []                             # gave up, loudly (logged)
+    assert [n["text"] for n in _view(store, 1)["doc"]["notes"]] == ["Only note."]  # kept
 
 
 # ── the REST surface, during AND after (DoD 8): api.v1 responses, both phases ───────────────────

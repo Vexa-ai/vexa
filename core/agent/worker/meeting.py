@@ -537,6 +537,17 @@ def serve_meeting(
                         n += 1
                         _run_beat(mutable, n)
                     _persist_envelope()  # final durable render source (notes + accumulated cards)
+                    # processed-notes.v1 ``view_end`` (ADR 0027): the stream is COMPLETE here — the
+                    # final beat has run and every note is emitted. The db-writer flushes the durable
+                    # view ON this marker (its bounded deadline covers a worker that dies without one);
+                    # the live SSE closes on it. Emitted BEFORE the doc turn (30s+ of LLM the durable
+                    # flush must not wait on) and regardless of ``enabled`` (baseline notes flow even
+                    # with live beats off — the emit gate is proc_stream, same as _emit_proc_note's).
+                    if proc_stream:
+                        end_marker: dict = {"type": "view_end"}
+                        if last and last != "0":
+                            end_marker["cursor"] = str(last)
+                        stream.xadd(proc_stream, end_marker)
                     if doc_turn is not None:  # post-meeting WRITE: author/update the kg meeting entity
                         _emit_turn(stream, out_topic, lambda: doc_turn(cards), "meeting-doc")
                     return  # meeting ended → reap

@@ -63,6 +63,17 @@ log = logging.getLogger("meeting_api.collector.db_writer")
 ACTIVE_MEETINGS_KEY = "active_meetings"
 IMMUTABILITY_THRESHOLD = float(os.environ.get("IMMUTABILITY_THRESHOLD", "30"))
 
+# ── the end-of-processing protocol (ADR 0027 / processed-notes.v1) ────────────────────────────────
+# The copilot worker runs one final LLM beat AFTER session_end (~10s), then XADDs a `view_end`
+# marker: the proc stream is COMPLETE at that entry. finalize_meeting's inline drain used to be the
+# LAST drain ever (the meeting then left this writer's sweep), so the final beat's notes stayed in
+# redis forever (run-46: durable cursor 1783512746260-0 < stream tail 1783512757882-0). Now a
+# finalized meeting whose stream is not yet marker-complete PARKS in `processed_pending` (zset,
+# score = deadline) and every tick re-drains it until the marker is seen — or the deadline passes
+# (the P22 pairing: graceful marker, hard bounded guarantee for a worker that died markerless).
+PROC_PENDING_KEY = "processed_pending"
+PROC_PENDING_GRACE_SEC = float(os.environ.get("PROC_PENDING_GRACE_SEC", "120"))
+
 # The one processed view the collector maintains today: the copilot's 1:1 cleaned transcript.
 # Addressable by id inside data.processed.views[] so future processings (per-workspace views,
 # summaries, translations) ADD views instead of overwriting this one.
@@ -215,6 +226,26 @@ async def flush_meeting_processed(redis_c, sink, meeting_id: int) -> int:
     return len(notes)
 
 
+async def _processed_complete(redis_c, sink, meeting_id: int) -> bool:
+    """Whether the meeting's processed stream is DRAINED THROUGH its ``view_end`` marker: the
+    stream's last entry is the marker AND the persisted view cursor sits exactly on it. A sink
+    that can't persist views has nothing to wait for (vacuously complete)."""
+    cursor_of = getattr(sink, "processed_view_cursor", None)
+    if cursor_of is None:
+        return True
+    try:
+        rows = await redis_c.xrevrange(proc_stream_key(meeting_id), max="+", min="-", count=1)
+    except Exception:  # noqa: BLE001 — unreadable stream ⇒ not provably complete
+        return False
+    if not rows:
+        return False  # nothing written (yet) — a just-armed copilot may still deliver
+    entry_id, fields = rows[0]
+    decoded = {_s(k): _s(v) for k, v in fields.items()}
+    if decoded.get("type") != "view_end":
+        return False
+    return await cursor_of(meeting_id, PROC_VIEW_ID) == _s(entry_id)
+
+
 async def db_writer_tick(
     redis_c,
     sink,
@@ -253,6 +284,38 @@ async def db_writer_tick(
             await flush_meeting_processed(redis_c, sink, meeting_id)
         except Exception:  # noqa: BLE001 — isolate per meeting; the next tick retries
             log.exception("db-writer flush failed for meeting %s", raw_id)
+
+    # Finalized-but-incomplete processed streams (ADR 0027): re-drain each parked meeting until its
+    # view_end marker is drained-through, or its deadline passes. These meetings have LEFT the sweep
+    # above (hash drained, out of active_meetings) — without this pass the final beat's notes would
+    # never reach the durable row.
+    try:
+        pending = await redis_c.zrange(PROC_PENDING_KEY, 0, -1, withscores=True)
+    except Exception:  # noqa: BLE001 — the pending pass is additive; never break the main sweep
+        pending = []
+    now_ts = (now or datetime.now(timezone.utc)).timestamp()
+    for member, deadline in pending or []:
+        raw_id = _s(member)
+        try:
+            meeting_id = int(raw_id)
+        except (TypeError, ValueError):
+            await redis_c.zrem(PROC_PENDING_KEY, member)
+            continue
+        try:
+            await flush_meeting_processed(redis_c, sink, meeting_id)
+            if await _processed_complete(redis_c, sink, meeting_id):
+                await redis_c.zrem(PROC_PENDING_KEY, raw_id)
+            elif now_ts >= float(deadline):
+                # P18: the give-up is a reportable state, not silence — everything that DID arrive
+                # was flushed above; what never arrived is attributed to the worker, loudly.
+                log.warning(
+                    "processed view for meeting %s never saw view_end within %ss — "
+                    "flushed what arrived, giving up the pending re-drain",
+                    raw_id, PROC_PENDING_GRACE_SEC,
+                )
+                await redis_c.zrem(PROC_PENDING_KEY, raw_id)
+        except Exception:  # noqa: BLE001 — isolate per meeting; the next tick retries
+            log.exception("pending processed re-drain failed for meeting %s", raw_id)
     return total
 
 
@@ -260,7 +323,18 @@ async def finalize_meeting(redis_c, sink, meeting_id: int) -> int:
     """The COMPLETION flush — called by the lifecycle callback the moment a meeting reaches a
     terminal status (completed/failed): flush EVERYTHING still in the hash (threshold 0 — the
     mutable tail and trailing drafts included; no more updates are coming) and drain the processed
-    notes, so the finished meeting's transcript + processed doc are durable IMMEDIATELY."""
+    notes, so the finished meeting's transcript + processed doc are durable IMMEDIATELY.
+
+    The processed stream is NOT necessarily complete here — the copilot's final beat runs ~10s
+    AFTER session_end (ADR 0027). Unless the ``view_end`` marker is already drained-through, the
+    meeting PARKS in ``processed_pending``; ``db_writer_tick`` keeps re-draining it until the
+    marker (or the bounded deadline). Never processed ⇒ the deadline simply expires the parking."""
     stored = await flush_meeting_segments(redis_c, sink, meeting_id, immutability_threshold=0)
     await flush_meeting_processed(redis_c, sink, meeting_id)
+    if not await _processed_complete(redis_c, sink, meeting_id):
+        try:
+            deadline = datetime.now(timezone.utc).timestamp() + PROC_PENDING_GRACE_SEC
+            await redis_c.zadd(PROC_PENDING_KEY, {str(meeting_id): deadline})
+        except Exception:  # noqa: BLE001 — parking is the safety net, never fail the finalize
+            log.exception("could not park meeting %s for the pending processed re-drain", meeting_id)
     return stored

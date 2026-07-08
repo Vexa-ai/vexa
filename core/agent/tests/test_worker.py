@@ -287,6 +287,62 @@ def test_serve_meeting_persists_and_advances_cursor():
     assert s.kv["proc:meeting:m1:cursor"] == "6-0"  # advanced to the last cleaned raw entry
 
 
+def _proc_markers(s, proc_stream):
+    return [f for name, f in s.out if name == proc_stream and f.get("type") == "view_end"]
+
+
+def test_session_end_emits_view_end_marker_after_final_beat_notes():
+    """processed-notes.v1 / ADR 0027: session_end → the final beat's notes land on the proc stream,
+    THEN exactly one view_end marker (with the last raw stream id as its auditable cursor). Consumers
+    flush/close on the marker instead of racing the final beat."""
+    s = ProcMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "um so yeah"), "segment_id": "a"}),
+        ("2-0", {"payload": json.dumps({"type": "session_end"})}),
+    ])
+    serve_meeting(
+        s, transcript_stream="tc:m1", out_topic="o", card_turn=_notes_card_turn,
+        idle_ms=10, proc_stream="proc:meeting:m1", cursor_key="proc:meeting:m1:cursor",
+    )
+    proc_entries = [(name, f) for name, f in s.out if name == "proc:meeting:m1"]
+    markers = _proc_markers(s, "proc:meeting:m1")
+    assert len(markers) == 1
+    assert markers[0]["cursor"] == "2-0"                      # the session_end entry id — auditable
+    assert proc_entries[-1][1].get("type") == "view_end"      # the marker is the stream's LAST entry
+    # the final beat's upgrade note for segment "a" was emitted BEFORE the marker
+    assert any(n["id"] == "a" and n["pass"] == 1 for n in s.proc_notes("proc:meeting:m1"))
+
+
+def test_view_end_emitted_even_with_live_beats_disabled():
+    """The marker gates on proc_stream (like the baseline notes), NOT on `enabled` — a processing-off
+    stream still completes, so the durable flush never waits for a beat that will never run."""
+    s = ProcMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "hello"), "segment_id": "a"}),
+        ("2-0", {"payload": json.dumps({"type": "session_end"})}),
+    ])
+    serve_meeting(
+        s, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn,
+        idle_ms=10, enabled=False, proc_stream="proc:meeting:m1", cursor_key="proc:meeting:m1:cursor",
+    )
+    assert len(_proc_markers(s, "proc:meeting:m1")) == 1
+
+
+def test_no_view_end_on_idle_exit_or_without_proc_stream():
+    """An idle-timeout exit is NOT completion — no marker (the consumer's deadline covers a dead
+    worker, ADR 0027's hard guarantee). And with proc_stream unset nothing is emitted anywhere."""
+    idle = ProcMeetingStream(inbox=[
+        _transcript("1-0", {**_seg("Jane", "hi"), "segment_id": "a"}),
+    ])  # inbox drains with NO session_end → the serve loop idles out
+    serve_meeting(
+        idle, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn,
+        idle_ms=10, proc_stream="proc:meeting:m1", cursor_key="proc:meeting:m1:cursor",
+    )
+    assert _proc_markers(idle, "proc:meeting:m1") == []
+
+    bare = MeetingStream(inbox=[("2-0", {"payload": json.dumps({"type": "session_end"})})])
+    serve_meeting(bare, transcript_stream="tc:m1", out_topic="o", card_turn=_card_turn, idle_ms=10)
+    assert all(not (isinstance(f, dict) and f.get("type") == "view_end") for _n, f in bare.out)
+
+
 def test_serve_meeting_upgrades_proc_note_text_from_llm_rewrite():
     """A valid LLM note for a segment UPGRADES its cleaned text on the proc stream (still 1:1 by id)."""
     s = ProcMeetingStream(inbox=[
