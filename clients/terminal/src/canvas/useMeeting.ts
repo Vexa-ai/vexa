@@ -267,10 +267,28 @@ function knownDoc(docs: { path?: string; title?: string; kind?: string; present?
   };
 }
 
-// Bug-3 finalizer-flush retry budget: after a meeting finalizes, the durable `data.processed`
-// can lag by a beat. Retry the durable fetch a few times, briefly, ONLY when live had notes.
-const DURABLE_REFETCH_ATTEMPTS = 5;
-const DURABLE_REFETCH_DELAY_MS = 600;
+// Durable catch-up budget (ADR-0027): after a stop, the durable `data.processed` completes only
+// once the copilot's final beat lands and the db-writer drains through the `view_end` marker —
+// up to ~2 ticks (≤20s) behind the FSM's terminal flip. Retry the durable fetch, bounded, while
+// it still holds FEWER notes than the live view already showed (never while genuinely empty-live).
+export const DURABLE_REFETCH_ATTEMPTS = 10;
+export const DURABLE_REFETCH_DELAY_MS = 2000;
+
+/** ADR-0027 / P21 — the live-subscription uid, PINNED across the row's terminal flip. The list
+ *  row's live flag is INTENT (it clears the moment the FSM stops); the stream's own `meeting-end`
+ *  (sent only after the worker's view_end marker) is the EVIDENCE the subscription releases on.
+ *  Without the pin, the stop transition changed the subscription key, which silently swapped the
+ *  hook onto a fresh empty store — every live note vanished from the pane at the exact moment the
+ *  final beat was still arriving, and a one-shot durable fetch raced the marker drain: the
+ *  "processed notes disappear on stop" defect every earlier view-layer patch worked around.
+ *  Single-slot memory: switching to another meeting drops the pin (a completed meeting re-opened
+ *  later hydrates from the durable row, which the marker protocol guarantees complete). */
+export function pinSubscriptionUid(
+  mem: { id: string; uid: string }, id: string, sessionUid: string | undefined,
+): { id: string; uid: string } {
+  if (sessionUid) return { id, uid: sessionUid };
+  return mem.id === id ? mem : { id: "", uid: "" };
+}
 
 function useLiveMeetingState(meetingId?: string): MeetingState {
   const contextMeetingId = useContext(MeetingScopeContext);
@@ -280,7 +298,11 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     () => scopedMeetingId ? resolveMeeting(meetings, scopedMeetingId) : pickMeeting(meetings),
     [meetings, scopedMeetingId],
   );
-  const live = useMeetingLive(selected.id, selected.session_uid ?? "");
+  // Subscribe by the PINNED uid — the connection outlives the row's terminal flip and ends when
+  // the SERVER ends it (`meeting-end` → the store self-closes; state survives in the module map).
+  const pinRef = useRef({ id: "", uid: "" });
+  pinRef.current = pinSubscriptionUid(pinRef.current, selected.id, selected.session_uid);
+  const live = useMeetingLive(selected.id, pinRef.current.uid);
   const actions = useCanvasActionState();
   const [durable, setDurable] = useState<DurableTranscript>({ lines: [], notes: [] });
   // The count of live copilot notes seen this session — read (not depended-on) inside the durable
@@ -295,13 +317,13 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   // it seeds notes already persisted before this client connected (page opened mid-meeting), with
   // live deltas merged over the seed by note id.
   //
-  // P0 Bug-3 (stop-refetch timing): this effect must re-run BOTH when `session_uid` clears (stop) AND
-  // when the effective status transitions to a TERMINAL state (completed/failed/stopped) — the durable
-  // `data.processed` is persisted by the finalizer only once the FSM reaches a terminal status, which
-  // lands DURING the "stopping" window AFTER `session_uid` already cleared. Keying only on `session_uid`
-  // fetched the still-empty row and never refetched. So `effStatus` (live_status ?? status) is a dep,
-  // and on a terminal status we short-retry when durable came back EMPTY but live HAD notes
-  // (finalizer-flush latency) so the pane ends up SHOWING the notes rather than stuck-empty.
+  // Stop-refetch timing (ADR-0027): this effect re-runs when `session_uid` clears (stop), when the
+  // effective status transitions to TERMINAL, AND when the STREAM itself reports ended (`live.ended`
+  // — the evidence signal, fired only after the worker's view_end marker reached the SSE). The
+  // durable `data.processed` completes ≤ ~2 db-writer ticks after that marker, so on any of those
+  // signals we retry, bounded, while the durable view still trails what the pane already saw live —
+  // the pinned live notes keep rendering meanwhile (mergeNotesById merges live OVER durable), so
+  // the pane never blanks and converges on the complete durable doc.
   const effStatus = selected.live_status ?? selected.status;
   useEffect(() => {
     setDurable({ lines: [], notes: [] });
@@ -318,18 +340,18 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       void fetchDurableTranscript(rowId).then((next) => {
         if (cancelled) return;
         setDurable(next);
-        // Finalizer-flush latency: on the terminal transition the durable row can still be EMPTY for a
-        // beat even though the copilot produced notes live. Retry briefly (bounded) so the persisted
-        // processed notes surface instead of leaving the pane stuck-empty after stop.
-        const empty = (next.notes?.length ?? 0) === 0 && (next.lines?.length ?? 0) === 0;
-        if (terminal && empty && liveNotesRef.current > 0 && attempt < DURABLE_REFETCH_ATTEMPTS) {
+        // Marker-drain latency: after a stop the durable row trails the live view until the
+        // db-writer drains through view_end. Retry (bounded) while durable holds FEWER notes than
+        // live showed — an untouched-by-copilot meeting (0 live notes) never retries.
+        const behind = (next.notes?.length ?? 0) < liveNotesRef.current;
+        if ((terminal || live.ended) && behind && attempt < DURABLE_REFETCH_ATTEMPTS) {
           retry = setTimeout(() => { if (!cancelled) load(attempt + 1); }, DURABLE_REFETCH_DELAY_MS);
         }
       });
     };
     load(0);
     return () => { cancelled = true; if (retry) clearTimeout(retry); };
-  }, [selected.id, selected.native_id, selected.platform, selected.session_uid, effStatus]);
+  }, [selected.id, selected.native_id, selected.platform, selected.session_uid, effStatus, live.ended]);
 
   return useMemo(() => {
     const participants = safeArray(selected.participants);

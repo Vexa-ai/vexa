@@ -1,12 +1,11 @@
-/** Bug-3 stop-refetch bounded-retry loop (useLiveMeetingState in useMeeting.ts).
+/** Durable catch-up bounded-retry loop (useLiveMeetingState in useMeeting.ts, ADR-0027).
  *
- *  The reviewer's non-blocking gap: processedNotesHydration.test.ts pins fetchDurableTranscript's URL
- *  but nothing exercised the BOUNDED-RETRY logic — the bug-prone part. After a meeting finalizes, the
- *  durable `data.processed` can lag, so on the terminal transition the hook refetches by ROW id, up to
- *  DURABLE_REFETCH_ATTEMPTS(5) times, DURABLE_REFETCH_DELAY_MS(600) apart, ONLY while
- *  (terminal && durable-empty && liveNotesRef>0), and the loop is cancel-guarded on unmount. These
- *  tests pin: (a) it retries at most 5× (bounded — never hammers), (b) it STOPS the instant durable
- *  comes back non-empty, (c) unmount cancels the pending retry (no post-unmount setState/fetch).
+ *  After a stop, the durable `data.processed` completes only once the db-writer drains through the
+ *  worker's view_end marker (≤ ~2 ticks). On the terminal/ended transition the hook refetches by
+ *  ROW id, up to DURABLE_REFETCH_ATTEMPTS times, DURABLE_REFETCH_DELAY_MS apart, ONLY while the
+ *  durable view holds FEWER notes than the pane already saw live, cancel-guarded on unmount.
+ *  These tests pin: (a) the retry is bounded (never hammers), (b) it STOPS the instant durable
+ *  catches up with the live count, (c) unmount cancels the pending retry.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, cleanup } from "@testing-library/react";
@@ -28,7 +27,7 @@ vi.mock("../../surfaces/meetingLive", () => ({
 }));
 vi.mock("../actions", () => ({ useCanvasActionState: () => ({}) }));
 
-import { MeetingSourceProvider } from "../useMeeting";
+import { DURABLE_REFETCH_ATTEMPTS, DURABLE_REFETCH_DELAY_MS, MeetingSourceProvider } from "../useMeeting";
 
 const EMPTY_DURABLE = { lines: [], notes: [] };
 
@@ -56,18 +55,18 @@ afterEach(() => {
 });
 
 describe("useLiveMeetingState durable stop-refetch", () => {
-  it("retries the durable fetch at most DURABLE_REFETCH_ATTEMPTS(5) times, 600ms apart, then stops", async () => {
+  it("retries the durable fetch at most DURABLE_REFETCH_ATTEMPTS times, then stops", async () => {
     terminalMeetingWithLiveNotes();
-    fetchDurableTranscript.mockResolvedValue(EMPTY_DURABLE); // durable stays empty → keep retrying, bounded
+    fetchDurableTranscript.mockResolvedValue(EMPTY_DURABLE); // durable stays behind live → keep retrying, bounded
 
     renderHook(() => null, { wrapper });
 
-    // Initial load(0), then up to 5 scheduled retries. Flush each 600ms tick + its awaited fetch.
-    for (let i = 0; i < 8; i++) {
-      await vi.advanceTimersByTimeAsync(600);
+    // Initial load(0), then up to DURABLE_REFETCH_ATTEMPTS scheduled retries. Flush each tick + fetch.
+    for (let i = 0; i < DURABLE_REFETCH_ATTEMPTS + 3; i++) {
+      await vi.advanceTimersByTimeAsync(DURABLE_REFETCH_DELAY_MS);
     }
-    // load(0) + attempts 1..5 = 6 fetches total; the 5th retry's callback does NOT schedule a 6th.
-    expect(fetchDurableTranscript).toHaveBeenCalledTimes(6);
+    // load(0) + all attempts; the last retry's callback does NOT schedule another.
+    expect(fetchDurableTranscript).toHaveBeenCalledTimes(DURABLE_REFETCH_ATTEMPTS + 1);
     expect(fetchDurableTranscript).toHaveBeenLastCalledWith("42");
   });
 
@@ -79,7 +78,7 @@ describe("useLiveMeetingState durable stop-refetch", () => {
       .mockResolvedValue(EMPTY_DURABLE);
 
     renderHook(() => null, { wrapper });
-    for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(600);
+    for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(DURABLE_REFETCH_DELAY_MS);
 
     expect(fetchDurableTranscript).toHaveBeenCalledTimes(2); // no further retries after notes arrived
   });
@@ -92,7 +91,7 @@ describe("useLiveMeetingState durable stop-refetch", () => {
     await vi.advanceTimersByTimeAsync(0);   // resolve load(0), schedule retry 1
     expect(fetchDurableTranscript).toHaveBeenCalledTimes(1);
     unmount();                               // cancelled = true; clearTimeout(retry)
-    await vi.advanceTimersByTimeAsync(600 * 6);
+    await vi.advanceTimersByTimeAsync(DURABLE_REFETCH_DELAY_MS * 6);
     expect(fetchDurableTranscript).toHaveBeenCalledTimes(1); // the cancelled retry never fired
   });
 });
