@@ -74,8 +74,8 @@ function DiffView({ text }: { text: string }) {
       {text.split("\n").map((line, i) => {
         const h = line[0];
         const meta = line.startsWith("@@") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ");
-        const color = meta ? "var(--accent)" : h === "+" ? "var(--green)" : h === "-" ? "var(--live)" : "var(--t3)";
-        const bg = !meta && h === "+" ? "color-mix(in srgb, var(--green) 14%, transparent)" : !meta && h === "-" ? "color-mix(in srgb, var(--live) 14%, transparent)" : "transparent";
+        const color = meta ? "var(--accent)" : h === "+" ? "var(--green)" : h === "-" ? "var(--danger)" : "var(--t3)";
+        const bg = !meta && h === "+" ? "color-mix(in srgb, var(--green) 14%, transparent)" : !meta && h === "-" ? "color-mix(in srgb, var(--danger) 14%, transparent)" : "transparent";
         return <div key={i} style={{ color, background: bg, padding: "0 3px" }}>{line || " "}</div>;
       })}
     </pre>
@@ -226,7 +226,7 @@ function MountSection({ mount }: { mount: ActiveMount }) {
         )}
       </div>
       {open && (<>
-        {error && <div role="alert" style={{ margin: "0 8px 6px", fontSize: 11.5, color: "var(--live)" }}>⚠ {error}</div>}
+        {error && <div role="alert" style={{ margin: "0 8px 6px", fontSize: 11.5, color: "var(--danger)" }}>⚠ {error}</div>}
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggleDir}
           openFile={openDoc} pinFile={pinDoc} openMenu={() => {}} />)}
         {!error && tree.length === 0 && <div style={{ padding: "3px 12px", color: "var(--t3)", fontSize: 12 }}>Empty.</div>}
@@ -398,7 +398,7 @@ function FilesList() {
           style={{ width: "100%", boxSizing: "border-box", fontSize: 12.5, padding: "5px 8px 5px 26px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t1)", outline: "none" }}
         />
       </div>
-      {error && <div role="alert" style={{ margin: "0 8px 8px", fontSize: 12, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 10px" }}>⚠ Couldn’t load the workspace — {error}</div>}
+      {error && <div role="alert" style={{ margin: "0 8px 8px", fontSize: 12, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 10px" }}>⚠ Couldn’t load the workspace — {error}</div>}
       {q ? (<>
         {matches.map((h) => (
           <div key={(h.slug || "") + ":" + h.p} onClick={() => layout.openPreview(docTab(h.p, h.slug))} onDoubleClick={() => layout.openTab(docTab(h.p, h.slug))} onContextMenu={(e) => openMenu(e, h.p)}
@@ -598,7 +598,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         <Icon name="folder" size={12} />workspaces
       </div>
       {open && (<>
-        {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ {err}</div>}
+        {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
           // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
           // into the agent turn, UNCHECKED = AVAILABLE (parked, check to mount). Multiple rows can be checked
@@ -677,7 +677,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                     onKeyDown={(e) => { if (e.key === "Enter") submit(); }} style={field} />
                   <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
                     <button disabled={busy || !form.repo.trim()} onClick={submit}
-                      style={{ fontSize: 13, padding: "8px 16px", background: "var(--accent)", color: "#1a1200", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
+                      style={{ fontSize: 13, padding: "8px 16px", background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
                     <button disabled={busy} onClick={() => setForm(null)} style={{ fontSize: 13, padding: "8px 16px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
                   </div>
                 </div>
@@ -849,7 +849,7 @@ function GitSection() {
         <Icon name="zap" size={12} />source control
         {git.branch && <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", color: "var(--t2)", textTransform: "none" }}>{git.branch}</span>}
       </div>
-      {open && gitError && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--live)" }}>⚠ git unavailable — {gitError}</div>}
+      {open && gitError && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ git unavailable — {gitError}</div>}
       {!open || gitError ? null : (!git.branch && feed.length === 0) ? (
         <div style={{ padding: "2px 9px", fontSize: 12, color: "var(--t3)" }}>Not a repo yet.</div>
       ) : (<>

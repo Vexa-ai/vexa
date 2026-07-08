@@ -103,7 +103,7 @@ function FailureNotice({ failure, onDismiss }: { failure: CanvasFailure; onDismi
       style={{ border: "1px solid var(--line2)", background: "var(--panel)", borderRadius: 8, padding: "8px 10px", marginBottom: 10, color: "var(--t2)", fontSize: 12, minWidth: 0 }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--live)", flex: "none" }} />
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--danger)", flex: "none" }} />
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>View update failed; keeping previous</span>
         <button type="button" onClick={() => setOpen((next) => !next)} style={{ border: "none", background: "transparent", color: "var(--accent)", fontSize: 12, cursor: "pointer", padding: 0 }}>{open ? "Hide" : "Details"}</button>
         <button type="button" onClick={onDismiss} style={{ border: "none", background: "transparent", color: "var(--t3)", fontSize: 12, cursor: "pointer", padding: 0 }}>Dismiss</button>

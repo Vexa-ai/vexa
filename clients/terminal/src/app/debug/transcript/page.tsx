@@ -78,17 +78,17 @@ export default function TranscriptDebug() {
 
   const mono: React.CSSProperties = { fontFamily: "monospace", fontSize: 12 };
   if (!mounted) {
-    return <div style={{ padding: 20, ...mono, color: "#888", background: "var(--bg, #111)", minHeight: "100vh" }} suppressHydrationWarning>loading probe…</div>;
+    return <div style={{ padding: 20, ...mono, color: "var(--t3)", background: "var(--bg)", minHeight: "100vh" }} suppressHydrationWarning>loading probe…</div>;
   }
   return (
-    <div style={{ padding: 20, color: "var(--t1, #ddd)", background: "var(--bg, #111)", minHeight: "100vh", ...mono }}>
+    <div style={{ padding: 20, color: "var(--t1)", background: "var(--bg)", minHeight: "100vh", ...mono }}>
       <h2 style={{ fontSize: 14, marginBottom: 12 }}>Transcript pipeline probe</h2>
       <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", rowGap: 4, marginBottom: 16 }}>
         <span>requested id</span><span>{requestedId || "(none — add ?id=…)"}</span>
         <span>meetings loaded</span><span>{meetings.length}</span>
         <span>row resolved</span><span>{row ? `yes — status=${row.live_status ?? row.status}` : "NO (not in list yet)"}</span>
         <span>session_uid</span><span>{sessionUid || "(empty → no SSE will open)"}</span>
-        <span>connected</span><span style={{ color: live.connected ? "#5d5" : "#d55" }}>{String(live.connected)}</span>
+        <span>connected</span><span style={{ color: live.connected ? "var(--green)" : "var(--danger)" }}>{String(live.connected)}</span>
         <span>ended</span><span>{String(live.ended)}</span>
         <span>reconnects</span><span>{live.reconnects}</span>
         <span>last event</span><span>{ageLabel(live.lastEventAt)}</span>
@@ -96,49 +96,49 @@ export default function TranscriptDebug() {
         <span>segments</span><span>{live.transcript.length}</span>
         <span>processed notes</span><span>{live.notes.length}</span>
         <span>cards</span><span>{live.cards.length}</span>
-        <span>issues</span><span style={{ color: live.issues.length ? "#d77" : "#888" }}>{live.issues.length}</span>
+        <span>issues</span><span style={{ color: live.issues.length ? "var(--danger)" : "var(--t3)" }}>{live.issues.length}</span>
         <span>react renders</span><span>{renders.current}</span>
         <span>last seg change @</span><span>{lastChangeAt.current == null ? "never" : `${lastChangeAt.current}ms`}</span>
       </div>
       {live.issues.length > 0 && (
-        <div style={{ borderTop: "1px solid #444", paddingTop: 10, marginBottom: 14 }}>
-          <div style={{ color: "#d77", marginBottom: 6 }}>recent issues</div>
+        <div style={{ borderTop: "1px solid var(--line2)", paddingTop: 10, marginBottom: 14 }}>
+          <div style={{ color: "var(--danger)", marginBottom: 6 }}>recent issues</div>
           {live.issues.slice(-8).map((issue, i) => (
             <div key={`${issue.at}-${i}`} style={{ marginBottom: 4 }}>
-              <span style={{ color: "#d77" }}>{issue.kind}</span>
-              <span style={{ color: "#777" }}> {new Date(issue.at).toLocaleTimeString()} </span>
+              <span style={{ color: "var(--danger)" }}>{issue.kind}</span>
+              <span style={{ color: "var(--t3)" }}> {new Date(issue.at).toLocaleTimeString()} </span>
               <span>{issue.message}{issue.status ? ` (${issue.status})` : ""}</span>
             </div>
           ))}
         </div>
       )}
       {/* RAW WIRE — every event off the SSE, append-only · NO upsert / clustering / copilot */}
-      <div style={{ borderTop: "1px solid #444", paddingTop: 10, marginBottom: 14 }}>
-        <div style={{ color: "#9c9", marginBottom: 6 }}>RAW WIRE — every event, uncleaned ({raw.length}) · ~ = pending · F = final</div>
-        {raw.length === 0 && <div style={{ color: "#888" }}>no raw events yet…</div>}
+      <div style={{ borderTop: "1px solid var(--line2)", paddingTop: 10, marginBottom: 14 }}>
+        <div style={{ color: "var(--green)", marginBottom: 6 }}>RAW WIRE — every event, uncleaned ({raw.length}) · ~ = pending · F = final</div>
+        {raw.length === 0 && <div style={{ color: "var(--t3)" }}>no raw events yet…</div>}
         {raw.slice(-150).map((ev, i) => (
           <div key={i} style={{ marginBottom: 2, opacity: ev.completed === false ? 0.55 : 1, whiteSpace: "pre-wrap" }}>
-            <span style={{ color: "#666" }}>{hms(ev.at)} </span>
-            <span style={{ color: ev.completed === false ? "#ca6" : "#5d5" }}>{ev.completed === false ? "~" : "F"} </span>
-            <span style={{ color: "#7af" }}>{ev.speaker} </span>
-            <span style={{ color: "#666" }}>[{ev.id}] </span>
+            <span style={{ color: "var(--t3)" }}>{hms(ev.at)} </span>
+            <span style={{ color: ev.completed === false ? "var(--warn)" : "var(--green)" }}>{ev.completed === false ? "~" : "F"} </span>
+            <span style={{ color: "var(--blue)" }}>{ev.speaker} </span>
+            <span style={{ color: "var(--t3)" }}>[{ev.id}] </span>
             <span>{ev.text}</span>
           </div>
         ))}
       </div>
       {/* current state per segment_id (upserted — latest text per id, still pre-clustering) */}
-      <div style={{ borderTop: "1px solid #444", paddingTop: 10 }}>
-        <div style={{ color: "#9c9", marginBottom: 6 }}>RAW SEGMENTS — current per id ({live.transcript.length})</div>
-        {live.transcript.length === 0 && <div style={{ color: "#888" }}>no segments yet…</div>}
+      <div style={{ borderTop: "1px solid var(--line2)", paddingTop: 10 }}>
+        <div style={{ color: "var(--green)", marginBottom: 6 }}>RAW SEGMENTS — current per id ({live.transcript.length})</div>
+        {live.transcript.length === 0 && <div style={{ color: "var(--t3)" }}>no segments yet…</div>}
         {live.transcript.slice(-40).map((s, i) => (
           <div key={s.id ?? i} style={{ marginBottom: 6, opacity: s.completed === false ? 0.6 : 1 }}>
-            <span style={{ color: "#7af" }}>{s.speaker}</span>
-            <span style={{ color: "#555" }}>{s.completed === false ? " (pending)" : ""}</span>
+            <span style={{ color: "var(--blue)" }}>{s.speaker}</span>
+            <span style={{ color: "var(--t3)" }}>{s.completed === false ? " (pending)" : ""}</span>
             <div>{s.text}</div>
           </div>
         ))}
       </div>
-      {live.note && <div style={{ marginTop: 14, color: "#caa" }}>note: {live.note}</div>}
+      {live.note && <div style={{ marginTop: 14, color: "var(--warn)" }}>note: {live.note}</div>}
     </div>
   );
 }

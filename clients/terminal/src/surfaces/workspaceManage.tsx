@@ -109,7 +109,7 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
           slug={slug} shared={shared} isSeed={isSeed} displayName={displayName} mounted={mounted}
           busy={busy} onRun={run} reload={loadCore} layout={layout} tabId={id}
         />
-        {err && <div role="alert" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 11px" }}>⚠ {err}</div>}
+        {err && <div role="alert" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 11px" }}>⚠ {err}</div>}
         {note && <div role="status" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--green)" }}>✓ {note}</div>}
 
         <PurposeSection slug={slug} />
@@ -191,7 +191,7 @@ function PurposeSection({ slug }: { slug: string }) {
   return (
     <Section icon="info" title="Purpose"
       right={!editing && <span onClick={() => setEditing(true)} style={{ cursor: "pointer", color: "var(--t3)" }}><Icon name="edit" size={13} /></span>}>
-      {err && <div role="alert" style={{ fontSize: 12, color: "var(--live)", marginBottom: 6 }}>⚠ {err}</div>}
+      {err && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", marginBottom: 6 }}>⚠ {err}</div>}
       {editing ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <textarea autoFocus value={draft} disabled={busy} placeholder="What is this workspace for? (one line — the agent reads it to know where things belong)"
@@ -286,7 +286,7 @@ function AheadBehind({ ahead, behind, tracked }: { ahead: number; behind: number
   return (
     <span style={{ display: "inline-flex", gap: 8, fontFamily: "var(--mono)" }}>
       {ahead > 0 && <span style={{ color: "var(--accent)" }} title={`${ahead} local commit(s) to push`}>↑{ahead}</span>}
-      {behind > 0 && <span style={{ color: "var(--live)" }} title={`${behind} remote commit(s) to pull`}>↓{behind}</span>}
+      {behind > 0 && <span style={{ color: "var(--warn)" }} title={`${behind} remote commit(s) to pull`}>↓{behind}</span>}
     </span>
   );
 }
@@ -366,12 +366,12 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
         <button disabled={busy} onClick={() => setInvite({ mode: "link", role: "contributor", ttlDays: 7, emails: "", link: null })} style={btn("primary")}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Invite link</span></button>
         <button disabled={busy} onClick={() => setInvite({ mode: "email", role: "contributor", ttlDays: 7, emails: "", link: null })} style={btn()}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="mail" size={13} />Add by email</span></button>
         {shared && (
-          <button disabled={busy} style={{ ...btn(), marginLeft: "auto", color: "var(--live)" }}
+          <button disabled={busy} style={{ ...btn(), marginLeft: "auto", color: "var(--danger)" }}
             onClick={() => onRun(async () => { await leaveWorkspace(shareWsId); layout.closeTab(tabId); }, "Left the workspace.")}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="logout" size={13} />Leave</span></button>
         )}
         {isOwner && shared && (
-          <button disabled={busy} style={{ ...btn(), color: "var(--live)" }}
+          <button disabled={busy} style={{ ...btn(), color: "var(--danger)" }}
             onClick={() => { if (window.confirm("Stop sharing? All members lose access and it becomes your private workspace.")) onRun(async () => { await unshareWorkspace(shareWsId); layout.closeTab(tabId); }, "Unshared."); }}>Unshare</button>
         )}
       </div>
@@ -425,7 +425,7 @@ function DangerZone({ slug, isSeed, displayName, archived, busy, onRun, reload, 
     <Section icon="alert" title="Danger zone">
       <div style={{ display: "flex", gap: 8 }}>
         <button disabled={busy} onClick={() => onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Un-archived." : "Archived.")} style={btn()}>{archived ? "Un-archive" : "Archive"}</button>
-        <button disabled={busy} style={{ ...btn(), color: "var(--live)", borderColor: "var(--live)" }}
+        <button disabled={busy} style={{ ...btn(), color: "var(--danger)", borderColor: "var(--danger)" }}
           onClick={() => { if (window.confirm(`Delete "${displayName}"? This permanently removes the workspace and all its data.`)) onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); }}>Delete</button>
       </div>
     </Section>

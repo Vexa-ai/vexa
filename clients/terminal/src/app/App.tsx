@@ -86,7 +86,7 @@ function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: s
   const termK: CSSProperties = { color: "var(--t3)" };
   const termV: CSSProperties = { color: "var(--t1)", fontWeight: 500, maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
   const btnBase: CSSProperties = { padding: "9px 16px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: "1px solid var(--line)" };
-  const btnPrimary: CSSProperties = { ...btnBase, background: "var(--accent)", color: "#1a1200", border: "1px solid var(--accent)", fontWeight: 600 };
+  const btnPrimary: CSSProperties = { ...btnBase, background: "var(--accent)", color: "var(--on-accent)", border: "1px solid var(--accent)", fontWeight: 600 };
   const btnGhost: CSSProperties = { ...btnBase, background: "transparent", color: "var(--t2)" };
 
   return (

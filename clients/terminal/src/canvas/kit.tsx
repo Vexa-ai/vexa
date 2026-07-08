@@ -13,14 +13,14 @@ const toneColor: Record<Tone, string> = {
   default: "var(--t2)",
   accent: "var(--accent)",
   green: "var(--green)",
-  warn: "var(--live)",
+  warn: "var(--warn)",
 };
 
 const toneBg: Record<Tone, string> = {
   default: "var(--panel2)",
   accent: "var(--accentbg)",
   green: "var(--greenbg)",
-  warn: "var(--livebg)",
+  warn: "var(--warnbg)",
 };
 
 const gap: Record<Size, number> = { sm: 6, md: 10, lg: 14 };
@@ -284,10 +284,10 @@ function List({ items, empty = "No items", loading = false }: { items?: ListItem
 
 const entityDotColor: Record<EntityItem["kind"], string> = {
   person: "var(--blue)",
-  company: "var(--coral, var(--accent))",
-  product: "var(--purple, #a78bfa)",
-  number: "var(--amber, #f6c453)",
-  signal: "var(--live)",
+  company: "var(--accent)",
+  product: "var(--green)",
+  number: "var(--t2)",
+  signal: "var(--warn)",
 };
 
 function entityRef(item: EntityItem): string {

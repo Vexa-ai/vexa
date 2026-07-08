@@ -84,7 +84,7 @@ function ShareSessionButton({ platform, native }: { platform: string; native: st
             <option value="">live feed only (no workspace)</option>
             {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>+ workspace: {s.workspace_id}</option>)}
           </select>
-          {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--live)" }}>⚠ {err}</div>}
+          {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</div>}
           {link ? (
             <div style={{ display: "flex", gap: 6 }}>
               <input readOnly value={link} onFocus={(e) => e.currentTarget.select()} style={{ ...fieldStyle, flex: 1, fontSize: 11 }} />
@@ -264,11 +264,11 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; k
   requested: { label: "Requested", color: "var(--accent)", bg: "var(--accentbg)", kind: "live" },
   joining: { label: "Joining", color: "var(--accent)", bg: "var(--accentbg)", kind: "live" },
   awaiting_admission: { label: "Awaiting", color: "var(--violet)", bg: "var(--violetbg)", kind: "awaiting" },
-  needs_help: { label: "Needs help", color: "var(--live)", bg: "var(--livebg)", kind: "needshelp" },
+  needs_help: { label: "Needs help", color: "var(--warn)", bg: "var(--warnbg)", kind: "needshelp" },
   active: { label: "Live", color: "var(--green)", bg: "var(--greenbg)", kind: "live" },
   stopping: { label: "Stopping", color: "var(--t3)", bg: "var(--panel2)", kind: "stopping" },
   completed: { label: "Completed", color: "var(--green)", bg: "var(--greenbg)", kind: "terminal" },
-  failed: { label: "Failed", color: "var(--live)", bg: "var(--livebg)", kind: "terminal" },
+  failed: { label: "Failed", color: "var(--danger)", bg: "var(--dangerbg)", kind: "terminal" },
   stopped: { label: "Stopped", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" },
 };
 const badgeFor = (raw?: string) => STATUS_BADGE[raw ?? ""] ?? { label: raw ?? "—", color: "var(--t3)", bg: "var(--panel2)", kind: "terminal" as BadgeKind };
@@ -405,7 +405,7 @@ function RowActions({ m, showBadge, reveal, onActionStart, onActionFailure }: { 
         <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, minWidth: 132, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,.28)", padding: 4, zIndex: 40 }}>
           {acts.map((a) => (
             <button key={a.id} onClick={(e) => { e.stopPropagation(); setOpen(false); onActionStart?.(); void a.run(onActionFailure); }}
-              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: a.tone === "live" ? "var(--live)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", borderRadius: 6, padding: "6px 9px", fontSize: 12, fontWeight: 550, cursor: "pointer" }}
+              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: a.tone === "live" ? "var(--danger)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", borderRadius: 6, padding: "6px 9px", fontSize: 12, fontWeight: 550, cursor: "pointer" }}
               onMouseEnter={(ev) => (ev.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(ev) => (ev.currentTarget.style.background = "transparent")}>
               {a.label}
             </button>
@@ -457,12 +457,12 @@ function MeetingRow({ m }: { m: MeetingMock }) {
       </div>
       <div style={{ fontSize: 11, color: inRoom ? "var(--green)" : "var(--t3)", marginTop: 1, paddingLeft: inRoom ? 13 : 0 }}>{inRoom ? "live" : m.when}</div>
       {isIntent && m.auto_join_error && (
-        <div role="alert" style={{ fontSize: 11, color: "var(--live)", marginTop: 3, lineHeight: 1.35 }}>
+        <div role="alert" style={{ fontSize: 11, color: "var(--danger)", marginTop: 3, lineHeight: 1.35 }}>
           ⚠ Auto-join failed: {m.auto_join_error}
         </div>
       )}
       {actionFailure && (
-        <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--live)", marginTop: 4, lineHeight: 1.35 }}>
+        <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.35 }}>
           {actionFailure.actionLabel} failed: {actionFailure.message}
         </div>
       )}
@@ -499,7 +499,7 @@ function PlanMeetingButton() {
         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
         {busy ? "Planning…" : "+ Plan a meeting"}
       </button>
-      {err && <div role="alert" style={{ fontSize: 11, color: "var(--live)", marginTop: 4, lineHeight: 1.4 }}>⚠ {err}</div>}
+      {err && <div role="alert" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.4 }}>⚠ {err}</div>}
     </>
   );
 }
@@ -514,7 +514,7 @@ function CalendarSyncStatusLine({ stamp }: { stamp: CalendarSyncStamp | null }) 
     return `${Math.round(s / 3600)} h ago`;
   })();
   if (stamp.last_error) {
-    return <div role="alert" style={{ fontSize: 11.5, color: "var(--live)", lineHeight: 1.5 }}>⚠ Last sync failed ({ago}): {stamp.last_error}</div>;
+    return <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.5 }}>⚠ Last sync failed ({ago}): {stamp.last_error}</div>;
   }
   const c = stamp.counts ?? {};
   const bits = [c.created ? `imported ${c.created}` : "", c.updated ? `updated ${c.updated}` : "", c.cancelled ? `removed ${c.cancelled}` : ""].filter(Boolean);
@@ -603,7 +603,7 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
                   {syncing ? "Syncing…" : "Sync now"}
                 </button>
                 <button disabled={busy || syncing} onClick={() => void save({ ics_url: null })}
-                  style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--live)", borderRadius: 6, cursor: "pointer" }}>
+                  style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--danger)", borderRadius: 6, cursor: "pointer" }}>
                   Disconnect
                 </button>
               </div>
@@ -626,7 +626,7 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
               </div>
             </>
           )}
-          {err && <div role="alert" style={{ fontSize: 11, color: "var(--live)" }}>⚠ {err}</div>}
+          {err && <div role="alert" style={{ fontSize: 11, color: "var(--danger)" }}>⚠ {err}</div>}
         </div>
       )}
     </div>
@@ -698,12 +698,12 @@ function MeetingsList() {
           <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addBot(); }}
             placeholder="Paste a Google Meet link…" style={{ flex: 1, minWidth: 0, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 7, padding: "6px 8px", color: "var(--t1)", fontSize: 12, outline: "none" }} />
           <button onClick={() => void addBot()} disabled={!url.trim() || sent === "sending"} title="Send the Vexa bot to this meeting"
-            style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent, #241008)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 10px", fontSize: 12, fontWeight: 600, cursor: url.trim() ? "pointer" : "default" }}>
+            style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 10px", fontSize: 12, fontWeight: 600, cursor: url.trim() ? "pointer" : "default" }}>
             {sent === "sending" ? "…" : "Add bot"}
           </button>
         </div>
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
-        {sent === "err" && <div style={{ fontSize: 11, color: "var(--live)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
+        {sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
         <div style={{ marginTop: 8 }}>
           <PlanMeetingButton />
           <CalendarSyncButton variant="row" />

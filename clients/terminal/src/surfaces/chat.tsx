@@ -906,9 +906,9 @@ export function Chat({ params = {} }: ChatProps) {
             disabled={uploading || mic === "stt"}
             onClick={() => void toggleMic()}
             style={{
-              background: mic === "rec" ? "var(--livebg)" : "transparent",
-              color: mic === "rec" ? "var(--live)" : "var(--t3)",
-              border: `1px solid ${mic === "rec" ? "var(--live)" : "var(--line2)"}`,
+              background: mic === "rec" ? "var(--accentbg)" : "transparent",
+              color: mic === "rec" ? "var(--accent)" : "var(--t3)",
+              border: `1px solid ${mic === "rec" ? "var(--accent)" : "var(--line2)"}`,
               width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
               cursor: uploading || mic === "stt" ? "default" : "pointer", flex: "none", opacity: mic === "stt" ? 0.6 : 1,
             }}>
@@ -918,7 +918,7 @@ export function Chat({ params = {} }: ChatProps) {
           </button>
           {busy
             ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
-            : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "#241008", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
+            : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
         </div>
       </div>
     </>

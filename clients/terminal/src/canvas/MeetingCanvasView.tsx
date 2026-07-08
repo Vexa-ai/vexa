@@ -115,12 +115,12 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
           style={{
             display: "flex", alignItems: "center", gap: 7, cursor: "pointer",
             background: processing ? "var(--accent)" : "transparent",
-            color: processing ? "#241008" : "var(--t2)",
+            color: processing ? "var(--on-accent)" : "var(--t2)",
             border: `1px solid ${processing ? "var(--accent)" : "var(--line2)"}`,
             borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 600,
           }}
         >
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: processing ? "#241008" : "var(--t3)", flex: "none" }} />
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: processing ? "var(--on-accent)" : "var(--t3)", flex: "none" }} />
           {label}
         </button>
         <span style={{ fontSize: 11.5, color: "var(--t3)" }}>{processing ? "cleaned + copilot" : "raw transcript"}</span>

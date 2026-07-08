@@ -111,13 +111,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none",
               }}
             />
-            {error && <div style={{ fontSize: 11, color: "var(--live)", lineHeight: 1.4 }}>{error}</div>}
+            {error && <div style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>{error}</div>}
             <button
               type="submit"
               disabled={!email.trim() || submitting}
               style={{
                 background: email.trim() ? "var(--accent)" : "var(--panel2)",
-                color: email.trim() ? "var(--on-accent, #241008)" : "var(--t3)",
+                color: email.trim() ? "var(--on-accent)" : "var(--t3)",
                 border: "none", borderRadius: 7, padding: "9px 10px", fontSize: 13, fontWeight: 600,
                 cursor: email.trim() && !submitting ? "pointer" : "default",
               }}

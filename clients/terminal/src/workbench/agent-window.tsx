@@ -53,7 +53,7 @@ function linkify(text: string): ReactNode[] {
 // ── one operation step (the "what's in works" line) ──────────────────────────────
 function OpRow({ op }: { op: Op }) {
   const running = op.status === "running";
-  const color = op.status === "error" ? "var(--live)" : op.status === "done" ? "var(--green)" : "var(--accent)";
+  const color = op.status === "error" ? "var(--danger)" : op.status === "done" ? "var(--green)" : "var(--accent)";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: running ? "var(--t1)" : "var(--t2)" }}>
       <span style={{ width: 13, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -100,7 +100,7 @@ export function Conversation({ turns, busy, empty }: { turns: Turn[]; busy?: boo
               </div>
             )}
             {t.rejected && (
-              <div style={{ marginTop: 9, fontSize: 11, color: "var(--live)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--livebg)", borderRadius: 6, padding: "3px 8px" }}>
+              <div style={{ marginTop: 9, fontSize: 11, color: "var(--danger)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--dangerbg)", borderRadius: 6, padding: "3px 8px" }}>
                 <Icon name="x" size={12} />{t.rejected}
               </div>
             )}

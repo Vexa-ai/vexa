@@ -62,7 +62,7 @@ function RoutinesBoard() {
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px" }}>
         <div style={{ fontSize: 18, color: "var(--t1)", fontWeight: 500, marginBottom: 4 }}>Routines</div>
         <div style={{ fontSize: 13, color: "var(--t3)", marginBottom: 20 }}>Scheduled agents. Create one in Chat with <code style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>/routine</code>; manage them here.</div>
-        {error && <div role="alert" style={{ fontSize: 12.5, color: "var(--live)", background: "var(--panel)", border: "1px solid var(--live)", borderRadius: 8, padding: "8px 11px", marginBottom: 14 }}>⚠ Couldn’t load routines — {error}</div>}
+        {error && <div role="alert" style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 11px", marginBottom: 14 }}>⚠ Couldn’t load routines — {error}</div>}
         {routines.map((r) => (
           <div key={r.id} style={{ border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)", padding: "14px 16px", marginBottom: 12, opacity: r.enabled ? 1 : 0.55 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

@@ -40,7 +40,7 @@ function TokenRow({ token, onRevoke }: { token: TokenInfo; onRevoke: (id: number
       </div>
       {confirming ? (
         <>
-          <button onClick={() => onRevoke(token.id)} style={{ background: "none", border: "none", color: "var(--live)", cursor: "pointer", fontSize: 11.5, padding: 2 }}>revoke</button>
+          <button onClick={() => onRevoke(token.id)} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 11.5, padding: 2 }}>revoke</button>
           <button onClick={() => setConfirming(false)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 11.5, padding: 2 }}>keep</button>
         </>
       ) : (
@@ -111,7 +111,7 @@ function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void })
       <select value={expiryIdx} onChange={(e) => setExpiryIdx(Number(e.target.value))} style={{ ...field, marginBottom: 8 }}>
         {EXPIRIES.map((e, i) => <option key={e.label} value={i}>{e.label}</option>)}
       </select>
-      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--live)", marginBottom: 8 }}>⚠ {error}</div>}
+      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", marginBottom: 8 }}>⚠ {error}</div>}
       <button onClick={() => void submit()} disabled={busy || scopes.length === 0}
         style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, padding: "4px 10px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--panel2)", color: "var(--t1)", cursor: busy || scopes.length === 0 ? "default" : "pointer", opacity: busy || scopes.length === 0 ? 0.6 : 1 }}>
         <Icon name="plus" size={12} />{busy ? "creating…" : "Create token"}
@@ -160,13 +160,13 @@ function GitHubTokenCard() {
         Saved once and reused for push · pull · publish · attach across all your repos. Stored server-side —
         never shown again. Use a fine-grained, minimally-scoped PAT you can revoke on GitHub anytime.
       </div>
-      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--live)", marginBottom: 8 }}>⚠ {error}</div>}
+      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", marginBottom: 8 }}>⚠ {error}</div>}
       {state?.set && !showForm && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="key" size={13} style={{ color: "var(--accent)" }} />
           <span style={{ flex: 1, fontSize: 12.5, color: "var(--t2)", fontFamily: "var(--mono)" }}>{state.masked}</span>
           <button disabled={busy} onClick={() => { setEditing(true); setValue(""); }} style={btn}>Replace</button>
-          <button disabled={busy} onClick={() => void clear()} style={{ ...btn, color: "var(--live)" }}>Clear</button>
+          <button disabled={busy} onClick={() => void clear()} style={{ ...btn, color: "var(--danger)" }}>Clear</button>
         </div>
       )}
       {showForm && (
@@ -174,7 +174,7 @@ function GitHubTokenCard() {
           <input type="password" autoFocus value={value} placeholder="ghp_… (fine-grained PAT)" disabled={busy}
             onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") { setEditing(false); setValue(""); } }} style={field} />
           <div style={{ display: "flex", gap: 8 }}>
-            <button disabled={busy || !value.trim()} onClick={() => void save()} style={{ ...btn, background: "var(--accent)", color: "#1a1200", border: "none", opacity: busy || !value.trim() ? 0.5 : 1 }}>{busy ? "Saving…" : "Save token"}</button>
+            <button disabled={busy || !value.trim()} onClick={() => void save()} style={{ ...btn, background: "var(--accent)", color: "var(--on-accent)", border: "none", opacity: busy || !value.trim() ? 0.5 : 1 }}>{busy ? "Saving…" : "Save token"}</button>
             {state?.set && <button disabled={busy} onClick={() => { setEditing(false); setValue(""); }} style={btn}>Cancel</button>}
           </div>
         </div>
@@ -203,7 +203,7 @@ function TokensList() {
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>github</div>
       <GitHubTokenCard />
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>api tokens</div>
-      {error && <div role="alert" style={{ fontSize: 12, color: "var(--live)", padding: "6px 9px" }}>⚠ Couldn’t load tokens — {error}</div>}
+      {error && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", padding: "6px 9px" }}>⚠ Couldn’t load tokens — {error}</div>}
       {minted && <MintedTokenCard minted={minted} onDismiss={() => setMinted(null)} />}
       <CreateTokenForm onCreated={onCreated} />
       {tokens.map((t) => <TokenRow key={t.id} token={t} onRevoke={onRevoke} />)}

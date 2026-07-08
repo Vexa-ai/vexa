@@ -154,7 +154,7 @@ function MeetingPrepTab({ params }: TabProps) {
         <h2 style={{ margin: "0 0 18px", fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>{headline}</h2>
 
         {m.auto_join_error && (
-          <div role="alert" style={{ margin: "0 0 14px", padding: "8px 12px", borderRadius: 8, background: "var(--livebg)", color: "var(--live)", fontSize: 12.5, lineHeight: 1.5 }}>
+          <div role="alert" style={{ margin: "0 0 14px", padding: "8px 12px", borderRadius: 8, background: "var(--dangerbg)", color: "var(--danger)", fontSize: 12.5, lineHeight: 1.5 }}>
             ⚠ Auto-join failed: {m.auto_join_error}
           </div>
         )}
@@ -264,13 +264,13 @@ function MeetingPrepTab({ params }: TabProps) {
             </button>
             <span style={{ flex: 1 }} />
             <button disabled={busy} onClick={() => void remove()}
-              style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--live)", borderRadius: 7, padding: "5px 12px", fontSize: 12, cursor: "pointer" }}>
+              style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--danger)", borderRadius: 7, padding: "5px 12px", fontSize: 12, cursor: "pointer" }}>
               Delete
             </button>
           </div>
         )}
 
-        {err && <div role="alert" style={{ marginTop: 12, fontSize: 12, color: "var(--live)" }}>⚠ {err}</div>}
+        {err && <div role="alert" style={{ marginTop: 12, fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
       </div>
     </div>
   );

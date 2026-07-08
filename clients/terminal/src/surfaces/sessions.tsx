@@ -55,7 +55,7 @@ function SessionsList() {
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>sessions</div>
-      {error && <div role="alert" style={{ fontSize: 12, color: "var(--live)", padding: "6px 9px" }}>⚠ Couldn’t load sessions — {error}</div>}
+      {error && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", padding: "6px 9px" }}>⚠ Couldn’t load sessions — {error}</div>}
       {sessions.map((s) => (
         <SessionRow key={s.session} session={s} active={s.session === activeSession} onOpen={() => openSession(s.session)} />
       ))}

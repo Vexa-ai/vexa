@@ -71,7 +71,7 @@ type Tone = "ok" | "warn" | "danger";
 const TONE: Record<Tone, { fg: string; bg: string }> = {
   ok: { fg: "var(--green)", bg: "var(--greenbg)" },
   warn: { fg: "var(--accent)", bg: "var(--accentbg)" },
-  danger: { fg: "var(--live)", bg: "var(--livebg)" },
+  danger: { fg: "var(--danger)", bg: "var(--dangerbg)" },
 };
 
 /** One health verdict per meeting row, most severe first (ADR-0027 Train-2-aware):
@@ -149,7 +149,7 @@ function ProbeStrip() {
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)", whiteSpace: "nowrap" }}>Transcription golden probe</span>
         {probe && <Pill label={`${probe.status} · ${(probe.duration_ms / 1000).toFixed(1)}s`} tone={tone} />}
         {probe && <span style={{ fontSize: 12, color: "var(--t3)" }}>ran {ago(probe.at * 1000)} ago</span>}
-        {err && <span style={{ fontSize: 12, color: "var(--live)" }}>{err}</span>}
+        {err && <span style={{ fontSize: 12, color: "var(--danger)" }}>{err}</span>}
         <button onClick={() => void run()} disabled={running}
           style={{ marginLeft: "auto", ...segBtn(false), display: "flex", alignItems: "center", gap: 5, opacity: running ? 0.6 : 1 }}>
           <Icon name="zap" size={12} />{running ? "Running…" : "Run probe"}
@@ -240,7 +240,7 @@ function PipelineTab({ meetings, botStops, error }: { meetings: PipelineRow[]; b
         <input placeholder="Filter by meeting id…" value={q} onChange={(e) => setQ(e.target.value)} style={searchStyle} />
         <div style={{ display: "flex", gap: 4 }}>
           {([["all", "All"], ["on", "Processing on"], ["live", "Live only"], ["issues", "Issues"]] as const).map(([k, label]) => (
-            <button key={k} style={{ ...segBtn(mode === k), ...(k === "issues" ? { color: mode === k ? "var(--live)" : "var(--t2)" } : {}) }} onClick={() => setMode(k)}>{label}</button>
+            <button key={k} style={{ ...segBtn(mode === k), ...(k === "issues" ? { color: mode === k ? "var(--danger)" : "var(--t2)" } : {}) }} onClick={() => setMode(k)}>{label}</button>
           ))}
         </div>
         <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--t3)" }}>{shown.length} shown</span>

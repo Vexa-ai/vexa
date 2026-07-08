@@ -169,8 +169,16 @@ export const ENTITY_CHIP: Record<string, { icon: string; color: string; bg: stri
   project: { icon: "zap", color: "var(--green)", bg: "var(--greenbg)" },
   meeting: { icon: "cal", color: "var(--violet)", bg: "var(--violetbg)" },
   task: { icon: "tasks", color: "var(--green)", bg: "var(--greenbg)" },
+  product: { icon: "zap", color: "var(--green)", bg: "var(--greenbg)" },
 };
 export const DEFAULT_ENTITY_CHIP = { icon: "link", color: "var(--blue)", bg: "var(--bluebg)" };
+
+/** The ONE entity-kind → color lookup for the whole client (chips, inline transcript
+ *  highlights, entity dots). Returns undefined for unknown kinds so each site picks its
+ *  own fallback (chips default blue, transcript text defaults muted). */
+export function entityColor(kind?: string): string | undefined {
+  return kind ? ENTITY_CHIP[kind]?.color : undefined;
+}
 
 /** Rich entity chip for [[wikilinks]] — typed pill (icon + color per entity type).
  *  Resolves against the doc's workspace (DocMetaContext); a title that matches no entity

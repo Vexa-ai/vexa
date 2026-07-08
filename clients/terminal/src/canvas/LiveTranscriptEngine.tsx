@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { splitTextIntoSpans, type SpanEntity } from "./inlineSpans";
+import { entityColor } from "../ui-kit/docLinks";
 
 export interface EngineTag { label: string; kind: string }
 export interface EngineEntity { id?: string; label: string; kind: string; docPath?: string }
@@ -24,11 +25,12 @@ export interface EngineActions {
   onSignal?(signal: EngineSignal): void;
 }
 
-const TAG_HUE: Record<string, string> = { person: "#2563eb", company: "#7c3aed", product: "#0d9488", number: "#b45309" };
-const SIGNAL_HUE: Record<string, string> = { decision: "#7c3aed", "action-item": "#0d9488", action: "#0d9488", question: "#2563eb", claim: "#b45309" };
+// Entity hues come from the ONE client-wide map (ui-kit/docLinks ENTITY_CHIP) so inline
+// transcript highlights match [[wikilink]] chips exactly. Signals use semantic tokens.
+const SIGNAL_HUE: Record<string, string> = { decision: "var(--violet)", "action-item": "var(--green)", action: "var(--green)", question: "var(--blue)", claim: "var(--warn)" };
 
 function hueFor(kind: string): string {
-  return TAG_HUE[kind] ?? "var(--t2)";
+  return entityColor(kind) ?? "var(--t2)";
 }
 
 /** An inline entity mention: colored, keyboard-focusable, opens a small action menu on click/Enter. */
@@ -156,7 +158,7 @@ export function LiveTranscriptEngine({
     return (
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
         {uniq.map((t, i) => {
-          const hue = TAG_HUE[t.kind] ?? "var(--t2)";
+          const hue = hueFor(t.kind);
           return (
             <span key={`${t.label}-${i}`} title={`research ${t.label}`}
               style={{ fontSize: 11, color: hue, border: `1px solid ${hue}`, background: "transparent", borderRadius: 999, padding: "1px 8px", lineHeight: 1.5, opacity: 0.9 }}>

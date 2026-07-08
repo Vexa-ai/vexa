@@ -22,8 +22,17 @@
   --t3: #65656f;
   --accent: #d8855c;
   --accentbg: rgba(216, 133, 92, 0.14);
-  --live: #ef5b56;
-  --livebg: rgba(239, 91, 86, 0.14);
+  /* Semantic set (palette A, design-spec meeting-lifecycle-v2): --danger = destructive
+   * actions + errors ONLY (never "live" — live is green); --warn = attention-not-error
+   * (needs_help, waiting, behind). --on-* = text on solid semantic fills. The old --live
+   * token is deliberately GONE so stale usage fails visibly. */
+  --danger: #e0645e;
+  --dangerbg: rgba(224, 100, 94, 0.12);
+  --warn: #d9a13c;
+  --warnbg: rgba(217, 161, 60, 0.14);
+  --on-accent: #241008;
+  --on-green: #08110c;
+  --on-warn: #1a1200;
   --green: #48b787;
   --greenbg: rgba(72, 183, 135, 0.14);
   --blue: #6ea8fe;
@@ -56,8 +65,13 @@
   --t3: #8a8a94;
   --accent: #c06a3f;
   --accentbg: rgba(192, 106, 63, 0.12);
-  --live: #e0453f;
-  --livebg: rgba(224, 69, 63, 0.12);
+  --danger: #c9403a;
+  --dangerbg: rgba(201, 64, 58, 0.10);
+  --warn: #b8811f;
+  --warnbg: rgba(184, 129, 31, 0.12);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --on-warn: #ffffff;
   --green: #2f9e72;
   --greenbg: rgba(47, 158, 114, 0.12);
   --blue: #3b73d6;
