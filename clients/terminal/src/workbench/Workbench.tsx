@@ -340,9 +340,13 @@ export function Workbench() {
     try { acceptedSlug = localStorage.getItem("vexa.openWorkspace"); if (acceptedSlug) localStorage.removeItem("vexa.openWorkspace"); } catch { /* noop */ }
     // a shared workspace connected to this user (a non-primary 'shared' mount in the active set)
     let sharedSlug: string | null = null;
+    // the HOME mount (first active) — "own README" means ITS README (ADR-0028: reads are
+    // slug-addressed; the seed-slot dir is a storage detail, not "the user's workspace")
+    let homeSlug: string | undefined;
     try {
       const set = await readActiveSet();
       sharedSlug = set.active.find((m) => !m.primary && m.role === "shared")?.slug ?? null;
+      homeSlug = (set.active.find((m) => m.primary) ?? set.active[0])?.slug;
     } catch { /* active-set read failed — treat as no shared workspace */ }
     if (!apiRef.current) return;  // grid torn down while we awaited — nothing to arrange
 
@@ -367,7 +371,7 @@ export function Workbench() {
       case "meeting":               openMeeting(plan.meetingId, true); break;
       case "workspace-readme":      pinReadme(plan.slug, !!acceptedSlug); break;  // accepted invite → force Knowledge open
       case "live-meeting":          openMeeting(plan.meetingId, true); break;
-      case "own-readme":            pinReadme(); break;
+      case "own-readme":            pinReadme(homeSlug); break;
       case "noop":                  break;
     }
   };

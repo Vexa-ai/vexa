@@ -6,8 +6,8 @@
  *  each site resolved links its own way, always against the user's OWN workspace tree, so
  *  links inside a SHARED workspace's docs silently did nothing. Everything now funnels
  *  through resolveDocRef(), which is:
- *    - slug-aware: searches the doc's OWN workspace first, then the home workspace, then
- *      the rest of the mounted active set;
+ *    - slug-aware: searches the doc's OWN workspace first, then every ACTIVE mount in
+ *      order, then the legacy no-slug (seed-slot) read strictly last (ADR-0028);
  *    - base-aware: relative paths normalize against the linking doc's directory;
  *    - loud: an unresolvable [[wikilink]] renders as a muted chip with a "not found"
  *      tooltip instead of a click that does nothing.
@@ -115,6 +115,15 @@ const wikilinkMatcher = (title: string) => {
 /** Resolve any doc link to a concrete { path, slug } target, or undefined when a
  *  [[wikilink]] matches no entity doc in any mounted workspace. */
 export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<ResolvedDoc | undefined> {
+  // Search order (ADR-0028: reads are slug-addressed; the ACTIVE SET is the source of truth):
+  // the doc's own workspace, then every active mount in order, then the legacy no-slug read
+  // (= the seed-slot storage dir) strictly last — it can hold a DEACTIVATED workspace's tree.
+  const searchOrder = async (): Promise<(string | undefined)[]> =>
+    [...new Set<string | undefined>([
+      ...(meta.slug !== undefined ? [meta.slug] : []),
+      ...(await activeSlugs()),
+      undefined,
+    ])];
   if (ref.path) {
     // A worker-visible ABSOLUTE path (quoted verbatim by the agent in chat) carries its own
     // workspace: translate to {slug, relative} and verify against THAT workspace's tree.
@@ -122,30 +131,29 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
     if (worker) {
       const tree = await workspaceTree(worker.slug);
       if (tree.includes(worker.path)) return { path: worker.path, slug: worker.slug };
-      // attached-store slug didn't resolve (e.g. the user's own store viewed as home) —
-      // fall through to home before giving up
-      if (worker.slug && (await workspaceTree(undefined)).includes(worker.path)) return { path: worker.path, slug: undefined };
+      // attached-store slug didn't resolve — try the rest of the search order before giving up
+      for (const ws of await searchOrder()) {
+        if (ws !== worker.slug && (await workspaceTree(ws)).includes(worker.path)) return { path: worker.path, slug: ws };
+      }
       return { path: worker.path, slug: worker.slug };
     }
     // Try root-relative first, then doc-relative (authors write both `kg/x.md` and `entities/x.md`
-    // meaning a sibling) — pick whichever actually exists in the doc's workspace.
+    // meaning a sibling) — pick whichever actually exists, searching workspaces in order.
     const root = normalizeDocPath(ref.path, meta.path);
-    const tree = await workspaceTree(meta.slug);
-    if (tree.includes(root)) return { path: root, slug: meta.slug };
-    if (meta.path) {
-      const sibling = normalizeDocPath(`./${ref.path.replace(/^\.\//, "")}`, meta.path);
-      if (tree.includes(sibling)) return { path: sibling, slug: meta.slug };
+    const sibling = meta.path ? normalizeDocPath(`./${ref.path.replace(/^\.\//, "")}`, meta.path) : null;
+    const order = await searchOrder();
+    for (const ws of order) {
+      const tree = await workspaceTree(ws);
+      if (tree.includes(root)) return { path: root, slug: ws };
+      if (sibling && tree.includes(sibling)) return { path: sibling, slug: ws };
     }
-    // Not in the tree — still open it (the doc tab shows "(not found)", which is louder
-    // and more debuggable than a click that does nothing).
-    return { path: root, slug: meta.slug };
+    // Not in any tree — still open it in the most specific workspace (the doc tab shows
+    // "(not found)", which is louder and more debuggable than a click that does nothing).
+    return { path: root, slug: order[0] };
   }
   if (ref.wikilink) {
     const re = wikilinkMatcher(ref.wikilink);
-    // the doc's own workspace first, then home, then the rest of the mounted set
-    const others = (await activeSlugs()).filter((s) => s !== meta.slug);
-    const candidates = [...new Set<string | undefined>([meta.slug, undefined, ...others])];
-    for (const ws of candidates) {
+    for (const ws of await searchOrder()) {
       const hit = (await workspaceTree(ws)).find((p) => re.test(p));
       if (hit) return { path: hit, slug: ws, type: re.exec(hit)?.[1] };
     }

@@ -259,7 +259,9 @@ function FilesList() {
   // The top tree + Find-file show the HOME workspace (the first active one, read with no slug). Switch a
   // workspace off and it leaves the active set so its files vanish; when NOTHING is active there is no home
   // and the tree is empty. Driven off the active set; defaults true so a slow read never blanks it.
-  const [hasHome, setHasHome] = useState(true);
+  // the HOME mount (first active) — the finder's main section; null = loaded + empty active
+  // set, undefined = not yet loaded (render nothing rather than a flash of "No active workspace")
+  const [homeMount, setHomeMount] = useState<ActiveMount | null | undefined>(undefined);
   // per-mount trees (keyed by slug) so the Find-file search can reach shared/other workspaces, not just
   // the primary — otherwise a file a member's agent wrote in a SHARED ws is invisible to search.
   const [mountTrees, setMountTrees] = useState<Record<string, string[]>>({});
@@ -269,35 +271,39 @@ function FilesList() {
   useEffect(() => {
     // Never request dotfiles (hidden:false) — the `.git`/`.claude` listing 500s; the toggle is a client-side
     // kg-only vs full-workspace filter, not a dotfile switch.
+    // ADR-0028: the ACTIVE SET is the single source of what the finder shows, and every tree is
+    // fetched BY SLUG. The main section is the HOME mount (first active); a no-slug read (= the
+    // seed-slot storage dir) is never issued — that dir can hold a DEACTIVATED workspace's tree.
     // The agent writes files continuously, so the tree self-refreshes: poll while the tab is
     // visible + re-fetch on window focus. setTree only on change so React skips no-op renders.
-    const load = () => {
-      void listWorkspaceTree({ hidden: false })
-        .then((t) => { setTree((prev) => (JSON.stringify(prev) === JSON.stringify(t) ? prev : t)); setError(null); })
-        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-    };
-    // Lane A: resolve the non-primary mounts in the active set (best-effort — a failure just hides the
-    // extra sections, never the primary tree).
-    const loadExtra = () => void readActiveSet()
+    const load = () => void readActiveSet()
       .then(async (s) => {
-        setHasHome(s.active.some((m) => m.primary));  // baseline present in the set ⇒ not switched off
-        const mounts = s.active.filter((m) => !m.primary);
+        const home = s.active.find((m) => m.primary) ?? s.active[0] ?? null;
+        setHomeMount(home);
+        const mounts = s.active.filter((m) => m !== home);
         setExtraMounts(mounts);
-        // fetch each mount's full tree so the search index spans every active workspace
+        if (home) {
+          try {
+            const t = await listWorkspaceTree({ hidden: false, slug: home.slug });
+            setTree((prev) => (JSON.stringify(prev) === JSON.stringify(t) ? prev : t));
+            setError(null);
+          } catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+        } else { setTree([]); setError(null); }
+        // fetch each extra mount's full tree so the search index spans every active workspace
         const entries = await Promise.all(mounts.map(async (m) => {
           try { return [m.slug, await listWorkspaceTree({ hidden: false, slug: m.slug })] as const; }
           catch { return [m.slug, [] as string[]] as const; }
         }));
         setMountTrees(Object.fromEntries(entries));
       })
-      .catch(() => { /* extra sections are additive; ignore */ });
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
     load();
-    loadExtra();
-    const id = setInterval(() => { if (!document.hidden) { load(); loadExtra(); } }, 5000);
+    const id = setInterval(() => { if (!document.hidden) load(); }, 5000);
     window.addEventListener("focus", load);
     return () => { clearInterval(id); window.removeEventListener("focus", load); };
   }, [reloadKey]);
-  // Baseline switched off ⇒ its own tree is not part of the finder (its files leave with it, like any mount).
+  // No active workspace ⇒ nothing to show (a deactivated workspace's files leave with it, like any mount).
+  const hasHome = homeMount != null;
   const nodes = hasHome ? buildTree(kgOnly ? tree.filter((p) => p.startsWith("kg/")) : tree) : [];
   // default expansion: top-level folders open, deeper folders collapsed (only when no saved state yet)
   useEffect(() => {
@@ -346,7 +352,7 @@ function FilesList() {
   // opens against the right mount, not just the caller's own primary.
   type Hit = { p: string; name: string; slug?: string; ws?: string };
   const index: Hit[] = [
-    ...scoped.map((p) => ({ p, name: base(p).toLowerCase() } as Hit)),
+    ...scoped.map((p) => ({ p, name: base(p).toLowerCase(), slug: homeMount?.slug } as Hit)),
     ...extraMounts.flatMap((m) => (mountTrees[m.slug] || []).map((p) =>
       ({ p, name: base(p).toLowerCase(), slug: m.slug, ws: m.name || m.slug } as Hit))),
   ];
@@ -406,8 +412,8 @@ function FilesList() {
         ))}
         {matches.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No files match “{query.trim()}”.</div>}
       </>) : (<>
-        {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p))} pinFile={(p) => layout.openTab(docTab(p))} openMenu={openMenu} />)}
-        {!error && !hasHome && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No active workspace — turn one on in Workspaces below.</div>}
+        {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p, homeMount?.slug))} pinFile={(p) => layout.openTab(docTab(p, homeMount?.slug))} openMenu={openMenu} />)}
+        {!error && homeMount === null && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No active workspace — turn one on in Workspaces below.</div>}
         {!error && hasHome && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
       </>)}
       {menu && (

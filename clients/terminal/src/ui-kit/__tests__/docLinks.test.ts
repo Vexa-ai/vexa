@@ -76,6 +76,31 @@ describe("resolveDocRef — paths", () => {
   });
 });
 
+describe("resolveDocRef — active set outranks the legacy no-slug read (ADR-0028)", () => {
+  it("finds a path in an ACTIVE mount before the seed-slot (no-slug) tree", async () => {
+    // the seed slot holds a DEACTIVATED workspace's tree with the same file — active wins
+    trees[""] = ["README.md"];
+    trees["three"] = ["README.md"];
+    active = [{ slug: "three" }];
+    const r = await resolveDocRef({ path: "README.md" }, {});
+    expect(r).toEqual({ path: "README.md", slug: "three" });
+  });
+  it("wikilinks search active mounts before the no-slug tree", async () => {
+    trees[""] = ["kg/entities/person/jane-liu.md"];
+    trees["three"] = ["kg/entities/person/jane-liu.md"];
+    active = [{ slug: "three" }];
+    const r = await resolveDocRef({ wikilink: "Jane Liu" }, {});
+    expect(r?.slug).toBe("three");
+  });
+  it("still falls back to the no-slug tree when no active mount has the file", async () => {
+    trees[""] = ["kg/notes.md"];
+    active = [{ slug: "three" }];
+    trees["three"] = [];
+    const r = await resolveDocRef({ path: "kg/notes.md" }, {});
+    expect(r).toEqual({ path: "kg/notes.md", slug: undefined });
+  });
+});
+
 describe("resolveDocRef — worker-visible absolute paths (chat links)", () => {
   it("translates an attached-mount path to {slug, relative}", async () => {
     trees["dna"] = ["kg/entities/project/dna.md"];
