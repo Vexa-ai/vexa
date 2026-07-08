@@ -46,7 +46,7 @@ running → stopped directly when the workload exits on its own (reason=complete
 ## Operations
 | Op | In → Out |
 |---|---|
-| `create` | `WorkloadSpec` → `{ workloadId, state: "starting" }` |
+| `create` | `WorkloadSpec` → `{ workloadId, state: "starting" }` — **idempotent on `workloadId`** (ADR 0027): while that workload is `starting`/`running`, `create` is a *touch* — it returns the live `WorkloadStatus` unchanged (no respawn, no spec overwrite, no quota charge, no events). Only an absent or exited workload spawns; a re-`create` after self-exit replaces it. |
 | `get` | `workloadId` → `WorkloadStatus` |
 | `list` | filter? → `WorkloadStatus[]` |
 | `stop` | `workloadId, reason?` → `{ state: "stopping" }` (graceful SIGTERM; the workload persists itself) |

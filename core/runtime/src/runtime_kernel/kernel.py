@@ -142,6 +142,23 @@ class Runtime:
 
     # ── runtime.v1 operations ────────────────────────────────────────────────
     def create(self, spec: WorkloadSpec) -> WorkloadStatus:
+        # runtime.v1: workloadId is the caller-assigned IDEMPOTENCY KEY (ADR 0027). A create for a
+        # workload that is still starting/running is a TOUCH — return the live status unchanged: no
+        # respawn (the docker backend's name-conflict path would force-delete the RUNNING container,
+        # the copilot-churn defect), no spec overwrite, no quota charge. This check runs BEFORE the
+        # profile resolve and the quota gate so a keep-alive touch can never 400/429 an owner at cap.
+        # get() reflects a self-exited workload to stopped (and re-derives the handle across a
+        # runtime restart via backend.find), so a stale "running" record falls through to the spawn
+        # path, where the backend's stale-name replace reclaims the exited container. `starting` is
+        # touched too — the truthful read of a concurrent create mid-spawn; a record crashed stuck
+        # in `starting` was already unrecoverable-by-create before this (stop/destroy clears it).
+        try:
+            existing = self.get(spec.workloadId)
+        except KeyError:
+            existing = None
+        if existing is not None and existing.state in (RuntimeState.starting, RuntimeState.running):
+            return existing
+
         runnable = self.profiles.resolve(spec.profile)
         if runnable is None:
             raise ValueError(f"unknown profile: {spec.profile!r}")
