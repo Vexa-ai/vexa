@@ -165,8 +165,10 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     native_id: native ?? undefined,
     session_uid: live ? id : undefined,  // only live meetings subscribe to the copilot stream — by ROW id
     // a planned meeting's user-given title wins; otherwise the platform·native fallback
+    // Honest fallbacks (design-spec W3): a link-less plan is "Untitled meeting", never
+    // "unknown · (no link)"; a linked one reads "Google Meet · abc-defg-hij".
     title: d.data?.title
-      || `${d.platform === "google_meet" ? "Google Meet" : d.platform} · ${native ?? "(no link)"}`,
+      || (native ? `${d.platform === "google_meet" ? "Google Meet" : d.platform} · ${native}` : "Untitled meeting"),
     title_custom: d.data?.title ?? undefined,
     when: whenLabel(d, live),
     status: live ? "live" : "past",

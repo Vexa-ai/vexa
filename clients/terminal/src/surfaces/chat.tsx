@@ -14,7 +14,7 @@ import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
 import { streamChatTurn, type ChatPhase } from "./chatStream";
 import { useLiveMeetings } from "./liveMeetings";
-import { type MeetingMock } from "./meetingModel";
+import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -285,7 +285,7 @@ function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
 
       {open && (
         <div role="menu" style={{ position: "absolute", zIndex: 30, top: 36, left: 8, right: 8, maxHeight: 260, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", boxShadow: "0 14px 34px rgba(0,0,0,.32)", padding: 4 }}>
-          {error && <div role="alert" style={{ padding: "8px", color: "var(--danger, #e5484d)", fontSize: 12 }}>⚠ Couldn&apos;t load sessions — {error}</div>}
+          {error && <div role="alert" style={{ padding: "8px", color: "var(--danger)", fontSize: 12 }}>⚠ Couldn&apos;t load sessions — {error}</div>}
           {visibleSessions.map((s) => {
             const active = s.session === session;
             return (
@@ -391,9 +391,23 @@ function activeReference(tab: ActiveTab | null): ActiveReference | null {
   const path = typeof tab.params.path === "string" ? tab.params.path : null;
   if ((tab.kind === "doc" || tab.kind === "file") && path) return { kind: "file", value: path, raw: `@file:${path}` };
   const meetingId = typeof tab.params.meetingId === "string" ? tab.params.meetingId : null;
-  if (tab.kind === "meeting" && meetingId) return { kind: "meeting", value: meetingId, raw: `@meeting:${meetingId}` };
+  // A PREP tab focuses its meeting too — the chat enters "Preparing" mode for it (W3/W4).
+  if ((tab.kind === "meeting" || tab.kind === "meetingPrep") && meetingId) return { kind: "meeting", value: meetingId, raw: `@meeting:${meetingId}` };
   return null;
 }
+
+// ── chat MODE (design-spec meeting-lifecycle-v2, W3): the composer states its meeting phase ────────
+const MODE_CHIP: Record<MeetingPhase, { label: string; color: string; bg: string }> = {
+  prep: { label: "Preparing", color: "var(--accent)", bg: "var(--accentbg)" },
+  live: { label: "In meeting", color: "var(--green)", bg: "var(--greenbg)" },
+  post: { label: "Recap", color: "var(--violet)", bg: "var(--violetbg)" },
+};
+const MODE_PLACEHOLDER: Record<MeetingPhase, string> = {
+  prep: "Ask me to build the agenda, research attendees, or draft the brief…",
+  live: "Ask about what's being said…",
+  post: "Ask for the recap, decisions, or follow-up drafts…",
+};
+const meetingLabel = (m: MeetingMock) => m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "");
 
 function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   if (!ref) return "";
@@ -706,10 +720,20 @@ export function Chat({ params = {} }: ChatProps) {
     // P0 (cross-tenant leak fix): `meeting_id` is the meetings-domain ROW id (the mock's `id`) — the
     // transcript carrier keys on it, so grounding reads THIS row's transcript (`tc:meeting:{row_id}`),
     // never a DIFFERENT tenant's / an older row's under the shared native. `native_id` is display only.
+    // The meeting's raw STATUS (+ title/when/workspace) rides along so agent-api branches the
+    // grounding by lifecycle phase — prep (no transcript, steer preparation) / live (fold the live
+    // stream) / post (fold the processed notes). A status-less payload keeps the legacy live path.
     const active = !ground || !contextRef
       ? undefined
       : contextRef.kind === "meeting"
-        ? { kind: "meeting", native_id: contextRef.value, meeting_id: activeMeeting?.id, platform: meetingPlatformSlug(activeMeeting) }
+        ? {
+            kind: "meeting", native_id: contextRef.value, meeting_id: activeMeeting?.id,
+            platform: meetingPlatformSlug(activeMeeting),
+            status: activeMeeting?.live_status,
+            title: activeMeeting ? meetingLabel(activeMeeting) : undefined,
+            scheduled_at: activeMeeting?.scheduled_at,
+            workspace_id: activeMeeting?.workspace_id,
+          }
         : { kind: contextRef.kind, ref: contextRef.raw };
     try {
       const result = await streamChatTurn(
@@ -860,7 +884,18 @@ export function Chat({ params = {} }: ChatProps) {
         style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
       >
         {contextRef && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
+            {contextRef.kind === "meeting" && activeMeeting && (() => {
+              const mode = MODE_CHIP[meetingPhase(activeMeeting)];
+              return (
+                <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
+                  style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)",
+                    fontSize: 10, letterSpacing: ".07em", textTransform: "uppercase", color: mode.color,
+                    background: mode.bg, borderRadius: 999, padding: "2px 9px", maxWidth: 220 }}>
+                  {mode.label} · <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none", letterSpacing: 0 }}>{meetingLabel(activeMeeting)}</span>
+                </span>
+              );
+            })()}
             <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
             <ReferenceChip refToken={contextRef} />
             <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
@@ -868,8 +903,8 @@ export function Chat({ params = {} }: ChatProps) {
         )}
         <ComposerReferences text={value} />
         <AttachmentChips attachments={attachments} onRemove={removeAttachment} />
-        {uploadError && <div style={{ color: "var(--danger, #ff8b8b)", fontSize: 12, lineHeight: 1.35 }}>{uploadError}</div>}
-        {micError && <div style={{ color: "var(--danger, #ff8b8b)", fontSize: 12, lineHeight: 1.35 }}>{micError}</div>}
+        {uploadError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{uploadError}</div>}
+        {micError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{micError}</div>}
         <input
           ref={fileInputRef}
           type="file"
@@ -891,7 +926,9 @@ export function Chat({ params = {} }: ChatProps) {
               e.preventDefault();
               void onSubmit();
             }}
-            placeholder="Type / for skills, or ask the agent…"
+            placeholder={contextRef?.kind === "meeting" && activeMeeting
+              ? MODE_PLACEHOLDER[meetingPhase(activeMeeting)]
+              : "Type / for skills, or ask the agent…"}
             disabled={uploading}
             rows={1}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 28, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "4px 0", margin: 0, fontFamily: "inherit" }}

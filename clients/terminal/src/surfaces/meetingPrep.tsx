@@ -20,6 +20,7 @@ import type { MeetingMock } from "./meetingModel";
 import { updatePlannedMeeting, deletePlannedMeeting } from "./plannedApi";
 import { createSharedWorkspace, listSharedMemberships, mintInvite, readWorkspaceFile, type Membership } from "./workspaceApi";
 import { manageTabDescriptor } from "./workspaceManage";
+import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 const field = {
   fontSize: 12.5, padding: "6px 8px", background: "var(--panel)", border: "1px solid var(--line)",
@@ -27,19 +28,51 @@ const field = {
 } as const;
 const label = { fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 600 } as const;
 
-/** The bound workspace's README preview — the shared prep context the attendees will land in. */
-function WorkspaceReadme({ slug }: { slug: string }) {
+/** The PREP BRIEF (design-spec meeting-lifecycle-v2, W3): the agent-maintained doc this meeting's
+ *  chat writes into. Prefers the meeting's own `meetings/{id}/prep.md` in the bound workspace, falls
+ *  back to the workspace README (the shared context attendees land in), else offers the chat CTA. */
+function PrepBrief({ slug, meetingId, title }: { slug: string; meetingId: string; title: string }) {
   const [text, setText] = useState<string | null>(null);
+  const [source, setSource] = useState<"brief" | "readme" | "none" | "loading">("loading");
   useEffect(() => {
     let alive = true;
-    void readWorkspaceFile("README.md", { slug }).then((t) => { if (alive) setText(t); }).catch(() => {});
+    void readWorkspaceFile(`meetings/${meetingId}/prep.md`, { slug })
+      .then((t) => { if (alive) { setText(t); setSource("brief"); } })
+      .catch(() => readWorkspaceFile("README.md", { slug })
+        .then((t) => { if (alive) { setText(t); setSource("readme"); } })
+        .catch(() => { if (alive) setSource("none"); }));
     return () => { alive = false; };
-  }, [slug]);
-  if (!text) return null;
+  }, [slug, meetingId]);
+  const askForBrief = () => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+    detail: { prompt: `Draft a one-page prep brief for the meeting "${title}" into ${slug}:meetings/${meetingId}/prep.md — last touchpoints, open items, attendees worth researching, and a suggested agenda.` },
+  }));
+  if (source === "loading") return null;
+  if (source === "none" || !text) {
+    return (
+      <div style={{ margin: "10px 0 0", padding: "10px 12px", border: "1px dashed var(--line2)", borderRadius: 8, fontSize: 12.5, color: "var(--t3)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ flex: 1, minWidth: 200 }}>No brief yet — the agent can research this meeting into the workspace.</span>
+        <button onClick={askForBrief} style={{ background: "var(--accentbg)", color: "var(--accent)", border: "none", borderRadius: 7, padding: "4px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer", flex: "none" }}>
+          Ask the agent to draft it
+        </button>
+      </div>
+    );
+  }
   return (
-    <pre style={{ margin: "10px 0 0", padding: "10px 12px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, color: "var(--t2)", lineHeight: 1.5, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
-      {text.slice(0, 2000)}
-    </pre>
+    <div style={{ margin: "10px 0 0", border: "1px solid var(--line)", borderLeft: "3px solid var(--accent)", borderRadius: 8, background: "var(--panel)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px 0" }}>
+        <span style={{ fontSize: 10, color: "var(--accent)", textTransform: "uppercase", letterSpacing: ".1em", fontFamily: "var(--mono)" }}>
+          {source === "brief" ? "prep brief" : "workspace readme"}
+        </span>
+        <span style={{ flex: 1 }} />
+        <button onClick={askForBrief} title="Ask the agent to update the brief in chat"
+          style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          update via chat
+        </button>
+      </div>
+      <pre style={{ margin: 0, padding: "6px 12px 10px", fontSize: 12, color: "var(--t2)", lineHeight: 1.5, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+        {text.slice(0, 2000)}
+      </pre>
+    </div>
   );
 }
 
@@ -145,13 +178,25 @@ function MeetingPrepTab({ params }: TabProps) {
     <div style={{ width: "100%", height: "100%", overflow: "auto", boxSizing: "border-box", padding: "24px 28px" }}>
       <div style={{ maxWidth: 640 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-          <span style={{ fontSize: 11, color: "var(--blue)", background: "var(--bluebg)", borderRadius: 5, padding: "1px 7px", fontWeight: 600 }}>
+          <span style={{ fontSize: 11, color: "var(--accent)", background: "var(--accentbg)", borderRadius: 5, padding: "1px 7px", fontWeight: 600 }}>
             {m.live_status === "scheduled" ? "Scheduled" : "Planned"}
           </span>
           {m.calendar_uid && <span title="Imported from your calendar" style={{ fontSize: 10.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 6px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="cal" size={10} /> calendar</span>}
           {readOnly && <span style={{ fontSize: 10.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 6px" }}>shared with you</span>}
         </div>
-        <h2 style={{ margin: "0 0 18px", fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>{headline}</h2>
+        {/* TITLE-FIRST hero (design-spec W3): the title IS the headline — editable in place, honest
+            placeholder, never the "platform · (no link)" fallback. */}
+        {readOnly ? (
+          <h2 style={{ margin: "0 0 18px", fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>{headline}</h2>
+        ) : (
+          <input value={title} disabled={busy} placeholder="What's this meeting about?"
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => { if ((m.title_custom ?? "") !== title.trim()) void patch({ title: title.trim() || null }); }}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+            style={{ display: "block", width: "100%", boxSizing: "border-box", margin: "0 0 18px", padding: "2px 0 6px",
+              fontSize: 19, fontWeight: 650, color: "var(--t1)", background: "transparent", border: "none",
+              borderBottom: "1px dashed var(--line2)", outline: "none" }} />
+        )}
 
         {m.auto_join_error && (
           <div role="alert" style={{ margin: "0 0 14px", padding: "8px 12px", borderRadius: 8, background: "var(--dangerbg)", color: "var(--danger)", fontSize: 12.5, lineHeight: 1.5 }}>
@@ -161,13 +206,6 @@ function MeetingPrepTab({ params }: TabProps) {
 
         {/* ── details ─────────────────────────────────────────────── */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 22 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={label}>Title</span>
-            <input value={title} disabled={readOnly || busy} placeholder="What's this meeting about?"
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={() => { if ((m.title_custom ?? "") !== title.trim()) void patch({ title: title.trim() || null }); }}
-              style={field} />
-          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: "none" }}>
               <span style={label}>When</span>
@@ -229,7 +267,7 @@ function MeetingPrepTab({ params }: TabProps) {
                 <button onClick={() => void copyText(inviteLink)} style={{ fontSize: 12, padding: "4px 12px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 7, cursor: "pointer" }}>Copy</button>
               </div>
             )}
-            <WorkspaceReadme slug={m.workspace_id} />
+            <PrepBrief slug={m.workspace_id} meetingId={m.id} title={headline} />
           </>
         ) : readOnly ? (
           <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No workspace bound.</div>
