@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Analytics } from "./Analytics";
+import { Analytics } from "./AnalyticsScript";
 
 export const metadata: Metadata = {
   title: "Vexa Terminal",
