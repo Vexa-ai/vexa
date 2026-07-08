@@ -277,6 +277,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      # The background sweeps' internal lookups: auto-join fetches per-user spawn context
+      # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
+      # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
+      - ADMIN_API_URL=http://admin-api:8001
       # MeetingToken is signed (mint) AND verified (recordings upload) with ADMIN_TOKEN — the SAME
       # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like
       # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
@@ -401,6 +405,11 @@ services:
       - VEXA_API_URL=http://gateway:8000
       - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-changeme}
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      # Hidden admin panel (/api/admin/*): comma-separated email allowlist — EMPTY = the panel is off
+      # for everyone. Identity is VERIFIED against admin-api /internal/validate over the internal-tier
+      # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
+      - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
+      - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       # Composer mic dictation (/api/stt) — same STT service the meeting pipeline uses; token stays
       # server-side. Empty → the mic button reports "not configured" instead of failing silently.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
