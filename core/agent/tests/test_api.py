@@ -551,13 +551,26 @@ def test_session_history_found_in_active_mount_dir(tmp_path):
         {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "A VFX app."}]}},
     ])
     reader = WorkspaceReader(str(tmp_path))
-    # without the mount dir the thread is invisible (the pre-fix behaviour)…
-    assert reader.history("28", "chat-x") == []
-    # …with it, the thread loads
+    # the mount dir as an explicit candidate loads the thread (no sweep needed)
     turns = reader.history("28", "chat-x", extra_roots=[str(shared)])
     assert [t["role"] for t in turns] == ["user", "agent"]
     # out-of-root candidates are dropped, never raised on
     assert reader.history("28", "chat-x", extra_roots=["/etc", str(shared)]) == turns
+
+
+def test_session_history_sweeps_unmounted_strands(tmp_path):
+    """A thread recorded under a workspace that is NO LONGER mounted (deactivated shared ws) must
+    still load: the reader's last-resort sweep finds the pointer without any extra_roots."""
+    from control_plane.workspace_reader import WorkspaceReader
+
+    gone = tmp_path / "some-shared-ws"          # not passed as an extra root — unmounted
+    (gone / ".claude" / "sessions").mkdir(parents=True)
+    (gone / ".claude" / "sessions" / "chat-z.session").write_text("sid-7\n")
+    _write_transcript(gone, "sid-7", [
+        {"type": "user", "message": {"role": "user", "content": "stranded"}},
+    ])
+    reader = WorkspaceReader(str(tmp_path))
+    assert reader.history("28", "chat-z") == [{"role": "user", "text": "stranded"}]
 
 
 def test_session_history_prefers_the_system_anchor(tmp_path):

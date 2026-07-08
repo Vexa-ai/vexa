@@ -175,6 +175,20 @@ class WorkspaceReader:
             if sid:
                 break
         if not sid:
+            # LAST RESORT — threads recorded BEFORE continuity anchoring sit under whatever workspace
+            # was the turn's cwd at the time, which may no longer be mounted (deactivated / membership
+            # gone). Two fixed-depth globs over the store root find the pointer; read-only + bounded.
+            for pat in (f"*/.claude/sessions/{session}.session",
+                        f".attached/*/*/.claude/sessions/{session}.session"):
+                for f in self._root.glob(pat):
+                    ws = f.parents[2]
+                    sid = self._session_id(ws, session)
+                    if sid:
+                        roots.append(ws)
+                        break
+                if sid:
+                    break
+        if not sid:
             return []
         # The cwd-slug dir is claude's encoding of the workspace path; there is normally one, but match by
         # the sessionId filename to be safe. ``rglob`` also catches subagent transcripts — we want the top.
