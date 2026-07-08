@@ -16,6 +16,7 @@ const persistSizes = (s: number[]) => { try { localStorage.setItem(PANES_KEY, JS
 import { useService, useStore, KeybindingServiceId } from "../platform";
 import { LayoutServiceId } from "./layout";
 import { CommandPalette } from "./CommandPalette";
+import { OpsNotice } from "./OpsNotice";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
 import { updatesBadge, markUpdatesSeen, updatesSeenTs } from "../surfaces/updatesBadge";
@@ -395,7 +396,7 @@ export function Workbench() {
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)" }}>
       <div style={{ height: 38, display: "flex", alignItems: "center", gap: 12, padding: "0 12px", borderBottom: "1px solid var(--line)", background: "var(--sidebar)", flex: "none" }}>
         <button aria-label="Toggle left" onClick={() => layout.toggleLeft()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="panel" size={16} /></button>
-        <div style={{ flex: 1 }} />
+        <div style={{ flex: 1, display: "flex", justifyContent: "center", minWidth: 0 }}><OpsNotice /></div>
         <button aria-label="Toggle right" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
       </div>
 
