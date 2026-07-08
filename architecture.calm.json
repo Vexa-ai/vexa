@@ -818,7 +818,7 @@
       "unique-id": "proc-stream",
       "node-type": "data-asset",
       "name": "proc:meeting:{id} (stream)",
-      "description": "cleaned 1:1 processed transcript mirror, keyed by segment_id; agent-worker is the writer",
+      "description": "cleaned 1:1 processed transcript, keyed by segment_id, + the view_end terminal marker (processed-notes.v1, ADR-0027); agent-worker is the writer; read by meeting-api's db-writer (durable data.processed.views) and agent-api's live SSE",
       "controls": {
         "ownership": {
           "description": "single writer (P23)",
@@ -849,7 +849,7 @@
       "unique-id": "out-stream",
       "node-type": "data-asset",
       "name": "unit:{id}:out (stream)",
-      "description": "worker output stream (cards/notes/message deltas); agent-api relays as SSE",
+      "description": "worker output stream (cards / agent activity / message deltas — notes moved to proc-stream per ADR-0027); agent-api relays as SSE",
       "controls": {
         "ownership": {
           "description": "single writer (P23)",

@@ -1391,10 +1391,10 @@ def create_app(
             # Absent row, or a row owned by a DIFFERENT tenant → refuse (404-equivalent, no stream opened).
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         # Defense-in-depth on the copilot out-stream: `session_uid` is ALSO caller-supplied and keys
-        # `unit:agent-meet-{session_uid}:out`. The terminal always passes the meeting's own native id as
-        # `session_uid` (meetingLive.ts). Bind it to the OWNED meeting's native so B can't pair its own row
-        # with A's native to sniff A's copilot cards. `session_uid == row id` (the /api/meeting/start
-        # legacy shape, where native==row==session) is also accepted.
+        # `unit:agent-meet-{session_uid}:out`. The terminal passes the ROW id as `session_uid` for live
+        # rows (liveMeetings.ts `session_uid = live ? id : undefined`); the meeting's own native id is
+        # accepted for the legacy /api/meeting/start shape (native==row==session). Bind it to the OWNED
+        # row so B can't pair its own row with A's key to sniff A's copilot cards.
         owned_native = str(owned.get("native_meeting_id") or "")
         if session_uid not in (owned_native, str(meeting_id)):
             raise HTTPException(status_code=403, detail="session_uid does not match this meeting")

@@ -4,6 +4,7 @@ import { CanvasActionsProvider, useActions, OPEN_ENTITY_EVENT } from "./actions"
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
 import { useMeetingNotes } from "./notes";
+import { deriveProcessingView } from "./processingView";
 import { MeetingScopeProvider, MeetingSourceProvider, useEntities, useMeeting, useSignals } from "./useMeeting";
 
 export const MEETING_CANVAS_CONTENT_INSET = 18;
@@ -66,18 +67,16 @@ function ProcessedTranscript() {
   );
 }
 
-/** Default view when the user hasn't touched the toggle:
- *  - LIVE meeting → raw (unchanged): processing is an explicit opt-in that arms the copilot.
- *  - COMPLETED meeting → processed IF durable notes were persisted (they're the meeting's real
- *    output; defaulting to raw made users think their processed notes were lost), else raw. */
-export function defaultProcessingView(live: boolean, hasNotes: boolean): boolean {
-  return !live && hasNotes;
-}
-
 function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   const { meeting, transcript } = useMeeting();
   const live = meeting.live === true;
   const hasNotes = (transcript.notes?.length ?? 0) > 0;
+  // Durable truth wins over a stale list `live` flag ([N8] — the row can stay stuck on a live
+  // session_uid after a stop): once the effective status is TERMINAL the meeting is not
+  // effectively-live, whatever the subscribe key says. THE view-mode rule is the shared
+  // deriveProcessingView (processingView.ts) — this component holds no private copy of it.
+  const durableTerminal = ["completed", "failed", "stopped", "past"].includes(meeting.status ?? "");
+  const effectiveLive = live && !durableTerminal;
   // P0: `meetingId` (the tab id) is the meetings-domain ROW id; the human-readable native is on the
   // meeting state — pass BOTH to /api/meeting/process so it keys the copilot on the row id (leak-safe)
   // while naming the kg doc by the native.
@@ -85,15 +84,15 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
 
   // null = untouched → follow the default (which can flip once the durable notes hydrate).
   const [override, setOverride] = useState<boolean | null>(null);
-  const processing = override ?? defaultProcessingView(live, hasNotes);
+  const processing = deriveProcessingView({ override, live, hasNotes, durableTerminal });
 
   // LIVE: the toggle ALSO controls backend processing — ON enables the copilot (full-history backfill
   // the first time, else resume); OFF disables it. COMPLETED: pure view switch — there is nothing to
-  // arm any more, so we must NOT hit the process endpoint.
+  // arm any more, so we must NOT hit the process endpoint (a stale-live row counts as completed).
   const toggleProcessing = () => {
     const next = !processing;
     setOverride(next);
-    if (meetingId && live) {
+    if (meetingId && effectiveLive) {
       void fetch("/api/meeting/process", {
         method: "POST", headers: { "Content-Type": "application/json" },
         // meeting_id = the ROW id (the copilot keys on it); native_id = the display native (kg doc name).
@@ -103,7 +102,7 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   };
 
   // Completed meetings get view names (nothing is "processing" any more); live keeps the arm/disarm wording.
-  const label = live ? `Processing ${processing ? "on" : "off"}` : (processing ? "Processed" : "Raw");
+  const label = effectiveLive ? `Processing ${processing ? "on" : "off"}` : (processing ? "Processed" : "Raw");
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)" }}>
@@ -112,7 +111,7 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
           type="button"
           onClick={toggleProcessing}
           aria-pressed={processing}
-          title={processing ? "Showing the cleaned, copilot-processed view" : (live ? "Showing the raw transcript — flip on for processing" : "Showing the raw transcript")}
+          title={processing ? "Showing the cleaned, copilot-processed view" : (effectiveLive ? "Showing the raw transcript — flip on for processing" : "Showing the raw transcript")}
           style={{
             display: "flex", alignItems: "center", gap: 7, cursor: "pointer",
             background: processing ? "var(--accent)" : "transparent",

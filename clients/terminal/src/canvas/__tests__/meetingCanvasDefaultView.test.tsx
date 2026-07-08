@@ -27,7 +27,8 @@ vi.mock("../../surfaces/meetingLive", () => ({
   }),
 }));
 
-import { MeetingCanvasView, defaultProcessingView } from "../MeetingCanvasView";
+import { MeetingCanvasView } from "../MeetingCanvasView";
+import { defaultProcessingView } from "../processingView";
 import { ServicesProvider, createContainer, reg } from "../../platform";
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 
