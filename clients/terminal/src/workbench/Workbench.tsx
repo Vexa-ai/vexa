@@ -22,7 +22,7 @@ import { updatesBadge, markUpdatesSeen, updatesSeenTs } from "../surfaces/update
 import { readActiveSet, readWorkspaceGit } from "../surfaces/workspaceApi";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
-import { listWorkspaceTree } from "../surfaces/workspaceApi";
+import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
@@ -40,8 +40,6 @@ function ThemeToggle() {
     </button>
   );
 }
-
-const entitySlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 // ── the dockview panel host: render a tab by its kind, tracking active state ─────
 function TabHost(props: IDockviewPanelProps) {
@@ -298,20 +296,16 @@ export function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Clicking an entity link in chat opens its doc. Reveal the center (leave chat-only → Knowledge view),
-  // resolve a [[wikilink]] title to its kg/entities/*.md path, then open the doc tab.
+  // Clicking an entity link in chat or a doc opens its doc tab. Reveal the center (leave chat-only →
+  // Knowledge view), resolve [[wikilinks]]/relative paths via the shared resolver (slug-aware: the
+  // source doc's workspace first, then home, then the rest of the mounted set).
   useEffect(() => {
     const onOpenEntity = async (e: Event) => {
-      const detail = (e as CustomEvent<{ path?: string; wikilink?: string; beside?: boolean }>).detail || {};
-      let path = detail.path;
-      if (!path && detail.wikilink) {
-        const slug = entitySlug(detail.wikilink);
-        const tree = await listWorkspaceTree().catch(() => [] as string[]);
-        path = tree.find((p) => p.startsWith("kg/entities/") && p.endsWith(`/${slug}.md`));
-      }
-      if (!path) return;
+      const detail = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; beside?: boolean }>).detail || {};
+      const r = await resolveDocRef(detail, { path: detail.docPath, slug: detail.slug });
+      if (!r) return;
       if (layout.store.getState().activeList === "sessions") layout.setActiveList("files");  // reveal the center
-      const d = { id: `doc:${path}`, title: path.split("/").pop() ?? path, kind: "doc", params: { path } };
+      const d = { id: r.slug ? `doc:${r.slug}:${r.path}` : `doc:${r.path}`, title: r.path.split("/").pop() ?? r.path, kind: "doc", params: { path: r.path, slug: r.slug } };
       // beside = clicked inside a doc → split, keep the source visible; otherwise plain tab.
       if (detail.beside) layout.openTabBeside(d); else layout.openTab(d);
     };

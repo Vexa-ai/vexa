@@ -5,13 +5,22 @@
  *  lists, links (new tab, rel noreferrer), [[wikilinks]], blockquotes, horizontal rules,
  *  GFM pipe tables, paragraphs and line breaks. Intentionally a small subset — robust,
  *  not spec-complete. */
+"use client";
 import { Fragment, type ReactNode } from "react";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 
 // An entity-doc path (e.g. kg/entities/person/dmitry-grankin.md) → clickable to open the doc.
 const ENTITY_PATH = /^[\w./-]*kg\/entities\/[\w./-]+\.md$/;
-function openEntity(detail: { path?: string; wikilink?: string }): void {
-  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail }));
+// Clickable `kg/entities/...` inline code — a component so it can read the doc's
+// workspace context (DocMeta/DocNav) via useOpenEntity, same as every other link.
+function EntityCode({ code }: { code: string }) {
+  const openEntity = useOpenEntity();
+  return (
+    <code onClick={() => openEntity({ path: code })}
+      style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--blue)", cursor: "pointer" }}>
+      {code}
+    </code>
+  );
 }
 
 // ── inline span parsing: code, bold, italic, links, wikilinks ──────────────────────
@@ -23,12 +32,12 @@ function inline(text: string): ReactNode[] {
   codeParts.forEach((seg, ci) => {
     if (seg.startsWith("`") && seg.endsWith("`") && seg.length >= 2) {
       const code = seg.slice(1, -1);
-      const isPath = ENTITY_PATH.test(code);
-      out.push(
-        <code key={`c${ci}`} onClick={isPath ? () => openEntity({ path: code }) : undefined}
-          style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: isPath ? "var(--blue)" : "var(--t1)", cursor: isPath ? "pointer" : undefined }}>
-          {code}
-        </code>,
+      out.push(ENTITY_PATH.test(code)
+        ? <EntityCode key={`c${ci}`} code={code} />
+        : <code key={`c${ci}`}
+            style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--t1)" }}>
+            {code}
+          </code>,
       );
     } else {
       emphasis(seg, `${ci}`, out);
@@ -47,15 +56,18 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
     if (m.index > last) out.push(<Fragment key={`${key}-t${i}`}>{text.slice(last, m.index)}</Fragment>);
     const tok = m[0];
     if (m[1]) {
-      // [[wikilink]] — clickable: resolve the title to its entity doc
-      out.push(<span key={`${key}-w${i}`} onClick={() => openEntity({ wikilink: tok.slice(2, -2) })} style={{ color: "var(--blue)", cursor: "pointer" }}>{tok}</span>);
+      // [[wikilink]] — the same typed entity chip MdxDoc renders (shared resolver; a
+      // title with no entity doc renders muted + tooltip instead of a dead click)
+      out.push(<Wikilink key={`${key}-w${i}`} title={tok.slice(2, -2)} />);
     } else if (m[2]) {
-      // [text](url)
+      // [text](url) — workspace-internal (schemeless) hrefs navigate in place, resolving
+      // relative paths against the linking doc; external links open a browser tab
       const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;
-      out.push(
-        <a key={`${key}-l${i}`} href={lm[2]} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>
-          {lm[1] || lm[2]}
-        </a>,
+      out.push(isInternalHref(lm[2])
+        ? <InternalLink key={`${key}-l${i}`} href={lm[2]}>{lm[1] || lm[2]}</InternalLink>
+        : <a key={`${key}-l${i}`} href={/^https?:/i.test(lm[2]) || lm[2].startsWith("#") ? lm[2] : undefined} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>
+            {lm[1] || lm[2]}
+          </a>,
       );
     } else if (m[3]) {
       // **bold** / __bold__

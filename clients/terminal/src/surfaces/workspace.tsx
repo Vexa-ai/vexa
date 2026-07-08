@@ -10,7 +10,7 @@ import { meetingsOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
-import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocNavContext, type DocNavigate } from "../ui-kit/MdxDoc";
+import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocMetaContext, DocNavContext, resolveDocRef, type DocNavigate } from "../ui-kit/docLinks";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
@@ -43,12 +43,8 @@ function wikilinks(text: string, navigate?: DocNavigate | null): ReactNode[] {
     : <span key={i}>{part}</span>);
 }
 
-// [[Title]] → kg/entities/<type>/<slug>.md (same resolution the workbench uses for chat links)
-const entitySlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-async function resolveWikilink(title: string): Promise<string | undefined> {
-  const tree = await listWorkspaceTree().catch(() => [] as string[]);
-  return tree.find((p) => p.startsWith("kg/entities/") && p.endsWith(`/${entitySlug(title)}.md`));
-}
+// [[Title]] / relative-path resolution lives in ui-kit/docLinks (resolveDocRef) — shared
+// with the renderers and the workbench event handler, slug- and base-path-aware.
 
 // ── reveal-in-tree: breadcrumb segments ask the Files list to expand down to a folder ──
 const REVEAL_PATH_EVENT = "vexa:terminal:reveal-path";
@@ -1036,10 +1032,20 @@ function DocTab({ id, params }: TabProps) {
   const show = (p: string) => layout.retargetTab(id, docTab(p, slug));
   const navigate: DocNavigate = (detail) => {
     void (async () => {
-      const p = detail.path ?? (detail.wikilink ? await resolveWikilink(detail.wikilink) : undefined);
-      if (!p || p === path) return;
-      setNav((n) => ({ stack: [...n.stack.slice(0, n.idx + 1), p], idx: n.idx + 1 }));
-      show(p);
+      // Resolve within THIS doc's workspace first (then home, then the mounted set) and
+      // against THIS doc's directory for relative paths. A link whose key is present
+      // pins the target workspace (the Wikilink chip pre-resolves and pins).
+      const r = await resolveDocRef(detail, { path, slug: "slug" in detail ? detail.slug : slug });
+      if (!r) return;
+      // Cross-workspace target → this pane can't show it (it reads files via its own
+      // slug); open a separate tab in the target workspace instead.
+      if (r.slug !== slug) {
+        window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: r.path, slug: r.slug } }));
+        return;
+      }
+      if (r.path === path) return;
+      setNav((n) => ({ stack: [...n.stack.slice(0, n.idx + 1), r.path], idx: n.idx + 1 }));
+      show(r.path);
     })();
   };
   const go = (dir: -1 | 1) => {
@@ -1051,6 +1057,7 @@ function DocTab({ id, params }: TabProps) {
   const { fm, body } = parseEntity(content ?? "");
   return (
     <DocNavContext.Provider value={navigate}>
+    <DocMetaContext.Provider value={{ path, slug }}>
       <div ref={scroller} style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
         <div style={{ maxWidth: 760, margin: "0 auto", padding: "22px 24px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
@@ -1077,6 +1084,7 @@ function DocTab({ id, params }: TabProps) {
           <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <MdxDoc>{body}</MdxDoc>}</div>
         </div>
       </div>
+    </DocMetaContext.Provider>
     </DocNavContext.Provider>
   );
 }
