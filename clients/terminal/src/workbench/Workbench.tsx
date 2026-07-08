@@ -148,6 +148,8 @@ const dvTabComponents = { default: TabHeader };
 function LeftPane() {
   const layout = useService(LayoutServiceId);
   const { activeList } = useStore(layout.store);
+  // re-render on LATE registrations (e.g. the admin surface appears after its async gate check)
+  useSyncExternalStore(registry.subscribe, registry.version, registry.version);
   const lists = registry.lists();
   const active = registry.list(activeList) ?? lists[0];
   const Comp = active?.component;

@@ -36,10 +36,20 @@ const _lists = new Map<string, ListContribution>();
 const _tabs = new Map<string, TabComponent>();
 const _commands: CommandContribution[] = [];
 
+// Most surfaces register at import time (the barrel), but a surface may register LATE after an
+// async check (e.g. the hidden admin panel appears only once /api/admin/me confirms the caller).
+// The shell subscribes (useSyncExternalStore) so a late registration re-renders the switcher.
+let _version = 0;
+const _subs = new Set<() => void>();
+const _notify = () => { _version++; for (const fn of _subs) fn(); };
+
 export const registry = {
-  registerList(l: ListContribution) { _lists.set(l.id, l); },
+  registerList(l: ListContribution) { _lists.set(l.id, l); _notify(); },
   lists(): ListContribution[] { return [..._lists.values()].sort((a, b) => a.order - b.order); },
   list(id: string): ListContribution | undefined { return _lists.get(id); },
+
+  subscribe(fn: () => void): () => void { _subs.add(fn); return () => { _subs.delete(fn); }; },
+  version(): number { return _version; },
 
   registerTab(kind: string, c: TabComponent) { _tabs.set(kind, c); },
   tabComponent(kind: string): TabComponent | undefined { return _tabs.get(kind); },

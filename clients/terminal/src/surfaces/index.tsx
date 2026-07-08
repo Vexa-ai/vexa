@@ -21,4 +21,5 @@ import "./workspace";  // list "files" (+ git) + tab-kind "doc"       (gated in 
 import "./workspaceManage"; // tab-kind "workspace" — the manage hub  (gated in meetings mode)
 import "./routines";   // list "routines" + tab-kind "routines"       (gated in meetings mode)
 import "./tokens";     // list "tokens" — API-token self-serve (registers in EVERY mode)
+import "./admin";      // HIDDEN admin infra panel — registers only after /api/admin/me confirms (gated in meetings mode)
 // tasks deferred — surfaces as quick-action cards in chat later (see roadmap)

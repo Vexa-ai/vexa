@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -693,6 +694,40 @@ def create_app(
         `native_resolve: {ok:false, kind:'unauthorized', detail:…}` instead of silent dead air."""
         from control_plane import transcription_watcher as _txw
         return _txw.relay_health()
+
+    @app.get("/api/admin/overview")
+    def admin_overview(request: Request):
+        """Read-only infra + pipeline introspection for the terminal's hidden admin panel: every
+        runtime.v1 workload (agent workers + meeting bots, classified) plus the per-meeting redis
+        pipeline carriers (proc/tc streams, opt-in flag, cursor, active_meetings membership).
+
+        INTERNAL-TIER ONLY (fail-closed): the caller must present ``X-Internal-Secret`` matching
+        ``VEXA_INTERNAL_API_SECRET`` — the terminal's Next server holds it and fronts this with its
+        own email-allowlist gate; an unconfigured secret means NOBODY gets in (403), and the check
+        holds regardless of ingress (direct or via the gateway's /agent/* proxy)."""
+        from control_plane import admin_panel
+
+        secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
+        provided = request.headers.get("x-internal-secret", "")
+        if not secret or not hmac.compare_digest(provided, secret):
+            raise HTTPException(status_code=403, detail="internal secret required")
+
+        overview: dict = {"workloads": [], "meetings": []}
+        try:
+            overview["workloads"] = admin_panel.fetch_workloads(settings.runtime_api_url)
+        except Exception as e:  # noqa: BLE001 — typed partial failure (P18): the panel shows the section error
+            overview["workloads_error"] = f"{type(e).__name__}: {e}"
+        if redis_url:
+            import redis as _redis
+
+            try:
+                r = _redis.from_url(redis_url, decode_responses=True)
+                overview["meetings"] = admin_panel.pipeline_snapshot(r, live.list())
+            except Exception as e:  # noqa: BLE001
+                overview["meetings_error"] = f"{type(e).__name__}: {e}"
+        else:
+            overview["meetings_error"] = "no redis_url configured"
+        return overview
 
     @app.post("/api/meeting/process", status_code=202)
     def meeting_process(body: MeetingProcess, request: Request):
