@@ -28,7 +28,7 @@ interface PipelineRow {
   proc_stream?: StreamStat;
   transcript_stream?: StreamStat;
   pending_drain?: { deadline: number; overdue: boolean };
-  live?: { native_id?: string; platform?: string; title?: string; status?: string };
+  live?: { native_id?: string; platform?: string; title?: string; status?: string; last_seen?: number };
 }
 interface Workload {
   workloadId: string;
@@ -263,7 +263,9 @@ function PipelineTab({ meetings, botStops, error }: { meetings: PipelineRow[]; b
             {shown.map(({ m, health }) => (
               <tr key={m.meeting_id}>
                 <td style={{ ...td, paddingLeft: 14 }} title={m.live?.title}>{m.meeting_id}{m.live?.native_id ? <span style={{ color: "var(--t3)" }}> ({m.live.native_id})</span> : null}</td>
-                <td style={td}>{m.live ? <><StateDot on={m.live.status === "live"} />{m.live.status}</> : "—"}</td>
+                <td style={td} title={m.live?.last_seen ? "registry last_seen — re-stamped every segment batch; silent entries self-demote after 60s" : undefined}>
+                  {m.live ? <><StateDot on={m.live.status === "live"} />{m.live.status}{m.live.last_seen ? <span style={{ color: "var(--t3)" }}> · {ago(m.live.last_seen * 1000)}</span> : null}</> : "—"}
+                </td>
                 <td style={{ ...td, color: m.processing_on ? "var(--t1)" : "var(--t2)" }}>{m.processing_on ? "ON" : "off"}</td>
                 <td style={td}>{stat(m.proc_stream)}</td>
                 <td style={td}>{stat(m.transcript_stream)}</td>
