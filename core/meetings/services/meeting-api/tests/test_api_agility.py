@@ -205,8 +205,9 @@ def test_404_envelope_matches_across_handlers():
 def test_method_not_allowed_405():
     store, _ = _seeded_store()
     c = _client(store=store)
-    # /meetings is GET-only at this layer; /transcripts/... is GET-only.
-    assert c.post("/meetings", headers=HEADERS, json={}).status_code == 405
+    # /meetings accepts GET + POST (planned-meeting create) but not PUT/DELETE on the collection;
+    # /transcripts/... is GET-only.
+    assert c.put("/meetings", headers=HEADERS, json={}).status_code == 405
     assert c.delete("/meetings", headers=HEADERS).status_code == 405
     assert c.put("/transcripts/google_meet/abc-defg-hij", headers=HEADERS, json={}).status_code == 405
     # /bots accepts GET + POST but not PUT/PATCH.

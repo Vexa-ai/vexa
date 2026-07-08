@@ -320,6 +320,119 @@ class InMemoryTranscriptStore:
             "changed": changed,
         }
 
+    def _planned_row(self, mid) -> dict:
+        m = self._meetings[mid]
+        return {
+            "id": mid,
+            "user_id": m["user_id"],
+            "platform": m["platform"],
+            "native_meeting_id": m["native_meeting_id"],
+            "constructed_meeting_url": m.get("constructed_meeting_url")
+            or m["data"].get("constructed_meeting_url"),
+            "status": m["status"],
+            "bot_container_id": m.get("bot_container_id"),
+            "start_time": m.get("start_time"),
+            "end_time": m.get("end_time"),
+            "data": m["data"],
+            "shared": False,
+            "created_at": m.get("created_at"),
+            "updated_at": m.get("updated_at"),
+        }
+
+    def _dup_non_terminal(self, user_id, platform, native_meeting_id, exclude_id=None):
+        """True when a NON-TERMINAL row already exists for (user, platform, native) — the fake's
+        stand-in for the partial unique index + the adapter's dup check."""
+        if native_meeting_id is None:
+            return False
+        return any(
+            m["user_id"] == user_id and m["platform"] == platform
+            and m["native_meeting_id"] == native_meeting_id
+            and m["status"] not in ("completed", "failed")
+            and mid != exclude_id
+            for mid, m in self._meetings.items()
+        )
+
+    async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
+                                     title=None, scheduled_at=None, meeting_url=None,
+                                     workspace_id=None, auto_join=True, calendar_uid=None):
+        if self._dup_non_terminal(user_id, platform, native_meeting_id):
+            return {"error": "duplicate"}
+        data: dict = {"auto_join": bool(auto_join)}
+        if title:
+            data["title"] = title
+        if scheduled_at:
+            data["scheduled_at"] = scheduled_at
+        if meeting_url:
+            data["constructed_meeting_url"] = meeting_url
+        if workspace_id:
+            data["workspace_id"] = workspace_id
+        if calendar_uid:
+            data["calendar_uid"] = calendar_uid
+        mid = self.seed_meeting(
+            user_id=user_id, platform=platform, native_meeting_id=native_meeting_id,
+            status="scheduled" if scheduled_at else "idle",
+            start_time=None, data=data, constructed_meeting_url=meeting_url,
+        )
+        return self._planned_row(mid)
+
+    async def update_planned_meeting(self, user_id, meeting_id, updates):
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        if m["status"] not in ("idle", "scheduled"):
+            return {"error": "conflict"}
+        data = m["data"]
+        if "native_meeting_id" in updates:
+            new_platform = updates.get("platform") or m["platform"]
+            new_native = updates["native_meeting_id"]
+            if new_native is not None and self._dup_non_terminal(
+                user_id, new_platform, new_native, exclude_id=meeting_id
+            ):
+                return {"error": "duplicate"}
+            m["platform"] = new_platform
+            m["native_meeting_id"] = new_native
+        if "constructed_meeting_url" in updates:
+            if updates["constructed_meeting_url"]:
+                data["constructed_meeting_url"] = updates["constructed_meeting_url"]
+                m["constructed_meeting_url"] = updates["constructed_meeting_url"]
+            else:
+                data.pop("constructed_meeting_url", None)
+                m["constructed_meeting_url"] = None
+        if "title" in updates:
+            if updates["title"]:
+                data["title"] = updates["title"]
+            else:
+                data.pop("title", None)
+        if "scheduled_at" in updates:
+            if updates["scheduled_at"]:
+                data["scheduled_at"] = updates["scheduled_at"]
+                m["status"] = "scheduled"
+            else:
+                data.pop("scheduled_at", None)
+                m["status"] = "idle"
+        if "workspace_id" in updates:
+            if updates["workspace_id"]:
+                data["workspace_id"] = updates["workspace_id"]
+            else:
+                data.pop("workspace_id", None)
+        if "auto_join" in updates:
+            data["auto_join"] = bool(updates["auto_join"])
+        if "calendar_uid" in updates:
+            if updates["calendar_uid"]:
+                data["calendar_uid"] = updates["calendar_uid"]
+            else:
+                data.pop("calendar_uid", None)
+        return self._planned_row(meeting_id)
+
+    async def delete_planned_meeting(self, user_id, meeting_id):
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        if m["status"] not in ("idle", "scheduled"):
+            return False
+        del self._meetings[meeting_id]
+        return True
+
     def _row_or_placeholder(self, meeting_id) -> dict:
         m = self._meetings.get(meeting_id)
         if m is None:

@@ -373,6 +373,33 @@ class SqlAlchemyMeetingRepo:
                 n_active = int((await db.execute(count_stmt)).scalar() or 0)
                 if n_active >= max_concurrent:
                     raise MaxBotsExceeded(user_id, max_concurrent)
+            # 2b. claim — a PLANNED row (intent status `idle`/`scheduled`, created by POST /meetings
+            #     or calendar sync) for the SAME (user, platform, native) is UPGRADED in place instead
+            #     of inserting a second row: without this, the unique partial index (which covers
+            #     intent statuses too) would 409 the spawn. The planned analog of ``reopen_meeting``,
+            #     atomic under the same advisory lock. Spawn keys merge OVER the planned data; the
+            #     plan's `title` / `scheduled_at` / `workspace_id` / `auto_join` / `calendar_uid`
+            #     survive — the plan, its workspace bind, and the transcript live on ONE row.
+            from sqlalchemy.orm.attributes import flag_modified
+
+            claimable = (await db.execute(
+                select(Meeting).where(
+                    Meeting.user_id == user_id,
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                    Meeting.status.in_(("idle", "scheduled")),
+                ).order_by(Meeting.created_at.desc()).limit(1).with_for_update()
+            )).scalars().first()
+            if claimable is not None:
+                planned = dict(claimable.data) if isinstance(claimable.data, dict) else {}
+                claimable.status = "requested"
+                claimable.end_time = None
+                claimable.bot_container_id = None
+                claimable.data = {**planned, **dict(data or {})}
+                flag_modified(claimable, "data")
+                await db.commit()
+                await db.refresh(claimable)
+                return _row_to_dict(claimable)
             # 3. insert — still inside the same txn/lock, so check+insert is atomic.
             m = Meeting(
                 user_id=user_id, platform=platform, platform_specific_id=native_meeting_id,
@@ -390,6 +417,47 @@ class SqlAlchemyMeetingRepo:
                 ) from e
             await db.refresh(m)
             return _row_to_dict(m)
+
+    async def list_scheduled_meetings(self) -> list[dict]:
+        """Every ``scheduled`` row with a joinable link (the auto-join sweep's candidate set —
+        the time/toggle/backoff filtering is the sweep's pure ``due_rows``)."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (await db.execute(
+                select(Meeting).where(
+                    Meeting.status == "scheduled",
+                    Meeting.platform_specific_id.isnot(None),
+                    Meeting.platform != "unknown",
+                )
+            )).scalars().all()
+            return [_row_to_dict(m) for m in rows]
+
+    async def merge_meeting_data(self, meeting_id, patch: dict) -> None:
+        """Merge ``patch`` into ``meeting.data`` (a ``None`` value REMOVES the key) — the sweep's
+        error/backoff stamping primitive. Row-locked; a missing row is a no-op."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id).with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            for k, v in patch.items():
+                if v is None:
+                    data.pop(k, None)
+                else:
+                    data[k] = v
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
 
     async def create_session(self, *, meeting_id, session_uid) -> None:
         async with self._session_factory() as db:

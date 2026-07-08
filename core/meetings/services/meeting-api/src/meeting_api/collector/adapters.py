@@ -703,6 +703,176 @@ class SqlAlchemyTranscriptStore:
                 "changed": changed,
             }
 
+    @staticmethod
+    def _planned_row(m) -> dict:
+        """One meeting ORM row → the ``list_meetings`` dict shape (owner context: shared=False)."""
+        return {
+            "id": m.id,
+            "user_id": m.user_id,
+            "platform": m.platform,
+            "native_meeting_id": m.platform_specific_id,
+            "constructed_meeting_url": (m.data or {}).get("constructed_meeting_url")
+            if isinstance(m.data, dict) else None,
+            "status": m.status,
+            "bot_container_id": m.bot_container_id,
+            "start_time": m.start_time.isoformat() if m.start_time else None,
+            "end_time": m.end_time.isoformat() if m.end_time else None,
+            "data": m.data if isinstance(m.data, dict) else {},
+            "shared": False,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+            "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+        }
+
+    async def create_planned_meeting(self, user_id, *, platform, native_meeting_id,
+                                     title=None, scheduled_at=None, meeting_url=None,
+                                     workspace_id=None, auto_join=True, calendar_uid=None) -> dict:
+        """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
+        ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
+        and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate)."""
+        from sqlalchemy import bindparam, select, text
+        from sqlalchemy.exc import IntegrityError
+
+        from .models import Meeting
+
+        data: dict = {"auto_join": bool(auto_join)}
+        if title:
+            data["title"] = title
+        if scheduled_at:
+            data["scheduled_at"] = scheduled_at
+        if meeting_url:
+            data["constructed_meeting_url"] = meeting_url
+        if workspace_id:
+            data["workspace_id"] = workspace_id
+        if calendar_uid:
+            data["calendar_uid"] = calendar_uid
+        status = "scheduled" if scheduled_at else "idle"
+
+        async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            if native_meeting_id is not None:
+                dup = (await db.execute(
+                    select(Meeting.id).where(
+                        Meeting.user_id == user_id,
+                        Meeting.platform == platform,
+                        Meeting.platform_specific_id == native_meeting_id,
+                        Meeting.status.notin_(("completed", "failed")),
+                    )
+                )).scalars().first()
+                if dup is not None:
+                    return {"error": "duplicate"}
+            m = Meeting(
+                user_id=user_id, platform=platform, platform_specific_id=native_meeting_id,
+                status=status, data=data,
+            )
+            db.add(m)
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                return {"error": "duplicate"}
+            await db.refresh(m)
+            return self._planned_row(m)
+
+    async def update_planned_meeting(self, user_id, meeting_id, updates) -> "Optional[dict]":
+        """ROW-id-addressed PATCH of a planned row (intent status only). ``updates`` carries only
+        the keys the caller sent — presence means apply (None clears where documented)."""
+        from sqlalchemy import bindparam, select, text
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("idle", "scheduled"):
+                return {"error": "conflict"}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+
+            if "native_meeting_id" in updates:
+                new_platform = updates.get("platform") or meeting.platform
+                new_native = updates["native_meeting_id"]
+                if new_native is not None:
+                    dup = (await db.execute(
+                        select(Meeting.id).where(
+                            Meeting.user_id == user_id,
+                            Meeting.platform == new_platform,
+                            Meeting.platform_specific_id == new_native,
+                            Meeting.status.notin_(("completed", "failed")),
+                            Meeting.id != meeting_id,
+                        )
+                    )).scalars().first()
+                    if dup is not None:
+                        return {"error": "duplicate"}
+                meeting.platform = new_platform
+                meeting.platform_specific_id = new_native
+            if "constructed_meeting_url" in updates:
+                if updates["constructed_meeting_url"]:
+                    data["constructed_meeting_url"] = updates["constructed_meeting_url"]
+                else:
+                    data.pop("constructed_meeting_url", None)
+            if "title" in updates:
+                if updates["title"]:
+                    data["title"] = updates["title"]
+                else:
+                    data.pop("title", None)
+            if "scheduled_at" in updates:
+                if updates["scheduled_at"]:
+                    data["scheduled_at"] = updates["scheduled_at"]
+                    meeting.status = "scheduled"
+                else:
+                    data.pop("scheduled_at", None)
+                    meeting.status = "idle"
+            if "workspace_id" in updates:
+                if updates["workspace_id"]:
+                    data["workspace_id"] = updates["workspace_id"]
+                else:
+                    data.pop("workspace_id", None)
+            if "auto_join" in updates:
+                data["auto_join"] = bool(updates["auto_join"])
+            if "calendar_uid" in updates:
+                if updates["calendar_uid"]:
+                    data["calendar_uid"] = updates["calendar_uid"]
+                else:
+                    data.pop("calendar_uid", None)
+
+            meeting.data = data
+            flag_modified(meeting, "data")
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                return {"error": "duplicate"}
+            await db.refresh(meeting)
+            return self._planned_row(meeting)
+
+    async def delete_planned_meeting(self, user_id, meeting_id) -> "Optional[bool]":
+        from sqlalchemy import select
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status not in ("idle", "scheduled"):
+                return False
+            await db.delete(meeting)
+            await db.commit()
+            return True
+
 
 class RedisStreamBus:
     """``RedisBus`` over a ``redis.asyncio`` client — XREADGROUP the segments stream, XACK,

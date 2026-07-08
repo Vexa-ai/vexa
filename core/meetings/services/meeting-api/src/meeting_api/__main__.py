@@ -297,6 +297,127 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
                 log.exception("stop-reconcile tick failed")
             await asyncio.sleep(stop_interval)
 
+    # Auto-join: "scheduled" means the bot joins. The sweep spawns a bot for every scheduled row
+    # whose data.scheduled_at arrived (lead window) and whose auto_join toggle is on, through the
+    # SAME request_bot flow POST /bots runs — the claim/upgrade branch makes it idempotent. The
+    # per-user spawn context (max-bots cap + webhook config the gateway would inject as headers)
+    # is fetched from admin-api's internal edge; unset ADMIN_API_URL/INTERNAL_API_SECRET degrades
+    # to uncapped spawns (the self-host default), an UNREACHABLE identity skips the tick (fail-closed).
+    auto_join_interval = float(os.getenv("AUTO_JOIN_SWEEP_INTERVAL_S", "30"))
+    auto_join_lead = float(os.getenv("AUTO_JOIN_LEAD_S", "60"))
+    auto_join_grace = float(os.getenv("AUTO_JOIN_GRACE_S", "600"))
+    auto_join_backoff = float(os.getenv("AUTO_JOIN_RETRY_BACKOFF_S", "300"))
+    admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
+    internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
+
+    async def _auto_join_loop() -> None:
+        if meeting_repo is None or runtime is None or not hasattr(meeting_repo, "list_scheduled_meetings"):
+            return
+        import json as _json
+
+        import httpx
+
+        from .bot_spawn.auto_join import auto_join_tick
+
+        fetch_bot_context = None
+        if admin_api_url and internal_secret:
+            async def fetch_bot_context(user_id: int):
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        r = await client.get(
+                            f"{admin_api_url}/internal/users/{user_id}/bot-context",
+                            headers={"X-Internal-Secret": internal_secret},
+                        )
+                    if r.status_code != 200:
+                        return None
+                    body = r.json()
+                    return body if isinstance(body, dict) else None
+                except Exception:
+                    return None  # identity unreachable → the sweep skips the row this tick
+
+        async def publish_status(*, user_id, meeting_id, native_id, status, when):
+            frame = {"type": "meeting.status", "meeting_id": meeting_id,
+                     "native": native_id, "status": status, "when": when}
+            try:
+                await redis_client.publish(f"u:{user_id}:meetings", _json.dumps(frame))
+            except Exception:
+                pass  # best-effort, like the collector's publish
+
+        while True:
+            try:
+                await auto_join_tick(
+                    meeting_repo, runtime,
+                    fetch_bot_context=fetch_bot_context,
+                    publish_status=publish_status,
+                    lead_s=auto_join_lead, grace_s=auto_join_grace,
+                    retry_backoff_s=auto_join_backoff,
+                    token_secret=os.getenv("ADMIN_TOKEN") or None,
+                    redis_url=os.getenv("REDIS_URL"),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("auto-join tick failed")
+            await asyncio.sleep(auto_join_interval)
+
+    # Calendar sync: each sweep discovers every user with a connected ICS feed (admin-api internal
+    # edge), fetches it over the SSRF-pinned transport, and upserts planned meetings (one row per
+    # calendar UID — next occurrence only). Per-user try/except: one bad feed never stalls the
+    # sweep. Unset ADMIN_API_URL/INTERNAL_API_SECRET → no-op (capability degrade, not boot-fail).
+    calendar_interval = float(os.getenv("CALENDAR_SYNC_INTERVAL_S", "300"))
+
+    async def _calendar_sync_loop() -> None:
+        if not (admin_api_url and internal_secret):
+            return
+        if not hasattr(transcript_store, "create_planned_meeting"):
+            return
+        import json as _json
+        from datetime import datetime, timezone
+
+        from .calendar_sync import fetch_configs, fetch_ics, parse_ics, sync_user
+
+        async def _publish(user_id, entry):
+            frame = {"type": "meeting.status", "meeting_id": entry["id"],
+                     "native": entry.get("native"), "status": entry.get("status"),
+                     "when": entry.get("when")}
+            try:
+                await redis_client.publish(f"u:{user_id}:meetings", _json.dumps(frame))
+            except Exception:
+                pass
+
+        while True:
+            try:
+                configs = await fetch_configs(admin_api_url, internal_secret)
+                for cfg in configs or []:
+                    user_id = cfg.get("user_id")
+                    stamp = {"last_sync": datetime.now(timezone.utc).isoformat(), "last_error": None}
+                    try:
+                        text = await fetch_ics(cfg["ics_url"])
+                        if text is None:
+                            stamp["last_error"] = "fetch failed (bad URL, oversize, or blocked)"
+                        else:
+                            parsed = parse_ics(text, now=datetime.now(timezone.utc))
+                            result = await sync_user(
+                                transcript_store, user_id, parsed,
+                                auto_join_default=bool(cfg.get("auto_join", True)),
+                            )
+                            stamp["counts"] = result.get("counts")
+                            for entry in (result.get("created", []) + result.get("updated", [])
+                                          + result.get("cancelled", [])):
+                                await _publish(user_id, entry)
+                    except Exception as e:  # one bad feed never stalls the sweep
+                        log.exception("calendar sync failed for user %s", user_id)
+                        stamp["last_error"] = str(e)
+                    try:
+                        await redis_client.set(f"cal:sync:{user_id}", _json.dumps(stamp))
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("calendar sync tick failed")
+            await asyncio.sleep(calendar_interval)
+
     @asynccontextmanager
     async def lifespan(_app):
         tasks = [
@@ -305,6 +426,8 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             asyncio.create_task(_webhook_drain_loop(), name="webhook-drain"),
             asyncio.create_task(_scheduler_tick_loop(), name="scheduler-tick"),
             asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
+            asyncio.create_task(_auto_join_loop(), name="auto-join"),
+            asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:

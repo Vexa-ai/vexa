@@ -139,6 +139,52 @@ class TranscriptStore(Protocol):
         or ``None`` when the user owns no such meeting."""
         ...
 
+    async def create_planned_meeting(
+        self,
+        user_id: int,
+        *,
+        platform: str,
+        native_meeting_id: Optional[str],
+        title: Optional[str] = None,
+        scheduled_at: Optional[str] = None,
+        meeting_url: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        auto_join: bool = True,
+        calendar_uid: Optional[str] = None,
+    ) -> dict:
+        """Create a PLANNED meeting row — status ``scheduled`` (when ``scheduled_at`` is set) or
+        ``idle`` — with NO bot spawned. Link-less plans use ``platform='unknown'`` +
+        ``native_meeting_id=None`` (mutations then address the ROW id). ``title`` /
+        ``scheduled_at`` / ``workspace_id`` / ``auto_join`` land in ``meeting.data``.
+
+        Serializes with concurrent spawns via the same per-user advisory lock
+        ``create_meeting_guarded`` takes. Returns the created row (``list_meetings`` shape), or
+        ``{"error": "duplicate"}`` when a NON-TERMINAL row already exists for
+        ``(user, platform, native)`` (the route maps it → 409)."""
+        ...
+
+    async def update_planned_meeting(
+        self, user_id: int, meeting_id: int, updates: dict
+    ) -> Optional[dict]:
+        """OWNER-scoped, ROW-id-addressed edit of a PLANNED meeting. Refused unless the row's
+        status is an intent status (``idle``/``scheduled``) — the bot FSM is never fought.
+
+        ``updates`` carries only the keys the caller sent (PATCH semantics): ``title`` (None
+        clears), ``scheduled_at`` (ISO8601; None clears → status flips to ``idle``; a value flips
+        to ``scheduled``), ``platform``+``native_meeting_id``+``constructed_meeting_url`` (from a
+        parsed ``meeting_url``), ``workspace_id`` (None unbinds), ``auto_join`` (bool).
+
+        Returns the updated row (``list_meetings`` shape), ``None`` when the user owns no such
+        row (→ 404), ``{"error": "conflict"}`` when the row advanced into the FSM (→ 409), or
+        ``{"error": "duplicate"}`` when a new native id collides with another non-terminal row."""
+        ...
+
+    async def delete_planned_meeting(self, user_id: int, meeting_id: int) -> Optional[bool]:
+        """OWNER-scoped delete of a PLANNED (``idle``/``scheduled``) row. Returns ``True`` on
+        delete, ``None`` when the user owns no such row (→ 404), ``False`` when the row is
+        FSM-owned (→ 409). An FSM row is never deletable from here."""
+        ...
+
 
 @runtime_checkable
 class PubSub(Protocol):

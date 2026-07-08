@@ -33,9 +33,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
@@ -254,6 +255,178 @@ def build_router(
         if meeting is None:
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
         return JSONResponse(content=meeting)
+
+    # --- POST /meetings → CREATE a PLANNED meeting (intent status, NO bot spawned). The user plans a
+    # meeting ahead of time — with or without a meeting link, with or without a time. Status starts at
+    # `scheduled` (time given) or `idle`. A later POST /bots for the same (platform, native) CLAIMS the
+    # row in place (bot_spawn.create_meeting_guarded), so the plan, its workspace bind, and the eventual
+    # transcript share ONE row. Link-less plans use platform='unknown' + NULL native id and are addressed
+    # by ROW id (PATCH/DELETE below). ---
+    @router.post("/meetings", status_code=201)
+    async def create_planned_meeting(
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+
+        title = payload.get("title")
+        if title is not None and not isinstance(title, str):
+            raise HTTPException(status_code=422, detail="'title' must be a string")
+        title = (title or "").strip()[:512] or None
+
+        scheduled_at = payload.get("scheduled_at")
+        if scheduled_at is not None and not isinstance(scheduled_at, str):
+            raise HTTPException(status_code=422, detail="'scheduled_at' must be an ISO8601 string")
+
+        meeting_url = payload.get("meeting_url")
+        if meeting_url is not None and not isinstance(meeting_url, str):
+            raise HTTPException(status_code=422, detail="'meeting_url' must be a string")
+        meeting_url = (meeting_url or "").strip() or None
+        platform, native_id = "unknown", None
+        if meeting_url:
+            parsed = parse_meeting_url(meeting_url)
+            if parsed is None:
+                raise HTTPException(status_code=422, detail="unrecognized 'meeting_url'")
+            platform, native_id = parsed
+
+        workspace_id = payload.get("workspace_id")
+        if workspace_id is not None and not isinstance(workspace_id, str):
+            raise HTTPException(status_code=422, detail="'workspace_id' must be a string")
+        workspace_id = (workspace_id or "").strip() or None
+
+        auto_join = payload.get("auto_join", True)
+        if not isinstance(auto_join, bool):
+            raise HTTPException(status_code=422, detail="'auto_join' must be a boolean")
+
+        row = await store.create_planned_meeting(
+            user_id, platform=platform, native_meeting_id=native_id,
+            title=title, scheduled_at=scheduled_at, meeting_url=meeting_url,
+            workspace_id=workspace_id, auto_join=auto_join,
+        )
+        if isinstance(row, dict) and row.get("error") == "duplicate":
+            raise HTTPException(
+                status_code=409,
+                detail=f"A meeting already exists for {platform}/{native_id}",
+            )
+        log_event(
+            "meeting_planned", audience="user", span="meetings.plan",
+            user_id=user_id, meeting_id=str(row.get("id")),
+            fields={"status": row.get("status"), "platform": platform,
+                    "scheduled_at": scheduled_at, "has_link": native_id is not None},
+        )
+        await _publish_user_meeting_status(
+            redis, user_id=user_id, meeting_id=row.get("id"), native_id=native_id,
+            status=row.get("status"), when=scheduled_at, log_event=log_event,
+        )
+        return JSONResponse(status_code=201, content=row)
+
+    # --- PATCH /meetings/{meeting_id} → EDIT a PLANNED meeting by ROW id (title / time / link /
+    # workspace / auto_join). Owner-scoped; refused (409) once the row advanced into the bot FSM —
+    # the FSM is never fought. `scheduled_at: null` clears the time (status flips to `idle`);
+    # `meeting_url: null` detaches the link (row becomes link-less). ---
+    @router.patch("/meetings/{meeting_id}")
+    async def patch_planned_meeting(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+
+        updates: dict = {}
+        if "title" in payload:
+            title = payload["title"]
+            if title is not None and not isinstance(title, str):
+                raise HTTPException(status_code=422, detail="'title' must be a string")
+            updates["title"] = (title or "").strip()[:512] or None
+        if "scheduled_at" in payload:
+            scheduled_at = payload["scheduled_at"]
+            if scheduled_at is not None and not isinstance(scheduled_at, str):
+                raise HTTPException(status_code=422, detail="'scheduled_at' must be an ISO8601 string")
+            updates["scheduled_at"] = scheduled_at
+        if "meeting_url" in payload:
+            meeting_url = payload["meeting_url"]
+            if meeting_url is not None and not isinstance(meeting_url, str):
+                raise HTTPException(status_code=422, detail="'meeting_url' must be a string")
+            meeting_url = (meeting_url or "").strip() or None
+            if meeting_url:
+                parsed = parse_meeting_url(meeting_url)
+                if parsed is None:
+                    raise HTTPException(status_code=422, detail="unrecognized 'meeting_url'")
+                updates["platform"], updates["native_meeting_id"] = parsed
+                updates["constructed_meeting_url"] = meeting_url
+            else:
+                updates["platform"] = "unknown"
+                updates["native_meeting_id"] = None
+                updates["constructed_meeting_url"] = None
+        if "workspace_id" in payload:
+            workspace_id = payload["workspace_id"]
+            if workspace_id is not None and not isinstance(workspace_id, str):
+                raise HTTPException(status_code=422, detail="'workspace_id' must be a string")
+            updates["workspace_id"] = (workspace_id or "").strip() or None
+        if "auto_join" in payload:
+            if not isinstance(payload["auto_join"], bool):
+                raise HTTPException(status_code=422, detail="'auto_join' must be a boolean")
+            updates["auto_join"] = payload["auto_join"]
+        if not updates:
+            raise HTTPException(status_code=422, detail="no editable fields in body")
+
+        row = await store.update_planned_meeting(user_id, meeting_id, updates)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        if row.get("error") == "conflict":
+            raise HTTPException(
+                status_code=409, detail="Meeting is no longer planned (bot lifecycle owns it)"
+            )
+        if row.get("error") == "duplicate":
+            raise HTTPException(status_code=409, detail="Another active meeting uses that link")
+        log_event(
+            "meeting_plan_updated", audience="user", span="meetings.plan.update",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"keys": sorted(updates.keys()), "status": row.get("status")},
+        )
+        await _publish_user_meeting_status(
+            redis, user_id=user_id, meeting_id=meeting_id,
+            native_id=row.get("native_meeting_id"), status=row.get("status"),
+            when=(row.get("data") or {}).get("scheduled_at"), log_event=log_event,
+        )
+        return JSONResponse(content=row)
+
+    # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
+    # never deletable from here). Owner-scoped, ROW-id addressed. ---
+    @router.delete("/meetings/{meeting_id}", status_code=204)
+    async def delete_planned_meeting(
+        meeting_id: int,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        result = await store.delete_planned_meeting(user_id, meeting_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        if result is False:
+            raise HTTPException(
+                status_code=409, detail="Meeting is no longer planned (bot lifecycle owns it)"
+            )
+        log_event(
+            "meeting_plan_deleted", audience="user", span="meetings.plan.delete",
+            user_id=user_id, meeting_id=str(meeting_id), fields={},
+        )
+        await _publish_user_meeting_status(
+            redis, user_id=user_id, meeting_id=meeting_id, native_id=None,
+            status="deleted", when=None, log_event=log_event,
+        )
+        return Response(status_code=204)
 
     # --- POST /meetings/{platform}/{native_meeting_id}/workspace → BIND the meeting to a shared workspace
     # (meetings.data.workspace_id). Owner-scoped. Members of that workspace can then subscribe to this

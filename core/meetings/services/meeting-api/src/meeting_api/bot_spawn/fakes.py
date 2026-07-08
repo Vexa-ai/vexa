@@ -115,6 +115,23 @@ class InMemoryMeetingRepo:
             )
             if active >= max_concurrent:
                 raise MaxBotsExceeded(user_id, max_concurrent)
+        # 2b. claim — a PLANNED row (intent status) for the same (user, platform, native) is
+        #     UPGRADED in place, mirroring the real adapter: spawn keys merge OVER the planned
+        #     data (title / scheduled_at / workspace_id / auto_join / calendar_uid survive).
+        planned_rows = [
+            m for m in self._meetings.values()
+            if m["user_id"] == user_id
+            and m["platform"] == platform
+            and m["native_meeting_id"] == native_meeting_id
+            and m["status"] in ("idle", "scheduled")
+        ]
+        if planned_rows:
+            row = max(planned_rows, key=lambda m: m["id"])  # newest, like the real adapter
+            row["status"] = "requested"
+            row["end_time"] = None
+            row["bot_container_id"] = None
+            row["data"] = {**row["data"], **dict(data or {})}
+            return dict(row)
         # 3. insert — NO await before this point since the dedup read, so the check+insert is atomic.
         mid = self._next_id
         self._next_id += 1
@@ -134,6 +151,24 @@ class InMemoryMeetingRepo:
         }
         self._meetings[mid] = row
         return dict(row)
+
+    async def list_scheduled_meetings(self) -> list:
+        return [
+            dict(m) for m in self._meetings.values()
+            if m["status"] == "scheduled"
+            and m["native_meeting_id"] is not None
+            and m["platform"] not in (None, "", "unknown")
+        ]
+
+    async def merge_meeting_data(self, meeting_id, patch) -> None:
+        m = self._meetings.get(meeting_id)
+        if m is None:
+            return
+        for k, v in patch.items():
+            if v is None:
+                m["data"].pop(k, None)
+            else:
+                m["data"][k] = v
 
     async def reopen_meeting(self, *, meeting_id) -> dict:
         row = self._meetings[meeting_id]
