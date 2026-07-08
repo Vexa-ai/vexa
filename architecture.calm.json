@@ -458,6 +458,18 @@
       ]
     },
     {
+      "unique-id": "processed-notes.v1",
+      "node-type": "contract",
+      "name": "processed-notes.v1",
+      "description": "processed-notes.v1 — sealed/published contract (agent): the proc:meeting:{row_id} cleaned-notes stream + view_end terminal marker (agent-worker → meeting-api db-writer / agent-api SSE; ADR-0027)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/processed-notes.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
       "unique-id": "workspace.v1",
       "node-type": "contract",
       "name": "workspace.v1",
@@ -1169,6 +1181,7 @@
             "task.v1",
             "tool.v1",
             "unit.v1",
+            "processed-notes.v1",
             "workspace.v1",
             "agent-worker",
             "out-stream",

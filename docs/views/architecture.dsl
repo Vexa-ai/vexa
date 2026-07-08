@@ -44,6 +44,7 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   contract task.v1
   contract tool.v1
   contract unit.v1
+  contract processed-notes.v1
   contract workspace.v1
   service agent-worker
   data-asset out-stream [writers: agent-worker]

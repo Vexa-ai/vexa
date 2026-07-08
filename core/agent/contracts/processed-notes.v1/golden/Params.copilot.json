@@ -1,0 +1,6 @@
+{
+  "pipeline": "meeting-copilot/proc-notes",
+  "version": 1,
+  "provider": "claude-cli",
+  "model": null
+}
