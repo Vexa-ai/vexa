@@ -13,6 +13,7 @@ import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micD
 import { sessionTitle, type SessionSummary } from "./sessions";
 import { listSessions } from "./sessionsApi";
 import { streamChatTurn, type ChatPhase } from "./chatStream";
+import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { ASK_CHAT_EVENT, ONBOARDING_KICKOFF_MARK, ONBOARDING_SEED_EVENT, ONBOARDING_GREETING, ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
@@ -492,7 +493,7 @@ export function Chat({ params = {} }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
   const commands = useService(CommandServiceId);
   const layout = useService(LayoutServiceId);
-  const { activeTab, activeSession } = useStore(layout.store);
+  const { activeTab, activeSession, activeList } = useStore(layout.store);
   // the rail follows the store's active session (switched from the rail header or Sessions list); params override if ever passed.
   const session = typeof params.session === "string" && params.session.trim() ? params.session : activeSession;
   const chatKey = chatStateKey(subject, session);
@@ -506,6 +507,14 @@ export function Chat({ params = {} }: ChatProps) {
   // the user can clear focus with the chip's ×; a newly-focused tab re-shows it.
   const [focusCleared, setFocusCleared] = useState(false);
   useEffect(() => { setFocusCleared(false); }, [activeRef?.raw]);
+  // ambient schedule digest (context bundle): surface-gated, with a per-session explicit toggle
+  const ambientEligible = scheduleEligible(activeList, activeTab);
+  const [includeSchedule, setIncludeSchedule] = useState<boolean | null>(null);
+  useEffect(() => { setIncludeSchedule(readIncludeSchedule(session)); }, [session]);
+  const setAmbient = (v: boolean | null) => { setIncludeSchedule(v); writeIncludeSchedule(session, v); };
+  const ambientOn = includeSchedule !== null ? includeSchedule : ambientEligible;
+  // the bundle focus payload — meeting/file mirror the legacy `active`; workspace/today are new kinds
+  const bundleFocus: FocusPayload | null = focusCleared ? null : focusTarget(activeTab);
   const focusRef = focusCleared ? null : activeRef;
   const meetings = useLiveMeetings();
   const activeMeeting = activeRef?.kind === "meeting"
@@ -735,9 +744,20 @@ export function Chat({ params = {} }: ChatProps) {
             workspace_id: activeMeeting?.workspace_id,
           }
         : { kind: contextRef.kind, ref: contextRef.raw };
+    // The CONTEXT BUNDLE (slice 1): tz + surface + focus + explicit include toggles. The focus
+    // mirrors `active` for meeting/file (server prefers `context`); workspace/today are new
+    // focus kinds the server folds itself. ground:false (onboarding) sends no bundle at all.
+    const wireFocus: FocusPayload | null | undefined = !ground
+      ? undefined
+      : (active && (active.kind === "meeting" || active.kind === "file"))
+        ? (active as FocusPayload)
+        : bundleFocus;
+    const context = !ground ? undefined : buildChatContext({
+      activeList, activeTab, focus: wireFocus ?? null, includeSchedule,
+    });
     try {
       const result = await streamChatTurn(
-        { prompt: p, session: sessionForSend, active },
+        { prompt: p, session: sessionForSend, active, context },
         {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
           onStatus: (phase) => setStatus(phase),
@@ -883,9 +903,24 @@ export function Chat({ params = {} }: ChatProps) {
         onDrop={onDrop}
         style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
       >
-        {contextRef && (
+        {(contextRef || ambientEligible || includeSchedule === true || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
-            {contextRef.kind === "meeting" && activeMeeting && (() => {
+            {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
+                sees today's schedule; × turns it off for this session; ghost chip re-adds */}
+            {ambientOn ? (
+              <span title="The agent sees your schedule (today, upcoming, live) on this surface"
+                style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--t2)", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 999, padding: "2px 4px 2px 9px" }}>
+                <Icon name="cal" size={10} /> Schedule · today
+                <button aria-label="Remove schedule context" title="Remove schedule context for this session" onClick={() => setAmbient(false)}
+                  style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 2 }}><Icon name="x" size={10} /></button>
+              </span>
+            ) : ambientEligible ? (
+              <button onClick={() => setAmbient(null)} title="Include your schedule in the agent's context"
+                style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t3)", background: "transparent", border: "1px dashed var(--line2)", borderRadius: 999, padding: "2px 9px", cursor: "pointer" }}>
+                + schedule
+              </button>
+            ) : null}
+            {contextRef && contextRef.kind === "meeting" && activeMeeting && (() => {
               const mode = MODE_CHIP[meetingPhase(activeMeeting)];
               return (
                 <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
@@ -896,9 +931,23 @@ export function Chat({ params = {} }: ChatProps) {
                 </span>
               );
             })()}
-            <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
-            <ReferenceChip refToken={contextRef} />
-            <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
+            {contextRef && (
+              <>
+                <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
+                <ReferenceChip refToken={contextRef} />
+                <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
+              </>
+            )}
+            {!contextRef && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
+              <>
+                <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
+                <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: bundleFocus.kind === "workspace" ? "var(--blue)" : "var(--t2)", background: bundleFocus.kind === "workspace" ? "var(--bluebg)" : "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "1px 7px" }}>
+                  <Icon name={bundleFocus.kind === "workspace" ? "panel" : "cal"} size={10} />
+                  {bundleFocus.kind === "workspace" ? `Workspace · ${bundleFocus.slug}` : "Today"}
+                </span>
+                <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
+              </>
+            )}
           </div>
         )}
         <ComposerReferences text={value} />

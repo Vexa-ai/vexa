@@ -26,7 +26,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -34,6 +34,7 @@ from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
 from control_plane import meeting_steering
+from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import routines as routines_mod
 from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
@@ -231,6 +232,16 @@ class _LiveMeetings:
         return list(self._by_uid.values())
 
 
+class ChatContextBody(BaseModel):
+    """The terminal-state CONTEXT BUNDLE (slice 1). ``extra="ignore"`` on purpose — forward-
+    tolerant: a newer terminal adding bundle fields must never 422 against this server."""
+    model_config = {"extra": "ignore"}
+    tz: Optional[str] = None            # IANA tz for digest rendering (invalid → UTC)
+    surface: Optional[dict] = None      # {list?: str, tab?: {kind: str}} — the ambient gate signal
+    focus: Optional[dict] = None        # the focused thing (meeting/file/workspace/today); None = cleared
+    include: Optional[dict] = None      # {schedule?: bool} — explicit user toggle beats the gate
+
+
 class ChatBody(BaseModel):
     model_config = {"extra": "forbid"}
     prompt: str
@@ -238,9 +249,12 @@ class ChatBody(BaseModel):
     # doesn't 422 (extra=forbid); the value is IGNORED. Dropped from the client in Stage 4.
     subject: Optional[str] = None
     session: Optional[str] = None
-    # the terminal's active center tab ({kind, ref}) — grounds the chat in what's
-    # in focus. Accepted now (Wave 2 wires it into the meeting tool / file context).
+    # LEGACY single-focus grounding ({kind, ref}) — still honored when ``context`` is absent, so
+    # old clients keep byte-identical behavior. The terminal now sends ``context`` (below) too.
     active: Optional[dict] = None
+    # the terminal-state context bundle; when present it is AUTHORITATIVE (including
+    # ``focus: null`` = the user cleared the focus chip — legacy ``active`` is then ignored).
+    context: Optional[ChatContextBody] = None
 
 
 class ResetBody(BaseModel):
@@ -252,6 +266,7 @@ class ResetBody(BaseModel):
     subject: Optional[str] = None
     prompt: Optional[str] = None
     active: Optional[dict] = None
+    context: Optional[ChatContextBody] = None  # accepted-and-ignored, same rationale
 
 
 class RoutineCreate(BaseModel):
@@ -625,6 +640,142 @@ def _meeting_grounding(
     return (ctx, [], preamble + prompt)
 
 
+# ── terminal-state context bundle (slice 1) — the grounding orchestrator ────────────────────────────
+# A chat turn's prompt is assembled [ambient <schedule> digest] + [focus fold] + user prompt.
+#   ambient — the schedule digest, SURFACE-GATED (Meetings list / Today tab / meeting-ish tab focused)
+#             with the user's explicit include.schedule toggle beating the gate either way.
+#   focus   — meeting/prep (delegates to _meeting_grounding, ENRICHED with the server row so a cold
+#             client store can't ground a planned meeting as live), workspace (purpose + README head),
+#             today (the full-day digest REPLACES ambient), file/none (unchanged).
+# Everything stays inside the trusted control plane and rides the prompt (P15); ctx stays "none".
+
+_AMBIENT_TAB_KINDS = {"today", "meeting", "meetingPrep"}
+
+
+def _ambient_gated(context: "ChatContextBody | None") -> bool:
+    """Digest on/off: explicit ``include.schedule`` wins; absent → on iff the user is on a
+    meetings-relevant surface. No context (legacy client) → off (old behavior)."""
+    if context is None:
+        return False
+    include = context.include or {}
+    if isinstance(include.get("schedule"), bool):
+        return include["schedule"]
+    surface = context.surface or {}
+    if surface.get("list") == "meetings":
+        return True
+    tab = surface.get("tab") or {}
+    if tab.get("kind") in _AMBIENT_TAB_KINDS:
+        return True
+    focus = context.focus or {}
+    return focus.get("kind") == "today"
+
+
+_WORKSPACE_README_LINES = 60
+_WORKSPACE_README_CHARS = 3000
+
+
+def _fold_workspace_grounding(mounts: "list", slug: str) -> str:
+    """The workspace-focus preamble: purpose + README head for the mount matching ``slug``.
+    FAIL-CLOSED: a slug outside the caller's active/shared mounts folds nothing — the mount set
+    IS the authorization; we never read a workspace the turn couldn't see."""
+    mount = next((m for m in mounts if getattr(m, "slug", None) == slug
+                  or getattr(m, "workspace_id", None) == slug), None)
+    if mount is None:
+        return ""
+    name = str(getattr(mount, "name", "") or slug)
+    try:
+        purpose = read_purpose(mount.path) or ""
+    except Exception:  # noqa: BLE001
+        purpose = ""
+    purpose_part = f" Its purpose: {purpose.strip()}." if purpose.strip() else ""
+    readme = ""
+    try:
+        text = (Path(mount.path) / "README.md").read_text(encoding="utf-8")
+        readme = "\n".join(text.splitlines()[:_WORKSPACE_README_LINES])[:_WORKSPACE_README_CHARS]
+    except OSError:
+        readme = ""
+    fields = {"name": name, "slug": slug, "purpose": purpose_part, "readme": readme}
+    if not readme.strip():
+        return meeting_steering.NO_README_WORKSPACE_FOCUS.format(**fields)
+    return meeting_steering.render("workspace_focus", fields)
+
+
+def _enriched_meeting_focus(focus: dict, rows: "list[dict]") -> dict:
+    """Overlay the SERVER row's truth onto the client-sent meeting focus — status/title/
+    scheduled_at/workspace_id come from the meetings domain when the row is found; the client's
+    values remain only as the fallback (legacy clients / row not fetched)."""
+    row = schedule_digest_mod.find_row(
+        rows, meeting_id=focus.get("meeting_id"),
+        platform=focus.get("platform"), native_id=focus.get("native_id") or focus.get("ref"))
+    if row is None:
+        return focus
+    data = row.get("data") or {}
+    merged = dict(focus)
+    merged["meeting_id"] = row.get("id", focus.get("meeting_id"))
+    merged["status"] = row.get("status") or focus.get("status")
+    if row.get("platform") and row.get("platform") != "unknown":
+        merged["platform"] = row["platform"]
+    if row.get("native_meeting_id"):
+        merged["native_id"] = row["native_meeting_id"]
+    for src_key, dst_key in (("title", "title"), ("scheduled_at", "scheduled_at"), ("workspace_id", "workspace_id")):
+        if data.get(src_key):
+            merged[dst_key] = data[src_key]
+    return merged
+
+
+def _context_grounding(
+    body: "ChatBody", session: str, redis_url: "str | None", *,
+    schedule_rows: "Callable[[], list[dict]]",
+    workspace_mounts: "Callable[[], list]",
+) -> "tuple[dict, list[str], str]":
+    """Assemble the turn's grounding from the context bundle (or the legacy ``active``).
+    ``schedule_rows`` / ``workspace_mounts`` are LAZY — fetched only for the branches that
+    need them, and both degrade to empty on failure (a bundle must never fail the turn)."""
+    prompt = body.prompt
+    context = body.context
+    focus = context.focus if context is not None else body.active
+    ctx = {"kind": "none", "session": session}
+
+    ambient = _ambient_gated(context)
+    kind = (focus or {}).get("kind")
+    need_rows = ambient or kind in ("meeting", "today")
+    rows: "list[dict]" = []
+    if need_rows:
+        try:
+            rows = schedule_rows() or []
+        except Exception:  # noqa: BLE001 — best-effort by contract
+            rows = []
+
+    tz = context.tz if context is not None else None
+    preamble = ""
+    if kind == "today":
+        digest = schedule_digest_mod.build_schedule_digest(rows, tz=tz, full_day=True)
+        if digest:
+            preamble = digest + meeting_steering.render("schedule", {})
+        return (ctx, [], preamble + prompt)
+
+    if ambient:
+        digest = schedule_digest_mod.build_schedule_digest(rows, tz=tz)
+        if digest:
+            preamble = digest + meeting_steering.render("schedule", {})
+
+    if kind == "meeting":
+        enriched = _enriched_meeting_focus(dict(focus), rows) if rows else dict(focus)
+        _c, _t, folded_prompt = _meeting_grounding(enriched, session, prompt, redis_url)
+        return (_c, _t, preamble + folded_prompt if preamble else folded_prompt)
+
+    if kind == "workspace" and (focus or {}).get("slug"):
+        try:
+            mounts = workspace_mounts() or []
+        except Exception:  # noqa: BLE001
+            mounts = []
+        preamble += _fold_workspace_grounding(mounts, str(focus["slug"]))
+        return (ctx, [], preamble + prompt)
+
+    # file focus stays client-side-preambled; none/unknown kinds fold nothing extra
+    return (ctx, [], preamble + prompt)
+
+
 # ── SSE ownership gate (P0 cross-tenant leak fix — the SSE sibling of the by-id REST check) ──────────
 # The live SSE feed `GET /api/meeting/stream` is keyed on a CALLER-SUPPLIED row id (`meeting_id`) and a
 # `session_uid`. Row ids are sequential ints, so without an ownership check any authenticated user B could
@@ -677,6 +828,7 @@ def create_app(
     redis_url: Optional[str] = None,
     membership_index: Optional[MembershipIndex] = None,
     meeting_owner_lookup: "Optional[object]" = None,
+    schedule_source: "Optional[Callable[[str], list]]" = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -698,6 +850,10 @@ def create_app(
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
         settings.meeting_api_url if settings is not None else "")
+    # The ambient schedule digest's rows source (context bundle): TTL-cached meeting-api fetch;
+    # injectable for L2 tests, same seam style as meeting_owner_lookup.
+    _schedule_source = schedule_source or schedule_digest_mod.digest_source(
+        settings.meeting_api_url if settings is not None else "", mindex.list)
 
     # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
     # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
@@ -955,7 +1111,12 @@ def create_app(
         # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the copilot tails) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
         # rides the prompt to the worker — no file, no cross-domain HTTP, no user key in the worker (P15).
-        ctx, tools, prompt = _meeting_grounding(body.active, session, body.prompt, redis_url)
+        ctx, tools, prompt = _context_grounding(
+            body, session, redis_url,
+            schedule_rows=lambda: _schedule_source(subject),
+            workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
+                                      + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
+        )
         # Attribute this turn's commits to the human editor by EMAIL (gateway-injected, trusted) rather
         # than the bare subject id — the git author NAME becomes the email; the synthetic author email
         # (<subject>@vexa.local) stays for the you/member classification (workspace_reader.git_state_at).

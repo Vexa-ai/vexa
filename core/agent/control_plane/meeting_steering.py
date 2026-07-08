@@ -15,14 +15,17 @@ serves read-only into every worker turn): an operator file at
 
     {GLOBAL_SYSTEM_WORKSPACE_PATH}/agents/meeting-lifecycle.md
 
-with ``## prep`` / ``## live`` / ``## post`` H2 sections overrides the matching template
+with ``## prep`` / ``## live`` / ``## post`` / ``## schedule`` / ``## workspace_focus`` H2
+sections overrides the matching template
 — edit the one _global repo and every agent's chat behavior changes next turn, no deploy.
 FAIL LOUD, DEGRADE SAFE: a malformed override (unknown placeholder, unreadable file)
 logs a warning and falls back to the built-in template; it never breaks a chat turn.
 
 Templates are ``str.format``-style over a FIXED placeholder set (extra placeholders in an
 override raise at format time → caught → loud log + fallback):
-  {title} {when} {platform} {native} {workspace}
+  prep/live/post:   {title} {when} {platform} {native} {workspace}
+  schedule:         (none — a fixed steering sentence after the <schedule> block)
+  workspace_focus:  {name} {slug} {purpose} {readme}
 """
 from __future__ import annotations
 
@@ -70,7 +73,26 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "and draft follow-ups on request. Don't paste the transcript back verbatim.\n\n"
         "<transcript>\n{transcript}\n</transcript>\n\n"
     ),
+    # Ambient terminal-state digest (context bundle): one steering sentence AFTER the
+    # <schedule> block build_schedule_digest rendered. No placeholders.
+    "schedule": (
+        "The user's meeting schedule is in <schedule> above (times are in their timezone). "
+        "Resolve phrases like \"my next meeting\" or \"today\" from it and refer to meetings by "
+        "title. It is a compact digest — for depth, read the meeting's notes files or ask.\n\n"
+    ),
+    # Workspace focus (the manage panel is the active tab): purpose + README head folded below.
+    "workspace_focus": (
+        "The user is looking at the workspace \"{name}\" ({slug}).{purpose} Its README head is "
+        "below — ground answers about this workspace in it and in the workspace's files.\n\n"
+        "<readme>\n{readme}\n</readme>\n\n"
+    ),
 }
+
+# Workspace focus when there's no README — honest, still names the workspace.
+NO_README_WORKSPACE_FOCUS = (
+    "The user is looking at the workspace \"{name}\" ({slug}).{purpose} It has no README yet — "
+    "ground answers in the workspace's files, and say when context is missing.\n\n"
+)
 
 # Live/post when the stream holds nothing — honest, never fabricated (fail loud).
 NO_TRANSCRIPT_LIVE = (
@@ -83,7 +105,7 @@ NO_RECORD_POST = (
     "exists — do not reconstruct or invent its content.\n\n"
 )
 
-_SECTION_RE = re.compile(r"^##\s+(prep|live|post)\s*$", re.MULTILINE)
+_SECTION_RE = re.compile(r"^##\s+(prep|live|post|schedule|workspace_focus)\s*$", re.MULTILINE)
 
 
 def _parse_sections(text: str) -> dict[str, str]:

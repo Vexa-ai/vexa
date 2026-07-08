@@ -1057,3 +1057,52 @@ def test_workspace_publish_pushes_born_workspace_to_remote(tmp_path, monkeypatch
     assert r2.status_code == 400
     r3 = c.post("/api/workspace/publish", headers=h, json={"token": "t"})
     assert r3.status_code == 400
+
+
+def test_chat_accepts_context_bundle_and_folds_digest_into_prompt():
+    """Context bundle (slice 1): /api/chat accepts ``context`` (no 422); when the surface gates
+    the ambient digest ON, the schedule block reaches the dispatched worker's inline prompt
+    (VEXA_START env) — server-derived rows via the injected schedule_source seam."""
+    runtime = _FakeRuntime()
+    rows = [{"id": 51, "status": "scheduled", "platform": "google_meet",
+             "native_meeting_id": "abc-defg-hij",
+             "data": {"title": "Acme intro", "scheduled_at": "2026-07-09T09:00:00Z"},
+             "end_time": None, "start_time": None, "updated_at": None}]
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=_FakeReader(),
+        schedule_source=lambda subject: rows,
+    ))
+    r = c.post("/api/chat", headers={"X-User-Id": "u_jane"}, json={
+        "prompt": "what's my next meeting?", "session": "s-ctx",
+        "context": {"tz": "UTC", "surface": {"list": "meetings"},
+                    "unknown_future_field": {"x": 1}},   # extra=ignore: never a 422
+    })
+    assert r.status_code == 200
+    import json as _json
+    start = _json.loads(runtime.spawned[-1][2]["VEXA_START"])["entrypoint"]["inline"]
+    assert "<schedule tz=" in start and '"Acme intro"' in start
+    assert start.endswith("what's my next meeting?")
+
+
+def test_chat_doc_surface_stays_lean_and_legacy_active_still_grounds():
+    runtime = _FakeRuntime()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=_FakeReader(),
+        schedule_source=lambda subject: [],
+    ))
+    # doc surface → no digest
+    r = c.post("/api/chat", headers={"X-User-Id": "u_jane"}, json={
+        "prompt": "hi", "session": "s-doc",
+        "context": {"surface": {"list": "files", "tab": {"kind": "doc"}}},
+    })
+    assert r.status_code == 200
+    assert "<schedule" not in runtime.spawned[-1][2]["VEXA_START"]  # JSON-encoded, substring still valid
+    # legacy body (active only, no context) → prep grounding from client fields, as before
+    r = c.post("/api/chat", headers={"X-User-Id": "u_jane"}, json={
+        "prompt": "hi", "session": "s-legacy",
+        "active": {"kind": "meeting", "native_id": "abc", "platform": "google_meet",
+                   "status": "scheduled", "title": "Legacy"},
+    })
+    assert r.status_code == 200
+    start = runtime.spawned[-1][2]["VEXA_START"]
+    assert "PREPARE" in start and "Legacy" in start and "<schedule" not in start

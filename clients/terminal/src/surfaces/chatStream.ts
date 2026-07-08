@@ -56,8 +56,10 @@ export type ChatStreamRequest = {
   prompt: string;
   /** the chat session/thread id (the warm unit keys on subject+session) */
   session: string;
-  /** the active center-tab grounding, or undefined */
+  /** the active center-tab grounding (legacy mirror), or undefined */
   active: unknown;
+  /** the terminal-state context bundle {tz, surface, focus, include}, or undefined */
+  context?: unknown;
 };
 
 export type ChatStreamOptions = {
@@ -158,7 +160,7 @@ export async function streamChatTurn(
       r = await fetchImpl("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}) },
-        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active }),
+        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context }),
         signal,
       });
     } catch (e) {
