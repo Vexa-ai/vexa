@@ -1,16 +1,17 @@
 "use client";
-/** Hidden admin surface — read-only infra observability (workloads + meeting pipeline).
+/** Hidden admin surface — read-only infra observability (workloads + meeting pipeline + probe).
  *
  *  HIDDEN: nothing registers at import time. The module probes `/api/admin/me` (server-verified
  *  email allowlist — see app/api/admin/gate.ts); only a 200 registers the "Infra" list + the
  *  "adminInfra" tab, and the contributions registry notifies the shell so the switcher entry
  *  appears. Non-admins never see an entry and every /api/admin/* route answers 404 for them.
  *
- *  Read-only by design (v1): the panel observes containers and pipeline carriers; it cannot
- *  stop/kill anything. Data: GET /api/admin/overview → agent-api (internal tier) → runtime.v1
- *  /workloads + the redis meeting carriers (proc/tc streams, on-flag, cursor, active_meetings).
+ *  Layout: a persistent TRANSCRIPTION GOLDEN PROBE strip (gateway → meeting-api → runtime →
+ *  redis carriers → transcript relay; run on demand) above two in-panel tabs — Workloads and
+ *  Meeting pipeline — each with client-side filters. Read-only by design (v1): no stop/kill.
+ *  Data: GET /api/admin/overview + POST /api/admin/probe → agent-api (internal tier).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { registerList, registerTab } from "../contributions";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
@@ -38,7 +39,6 @@ interface Workload {
   stoppedAt?: string;
   exitCode?: number | null;
   stopReason?: string | null;
-  node?: string | null;
 }
 interface Overview {
   workloads?: Workload[];
@@ -46,41 +46,231 @@ interface Overview {
   meetings?: PipelineRow[];
   meetings_error?: string;
 }
+interface ProbeStage { id: string; label: string; status: "pass" | "warn" | "fail"; latency_ms?: number; detail?: string }
+interface ProbeResult { status: "pass" | "warn" | "fail"; stages: ProbeStage[]; duration_ms: number; at: number }
 
 const PANEL: TabDescriptor = { id: "admin-infra", title: "Infra", kind: "adminInfra", params: {} };
 const POLL_MS = 5000;
 
-function ago(iso?: string): string {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
+function ago(t?: number): string {
+  if (!t) return "—";
   const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
   if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
+const isoAgo = (iso?: string) => (iso ? `${ago(Date.parse(iso))} ago` : "—");
+/** redis stream ids are `{ms}-{seq}` — the ms half is a wall-clock timestamp. */
+const idMs = (id?: string | null): number | null => {
+  const ms = id ? Number(id.split("-")[0]) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+};
 
-const th: React.CSSProperties = { textAlign: "left", fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "4px 8px", borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" };
-const td: React.CSSProperties = { fontSize: 12.5, color: "var(--t1)", padding: "5px 8px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", whiteSpace: "nowrap" };
+type Tone = "ok" | "warn" | "danger";
+const TONE: Record<Tone, { fg: string; bg: string }> = {
+  ok: { fg: "var(--green)", bg: "var(--greenbg)" },
+  warn: { fg: "var(--accent)", bg: "var(--accentbg)" },
+  danger: { fg: "var(--live)", bg: "var(--livebg)" },
+};
 
-function StateDot({ state }: { state?: string }) {
-  const color = state === "running" ? "var(--green)" : state === "stopped" ? "var(--t3)" : "var(--accent)";
-  return <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: color, marginRight: 6 }} />;
+/** One health verdict per meeting row: native keying (S2) beats the undrained-tail
+ *  approximation (proc entries newer than the bot's stop, meeting out of the sweep — the S1
+ *  signature, approximated until the durable source_cursor is exposed via meeting-api). */
+function healthOf(m: PipelineRow, botStopMs: number | null): { label: string; tone: Tone } {
+  if (m.row_keyed === false) return { label: "native key (S2)", tone: "danger" };
+  const procMs = idMs(m.proc_stream?.last_id);
+  if (botStopMs && procMs && procMs > botStopMs && !m.in_active_meetings) {
+    return { label: "undrained tail?", tone: "warn" };
+  }
+  return { label: "ok", tone: "ok" };
 }
 
-function SectionError({ error }: { error?: string }) {
+const th: CSSProperties = { textAlign: "left", fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "4px 8px", borderBottom: "1px solid var(--line)", whiteSpace: "nowrap", fontWeight: 500 };
+const td: CSSProperties = { fontSize: 12.5, color: "var(--t1)", padding: "5px 8px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", whiteSpace: "nowrap" };
+const segBtn = (on: boolean): CSSProperties => ({ fontSize: 12, padding: "3px 10px", borderRadius: 6, border: "1px solid var(--line)", cursor: "pointer", background: on ? "var(--panel2)" : "transparent", color: on ? "var(--t1)" : "var(--t2)" });
+const searchStyle: CSSProperties = { width: 210, height: 28, fontSize: 12.5, padding: "0 8px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--panel)", color: "var(--t1)", outline: "none" };
+
+function Pill({ label, tone }: { label: string; tone: Tone }) {
+  return (
+    <span style={{ fontSize: 11.5, fontFamily: "var(--sans)", background: TONE[tone].bg, color: TONE[tone].fg, padding: "2px 8px", borderRadius: 999, whiteSpace: "nowrap" }}>
+      {label}
+    </span>
+  );
+}
+
+function StateDot({ on }: { on: boolean }) {
+  return <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: on ? "var(--green)" : "var(--t3)", marginRight: 6 }} />;
+}
+
+function SectionError({ error }: { error?: string | null }) {
   if (!error) return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--accent)", fontSize: 12, padding: "6px 0" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--accent)", fontSize: 12, padding: "6px 14px" }}>
       <Icon name="alert" size={13} />{error}
     </div>
   );
 }
 
+// ── the golden probe strip ────────────────────────────────────────────────────────
+function ProbeStrip() {
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    setRunning(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/admin/probe", { method: "POST", cache: "no-store" });
+      if (!r.ok) { setErr(`probe failed (${r.status})`); return; }
+      const body = (await r.json()) as ProbeResult;
+      setProbe({ ...body, at: Date.now() / 1000 });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const tone: Tone = probe ? (probe.status === "pass" ? "ok" : probe.status === "warn" ? "warn" : "danger") : "ok";
+  return (
+    <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", background: "var(--panel)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)", whiteSpace: "nowrap" }}>Transcription golden probe</span>
+        {probe && <Pill label={`${probe.status} · ${(probe.duration_ms / 1000).toFixed(1)}s`} tone={tone} />}
+        {probe && <span style={{ fontSize: 12, color: "var(--t3)" }}>ran {ago(probe.at * 1000)} ago</span>}
+        {err && <span style={{ fontSize: 12, color: "var(--live)" }}>{err}</span>}
+        <button onClick={() => void run()} disabled={running}
+          style={{ marginLeft: "auto", ...segBtn(false), display: "flex", alignItems: "center", gap: 5, opacity: running ? 0.6 : 1 }}>
+          <Icon name="zap" size={12} />{running ? "Running…" : "Run probe"}
+        </button>
+      </div>
+      {probe && (
+        <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap" }}>
+          {probe.stages.map((s) => (
+            <span key={s.id} title={s.detail}
+              style={{ fontSize: 11.5, fontFamily: "var(--mono)", background: TONE[s.status === "pass" ? "ok" : s.status === "warn" ? "warn" : "danger"].bg, color: TONE[s.status === "pass" ? "ok" : s.status === "warn" ? "warn" : "danger"].fg, padding: "3px 8px", borderRadius: 6, cursor: s.detail ? "help" : "default" }}>
+              {s.label}{s.latency_ms != null ? ` ${s.latency_ms}ms` : ""}{s.status !== "pass" && s.detail ? ` — ${s.detail}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── workloads tab ─────────────────────────────────────────────────────────────────
+function WorkloadsTab({ workloads, error }: { workloads: Workload[]; error?: string }) {
+  const [q, setQ] = useState("");
+  const [kind, setKind] = useState<"all" | "bot" | "agent-worker">("all");
+  const [state, setState] = useState<"all" | "running" | "stopped">("all");
+  const shown = useMemo(() => workloads.filter((w) =>
+    (kind === "all" || w.kind === kind) &&
+    (state === "all" || w.state === state) &&
+    (!q || `${w.workloadId} ${w.meeting_id ?? ""}`.toLowerCase().includes(q.toLowerCase())),
+  ), [workloads, q, kind, state]);
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 14px", flexWrap: "wrap" }}>
+        <input placeholder="Filter by id or meeting…" value={q} onChange={(e) => setQ(e.target.value)} style={searchStyle} />
+        <div style={{ display: "flex", gap: 4 }}>
+          {(["all", "bot", "agent-worker"] as const).map((k) => (
+            <button key={k} style={segBtn(kind === k)} onClick={() => setKind(k)}>{k === "all" ? "All" : k === "bot" ? "Bots" : "Workers"}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          {(["all", "running", "stopped"] as const).map((s) => (
+            <button key={s} style={segBtn(state === s)} onClick={() => setState(s)}>{s === "all" ? "Any state" : s[0].toUpperCase() + s.slice(1)}</button>
+          ))}
+        </div>
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--t3)" }}>{shown.length} shown</span>
+      </div>
+      <SectionError error={error} />
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead><tr>
+            <th style={{ ...th, paddingLeft: 14 }}>workload</th><th style={th}>kind</th><th style={th}>state</th>
+            <th style={th}>meeting</th><th style={th}>started</th><th style={th}>exit</th>
+          </tr></thead>
+          <tbody>
+            {shown.map((w) => (
+              <tr key={w.workloadId} style={{ opacity: w.state === "running" ? 1 : 0.75 }}>
+                <td style={{ ...td, paddingLeft: 14 }}>{w.workloadId}</td>
+                <td style={{ ...td, fontFamily: "var(--sans)", color: "var(--t2)" }}>{w.kind ?? "—"}</td>
+                <td style={td}><StateDot on={w.state === "running"} />{w.state ?? "—"}</td>
+                <td style={td}>{w.meeting_id ?? "—"}</td>
+                <td style={{ ...td, color: "var(--t2)" }} title={w.startedAt}>{isoAgo(w.startedAt)}</td>
+                <td style={{ ...td, color: "var(--t3)" }}>{w.exitCode ?? w.stopReason ?? "—"}</td>
+              </tr>
+            ))}
+            {shown.length === 0 && !error && (
+              <tr><td style={{ ...td, color: "var(--t3)", paddingLeft: 14 }} colSpan={6}>{workloads.length ? "nothing matches the filters" : "no managed containers"}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── meeting pipeline tab ──────────────────────────────────────────────────────────
+function PipelineTab({ meetings, botStops, error }: { meetings: PipelineRow[]; botStops: Record<string, number>; error?: string }) {
+  const [q, setQ] = useState("");
+  const [mode, setMode] = useState<"all" | "on" | "live" | "issues">("all");
+  const rows = useMemo(() => meetings.map((m) => ({ m, health: healthOf(m, botStops[m.meeting_id] ?? null) })), [meetings, botStops]);
+  const shown = useMemo(() => rows.filter(({ m, health }) =>
+    (mode === "all" || (mode === "on" && m.processing_on) || (mode === "live" && m.live?.status === "live") || (mode === "issues" && health.tone !== "ok")) &&
+    (!q || `${m.meeting_id} ${m.live?.native_id ?? ""} ${m.live?.title ?? ""}`.toLowerCase().includes(q.toLowerCase())),
+  ), [rows, q, mode]);
+  const stat = (s?: StreamStat) => (s ? `${s.len} @ …${(s.last_id ?? "").slice(-6) || "—"}` : "—");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 14px", flexWrap: "wrap" }}>
+        <input placeholder="Filter by meeting id…" value={q} onChange={(e) => setQ(e.target.value)} style={searchStyle} />
+        <div style={{ display: "flex", gap: 4 }}>
+          {([["all", "All"], ["on", "Processing on"], ["live", "Live only"], ["issues", "Issues"]] as const).map(([k, label]) => (
+            <button key={k} style={{ ...segBtn(mode === k), ...(k === "issues" ? { color: mode === k ? "var(--live)" : "var(--t2)" } : {}) }} onClick={() => setMode(k)}>{label}</button>
+          ))}
+        </div>
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--t3)" }}>{shown.length} shown</span>
+      </div>
+      <SectionError error={error} />
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead><tr>
+            <th style={{ ...th, paddingLeft: 14 }}>meeting</th><th style={th}>live</th><th style={th}>processing</th>
+            <th style={th}>proc stream</th><th style={th}>transcript</th><th style={th}>cursor</th>
+            <th style={th}>active set</th><th style={th}>health</th>
+          </tr></thead>
+          <tbody>
+            {shown.map(({ m, health }) => (
+              <tr key={m.meeting_id}>
+                <td style={{ ...td, paddingLeft: 14 }} title={m.live?.title}>{m.meeting_id}{m.live?.native_id ? <span style={{ color: "var(--t3)" }}> ({m.live.native_id})</span> : null}</td>
+                <td style={td}>{m.live ? <><StateDot on={m.live.status === "live"} />{m.live.status}</> : "—"}</td>
+                <td style={{ ...td, color: m.processing_on ? "var(--t1)" : "var(--t2)" }}>{m.processing_on ? "ON" : "off"}</td>
+                <td style={td}>{stat(m.proc_stream)}</td>
+                <td style={td}>{stat(m.transcript_stream)}</td>
+                <td style={{ ...td, color: "var(--t2)" }}>{m.copilot_cursor ? `…${m.copilot_cursor.slice(-6)}` : "—"}</td>
+                <td style={{ ...td, color: "var(--t2)" }}>{m.in_active_meetings ? "yes" : "no"}</td>
+                <td style={td}><Pill label={health.label} tone={health.tone} /></td>
+              </tr>
+            ))}
+            {shown.length === 0 && !error && (
+              <tr><td style={{ ...td, color: "var(--t3)", paddingLeft: 14 }} colSpan={8}>{meetings.length ? "nothing matches the filters" : "no pipeline carriers in redis"}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── the panel: probe strip + tab bar + tables ─────────────────────────────────────
 function AdminPanel({ active }: { id: string; params: Record<string, unknown>; active: boolean }) {
   const [data, setData] = useState<Overview | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [ts, setTs] = useState<number>(0);
+  const [ts, setTs] = useState(0);
+  const [tab, setTab] = useState<"w" | "p">("w");
 
   useEffect(() => {
     if (!active) return;
@@ -105,80 +295,33 @@ function AdminPanel({ active }: { id: string; params: Record<string, unknown>; a
 
   const workloads = data?.workloads ?? [];
   const meetings = data?.meetings ?? [];
-  const bots = workloads.filter((w) => w.kind === "bot");
-  const agents = workloads.filter((w) => w.kind === "agent-worker");
-  const other = workloads.filter((w) => w.kind !== "bot" && w.kind !== "agent-worker");
+  const botStops = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const w of workloads) {
+      if (w.kind === "bot" && w.meeting_id && w.stoppedAt) {
+        const t = Date.parse(w.stoppedAt);
+        if (Number.isFinite(t)) out[w.meeting_id] = Math.max(out[w.meeting_id] ?? 0, t);
+      }
+    }
+    return out;
+  }, [workloads]);
 
+  const tabBtn = (on: boolean): CSSProperties => ({ border: "none", borderBottom: on ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, background: "none", fontSize: 13, fontWeight: on ? 600 : 400, color: on ? "var(--t1)" : "var(--t2)", padding: "6px 12px", cursor: "pointer" });
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: "18px 22px", background: "var(--bg)" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
-        <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)", margin: 0 }}>Infra — live observability</h2>
-        <span style={{ fontSize: 11.5, color: "var(--t3)" }}>
-          read-only · polls every {POLL_MS / 1000}s{ts ? ` · updated ${ago(new Date(ts).toISOString())} ago` : ""}
-        </span>
+    <div style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "14px 14px 8px" }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)", margin: 0 }}>Infra</h2>
+        <span style={{ fontSize: 11.5, color: "var(--t3)" }}>read-only · refreshes every {POLL_MS / 1000}s{ts ? ` · updated ${ago(ts)} ago` : ""}</span>
       </div>
       {err && <SectionError error={err} />}
-
-      <div style={{ fontSize: 12, color: "var(--t2)", margin: "10px 0 6px", fontWeight: 600 }}>
-        Workloads <span style={{ color: "var(--t3)", fontWeight: 400 }}>· {bots.length} bot{bots.length === 1 ? "" : "s"} · {agents.length} agent worker{agents.length === 1 ? "" : "s"}{other.length ? ` · ${other.length} other` : ""}</span>
+      <ProbeStrip />
+      <div style={{ display: "flex", gap: 2, padding: "8px 14px 0", borderBottom: "1px solid var(--line)" }}>
+        <button style={tabBtn(tab === "w")} onClick={() => setTab("w")}>Workloads <span style={{ color: "var(--t3)", fontWeight: 400 }}>{workloads.length}</span></button>
+        <button style={tabBtn(tab === "p")} onClick={() => setTab("p")}>Meeting pipeline <span style={{ color: "var(--t3)", fontWeight: 400 }}>{meetings.length}</span></button>
       </div>
-      <SectionError error={data?.workloads_error} />
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", width: "100%" }}>
-          <thead><tr>
-            <th style={th}>workload</th><th style={th}>kind</th><th style={th}>state</th>
-            <th style={th}>meeting</th><th style={th}>started</th><th style={th}>exit</th>
-          </tr></thead>
-          <tbody>
-            {workloads.map((w) => (
-              <tr key={w.workloadId}>
-                <td style={td}>{w.workloadId}</td>
-                <td style={td}>{w.kind ?? "—"}</td>
-                <td style={td}><StateDot state={w.state} />{w.state ?? "—"}</td>
-                <td style={td}>{w.meeting_id ?? "—"}</td>
-                <td style={td} title={w.startedAt}>{w.startedAt ? `${ago(w.startedAt)} ago` : "—"}</td>
-                <td style={td}>{w.exitCode ?? (w.stopReason ?? "—")}</td>
-              </tr>
-            ))}
-            {workloads.length === 0 && !data?.workloads_error && (
-              <tr><td style={{ ...td, color: "var(--t3)" }} colSpan={6}>no managed containers</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div style={{ fontSize: 12, color: "var(--t2)", margin: "18px 0 6px", fontWeight: 600 }}>
-        Meeting pipeline <span style={{ color: "var(--t3)", fontWeight: 400 }}>· redis carriers per meeting — a non-row-keyed row or a proc stream growing after stop is a persistence bug</span>
-      </div>
-      <SectionError error={data?.meetings_error} />
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", width: "100%" }}>
-          <thead><tr>
-            <th style={th}>meeting</th><th style={th}>live</th><th style={th}>processing</th>
-            <th style={th}>proc stream</th><th style={th}>transcript</th><th style={th}>cursor</th>
-            <th style={th}>active set</th><th style={th}>keyed</th>
-          </tr></thead>
-          <tbody>
-            {meetings.map((m) => (
-              <tr key={m.meeting_id}>
-                <td style={td} title={m.live?.title}>{m.meeting_id}{m.live?.native_id ? ` (${m.live.native_id})` : ""}</td>
-                <td style={td}>{m.live ? <><StateDot state={m.live.status === "live" ? "running" : "stopped"} />{m.live.status}</> : "—"}</td>
-                <td style={td}>{m.processing_on ? "ON" : "off"}</td>
-                <td style={td}>{m.proc_stream ? `${m.proc_stream.len} @ ${m.proc_stream.last_id ?? "—"}` : "—"}</td>
-                <td style={td}>{m.transcript_stream ? `${m.transcript_stream.len} @ ${m.transcript_stream.last_id ?? "—"}` : "—"}</td>
-                <td style={td}>{m.copilot_cursor ?? "—"}</td>
-                <td style={td}>{m.in_active_meetings ? "yes" : "no"}</td>
-                <td style={{ ...td, color: m.row_keyed === false ? "var(--accent)" : "var(--t1)" }}>
-                  {m.row_keyed === false ? "NATIVE (S2!)" : "row"}
-                </td>
-              </tr>
-            ))}
-            {meetings.length === 0 && !data?.meetings_error && (
-              <tr><td style={{ ...td, color: "var(--t3)" }} colSpan={8}>no pipeline carriers in redis</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      {tab === "w"
+        ? <WorkloadsTab workloads={workloads} error={data?.workloads_error} />
+        : <PipelineTab meetings={meetings} botStops={botStops} error={data?.meetings_error} />}
     </div>
   );
 }
@@ -189,7 +332,7 @@ function AdminLeft() {
   useEffect(() => { layout.openTab(PANEL); }, [layout]);
   return (
     <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--t3)" }}>
-      Read-only infrastructure panel: running bots, agent workers, and per-meeting pipeline state.
+      Read-only infrastructure panel: transcription golden probe, running bots, agent workers, and per-meeting pipeline state.
     </div>
   );
 }

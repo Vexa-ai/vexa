@@ -740,6 +740,29 @@ def create_app(
             overview["meetings_error"] = "no redis_url configured"
         return overview
 
+    @app.post("/api/admin/probe")
+    def admin_probe(request: Request):
+        """Run the transcription-pipeline golden smoke probe (gateway → meeting-api → runtime →
+        redis carriers → transcript relay). Same internal-tier gate as the overview; POST because
+        it actively exercises the path (a redis write/read round-trip on scratch keys)."""
+        from control_plane import admin_panel
+        from control_plane import transcription_watcher as _txw
+
+        secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
+        provided = request.headers.get("x-internal-secret", "")
+        if not secret or not hmac.compare_digest(provided, secret):
+            raise HTTPException(status_code=403, detail="internal secret required")
+
+        r = None
+        if redis_url:
+            import redis as _redis
+
+            try:
+                r = _redis.from_url(redis_url, decode_responses=True)
+            except Exception:  # noqa: BLE001 — the probe's redis stage reports the fault
+                r = None
+        return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health())
+
     @app.post("/api/meeting/process", status_code=202)
     def meeting_process(body: MeetingProcess, request: Request):
         """User-controlled copilot PROCESSING for a meeting — DESIRED STATE ONLY (ADR 0027). This

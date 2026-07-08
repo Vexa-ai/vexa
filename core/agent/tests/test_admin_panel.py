@@ -83,12 +83,23 @@ def test_classify_workload_other():
 
 
 class _FakeRedis:
-    """Just enough of redis for pipeline_snapshot: streams as {key: [(id, fields)]}, plain KV, a set."""
+    """Just enough of redis for pipeline_snapshot + the probe's carrier round-trip: streams as
+    {key: [(id, fields)]}, plain KV, a set."""
 
     def __init__(self, streams=None, kv=None, active=None):
         self._streams = streams or {}
         self._kv = kv or {}
         self._active = active or set()
+
+    def set(self, key, value, ex=None):
+        self._kv[key] = value
+
+    def delete(self, key):
+        self._kv.pop(key, None)
+        self._streams.pop(key, None)
+
+    def xadd(self, key, fields):
+        self._streams.setdefault(key, []).append(("1-0", fields))
 
     def scan_iter(self, match="*", count=100):
         import fnmatch
@@ -138,3 +149,68 @@ def test_pipeline_snapshot_includes_live_registry():
     )
     by_id = {row["meeting_id"]: row for row in rows}
     assert "7" in by_id and by_id["7"]["live"]["native_id"] == "xyz"
+
+
+# ── the golden smoke probe ────────────────────────────────────────────────────────────────────
+
+def _ok_http(url, **kw):
+    return 5, {"status": "ok", "capabilities": {"bot_spawn": {"status": "ok"}}}
+
+
+def _probe(r=None, live=None, relay=None, http=_ok_http):
+    import time as _time
+    relay = relay if relay is not None else {
+        "native_resolve": {"ok": True},
+        "ingest": {"ok": True, "last_segment_at": _time.time() - 10, "segments": 3},
+    }
+    return admin_panel.run_probe(load_settings(), r if r is not None else _FakeRedis(),
+                                 live or [], relay_health=relay, http_health=http)
+
+
+def test_probe_all_pass():
+    result = _probe()
+    assert result["status"] == "pass"
+    assert [s["id"] for s in result["stages"]] == ["gateway", "meeting-api", "runtime", "redis", "relay"]
+    assert all(s["status"] == "pass" for s in result["stages"])
+
+
+def test_probe_quiet_relay_is_warn_when_nothing_live_but_fail_when_live():
+    stale_relay = {"native_resolve": {"ok": True}, "ingest": {"ok": True, "last_segment_at": None}}
+    idle = _probe(relay=stale_relay)
+    assert idle["status"] == "warn"
+    assert next(s for s in idle["stages"] if s["id"] == "relay")["status"] == "warn"
+
+    busy = _probe(relay=stale_relay, live=[{"status": "live"}])
+    assert busy["status"] == "fail"
+    assert "LIVE" in next(s for s in busy["stages"] if s["id"] == "relay")["detail"]
+
+
+def test_probe_native_resolve_fault_fails_relay_stage():
+    relay = {"native_resolve": {"ok": False, "kind": "unauthorized", "detail": "stale bot key"},
+             "ingest": {"ok": True, "last_segment_at": None}}
+    result = _probe(relay=relay)
+    stage = next(s for s in result["stages"] if s["id"] == "relay")
+    assert stage["status"] == "fail" and "stale bot key" in stage["detail"]
+
+
+def test_probe_service_down_is_typed_stage_failure():
+    def _flaky(url, **kw):
+        if "gateway" in url:
+            raise OSError("connection refused")
+        return _ok_http(url)
+    result = _probe(http=_flaky)
+    assert result["status"] == "fail"
+    gw = next(s for s in result["stages"] if s["id"] == "gateway")
+    assert gw["status"] == "fail" and "connection refused" in gw["detail"]
+
+
+def test_probe_endpoint_gate_and_shape(monkeypatch):
+    c = TestClient(create_app(
+        Dispatcher(load_settings(internal_api_secret="s3cret"), _FakeRuntime(), _FakeIdentity()),
+    ))
+    assert c.post("/api/admin/probe").status_code == 403
+
+    monkeypatch.setattr(admin_panel, "run_probe",
+                        lambda *a, **kw: {"status": "pass", "stages": [], "duration_ms": 1, "at": 0})
+    r = c.post("/api/admin/probe", headers={"X-Internal-Secret": "s3cret"})
+    assert r.status_code == 200 and r.json()["status"] == "pass"

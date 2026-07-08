@@ -14,6 +14,7 @@ vi.mock("next/headers", () => ({
 import { requireAdmin } from "../admin/gate";
 import { GET as meRoute } from "../admin/me/route";
 import { GET as overviewRoute } from "../admin/overview/route";
+import { POST as probeRoute } from "../admin/probe/route";
 
 /** A fake admin-api /internal/validate: token "admin-tok" → dmitry (allowlisted), "user-tok" → bob. */
 function stubValidate() {
@@ -34,6 +35,9 @@ function stubValidate() {
       }
       if (url.includes("/api/admin/overview")) {
         return new Response(JSON.stringify({ workloads: [], meetings: [] }), { status: 200 });
+      }
+      if (url.includes("/api/admin/probe")) {
+        return new Response(JSON.stringify({ status: "pass", stages: [], duration_ms: 1, at: 0 }), { status: 200 });
       }
       return new Response("nope", { status: 500 });
     }),
@@ -113,5 +117,21 @@ describe("admin gate — verified allowlist, fail-closed", () => {
     const calls2 = stubValidate();
     expect((await overviewRoute()).status).toBe(404);
     expect(calls2.some((c) => c.url.includes("/api/admin/overview"))).toBe(false);
+  });
+
+  it("/api/admin/probe: runs for admin (POST with the internal secret); 404 for non-admin, agent-api never called", async () => {
+    cookieJar = { "vexa-token": "admin-tok" };
+    const calls = stubValidate();
+    const res = await probeRoute();
+    expect(res.status).toBe(200);
+    expect((await res.json()).status).toBe("pass");
+    const proxied = calls.find((c) => c.url.includes("/api/admin/probe"));
+    expect(proxied?.url).toBe("http://agent.test/api/admin/probe");
+    expect(proxied?.secret).toBe("internal-secret");
+
+    cookieJar = { "vexa-token": "user-tok" };
+    const calls2 = stubValidate();
+    expect((await probeRoute()).status).toBe(404);
+    expect(calls2.some((c) => c.url.includes("/api/admin/probe"))).toBe(false);
   });
 });

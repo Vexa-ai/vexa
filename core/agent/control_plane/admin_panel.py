@@ -13,7 +13,9 @@ redis sweep produced, so the panel degrades a section instead of blanking.
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -125,3 +127,112 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
                            if live_row.get(k) is not None}
         rows.append(row)
     return rows
+
+
+# ── the transcription-pipeline golden smoke probe ─────────────────────────────────────────────────
+# Five stages walk the golden path a live transcript travels: gateway → meeting-api → runtime
+# (+ bot_spawn capability) → the redis carriers (a real write/read round-trip on scratch keys) →
+# the transcript relay (native resolve + segment recency). Each stage is a typed result — never a
+# swallowed exception (P18). "Quiet" is distinguished from "broken": no recent segments is a WARN
+# when nothing is live, a FAIL when a live meeting should be producing them.
+
+_PROBE_SCRATCH = "admin:probe:scratch"
+_PROBE_STREAM = "admin:probe:stream"
+SEGMENT_FRESH_SEC = 120
+
+
+def _http_health(url: str, *, timeout: float = 5.0) -> tuple[int, dict]:
+    """GET a service /health → (latency_ms, parsed body). Raises on transport/HTTP errors."""
+    t0 = time.monotonic()
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — internal service URLs
+        body = json.loads(r.read() or b"{}")
+    return int((time.monotonic() - t0) * 1000), body if isinstance(body, dict) else {}
+
+
+def _stage(sid: str, label: str, status: str, latency_ms: int | None = None, detail: str | None = None) -> dict:
+    out: dict = {"id": sid, "label": label, "status": status}
+    if latency_ms is not None:
+        out["latency_ms"] = latency_ms
+    if detail:
+        out["detail"] = detail
+    return out
+
+
+def _health_stage(sid: str, label: str, url: str, http_health) -> dict:
+    try:
+        ms, body = http_health(url)
+    except Exception as e:  # noqa: BLE001 — typed stage failure, not a 500
+        return _stage(sid, label, "fail", detail=f"{type(e).__name__}: {e}")
+    status = "pass" if body.get("status") == "ok" else "warn"
+    return _stage(sid, label, status, ms, None if status == "pass" else f"status={body.get('status')}")
+
+
+def run_probe(settings, r, live_meetings: list[dict] | None = None, *,
+              relay_health: dict | None = None, http_health=_http_health) -> dict:
+    """Run the golden smoke probe. ``r`` may be None (redis stage reports fail).
+    Overall: fail > warn > pass across stages."""
+    t0 = time.monotonic()
+    stages: list[dict] = []
+
+    gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
+    stages.append(_health_stage("gateway", "gateway", f"{gw}/health", http_health))
+    stages.append(_health_stage("meeting-api", "meeting-api",
+                                f"{settings.meeting_api_url.rstrip('/')}/health", http_health))
+
+    try:
+        ms, body = http_health(f"{settings.runtime_api_url.rstrip('/')}/health")
+        caps = body.get("capabilities") or {}
+        bot = caps.get("bot_spawn") if isinstance(caps, dict) else None
+        bot_state = (bot or {}).get("status") if isinstance(bot, dict) else bot
+        if body.get("status") != "ok":
+            stages.append(_stage("runtime", "runtime + bot_spawn", "warn", ms, f"status={body.get('status')}"))
+        elif bot_state not in (None, "ok", "configured", True):
+            stages.append(_stage("runtime", "runtime + bot_spawn", "warn", ms, f"bot_spawn={bot_state}"))
+        else:
+            stages.append(_stage("runtime", "runtime + bot_spawn", "pass", ms))
+    except Exception as e:  # noqa: BLE001
+        stages.append(_stage("runtime", "runtime + bot_spawn", "fail", detail=f"{type(e).__name__}: {e}"))
+
+    if r is None:
+        stages.append(_stage("redis", "redis carriers", "fail", detail="no redis configured"))
+    else:
+        try:
+            rt0 = time.monotonic()
+            r.set(_PROBE_SCRATCH, "1", ex=30)
+            ok = r.get(_PROBE_SCRATCH) is not None
+            r.delete(_PROBE_SCRATCH)
+            r.xadd(_PROBE_STREAM, {"probe": "1"})
+            r.xlen(_PROBE_STREAM)
+            r.delete(_PROBE_STREAM)
+            ms = int((time.monotonic() - rt0) * 1000)
+            stages.append(_stage("redis", "redis carriers", "pass" if ok else "fail", ms,
+                                 None if ok else "scratch read-back missing"))
+        except Exception as e:  # noqa: BLE001
+            stages.append(_stage("redis", "redis carriers", "fail", detail=f"{type(e).__name__}: {e}"))
+
+    rh = relay_health or {}
+    resolve = rh.get("native_resolve") or {}
+    ingest = rh.get("ingest") or {}
+    live_now = any(m.get("status") == "live" for m in (live_meetings or []))
+    if resolve and not resolve.get("ok", True):
+        stages.append(_stage("relay", "transcript relay", "fail",
+                             detail=f"native resolve: {resolve.get('kind')}: {resolve.get('detail')}"))
+    else:
+        last_at = ingest.get("last_segment_at")
+        age = (time.time() - last_at) if last_at else None
+        if age is not None and age <= SEGMENT_FRESH_SEC:
+            stages.append(_stage("relay", "transcript relay", "pass", detail=f"segments flowing ({int(age)}s ago)"))
+        else:
+            quiet = f"no segments for {int(age / 60)}m" if age is not None else "no segments seen since start"
+            # quiet ≠ broken: with a live meeting the silence is a fault; idle it's just idle
+            stages.append(_stage("relay", "transcript relay", "fail" if live_now else "warn",
+                                 detail=quiet + (" with a LIVE meeting" if live_now else " (nothing live)")))
+
+    worst = "pass"
+    if any(s["status"] == "warn" for s in stages):
+        worst = "warn"
+    if any(s["status"] == "fail" for s in stages):
+        worst = "fail"
+    return {"status": worst, "stages": stages,
+            "duration_ms": int((time.monotonic() - t0) * 1000), "at": time.time()}
