@@ -477,6 +477,15 @@ def test_active_mounts_reads_the_set_and_falls_back_to_baseline(monkeypatch, tmp
     assert len(base) == 1 and base[0]["primary"] is True and base[0]["path"] == "/workspaces/u1"
 
 
+def test_kg_links_preamble_ships_the_wikilink_rule():
+    """Entity mentions must render as ACTIONABLE chips in the client, so the [[Title]] referencing
+    rule is declared on EVERY turn — single-mount legacy turns included (their seeded CLAUDE.md
+    may predate it)."""
+    from worker import worker
+    txt = worker.kg_links_preamble()
+    assert "[[Title]]" in txt and "kg/entities/" in txt and "chat replies AND in workspace docs" in txt
+
+
 def test_mounts_preamble_declares_each_mount_or_stays_empty():
     from worker import worker
     # single mount → no preamble (nothing to disambiguate)
@@ -556,6 +565,8 @@ def test_run_turn_declares_mounts_and_commits_extras_with_principal(tmp_path, mo
 
     # the mount set was DECLARED to the model (WP-A1.1)
     assert "Your mounted workspaces" in seen["prompt"] and str(shared) in seen["prompt"]
+    # the kg-links rule ships on the same turn ([[wikilinks]] must be actionable in the client)
+    assert "Referencing knowledge" in seen["prompt"]
     # the extra mount committed, authored by the principal (D4)
     assert any(e["type"] == "commit" for e in evs)
     fmt = "%an%n%ae%n%cn%n%ce"

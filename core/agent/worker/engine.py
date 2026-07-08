@@ -95,6 +95,25 @@ def _tier_label(m: dict) -> str:
     return f"{role} workspace — {writable}"
 
 
+def kg_links_preamble() -> str:
+    """Entity references must be ACTIONABLE in the client. Chat replies and workspace docs render
+    ``[[Title]]`` as a clickable entity chip and workspace file paths as links (the terminal resolves
+    both across every mounted workspace — clients/terminal/src/ui-kit/docLinks.tsx). A plain-text
+    mention of a known entity is a dead end, so this rule ships on EVERY turn, not just multi-mount
+    ones — old workspaces whose seeded CLAUDE.md predates it get the behaviour too."""
+    return (
+        "## Referencing knowledge (always)\n\n"
+        "Your replies render in a client that turns entity references into clickable chips:\n"
+        "- Whenever you mention a person, company, organization, project, meeting, or task that has"
+        " (or that you are creating) an entity doc under `kg/entities/`, write it as `[[Title]]` —"
+        " in chat replies AND in workspace docs alike. Never mention a known entity as plain text.\n"
+        "- Reference other workspace files by their path in backticks (e.g. `kg/dashboards/plan.md`)"
+        " or a markdown link — both are clickable.\n"
+        "- Don't write `[[wikilinks]]` for things that have no entity doc (they render as inert"
+        " 'not found' chips) — create the entity first, or use plain text.\n\n"
+    )
+
+
 def mounts_preamble(mounts: list[dict]) -> str:
     """A prompt preamble that DECLARES every mount in the THREE-TIER stack to the model VERBATIM — names,
     paths, tiers, roles, write rules — plus the default write-routing policy (WP-A1.2). The agent must
@@ -248,11 +267,12 @@ def run_turn_over_workspace(
     resume = _resume_id(work, sess_file, harness) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
     # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
-    # agent never guesses where it may read/write. Single-mount turns get no preamble.
+    # agent never guesses where it may read/write. Single-mount turns get no mounts preamble; the
+    # kg-links rule ([[wikilinks]] render as actionable entity chips) applies to EVERY turn.
     mounts = active_mounts()
     author = _principal_author()
     extras = _extra_mount_paths(work)
-    turn_prompt = mounts_preamble(mounts) + prompt if mounts_preamble(mounts) else prompt
+    turn_prompt = kg_links_preamble() + mounts_preamble(mounts) + prompt
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
                            commit=commit, author=author, extra_mounts=extras)
     first = next(gen, None)

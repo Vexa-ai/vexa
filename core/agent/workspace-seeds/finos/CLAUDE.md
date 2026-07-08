@@ -29,6 +29,12 @@ to record, research, or restructure knowledge, you **write it into this repo** a
   You may add more frontmatter fields (role, company, tags, etc.) and a markdown body below the
   second `---`. Cross-reference other entities with `[[wikilinks]]` using their title.
 
+**Reference entities as `[[Title]]` everywhere — chat replies included.** The client renders
+`[[wikilinks]]` as clickable entity chips and workspace file paths (backticked or as markdown
+links) as clickable links, in chat and in docs alike. A plain-text mention of a known entity is
+a dead end for the reader. Don't `[[link]]` things that have no entity doc — create the entity
+first, or use plain text.
+
 ## `kg/` is an Open Knowledge Format bundle (OKF v0.1)
 
 The knowledge graph follows the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf):
