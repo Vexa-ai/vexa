@@ -62,9 +62,12 @@ def test_parse_link_found_in_description():
     assert ev["platform"] == "zoom" and ev["native_meeting_id"] == "1234567890"
 
 
-def test_parse_skips_events_without_meeting_link():
+def test_parse_imports_events_without_meeting_link_as_linkless():
+    # fail loud (v4 BUG-2): a link-less event is NOT silently dropped — it imports link-less
     parsed = parse_ics(_ics(_event(location="Dentist, Main St 4", description="checkup")), now=NOW)
-    assert parsed["events"] == []
+    (ev,) = parsed["events"]
+    assert ev["uid"] == "uid-1" and ev["title"] == "Weekly sync"
+    assert ev["platform"] is None and ev["native_meeting_id"] is None and ev["meeting_url"] is None
 
 
 def test_parse_weekly_rrule_imports_only_next_occurrence():
@@ -186,3 +189,56 @@ async def test_sync_other_users_rows_untouched():
     await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
     await sync_user(store, 99, parse_ics(_ics(), now=NOW))  # user 99's empty feed
     assert len(await store.list_meetings(USER)) == 1
+
+# ---- link-less imports (fail loud, v4 BUG-2) -----------------------------------------
+
+async def test_sync_creates_linkless_planned_row():
+    store = InMemoryTranscriptStore()
+    parsed = parse_ics(_ics(_event(location="Room 4", description="no link here")), now=NOW)
+    result = await sync_user(store, USER, parsed)
+    assert result["counts"] == {"created": 1, "updated": 0, "cancelled": 0}
+    (row,) = await store.list_meetings(USER)
+    assert row["platform"] == "unknown" and row["native_meeting_id"] is None
+    assert row["status"] == "scheduled"
+    assert row["data"]["calendar_uid"] == "uid-1"
+    assert row["data"]["title"] == "Weekly sync"
+
+
+async def test_sync_linkless_import_is_idempotent_and_never_strips_a_link():
+    store = InMemoryTranscriptStore()
+    linkless = parse_ics(_ics(_event(location="Room 4")), now=NOW)
+    await sync_user(store, USER, linkless)
+    # idempotent re-sweep of the same link-less feed: no churn
+    again = await sync_user(store, USER, linkless)
+    assert again["counts"] == {"created": 0, "updated": 0, "cancelled": 0}
+    # a later sweep where the event GAINS a link arms the SAME row
+    armed = parse_ics(_ics(_event()), now=NOW)
+    result = await sync_user(store, USER, armed)
+    assert result["counts"]["updated"] == 1
+    (row,) = await store.list_meetings(USER)
+    assert row["platform"] == "google_meet" and row["native_meeting_id"] == "abc-defg-hij"
+    # and the reverse: the feed dropping the link does NOT strip the armed row
+    stripped = await sync_user(store, USER, linkless)
+    assert stripped["counts"] == {"created": 0, "updated": 0, "cancelled": 0}
+    (row,) = await store.list_meetings(USER)
+    assert row["native_meeting_id"] == "abc-defg-hij"
+
+
+async def test_sync_two_linkless_events_create_two_rows():
+    store = InMemoryTranscriptStore()
+    parsed = parse_ics(_ics(
+        _event(uid="u-a", summary="Standup", location="Office"),
+        _event(uid="u-b", summary="1:1", location="Cafe", start="20260709T090000Z"),
+    ), now=NOW)
+    result = await sync_user(store, USER, parsed)
+    assert result["counts"]["created"] == 2
+    rows = await store.list_meetings(USER)
+    assert sorted((r["data"]["calendar_uid"] for r in rows)) == ["u-a", "u-b"]
+
+
+async def test_sync_vanished_linkless_uid_retires_row():
+    store = InMemoryTranscriptStore()
+    await sync_user(store, USER, parse_ics(_ics(_event(location="Room 4")), now=NOW))
+    result = await sync_user(store, USER, parse_ics(_ics(), now=NOW))
+    assert result["counts"]["cancelled"] == 1
+    assert await store.list_meetings(USER) == []

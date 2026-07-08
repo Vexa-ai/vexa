@@ -9,8 +9,11 @@ meeting reuses the same Meet link every occurrence; two scheduled rows on one na
 violate the active-row unique index. Importing only the next occurrence sidesteps that entirely
 (the following occurrence imports on a later sweep, after the current one completes).
 
-Import filter: only events with a RECOGNIZABLE meeting link (Meet/Zoom/Teams via
-``collector.meeting_link``) become meetings — a dentist appointment is not a joinable meeting.
+Import rule (fail loud, design-spec meeting-lifecycle-v2 §v4 BUG-2): EVERY upcoming event
+imports. Events with a RECOGNIZABLE meeting link (Meet/Zoom/Teams via ``collector.meeting_link``)
+import armed; events WITHOUT one import as LINK-LESS planned rows (``platform='unknown'``,
+no native id) so the terminal can render the honest "bot not armed — no link" state instead of
+the event silently vanishing. A link appearing in a later feed sweep arms the existing row.
 ``STATUS:CANCELLED`` events and UIDs that vanish from the feed cancel their still-planned row;
 a row the bot FSM owns (live/completed) is NEVER touched by sync.
 """
@@ -84,8 +87,10 @@ def parse_ics(text: str, *, now: datetime,
     """Parse an ICS feed → ``{"events": [PlannedEvent], "cancelled_uids": [uid]}``.
 
     PlannedEvent = ``{uid, title, scheduled_at, platform, native_meeting_id, meeting_url}`` —
-    ONE per UID (the next upcoming occurrence), only for events carrying a recognizable meeting
-    link. Cancelled events surface as ``cancelled_uids`` so ``sync_user`` can retire their rows."""
+    ONE per UID (the next upcoming occurrence). Events WITHOUT a recognizable meeting link
+    still import — their ``platform``/``native_meeting_id``/``meeting_url`` are ``None`` and
+    ``sync_user`` creates them as link-less planned rows (fail loud, never a silent skip).
+    Cancelled events surface as ``cancelled_uids`` so ``sync_user`` can retire their rows."""
     from icalendar import Calendar
 
     window_start = now - timedelta(seconds=lookback_s)
@@ -114,9 +119,8 @@ def parse_ics(text: str, *, now: datetime,
             link = find_meeting_link(source)
             if link:
                 break
-        if not link:
-            continue  # no recognizable meeting link → not a joinable meeting, skip
-        platform, native_id, url = link
+        # no recognizable link → import LINK-LESS (fail loud; the terminal shows "no link")
+        platform, native_id, url = link if link else (None, None, None)
         events.append({
             "uid": uid,
             "title": _event_text(comp, "SUMMARY").strip() or None,
@@ -163,7 +167,9 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 updates["title"] = ev["title"]
             if data.get("scheduled_at") != ev["scheduled_at"]:
                 updates["scheduled_at"] = ev["scheduled_at"]
-            if row.get("native_meeting_id") != ev["native_meeting_id"] or row.get("platform") != ev["platform"]:
+            # link updates only when the feed CARRIES a link — a link-less event never strips an
+            # armed row's link (and never churns the row back to 'unknown' every sweep)
+            if ev["platform"] and (row.get("native_meeting_id") != ev["native_meeting_id"] or row.get("platform") != ev["platform"]):
                 updates["platform"] = ev["platform"]
                 updates["native_meeting_id"] = ev["native_meeting_id"]
                 updates["constructed_meeting_url"] = ev["meeting_url"]
@@ -177,7 +183,8 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             continue
 
         # no row for this uid — adopt a manual plan on the same link, else create
-        manual = by_native.get((ev["platform"], ev["native_meeting_id"]))
+        # (a link-less event has no native identity to adopt by — always creates)
+        manual = by_native.get((ev["platform"], ev["native_meeting_id"])) if ev["native_meeting_id"] else None
         if manual is not None:
             if manual.get("status") in _INTENT and not (manual.get("data") or {}).get("calendar_uid"):
                 adopted = await store.update_planned_meeting(user_id, manual["id"], {
@@ -194,7 +201,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
 
         created = await store.create_planned_meeting(
             user_id,
-            platform=ev["platform"],
+            platform=ev["platform"] or "unknown",   # link-less imports use the link-less-plan shape
             native_meeting_id=ev["native_meeting_id"],
             title=ev["title"],
             scheduled_at=ev["scheduled_at"],
