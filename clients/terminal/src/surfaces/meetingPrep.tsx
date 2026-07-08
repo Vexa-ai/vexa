@@ -187,6 +187,14 @@ function MeetingPrepTab({ params }: TabProps) {
   const autoJoin = m?.auto_join !== false;   // absent = ON
   const headline = useMemo(() => m?.title_custom || m?.title || "Planned meeting", [m]);
 
+  // B2 tab hygiene: a calendar sweep DELETES + recreates rows (new ids) — a tab keyed to the old
+  // row would dangle on "Loading meeting…" forever. Once the store has data and the row is gone,
+  // the tab closes itself (the meeting lives on under its new row, reachable from Today).
+  const rowGone = all.length > 0 && !m;
+  useEffect(() => {
+    if (rowGone) layout.closeTab(`prep:${meetingId}`);
+  }, [rowGone, layout, meetingId]);
+
   if (!m) {
     return <div style={{ padding: 32, fontSize: 13, color: "var(--t3)" }}>Loading meeting…</div>;
   }
