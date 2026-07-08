@@ -4,8 +4,9 @@ opt-in, and — crucially — NEVER write the transcript carrier.
 Post-D7 (P23): meeting-api's collector is the SINGLE writer of ``tc:meeting:{native}`` (segments AND the
 session_end marker). The agent watcher only tails ``transcription_segments`` as a TRIGGER to do agent-domain
 jobs: freeze ONE native routing key per meeting, register the live row, re-arm the copilot while processing
-is enabled, and reap on session_end. It READS the native feed's tail for the copilot resume cursor, but
-writes nothing — `meetings ⊥ agent` (P3). These tests assert that behaviour via keymap/live/dispatch, and
+is enabled (resuming from the worker-advanced cursor — the ONE resume source, ADR 0027), and reap on
+session_end (live row, keymap, AND the desired-state flag). It writes nothing to the carrier —
+`meetings ⊥ agent` (P3). These tests assert that behaviour via keymap/live/dispatch, and
 that no ``tc:meeting:*`` write ever originates here.
 """
 from __future__ import annotations
@@ -181,25 +182,41 @@ def test_resolve_native_requests_limit_within_gateway_cap(monkeypatch):
     assert requested <= 100, f"gateway caps limit at 100; requested {requested} → HTTP 422 every call"
 
 
-# ── copilot arming (opt-in) reads the collector-owned feed tail for the resume cursor ───────────────
+# ── copilot arming (opt-in) resumes from the ONE cursor — never the stream tail (ADR 0027) ──────────
 
-def test_arm_reads_row_keyed_feed_tail_for_resume_cursor(monkeypatch):
-    """The copilot resumes after the ROW-keyed feed's CURRENT tail. The arm thread READS that tail (the
-    collector writes tc:meeting:{row_id}) and passes it as the dispatch's transcript_start_id — writes
-    nothing. The opt-in flag is ROW-keyed too (proc:meeting:{row_id}:on)."""
+def test_arm_resumes_from_the_frozen_cursor(monkeypatch):
+    """The arm's transcript_start_id is the worker-advanced cursor (proc:meeting:{row}:cursor) — the
+    SAME resume source the /process toggle reports. Arming from the feed TAIL here used to race the
+    toggle's dispatch, and a tail-armed win silently skipped the backfill (run-46). Writes nothing."""
     _reset_module_caches()
     monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
 
     r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
     # The collector has already written 2 entries onto the ROW-keyed feed (simulated here).
     r.streams["tc:meeting:42"] = [{"payload": "c-1"}, {"payload": "c-2"}]
-    r.set("proc:meeting:42:on", "1")  # processing is opt-in — enable it (ROW-keyed) so the copilot arms
+    r.set("proc:meeting:42:on", "1")        # processing is opt-in — enable it (ROW-keyed)
+    r.set("proc:meeting:42:cursor", "1-0")  # the worker cleaned up to 1-0 before it was reaped
 
     w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
 
     meeting = disp.dispatched[0]["context"]["meeting"]
-    assert meeting["transcript_start_id"] == "2-0"                # tail of the collector-written row feed
+    assert meeting["transcript_start_id"] == "1-0"                # the frozen cursor — gap-fill, no skip
     assert len(r.streams["tc:meeting:42"]) == 2                   # unchanged — the agent appended nothing
+
+
+def test_arm_without_cursor_backfills_full_history(monkeypatch):
+    """A never-processed meeting has no cursor ⇒ the arm starts from 0-0 (full-history backfill), even
+    when the transcript already has entries — the tail is NOT a resume source."""
+    _reset_module_caches()
+    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("aaa-aaaa-aaa", "google_meet"))
+
+    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
+    r.streams["tc:meeting:42"] = [{"payload": "c-1"}, {"payload": "c-2"}]  # history exists
+    r.set("proc:meeting:42:on", "1")
+
+    w._handle(r, disp, live, "u_live", _payload("42"), *_fresh_state())
+
+    assert disp.dispatched[0]["context"]["meeting"]["transcript_start_id"] == "0-0"
 
 
 def test_copilot_processing_is_opt_in(monkeypatch):
@@ -279,6 +296,25 @@ def test_session_end_reaps_copilot_without_writing_the_carrier(monkeypatch):
     assert "9" not in live.by_uid                            # live row dropped (by the row-id key)
     assert "9" not in keymap                                 # keymap cleared (clean relaunch)
     assert _native_streams(r) == []                          # the agent wrote NO session_end marker
+
+
+def test_session_end_reaps_the_processing_flag(monkeypatch):
+    """session_end also deletes the desired-state flag (proc:meeting:{row}:on) — the meeting is over, so
+    a leftover flag must not survive to litter redis / re-arm a copilot for a dead meeting (ADR 0027:
+    this watcher is the flag's end-of-life owner). The frozen cursor is intentionally LEFT in place."""
+    _reset_module_caches()
+    monkeypatch.setattr(w, "_resolve_native", lambda mid: ("nat-9", "google_meet"))
+    monkeypatch.delenv("VEXA_BOT_API_KEY", raising=False)
+    r, disp, live = _FakeRedis(), _FakeDispatcher(), _FakeLive()
+    st = _fresh_state()
+    r.set("proc:meeting:9:on", "1")
+    r.set("proc:meeting:9:cursor", "5-0")
+
+    w._handle(r, disp, live, "u", _payload("9"), *st)
+    w._handle(r, disp, live, "u", {"type": "session_end", "meeting_id": "9"}, *st)
+
+    assert r.get("proc:meeting:9:on") is None                # desired state reaped with the meeting
+    assert r.get("proc:meeting:9:cursor") == "5-0"           # cursor frozen (audit / late gap-fill)
 
 
 # ── P18 (ADR 0010) — fail-loud regression gates: the 90-minute incident as a red-then-green test ──────

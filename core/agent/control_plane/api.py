@@ -731,15 +731,15 @@ def create_app(
 
     @app.post("/api/meeting/process", status_code=202)
     def meeting_process(body: MeetingProcess, request: Request):
-        """User-controlled copilot PROCESSING for a meeting. Processing is OPT-IN: the transcription
-        watcher only arms / keeps the copilot alive while ``proc:meeting:{native}`` is set — so OFF means
-        NO processing runs at all (the raw transcript still streams).
-
-        ON resumes from the per-meeting CURSOR (``proc:meeting:{native}:cursor`` = the last raw transcript
-        stream-id already cleaned): the copilot gets ``transcript_start_id = cursor`` and processes the gap
-        ``[cursor → tail]`` in ONE catch-up pass, then continues live. A never-processed meeting has no
-        cursor ⇒ ``'0-0'`` (process the whole history). OFF just clears the flag — the cursor is FROZEN at
-        the last processed entry so a later re-enable gap-fills from exactly where we left off."""
+        """User-controlled copilot PROCESSING for a meeting — DESIRED STATE ONLY (ADR 0027). This
+        endpoint writes the opt-in flag; it never dispatches. The transcription watcher is the ONE
+        dispatch arbiter: it arms (and keeps alive) the copilot while ``proc:meeting:{row}:on`` is
+        set, always resuming from the per-meeting CURSOR (``proc:meeting:{row}:cursor`` = the last
+        raw transcript stream-id already cleaned; absent ⇒ ``'0-0'`` = full history). Two writers
+        used to dispatch here (this handler from the cursor, the watcher from the stream tail) and
+        race — whichever landed second was a touch, so a tail-armed win silently skipped the
+        backfill. OFF just clears the flag — the cursor is FROZEN at the last processed entry so a
+        later re-enable gap-fills from exactly where we left off."""
         import redis as _redis
 
         r = _redis.from_url(redis_url, decode_responses=True)
@@ -772,30 +772,17 @@ def create_app(
             except Exception:  # noqa: BLE001 — best-effort; the watcher reaps the copilot on TTL anyway
                 pass
             return {"native_id": body.native_id, "meeting_id": row_id, "processing": False}
+        subject_of(request)  # identity gate (P20) — kept even though nothing dispatches from here
         cursor: str | None = None
         try:
             r.set(flag, "1")
             cursor = r.get(cursor_key)
         except Exception:  # noqa: BLE001
             cursor = None
-        # Gap-fill from the cursor (last cleaned raw id); no cursor yet ⇒ from the start of the transcript.
+        # `resumed_from` reports where the watcher's arm WILL resume (the frozen cursor, else the
+        # start of the transcript) — informational for the client; the dispatch itself happens on
+        # the watcher's next segment (≤ one batch), keyed and started from the same cursor.
         start_id = cursor or "0-0"
-        # The dispatch routes by the ROW id (meeting_id) — matching the watcher's row-keyed carriers — and
-        # carries the native SEPARATELY for the readable kg doc name (nuance #1). numeric_meeting_id is the
-        # explicit row-id hint the db-writer needs to persist the processed doc.
-        meeting_ref: dict = {
-            "meeting_id": key, "session_uid": key,
-            "platform": body.platform, "transcript_start_id": start_id,
-            "native_id": body.native_id,
-        }
-        if row_id:
-            meeting_ref["numeric_meeting_id"] = str(row_id)
-        inv = units.make_dispatch(
-            subject=subject_of(request), trigger="transcription",
-            start=units.entrypoint(inline=_MEETING_BRIEF),
-            context={"kind": "meeting", "meeting": meeting_ref},
-        )
-        dispatcher.dispatch(inv)
         return {"native_id": body.native_id, "meeting_id": row_id, "processing": True, "resumed_from": start_id}
 
     @app.post("/api/chat")

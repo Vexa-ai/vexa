@@ -13,9 +13,11 @@ field); a resolution miss no longer diverges the carrier key.
 
 It does NOT write the transcript carrier. The MEETINGS domain (meeting-api's collector) is the SINGLE
 writer of the per-meeting feed ``tc:meeting:{row_id}`` and its ``session_end`` marker (P23) — the agent only
-CONSUMES it: the copilot worker reads it, and the arm thread only READS its tail for the copilot resume
-cursor. `meetings ⊥ agent` (P3): the agent re-derives nothing. ``keymap`` (numeric meeting_id → row-id
-routing key) is the arm thread's own state.
+CONSUMES it. This loop is also the ONE dispatch arbiter for copilot processing (ADR 0027): /api/meeting/
+process writes the desired-state flag only; the arm here resumes from the worker-advanced cursor
+(``proc:meeting:{row_id}:cursor``, else 0-0) and relies on runtime.v1's idempotent create (a running
+copilot is touched, never respawned). `meetings ⊥ agent` (P3): the agent re-derives nothing. ``keymap``
+(numeric meeting_id → row-id routing key) is the arm thread's own state.
 
 No extra container, no HTTP hop: it holds the Dispatcher directly.
 """
@@ -193,16 +195,17 @@ def _record_meeting_doc(native: str, platform: str, subject: str) -> None:
         logger.exception("connect meeting doc ref failed for %s/%s", platform, native)
 
 
-def _stream_tail_id(r, stream: str) -> str:
-    """Return the current Redis Stream tail id, or ``0-0`` when the stream has no entries."""
+def _resume_cursor(r, key: str) -> str:
+    """Where the copilot resumes in ``tc:meeting:{key}``: the per-meeting cursor the worker advances
+    as it cleans (``proc:meeting:{key}:cursor``), else ``0-0`` (never processed ⇒ full history).
+    ADR 0027: this is the ONE resume source — arming from the stream TAIL here used to race the
+    /process toggle's cursor-armed dispatch, and a tail-armed win silently skipped the backfill."""
     try:
-        rows = r.xrevrange(stream, "+", "-", count=1)
+        cursor = r.get(f"proc:meeting:{key}:cursor")
     except Exception:  # noqa: BLE001 — cursoring is best-effort; an empty cursor is still valid
-        logger.exception("stream tail lookup failed for %s", stream)
-        return "0-0"
-    if not rows:
-        return "0-0"
-    return str(rows[0][0])
+        logger.exception("resume-cursor lookup failed for %s", key)
+        cursor = None
+    return str(cursor) if cursor else "0-0"
 
 
 def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threading.Thread:
@@ -305,11 +308,17 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
     if kind == "session_end":
         # The collector emits the session_end MARKER onto tc:meeting:{row_id} (P23/P0, single writer); the
         # agent only does its OWN reaping here — drop the live row (by the row-id key we registered it
-        # under), clear keymap, connect the kg doc (native, for display).
+        # under), clear keymap, reap the processing DESIRED STATE (the meeting is over — a stale `:on`
+        # flag would re-arm a copilot for a dead meeting and litter redis; ADR 0027 makes this watcher
+        # the flag's end-of-life owner), connect the kg doc (native, for display).
         live.drop(key)
         last_arm.pop(key, None)
         keymap.pop(mid, None)
         first_seen.pop(mid, None)
+        try:
+            r.delete(f"proc:meeting:{key}:on")
+        except Exception:  # noqa: BLE001 — best-effort; a leftover flag only wastes a re-arm attempt
+            logger.exception("processing-flag reap failed for %s", key)
         logger.info("meeting %s ended → reaping copilot", key)
         # Connect this meeting's own kg doc (authored by the §4 worker on session_end) to the
         # meeting — from here, so the user key stays out of the isolated worker container.
@@ -317,9 +326,6 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
         return
     if kind != "transcription":
         return
-
-    # READ-only: the row-keyed feed's tail is the copilot's RESUME cursor. The collector writes the feed.
-    transcript_start_id = _stream_tail_id(r, out_stream)
 
     # Keep the terminal's live feed fresh on EVERY batch (a cheap dict write) so an agent-api restart
     # can't drop the meeting from the list — it reappears on the first segment. Throttle only the spawn.
@@ -334,23 +340,26 @@ def _handle(r, dispatcher, live, subject, p, last_arm, keymap, first_seen) -> No
         "numeric_meeting_id": mid if mid.isdigit() else None,
     })
     # Processing is OPT-IN per meeting: only arm / keep-alive the copilot while the user has enabled it
-    # (the terminal sets ``proc:meeting:{row_id}:on`` via /api/meeting/process). Default OFF → no copilot →
-    # no processing; the RAW transcript still flows through the collector-owned feed above.
+    # (the terminal sets ``proc:meeting:{row_id}:on`` via /api/meeting/process — DESIRED STATE only;
+    # ADR 0027 makes this loop the ONE dispatch arbiter). Default OFF → no copilot → no processing;
+    # the RAW transcript still flows through the collector-owned feed above.
     now = time.monotonic()
     # The opt-in flag is ``proc:meeting:{key}:on`` — a DISTINCT key from the processed-notes stream
     # ``proc:meeting:{key}`` (a GET on that stream raises WRONGTYPE and would crash this arm loop).
     if r.get(f"proc:meeting:{key}:on") and now - last_arm.get(key, 0.0) > REARM_SEC:
         last_arm[key] = now
-        _arm(dispatcher, subject, key, platform, transcript_start_id=transcript_start_id,
+        _arm(dispatcher, subject, key, platform, transcript_start_id=_resume_cursor(r, key),
              numeric_meeting_id=mid if mid.isdigit() else None, native_id=native)
 
 
 def _arm(dispatcher, subject: str, key: str, platform: str, *, transcript_start_id: str = "0-0",
          numeric_meeting_id: str | None = None, native_id: str | None = None) -> None:
-    """Spawn-or-touch the meeting's copilot (keyed agent-meet-{key}, where key is the ROW id). Idempotent:
-    spawns if reaped, touches (keep-alive) if already running. The live-feed registration happens in
-    _handle every batch. ``native_id`` is carried for DISPLAY only (the worker names the kg doc/title by
-    the human-readable native code, while the transcript/proc/cursor keys stay the row id)."""
+    """Spawn-or-touch the meeting's copilot (keyed agent-meet-{key}, where key is the ROW id). Idempotent
+    FOR REAL since ADR 0027: runtime.v1 create touches a running workload (returns its live status) and
+    only spawns one that is absent/exited — before that, every re-arm force-replaced the live container
+    (the copilot-churn defect). The live-feed registration happens in _handle every batch. ``native_id``
+    is carried for DISPLAY only (the worker names the kg doc/title by the human-readable native code,
+    while the transcript/proc/cursor keys stay the row id)."""
     meeting_ref: dict = {
         "meeting_id": key, "session_uid": key, "platform": platform,
         "transcript_start_id": transcript_start_id,
