@@ -792,6 +792,8 @@ function MeetingTab({ params }: TabProps) {
   );
 }
 
-registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList });
+registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList,
+  // clicking Meetings opens the user's DAY in the center (design-spec meeting-lifecycle-v2, W2)
+  centerTab: { id: "today", title: "Today", kind: "today", params: {} } });
 registerTab("meeting", MeetingTab);
 registerCommand({ id: "meeting.openLive", title: "Open live meeting", run: ({ container }) => { const m = liveMeetingsNow()[0]; if (m) container.get(LayoutServiceId).openTab(meetingTab(m)); } });

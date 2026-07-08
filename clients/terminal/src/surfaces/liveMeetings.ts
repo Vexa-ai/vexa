@@ -178,6 +178,8 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     auto_join: d.data?.auto_join,
     auto_join_error: d.data?.auto_join_error ?? undefined,
     meeting_url: d.constructed_meeting_url ?? d.data?.constructed_meeting_url ?? undefined,
+    start_time: d.start_time ?? undefined,
+    end_time: d.end_time ?? undefined,
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],

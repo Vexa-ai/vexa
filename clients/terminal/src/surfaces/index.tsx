@@ -16,10 +16,12 @@ import "./sessions";   // list "sessions" (→ focuses right-rail chat) (gated i
 import "./entities";   // EntityList helpers
 import "./meeting";    // list "meetings" + tab-kind "meeting"
 import "./meetingPrep"; // tab-kind "meetingPrep" — a planned meeting's prep/share hub
+import "./today";      // tab-kind "today" — the Meetings click target (the user's day)
 import "./canvas";     // tab-kind "canvas" + command "Open Meeting Canvas"
 import "./workspace";  // list "files" (+ git) + tab-kind "doc"       (gated in meetings mode)
 import "./workspaceManage"; // tab-kind "workspace" — the manage hub  (gated in meetings mode)
 import "./routines";   // list "routines" + tab-kind "routines"       (gated in meetings mode)
-import "./tokens";     // list "tokens" — API-token self-serve (registers in EVERY mode)
+import "./tokens";     // token panels (rendered inside Settings; no list of its own anymore)
+import "./settings";   // tab-kind "settings" — the footer-gear hub (calendar · tokens · github · account)
 import "./admin";      // HIDDEN admin infra panel — registers only after /api/admin/me confirms (gated in meetings mode)
 // tasks deferred — surfaces as quick-action cards in chat later (see roadmap)

@@ -188,7 +188,8 @@ function LeftPane() {
           overflow/scroll), matching the file-tree rows below */}
       <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
         {lists.map((l) => (
-          <button key={l.id} style={seg(l.id === active?.id)} onClick={() => layout.setActiveList(l.id)} title={l.label}>
+          <button key={l.id} style={seg(l.id === active?.id)}
+            onClick={() => { layout.setActiveList(l.id); if (l.centerTab) layout.openTab(l.centerTab); }} title={l.label}>
             <Icon name={l.icon} size={13} />{l.label}
             {l.id === "files" && badge > 0 && (
               <span title={`${badge} new update${badge > 1 ? "s" : ""} from other members`}
@@ -210,6 +211,7 @@ function LeftPane() {
 //    control stays here so logout is always reachable. Wiping client state on logout keeps the next user
 //    from inheriting this one's tabs/docs/focus.
 function UserProfile() {
+  const layout = useService(LayoutServiceId);
   const [user, setUser] = useState<{ email?: string | null; name?: string | null } | null>(null);
   useEffect(() => {
     let active = true;
@@ -238,6 +240,11 @@ function UserProfile() {
         <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
         {email && <div style={{ fontSize: 11, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>}
       </div>
+      <button type="button" title="Settings"
+        onClick={() => layout.openTab({ id: "settings", title: "Settings", kind: "settings", params: {} })}
+        style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>
+        <Icon name="gear" size={15} />
+      </button>
       <ThemeToggle />
       <button type="button" title="Sign out" onClick={signOut}
         style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>

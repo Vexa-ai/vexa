@@ -1,13 +1,12 @@
 "use client";
-/** API Tokens — the logged-in user's token self-serve LIST (left): list, mint, revoke.
- *
- *  Registers in EVERY terminal mode (it's the settings surface meetings-only deployments need to get
- *  programmatic API access). All data flows through /api/tokens, which resolves the user server-side
- *  from the auth cookies — no user_id ever leaves this component (P20). The minted token value is
- *  shown ONCE (copy it now); it is never listed again.
+/** API tokens + GitHub token panels — the user's credential self-serve (list, mint, revoke; save-once
+ *  PAT). These render inside the SETTINGS tab (surfaces/settings.tsx — the footer-gear surface,
+ *  design-spec meeting-lifecycle-v2 W5); the old "API Tokens" activity-bar item is retired so
+ *  integrator config leaves the daily-driver nav. All data flows through /api/tokens, which resolves
+ *  the user server-side from the auth cookies — no user_id ever leaves this component (P20). The
+ *  minted token value is shown ONCE (copy it now); it is never listed again.
  */
 import { useCallback, useEffect, useState } from "react";
-import { registerList } from "../contributions";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { listTokens, createToken, revokeToken, TOKEN_SCOPES, type TokenInfo, type TokenScope, type MintedToken } from "./tokensApi";
@@ -23,6 +22,10 @@ const EXPIRIES: Array<{ label: string; seconds?: number }> = [
 
 const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString() : null);
 
+// Scopes speak CAPABILITIES to the user (the raw scope id rides in the tooltip + the API).
+const SCOPE_LABELS: Record<string, string> = { bot: "Join meetings", tx: "Read transcripts", browser: "Browse web" };
+const scopeLabel = (s: string) => SCOPE_LABELS[s] ?? s;
+
 function TokenRow({ token, onRevoke }: { token: TokenInfo; onRevoke: (id: number) => void }) {
   const [confirming, setConfirming] = useState(false);
   const created = fmtDate(token.created_at);
@@ -35,7 +38,7 @@ function TokenRow({ token, onRevoke }: { token: TokenInfo; onRevoke: (id: number
           {token.name || `token #${token.id}`}
         </div>
         <div style={{ fontSize: 11, color: "var(--t3)" }}>
-          {token.scopes.join(" · ")}{created ? ` · created ${created}` : ""}{expires ? ` · expires ${expires}` : ""}
+          {token.scopes.map(scopeLabel).join(" · ")}{created ? ` · created ${created}` : ""}{expires ? ` · expires ${expires}` : ""}
         </div>
       </div>
       {confirming ? (
@@ -103,8 +106,8 @@ function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void })
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional)" style={{ ...field, marginBottom: 8 }} />
       <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
         {TOKEN_SCOPES.map((s) => (
-          <label key={s} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--t2)", cursor: "pointer" }}>
-            <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggle(s)} />{s}
+          <label key={s} title={`scope: ${s}`} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--t2)", cursor: "pointer" }}>
+            <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggle(s)} />{scopeLabel(s)}
           </label>
         ))}
       </div>
@@ -123,7 +126,7 @@ function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void })
 /** The SAVE-ONCE reusable GitHub token (git_credentials). Stored server-side; the clear value is never
  *  shown again (only a ••••abcd mask). Applied as the fallback credential for push / pull / publish /
  *  attach across ALL of the user's repos, so they don't re-enter it per repo. */
-function GitHubTokenCard() {
+export function GitHubTokenCard() {
   const [state, setState] = useState<SavedGitToken | null>(null);
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
@@ -183,7 +186,7 @@ function GitHubTokenCard() {
   );
 }
 
-function TokensList() {
+export function TokensPanel() {
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [minted, setMinted] = useState<MintedToken | null>(null);
   const [error, setError] = useState<string | null>(null);  // fail-loud (P18)
@@ -200,9 +203,6 @@ function TokensList() {
 
   return (
     <div style={{ padding: "8px" }}>
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>github</div>
-      <GitHubTokenCard />
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>api tokens</div>
       {error && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", padding: "6px 9px" }}>⚠ Couldn’t load tokens — {error}</div>}
       {minted && <MintedTokenCard minted={minted} onDismiss={() => setMinted(null)} />}
       <CreateTokenForm onCreated={onCreated} />
@@ -211,5 +211,3 @@ function TokensList() {
     </div>
   );
 }
-
-registerList({ id: "tokens", label: "API Tokens", icon: "key", order: 60, component: TokensList });

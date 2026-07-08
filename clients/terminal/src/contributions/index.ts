@@ -21,6 +21,9 @@ export interface ListContribution {
   icon: string;
   order: number;
   component: ComponentType;
+  /** optional CENTER tab the shell opens when this list is activated (e.g. Meetings → "Today").
+   *  Structurally a workbench TabDescriptor; declared inline so contributions stays shell-agnostic. */
+  centerTab?: { id: string; title: string; kind: string; params: Record<string, unknown> };
 }
 
 export interface TabProps {
