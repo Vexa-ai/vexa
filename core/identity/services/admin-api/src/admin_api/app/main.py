@@ -115,6 +115,13 @@ class WebhookUpdate(BaseModel):
     webhook_events: Optional[Dict[str, bool]] = None
 
 
+class CalendarUpdate(BaseModel):
+    """The user's calendar-sync self-serve config: a secret ICS feed URL (``null`` disconnects)
+    + the GLOBAL auto-join default stamped onto every imported meeting."""
+    ics_url: Optional[str] = None
+    auto_join: Optional[bool] = None
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Vexa Admin API (v0.12)")
 
@@ -241,6 +248,57 @@ def create_app() -> FastAPI:
             "webhook_events": data.get("webhook_events"),
         }
 
+    # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
+    @app.put("/user/calendar")
+    async def set_user_calendar(calendar_update: CalendarUpdate,
+                                user: User = Depends(get_current_user),
+                                db: AsyncSession = Depends(get_db)):
+        """Set/clear the caller's secret ICS feed URL (+ the global auto-join default for
+        imported meetings). ``ics_url: null`` disconnects the calendar. The URL is a SECRET
+        (Google/Outlook secret-address feeds) — it is stored, never echoed in the clear."""
+        from urllib.parse import urlparse
+
+        from sqlalchemy.orm import attributes
+        data = dict(user.data or {})
+        if "ics_url" in calendar_update.model_fields_set:
+            url = (calendar_update.ics_url or "").strip()
+            if url:
+                if len(url) > 2048:
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                        detail="ics_url too long")
+                parsed = urlparse(url)
+                if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                        detail="ics_url must be an http(s) URL")
+                data["calendar_ics_url"] = url
+            else:
+                data.pop("calendar_ics_url", None)
+        if calendar_update.auto_join is not None:
+            data["calendar_auto_join"] = bool(calendar_update.auto_join)
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return await get_user_calendar(user)  # the masked read-back shape
+
+    @app.get("/user/calendar")
+    async def get_user_calendar(user: User = Depends(get_current_user)):
+        """Read back the caller's calendar config. The ICS URL is a secret — masked to its host
+        + last 4 chars, enough to recognize WHICH feed is connected without disclosing it."""
+        from urllib.parse import urlparse
+
+        data = user.data if isinstance(user.data, dict) else {}
+        url = data.get("calendar_ics_url")
+        masked = None
+        if url:
+            host = urlparse(url).hostname or ""
+            masked = f"{host}/…{url[-4:]}"
+        return {
+            "ics_url_set": bool(url),
+            "ics_url_masked": masked,
+            "auto_join": data.get("calendar_auto_join", True),
+        }
+
     # --- internal tier: the gateway's authz oracle (FAIL-CLOSED) ---
     @app.post("/internal/validate", include_in_schema=False)
     async def validate_token(request: Request, payload: dict, db: AsyncSession = Depends(get_db)):
@@ -361,6 +419,44 @@ def create_app() -> FastAPI:
         db.add(user)
         await db.commit()
         return {"memberships": memberships}
+
+    # --- internal tier: calendar-sync configs — meeting-api's ICS poller discovers every user
+    #     with a connected feed over the same X-Internal-Secret edge as /internal/validate. The
+    #     secret URL crosses ONLY this internal hop (never a user-facing response). ---
+    @app.get("/internal/calendar-configs", include_in_schema=False)
+    async def list_calendar_configs(request: Request, db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        rows = (await db.execute(
+            select(User).where(User.data["calendar_ics_url"].astext.isnot(None))
+        )).scalars().all()
+        configs = []
+        for u in rows:
+            data = u.data if isinstance(u.data, dict) else {}
+            url = data.get("calendar_ics_url")
+            if url:
+                configs.append({
+                    "user_id": u.id,
+                    "ics_url": url,
+                    "auto_join": data.get("calendar_auto_join", True),
+                })
+        return {"configs": configs}
+
+    # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
+    #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
+    #     Same shape /internal/validate returns for those fields, keyed by user id. ---
+    @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
+    async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        user = await _load_user(user_id, db)
+        data = user.data if isinstance(user.data, dict) else {}
+        resp: dict = {"max_concurrent": user.max_concurrent_bots}
+        if data.get("webhook_url"):
+            resp["webhook_url"] = data["webhook_url"]
+            if data.get("webhook_secret"):
+                resp["webhook_secret"] = data["webhook_secret"]
+            if data.get("webhook_events"):
+                resp["webhook_events"] = data["webhook_events"]
+        return resp
 
     @app.get("/")
     async def root():

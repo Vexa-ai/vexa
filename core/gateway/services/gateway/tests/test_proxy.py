@@ -125,6 +125,54 @@ def test_meeting_intent_put_forwards_to_meeting_api():
     assert "meeting-api" in downstream.last["url"]
 
 
+def test_planned_meeting_routes_forward_to_meeting_api():
+    """Planned meetings: POST /meetings (create), PATCH/DELETE /meetings/{id} (row-id-addressed
+    edits) forward verbatim to meeting-api — the Meetings surface's 'Plan a meeting' flow."""
+    client, downstream = _client()
+    r = client.post("/meetings", headers=AUTH, json={"title": "Q3 kickoff"})
+    assert r.status_code == 200  # FakeDownstream's status; the route itself declares 201
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"].endswith("/meetings") and "meeting-api" in downstream.last["url"]
+
+    client.patch("/meetings/42", headers=AUTH, json={"title": "renamed"})
+    assert downstream.last["method"] == "PATCH"
+    assert downstream.last["url"].endswith("/meetings/42")
+
+    client.delete("/meetings/42", headers=AUTH)
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"].endswith("/meetings/42")
+
+
+def test_planned_meeting_routes_require_api_key():
+    client, downstream = _client()
+    assert client.post("/meetings", json={"title": "x"}).status_code == 401
+    assert client.patch("/meetings/1", json={"title": "x"}).status_code == 401
+    assert client.delete("/meetings/1").status_code == 401
+    assert downstream.last is None
+
+
+def test_user_calendar_routes_forward_to_admin_api():
+    """Self-serve calendar-sync config: PUT/GET /user/calendar proxy to admin-api (which masks the
+    secret ICS URL on read-back), same idiom as /user/webhook."""
+    client, downstream = _client()
+    r = client.put("/user/calendar", headers=AUTH, json={"ics_url": "https://cal.example/x.ics"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "PUT"
+    assert downstream.last["url"] == "http://admin-api/user/calendar"
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+    client.get("/user/calendar", headers=AUTH)
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"] == "http://admin-api/user/calendar"
+
+
+def test_user_calendar_requires_api_key():
+    client, downstream = _client()
+    assert client.put("/user/calendar", json={"ics_url": "https://x"}).status_code == 401
+    assert client.get("/user/calendar").status_code == 401
+    assert downstream.last is None
+
+
 def test_user_webhook_put_forwards_to_admin_api():
     """Self-serve webhook config: PUT /user/webhook proxies to admin-api (0.10.6 main.py:1080
     set_user_webhook_proxy) with the same auth + identity-injection idiom as every proxied route."""

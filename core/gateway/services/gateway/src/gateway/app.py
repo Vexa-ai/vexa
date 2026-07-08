@@ -330,10 +330,24 @@ def create_app(
     async def meetings(request: Request):
         return await _forward("GET", _meeting("/meetings"), request)
 
+    # Create a PLANNED meeting (intent status, no bot) — the Meetings surface's "Plan a meeting".
+    @app.post("/meetings", status_code=201)
+    async def create_planned_meeting(request: Request):
+        return await _forward("POST", _meeting("/meetings"), request)
+
     # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")
     async def meeting(meeting_id: int, request: Request):
         return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)
+
+    # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
+    @app.patch("/meetings/{meeting_id}")
+    async def patch_planned_meeting(meeting_id: int, request: Request):
+        return await _forward("PATCH", _meeting(f"/meetings/{meeting_id}"), request)
+
+    @app.delete("/meetings/{meeting_id}", status_code=204)
+    async def delete_planned_meeting(meeting_id: int, request: Request):
+        return await _forward("DELETE", _meeting(f"/meetings/{meeting_id}"), request)
 
     # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
     # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
@@ -370,6 +384,17 @@ def create_app(
     @app.get("/user/webhook")
     async def get_user_webhook(request: Request):
         return await _forward("GET", _admin("/user/webhook"), request)
+
+    # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
+    # The ICS URL is a secret — admin-api masks it on every read-back. No ROUTE_SCOPES entry
+    # (any valid key manages its own calendar), parity with the webhook self-serve. ----
+    @app.put("/user/calendar")
+    async def set_user_calendar(request: Request):
+        return await _forward("PUT", _admin("/user/calendar"), request)
+
+    @app.get("/user/calendar")
+    async def get_user_calendar(request: Request):
+        return await _forward("GET", _admin("/user/calendar"), request)
 
     # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under the canonical /agent/*
     # prefix so the SAME edge resolves key → user and injects X-User-Id; agent-api derives `subject`
