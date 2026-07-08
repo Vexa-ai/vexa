@@ -19,9 +19,13 @@ services:
 
   postgres:
     image: postgres:17-alpine
-    # idle_in_transaction_session_timeout=60s auto-kills orphaned transactions
-    # (defense-in-depth against future DB session leaks in meeting-api).
-    command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
+    # 60s was too aggressive: /meetings/{id}/transcribe holds the request's
+    # AsyncSession open while calling Whisper on an hour-long recording,
+    # which lands > 60s and gets the connection killed mid-flight → the
+    # follow-up INSERT explodes with "connection is closed" (meeting 118,
+    # 2026-07-08). 600s covers ≤ 2h meetings; anything longer needs the
+    # endpoint refactored to release the session before the Whisper call.
+    command: ["postgres", "-c", "idle_in_transaction_session_timeout=600000"]
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
       - POSTGRES_USER=${DB_USER:-postgres}
