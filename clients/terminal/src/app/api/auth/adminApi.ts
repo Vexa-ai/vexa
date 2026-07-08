@@ -72,6 +72,45 @@ export function createUserToken(userId: string | number): Promise<AdminResult<{ 
   );
 }
 
+// ── verified identity — admin-api's internal oracle (`POST /internal/validate`, the same
+//    X-Internal-Secret edge the gateway uses). The `vexa-token` auth cookie is the ONLY input; the
+//    returned {user_id, email} is the ONLY identity this server trusts. The `vexa-user-info` cookie
+//    is display-only: httpOnly stops JS reads, not a hand-crafted Cookie header, so nothing
+//    security-relevant may ever be derived from it.
+
+export type ValidatedUser =
+  | { ok: true; userId: string | number; email: string }
+  | { ok: false; status: number; error: string };
+
+export async function validateAuthToken(token: string): Promise<ValidatedUser> {
+  const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret) {
+    // Fail closed — an unconfigured oracle must never fall back to trusting client-sendable data.
+    return { ok: false, status: 503, error: "Auth validation is not configured (VEXA_ADMIN_API_URL / VEXA_INTERNAL_API_SECRET)" };
+  }
+
+  try {
+    const res = await fetch(`${url}/internal/validate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.status === 401) return { ok: false, status: 401, error: "Not authenticated" };
+    if (!res.ok) return { ok: false, status: 503, error: `Token validation failed (admin-api returned ${res.status})` };
+    const data = (await res.json()) as { user_id?: string | number; email?: string };
+    if (data.user_id === undefined || data.user_id === null || !data.email) {
+      return { ok: false, status: 502, error: "Token validation returned no identity" };
+    }
+    return { ok: true, userId: data.user_id, email: data.email };
+  } catch (err) {
+    const e = err as Error;
+    return { ok: false, status: 503, error: e.name === "TimeoutError" ? "Token validation timed out" : "Token validation unavailable" };
+  }
+}
+
 // ── token self-serve (the /api/tokens routes) — admin-tier calls, ALWAYS scoped to the logged-in
 //    user's own user_id (resolved server-side from the auth cookies; never taken from the client).
 
