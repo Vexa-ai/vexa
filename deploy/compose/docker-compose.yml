@@ -392,6 +392,11 @@ services:
         # API-tokens surface load, and the server proxy refuses agent-api paths (404). Uncomment
         # (or set TERMINAL_MODE=meetings in .env) and REBUILD the terminal image to enable:
         # NEXT_PUBLIC_TERMINAL_MODE: ${TERMINAL_MODE:-meetings}
+        # Runtime node_modules flavor (clients/terminal/Dockerfile): prod (default, pruned) or
+        # dev (full tree). Set TERMINAL_RUNTIME_DEPS=dev in .env on hosts that run the terminal
+        # under the hot overlay's NODE_ENV=development — dev-mode Next needs the dev toolchain at
+        # runtime and otherwise npm-installs it AT BOOT (slow, network-dependent, currently broken).
+        RUNTIME_DEPS: ${TERMINAL_RUNTIME_DEPS:-prod}
     image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"

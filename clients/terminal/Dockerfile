@@ -5,6 +5,17 @@
 # imports `next`, `@next/env`, and `ws`, which a standalone trace would not all include.
 # Build context: clients/terminal (self-contained npm project; no @vexa/* workspace deps).
 
+# RUNTIME_DEPS selects the node_modules the runtime stage ships (see the deps-* stages below):
+#   prod (default) — pruned production deps; the lean image every release build uses.
+#   dev            — the FULL npm ci tree from the build stage. Required for hot/dev-mode runs
+#                    (compose hot overlay sets NODE_ENV=development): dev-mode Next needs
+#                    @types/node, @types/react and the tailwind/postcss toolchain at runtime,
+#                    and when they are missing it npm-installs them AT BOOT over the network —
+#                    a ~40s+ start that now hard-fails on a peer conflict (Next pins
+#                    @types/node@20.17.6; vite@8's peer range rejects it). Shipping the deps
+#                    makes dev boot instant and offline-safe.
+ARG RUNTIME_DEPS=prod
+
 # node:22 — tinykeys@4 requires node >=22; 20 only warns but we pin 22 to match engines.
 FROM node:22-slim AS build
 WORKDIR /app
@@ -24,6 +35,22 @@ ENV NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
 # Regular build (not standalone): produces .next served by the custom server in production.
 RUN npm run build
 
+# deps-prod: pruned production deps. typescript must ALSO be present — Next loads the TypeScript
+# next.config.ts at runtime and npm-installs its own at BOOT when it's absent. `npm i typescript`
+# here CANNOT provide it: NODE_ENV=production makes npm silently omit anything matching a
+# devDependency. So it is COPIED from the build stage — the exact compiler `next build` ran with.
+FROM node:22-slim AS deps-prod
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/node_modules/typescript ./node_modules/typescript
+
+# deps-dev: the build stage already holds the full npm ci tree.
+FROM build AS deps-dev
+
+# ARG-selected alias (COPY --from does not expand variables; FROM does).
+FROM deps-${RUNTIME_DEPS} AS deps
+
 FROM node:22-slim AS runtime
 # The server-side proxy gate reads the mode at REQUEST time (process.env), so the runtime stage must
 # carry the same value the bundle was built with — client gating and edge gating stay in lockstep.
@@ -33,15 +60,10 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
 WORKDIR /app
-# Prod-only deps (keeps next/react/ws; drops the build toolchain). typescript must ALSO be present —
-# Next loads the TypeScript next.config.ts at runtime and npm-installs its own at BOOT when it's
-# absent (a ~40s network-dependent start; breaks air-gapped pods). `npm i typescript` here CANNOT
-# provide it: NODE_ENV=production makes npm silently omit anything matching a devDependency. So it
-# is COPIED from the build stage below — the exact compiler `next build` ran with.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# node_modules from the RUNTIME_DEPS-selected stage (prod = pruned + typescript; dev = full tree).
+COPY --from=deps /app/node_modules ./node_modules
 # The built app + the custom server + runtime config it reads.
-COPY --from=build /app/node_modules/typescript ./node_modules/typescript
 COPY --from=build /app/.next ./.next
 COPY public ./public
 COPY server.mjs next.config.ts tsconfig.json ./
