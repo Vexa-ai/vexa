@@ -33,11 +33,15 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     NEXT_PUBLIC_TERMINAL_MODE=$NEXT_PUBLIC_TERMINAL_MODE
 WORKDIR /app
-# Prod-only deps (keeps next/react/ws; drops the build toolchain), PLUS typescript — Next loads the
-# TypeScript next.config.ts at runtime and would otherwise try to auto-install it (no network in a pod).
+# Prod-only deps (keeps next/react/ws; drops the build toolchain). typescript must ALSO be present —
+# Next loads the TypeScript next.config.ts at runtime and npm-installs its own at BOOT when it's
+# absent (a ~40s network-dependent start; breaks air-gapped pods). `npm i typescript` here CANNOT
+# provide it: NODE_ENV=production makes npm silently omit anything matching a devDependency. So it
+# is COPIED from the build stage below — the exact compiler `next build` ran with.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm i --no-save typescript@5 && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 # The built app + the custom server + runtime config it reads.
+COPY --from=build /app/node_modules/typescript ./node_modules/typescript
 COPY --from=build /app/.next ./.next
 COPY public ./public
 COPY server.mjs next.config.ts tsconfig.json ./
