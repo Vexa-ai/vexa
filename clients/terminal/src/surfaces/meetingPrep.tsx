@@ -31,7 +31,12 @@ const label = { fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", 
 /** The PREP BRIEF (design-spec meeting-lifecycle-v2, W3): the agent-maintained doc this meeting's
  *  chat writes into. Prefers the meeting's own `meetings/{id}/prep.md` in the bound workspace, falls
  *  back to the workspace README (the shared context attendees land in), else offers the chat CTA. */
+// slug-aware doc tab (same shape as workspace.tsx docTab): opens a file from the BOUND workspace.
+const wsDocTab = (slug: string, path: string, title?: string) =>
+  ({ id: `doc:${slug}:${path}`, title: title ?? (path.split("/").pop() ?? path), kind: "doc", params: { path, slug } });
+
 function PrepBrief({ slug, meetingId, title }: { slug: string; meetingId: string; title: string }) {
+  const layout = useService(LayoutServiceId);
   const [text, setText] = useState<string | null>(null);
   const [source, setSource] = useState<"brief" | "readme" | "none" | "loading">("loading");
   useEffect(() => {
@@ -54,6 +59,11 @@ function PrepBrief({ slug, meetingId, title }: { slug: string; meetingId: string
         <button onClick={askForBrief} style={{ background: "var(--accentbg)", color: "var(--accent)", border: "none", borderRadius: 7, padding: "4px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer", flex: "none" }}>
           Ask the agent to draft it
         </button>
+        <button onClick={() => layout.openTab(wsDocTab(slug, "README.md"))}
+          title="Open the workspace README as a document"
+          style={{ background: "none", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "4px 11px", fontSize: 12, cursor: "pointer", flex: "none" }}>
+          Open README
+        </button>
       </div>
     );
   }
@@ -64,6 +74,10 @@ function PrepBrief({ slug, meetingId, title }: { slug: string; meetingId: string
           {source === "brief" ? "prep brief" : "workspace readme"}
         </span>
         <span style={{ flex: 1 }} />
+        <button onClick={() => layout.openTab(wsDocTab(slug, source === "brief" ? `meetings/${meetingId}/prep.md` : "README.md"))}
+          title="Open as a document" style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          open
+        </button>
         <button onClick={askForBrief} title="Ask the agent to update the brief in chat"
           style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
           update via chat
@@ -247,6 +261,11 @@ function MeetingPrepTab({ params }: TabProps) {
         {m.workspace_id ? (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => layout.openTab(wsDocTab(m.workspace_id!, "README.md", `${m.workspace_id} · README`))}
+                title="Open the workspace README"
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer" }}>
+                <Icon name="file" size={12} /> README
+              </button>
               <button onClick={() => layout.openTab(manageTabDescriptor(m.workspace_id!, { shared: true }))}
                 title="Open the workspace manage panel"
                 style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer" }}>
