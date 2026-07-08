@@ -13,7 +13,7 @@ The templates below are the hardcoded FALLBACK. The governed control surface is 
 platform-operated ``_global`` workspace (the same repo `system_mounts.global_mount`
 serves read-only into every worker turn): an operator file at
 
-    {GLOBAL_SYSTEM_WORKSPACE_PATH}/agents/meeting-lifecycle.md
+    {VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH}/agents/meeting-lifecycle.md
 
 with ``## prep`` / ``## live`` / ``## post`` / ``## schedule`` / ``## workspace_focus`` H2
 sections overrides the matching template
@@ -133,8 +133,8 @@ OVERRIDE_RELPATH = "agents/meeting-lifecycle.md"
 def steering_templates(global_ws_path: "str | None" = None) -> dict[str, str]:
     """The effective per-phase templates: built-in defaults overlaid with the _global
     override file when present/parseable. ``global_ws_path`` defaults to the same env the
-    _global mount uses (GLOBAL_SYSTEM_WORKSPACE_PATH)."""
-    root = (global_ws_path if global_ws_path is not None else os.environ.get("GLOBAL_SYSTEM_WORKSPACE_PATH", "")).strip()
+    _global mount uses (VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH — config.v1-declared)."""
+    root = (global_ws_path if global_ws_path is not None else os.environ.get("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", "")).strip()
     if not root:
         return dict(DEFAULT_TEMPLATES)
     path = Path(root) / OVERRIDE_RELPATH
