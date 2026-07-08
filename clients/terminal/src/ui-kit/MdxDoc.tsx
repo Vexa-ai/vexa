@@ -11,15 +11,15 @@
  *  so the doc always displays — worst case it loses interactivity, never the page.
  */
 "use client";
-import { useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
 import { Markdown } from "./Markdown";
 import { Icon } from "./index";
 import {
-  DocMetaContext, DocNavContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink, Wikilink,
-  isInternalHref, normalizeDocPath, useOpenEntity, type DocNavigate,
+  Card, CardGroup, DocMetaContext, DocNavContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
+  Wikilink, isInternalHref, type DocNavigate,
 } from "./docLinks";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
@@ -41,33 +41,8 @@ function Callout({ tone, icon, children }: { tone: "blue" | "accent"; icon: stri
 const Note = ({ children }: { children?: ReactNode }) => <Callout tone="blue" icon="info">{children}</Callout>;
 const Warning = ({ children }: { children?: ReactNode }) => <Callout tone="accent" icon="alert">{children}</Callout>;
 
-function Card({ title, icon, href, children }: { title?: string; icon?: string; href?: string; children?: ReactNode }) {
-  const [hover, setHover] = useState(false);
-  const clickable = Boolean(href);
-  const openEntity = useOpenEntity();
-  const meta = useContext(DocMetaContext);
-  const open = () => {
-    if (!href) return;
-    // scheme allowlist: http(s) opens externally, scheme-less opens in-workspace,
-    // anything else (javascript:, data:, //host) is untrusted-doc content — ignore
-    if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
-    else if (isInternalHref(href)) openEntity({ path: href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
-  };
-  return (
-    <div onClick={clickable ? open : undefined} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ border: `1px solid ${hover && clickable ? "var(--line2)" : "var(--line)"}`, borderRadius: 10, background: hover && clickable ? "var(--panel2)" : "var(--panel)", padding: "12px 14px", cursor: clickable ? "pointer" : undefined, minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: children ? 6 : 0 }}>
-        {icon && <span style={{ color: "var(--blue)" }}><Icon name={icon} size={14} /></span>}
-        <span style={{ fontWeight: 600, color: "var(--t1)", fontSize: 13.5 }}>{title}</span>
-      </div>
-      <div style={{ color: "var(--t2)", fontSize: 13, lineHeight: 1.5 }}>{children}</div>
-    </div>
-  );
-}
-
-function CardGroup({ cols = 2, children }: { cols?: number; children?: ReactNode }) {
-  return <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10, margin: "8px 0 12px" }}>{children}</div>;
-}
+// Card + CardGroup live in ./docLinks — shared with the plain-Markdown fallback so the
+// same link-card UI renders whether or not the doc compiles as MDX.
 
 function Steps({ children }: { children?: ReactNode }) {
   const items = Array.isArray(children) ? children : [children];
@@ -179,11 +154,24 @@ function remarkForbidExecutable() {
   return (tree: { type?: string; children?: unknown[] }) => assertNoExecutableMdx(tree);
 }
 
-// ── wikilink preprocessing: [[Title]] → <Wikilink title="Title" /> (skip code) ───
+// ── prose preprocessing (code spans/fences untouched) ────────────────────────────
+// 1. escape `<` that doesn't start a known tag — agent-written docs routinely carry raw
+//    angle-bracket text (`<meeting_id>`, `a<b`, `<url>`) that would otherwise abort the
+//    whole MDX compile and downgrade the doc to the plain renderer;
+// 2. rewrite [[Title]] → <Wikilink title="Title" /> (after escaping, so the injected tag
+//    survives).
+const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|Tab|Wikilink" +
+  // no single-letter html tags (b, i): `a<b then` in prose is far likelier than a raw
+  // <b> tag, and an unclosed <b would abort the compile this pass exists to save
+  "|a\\b|br|blockquote|code|details|div|em|h[1-6]|hr|img|kbd|li|ol|p\\b|pre|span|strong|sub|summary|sup|table|tbody|td|th|thead|tr|ul";
+const UNKNOWN_TAG_OPEN = new RegExp(`<(?!/?(?:${KNOWN_TAGS})(?:[\\s/>]|$))`, "g");
+export function escapeUnknownTags(seg: string): string {
+  return seg.replace(UNKNOWN_TAG_OPEN, "\\<");
+}
 function transformWikilinks(src: string): string {
   // split out fenced code blocks and inline code; only rewrite prose segments
   return src.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) =>
-    i % 2 === 1 ? seg : seg.replace(/\[\[([^\]]+)\]\]/g, (_m, t: string) => `<Wikilink title=${JSON.stringify(t)} />`),
+    i % 2 === 1 ? seg : escapeUnknownTags(seg).replace(/\[\[([^\]]+)\]\]/g, (_m, t: string) => `<Wikilink title=${JSON.stringify(t)} />`),
   ).join("");
 }
 
@@ -211,7 +199,11 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
   if (state.status === "fallback") {
     return (
       <div style={style}>
-        <div title={state.error} style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--t3)", marginBottom: 8 }}>plain markdown (MDX parse failed)</div>
+        {/* fail-loud: name the downgrade AND the reason inline — a tooltip-only error is
+            invisible in screenshots and to anyone who doesn't hover */}
+        <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--t3)", marginBottom: 8 }}>
+          simplified rendering (MDX failed: {state.error})
+        </div>
         <Markdown>{src}</Markdown>
       </div>
     );

@@ -236,6 +236,37 @@ export function InternalLink({ href, children }: { href: string; children?: Reac
   );
 }
 
+/** Link-card (Mintlify <Card>) — lives here so BOTH renderers share one implementation:
+ *  MdxDoc registers it in the MDX component vocabulary, and the plain-Markdown fallback
+ *  reconstructs it from raw <Card> tags so a failed MDX compile doesn't print tag soup. */
+export function Card({ title, icon, href, children }: { title?: string; icon?: string; href?: string; children?: ReactNode }) {
+  const [hover, setHover] = useState(false);
+  const clickable = Boolean(href);
+  const openEntity = useOpenEntity();
+  const meta = useContext(DocMetaContext);
+  const open = () => {
+    if (!href) return;
+    // scheme allowlist: http(s) opens externally, scheme-less opens in-workspace,
+    // anything else (javascript:, data:, //host) is untrusted-doc content — ignore
+    if (/^https?:/i.test(href)) window.open(href, "_blank", "noreferrer");
+    else if (isInternalHref(href)) openEntity({ path: href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
+  };
+  return (
+    <div onClick={clickable ? open : undefined} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ border: `1px solid ${hover && clickable ? "var(--line2)" : "var(--line)"}`, borderRadius: 10, background: hover && clickable ? "var(--panel2)" : "var(--panel)", padding: "12px 14px", cursor: clickable ? "pointer" : undefined, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: children ? 6 : 0 }}>
+        {icon && <span style={{ color: "var(--blue)" }}><Icon name={icon} size={14} /></span>}
+        <span style={{ fontWeight: 600, color: "var(--t1)", fontSize: 13.5 }}>{title}</span>
+      </div>
+      <div style={{ color: "var(--t2)", fontSize: 13, lineHeight: 1.5 }}>{children}</div>
+    </div>
+  );
+}
+
+export function CardGroup({ cols = 2, children }: { cols?: number; children?: ReactNode }) {
+  return <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10, margin: "8px 0 12px" }}>{children}</div>;
+}
+
 /** True when an href points inside the workspace (no scheme, not an anchor, not //host). */
 export const isInternalHref = (href?: string): boolean =>
   Boolean(href) && !/^[a-z][a-z0-9+.-]*:/i.test(href!) && !href!.startsWith("#") && !href!.startsWith("//");

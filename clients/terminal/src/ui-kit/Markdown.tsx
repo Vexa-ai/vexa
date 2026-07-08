@@ -7,7 +7,7 @@
  *  not spec-complete. */
 "use client";
 import { Fragment, type ReactNode } from "react";
-import { InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
+import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
 // spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
@@ -87,6 +87,33 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
     i++;
   }
   if (last < text.length) out.push(<Fragment key={`${key}-t${i}`}>{text.slice(last)}</Fragment>);
+}
+
+// ── <Card>/<CardGroup> fallback parity ─────────────────────────────────────────────
+// This renderer is where docs land when their MDX compile FAILS, and agent-written docs
+// use the Mintlify card vocabulary heavily — without this, every failed doc prints
+// `<CardGroup cols={2}>` as literal text. Parse just those two tags (string/number
+// attributes only, matching MdxDoc's no-expressions rule) and render the SAME Card /
+// CardGroup components from ./docLinks.
+export interface ParsedCard { title?: string; icon?: string; href?: string; body: string }
+export interface ParsedCardBlock { cols: number; grouped: boolean; cards: ParsedCard[] }
+const CARD_BLOCK_START = /^\s*<Card(Group)?\b/;
+function parseCardAttrs(attrs: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of attrs.matchAll(/(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|\{\s*(\d+)\s*\})/g))
+    out[m[1]] = m[2] ?? m[3] ?? m[4];
+  return out;
+}
+/** Parse one card block's source (a <CardGroup>…</CardGroup> or bare <Card>s). Exported for tests. */
+export function parseCardBlock(src: string): ParsedCardBlock {
+  const group = src.match(/<CardGroup\b([^>]*)>/);
+  const cols = group ? Number(parseCardAttrs(group[1]).cols) || 2 : 2;
+  const cards: ParsedCard[] = [];
+  for (const m of src.matchAll(/<Card\b([^>]*?)(\/>|>([\s\S]*?)<\/Card>)/g)) {
+    const a = parseCardAttrs(m[1]);
+    cards.push({ title: a.title, icon: a.icon, href: a.href, body: (m[3] ?? "").trim() });
+  }
+  return { cols, grouped: Boolean(group), cards };
 }
 
 const HEADING_SIZE: Record<number, number> = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 };
@@ -229,6 +256,28 @@ export function Markdown({ children, style }: { children: string; style?: React.
       continue;
     }
 
+    // <Card> / <CardGroup> block — same card UI MdxDoc renders (fallback parity)
+    if (CARD_BLOCK_START.test(line)) {
+      const isGroup = /^\s*<CardGroup\b/.test(line);
+      const closeRe = isGroup ? /<\/CardGroup>/ : /(\/>\s*$|<\/Card>)/;
+      const buf: string[] = [lines[i]];
+      i++;
+      while (i < lines.length && !closeRe.test(buf[buf.length - 1])) { buf.push(lines[i]); i++; }
+      const parsed = parseCardBlock(buf.join("\n"));
+      if (parsed.cards.length === 0) {
+        // not actually card markup (e.g. a lone unclosed tag) — show it as literal text
+        blocks.push(<p key={key++} style={{ margin: "0 0 8px", lineHeight: 1.6 }}>{inline(buf.join(" "))}</p>);
+        continue;
+      }
+      const rendered = parsed.cards.map((c, j) => (
+        <Card key={j} title={c.title} icon={c.icon} href={c.href}>{c.body ? inline(c.body.replace(/\s*\n\s*/g, " ")) : undefined}</Card>
+      ));
+      blocks.push(parsed.grouped
+        ? <CardGroup key={key++} cols={parsed.cols}>{rendered}</CardGroup>
+        : <div key={key++} style={{ display: "flex", flexDirection: "column", gap: 10, margin: "8px 0 12px" }}>{rendered}</div>);
+      continue;
+    }
+
     // GFM pipe table
     const table = tableStart(lines, i);
     if (table) {
@@ -269,7 +318,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
 
     // paragraph — gather consecutive plain lines until a blank or a block starter
     const para: string[] = [];
-    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !tableStart(lines, i)) {
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !CARD_BLOCK_START.test(lines[i]) && !tableStart(lines, i)) {
       para.push(lines[i]); i++;
     }
     blocks.push(
