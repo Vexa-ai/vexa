@@ -16,10 +16,11 @@ from typing import Optional
 MAX_ICS_BYTES = 2 * 1024 * 1024  # 2 MB — a personal calendar feed is KBs; refuse anything huge
 
 
-async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> Optional[str]:
-    """GET the ICS feed over the SSRF-pinned transport → the feed text, or ``None`` on any
-    failure (bad status, oversize, network error, blocked target). Failures are the caller's
-    ``last_error`` — never an exception out of the sweep."""
+async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> tuple[Optional[str], Optional[str]]:
+    """GET the ICS feed over the SSRF-pinned transport → ``(feed_text, None)`` on success or
+    ``(None, human_reason)`` on any failure. The reason is USER-FACING (it becomes the feed's
+    ``last_error`` and is shown in the terminal's calendar panel), so it names the actual
+    problem — an HTML page instead of a feed, a bad status, oversize — never a stack trace."""
     import httpx
 
     from ..webhooks.ssrf import build_pinned_transport
@@ -29,13 +30,22 @@ async def fetch_ics(url: str, *, timeout_s: float = 15.0) -> Optional[str]:
             timeout=timeout_s, transport=build_pinned_transport(), follow_redirects=False,
         ) as client:
             resp = await client.get(url)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            return None, "the URL redirects — paste the final feed URL (Google: the 'Secret address in iCal format')"
         if resp.status_code != 200:
-            return None
+            return None, f"the URL answered HTTP {resp.status_code}"
         if len(resp.content) > MAX_ICS_BYTES:
-            return None
-        return resp.text
+            return None, "the feed is too large (over 2 MB)"
+        text = resp.text
+        head = text.lstrip()[:200].lower()
+        if head.startswith("<") or "<html" in head:
+            return None, ("the URL returns a web page, not a calendar feed — in Google Calendar use "
+                          "Settings → Integrate calendar → 'Secret address in iCal format' (ends in .ics)")
+        if "begin:vcalendar" not in head:
+            return None, "the URL doesn't return an ICS calendar (no BEGIN:VCALENDAR)"
+        return text, None
     except Exception:
-        return None
+        return None, "couldn't reach the URL (unreachable, timed out, or a blocked/internal address)"
 
 
 async def fetch_configs(admin_api_url: str, internal_secret: str,

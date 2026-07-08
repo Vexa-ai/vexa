@@ -63,3 +63,19 @@ export async function setCalendarConfig(body: { ics_url?: string | null; auto_jo
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }));
 }
+
+/** The last sync attempt's outcome (stamped by the sweep AND by syncCalendarNow). */
+export interface CalendarSyncStamp {
+  last_sync?: string;
+  last_error?: string | null;
+  counts?: { created?: number; updated?: number; cancelled?: number };
+}
+
+export async function getCalendarSyncStatus(): Promise<CalendarSyncStamp> {
+  return jsonOrThrow(await fetch("/api/user/calendar/sync", { cache: "no-store" }));
+}
+
+/** Run the user's calendar sync RIGHT NOW → the fresh stamp (or throws: 404 = no feed connected). */
+export async function syncCalendarNow(): Promise<CalendarSyncStamp> {
+  return jsonOrThrow(await fetch("/api/user/calendar/sync", { method: "POST" }));
+}

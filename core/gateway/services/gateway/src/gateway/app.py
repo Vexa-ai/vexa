@@ -388,6 +388,16 @@ def create_app(
     # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
     # The ICS URL is a secret — admin-api masks it on every read-back. No ROUTE_SCOPES entry
     # (any valid key manages its own calendar), parity with the webhook self-serve. ----
+    # calendar-sync feedback edges live in MEETING-api (they run the sync), unlike the config
+    # (identity). Registered before the config routes only for reading clarity - paths are exact.
+    @app.get("/user/calendar/sync")
+    async def get_user_calendar_sync(request: Request):
+        return await _forward("GET", _meeting("/user/calendar/sync"), request)
+
+    @app.post("/user/calendar/sync")
+    async def run_user_calendar_sync(request: Request):
+        return await _forward("POST", _meeting("/user/calendar/sync"), request)
+
     @app.put("/user/calendar")
     async def set_user_calendar(request: Request):
         return await _forward("PUT", _admin("/user/calendar"), request)

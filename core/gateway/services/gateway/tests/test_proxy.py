@@ -166,6 +166,22 @@ def test_user_calendar_routes_forward_to_admin_api():
     assert downstream.last["url"] == "http://admin-api/user/calendar"
 
 
+def test_user_calendar_sync_routes_forward_to_meeting_api():
+    """The sync FEEDBACK edges live in meeting-api (it runs the sync), unlike the config
+    (identity): GET reads the last stamp, POST runs the user's sync right now."""
+    client, downstream = _client()
+    r = client.get("/user/calendar/sync", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"] == "http://meeting-api/user/calendar/sync"
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+    r = client.post("/user/calendar/sync", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"] == "http://meeting-api/user/calendar/sync"
+
+
 def test_user_calendar_requires_api_key():
     client, downstream = _client()
     assert client.put("/user/calendar", json={"ics_url": "https://x"}).status_code == 401

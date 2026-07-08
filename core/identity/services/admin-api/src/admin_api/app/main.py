@@ -270,6 +270,15 @@ def create_app() -> FastAPI:
                 if parsed.scheme not in ("http", "https") or not parsed.hostname:
                     raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                         detail="ics_url must be an http(s) URL")
+                # Catch the #1 paste mistake up front: Google Calendar's EMBED page (HTML, not a
+                # feed). The real feed is Settings -> Integrate calendar -> 'Secret address in
+                # iCal format' (ends in .ics). Content-level checks happen at fetch time.
+                if "/calendar/embed" in (parsed.path or "").lower():
+                    raise HTTPException(
+                        status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=("that's the calendar's embed page, not its feed - in Google "
+                                "Calendar open Settings -> Integrate calendar and copy the "
+                                "'Secret address in iCal format' (ends in .ics)"))
                 data["calendar_ics_url"] = url
             else:
                 data.pop("calendar_ics_url", None)

@@ -100,6 +100,8 @@ def build_router(
     redis: RedisBus,
     *,
     log_event: Callable[..., dict] = _default_log_event,
+    calendar_sync_now: Optional[Callable] = None,
+    calendar_sync_status: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -262,6 +264,29 @@ def build_router(
     # row in place (bot_spawn.create_meeting_guarded), so the plan, its workspace bind, and the eventual
     # transcript share ONE row. Link-less plans use platform='unknown' + NULL native id and are addressed
     # by ROW id (PATCH/DELETE below). ---
+    # ── calendar sync, user-facing: immediate feedback for the "Connect your calendar" panel.
+    #    GET  → the last sweep's stamp {last_sync, last_error, counts?} (or {} before any run).
+    #    POST → run THIS user's fetch→parse→sync NOW and return the fresh stamp — pasting a feed
+    #    answers in seconds ("imported N" / the actual failure), not "wait for the next tick".
+    #    Both 503 when the composition root didn't wire the edges (standalone/test app). ──────────
+    @router.get("/user/calendar/sync")
+    async def calendar_sync_state(x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        if calendar_sync_status is None:
+            raise HTTPException(status_code=503, detail="calendar sync is not available")
+        stamp = await calendar_sync_status(user_id)
+        return stamp or {}
+
+    @router.post("/user/calendar/sync")
+    async def calendar_sync_run(x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        if calendar_sync_now is None:
+            raise HTTPException(status_code=503, detail="calendar sync is not available")
+        stamp = await calendar_sync_now(user_id)
+        if stamp is None:
+            raise HTTPException(status_code=404, detail="no calendar feed connected")
+        return stamp
+
     @router.post("/meetings", status_code=201)
     async def create_planned_meeting(
         request: Request,
@@ -723,6 +748,8 @@ def create_app(
     *,
     log_event: Callable[..., dict] = _default_log_event,
     trace_middleware: type = _DefaultTraceMiddleware,
+    calendar_sync_now: Optional[Callable] = None,
+    calendar_sync_status: Optional[Callable] = None,
 ) -> FastAPI:
     """Build the STANDALONE collector FastAPI app over the injected ports.
 
@@ -745,5 +772,7 @@ def create_app(
     async def health():
         return {"status": "ok", "service": "transcription-collector"}
 
-    app.include_router(build_router(store, redis, log_event=log_event))
+    app.include_router(build_router(store, redis, log_event=log_event,
+                                    calendar_sync_now=calendar_sync_now,
+                                    calendar_sync_status=calendar_sync_status))
     return app

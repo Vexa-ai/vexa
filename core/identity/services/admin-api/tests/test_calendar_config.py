@@ -75,6 +75,16 @@ def test_calendar_rejects_non_http_url(client):
     assert r.status_code == 422
 
 
+def test_calendar_rejects_embed_page_url(client):
+    """The #1 paste mistake: Google Calendar's EMBED page (HTML) instead of the ICS feed. The
+    422 must TEACH — name the 'Secret address in iCal format' fix, not just refuse."""
+    _uid, tok = _user_token(client, email="cal-embed@vexa.ai")
+    r = client.put("/user/calendar", headers={"X-API-Key": tok},
+                   json={"ics_url": "https://calendar.google.com/calendar/embed?src=x%40vexa.ai&ctz=Europe%2FLisbon"})
+    assert r.status_code == 422
+    assert "Secret address in iCal format" in r.json()["detail"]
+
+
 def test_calendar_auto_join_defaults_true(client):
     _uid, tok = _user_token(client, email="cal3@vexa.ai")
     r = client.get("/user/calendar", headers={"X-API-Key": tok})

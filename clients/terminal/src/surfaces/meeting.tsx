@@ -15,7 +15,7 @@ import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeeting
 import { usePreviewPinTab } from "./previewPinTab";
 import { parseMeetingInput } from "./meetingId";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
-import { createPlannedMeeting, deletePlannedMeeting, getCalendarConfig, setCalendarConfig, type CalendarConfig } from "./plannedApi";
+import { createPlannedMeeting, deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor } from "./meetingPrep";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
@@ -504,6 +504,27 @@ function PlanMeetingButton() {
   );
 }
 
+/** The last sync attempt, humanized: "Imported 3 · updated 1 (2 min ago)" or the actual error. */
+function CalendarSyncStatusLine({ stamp }: { stamp: CalendarSyncStamp | null }) {
+  if (!stamp?.last_sync) return null;
+  const ago = (() => {
+    const s = Math.max(0, (Date.now() - new Date(stamp.last_sync).getTime()) / 1000);
+    if (s < 90) return "just now";
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    return `${Math.round(s / 3600)} h ago`;
+  })();
+  if (stamp.last_error) {
+    return <div role="alert" style={{ fontSize: 11.5, color: "var(--live)", lineHeight: 1.5 }}>⚠ Last sync failed ({ago}): {stamp.last_error}</div>;
+  }
+  const c = stamp.counts ?? {};
+  const bits = [c.created ? `imported ${c.created}` : "", c.updated ? `updated ${c.updated}` : "", c.cancelled ? `removed ${c.cancelled}` : ""].filter(Boolean);
+  return (
+    <div style={{ fontSize: 11.5, color: "var(--green)", lineHeight: 1.5 }}>
+      ✓ Synced {ago}{bits.length ? ` — ${bits.join(", ")}` : " — no meetings with joinable links found"}
+    </div>
+  );
+}
+
 // ── Calendar sync — the secret ICS URL + the GLOBAL auto-join default for imported meetings.
 //    The URL is a secret: reads come back MASKED (host + tail). Synced meetings land under Upcoming.
 //    Two skins over ONE popover: `icon` (the quiet header icon, always there) and `row` (a
@@ -514,7 +535,15 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [stamp, setStamp] = useState<CalendarSyncStamp | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const syncNow = async () => {
+    setSyncing(true); setErr(null);
+    try { setStamp(await syncCalendarNow()); refreshMeetings(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setSyncing(false); }
+  };
   // the row skin needs the connected-state up front (it hides once connected)
   useEffect(() => {
     if (variant !== "row") return;
@@ -523,13 +552,19 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
   useEffect(() => {
     if (!open) return;
     void getCalendarConfig().then(setCfg).catch(() => setCfg(null));
+    void getCalendarSyncStatus().then(setStamp).catch(() => {});
     const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
   const save = async (body: { ics_url?: string | null; auto_join?: boolean }) => {
     setBusy(true); setErr(null);
-    try { setCfg(await setCalendarConfig(body)); setUrl(""); refreshMeetings(); }
+    try {
+      setCfg(await setCalendarConfig(body));
+      setUrl(""); refreshMeetings();
+      if (body.ics_url) await syncNow();              // paste → an ANSWER, not a silent wait
+      if (body.ics_url === null) setStamp(null);
+    }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
@@ -561,10 +596,17 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
                   onChange={(e) => void save({ auto_join: e.target.checked })} />
                 Auto-join imported meetings
               </label>
-              <button disabled={busy} onClick={() => void save({ ics_url: null })}
-                style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--live)", borderRadius: 6, cursor: "pointer" }}>
-                Disconnect
-              </button>
+              <CalendarSyncStatusLine stamp={stamp} />
+              <div style={{ display: "flex", gap: 6 }}>
+                <button disabled={busy || syncing} onClick={() => void syncNow()}
+                  style={{ flex: 1, fontSize: 12, padding: "4px 10px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
+                  {syncing ? "Syncing…" : "Sync now"}
+                </button>
+                <button disabled={busy || syncing} onClick={() => void save({ ics_url: null })}
+                  style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--live)", borderRadius: 6, cursor: "pointer" }}>
+                  Disconnect
+                </button>
+              </div>
             </>
           ) : (
             <>
@@ -577,8 +619,11 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
                 style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
               <button disabled={busy || !url.trim()} onClick={() => void save({ ics_url: url.trim() })}
                 style={{ fontSize: 12, padding: "5px 10px", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--bg)" : "var(--t3)", border: "none", borderRadius: 6, cursor: url.trim() ? "pointer" : "default" }}>
-                {busy ? "Connecting…" : "Connect"}
+                {busy || syncing ? "Connecting…" : "Connect"}
               </button>
+              <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.45 }}>
+                Tip: the <i>public</i> address only carries events you made public — use the <b>secret</b> one for your full calendar.
+              </div>
             </>
           )}
           {err && <div role="alert" style={{ fontSize: 11, color: "var(--live)" }}>⚠ {err}</div>}

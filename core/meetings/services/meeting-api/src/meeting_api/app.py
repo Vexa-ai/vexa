@@ -62,6 +62,9 @@ def create_app(
     # meeting's remaining redis segments to Postgres + persist the processed doc into meeting.data,
     # so a finished meeting's transcript is durable IMMEDIATELY. Best-effort — never fails the callback.
     transcript_finalizer: Optional["object"] = None,
+    # calendar-sync user edges (async callables from the composition root; None → routes 503)
+    calendar_sync_now: Optional["object"] = None,
+    calendar_sync_status: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -115,7 +118,9 @@ def create_app(
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
-    app.include_router(_build_collector_router(transcript_store, redis))
+    app.include_router(_build_collector_router(transcript_store, redis,
+                                            calendar_sync_now=calendar_sync_now,
+                                            calendar_sync_status=calendar_sync_status))
 
     # --- recordings: chunk upload + finalize → meeting.data JSONB (recording.v1) ---
     if recording_repo is None:
