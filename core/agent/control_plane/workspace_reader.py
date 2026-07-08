@@ -132,29 +132,62 @@ class WorkspaceReader:
                 continue
         return None
 
-    def history(self, subject: str, session: str) -> list[dict]:
+    def _continuity_roots(self, subject: str, extra_roots: "list[str | Path] | None" = None) -> list[Path]:
+        """Every workspace dir a thread's continuity (pointer + transcript) may live in, in preference
+        order: the PRIVATE SYSTEM tier (``<root>/.system/<subject>`` — where the worker anchors chats
+        now), the subject's own workspace (the legacy location), then any caller-supplied mount dirs —
+        the turn's cwd FOLLOWS the active set under the flat model, so chats recorded before the
+        _system anchoring landed sit under whichever workspace was mounted first (e.g. a shared one).
+        Non-existent and out-of-root candidates are silently dropped."""
+        candidates: list[Path] = [self._root / ".system" / subject, self._ws(subject)]
+        for e in extra_roots or []:
+            candidates.append(Path(e))
+        out: list[Path] = []
+        seen: set[str] = set()
+        for c in candidates:
+            try:
+                c = self._guard_under_root(c)
+            except ValueError:
+                continue
+            k = str(c)
+            if k in seen or not c.exists():
+                continue
+            seen.add(k)
+            out.append(c)
+        return out
+
+    def history(self, subject: str, session: str, extra_roots: "list[str | Path] | None" = None) -> list[dict]:
         """The session's prior conversation as ordered, terminal-renderable turns.
 
         Resolves the thread's claude sessionId from its continuity pointer, finds the transcript JSONL
         under ``<ws>/.claude/projects/<cwd-slug>/<sessionId>.jsonl``, and parses it into ``Turn``-shaped
         dicts: user turns ``{role:"user", text}``; agent turns ``{role:"agent", text, ops, commit?}``.
-        Tolerant by design — a missing pointer/file or unparseable lines yield ``[]`` (never raises),
-        so the surface degrades to "no history yet" rather than erroring."""
+        Pointer and transcript are searched across every continuity root (``_continuity_roots``) — they
+        normally co-locate, but a thread that MOVED anchors (cwd-rooted → _system-rooted) may have them
+        apart. Tolerant by design — a missing pointer/file or unparseable lines yield ``[]`` (never
+        raises), so the surface degrades to "no history yet" rather than erroring."""
         if "/" in session or "\\" in session or session in ("", ".", ".."):
             return []
-        ws = self._ws(subject)
-        sid = self._session_id(ws, session)
+        roots = self._continuity_roots(subject, extra_roots)
+        sid: Optional[str] = None
+        for ws in roots:
+            sid = self._session_id(ws, session)
+            if sid:
+                break
         if not sid:
-            return []
-        projects = ws / ".claude" / "projects"
-        if not projects.exists():
             return []
         # The cwd-slug dir is claude's encoding of the workspace path; there is normally one, but match by
         # the sessionId filename to be safe. ``rglob`` also catches subagent transcripts — we want the top.
         path: Optional[Path] = None
-        for cand in projects.glob(f"*/{sid}.jsonl"):
-            path = cand
-            break
+        for ws in roots:
+            projects = ws / ".claude" / "projects"
+            if not projects.exists():
+                continue
+            for cand in projects.glob(f"*/{sid}.jsonl"):
+                path = cand
+                break
+            if path is not None:
+                break
         if path is None:
             return []
         try:
@@ -219,11 +252,14 @@ class WorkspaceReader:
         ``session`` is a bare name (no path separators)."""
         if "/" in session or "\\" in session or session in ("", ".", ".."):
             raise ValueError("invalid session")
-        ws = self._ws(subject)
         removed = False
-        targets = [ws / ".claude" / "sessions" / f"{session}.session"]
-        if session == "main":
-            targets.append(ws / ".claude" / ".session")
+        targets: list[Path] = []
+        # every continuity root the pointer may live in (_system, home — extra mount dirs are not
+        # needed here: dropping the indexed thread only has to cover the anchored locations)
+        for ws in self._continuity_roots(subject):
+            targets.append(ws / ".claude" / "sessions" / f"{session}.session")
+            if session == "main":
+                targets.append(ws / ".claude" / ".session")
         for f in targets:
             if f.exists() and f.is_file():
                 f.unlink()

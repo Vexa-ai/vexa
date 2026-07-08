@@ -869,8 +869,17 @@ def create_app(
         saved chat re-opens its history). Tolerant: a missing/empty transcript returns ``{turns: []}``;
         an invalid subject/session never 500s."""
         subject = subject_of(request)
+        # The turn's cwd FOLLOWS the active set (flat model), so a thread's continuity may sit under
+        # any currently-mounted workspace dir — hand the reader those candidates. Best-effort: a
+        # failing mount resolution only narrows the search to _system + home.
+        extra: list = []
         try:
-            turns = wsr.history(subject, session)
+            ms = active_workspaces(wsr.root, subject) + shared_active_mounts(wsr.root, subject, mindex.list(subject))
+            extra = [m.path for m in ms]
+        except Exception:  # noqa: BLE001
+            logger.warning("mount resolution for history failed subject=%s — searching anchored roots only", subject)
+        try:
+            turns = wsr.history(subject, session, extra_roots=extra)
         except Exception:  # noqa: BLE001 — history is best-effort; a bad path → empty, never an error
             logger.exception("loading session history failed subject=%s session=%s", subject, session)
             turns = []

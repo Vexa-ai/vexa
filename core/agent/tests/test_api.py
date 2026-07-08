@@ -537,6 +537,45 @@ def test_session_history_parses_turns(tmp_path):
     assert turns[2]["text"] == "thanks"
 
 
+def test_session_history_found_in_active_mount_dir(tmp_path):
+    """THE 'chats list but don't load' bug: with Personal off, the worker cwd follows the active set,
+    so a thread's continuity (pointer + transcript) lands under a SHARED workspace dir — which the
+    subject-keyed reader never searched. extra_roots (the caller's mount dirs) must find it."""
+    from control_plane.workspace_reader import WorkspaceReader
+
+    shared = tmp_path / "aswf-dna-52bd7a93"
+    (shared / ".claude" / "sessions").mkdir(parents=True)
+    (shared / ".claude" / "sessions" / "chat-x.session").write_text("sid-9\n")
+    _write_transcript(shared, "sid-9", [
+        {"type": "user", "message": {"role": "user", "content": "what is dna"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "A VFX app."}]}},
+    ])
+    reader = WorkspaceReader(str(tmp_path))
+    # without the mount dir the thread is invisible (the pre-fix behaviour)…
+    assert reader.history("28", "chat-x") == []
+    # …with it, the thread loads
+    turns = reader.history("28", "chat-x", extra_roots=[str(shared)])
+    assert [t["role"] for t in turns] == ["user", "agent"]
+    # out-of-root candidates are dropped, never raised on
+    assert reader.history("28", "chat-x", extra_roots=["/etc", str(shared)]) == turns
+
+
+def test_session_history_prefers_the_system_anchor(tmp_path):
+    """New turns anchor continuity in the PRIVATE SYSTEM tier (<root>/.system/<subject>) — chats are
+    private and must not live on a shared cwd. The reader searches _system FIRST."""
+    from control_plane.workspace_reader import WorkspaceReader
+
+    sysws = tmp_path / ".system" / "28"
+    (sysws / ".claude" / "sessions").mkdir(parents=True)
+    (sysws / ".claude" / "sessions" / "chat-y.session").write_text("sid-2\n")
+    _write_transcript(sysws, "sid-2", [
+        {"type": "user", "message": {"role": "user", "content": "hello"}},
+    ])
+    reader = WorkspaceReader(str(tmp_path))
+    turns = reader.history("28", "chat-y")
+    assert turns == [{"role": "user", "text": "hello"}]
+
+
 def test_session_history_tolerant_of_missing(tmp_path):
     from control_plane.workspace_reader import WorkspaceReader
 

@@ -205,9 +205,11 @@ class ClaudeCodeHarness:
                           mcp_config=mcp_config)
         yield from parse_stream_json(self._exec(argv, str(work)))
 
-    def prepare(self, work: Path) -> None:
-        # chats are saved to / resumed from the workspace, not ~/.claude; skills/ → .claude/skills
-        _link_chat_into_workspace(work)
+    def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
+        # chats are saved to / resumed from the PRIVATE continuity root (the _system mount when the
+        # dispatch declares one — the flat model can make the cwd a SHARED workspace, and chats are
+        # private), not ~/.claude; skills stay cwd-scoped (.claude/skills → <work>/skills)
+        _link_chat_into_workspace(chat_root or work)
         _link_skills_into_workspace(work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:

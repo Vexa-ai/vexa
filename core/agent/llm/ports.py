@@ -77,8 +77,11 @@ class HarnessPort(Protocol):
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]: ...
 
-    def prepare(self, work: Path) -> None:
-        """Harness-specific workspace hooks before a turn (continuity/skills wiring). May no-op."""
+    def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
+        """Harness-specific workspace hooks before a turn (continuity/skills wiring). ``chat_root``
+        anchors chat continuity (session store + transcripts) when it must live OUTSIDE the turn's
+        cwd — the flat model can point the cwd at a SHARED workspace, and chats are private to the
+        subject. None ⇒ continuity stays under ``work`` (legacy). May no-op."""
         ...
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:

@@ -95,6 +95,19 @@ def _tier_label(m: dict) -> str:
     return f"{role} workspace — {writable}"
 
 
+def _continuity_root(work: Path) -> Path:
+    """Where chat continuity (session pointers + transcripts) LIVES: the PRIVATE SYSTEM mount
+    (``_system``) when the dispatch declares one, else the turn's workspace. The flat model can
+    point the turn's cwd at a SHARED workspace (Personal off -> first active mount), and chat
+    conversations are private to the subject — anchoring them to the cwd both LEAKS them onto the
+    shared volume and strands them where ``workspace_reader.history`` (which reads the subject's
+    own tree) can't see them: the "chats list but don't load" bug."""
+    for m in active_mounts():
+        if m.get("role") == "system" and m.get("path"):
+            return Path(m["path"])
+    return work
+
+
 def kg_links_preamble() -> str:
     """Entity references must be ACTIONABLE in the client. Chat replies and workspace docs render
     ``[[Title]]`` as a clickable entity chip and workspace file paths as links (the terminal resolves
@@ -260,11 +273,12 @@ def run_turn_over_workspace(
     import worker.worker as _w
     factory = getattr(_w, "harness_factory", harness_from_env)
     harness: HarnessPort = factory()
-    harness.prepare(work)  # harness-specific continuity/skills wiring (durable, workspace-rooted)
-    sess_file = _session_file(work, session)
+    chat_root = _continuity_root(work)  # chats are PRIVATE: _system when mounted, never a shared cwd
+    harness.prepare(work, chat_root=chat_root)  # harness-specific continuity/skills wiring (durable)
+    sess_file = _session_file(chat_root, session)
     # session_continuity=False (the meeting copilot): never read/write the shared chat session — its
     # card-extraction beats must NOT pollute the user's chat conversation memory.
-    resume = _resume_id(work, sess_file, harness) if session_continuity else None
+    resume = _resume_id(chat_root, sess_file, harness) if session_continuity else None
     allowed = allowed_tools or ["Read", "Write", "Edit"]
     # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
     # agent never guesses where it may read/write. Single-mount turns get no mounts preamble; the
