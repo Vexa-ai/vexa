@@ -158,8 +158,11 @@ def pipeline_snapshot(r, live_meetings: list[dict] | None = None) -> list[dict]:
             continue  # registry echo of a numeric row — no carriers of its own, nothing to report
         live_row = live_by_id.get(mid)
         if live_row:
+            # last_seen: stamped by _LiveMeetings.add() since b07ca3ee (P21 silence-demotion) —
+            # lets the panel show registry freshness alongside the (now self-demoting) status.
             row["live"] = {k: live_row.get(k) for k in
-                           ("native_id", "platform", "title", "status", "unit_id", "numeric_meeting_id")
+                           ("native_id", "platform", "title", "status", "unit_id",
+                            "numeric_meeting_id", "last_seen")
                            if live_row.get(k) is not None}
         rows.append(row)
     return rows

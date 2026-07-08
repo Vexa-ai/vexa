@@ -150,10 +150,12 @@ def test_pipeline_snapshot_rows_and_s2_flag():
 def test_pipeline_snapshot_includes_live_registry():
     rows = admin_panel.pipeline_snapshot(
         _FakeRedis(),
-        [{"numeric_meeting_id": "7", "native_id": "xyz", "platform": "google_meet", "status": "live"}],
+        [{"numeric_meeting_id": "7", "native_id": "xyz", "platform": "google_meet",
+          "status": "live", "last_seen": 1783522800.0}],
     )
     by_id = {row["meeting_id"]: row for row in rows}
     assert "7" in by_id and by_id["7"]["live"]["native_id"] == "xyz"
+    assert by_id["7"]["live"]["last_seen"] == 1783522800.0  # b07ca3ee freshness passthrough
     # the native ALIAS of the numeric row has no carriers of its own — registry echo, not an S2
     # native-keyed stream; it must NOT appear as a separate (danger-chip) row
     assert "xyz" not in by_id
