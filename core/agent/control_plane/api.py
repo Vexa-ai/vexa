@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
+from control_plane import meeting_steering
 from control_plane import routines as routines_mod
 from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
@@ -500,14 +501,67 @@ def _fold_meeting_transcript(redis_url: "str | None", stream_key: str, *, limit:
     return "\n".join(lines)
 
 
+def _fold_meeting_processed(redis_url: "str | None", stream_key: str, *, limit: int) -> str:
+    """Fold the PROCESSED-notes Stream ``proc:meeting:{stream_key}`` (processed-notes.v1 — the copilot's
+    cleaned transcript; single writer worker/meeting.py) into ordered ``speaker: text`` lines for
+    post-meeting chat grounding. Notes upsert by id (a refining pass upgrades in place), the ``view_end``
+    terminal marker is skipped, order preserved, bounded to the last ``limit`` notes. Best-effort:
+    returns "" when redis is unwired, the stream is empty, or entries are malformed."""
+    if not redis_url:
+        return ""
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        rows = r.xrange(f"proc:meeting:{stream_key}")
+    except Exception as exc:  # noqa: BLE001 — grounding is best-effort; never fail the chat turn
+        logger.warning("could not read processed notes for %s: %s", stream_key, exc)
+        return ""
+    order: list[str] = []
+    note_by_id: dict[str, dict] = {}
+    for entry_id, fields in rows:
+        if fields.get("type") == "view_end":
+            continue
+        raw = fields.get("note")
+        if not raw:
+            continue
+        try:
+            note = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        nid = str(note.get("id") or entry_id)
+        if nid not in note_by_id:
+            order.append(nid)
+        note_by_id[nid] = note
+    lines: list[str] = []
+    for nid in order[-limit:]:
+        note = note_by_id[nid]
+        text = (note.get("text") or "").strip()
+        if not text:
+            continue
+        speaker = (note.get("speaker") or "Speaker").strip()
+        lines.append(f"{speaker}: {text}")
+    return "\n".join(lines)
+
+
 def _meeting_grounding(
     active: "dict | None", session: str, prompt: str, redis_url: "str | None"
 ) -> "tuple[dict, list[str], str]":
-    """Cookbook #1 — chat grounding in the terminal's ACTIVE meeting. The transcript reaches the agent
-    the SAME way the live copilot gets it: the meeting's redis Stream ``tc:meeting:{native}`` (the
-    meetings⊥agent seam) — NOT a file, NOT a cross-domain HTTP call, NO token. agent-api folds the
-    transcript-so-far and grounds the prompt with it, fresh on EVERY turn (so a follow-up re-reads the
-    latest lines). Returns the plain (none-context, no tools, prompt) when the active tab isn't a meeting."""
+    """Cookbook #1 — chat grounding in the terminal's ACTIVE meeting, branched by the meeting's
+    LIFECYCLE PHASE (design-spec meeting-lifecycle-v2, W4; steering templates + the _global override
+    live in control_plane/meeting_steering.py):
+
+      prep (idle/scheduled)          — no transcript fold (none exists); steer toward preparation,
+                                       naming the bound prep workspace when the client sent one.
+      live (default; absent status)  — fold ``tc:meeting:{row}`` fresh on every turn — a legacy
+                                       client that sends no status keeps exactly this behavior.
+      post (completed/failed/stopped)— fold the PROCESSED notes ``proc:meeting:{row}``; fall back to
+                                       the raw transcript; if neither exists say so plainly (fail loud,
+                                       never fabricate).
+
+    The transcript reaches the agent the SAME way the live copilot gets it: the meeting's redis Stream
+    (the meetings⊥agent seam) — NOT a file, NOT a cross-domain HTTP call, NO token. Returns the plain
+    (none-context, no tools, prompt) when the active tab isn't a meeting."""
     a = active or {}
     if a.get("kind") != "meeting":
         return ({"kind": "none", "session": session}, [], prompt)
@@ -519,21 +573,50 @@ def _meeting_grounding(
     # A chat turn (trigger "message"), not a live-meeting serve — the transcript travels in the prompt,
     # so the dispatch context stays plain (no meeting env / serve path is engaged for a chat).
     ctx = {"kind": "none", "session": session}
-    # P0 (cross-tenant leak fix): read the transcript by the meetings-domain ROW id (``meeting_id``),
-    # which the terminal passes on the active meeting — the transcript carrier keys on it, never the
-    # native id (which would fold a DIFFERENT tenant's / an older row's transcript into this user's chat).
+    # P0 (cross-tenant leak fix): read the streams by the meetings-domain ROW id (``meeting_id``),
+    # which the terminal passes on the active meeting — the carriers key on it, never the native id
+    # (which would fold a DIFFERENT tenant's / an older row's transcript into this user's chat).
     # Fall back to native only when the client didn't send a row id (legacy), documented as best-effort.
-    stream_key = m.get("meeting_id") or native
-    transcript = _fold_meeting_transcript(redis_url, str(stream_key), limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+    stream_key = str(m.get("meeting_id") or native)
+    status = str(m.get("status") or "").strip().lower()
+    phase = meeting_steering.phase_for(status)
+    fields = {
+        "title": str(m.get("title") or "").strip() or str(native),
+        "platform": platform,
+        "native": str(native),
+    }
+
+    if phase == "prep":
+        when = str(m.get("scheduled_at") or "").strip()
+        fields["when"] = f", scheduled for {when}" if when else " (no time set yet)"
+        workspace = str(m.get("workspace_id") or "").strip()
+        fields["workspace"] = (
+            f"The prep workspace bound to this meeting is \"{workspace}\" — ground your research and "
+            f"write the brief there (its kg/ entities cover the attendees and companies). "
+            if workspace
+            else "No prep workspace is bound to this meeting yet — say so when it matters. "
+        )
+        return (ctx, [], meeting_steering.render("prep", fields) + prompt)
+
+    if phase == "post":
+        fields["failed"] = " — the bot FAILED during this meeting" if status == "failed" else ""
+        folded = _fold_meeting_processed(redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+        if folded:
+            fields["source"] = "processed notes (cleaned transcript)"
+        else:
+            folded = _fold_meeting_transcript(redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+            fields["source"] = "raw transcript"
+        if not folded:
+            return (ctx, [], meeting_steering.NO_RECORD_POST.format(**fields) + prompt)
+        fields["transcript"] = folded
+        return (ctx, [], meeting_steering.render("post", fields) + prompt)
+
+    transcript = _fold_meeting_transcript(redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
     if transcript:
-        preamble = (
-            f"You are assisting in a live meeting ({platform}/{native}). Its live transcript so far is "
-            f"below — answer the user's question from it. Don't paste the transcript back verbatim.\n\n"
-            f"<transcript>\n{transcript}\n</transcript>\n\n")
+        fields["transcript"] = transcript
+        preamble = meeting_steering.render("live", fields)
     else:
-        preamble = (
-            f"You are assisting in a live meeting ({platform}/{native}), but no transcript has been "
-            f"captured yet. Tell the user the meeting has no transcript yet.\n\n")
+        preamble = meeting_steering.NO_TRANSCRIPT_LIVE.format(platform=platform, native=native)
     return (ctx, [], preamble + prompt)
 
 
