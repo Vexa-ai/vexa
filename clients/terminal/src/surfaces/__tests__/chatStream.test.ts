@@ -231,3 +231,79 @@ describe("streamChatTurn — cold start & resume", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);  // aborted → the loop exits, no resume
   });
 });
+
+describe("streamChatTurn — turn nonce & keepalives (the 'Reconnecting' hang fixes)", () => {
+  it("sends the SAME turn_id on every attempt of one turn — the no-cursor retry key", async () => {
+    // Attempt 1 drops with NO events (no cursor ever seen); attempt 2 must carry the same nonce so
+    // agent-api re-attaches to the turn instead of dispatching it twice.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseResponse([]))
+      .mockResolvedValueOnce(sseResponse([ev({ type: "message-delta", text: "hello" }, "5-0"), ev({ type: "turn-complete" }, "6-0")]));
+    const { cb } = recorder();
+
+    await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    const body1 = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
+    const body2 = JSON.parse((fetchImpl.mock.calls[1][1] as RequestInit).body as string);
+    expect(typeof body1.turn_id).toBe("string");
+    expect(body1.turn_id.length).toBeGreaterThan(0);
+    expect(body2.turn_id).toBe(body1.turn_id);   // constant across the retry
+  });
+
+  it("mints a DIFFERENT turn_id per turn (identical prompts stay distinct turns)", async () => {
+    const done = () => sseResponse([ev({ type: "turn-complete" }, "1-0")]);
+    const fetchImpl = vi.fn().mockResolvedValueOnce(done()).mockResolvedValueOnce(done());
+    const { cb } = recorder();
+    const opts = { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait };
+
+    await streamChatTurn({ prompt: "yes", session: "s1", active: undefined }, cb, opts);
+    await streamChatTurn({ prompt: "yes", session: "s1", active: undefined }, cb, opts);
+
+    const body1 = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
+    const body2 = JSON.parse((fetchImpl.mock.calls[1][1] as RequestInit).body as string);
+    expect(body2.turn_id).not.toBe(body1.turn_id);
+  });
+
+  it("ignores SSE comment keepalives (`: keepalive`) and keeps rendering the turn", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ": keepalive\n\n",
+      ev({ type: "message-delta", text: "hello" }, "5-0"),
+      ": keepalive\n\n",
+      ev({ type: "turn-complete" }, "6-0"),
+    ]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.text).toBe("hello");
+    expect(state.error).toBe("");
+    expect(result.terminal).toBe(true);
+  });
+
+  it("tolerates a full-turn replay after a no-cursor retry (renders it exactly once)", async () => {
+    // Attempt 1 drops pre-output; attempt 2 replays the WHOLE turn from its recorded start. The client
+    // rendered nothing on attempt 1, so the replay is the first (and only) rendering.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseResponse([]))
+      .mockResolvedValueOnce(sseResponse([ev({ type: "message-delta", text: "the answer" }, "5-0"), ev({ type: "commit", sha: "abc" }, "6-0"), ev({ type: "turn-complete" }, "7-0")]));
+    const { state, cb } = recorder();
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(state.text).toBe("the answer");
+    expect(state.commit).toBe("abc");
+    expect(result.terminal).toBe(true);
+  });
+});

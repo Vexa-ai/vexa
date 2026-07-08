@@ -62,6 +62,16 @@ export type ChatStreamRequest = {
   context?: unknown;
 };
 
+/** One nonce per user turn, constant across that turn's reconnect attempts. It lets agent-api tell a
+ *  NO-CURSOR retry (the stream dropped before any `id:` arrived, so Last-Event-ID is empty) from a new
+ *  turn with identical text — a matching nonce re-attaches to the same turn instead of dispatching a
+ *  second one. */
+function mintTurnId(): string {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export type ChatStreamOptions = {
   /** injected for tests; defaults to global fetch */
   fetchImpl?: typeof fetch;
@@ -125,6 +135,7 @@ export async function streamChatTurn(
   let sawVisibleOutput = false;
   let terminal = false;
   let lastEventId: string | null = null;
+  const turnId = mintTurnId();
   const startedAt = now();
 
   cb.onStarting();
@@ -160,7 +171,7 @@ export async function streamChatTurn(
       r = await fetchImpl("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}) },
-        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context }),
+        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId }),
         signal,
       });
     } catch (e) {

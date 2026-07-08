@@ -367,7 +367,11 @@ class RedisStreamReader(StreamReader):
     UnitEvent until a terminal event (``done`` / ``turn-complete``) or an idle give-up. ``redis`` is
     imported LAZILY (the unit tests inject a fake reader)."""
 
-    def __init__(self, redis_url: str, *, block_ms: int = 30000, idle_giveup_ms: int = 120000) -> None:
+    def __init__(self, redis_url: str, *, block_ms: int = 15000, idle_giveup_ms: int = 600000) -> None:
+        # ``block_ms`` doubles as the KEEPALIVE cadence: every empty blocking read yields a ``None``
+        # tick that the SSE layer turns into a ``: keepalive`` comment, so a byte-quiet stream (a long
+        # agent think) is never cut by proxies/clients that drop silent connections (~18-30s observed).
+        # With bytes flowing the giveup can honestly cover a long think instead of racing the proxy.
         self._url = redis_url
         self._block = block_ms
         self._giveup = idle_giveup_ms
@@ -377,7 +381,10 @@ class RedisStreamReader(StreamReader):
 
         client = redis.from_url(self._url, decode_responses=True)
         topic = f"unit:{unit_id}:out"
-        # Fresh connect → ``$`` (only events from now on). Reconnect → the client's last-seen Stream id
+        # ``resume`` is normally set: the chat handler passes the pre-dispatch tail snapshot on a fresh
+        # turn (attaching at ``$`` AFTER dispatching raced the worker — the 'Reconnecting' hang) and the
+        # cursor on a reconnect. ``$`` (events from now on) is only the no-cursor fallback.
+        # Reconnect → the client's last-seen Stream id
         # (Last-Event-ID): XREAD gaplessly delivers everything published while the reader was gone —
         # crucial when a per-dispatch worker cold-starts AFTER the SSE dropped (the false 'No chat
         # output arrived' failure was the reader giving up / the stream ending before any resume).
@@ -389,6 +396,7 @@ class RedisStreamReader(StreamReader):
                 waited += self._block
                 if waited >= self._giveup:
                     return
+                yield None  # idle tick → SSE ``: keepalive`` comment (bytes keep flowing mid-think)
                 continue
             waited = 0
             for _stream, entries in resp:

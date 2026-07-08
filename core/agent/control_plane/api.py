@@ -107,6 +107,47 @@ def _stream_tail_id(redis_url: str | None, stream: str) -> str | None:
         return None
 
 
+# How long a turn's start-cursor record lives — covers the client's whole resume window (its hard
+# timeout is minutes); after this a stale nonce simply falls back to the fresh-dispatch path.
+CHAT_TURN_HEAD_TTL_SEC = 900
+
+
+def _chat_turn_head_key(unit_id: str) -> str:
+    return f"unit:{unit_id}:turnhead"
+
+
+def _record_chat_turn_head(redis_url: str | None, unit_id: str, turn_id: str, start: str) -> None:
+    """Remember, per warm chat unit, the CURRENT turn's nonce + the out-Stream id it started after.
+    Best-effort (redis-less unit tests skip it): losing the record only degrades a no-cursor retry
+    back to today's behavior, it never breaks the turn."""
+    if not redis_url:
+        return
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        r.set(_chat_turn_head_key(unit_id), json.dumps({"turn_id": turn_id, "start": start}),
+              ex=CHAT_TURN_HEAD_TTL_SEC)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not record chat turn head for %s: %s", unit_id, exc)
+
+
+def _chat_turn_head(redis_url: str | None, unit_id: str, turn_id: str) -> str | None:
+    """The recorded start cursor of the turn ``turn_id`` — or None when it isn't the current turn."""
+    if not redis_url or not turn_id:
+        return None
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        raw = r.get(_chat_turn_head_key(unit_id))
+        head = json.loads(raw) if raw else None
+        return head["start"] if head and head.get("turn_id") == turn_id else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read chat turn head for %s: %s", unit_id, exc)
+        return None
+
+
 class _Sessions:
     """Durable, per-subject chat-session index. Each session carries a created + last-active stamp and an
     optional title (default the first prompt, truncated). ``list`` returns them most-recent first.
@@ -255,6 +296,11 @@ class ChatBody(BaseModel):
     # the terminal-state context bundle; when present it is AUTHORITATIVE (including
     # ``focus: null`` = the user cleared the focus chip — legacy ``active`` is then ignored).
     context: Optional[ChatContextBody] = None
+    # Client-minted TURN NONCE (one per user turn, constant across that turn's reconnect attempts).
+    # Lets the server tell a no-cursor RETRY (the stream dropped before the client ever saw an ``id:``,
+    # so it can't send Last-Event-ID) from a genuinely new turn with identical text ("yes" twice):
+    # a matching nonce re-attaches from the turn's recorded start — no second dispatch, no lost events.
+    turn_id: Optional[str] = None
 
 
 class ResetBody(BaseModel):
@@ -473,6 +519,12 @@ def _decode_sse_cursor(raw: str | None) -> "tuple[str | None, str | None, str | 
 
 def _sse(events) -> Iterator[str]:
     for item in events:
+        # ``None`` is the reader's idle tick → an SSE comment keepalive. Proxies (and the client's own
+        # idle-stall detector) cut a byte-silent stream in ~18-30s; a long agent think is byte-silent for
+        # minutes. The comment is invisible to EventSource parsing but keeps bytes flowing.
+        if item is None:
+            yield ": keepalive\n\n"
+            continue
         # Each item is either a bare event dict, or (event, sse_id) — the id makes reconnects resumable.
         ev, sid = item if isinstance(item, tuple) else (item, None)
         prefix = f"id: {sid}\n" if sid else ""
@@ -1135,12 +1187,29 @@ def create_app(
             # its durable output Stream from the cursor. No new turn, no session re-title.
             unit_id = units.dispatch_id(inv)
         else:
-            # Upsert the durable index on first use of a thread: a new thread is titled by its first
-            # prompt; an existing one just bumps last_active (title preserved).
-            is_new = not any(r["session"] == session for r in sess.list(subject))
-            sess.upsert(subject, session,
-                        title=_truncate_title(body.prompt) if is_new else None)
-            unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
+            unit_id = units.dispatch_id(inv)
+            retry_from = _chat_turn_head(redis_url, unit_id, body.turn_id) if body.turn_id else None
+            if retry_from is not None:
+                # No-cursor RETRY of the current turn (the stream dropped before the client saw any
+                # ``id:``): re-attach from the turn's recorded start — the whole turn replays, including
+                # a terminal event the worker wrote while the client was gone. NO second dispatch.
+                resume = retry_from
+            else:
+                # Fresh turn. Snapshot the out-Stream tail BEFORE dispatching and attach the reader from
+                # it — attaching at ``$`` raced the worker (events written between dispatch and attach,
+                # or a whole turn that finished in the gap, were invisible: the 'Reconnecting' hang).
+                # The thread's Stream holds PRIOR turns too, so the snapshot (not stream start) is the
+                # earliest safe attach point — the client appends and stops on any ``turn-complete``.
+                start = _stream_tail_id(redis_url, units.output_topic(unit_id)) or None
+                # Upsert the durable index on first use of a thread: a new thread is titled by its first
+                # prompt; an existing one just bumps last_active (title preserved).
+                is_new = not any(r["session"] == session for r in sess.list(subject))
+                sess.upsert(subject, session,
+                            title=_truncate_title(body.prompt) if is_new else None)
+                unit_id = dispatcher.dispatch(inv)  # spawn-or-touch the thread's warm chat unit
+                if body.turn_id and start is not None:
+                    _record_chat_turn_head(redis_url, unit_id, body.turn_id, start)
+                resume = start
         return StreamingResponse(
             _sse(stream_reader.read(unit_id, resume=resume)),
             media_type="text/event-stream",

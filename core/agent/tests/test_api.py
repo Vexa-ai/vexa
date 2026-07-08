@@ -1106,3 +1106,150 @@ def test_chat_doc_surface_stays_lean_and_legacy_active_still_grounds():
     assert r.status_code == 200
     start = runtime.spawned[-1][2]["VEXA_START"]
     assert "PREPARE" in start and "Legacy" in start and "<schedule" not in start
+
+
+# ── the 'Reconnecting' hang fixes (incident, user 28): attach-gap + no-cursor retry + keepalives ──
+
+class _ChatFakeRedis:
+    """Just enough redis for the chat path: the pre-dispatch tail snapshot (xrevrange), the turn-head
+    record (set/get), and the chat-session index (_Sessions hset/expire/…) stubbed inert."""
+    def __init__(self, tail=None, kv=None):
+        self.tail = tail          # [(id, fields)] for unit:*:out xrevrange
+        self.kv = dict(kv or {})
+        self.ttls = {}
+
+    def xrevrange(self, stream, count=1):
+        return list(self.tail or []) if stream.startswith("unit:") else []
+
+    def set(self, k, v, ex=None):
+        self.kv[k] = v
+        if ex is not None:
+            self.ttls[k] = ex
+
+    def get(self, k):
+        return self.kv.get(k)
+
+    def delete(self, k):
+        self.kv.pop(k, None)
+
+    # _Sessions surface (inert)
+    def hset(self, *a, **k): pass
+    def hgetall(self, *a, **k): return {}
+    def sadd(self, *a, **k): pass
+    def smembers(self, *a, **k): return set()
+    def srem(self, *a, **k): pass
+    def xrange(self, *a, **k): return []
+
+
+def test_chat_fresh_turn_attaches_from_predispatch_tail(monkeypatch):
+    """Fix A (attach gap): a fresh turn snapshots the out-Stream tail BEFORE dispatching and attaches the
+    reader there — never at ``$`` — so events the worker writes between dispatch and attach (or a whole
+    turn that finishes in the gap) are delivered, while PRIOR turns' events are not replayed."""
+    import json as _json
+    import redis
+
+    fake = _ChatFakeRedis(tail=[("7-0", {})])
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake)
+    runtime = _FakeRuntime()
+    reader = _CursorReader()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=reader,
+        redis_url="redis://test",
+    ))
+
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1",
+                                  "turn_id": "nonce-1"})
+
+    assert r.status_code == 200
+    assert reader.resume_seen == "7-0"          # attached from the snapshot, not "$"
+    assert len(runtime.spawned) == 1            # the turn dispatched exactly once
+    head = _json.loads(fake.kv["unit:agent-u_jane-chat-s1:turnhead"])
+    assert head == {"turn_id": "nonce-1", "start": "7-0"}   # retry anchor recorded
+    assert fake.ttls["unit:agent-u_jane-chat-s1:turnhead"] > 0
+
+
+def test_chat_no_cursor_retry_reattaches_without_second_dispatch(monkeypatch):
+    """Fix A (no-cursor reconnect): a retry that never saw an ``id:`` (no Last-Event-ID) but carries the
+    SAME turn nonce re-attaches from the turn's recorded start — the missed events (including a terminal
+    written while the client was gone) replay, and NO second turn is dispatched."""
+    import json as _json
+    import redis
+
+    fake = _ChatFakeRedis(
+        tail=[("9-0", {})],
+        kv={"unit:agent-u_jane-chat-s1:turnhead": _json.dumps({"turn_id": "nonce-1", "start": "7-0"})},
+    )
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake)
+    runtime = _FakeRuntime()
+    reader = _CursorReader()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=reader,
+        redis_url="redis://test",
+    ))
+
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1",
+                                  "turn_id": "nonce-1"})
+
+    assert r.status_code == 200
+    assert reader.resume_seen == "7-0"          # replays from the turn's start, not the current tail
+    assert runtime.spawned == []                # retry never dispatches a second turn
+
+
+def test_chat_new_turn_with_stale_nonce_dispatches_fresh(monkeypatch):
+    """A DIFFERENT nonce (a genuinely new turn — even with identical prompt text) must dispatch."""
+    import json as _json
+    import redis
+
+    fake = _ChatFakeRedis(
+        tail=[("9-0", {})],
+        kv={"unit:agent-u_jane-chat-s1:turnhead": _json.dumps({"turn_id": "nonce-1", "start": "7-0"})},
+    )
+    monkeypatch.setattr(redis, "from_url", lambda *_a, **_k: fake)
+    runtime = _FakeRuntime()
+    reader = _CursorReader()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=reader,
+        redis_url="redis://test",
+    ))
+
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1",
+                                  "turn_id": "nonce-2"})
+
+    assert r.status_code == 200
+    assert reader.resume_seen == "9-0"          # fresh snapshot of the CURRENT tail
+    assert len(runtime.spawned) == 1            # new turn dispatched
+    head = _json.loads(fake.kv["unit:agent-u_jane-chat-s1:turnhead"])
+    assert head["turn_id"] == "nonce-2"         # the retry anchor moved to the new turn
+
+
+def test_chat_sse_emits_keepalive_comments():
+    """Fix C: the reader's idle ticks (``None``) surface as SSE comment keepalives so proxies/clients
+    never cut a byte-quiet stream during a long agent think."""
+    class _IdleThenDone:
+        def read(self, unit_id, *, resume=None):
+            yield None
+            yield None
+            yield ({"type": "message-delta", "text": "hi"}, "5-0")
+            yield ({"type": "turn-complete"}, "6-0")
+
+    c = _client(_IdleThenDone())
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    assert r.text.count(": keepalive") == 2
+    assert '"turn-complete"' in r.text
+
+
+def test_redis_stream_reader_yields_keepalive_ticks(monkeypatch):
+    """RedisStreamReader emits a ``None`` tick on every empty blocking read (the keepalive cadence) and
+    still gives up after idle_giveup_ms with no events at all."""
+    import redis as _redis
+    from shared.adapters import RedisStreamReader
+
+    class _QuietRedis:
+        def xread(self, streams, count=50, block=15000):
+            return []
+
+    monkeypatch.setattr(_redis, "from_url", lambda *_a, **_k: _QuietRedis())
+    reader = RedisStreamReader("redis://test", block_ms=10, idle_giveup_ms=30)
+    out = list(reader.read("u1"))
+    assert out == [None, None]                  # ticks until the giveup, then a clean end
