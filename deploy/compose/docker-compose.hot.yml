@@ -6,20 +6,25 @@
 #   REVERT:   IMAGE_TAG=fixdev docker compose -p eyeball-compose up -d <svc>   # drops override → back to the built image
 #
 # Edit files under ~/eyeball/vexa/{core,clients} → change is live in seconds.
+# --timeout-graceful-shutdown: a hot-reload's OLD process waits for in-flight connections to drain
+# before the new one binds — long-lived SSE (chat / meeting stream / admin) NEVER drains on its own,
+# so a reload could wedge the service until a manual restart (agent-api down 8.5 min, 2026-07-08
+# incident). Bound the wait: 10s is one SSE ping interval short — clients reconnect gaplessly
+# (Last-Event-ID resume) the moment the new process binds.
 services:
   meeting-api:
-    command: ["uvicorn","meeting_api.__main__:app","--host","0.0.0.0","--port","8080","--reload","--reload-dir","/app/src"]
+    command: ["uvicorn","meeting_api.__main__:app","--host","0.0.0.0","--port","8080","--reload","--reload-dir","/app/src","--timeout-graceful-shutdown","10"]
     volumes:
       - ../../core/meetings/services/meeting-api/src:/app/src
 
   agent-api:
-    command: ["uvicorn","control_plane.api:app","--host","0.0.0.0","--port","8100","--reload","--reload-dir","/app/control_plane","--reload-dir","/app/shared"]
+    command: ["uvicorn","control_plane.api:app","--host","0.0.0.0","--port","8100","--reload","--reload-dir","/app/control_plane","--reload-dir","/app/shared","--timeout-graceful-shutdown","10"]
     volumes:
       - ../../core/agent/control_plane:/app/control_plane
       - ../../core/agent/shared:/app/shared
 
   runtime:
-    command: ["uvicorn","runtime_kernel.api:app","--host","0.0.0.0","--port","8090","--reload","--reload-dir","/app/src"]
+    command: ["uvicorn","runtime_kernel.api:app","--host","0.0.0.0","--port","8090","--reload","--reload-dir","/app/src","--timeout-graceful-shutdown","10"]
     volumes:
       - ../../core/runtime/src:/app/src
 
