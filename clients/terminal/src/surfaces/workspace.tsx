@@ -57,6 +57,7 @@ function revealInTree(dir: string): void {
     writeSS(SS_EXPANDED, JSON.stringify([...new Set([...(Array.isArray(cur) ? cur : []), ...ancestorDirs(dir)])]));
   } catch { writeSS(SS_EXPANDED, JSON.stringify(ancestorDirs(dir))); }
   if (!dir.startsWith("kg")) writeSS(SS_HIDDEN, "0");  // target hidden by the kg-only filter → reveal all
+  writeSS(SS_FILES_OPEN, "1");  // the Files section is collapsed by default — a reveal must expand it
   window.dispatchEvent(new CustomEvent(REVEAL_PATH_EVENT, { detail: { dir } }));
 }
 async function readFile(path: string, slug?: string): Promise<string> {
@@ -238,8 +239,8 @@ function MountSection({ mount }: { mount: ActiveMount }) {
 }
 
 // ── Files LIST (left) ───────────────────────────────────────────────────────────
-const SS_EXPANDED = "ws.tree.expanded", SS_HIDDEN = "ws.tree.hidden", SS_SYSTEM = "ws.system.show";
-function FilesList() {
+const SS_EXPANDED = "ws.tree.expanded", SS_HIDDEN = "ws.tree.hidden", SS_SYSTEM = "ws.system.show", SS_FILES_OPEN = "ws.files.open";
+export function FilesList() {  // exported for the surface test
   const layout = useService(LayoutServiceId);
   const [tree, setTree] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);  // fail-loud (P18): a tree-load failure is shown, not hidden as "empty"
@@ -253,6 +254,10 @@ function FilesList() {
   // _system (the user's private system workspace — chats/settings/routines, RW) is HIDDEN BY DEFAULT;
   // a toggle surfaces it as a section in the files panel.
   const [showSystem, setShowSystem] = useState<boolean>(() => readSS(SS_SYSTEM) === "1");
+  // Workspaces are the PRIMARY object of the Knowledge rail; the file tree recedes behind a
+  // collapsed FILES section (Find-file stays visible — search is the fast path, browsing the fallback).
+  const [filesOpen, setFilesOpen] = useState<boolean>(() => readSS(SS_FILES_OPEN) === "1");
+  const toggleFiles = () => setFilesOpen((v) => { const n = !v; writeSS(SS_FILES_OPEN, n ? "1" : "0"); return n; });
   // Lane A: every NON-PRIMARY active mount (other private workspaces + shared) — rendered as sections
   // beneath the primary tree, so KNOWLEDGE mirrors the agent's full mount set, not just the primary.
   const [extraMounts, setExtraMounts] = useState<ActiveMount[]>([]);
@@ -318,6 +323,7 @@ function FilesList() {
       const dir = (e as CustomEvent<{ dir?: string }>).detail?.dir;
       if (!dir) return;
       if (!dir.startsWith("kg")) setKgOnly(false);
+      setFilesOpen(true);  // sessionStorage was already set by the sender (revealInTree)
       setQuery("");  // a live search hides the tree — clear it so the reveal is visible
       setExpanded((prev) => new Set([...prev, ...ancestorDirs(dir)]));
       // after the expansion renders, bring the revealed row into view and flash it
@@ -333,6 +339,18 @@ function FilesList() {
     window.addEventListener(REVEAL_PATH_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PATH_EVENT, onReveal);
   }, []);
+  // Opening Knowledge lands on the HOME workspace's README (the workspace dashboard) instead of a
+  // bare tree — once per mount (= per Knowledge activation; only the active list's component mounts).
+  // Preview, not pinned; skipped when a doc is already active so a doc opened in the same gesture
+  // (chat entity-click revealing the center, invite landing) is never clobbered. Complements the
+  // first-landing resolver in Workbench, which only covers a fresh dock.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current || !homeMount || !tree.includes("README.md")) return;
+    autoOpened.current = true;
+    if (layout.store.getState().activeTab?.kind === "doc") return;
+    layout.openPreview(docTab("README.md", homeMount.slug));
+  }, [homeMount, tree, layout]);
   const toggle = (p: string) => setExpanded((prev) => {
     const next = new Set(prev); next.has(p) ? next.delete(p) : next.add(p);
     writeSS(SS_EXPANDED, JSON.stringify([...next])); return next;
@@ -366,10 +384,18 @@ function FilesList() {
         })
         .slice(0, 60)
     : [];
+  const homeLabel = homeMount ? (homeMount.name || (homeMount.slug === "seed" ? "Personal" : homeMount.slug)) : null;
   return (
     <div style={{ padding: "6px 8px" }}>
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 8px", display: "flex", alignItems: "center", gap: 6 }}>
-        <span>knowledge</span>
+      {/* WORKSPACES FIRST — the top-level object of Knowledge; the file tree recedes below. */}
+      <WorkspaceSwitcher onSwapped={() => setReloadKey((k) => k + 1)} />
+      <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }} />
+      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6 }}>
+        <span onClick={toggleFiles} title={filesOpen ? "Collapse the file tree" : "Browse the workspace files"}
+          style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", minWidth: 0 }}>
+          <Icon name="chevR" size={12} style={{ transform: filesOpen ? "rotate(90deg)" : "none", transition: "transform .12s", flex: "none" }} />
+          <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>files{homeLabel ? ` · ${homeLabel}` : ""}</span>
+        </span>
         <span onClick={() => setReloadKey((k) => k + 1)} title="Refresh the file list"
           style={{ marginLeft: "auto", display: "flex", cursor: "pointer", color: "var(--t3)" }}>
           <Icon name="refresh" size={13} />
@@ -411,22 +437,22 @@ function FilesList() {
           </div>
         ))}
         {matches.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No files match “{query.trim()}”.</div>}
-      </>) : (<>
+      </>) : filesOpen ? (<>
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p, homeMount?.slug))} pinFile={(p) => layout.openTab(docTab(p, homeMount?.slug))} openMenu={openMenu} />)}
-        {!error && homeMount === null && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No active workspace — turn one on in Workspaces below.</div>}
+        {!error && homeMount === null && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No active workspace — turn one on in Workspaces above.</div>}
         {!error && hasHome && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
-      </>)}
+      </>) : null}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           { id: "copy-reference", label: "Copy reference", detail: `@file:${menu.path}`, onSelect: () => copyText(`@file:${menu.path}`) },
           { id: "copy-path", label: "Copy path", detail: menu.path, onSelect: () => copyText(menu.path) },
         ]} />
       )}
-      {/* Lane A: every non-primary mount (other private + shared) as a KNOWLEDGE section — mirrors the mount set. */}
-      {!q && extraMounts.map((mount) => <MountSection key={mount.slug} mount={mount} />)}
+      {/* Lane A: every non-primary mount (other private + shared) as a KNOWLEDGE section — mirrors the
+          mount set. Part of the files area, so it follows the FILES collapse. */}
+      {!q && filesOpen && extraMounts.map((mount) => <MountSection key={mount.slug} mount={mount} />)}
       {/* The private SYSTEM workspace (_system, RW) — hidden by default, surfaced via the key toggle. */}
-      {!q && showSystem && <MountSection key="_system" mount={{ slug: "_system", repo: null, ref: null, role: "system", path: "", write: true, primary: false, name: "System · private" }} />}
-      <WorkspaceSwitcher onSwapped={() => setReloadKey((k) => k + 1)} />
+      {!q && filesOpen && showSystem && <MountSection key="_system" mount={{ slug: "_system", repo: null, ref: null, role: "system", path: "", write: true, primary: false, name: "System · private" }} />}
       <GitSection />
     </div>
   );
@@ -439,7 +465,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   // Selecting a workspace row opens the MANAGE hub as a center tab (rename · on/off · GitHub · purpose ·
   // participants). The row's checkbox stays the quick on/off; the name opens the panel.
   const openManage = (slug: string, opts?: { shared?: boolean; name?: string }) => layout.openTab(manageTabDescriptor(slug, opts));
-  const [open, setOpen] = useState<boolean>(() => readSS(SS_WS_OPEN) === "1");  // default collapsed
+  const [open, setOpen] = useState<boolean>(() => readSS(SS_WS_OPEN) !== "0");  // default OPEN — workspaces lead the Knowledge rail
   const [view, setView] = useState<AttachedWorkspaces>({ active: null, slots: {} });
   // The ADDITIVE active set (WP-A2.1): the slugs currently MOUNTED into the agent turn. Distinct from
   // `view.active` (the single private-baseline primary) — a workspace can be MOUNTED (in the set) or just
@@ -592,7 +618,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "vexa-workspace";
 
   return (
-    <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+    <div style={{ paddingTop: 2 }}>
       <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <Icon name="folder" size={12} />workspaces
