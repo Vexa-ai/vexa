@@ -34,6 +34,11 @@ Three things make that possible — and no one else has all three:
    attribution is the genuinely hard part — and it sits *upstream* of where "chat with your docs"
    and "second brain" tools even start. They begin after a transcript exists; **Vexa produces it.**
 
+   > **Just need the meeting-bot transcription API?** That alone is a complete, standalone
+   > product — send a bot, read the speaker-attributed transcript stream, done. The agent
+   > domain is a separate lane on the same gateway: if you don't need it, you simply don't
+   > use it. Nothing in capture depends on it.
+
 2. **Your knowledge is files you own.** Transcripts and derived knowledge are written as **Markdown
    in a git repo** (an Open Knowledge Format bundle) — not rows in an app-owned database. Portable,
    diffable, greppable, yours. **Knowledge as code.**
@@ -51,6 +56,7 @@ Three things make that possible — and no one else has all three:
 - [How it works](#-how-it-works)
 - [The agentic runtime](#-the-agentic-runtime)
 - [Agents & your workspace](#-agents--your-workspace)
+- [The Terminal: AI-augmented meetings](#️-the-terminal-ai-augmented-meetings)
 - [How-to recipes](#-how-to-recipes)
 - [Deployment options](#-deployment-options)
 - [Deploy & configure](#-deploy--configure)
@@ -172,12 +178,19 @@ into your **workspace** — a git repo of Markdown (an [Open Knowledge Format](h
 codebase* — the same CLI-coding-agent loop (Claude Code, Codex, …), pointed at your knowledge instead of
 your source. **Knowledge as code.**
 
-> You've seen the Claude + Obsidian second-brain posts everyone's sharing — Vexa is that, for your team's
-> meetings, on your own servers.
+> This is [Andrej Karpathy's **LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+> pattern, run as a team service. The idea: don't RAG over raw documents — where the model
+> rediscovers everything from scratch on every question — have agents **compile** sources into
+> structured, interlinked markdown entity pages (people, companies, projects, decisions) so
+> knowledge **compounds**. Vexa builds that wiki for you from the richest source there is: your
+> meetings. Each call is ingested into entity pages; agents keep them current between calls; every
+> answer starts from what your team already knows — on your own servers.
 
 **A standalone domain — with or without meetings.** Agents work *any* workspace; a meeting is just one
 trigger. The four triggers: **chat** (ask now), **schedule** (a cron routine), **event** (e.g. an incoming
-email), and a **finished meeting**.
+email), and a **finished meeting**. And meetings themselves are scheduled work: connect your
+calendar (ICS), and planned meetings appear with attendees — bots **auto-join** when the call
+starts, and agents prepare before it and process after it.
 
 - **Multiplayer, not single-user.** Team-shared, attributed workspaces — not one person's private notes.
 - **Automated, not manual.** The bot captures the call and the transcript compiles itself in — nothing to paste.
@@ -191,6 +204,35 @@ email), and a **finished meeting**.
 > durable chat memory — is **built and proven live** (verified end-to-end on Docker and in the Terminal).
 > The bucket-backed workspace store, live-meeting copilot, scheduled auto-join, and the Kubernetes
 > workspace-mount are **on the 0.12 roadmap** — see [Status](#-status--roadmap).
+
+---
+
+## 🖥️ The Terminal: AI-augmented meetings
+
+0.12 ships a **new Terminal UI** designed around one idea: the backend can run thousands of bots
+and agents — the UI's job is to put that scale to work on your actual week. It opens on your
+meetings — coming up, live now, to review — not on an app's menu. What that unlocks:
+
+- **An agent sitting in your meeting, with your knowledge.** Open a live call: the transcript
+  streams in speaker-attributed, and the agent listening to the bot has both the live conversation
+  *and* your whole workspace in context. Ask mid-call "what did we promise them last time?", or have
+  it research an entity the moment it comes up — a person, a company, a contract — grounded in your
+  wiki, not the open internet's guess.
+
+- **Knowledge built on meetings — and between them.** Connect your calendar and every planned
+  meeting gets a workspace lane: a **scheduled agent prepares the brief before the call**
+  (who's coming, history with them, open threads — it interviews *you* for what it can't know) and
+  **processes the transcript after it** (decisions, action items, entity updates). You arrive
+  prepared and leave with the wiki already updated. The knowledge compounds while you sleep.
+
+- **Sharing — workspaces and meetings.** A workspace is multiplayer: invite colleagues and they get
+  the same wiki, attributed. Share a meeting with its attendees and they get the **real-time
+  feed** — the live transcript and brief, not a recording link after the fact.
+
+- **Collaborative, AI-augmented meetings.** Prepare a shared workspace for a meeting *with* your
+  colleagues; during the call, everyone is in the same workspace at the same time — humans editing
+  the brief, agents streaming the transcript in and working the knowledge — one room, human and AI
+  participants on the same files.
 
 ---
 
@@ -408,7 +450,9 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 | Workspace — git Markdown / OKF `kg/` bundle | 🟡 core proven; bucket-backed store landing |
 | **Runtime — Kubernetes backend** (Pod per dispatch) | 🟡 Lifecycle done; mount + Helm landing |
 | Live-meeting copilot (cards as the call runs) | 🔵 Next |
-| Scheduled auto-join routines | 🔵 Planned |
+| Calendar sync (ICS) · planned meetings · scheduled auto-join | ✅ Production |
+| Shared workspaces & shared meetings (invites, real-time feed) | ✅ Built & proven live |
+| Agent chat during a live meeting (live transcript + workspace in context) | ✅ Built & proven live |
 | WebSocket transcript multiplex | 🔵 Planned (poll today) |
 | At-rest encryption (workspace · transcript · tokens) | 🔵 Planned |
 | Mid-call bot config / speak | 🔵 Returns 404 in open-core |
