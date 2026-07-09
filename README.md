@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logodark.svg" alt="Vexa logo" width="72"/>
+
 # Vexa
 
 **Open-source, self-hosted meeting bot & transcription API.**
@@ -65,11 +67,14 @@ No one else has all three:
 
 ## ⚡ Quickstart
 
-Self-host the whole stack on one Linux host, then explore it in the Terminal or drive it over the API.
+Self-host the whole stack on one host, then explore it in the Terminal or drive it over the API.
+Linux (Ubuntu 24.04) is the production target; a Mac with Docker Desktop works fine for a local
+evaluation — everything runs in containers either way.
 
-**Prerequisites** — Docker, and transcription: a free token at [vexa.ai/account](https://vexa.ai/account),
-or self-host the (GPU) transcription unit for a fully air-gapped setup. Without transcription, bots still
-join and record — they just produce no text.
+**Prerequisites** — Docker engine ≥ v26 (`make all` checks), and transcription: a free token at
+[vexa.ai/account](https://vexa.ai/account), or self-host the (GPU) transcription unit for a fully
+air-gapped setup. Without transcription, bots still join and record — they just produce no text
+(`make all` warns when the credentials block in `.env` is empty).
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
@@ -404,7 +409,7 @@ Two APIs behind the gateway, authenticated with `X-API-Key`. Base URL: `http://l
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/agent/chat` | Chat over your workspace — streams SSE (`message-delta`, `tool-call`, `commit`, `done`) |
+| `POST` | `/agent/chat` | Chat over your workspace — streams SSE (`message-delta`, `tool-call`, `commit`, `done`, `error`) |
 | `POST` | `/agent/invocations` | Dispatch a one-shot agent (e.g. a post-meeting report) |
 | `POST` | `/agent/routines` | Create a scheduled (cron) agent routine |
 | `POST` | `/agent/events` | Fire an integration event that dispatches an agent (e.g. email triage) |
