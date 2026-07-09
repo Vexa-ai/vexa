@@ -443,6 +443,16 @@ function MeetingPrepTab({ params }: TabProps) {
               )}
             </span>
           )}
+          {/* an own brief (or one in flight) must NOT hide the sharing path — the no-brief
+              placeholder's share button vanished exactly when there was something worth sharing
+              (owner ruling 2026-07-09) */}
+          {!readOnly && !m.workspace_id && (ownBrief || briefChatStarted) && (
+            <button disabled={busy} onClick={() => void createAndBind()}
+              title="Everyone you invite sees the brief and the live transcript the moment they join"
+              style={{ background: "none", border: "none", color: "var(--t2)", fontSize: 12, cursor: "pointer", padding: 0, borderBottom: "1px dotted var(--t3)" }}>
+              + Create a workspace to share
+            </button>
+          )}
           {readOnly && <span style={{ fontSize: 11.5 }}>shared with you</span>}
           <span style={{ flex: 1 }} />
           {!readOnly && m.workspace_id && (
