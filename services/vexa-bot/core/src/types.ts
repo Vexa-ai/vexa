@@ -30,6 +30,7 @@ export type BotConfig = {
   // Per-speaker transcription
   transcriptionServiceUrl?: string;   // HTTP endpoint for transcription-service
   transcriptionServiceToken?: string; // Bearer token for transcription-service
+  transcriptionModel?: string;        // Model id sent to the endpoint (default "whisper-1"; e.g. Groq needs "whisper-large-v3")
 
   // Voice agent / meeting interaction interface
   voiceAgentEnabled?: boolean;  // Enable TTS, chat, screen share capabilities

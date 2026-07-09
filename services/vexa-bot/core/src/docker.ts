@@ -52,6 +52,7 @@ export const BotConfigSchema = z.object({
   recordingUploadUrl: z.string().url().optional(),
   transcriptionServiceUrl: z.string().optional(),
   transcriptionServiceToken: z.string().optional(),
+  transcriptionModel: z.string().optional(),
   voiceAgentEnabled: z.boolean().optional(),
   voiceAgentSettings: z.object({
     url: z.string().optional(),

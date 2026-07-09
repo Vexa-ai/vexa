@@ -30,6 +30,11 @@ export interface TranscriptionClientConfig {
   serviceUrl: string;
   /** Optional bearer token for authentication */
   apiToken?: string;
+  /** Model id sent in the multipart body. The bundled transcription-service
+   *  ignores it beyond requiring presence, but external OpenAI-compatible
+   *  providers validate it (Groq: "whisper-large-v3", OpenAI: "whisper-1").
+   *  Default: "whisper-1" */
+  model?: string;
   /** Max retry attempts for transient failures. Default: 3 */
   maxRetries?: number;
   /** Base delay between retries in ms. Default: 1000 */
@@ -52,6 +57,7 @@ export interface TranscriptionClientConfig {
 export class TranscriptionClient {
   private serviceUrl: string;
   private apiToken: string | undefined;
+  private model: string;
   private maxRetries: number;
   private retryDelayMs: number;
   private sampleRate: number;
@@ -64,6 +70,7 @@ export class TranscriptionClient {
       this.serviceUrl += '/v1/audio/transcriptions';
     }
     this.apiToken = config.apiToken;
+    this.model = config.model || 'whisper-1';
     this.maxRetries = config.maxRetries ?? 3;
     this.retryDelayMs = config.retryDelayMs ?? 1000;
     this.sampleRate = config.sampleRate ?? 16000;
@@ -126,7 +133,7 @@ export class TranscriptionClient {
     parts.push(Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="model"\r\n\r\n` +
-      `whisper-1\r\n`
+      `${this.model}\r\n`
     ));
 
     // Response format part
