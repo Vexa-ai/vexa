@@ -219,7 +219,7 @@ export async function streamChatTurn(
         try { ev = JSON.parse(line.slice(6)); } catch { continue; }
         switch (ev.type) {
           // The worker's liveness ack — emitted the moment a turn is picked up (warm or cold), long
-          // before the first model token. Flips the heartbeat from "Starting agent" to "Working"
+          // before the first model token. Flips the heartbeat "Starting agent" → "Working"
           // honestly: the agent IS working, it just hasn't produced output yet.
           case "turn-accepted":
             sawVisibleOutput = true;
