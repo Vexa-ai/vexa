@@ -56,8 +56,35 @@ Point the agent at your own model so no inference leaves the network.
 | `VEXA_MEETING_MODEL` | — | Model for meeting-time processing. |
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
-| `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers. |
+| `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
 | `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
+
+### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)
+
+Setting `HOST_CLAUDE_CREDENTIALS=~/.claude/.credentials.json` mounts your Claude Code
+sign-in into the agent containers (read-only), so the agent runs on your subscription
+instead of an API key. Whether that file stays valid depends on the host OS:
+
+- **Linux** (and **Windows via WSL2** — run the stack and the `claude` CLI inside WSL):
+  the file is Claude Code's own store; the CLI refreshes it in place. Nothing to do.
+- **macOS**: the CLI's source of truth is the login **Keychain** — the file is a one-time
+  export whose token expires every ~8–12 hours. Symptom: agent chat fails with
+  `401 Invalid authentication credentials` while `claude` works fine in your terminal.
+  Install the bundled sync daemon once:
+
+  ```bash
+  deploy/bin/claude-creds-sync/install.sh
+  ```
+
+  It registers a launchd user agent (`ai.vexa.claude-creds-sync`) that re-exports the
+  Keychain into the file every 5 minutes, write-only-on-change, preserving the inode the
+  containers mount. `install.sh uninstall` removes it. Details:
+  `deploy/bin/claude-creds-sync/README.md`.
+
+The credential-file mount is a single-developer convenience. For a portable setup that
+survives token rotation on any OS, configure an API key or a custom endpoint in
+**Settings → Models** (stored per-user/global in the database) — see the setup wizard or
+the table above.
 
 ## Auto-join & calendar sync
 
