@@ -127,7 +127,10 @@ services:
     # token/endpoint pair is a SINGLE SOURCE OF TRUTH the ambient shell cannot shadow. The runtime brokers
     # these into spawned agent containers, so a shell-shadowed base_url here would poison every agent.
     env_file:
-      - .env
+      # required:false — a fresh checkout (CI, gate worktree) has no .env; the proof stack
+      # must boot without LLM auth. On a real deploy the file exists and wins as before.
+      - path: .env
+        required: false
     environment:
       - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:v012}
       # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
@@ -197,7 +200,10 @@ services:
     # a SINGLE SOURCE OF TRUTH that the ambient shell cannot shadow. env_file values are NOT interpolated
     # through the host shell (unlike `environment:` ${VAR} entries), which is exactly the prod-401 fix.
     env_file:
-      - .env
+      # required:false — a fresh checkout (CI, gate worktree) has no .env; the proof stack
+      # must boot without LLM auth. On a real deploy the file exists and wins as before.
+      - path: .env
+        required: false
     environment:
       - VEXA_AGENT_API_PORT=8100
       - VEXA_RUNTIME_API_URL=http://runtime:8090
