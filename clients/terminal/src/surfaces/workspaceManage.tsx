@@ -1,28 +1,29 @@
 "use client";
-/** Workspace MANAGE panel — the center TAB (kind "workspace") opened from a WORKSPACES row. ONE hub that
- *  houses everything about a single workspace:
- *   • Header      — inline rename + on/off (mount) toggle + the purpose one-liner.
- *   • GitHub      — push · pull · open + ahead/behind, for ANY workspace with a home remote (attached
- *                   clone's `origin`, or a published vexa-born workspace); Publish for an unpublished seed.
- *   • Purpose     — edit the per-workspace purpose (stored in the workspace, travels when shared, feeds
- *                   the agent's mount preamble).
- *   • Participants— the shared-workspace members list: role (creator/member), remove (owner), LEAVE
- *                   (self), invite-link + add-by-email (both small sub-dialogs).
+/** Workspace PAGE — the center TAB (kind "workspace") opened from a WORKSPACES row. The workspace's
+ *  README is the page BODY (the dashboard you land on); management is a compact header:
+ *   • Header   — mount toggle + name (inline rename) · SHARE (the primary action — enables sharing if
+ *                needed and opens the invite dialog) · ⋯ menu (Rename / Manage / Archive / Delete) ·
+ *                one quiet meta row (members · GitHub sync · role).
+ *   • README   — rendered below the header, live-refreshed; the hero of the page.
+ *   • Manage   — the deeper sections (Purpose · GitHub push/pull/publish · Participants) fold below the
+ *                README behind one quiet toggle, opened by the meta row / ⋯ / Share.
  *
- *  Opened via `openManageTab(...)` from workspace.tsx. Data-access is the workspaceApi SoC module. */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+ *  Opened via `manageTabDescriptor(...)` from workspace.tsx. Data-access is the workspaceApi SoC module. */
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../workbench/layout";
 import { registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
-import { copyText } from "../ui-kit/ContextMenu";
+import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
+import { MdxDoc } from "../ui-kit/MdxDoc";
+import { DocMetaContext } from "../ui-kit/docLinks";
 import {
   readAttachedWorkspaces, readActiveSet, listSharedMemberships, renameWorkspace,
   activateWorkspace, deactivateWorkspace, setSharedActive, shareEnableWorkspace, unshareWorkspace,
   publishWorkspace, archiveWorkspace, deleteWorkspace,
   gitRemoteStatus, pushWorkspace, pullWorkspace, getGitToken,
-  readWorkspacePurpose, writeWorkspacePurpose,
+  readWorkspacePurpose, writeWorkspacePurpose, readWorkspaceFile,
   listWorkspaceMembers, removeWorkspaceMember, leaveWorkspace, mintInvite,
   type AttachedWorkspaces, type ActiveMount, type Membership, type GitRemoteStatus, type WorkspaceMember, type SavedGitToken,
 } from "./workspaceApi";
@@ -98,49 +99,102 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
   const myRole = memberships.find((m) => m.workspace_id === slug)?.role;
 
   // The shared workspace_id the participants section operates on: a shared row IS the id; an own workspace
-  // gets one once it is shared (share-enable returns it). Null until then → the "Share this workspace" CTA.
+  // gets one once it is shared (share-enable returns it). Null until then → Share enables it first.
   const [shareWsId, setShareWsId] = useState<string | null>(shared ? slug : null);
   useEffect(() => { setShareWsId(shared ? slug : null); }, [shared, slug]);
 
+  // README is the page; the deeper sections fold behind ONE quiet toggle. Share/meta/⋯ open the fold;
+  // inviteSignal tells Participants to pop its invite dialog (the Share button's whole point).
+  const [manage, setManage] = useState(false);
+  const [inviteSignal, setInviteSignal] = useState(0);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);  // header meta only — Participants keeps its own list
+  useEffect(() => {
+    if (!shareWsId) { setMembers([]); return; }
+    void listWorkspaceMembers(shareWsId).then(setMembers).catch(() => setMembers([]));
+  }, [shareWsId, manage]);
+  const doShare = () => run(async () => {
+    if (!shareWsId && !shared) { const { workspace_id } = await shareEnableWorkspace(slug); setShareWsId(workspace_id); loadCore(); }
+    setManage(true); setInviteSignal((n) => n + 1);
+  });
+
   return (
     <div style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
-      <div style={{ maxWidth: 680, margin: "0 auto", padding: "22px 24px" }}>
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "22px 24px" }}>
         <Header
           slug={slug} shared={shared} isSeed={isSeed} displayName={displayName} mounted={mounted}
-          busy={busy} onRun={run} reload={loadCore} layout={layout} tabId={id}
+          archived={!!meta?.archived} busy={busy} onRun={run} reload={loadCore} layout={layout} tabId={id}
+          onShare={doShare} onManage={() => setManage(true)}
+          meta={{ members: shareWsId ? members : null, status, myRole: shared ? myRole : undefined }}
         />
         {err && <div role="alert" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 11px" }}>⚠ {err}</div>}
         {note && <div role="status" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--green)" }}>✓ {note}</div>}
 
-        <PurposeSection slug={slug} />
+        <ReadmeBody slug={slug} />
 
-        <GitHubSection
-          slug={slug} status={status} published_url={isSeed ? (attached.published_url ?? null) : null}
-          canPublish={isBorn && isSeed} defaultRepoName={defaultRepoName(displayName)}
-          busy={busy} onRun={run} reload={loadCore}
-        />
+        {/* the deeper management sections, folded — README stays the hero */}
+        <div onClick={() => setManage((v) => !v)}
+          style={{ display: "flex", alignItems: "center", gap: 6, margin: "18px 0 12px", padding: "6px 0", cursor: "pointer", borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em" }}>
+          <Icon name="chevR" size={12} style={{ transform: manage ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+          <Icon name="gear" size={12} />Manage workspace
+        </div>
+        {manage && (<>
+          <PurposeSection slug={slug} />
 
-        <ParticipantsSection
-          ownSlug={shared ? null : slug} shared={shared} shareWsId={shareWsId} myRole={shared ? myRole : undefined}
-          setShareWsId={setShareWsId} busy={busy} onRun={run} reload={loadCore}
-          layout={layout} tabId={id}
-        />
+          <GitHubSection
+            slug={slug} status={status} published_url={isSeed ? (attached.published_url ?? null) : null}
+            canPublish={isBorn && isSeed} defaultRepoName={defaultRepoName(displayName)}
+            busy={busy} onRun={run} reload={loadCore}
+          />
 
-        {!shared && <DangerZone slug={slug} isSeed={isSeed} displayName={displayName} archived={!!meta?.archived} busy={busy} onRun={run} reload={loadCore} layout={layout} tabId={id} />}
+          <ParticipantsSection
+            ownSlug={shared ? null : slug} shared={shared} shareWsId={shareWsId} myRole={shared ? myRole : undefined}
+            setShareWsId={setShareWsId} busy={busy} onRun={run} reload={loadCore}
+            layout={layout} tabId={id} inviteSignal={inviteSignal}
+          />
+        </>)}
       </div>
     </div>
+  );
+}
+
+// ── README — the page body: the workspace's dashboard doc, live-refreshed ─────────────────────────
+function ReadmeBody({ slug }: { slug: string }) {
+  const [text, setText] = useState<string | null | undefined>(undefined);  // undefined = loading, null = no README
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setText(undefined); setError(null);
+    const load = () => void readWorkspaceFile("README.md", { slug })
+      .then((c) => { if (live) { setText(c); setError(null); } })
+      .catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)); });
+    load();
+    const iv = setInterval(() => { if (!document.hidden) load(); }, 8000);
+    window.addEventListener("focus", load);
+    return () => { live = false; clearInterval(iv); window.removeEventListener("focus", load); };
+  }, [slug]);
+  if (error) return <div role="alert" style={{ fontSize: 12.5, color: "var(--danger)" }}>⚠ Couldn’t read the README — {error}</div>;
+  if (text === undefined) return <div style={{ fontSize: 12.5, color: "var(--t3)" }}>loading…</div>;
+  if (text === null) return <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No README yet — ask the agent in Chat to start this workspace’s dashboard.</div>;
+  const body = text.replace(/^---\n[\s\S]*?\n---\n/, "");  // READMEs rarely carry frontmatter; strip if present
+  return (
+    <DocMetaContext.Provider value={{ path: "README.md", slug }}>
+      <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}><MdxDoc>{body}</MdxDoc></div>
+    </DocMetaContext.Provider>
   );
 }
 
 const defaultRepoName = (name: string) =>
   (name || "vexa-workspace").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "vexa-workspace";
 
-// ── header: rename + on/off + purpose one-liner ─────────────────────────────────────────────────
-function Header({ slug, shared, isSeed, displayName, mounted, busy, onRun, reload, layout, tabId }: {
-  slug: string; shared: boolean; isSeed: boolean; displayName: string; mounted: boolean; busy: boolean;
+// ── header: mount toggle + name (inline rename) · Share · ⋯ menu · one quiet meta row ──────────────
+function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, onRun, reload, layout, tabId, onShare, onManage, meta }: {
+  slug: string; shared: boolean; isSeed: boolean; displayName: string; mounted: boolean; archived: boolean; busy: boolean;
   onRun: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; reload: () => void; layout: LayoutService; tabId: string;
+  onShare: () => void; onManage: () => void;
+  meta: { members: WorkspaceMember[] | null; status: GitRemoteStatus | null; myRole?: string };
 }) {
   const [renaming, setRenaming] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const cancelled = useRef(false);
   const toggle = () => onRun(async () => {
     if (shared) await setSharedActive(slug, !mounted);
@@ -148,8 +202,12 @@ function Header({ slug, shared, isSeed, displayName, mounted, busy, onRun, reloa
     reload();
   });
   const doRename = (name: string) => onRun(async () => { await renameWorkspace(slug, name.trim()); setRenaming(false); layout.retargetTab(tabId, manageTabDescriptor(slug, { name: name.trim() || slug })); reload(); });
+  const openMenu = (e: MouseEvent<HTMLSpanElement>) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); };
+  const st = meta.status;
+  const sync = !st?.has_home ? null : !st.tracked ? "not fetched" : st.ahead || st.behind ? `${st.ahead ? `↑${st.ahead}` : ""}${st.ahead && st.behind ? " " : ""}${st.behind ? `↓${st.behind}` : ""}` : "up to date";
+  const metaItem: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" };
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <Checkbox checked={mounted} disabled={busy} onChange={toggle}
           title={mounted ? "Mounted into the agent — uncheck to switch off" : "Switched off — check to mount"}
@@ -162,14 +220,40 @@ function Header({ slug, shared, isSeed, displayName, mounted, busy, onRun, reloa
         ) : (
           <h1 style={{ margin: 0, fontSize: 19, fontWeight: 650, color: "var(--t1)", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</h1>
         )}
-        {!shared && !renaming && (
-          <span onClick={() => setRenaming(true)} title="Rename (display label)" style={{ cursor: "pointer", color: "var(--t3)", padding: 4 }}><Icon name="edit" size={15} /></span>
+        <button disabled={busy} onClick={onShare} style={btn("primary")} title="Share this workspace — mint an invite link or add by email">
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Share</span>
+        </button>
+        <span onClick={openMenu} title="Rename · Manage · Archive · Delete"
+          style={{ cursor: "pointer", color: "var(--t3)", padding: "2px 7px", fontSize: 16, lineHeight: 1, border: "1px solid var(--line)", borderRadius: 7 }}>⋯</span>
+      </div>
+      {/* ONE quiet meta row: members · GitHub sync · role/kind — each opens the manage fold. */}
+      <div style={{ fontSize: 12, color: "var(--t3)", marginTop: 6, marginLeft: 26, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        {meta.members !== null && (
+          <span style={metaItem} onClick={onManage} title="Participants">
+            <Icon name="user" size={12} />{meta.members.length} member{meta.members.length === 1 ? "" : "s"}
+          </span>
         )}
+        {sync && (
+          <span style={metaItem} onClick={onManage} title="GitHub sync">
+            <Icon name="github" size={12} />{sync}
+          </span>
+        )}
+        <span style={{ ...metaItem, cursor: "default" }}>
+          {shared ? `shared${meta.myRole ? ` · ${meta.myRole}` : ""}` : isSeed ? "Personal" : meta.members !== null ? "shared by you" : "private"}
+          {archived ? " · archived" : ""}
+          {!mounted && " · not mounted"}
+        </span>
       </div>
-      <div style={{ fontSize: 12.5, color: "var(--t3)", marginTop: 5, marginLeft: 26 }}>
-        {shared ? "Shared workspace — you're a member." : isSeed ? "Your Personal workspace." : "Your workspace."}
-        {" "}{mounted ? "Mounted into the agent this turn." : "Not mounted — switch on to include it in the agent's context."}
-      </div>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+          ...(!shared ? [{ id: "rename", label: "Rename", detail: "display label", onSelect: () => setRenaming(true) }] : []),
+          { id: "manage", label: "Manage workspace", detail: "purpose · GitHub · participants", onSelect: onManage },
+          ...(!shared && !isSeed ? [
+            { id: "archive", label: archived ? "Un-archive" : "Archive", detail: "collapse · keep data", onSelect: () => void onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Un-archived." : "Archived.") },
+            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { if (window.confirm(`Delete "${displayName}"? This permanently removes the workspace and all its data.`)) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); } },
+          ] : []),
+        ]} />
+      )}
     </div>
   );
 }
@@ -309,15 +393,19 @@ function TokenRow({ label, value, busy, onChange, onSubmit, onCancel, submitLabe
 }
 
 // ── participants (shared membership) ───────────────────────────────────────────────────────────────
-function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId, busy, onRun, reload, layout, tabId }: {
+function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId, busy, onRun, reload, layout, tabId, inviteSignal }: {
   ownSlug: string | null; shared: boolean; shareWsId: string | null; myRole?: string;
   setShareWsId: (id: string) => void; busy: boolean; onRun: (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
-  reload: () => void; layout: LayoutService; tabId: string;
+  reload: () => void; layout: LayoutService; tabId: string; inviteSignal?: number;
 }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [invite, setInvite] = useState<{ mode: "link" | "email"; role: string; ttlDays: number; emails: string; link: string | null } | null>(null);
   const loadMembers = () => { if (shareWsId) void listWorkspaceMembers(shareWsId).then(setMembers).catch(() => setMembers([])); };
   useEffect(() => { loadMembers(); }, [shareWsId]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // The header's Share button — pop the invite dialog (sharing was already enabled by the caller).
+  useEffect(() => {
+    if (inviteSignal && shareWsId) setInvite({ mode: "link", role: "contributor", ttlDays: 7, emails: "", link: null });
+  }, [inviteSignal, shareWsId]);
 
   // An OWN workspace that isn't shared yet → the CTA that turns on sharing.
   if (!shareWsId) {
@@ -415,22 +503,7 @@ function InviteDialog({ s, setS, onMint, busy }: {
   );
 }
 
-// ── danger zone (own workspaces): archive / delete ────────────────────────────────────────────────
-function DangerZone({ slug, isSeed, displayName, archived, busy, onRun, reload, layout, tabId }: {
-  slug: string; isSeed: boolean; displayName: string; archived: boolean; busy: boolean;
-  onRun: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; reload: () => void; layout: LayoutService; tabId: string;
-}) {
-  if (isSeed) return null;  // the seed slot (Personal) can't be archived/deleted (backend refuses)
-  return (
-    <Section icon="alert" title="Danger zone">
-      <div style={{ display: "flex", gap: 8 }}>
-        <button disabled={busy} onClick={() => onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Un-archived." : "Archived.")} style={btn()}>{archived ? "Un-archive" : "Archive"}</button>
-        <button disabled={busy} style={{ ...btn(), color: "var(--danger)", borderColor: "var(--danger)" }}
-          onClick={() => { if (window.confirm(`Delete "${displayName}"? This permanently removes the workspace and all its data.`)) onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); }}>Delete</button>
-      </div>
-    </Section>
-  );
-}
+// (Archive/Delete retired into the header's ⋯ menu — the old Danger-zone section is gone.)
 
 // Agent surface — absent in meetings-only mode.
 if (!meetingsOnly()) {
