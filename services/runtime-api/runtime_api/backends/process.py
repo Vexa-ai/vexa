@@ -280,6 +280,16 @@ class ProcessBackend(Backend):
                     except ChildProcessError:
                         pass
 
+                # A process that exits on its own (crash, self-initiated
+                # leave) never goes through stop(), so background children
+                # spawned by its entrypoint (Xvfb, x11vnc, websockify,
+                # fluxbox, socat) are orphaned to PID 1 and live forever.
+                # pid is also the group's pgid (create() runs setsid() in
+                # preexec_fn), so killpg reaches them even though the
+                # leader itself is already dead.
+                if pid:
+                    await asyncio.to_thread(_kill_leftover_group, pid)
+
                 data["status"] = "exited"
                 data["stopped_at"] = time.time()
                 data["exit_code"] = exit_code
@@ -315,6 +325,26 @@ def _pid_alive(pid: int) -> bool:
     except (FileNotFoundError, OSError):
         return False
     return True
+
+
+def _kill_leftover_group(pid: int, grace: float = 2.0) -> None:
+    """Clean up orphaned children of a process that already exited on its
+    own (reaper path). Unlike _terminate_process_group, the group leader is
+    already dead here, so os.getpgid(pid) would raise — but pid IS the pgid
+    (create() calls setsid() in preexec_fn), so signal the group directly.
+    ProcessLookupError means the group is empty: the common, no-leak case."""
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        logger.warning(f"Permission denied cleaning up process group {pid}")
+        return
+    time.sleep(grace)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # group members exited during the grace period
 
 
 def _terminate_process_group(pid: int, timeout: int = 10) -> bool:
