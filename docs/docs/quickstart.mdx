@@ -9,7 +9,9 @@ with one command.
 
 ## Prerequisites
 
-- A Linux host (Ubuntu 24.04 recommended), `git`, and Docker.
+- A Linux host (Ubuntu 24.04 recommended for production), `git`, and **Docker engine ≥ v26**
+  (`make all` checks and refuses older engines). A Mac with Docker Desktop works for a local
+  evaluation — everything runs in containers either way.
 - A **transcription (STT) token** — get one free at [`vexa.ai/account`](https://vexa.ai/account), or
   [self-host transcription](/deployment#air-gapped) on a GPU. Without it, bots join and record but
   produce no transcript.
@@ -39,8 +41,11 @@ make bot          # build the meeting bot from source — needed before a bot ca
 
 <Note>
 `make all` seeds `.env` from `.env.example` on first run and mints a self-host API key for you
-(via `deploy/compose/bin/provision-token`). To add transcription (STT) and an LLM provider, fill the
-credentials block in `.env`. To mint additional scoped keys yourself, see [Authentication](/authentication).
+(via `deploy/compose/bin/provision-token`). **The seeded `.env` ships with every credential empty**
+— `make all` prints a warning box (and ⚠ lines in the banner) until you fill them: the STT pair for
+win 1 (transcripts), one model credential for win 2 (agent chat) — either in `.env` or under
+**Settings → Models** in the Terminal. To mint additional scoped keys yourself, see
+[Authentication](/authentication).
 </Note>
 
 ## 2. First win — capture a meeting (UI)

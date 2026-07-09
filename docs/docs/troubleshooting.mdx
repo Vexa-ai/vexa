@@ -88,6 +88,24 @@ The bot is capturing audio, but transcription isn't configured.
 | `403 Token scope not authorized` | key lacks the route's scope | mint with the right `scopes=` |
 | `403 Invalid or missing admin token.` on `/admin/*` | missing or wrong `ADMIN_TOKEN` | use the `X-Admin-API-Key` matching your `ADMIN_TOKEN` |
 
+## Agent chat says no model credentials are configured
+
+`POST /agent/chat` streams a single `error` frame — *"No model credentials are configured, so the
+agent cannot run…"* — and no turn runs. This is the credential preflight: the deployment has no
+model credential and your user has no custom endpoint, so a worker could only fail. Fix either side:
+
+- **Deployment-wide** — set ONE of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `VEXA_LLM_API_KEY` or `HOST_CLAUDE_CREDENTIALS` in `deploy/compose/.env`,
+  then `make all` (the frame names exactly the keys it found unset).
+- **Per-user** — add a custom endpoint under **Settings → Models** in the Terminal (a `custom`
+  config needs its `base_url`; the API key is optional for keyless local gateways).
+
+A turn that *starts* and then fails with **"Model credentials are missing or expired for this
+deployment"** (a `done` frame, `ok:false`) is the mid-flight variant: a credential that existed at
+dispatch went stale — on macOS typically the Keychain-exported `HOST_CLAUDE_CREDENTIALS` file
+(install the [sync daemon](/configuration#claude-subscription-credentials-host_claude_credentials));
+otherwise refresh/rotate the key. The raw provider text rides in the frame's `detail` field.
+
 ## Containers don't spawn (self-host)
 
 The [runtime](/core/runtime) spawns bot and agent containers via the Docker socket.

@@ -1,6 +1,6 @@
 # Security Policy
 
-The Vexum Core maintainers take the security of the project seriously.
+The Vexa Core maintainers take the security of the project seriously.
 
 ## Reporting a vulnerability
 
@@ -21,7 +21,7 @@ agree a public-disclosure timeline with you.
 
 ## Supported versions
 
-Vexum Core is under active development. Security fixes are applied to the `main`
+Vexa Core is under active development. Security fixes are applied to the `main`
 branch and the latest release line. Please test against `main` before reporting.
 
 ## OSPS Baseline

@@ -1,0 +1,58 @@
+---
+title: "How Vexa compares"
+description: "An honest map of the meeting-capture options — Vexa, Attendee, hosted APIs, local notetakers, DIY — and when each is the right choice."
+---
+
+If you're evaluating self-hosted meeting intelligence, you'll find these options. Here is how they
+actually differ — including where an alternative is the better fit.
+
+## The field
+
+**Meeting-bot APIs** put a bot *in* the call and give you a server-side API — the only shape that
+works org-wide (IT deploys it once; every meeting can be captured, governed, audited):
+
+- **Vexa** (this project) — Apache-2.0, self-hosted, bot + real-time STT + speaker attribution +
+  the agent/knowledge layer, air-gappable end to end.
+- **[Attendee](https://github.com/attendee-labs/attendee)** — the other credible open-source
+  meeting-bot API (Django/Postgres/Redis). A solid, conventional capture API you build on.
+- **Hosted bot APIs** (e.g. Recall.ai) — mature and convenient, but your meetings transit their
+  cloud; nothing to self-host.
+
+**Local notetakers** (Meetily, Hyprnote, and similar) record the *user's own device audio* on a
+laptop. Genuinely private for an individual — but per-seat installs with no server-side fleet, no
+API for downstream systems, and speaker attribution limited to what mono device audio allows. A
+personal tool, not an infrastructure layer.
+
+**DIY** (Whisper + your own headless-browser bot) — full control, and an enormous, permanently
+maintained effort: three platforms' join flows, admission handling, audio capture, streaming STT,
+attribution, scaling.
+
+## Vexa vs. the alternatives
+
+| Capability | **Vexa** | Attendee | Hosted APIs | Local notetakers | DIY |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Self-hosted / data stays in your perimeter | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Fully **air-gapped** (bundled self-hosted GPU STT unit) | ✅ | 🟡 BYO STT wiring | ❌ | 🟡 local models | 🟡 build it |
+| Bot joins **Meet + Teams + Zoom** | ✅ | ✅ | ✅ | ❌ device audio | 🟡 build ×3 |
+| Real-time transcript API, speaker-attributed | ✅ | ✅ | ✅ | 🟡 app-local | 🟡 build it |
+| **Bring your own models** (STT + LLM endpoints) | ✅ | 🟡 STT providers | ❌ | ✅ | ✅ |
+| Kubernetes / OpenShift scale-out (Helm, a Pod per workload) | ✅ | 🟡 compose-first | n/a | ❌ | 🟡 build it |
+| Knowledge layer: transcripts → git Markdown workspace + sandboxed agents | ✅ | ❌ | ❌ | 🟡 app notes | ❌ |
+| License | Apache-2.0 | Apache-2.0 | proprietary | varies | — |
+
+## When to choose what — honestly
+
+- **Choose Attendee** if you want *only* a capture API with the most conventional stack possible,
+  you're happy wiring your own transcription provider, and the knowledge/agent layer is something
+  you'd rather build yourself. It's good software and the comparison keeps us honest.
+- **Choose a hosted API** if your compliance posture allows a vendor cloud and you want zero
+  operations. That's a real trade — it's just not the one this project exists for.
+- **Choose a local notetaker** for personal note-taking on your own laptop with no IT involvement.
+- **Choose Vexa** when the requirement is *organizational and sovereign*: every meeting platform,
+  real-time attributed transcripts through an API you host, **your** STT and LLM endpoints, scaling
+  from one Linux box to an OpenShift cluster inside your walls — and, when you want it, the
+  [agent layer](/core/agents) that compounds those transcripts into a knowledge base your team owns.
+
+The deeper positioning discussion — why capture sits upstream of every "chat with your docs" tool —
+is in [Concepts](/concepts). For the regulated-enterprise posture (air-gap, procurement artifacts,
+OSPS Baseline), see [Security & compliance](/security-compliance).

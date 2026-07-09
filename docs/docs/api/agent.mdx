@@ -64,7 +64,8 @@ Returns **Server-Sent Events**; each `data:` line is one frame:
 | `tool-result` | `callId`, `ok`, `summary` |
 | `commit` | `sha` |
 | `rejected` | `violations` |
-| `done` | `reply`, `sessionId`, `ok` |
+| `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten) |
+| `error` | `message` — the turn was refused before dispatch (e.g. no model credential configured); actionable, names what to set |
 
 ```bash POST /api/chat  (SSE)
 curl -N -X POST "$AGENT_API/api/chat" -H "Content-Type: application/json" \

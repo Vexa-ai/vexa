@@ -14,7 +14,8 @@
         "pages": [
           "index",
           "quickstart",
-          "authentication"
+          "authentication",
+          "comparison"
         ]
       },
       {

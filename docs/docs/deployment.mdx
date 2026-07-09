@@ -8,8 +8,10 @@ agent state stay on infrastructure you control.
 
 ## Quick start (Docker Compose)
 
-Prerequisites: a Linux host (Ubuntu 24.04), **Docker engine ≥ v26** (agent workers mount each granted
-workspace as an isolated volume subpath — older engines fail worker creation), `git`, `curl`.
+Prerequisites: a Linux host (Ubuntu 24.04) for production, **Docker engine ≥ v26** (agent workers
+mount each granted workspace as an isolated volume subpath — older engines fail worker creation;
+`make all` checks and refuses), `git`, `curl`. A Mac with Docker Desktop works for a local
+evaluation — everything runs in containers either way.
 
 ```bash
 curl -fsSL https://get.docker.com | sh
