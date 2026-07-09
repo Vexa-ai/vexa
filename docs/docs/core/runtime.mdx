@@ -7,6 +7,10 @@ The **runtime** spawns, reuses, and reaps the [containers](/concepts#container) 
 bots) run in. It is the only thing that touches the orchestrator; the control plane just asks it to run a
 dispatch.
 
+It is one [one-concern module](/concepts#module) — mechanism, not policy — behind one
+[sealed contract](/concepts#contract) (`runtime.v1`), with pluggable backends (process ·
+Docker · K8s) proven by the same fixture suite against each.
+
 ## Why it exists: safety
 
 An agent is an untrusted, tool-using process operating on sensitive data. So every dispatch runs

@@ -7,6 +7,10 @@ An **agent** is a CLI coding agent (Claude Code, Codex, …) given a [workspace]
 job. It reads and writes Markdown files, runs tools, and commits — the same loop that disrupted software
 development, pointed at knowledge instead of code.
 
+The domain itself is built the way everything in Vexa is: [one-concern modules](/concepts#module)
+(dispatcher, worker, workspace store, LLM runners) joined by [sealed contracts](/concepts#contract)
+(`unit.v1`, `workspace.v1`, `invoke.v1`), each testable in isolation against fixtures.
+
 Agents are a **standalone domain** — they work any [workspace](/concepts#workspace) of knowledge, **with
 or without meetings**. A meeting is just one of the triggers and sources
 ([message, schedule, event](/concepts#scheduler)), never a requirement.

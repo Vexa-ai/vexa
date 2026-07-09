@@ -9,6 +9,11 @@ calendar), auto-join it when it starts, capture it natively in real time, and sh
 transcript stored and served over the API as it happens. Run it entirely on its own as a
 meeting-capture backend — no agents required.
 
+Like every Vexa domain it is built as [modules of one concern](/concepts#module) — the same
+capture bricks compose into the bot, the desktop host, and the eval harness — joined by
+[sealed contracts](/concepts#contract) (`transcript.v1`, `lifecycle.v1`, `invocation.v1`, …),
+with fixtures collected from real meetings driving the tests at every scale.
+
 It also **composes** with the [agent domain](/core/agents) — the transcript becomes knowledge agents act
 on — but that is a composition, not a dependency: meetings stands alone. How the two connect (the
 `transcript.v1` → agent bridge) lives in one place: [Modules & seams](/architecture/modules).

@@ -94,6 +94,14 @@ AI reshaped software development: a CLI agent on a Linux box is now enough to bu
 software. Vexa scales that same execution model to knowledge work — meetings and emails
 as the source, agents as the workers, your infrastructure as the sandbox.
 
+And the codebase itself is built for that world. Every service is a **modular monolith**:
+a [module owns exactly one concern](/concepts#module) and is the single source of truth for
+it; modules join only through [sealed contracts](/concepts#contract) that CI refuses to let
+drift; every unit ships its code, its adversarial tests, and the goldens that validate it —
+with fixtures collected from real meetings. That is what makes the system tractable for
+human contributors **and** for AI agents working on it — debug any module in isolation, or
+any chain of modules at the scale a bug lives at. The map: [Modules & Seams](/architecture/modules).
+
 <CardGroup cols={3}>
   <Card title="Knowledge agent" icon="brain" href="/how-to/chat-workspace" horizontal />
   <Card title="Meeting copilot" icon="video" href="/how-to/live-copilot" horizontal />

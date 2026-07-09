@@ -6,6 +6,11 @@ description: "The one place that decides who is asking, what they own, and wheth
 Identity is the platform checkpoint: accounts, keys, and the rule that you only touch what you own. Every
 other domain assumes a request already passed through it.
 
+It exists twice on purpose — the live DB-backed oracle and the pure DB-free reference library —
+both honouring the same [sealed contract](/concepts#contract) (`identity.v1`): the
+[one-concern-per-module](/concepts#module) rule applied to trust itself, so authorization logic
+is testable in full isolation from the database.
+
 On every request it resolves three things:
 
 1. **Who is asking** — resolved once at the edge, never from the client's word.
