@@ -1,9 +1,9 @@
-# vexa-core — agent instructions
+# vexa — agent instructions
 
-**Before editing anything, read [HANDOVER.md](HANDOVER.md) and follow its
-protocol.** Multiple agents work in this same checkout without worktrees:
-claim files there before multi-file edits, update it as you go, and record
-conflicts/resolutions there. Do not commit HANDOVER.md into PRs.
+Read [AGENTS.md](AGENTS.md) (the working protocol) and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (the principles the gates enforce)
+before editing. Multiple agents may share this checkout — prefer worktrees for
+multi-file edits, and run `node scripts/gates.mjs` before pushing.
 
 Layout: pnpm + turbo monorepo — `core/` (gateway, agent, runtime), `clients/terminal`
 (Next.js 15 web client, port 3000, `npm run dev`), `docs/` (Mintlify), `calm/`

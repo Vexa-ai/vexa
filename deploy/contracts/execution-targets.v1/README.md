@@ -2,7 +2,7 @@
 
 **Concern:** the machine-readable answer to *"where can work run, and what does it need?"* — the registry a
 plan resolves its `Runs on:` / `Resources:` against, **in planning, before execution** (ADR-0020). Promotes
-Learning #22 (*the amd64 bot's host is `bbb`; consult the registry before escalating a "block"*) to a contract.
+Learning #22 (*the amd64 bot runs on a named registry target; consult the registry before escalating a "block"*) to a contract.
 
 **Surface:** `execution-targets.schema.json` (the shape) · `golden/` (the spec, P8) · `validate.mjs`
 (gate:schema; also validates the deploy registry files via `--file`).
@@ -13,7 +13,7 @@ Learning #22 (*the amd64 bot's host is `bbb`; consult the registry before escala
 secret value (P14), enforced by the schema pattern.
 
 **Files (P14 / ADR-0002):**
-- `deploy/execution-targets.example.json` — committed template (the bbb + ci seed).
+- `deploy/execution-targets.example.json` — committed template (a dev-host + ci seed).
 - `deploy/execution-targets.json` — the user's real registry, **gitignored**; copy the template, fill in,
   reference secrets from `~/dev/vexa-secrets`.
 

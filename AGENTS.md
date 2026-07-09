@@ -14,7 +14,7 @@ them, don't adopt them (ADR-0019).
 ## Plan first — three modes; goal vs objective
 
 Never build without a current plan. **Planning mode** produces/revises the *full path* to the **goal**
-(`[docs/RELEASE-PLAN.md](docs/RELEASE-PLAN.md)` — the always-current, staged plan); **execution mode** runs
+(the always-current staged plan, kept in the maintainer workspace); **execution mode** runs
 it one **objective** at a time, *in-line*, under the loop below; **debug mode** runs the same loop as an
 **orchestrator** — delegating isolated objectives to background agents/workflows to keep the chat open for the
 human (next section). **Goal** = destination (end of plan = the release); **objective** = the current *go*.
@@ -26,7 +26,7 @@ drift; always in exactly one mode (ADR-0015/0017).
 - **The goal — the destination.** One **falsifiable, gate-backed** end-state (ADR-0017): the exact green the
 *end of the plan* shows. Not "0.12 works" — the specific gates / L4 evidence that closes the release.
 - **The hop chain to it.** The ordered objectives from here to the goal, each ending at a runnable proof,
-critical path and parallel workstreams marked (the `docs/RELEASE-PLAN.md` objective chain).
+critical path and parallel workstreams marked (the release-plan objective chain, maintainer workspace).
 - **The forks — Plan A / Plan B.** At each objective that *might not deliver*, name the decision point and
 pre-stage **both** branches: *delivers → next hop; doesn't (the foreseen non-delivery) → the fallback path*.
 A fork you reasoned through in planning is **EXPECTED** — you take the pre-staged branch autonomously, no
@@ -214,7 +214,7 @@ gate** (P9), never prose. A plan without inline rules, per-hop `Expected`, or it
 5. **Root-cause every surprise — earn the learning with the human, promote it twice.** Each surprise is a
   *symptom* of a missing/violated principle. Interpret it **with the human** (never mint a learning from
    an instrument alone), fix the instance, then promote it to **both** the **architecture** (a principle +
-   gate + ADR) **and** the **learnings log** (`[docs/LEARNINGS.md](docs/LEARNINGS.md)` — always, even for a
+   gate + ADR) **and** the **learnings log** (the learnings ledger in the maintainer workspace — always, even for a
    practice/candidate with no P-number). How the principle-set grows (P18→P21). See ADR-0014/0018.
 6. **State the objective, then report facts — not evaluations.** A report assesses the result-state
   against the **current objective** (*result vs objective*), so name the objective first, then ship the
@@ -280,14 +280,14 @@ the fix moves the translation **out to the client**, not deeper into the core.
 - **Source states the designed present, not its history.** Code comments, file headers, and docs describe
 what the thing **is** and **why**, in terms of *today's* contracts — never what broke, what was stale, what
 the fix was, or which Learning/ADR number prompted it. The **surprise → root-cause → fix narrative lives ONLY
-in `docs/LEARNINGS.md`.** A comment like "before this it was X", "this was the Y bug", "the carve had…",
+in the learnings ledger.** A comment like "before this it was X", "this was the Y bug", "the carve had…",
 "(Learning #N)" is **rot** — it freezes transient context into the source and decays into a lie. Write the
 comment as if the code had always been this way. (This is the *output* side of P21: report from designed
 state, not from the incident.)
 
 ## Closing the loop — a learning becomes a principle, minted into the plan (ADR-0021)
 
-A learning is not "done" when it lands in `docs/LEARNINGS.md`. The ledger holds the **incident** (the
+A learning is not "done" when it lands in the learnings ledger. The ledger holds the **incident** (the
 surprise/root-cause); the durable rule must be **conceptualized as a principle** and promoted to the
 **architecture** (this file / `docs/ARCHITECTURE.md` via `lane:contract`), so that **planning embeds it
 inline** (ADR-0021) and the next plan cannot repeat the class of failure. Three homes, three jobs, no overlap:

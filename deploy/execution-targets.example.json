@@ -1,11 +1,11 @@
 {
   "version": "v1",
-  "default_target": "bbb",
+  "default_target": "dev-host",
   "targets": [
     {
-      "name": "bbb",
+      "name": "dev-host",
       "kind": "ssh",
-      "host": "bbb",
+      "host": "dev-host.example.internal",
       "arch": "amd64",
       "caps": ["docker", "compose", "amd64-bot", "redis", "multicore"],
       "notes": "amd64 Linux docker host (the proven O6/eval venue). Authoritative for gate:compose + stress/chaos + the real bot (Lane B)."

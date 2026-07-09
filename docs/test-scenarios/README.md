@@ -4,7 +4,7 @@ One concern: a committed, behavior-named catalog of the failure scenarios the 0.
 pins as repeatable seam/module tests. Each catalog is one row per known failure class, naming its
 `module_probe` / `seam_probe` (and optional `compose_probe` / `live_probe`) and the EXACT expected
 contract state. The catalogs are the campaign checklist + standing anti-regression ledger (see
-`docs/MATURITY-FINDINGS.md` and the campaign plan).
+the maturity-findings ledger in the maintainer workspace, and the campaign plan).
 
 Two catalogs, split by surface:
 
