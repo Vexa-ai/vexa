@@ -2320,7 +2320,17 @@ async def transcribe_meeting(
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             files = {"file": (f"recording.{media_format}", audio_data, f"audio/{media_format}")}
-            form_data = {"model": "large-v3-turbo"}
+            # Model id must match the provider behind TRANSCRIPTION_SERVICE_URL:
+            # the bundled transcription-service accepts "large-v3-turbo", but
+            # e.g. Groq requires "whisper-large-v3-turbo" and OpenAI "whisper-1".
+            # response_format is explicit because providers like Groq default to
+            # plain {"text": ...} with no segments[], which stores 0 segments.
+            # The bundled service already defaults to verbose_json, so this is a
+            # no-op for self-hosted deployments.
+            form_data = {
+                "model": os.environ.get("TRANSCRIPTION_MODEL", "large-v3-turbo"),
+                "response_format": "verbose_json",
+            }
             if req.language:
                 form_data["language"] = req.language
             headers = {}
