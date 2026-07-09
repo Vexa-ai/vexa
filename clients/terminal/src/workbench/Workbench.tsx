@@ -282,11 +282,11 @@ export function Workbench() {
     return () => window.removeEventListener("resize", on);
   }, []);
   const tier = winW < 560 ? "single" : winW < 900 ? "narrow" : "full";
-  // CHAT-ONLY mode: the Sessions view is left-sidebar + chat, no center canvas. New users land here
-  // (default list = "sessions") so onboarding is just the conversation; Meetings/Files/Routines reveal
-  // the full 3-pane interface.
-  // Meetings-only mode: no agent chat rail at all — 2-pane shell (a stale persisted "sessions"
-  // activeList must not flip it into chat-only either; that list doesn't register in this mode).
+  // Meetings-only mode: no agent chat rail at all — 2-pane shell.
+  // NOTE: `chatOnly` is now INERT — the Sessions list was retired (createLayoutService migrates any
+  // persisted "sessions" → the default), so `activeList` is never "sessions" and the chat-only branch
+  // never renders. Kept (rather than ripping out its render sites) to avoid a risky pane refactor the
+  // owner didn't ask for; the `=== "sessions"` guards below are dead but harmless.
   const meetOnly = meetingsOnly();
   const chatOnly = !meetOnly && activeList === "sessions";
   useEffect(() => { const d = keybindings.attach(window); return () => d.dispose(); }, [keybindings]);
@@ -348,17 +348,19 @@ export function Workbench() {
     try { acceptedSlug = localStorage.getItem("vexa.openWorkspace"); if (acceptedSlug) localStorage.removeItem("vexa.openWorkspace"); } catch { /* noop */ }
     // a shared workspace connected to this user (a non-primary 'shared' mount in the active set)
     let sharedSlug: string | null = null;
-    // the HOME mount (first active) — "own README" means ITS README (ADR-0028: reads are
-    // slug-addressed; the seed-slot dir is a storage detail, not "the user's workspace")
-    let homeSlug: string | undefined;
     try {
       const set = await readActiveSet();
       sharedSlug = set.active.find((m) => !m.primary && m.role === "shared")?.slug ?? null;
-      homeSlug = (set.active.find((m) => m.primary) ?? set.active[0])?.slug;
     } catch { /* active-set read failed — treat as no shared workspace */ }
     if (!apiRef.current) return;  // grid torn down while we awaited — nothing to arrange
 
     const revealCenter = () => { if (!meetOnly && layout.store.getState().activeList === "sessions") layout.setActiveList("files"); };
+    // plain fresh landing → the Meetings day: the Meetings list + the Today tab (its onboarding cards
+    // are the first-run hand-off). Replaces the old own-README chat-only onboarding.
+    const showDay = () => {
+      layout.setActiveList("meetings");
+      layout.openTab({ id: "today", title: "Today", kind: "today", params: {} });
+    };
     const openMeeting = (mid: string, reveal: boolean) => {
       if (reveal && !meetOnly) layout.setActiveList("meetings");
       layout.openTab({ id: `meeting:${mid}`, title: "Shared meeting", kind: "meeting", params: { meetingId: mid } });
@@ -379,7 +381,7 @@ export function Workbench() {
       case "meeting":               openMeeting(plan.meetingId, true); break;
       case "workspace-readme":      pinReadme(plan.slug, !!acceptedSlug); break;  // accepted invite → force Knowledge open
       case "live-meeting":          openMeeting(plan.meetingId, true); break;
-      case "own-readme":            pinReadme(homeSlug); break;
+      case "own-day":               showDay(); break;
       case "noop":                  break;
     }
   };

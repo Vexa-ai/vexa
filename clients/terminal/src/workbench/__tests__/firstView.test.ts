@@ -5,12 +5,12 @@ import { firstViewPlan } from "../firstView";
 describe("firstViewPlan — landing priority resolution", () => {
   const base = { sharedMeetingId: null, acceptedSlug: null, sharedSlug: null, liveMeetingId: null, fresh: true } as const;
 
-  it("nothing shared, fresh dock → the user's own README-onboarding", () => {
-    expect(firstViewPlan({ ...base })).toEqual({ kind: "own-readme" });
+  it("nothing shared, fresh dock → the Meetings day (Today)", () => {
+    expect(firstViewPlan({ ...base })).toEqual({ kind: "own-day" });
   });
 
-  it("a shared workspace (no meeting) → that workspace's README pinned", () => {
-    expect(firstViewPlan({ ...base, sharedSlug: "deal-ab12" })).toEqual({ kind: "workspace-readme", slug: "deal-ab12" });
+  it("a PASSIVELY-mounted shared workspace (no meeting, no accept) does NOT hijack landing → the Meetings day", () => {
+    expect(firstViewPlan({ ...base, sharedSlug: "deal-ab12" })).toEqual({ kind: "own-day" });
   });
 
   it("a shared meeting (no workspace) → the meeting is the view", () => {

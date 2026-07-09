@@ -25,7 +25,7 @@ export type FirstViewPlan =
   | { kind: "meeting"; meetingId: string }                              // the meeting is the view
   | { kind: "workspace-readme"; slug: string }                         // the shared workspace's README, pinned
   | { kind: "live-meeting"; meetingId: string }                       // a live meeting already known, no shares
-  | { kind: "own-readme" }                                            // the user's own README-onboarding
+  | { kind: "own-day" }                                               // plain fresh landing → the Meetings day (Today)
   | { kind: "noop" };                                                 // returning user, nothing shared — leave their layout
 
 /** Decide the single landing arrangement. Explicit shared meetings win and apply even to a returning user
@@ -39,7 +39,10 @@ export function firstViewPlan(i: FirstViewInputs): FirstViewPlan {
   if (i.sharedMeetingId) return { kind: "meeting", meetingId: i.sharedMeetingId };
   if (i.acceptedSlug) return { kind: "workspace-readme", slug: i.acceptedSlug };  // explicit accept → pin regardless of a saved dock
   if (!i.fresh) return { kind: "noop" };
-  if (i.sharedSlug) return { kind: "workspace-readme", slug: i.sharedSlug };
   if (i.liveMeetingId) return { kind: "live-meeting", meetingId: i.liveMeetingId };
-  return { kind: "own-readme" };
+  // Default landing = the Meetings day. A PASSIVELY-mounted shared workspace no longer hijacks the
+  // center with its README (that was the old workspace-first onboarding) — only an EXPLICIT act (a
+  // just-accepted invite above, or a shared-meeting link) surfaces a shared workspace on landing.
+  // The workspace stays one click away in Knowledge.
+  return { kind: "own-day" };
 }

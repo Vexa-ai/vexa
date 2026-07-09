@@ -16,7 +16,6 @@ import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
 import { SetupGate } from "./SetupGate";
-import { meetingsOnly } from "./mode";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import "../surfaces";
 
@@ -127,8 +126,8 @@ function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: s
 const container = createContainer([
   reg(ContextKeyServiceId, () => createContextKeyService()),
   reg(CommandServiceId, (c) => createCommandService(c)),
-  // Meetings-only mode has no Sessions list — land on Meetings instead.
-  reg(LayoutServiceId, () => createLayoutService(meetingsOnly() ? "meetings" : "sessions")),
+  // Land on Meetings — the Sessions list is retired; the chat lives in the right rail.
+  reg(LayoutServiceId, () => createLayoutService("meetings")),
   reg(PaletteServiceId, () => createPaletteService()),
   reg(KeybindingServiceId, (c) => createKeybindingService(c)),
 ]);

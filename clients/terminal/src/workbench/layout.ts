@@ -71,8 +71,11 @@ const readLS = (k: string): string | null => { try { return localStorage.getItem
 const writeLS = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* noop */ } };
 
 export function createLayoutService(defaultList: string): LayoutService {
+  // A returning user may have "sessions" persisted (the retired list) — coerce it to the default so
+  // they land on Meetings, not a removed nav item.
+  const storedList = readLS(LS_LIST);
   const store = createStore<LayoutState>({
-    activeList: readLS(LS_LIST) || defaultList,
+    activeList: storedList && storedList !== "sessions" ? storedList : defaultList,
     leftCollapsed: false,
     rightCollapsed: false,
     context: null,
