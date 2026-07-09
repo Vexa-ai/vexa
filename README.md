@@ -22,31 +22,25 @@ the full stack, no install.
 
 ## Why Vexa
 
-Every meeting-AI tool you can buy — the hosted transcription APIs, the SaaS notetakers — sends
-your conversations to *their* cloud and rents you access back. Vexa inverts that: you run the
-whole stack yourself, point it at your own models, and own the transcripts and the knowledge
-they become.
+Every meeting-AI tool you can buy sends your conversations to *their* cloud and rents you
+access back. Vexa inverts that: run the stack yourself, point it at your own models, own what
+your meetings become.
 
-Three things make that possible — and no one else has all three:
+No one else has all three:
 
-1. **Vexa is _in_ the meeting.** A real bot joins the call and transcribes live across Meet, Teams,
-   and Zoom. A reliable, scalable server-side bot fleet with streaming speech-to-text and speaker
-   attribution is the genuinely hard part — and it sits *upstream* of where "chat with your docs"
-   and "second brain" tools even start. They begin after a transcript exists; **Vexa produces it.**
+1. **Vexa is *in* the meeting.** A real bot joins Meet, Teams, and Zoom and streams
+   speaker-attributed transcripts live. That bot fleet is the genuinely hard part — every
+   "chat with your docs" tool starts *after* a transcript exists. Vexa produces it.
 
-   > **Just need the meeting-bot transcription API?** That alone is a complete, standalone
-   > product — send a bot, read the speaker-attributed transcript stream, done. The agent
-   > domain is a separate lane on the same gateway: if you don't need it, you simply don't
-   > use it. Nothing in capture depends on it.
+2. **Your knowledge is files you own.** Meetings compile into Markdown in a git repo —
+   portable, diffable, greppable. Knowledge as code.
 
-2. **Your knowledge is files you own.** Transcripts and derived knowledge are written as **Markdown
-   in a git repo** (an Open Knowledge Format bundle) — not rows in an app-owned database. Portable,
-   diffable, greppable, yours. **Knowledge as code.**
+3. **Agents work it, safely.** Sandboxed coding agents read and write that repo like
+   developers — isolated ephemeral containers, no egress, thousands in parallel, on Docker
+   or your Kubernetes.
 
-3. **Agents work it, safely.** Sandboxed CLI coding agents (Claude Code, Codex, …) read and write
-   that workspace like a developer works a repo — in isolated, ephemeral containers spawned by an
-   **orchestration-agnostic runtime (Docker or Kubernetes)**, with no egress except through brokered
-   tools. Thousands in parallel, air-gapped, on hardware you control.
+> **Only here for the transcription API?** It's a complete standalone product — send a bot,
+> read the stream, ignore the agent lane entirely.
 
 ---
 
@@ -78,7 +72,7 @@ or self-host the (GPU) transcription unit for a fully air-gapped setup. Without 
 join and record — they just produce no text.
 
 ```bash
-git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa-core
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 make all      # full Docker Compose stack — seeds .env, builds, prints your API key + URLs
 make bot      # build the meeting bot from source (required before a bot can join)
 ```
@@ -145,20 +139,17 @@ inside your network.
 
 ## ⚙️ The agentic runtime
 
-A CLI coding agent is just a process on Linux. The **runtime** is what turns that into a **multi-tenant,
-sandboxed, orchestration-agnostic** execution layer safe to point at real business data — and it's the
-same engine already proven in production spawning Vexa's meeting bots.
+A CLI coding agent is just a process on Linux. The **runtime** makes that a multi-tenant,
+sandboxed execution layer safe to point at real business data — the same engine that already
+spawns Vexa's meeting bots in production.
 
-- **Isolated & sandboxed.** Every dispatch runs in its own container — **no egress except through brokered
-  tools**, scoped to only the workspaces and tools it was granted — the granted set is **enforced by the
-  substrate** (per-mount binds on docker/k8s, per-subject uid on lite): another tenant's workspace is not
-  in the worker's filesystem at all. Isolation is what makes governance real
-  rather than advisory, which is why **agents never run in the control plane**.
-- **Ephemeral & cheap.** TTL-on-idle: a container lives while it works and is reaped when idle; continuity
-  is a session file in the workspace, so nothing stays warm. Sub-second to start, **thousands in parallel**.
-- **Orchestration-agnostic.** The kernel owns one `runtime.v1` lifecycle (`starting → running → stopping →
-  stopped → destroyed`) and delegates the one substrate question — *how do I start, observe, and stop a
-  workload?* — to a pluggable backend. The **same dispatch runs identically** across:
+- **Isolated.** Every dispatch gets its own container: no egress except brokered tools, and
+  only its granted workspaces exist in its filesystem — enforced by the substrate, not by the
+  agent. Agents never run in the control plane.
+- **Ephemeral.** A container lives while it works and is reaped on idle; continuity is a
+  session file in the workspace. Sub-second starts, thousands in parallel.
+- **Orchestration-agnostic.** One `runtime.v1` lifecycle, pluggable substrate — the same
+  dispatch runs identically across:
 
 | Backend (`RUNTIME_BACKEND`) | A workload is… | State |
 |---|---|---|
@@ -166,19 +157,16 @@ same engine already proven in production spawning Vexa's meeting bots.
 | **`process`** | a child process, no Docker socket required | ✅ Available |
 | **`k8s`** | a bare **Pod** (`kubectl run --restart=Never`), scheduled across a cluster | ✅ Lifecycle + per-mount workspace isolation; Helm chart in `deploy/helm` |
 
-Same control plane, same `unit.v1` dispatch, same worker — only *how* the container is created changes.
-That's what lets Vexa scale from one laptop to a Kubernetes/OpenShift cluster **inside your walls**,
-without your data ever leaving them.
+Same control plane, same worker — only how the container is created changes. One laptop to a
+Kubernetes/OpenShift cluster, inside your walls.
 
 ---
 
 ## 🧠 Agents & your workspace
 
-Capture is the front door; **agents** are what make the knowledge compound. Every captured meeting compiles
-into your **workspace** — a git repo of Markdown (an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf)
-`kg/` bundle), not rows in an app-owned database. An agent reads and writes it *like a developer works a
-codebase* — the same CLI-coding-agent loop (Claude Code, Codex, …), pointed at your knowledge instead of
-your source. **Knowledge as code.**
+Capture is the front door; **agents** make the knowledge compound. Every meeting compiles into
+your **workspace** — a git repo of Markdown (an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf)
+`kg/` bundle) that agents (Claude Code, Codex, …) read and write like developers work a codebase.
 
 > This is [Andrej Karpathy's **LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
 > pattern, run as a team service. The idea: don't RAG over raw documents — where the model
@@ -188,53 +176,44 @@ your source. **Knowledge as code.**
 > meetings. Each call is ingested into entity pages; agents keep them current between calls; every
 > answer starts from what your team already knows — on your own servers.
 
-**A standalone domain — with or without meetings.** Agents work *any* workspace; a meeting is just one
-trigger. The four triggers: **chat** (ask now), **schedule** (a cron routine), **event** (e.g. an incoming
-email), and a **finished meeting**. And meetings themselves are scheduled work: connect your
-calendar (ICS), and planned meetings appear with attendees — bots **auto-join** when the call
-starts, and agents prepare before it and process after it.
+Agents work *any* workspace; a meeting is just one trigger of four — **chat**, **schedule**
+(cron), **event** (e.g. incoming email), **finished meeting**. Meetings themselves are scheduled
+work: connect your calendar (ICS) and planned meetings appear with attendees — bots
+**auto-join**, agents prepare before the call and process after it.
 
-- **Multiplayer, not single-user.** Team-shared, attributed workspaces — not one person's private notes.
-- **Automated, not manual.** The bot captures the call and the transcript compiles itself in — nothing to paste.
-- **Safe by design.** Agents are untrusted (prompt-injectable) and enforce nothing themselves. **Trusted**
-  input — *you*, in chat — writes to the workspace directly (git is the undo). **Untrusted** input — an
-  email, a web page — runs **propose-only**: the agent suggests actions as cards, a human approves, and only
-  then does trusted code apply them. Irreversible effects (send, order) are always gated.
+- **Multiplayer.** Team-shared, attributed workspaces — not one person's private notes.
+- **Automated.** The bot captures the call; the transcript compiles itself in.
+- **Safe by design.** Agents are untrusted and enforce nothing themselves. You, in chat, write
+  directly (git is the undo); untrusted input — an email, a web page — runs **propose-only**:
+  the agent suggests, a human approves, trusted code applies. Irreversible effects are always gated.
 
-> **Status (honest):** meeting capture, transcription, and speaker attribution are **production**. The
-> agent dispatch core — an agent in an isolated container over your workspace, streaming its output, with
-> durable chat memory — is **built and proven live** (verified end-to-end on Docker and in the Terminal).
-> The bucket-backed workspace store and live-meeting copilot are **on the 0.12 roadmap** — see
+> **Status (honest):** capture, transcription, and speaker attribution are **production**; the
+> agent dispatch core is **built and proven live** end-to-end. What's still landing is tracked in
 > [Status](#-status--roadmap).
 
 ---
 
 ## 🖥️ The Terminal: AI-augmented meetings
 
-0.12 ships a **new Terminal UI** designed around one idea: the backend can run thousands of bots
-and agents — the UI's job is to put that scale to work on your actual week. It opens on your
-meetings — coming up, live now, to review — not on an app's menu. What that unlocks:
+0.12 ships a **new Terminal UI** built to put the backend's scale — thousands of bots and
+agents — to work on your actual week. It opens on your meetings: coming up, live now, to review.
 
-- **An agent sitting in your meeting, with your knowledge.** Open a live call: the transcript
-  streams in speaker-attributed, and the agent listening to the bot has both the live conversation
-  *and* your whole workspace in context. Ask mid-call "what did we promise them last time?", or have
-  it research an entity the moment it comes up — a person, a company, a contract — grounded in your
-  wiki, not the open internet's guess.
+- **An agent in your meeting, with your knowledge.** Open a live call: the transcript streams
+  speaker-attributed, and the agent has the live conversation *and* your workspace in context.
+  Ask mid-call "what did we promise them last time?" — or research a person, company, or
+  contract the moment it comes up, grounded in your wiki.
 
-- **Knowledge built on meetings — and between them.** Connect your calendar and every planned
-  meeting gets a workspace lane: a **scheduled agent prepares the brief before the call**
-  (who's coming, history with them, open threads — it interviews *you* for what it can't know) and
-  **processes the transcript after it** (decisions, action items, entity updates). You arrive
-  prepared and leave with the wiki already updated. The knowledge compounds while you sleep.
+- **Knowledge built on meetings — and between them.** Every planned meeting gets an agent that
+  **prepares the brief before** (who's coming, history, open threads — it interviews *you* for
+  what it can't know) and **processes the transcript after**. Arrive prepared, leave with the
+  wiki updated.
 
-- **Sharing — workspaces and meetings.** A workspace is multiplayer: invite colleagues and they get
-  the same wiki, attributed. Share a meeting with its attendees and they get the **real-time
-  feed** — the live transcript and brief, not a recording link after the fact.
+- **Sharing.** Invite colleagues into a workspace — same wiki, attributed. Share a meeting with
+  its attendees — they get the **real-time feed**, not a recording link after the fact.
 
-- **Collaborative, AI-augmented meetings.** Prepare a shared workspace for a meeting *with* your
-  colleagues; during the call, everyone is in the same workspace at the same time — humans editing
-  the brief, agents streaming the transcript in and working the knowledge — one room, human and AI
-  participants on the same files.
+- **Collaborative, AI-augmented meetings.** Prep a shared workspace together; during the call,
+  humans edit the brief while agents stream the transcript in and work the knowledge — one room,
+  human and AI participants on the same files.
 
 ---
 
@@ -381,23 +360,26 @@ Companion** on the axes they structurally can't move:
 | Data control | Transits the vendor's cloud | **Never leaves your perimeter** |
 | Extensibility | Closed black box | Open source, API-first |
 
-**The things enterprises actually ask for:**
+What that means in practice:
 
-- **Air-gapped** — the only fit for regulated data. Runs fully offline on your own infrastructure and your
-  own models. Nothing phones home.
-- **Adaptive** — your engineers implement requirements directly, on your timeline. Microsoft Copilot won't
-  fine-tune a Croatian language model or your domain vocabulary for you; an open-source stack lets your team
-  do exactly that. No vendor feature queue.
-- **Owned, not rented** — an investment, not a subscription. Deploy once, own it forever, extend it without
-  asking permission. No per-seat tax, no lock-in.
-- **Scales like cloud, inside your walls** — the [runtime](#-the-agentic-runtime) spawns every agent in an
-  isolated, ephemeral container with no egress; thousands in parallel on Docker or your **Kubernetes /
-  OpenShift** cluster, air-gapped, across an org of thousands.
+- **Air-gapped** — fully offline, your infrastructure, your models. Nothing phones home.
+- **Adaptive** — your engineers implement requirements directly: domain vocabulary, underserved
+  languages, custom workflows. No vendor feature queue.
+- **Owned, not rented** — deploy once, extend without asking permission. No per-seat tax.
+- **Scales inside your walls** — thousands of isolated agents in parallel on Docker or your
+  Kubernetes/OpenShift cluster.
 
-**Built to pass procurement.** This repo ships architecture-as-code
-([`architecture.calm.json`](architecture.calm.json), the FINOS **CALM** standard), a published
-[`SECURITY.md`](SECURITY.md), [`security-insights.yml`](security-insights.yml), and an explicit
-[`license-exceptions.json`](license-exceptions.json) — the artifacts a regulated buyer's review asks for.
+**Evaluate it for your org** — the artifacts a security review asks for, in this repo:
+
+| Artifact | What it answers |
+|---|---|
+| [`architecture.calm.json`](architecture.calm.json) | machine-readable architecture (FINOS **CALM**) — every service and data flow, drift-gated in CI |
+| [`SECURITY.md`](SECURITY.md) | how to report a vulnerability |
+| [`security-insights.yml`](security-insights.yml) | OpenSSF Security Insights manifest |
+| [`license-exceptions.json`](license-exceptions.json) | license gating: Category-A permissive deps, exceptions explicit |
+| [`LICENSE`](LICENSE) | Apache-2.0 |
+
+Full review page: [Security & compliance](https://docs.vexa.ai/security-compliance) in the docs.
 
 > Regulated banks and Fortune-500s run Vexa fully air-gapped on their own OpenShift and local LLMs today.
 

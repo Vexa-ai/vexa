@@ -43,10 +43,10 @@ and worker run identically to the Docker backend. See [Execution](/architecture/
 
 ## Honest status
 
-The k8s backend **lifecycle is implemented and exercised**; the workspace-mount for agent
-workers on k8s and chart polish are still landing — track the
-[status page](/roadmap/status). For production today, the Compose stack is the proven path;
-the chart is the right starting point for a cluster evaluation.
+The k8s backend **lifecycle and the workspace mount are implemented** (the workspace store
+binds into each worker Pod as a PVC, scoped per-mount). The Compose stack is the path with the
+most production mileage today; the chart is the right starting point for a cluster
+evaluation — track the [status page](/roadmap/status).
 
 ## Air-gapped clusters
 
