@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
 from typing import Optional
 
 import contracts
@@ -259,6 +261,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
         env["VEXA_CHAT_SESSION"] = chat_session(invocation)
+        # The warm-serve window: how long the worker keeps serving unit:<id>:in after its last turn.
+        # The engine's own default is a tight 120s; chat stamps the (longer) configured window so a
+        # follow-up message lands on the WARM worker (no container/CLI cold start).
+        env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.chat_idle_timeout_sec)
     # A live meeting dispatch consumes the meeting's transcript.v1 Stream (the meetings⊥agent seam).
     ctx = invocation.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
@@ -357,10 +363,16 @@ class Dispatcher:
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
 
     def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort,
-                 membership_index=None, model_config=None) -> None:
+                 membership_index=None, model_config=None, warm_stream=None) -> None:
         self._settings = settings
         self._runtime = runtime
         self._identity = identity
+        # Warm delivery (the lost-turn fix): the redis client used to pre-deliver message-trigger
+        # prompts to unit:<id>:in and to watch for the worker's turn-accepted ack. Injectable for
+        # tests; None → built lazily from settings.redis_url (unreachable redis fails soft into the
+        # legacy spawn-only path — a dispatch never dies on the warm seam; retried after 60s).
+        self._warm_stream = warm_stream
+        self._warm_retry_at = 0.0
         # Lane A: the derived memberships index (users.data.memberships[]). Used to resolve, per dispatch,
         # the SHARED workspaces the subject is a member of so they enter the mount set. None → no shared
         # mounts (the private stack still dispatches exactly as before).
@@ -408,9 +420,126 @@ class Dispatcher:
                                identity["subject"])
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
                              model_config=model_config)
+        # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
+        # workload that is still starting/running (ADR-0027) — it returns the live status and
+        # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the
+        # thread's worker is alive (mid-turn, or parked in its serve() idle window) used to
+        # dispatch NOWHERE: the UI hung on "Starting agent" until the worker idled out. Fix:
+        # pre-deliver every message-trigger prompt to unit:<id>:in BEFORE the spawn call —
+        #   · worker WARM  → create touches; the parked serve() loop consumes the message (no
+        #     container / CLI cold start — this is also the fast path);
+        #   · worker GONE  → create really spawns; the fresh worker anchors its in-topic read at
+        #     the boot tail, SKIPS the pre-delivered copy, and runs the same prompt as its
+        #     entrypoint (no double turn).
+        # A watchdog then waits for the worker's turn-accepted ack and respawns once if the worker
+        # exited in the XADD↔idle-exit race window without taking the message.
+        delivery = self._predeliver(uid, invocation) if invocation["trigger"] == "message" else None
         acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
+        if delivery is not None:
+            self._watch_delivery(uid, env, tail=delivery)
         logger.info(
-            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s",
-            acked, invocation["trigger"], identity["subject"], identity["launcher"],
+            "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s",
+            acked, invocation["trigger"], identity["subject"], identity["launcher"], delivery is not None,
         )
         return acked
+
+    # ── warm delivery (message triggers) ─────────────────────────────────────
+
+    _ACK_DEADLINE_SEC = 10.0   # worker boot is ~1-2s; a warm pickup acks in ms
+    _ACK_POLL_SEC = 0.5
+
+    def _redis(self):
+        """The warm-delivery redis client — lazy, fail-soft (None = warm path off this dispatch),
+        retried a minute after a failure so a transient redis blip doesn't disable warm delivery
+        until restart."""
+        if self._warm_stream is not None:
+            return self._warm_stream
+        if time.monotonic() < self._warm_retry_at:
+            return None
+        try:
+            import redis
+
+            self._warm_stream = redis.from_url(
+                self._settings.redis_url, decode_responses=True,
+                socket_connect_timeout=0.5, socket_timeout=2,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("warm-delivery redis client unavailable — dispatching spawn-only")
+            self._warm_retry_at = time.monotonic() + 60.0
+            return None
+        return self._warm_stream
+
+    def _warm_fail(self) -> None:
+        """An op on the warm client failed — drop it and back off (the spawn path still dispatched)."""
+        self._warm_stream = None
+        self._warm_retry_at = time.monotonic() + 60.0
+
+    def _predeliver(self, uid: str, invocation: dict) -> Optional[str]:
+        """XADD the message's prompt to ``unit:<uid>:in`` with a matching nonce; returns the
+        out-stream TAIL id the watchdog reads the ack from (None = warm path unavailable)."""
+        prompt = ((invocation.get("start") or {}).get("entrypoint") or {}).get("inline")
+        if not prompt:
+            return None  # session-only starts have no inline prompt to deliver
+        r = self._redis()
+        if r is None:
+            return None
+        nonce = f"{uid}:{time.time_ns()}"
+        try:
+            entries = r.xrevrange(output_topic(uid), count=1)
+            tail = entries[0][0] if entries else "0-0"
+            r.xadd(input_topic(uid), {"turn": json.dumps({"type": "message", "prompt": prompt, "nonce": nonce})})
+        except Exception:  # noqa: BLE001 — warm delivery must never break a dispatch
+            logger.warning("warm pre-delivery failed for unit=%s — relying on the spawn path", uid)
+            self._warm_fail()
+            return None
+        return tail
+
+    def _workload_gone(self, uid: str) -> bool:
+        """True when the runtime says the workload is NOT alive. Errors read as gone: a respawn on
+        uncertainty is SAFE — the runtime's create is a touch for a live workload, never a kill."""
+        try:
+            return self._runtime.await_done(uid, timeout_sec=0.0) not in ("starting", "running")
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _watch_delivery(self, uid: str, env: dict[str, str], *, tail: str) -> None:
+        """Background ack watchdog: a ``turn-accepted`` event after ``tail`` proves the unit took a
+        turn (ours warm, or the cold entrypoint running the same prompt). None + worker gone = the
+        idle-exit race ate the message → respawn ONCE (the fresh worker's entrypoint re-runs the
+        prompt; the stale in-topic copy is behind its boot anchor). None + worker alive = the
+        message is queued behind a long-running turn — leave it be, log at deadline."""
+        def watch() -> None:
+            deadline = time.monotonic() + self._ACK_DEADLINE_SEC
+            cursor = tail
+            respawned = False
+            while time.monotonic() < deadline:
+                time.sleep(self._ACK_POLL_SEC)
+                r = self._redis()
+                if r is None:
+                    return
+                try:
+                    entries = r.xrange(output_topic(uid), f"({cursor}", "+", count=200)
+                except Exception:  # noqa: BLE001
+                    self._warm_fail()
+                    return
+                for entry_id, fields in entries:
+                    cursor = entry_id
+                    try:
+                        ev = json.loads(fields.get("event", "{}"))
+                    except (TypeError, ValueError):
+                        continue
+                    if ev.get("type") == "turn-accepted":
+                        return  # the turn is running
+                if not respawned and self._workload_gone(uid):
+                    logger.warning("warm delivery missed for unit=%s (worker exited) — respawning", uid)
+                    try:
+                        self._runtime.spawn(uid, self._settings.agent_profile, env)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("delivery-watchdog respawn failed for unit=%s", uid)
+                        return
+                    respawned = True
+            if not respawned:
+                logger.warning("no turn-accepted within %.0fs for unit=%s — turn queued behind a long "
+                               "turn, or lost to a concurrent boot", self._ACK_DEADLINE_SEC, uid)
+
+        threading.Thread(target=watch, daemon=True, name=f"warm-watch-{uid}").start()

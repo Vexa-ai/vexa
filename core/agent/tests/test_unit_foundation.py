@@ -397,3 +397,97 @@ def test_dispatcher_model_config_failure_dispatches_on_env_defaults():
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_AGENT_MODEL"] == "deployment-default"
+
+
+# ── warm delivery (the lost-turn fix): message prompts pre-deliver to unit:in ─────────────────────
+
+class _WarmFake:
+    """A minimal in-memory redis facade for the Dispatcher's warm-delivery seam."""
+
+    def __init__(self):
+        self.streams: dict[str, list] = {}
+        self._seq = 0
+
+    def xadd(self, name, fields):
+        self._seq += 1
+        eid = f"{self._seq}-0"
+        self.streams.setdefault(name, []).append((eid, fields))
+        return eid
+
+    def xrevrange(self, name, count=1):
+        return list(reversed(self.streams.get(name, [])))[:count]
+
+    def xrange(self, name, start, end, count=200):
+        entries = self.streams.get(name, [])
+        if start.startswith("("):  # exclusive start id
+            floor = int(start[1:].split("-")[0])
+            return [e for e in entries if int(e[0].split("-")[0]) > floor][:count]
+        return entries[:count]
+
+
+def _in_topic_msgs(warm, wid):
+    return [json.loads(f["turn"]) for _id, f in warm.streams.get(f"unit:{wid}:in", [])]
+
+
+def test_message_dispatch_predelivers_prompt_to_the_in_topic():
+    """The runtime's create is a TOUCH for a live workload (env discarded) — the prompt must ride
+    the in topic so a warm worker's serve() loop takes the turn instead of it dispatching nowhere."""
+    rt = _FakeRuntime()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), warm_stream=_WarmFake())
+    wid = d.dispatch(VALID_INV)
+    assert rt.spawned  # the spawn/touch still fires
+    msgs = _in_topic_msgs(d._warm_stream, wid)
+    assert len(msgs) == 1
+    assert msgs[0]["type"] == "message" and msgs[0]["prompt"] == "hi" and msgs[0]["nonce"]
+
+
+def test_non_message_triggers_do_not_predeliver():
+    rt = _FakeRuntime()
+    warm = _WarmFake()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), warm_stream=warm)
+    inv = {**VALID_INV, "trigger": "scheduled", "identity": {"subject": "u_jane", "launcher": "schedule:r1"}}
+    d.dispatch(inv)
+    assert warm.streams == {}  # nothing on any in topic
+
+
+def test_watchdog_respawns_once_when_the_worker_exited_without_taking_the_message(monkeypatch):
+    """The idle-exit race: XADD landed after the worker's final read; the touch saw it still
+    running. No turn-accepted + workload gone ⇒ respawn (the fresh worker's entrypoint re-runs
+    the prompt; the stale in-topic copy is behind its boot anchor)."""
+    import time as _time
+
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_DEADLINE_SEC", 0.6)
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_POLL_SEC", 0.05)
+    rt = _FakeRuntime()  # await_done returns "completed" → workload gone
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), warm_stream=_WarmFake())
+    d.dispatch(VALID_INV)
+    deadline = _time.monotonic() + 3.0
+    while len(rt.spawned) < 2 and _time.monotonic() < deadline:
+        _time.sleep(0.02)
+    assert len(rt.spawned) == 2  # exactly one respawn
+    _time.sleep(0.2)
+    assert len(rt.spawned) == 2  # …and never more
+
+
+def test_watchdog_stays_quiet_when_the_worker_acks(monkeypatch):
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_DEADLINE_SEC", 0.6)
+    monkeypatch.setattr(dispatch.Dispatcher, "_ACK_POLL_SEC", 0.05)
+    import time as _time
+
+    rt = _FakeRuntime()
+    warm = _WarmFake()
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), warm_stream=warm)
+    wid = d.dispatch(VALID_INV)
+    # the (warm) worker picks the message up and acks
+    warm.xadd(f"unit:{wid}:out", {"event": json.dumps({"type": "turn-accepted", "turn_id": "t3"})})
+    _time.sleep(0.8)
+    assert len(rt.spawned) == 1  # no respawn
+
+
+def test_message_dispatch_stamps_the_chat_idle_window():
+    rt = _FakeRuntime()
+    settings = load_settings()
+    d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), warm_stream=_WarmFake())
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(settings.chat_idle_timeout_sec)

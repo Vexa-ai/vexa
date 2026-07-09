@@ -47,13 +47,15 @@ def test_entrypoint_then_interactive_then_idle():
     serve(s, out_topic="unit:u:out", in_topic="unit:u:in", turn=_turn,
           start={"entrypoint": {"inline": "hello"}}, idle_ms=10)
     evs = s.events()
-    # t0 (entrypoint "hello"): delta, commit, turn-complete
-    assert evs[0] == {"type": "message-delta", "text": "re:hello", "turn_id": "t0"}
-    assert evs[1]["type"] == "commit" and evs[1]["turn_id"] == "t0"
-    assert evs[2] == {"type": "turn-complete", "turn_id": "t0"}
+    # t0 (entrypoint "hello"): accepted, delta, commit, turn-complete
+    assert evs[0] == {"type": "turn-accepted", "turn_id": "t0"}
+    assert evs[1] == {"type": "message-delta", "text": "re:hello", "turn_id": "t0"}
+    assert evs[2]["type"] == "commit" and evs[2]["turn_id"] == "t0"
+    assert evs[3] == {"type": "turn-complete", "turn_id": "t0"}
     # t1 (interactive "again")
-    assert evs[3] == {"type": "message-delta", "text": "re:again", "turn_id": "t1"}
-    assert evs[5] == {"type": "turn-complete", "turn_id": "t1"}
+    assert evs[4] == {"type": "turn-accepted", "turn_id": "t1"}
+    assert evs[5] == {"type": "message-delta", "text": "re:again", "turn_id": "t1"}
+    assert evs[7] == {"type": "turn-complete", "turn_id": "t1"}
     assert all(t == "unit:u:out" for t, _ in s.out)
 
 
@@ -62,14 +64,85 @@ def test_session_start_serves_inbox_without_entrypoint_turn():
     serve(s, out_topic="o", in_topic="i", turn=_turn,
           start={"session": {"ref": ".claude/.session"}}, idle_ms=10)
     evs = s.events()
-    # no t0 — the first event is the interactive turn t1
-    assert evs[0]["turn_id"] == "t1"
+    # no t0 — the first event is the interactive turn t1's liveness ack
+    assert evs[0]["turn_id"] == "t1" and evs[0]["type"] == "turn-accepted"
 
 
 def test_stop_message_exits_immediately():
     s = FakeStream(inbox=[("1-0", {"turn": json.dumps({"type": "stop"})}), _msg("2-0", "never")])
     serve(s, out_topic="o", in_topic="i", turn=_turn, start={}, idle_ms=10)
     assert s.out == []  # stop before any turn ran
+
+
+def test_interactive_turn_ack_echoes_the_delivery_nonce():
+    s = FakeStream(inbox=[("1-0", {"turn": json.dumps({"prompt": "warm", "nonce": "n-42"})})])
+    serve(s, out_topic="o", in_topic="i", turn=_turn, start={}, idle_ms=10)
+    evs = s.events()
+    assert evs[0] == {"type": "turn-accepted", "turn_id": "t1", "nonce": "n-42"}
+
+
+class CursorStream:
+    """A fake honoring in-topic CURSOR semantics (ids compare as redis stream ids), so the boot
+    tail-capture behavior is provable: entries already in the stream at boot are skipped; entries
+    appended later (even during the entrypoint turn) are consumed."""
+
+    def __init__(self, preloaded=None):
+        self.out = []
+        self.entries = list(preloaded or [])  # [(id, fields)] id-ordered
+
+    @staticmethod
+    def _key(eid):
+        ms, _, seq = eid.partition("-")
+        return (int(ms), int(seq or 0))
+
+    def xadd(self, name, fields):
+        self.out.append((name, fields))
+        return str(len(self.out))
+
+    def xrevrange(self, name, count=1):
+        return list(reversed(self.entries))[:count]
+
+    def xread(self, streams, count=1, block=None):
+        topic, last = next(iter(streams.items()))
+        if last == "$":
+            return []  # nothing arrives "later" in a fake
+        pending = [e for e in self.entries if self._key(e[0]) > self._key(last)]
+        if not pending:
+            return []
+        return [(topic, [pending[0]])]
+
+    def events(self):
+        return [json.loads(f["event"]) for _t, f in self.out]
+
+
+def test_boot_tail_capture_skips_the_predelivered_copy():
+    # The dispatcher XADDs the message to unit:in BEFORE spawning (warm delivery). On a COLD spawn
+    # the same prompt arrives as the entrypoint — the pre-delivered copy must be SKIPPED, not
+    # replayed as a second turn.
+    s = CursorStream(preloaded=[("5-0", {"turn": json.dumps({"prompt": "hello", "nonce": "n1"})})])
+    serve(s, out_topic="o", in_topic="i", turn=_turn, start={"entrypoint": {"inline": "hello"}}, idle_ms=10)
+    evs = s.events()
+    assert [e["turn_id"] for e in evs] == ["t0", "t0", "t0", "t0"]  # exactly ONE turn ran
+    assert evs[1]["text"] == "re:hello"
+
+
+def test_message_landing_during_the_entrypoint_turn_is_consumed_not_lost():
+    # Before the tail-capture fix serve() read from "$" AFTER the entrypoint turn — a message that
+    # arrived while t0 ran was invisible forever (the lost-turn hang).
+    s = CursorStream(preloaded=[("5-0", {"turn": json.dumps({"prompt": "hello"})})])
+
+    def turn_with_midturn_arrival(prompt):
+        if prompt == "hello":  # t0: a follow-up lands while this turn is still running
+            s.entries.append(("6-0", {"turn": json.dumps({"prompt": "follow-up", "nonce": "n2"})}))
+        yield {"type": "message-delta", "text": f"re:{prompt}"}
+
+    serve(s, out_topic="o", in_topic="i", turn=turn_with_midturn_arrival,
+          start={"entrypoint": {"inline": "hello"}}, idle_ms=10)
+    evs = s.events()
+    texts = [e.get("text") for e in evs if e["type"] == "message-delta"]
+    assert texts == ["re:hello", "re:follow-up"]
+    accepted = [e for e in evs if e["type"] == "turn-accepted"]
+    assert accepted[1]["nonce"] == "n2"
 
 
 # ── meeting mode: consume transcript Stream → gate → emit cards ───────────────────────────────────

@@ -307,3 +307,29 @@ describe("streamChatTurn — turn nonce & keepalives (the 'Reconnecting' hang fi
     expect(result.terminal).toBe(true);
   });
 });
+
+describe("streamChatTurn — turn-accepted liveness ack", () => {
+  it("flips the phase to working on turn-accepted, before any model output", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "turn-accepted", turn_id: "t1" }, "4-0"),
+      ev({ type: "message-delta", text: "hello" }, "5-0"),
+      ev({ type: "turn-complete" }, "6-0"),
+    ]));
+    const { state, cb } = recorder();
+    const statuses: (string | null)[] = [];
+    cb.onStatus = (p) => statuses.push(p);
+
+    const result = await streamChatTurn(
+      { prompt: "hi", session: "s1", active: undefined },
+      cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
+    );
+
+    expect(statuses[0]).toBe("connecting");
+    expect(statuses).toContain("working");           // the ack flipped the phase
+    expect(statuses.indexOf("working")).toBeLessThan(statuses.length); // before the final null clear
+    expect(state.text).toBe("hello");
+    expect(result.sawVisibleOutput).toBe(true);
+    expect(result.terminal).toBe(true);
+  });
+});

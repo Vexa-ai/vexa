@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     llm_model: str = ""         # deployment-default model (free string)
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
     meeting_idle_timeout_sec: int = Field(default=4 * 60 * 60, ge=60)
+    # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
+    # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
+    # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.
+    chat_idle_timeout_sec: int = Field(default=900, ge=30)
 
     # ── MVP3 toolbelt — tool.v1 descriptors + MCP launch specs (the generic tool mechanism) ──
     # A unit's unit.v1.tools names resolve against this dir into --allowedTools + an .mcp.json.

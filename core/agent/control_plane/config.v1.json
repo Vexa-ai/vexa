@@ -191,6 +191,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_CHAT_IDLE_TIMEOUT_SEC",
+      "class": "defaulted",
+      "default": "900",
+      "description": "chat worker warm-serve window after its last turn (s) — a follow-up inside it lands on the warm worker",
+      "targets": []
+    },
+    {
       "key": "VEXA_TOOLS_SEED_DIR",
       "class": "defaulted",
       "default": "/app/tools-seed",

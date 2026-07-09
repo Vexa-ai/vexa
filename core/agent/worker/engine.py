@@ -205,6 +205,9 @@ class _Stream(Protocol):
 
     def xadd(self, name: str, fields: dict) -> str: ...
     def xread(self, streams: dict, count: int = 1, block: int | None = None) -> list: ...
+    # xrevrange is OPTIONAL (serve() falls back to "$" when the stream object lacks it — older fakes):
+    # it anchors the in-topic read at the boot-time tail so a message XADDed while the entrypoint turn
+    # runs is consumed after it instead of lost ("$" only sees entries added after the first xread).
 
 
 # ── the agent turn over the mounted workspace (drives the llm HarnessPort) ────────────────────────
@@ -360,17 +363,42 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
     ``turn-complete`` marker. An empty blocking read (idle) returns — the process exits and the
     container is reaped (TTL-on-idle). A ``{"type":"stop"}`` message exits immediately.
+
+    Every turn opens with a ``turn-accepted`` event — the worker's LIVENESS ACK. It flips the UI
+    off "Starting agent" the moment the turn is picked up (long before the first model token) and
+    is the evidence the dispatcher's warm-delivery watchdog waits on: no accepted event = the
+    message was NOT taken (worker exited in the race window) → the dispatcher respawns. A warm
+    in-topic message carries a ``nonce`` the ack echoes so the watchdog can match ITS delivery.
     """
-    def run_message(prompt: str, turn_id: str) -> None:
+    def run_message(prompt: str, turn_id: str, nonce: str | None = None) -> None:
+        ack: dict = {"type": "turn-accepted", "turn_id": turn_id}
+        if nonce:
+            ack["nonce"] = nonce
+        stream.xadd(out_topic, {"event": json.dumps(ack)})
         for ev in turn(prompt):
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
         stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": turn_id})})
+
+    # Anchor the in-topic cursor at the BOOT-TIME tail, before the entrypoint turn runs. The
+    # dispatcher pre-delivers each chat message to the in topic BEFORE asking the runtime to spawn
+    # (warm delivery): on a COLD spawn that same prompt arrives as the entrypoint, so everything
+    # already in the stream at boot must be SKIPPED (no double turn) — while a message that lands
+    # DURING the entrypoint turn (previously invisible to a "$" read, a lost turn) is consumed
+    # right after it. Streams without history anchor at 0-0; a stream object without xrevrange
+    # (older test fakes) keeps the legacy "$" behavior.
+    last = "$"
+    xrevrange = getattr(stream, "xrevrange", None)
+    if xrevrange is not None:
+        try:
+            tail = xrevrange(in_topic, count=1)
+            last = tail[0][0] if tail else "0-0"
+        except Exception:  # noqa: BLE001 — tail anchoring is an upgrade, never a boot blocker
+            last = "$"
 
     first = start_prompt(start)
     if first:
         run_message(first, "t0")
 
-    last = "$"
     n = 0
     while True:
         resp = stream.xread({in_topic: last}, count=1, block=idle_ms)
@@ -383,7 +411,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 if msg.get("type") == "stop":
                     return
                 n += 1
-                run_message(msg.get("prompt", ""), f"t{n}")
+                run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"))
 
 
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())
