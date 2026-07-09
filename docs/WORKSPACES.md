@@ -40,6 +40,25 @@ Every agent turn mounts an ordered set `[_global?, *normal, _system]`:
   `system_mount`, `system_store_path`), the mount stack in `dispatch.py`, binds in
   `core/runtime/src/runtime_kernel/mounts.py:workspace_binds`.
 
+## Tenant isolation — enforced by the substrate (✅ all three backends)
+
+The mount set is not just a declaration to the model — it is **the enforced boundary**. A worker's
+filesystem physically contains ONLY its dispatch's declared mounts; another tenant's workspace is
+not reachable, so a prompt injection cannot read or write it. Read-only roles (viewer shares,
+`_global`) are enforced at the mount, not just at the commit token.
+
+| Backend | Mechanism |
+|---|---|
+| **docker** | One bind per mount: a named-volume store rides the Mounts API's `VolumeOptions.Subpath` (**requires engine ≥ v26** — older engines fail the container create loudly); a host-path store joins the subpath (no version requirement). The whole-store root bind is never emitted. |
+| **k8s** | One `volumeMount` per mount against the single store PVC — native `subPath` + `readOnly` (no version caveat). |
+| **lite (process)** | POSIX: workers drop to a **per-subject uid** (`100000+id`), private/system tiers are `0700`-owned, each shared workspace gets its own **gid** (persisted registry, joined as a supplementary group), per-subject `HOME`/`TMPDIR`, and a **default-deny sweep** seals never-dispatched tenants' dirs on every apply. Unavailable conditions (non-root runtime, non-numeric subject) degrade **loudly** to shared-trust. |
+
+There is **no opt-out knob** — strict is the only mode. Known lite limitation: within a shared
+workspace, viewer-vs-contributor *write* gating stays at the commit layer (a POSIX group can't
+split read from write per member without ACLs); cross-tenant isolation is fully kernel-enforced.
+Code: `runtime_kernel/mounts.py` (`workspace_binds`, `k8s_volume_mounts`),
+`runtime_kernel/isolation.py` (the POSIX plan/apply), tests `test_mounts.py` + `test_isolation.py`.
+
 ## Personal + normal workspaces
 
 - **Personal is just a normal workspace** — no special rank. It's the workspace **auto-seeded at

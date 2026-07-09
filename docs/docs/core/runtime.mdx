@@ -14,6 +14,13 @@ An agent is an untrusted, tool-using process operating on sensitive data. So eve
 **only the workspaces and tools it was granted**. Isolation is what makes the governance real rather than
 advisory — which is why agents never run in the control plane.
 
+The workspace grant is **enforced by the substrate**, not by instructions to the model: docker binds one
+volume subpath per granted mount (read-only roles bind `:ro`; requires engine ≥ v26 for named-volume
+stores); Kubernetes emits one `subPath` + `readOnly` volumeMount per mount against the store PVC; the
+lite process backend drops each worker to a **per-subject uid** with `0700` private tiers and
+per-shared-workspace groups. Another tenant's workspace isn't merely off-limits — it is **not in the
+worker's filesystem at all**, so even a prompt-injected agent cannot read or write it.
+
 ## One lifecycle, one substrate
 
 - **TTL-on-idle** — a container lives while it works and is reaped when idle. No warm/oneshot
@@ -55,14 +62,14 @@ deliberate:
   running; `Succeeded` → exit 0; `Failed` → the container's terminated exit code), which the kernel turns
   into the terminal state `stopped` with reason `completed` (exit 0) or `failed` (nonzero).
 
-<Note>**Current state (open core):** the Kubernetes backend implements the *lifecycle* — it spawns,
-observes, and stops the Pod — but not yet the **workspace mount** or **credential brokering** the Docker
-backend does (bind-mounting the [workspace](/concepts#workspace) at `/workspace` and injecting brokered
-model credentials as env, never in the dispatch envelope). The in-cluster substrate it would run under —
-a ServiceAccount + RBAC to create Pods, and a volume for the workspace — is intended to ship as a Helm
-chart and is **not in this open-core tree**. The shipped, self-hostable path is **Docker Compose** — see
-[Deployment](/deployment). Code: `core/runtime/src/runtime_kernel/k8s_backend.py` (lifecycle) vs
-`core/runtime/src/runtime_kernel/docker_backend.py` (the reference mount + credential path).</Note>
+<Note>**Current state (open core):** the Kubernetes backend implements the lifecycle **and the
+workspace mount** — worker Pods get one `subPath` + `readOnly` volumeMount per granted workspace
+against the store PVC (the same per-mount isolation the Docker backend enforces with volume-subpath
+binds). The in-cluster substrate — ServiceAccount + RBAC to create Pods, the store PVC — ships as the
+**Helm chart** in `deploy/helm`. The simplest self-hosted paths remain **Docker Compose** (`make all`)
+and the one-container **lite** (`make lite`) — see [Deployment](/deployment). Code:
+`core/runtime/src/runtime_kernel/k8s_backend.py` + `mounts.py:k8s_volume_mounts` (Pod spec) vs
+`docker_backend.py` (the reference bind + credential path).</Note>
 
 ## Already in production
 

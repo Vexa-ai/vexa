@@ -150,7 +150,9 @@ sandboxed, orchestration-agnostic** execution layer safe to point at real busine
 same engine already proven in production spawning Vexa's meeting bots.
 
 - **Isolated & sandboxed.** Every dispatch runs in its own container — **no egress except through brokered
-  tools**, scoped to only the workspaces and tools it was granted. Isolation is what makes governance real
+  tools**, scoped to only the workspaces and tools it was granted — the granted set is **enforced by the
+  substrate** (per-mount binds on docker/k8s, per-subject uid on lite): another tenant's workspace is not
+  in the worker's filesystem at all. Isolation is what makes governance real
   rather than advisory, which is why **agents never run in the control plane**.
 - **Ephemeral & cheap.** TTL-on-idle: a container lives while it works and is reaped when idle; continuity
   is a session file in the workspace, so nothing stays warm. Sub-second to start, **thousands in parallel**.
@@ -162,7 +164,7 @@ same engine already proven in production spawning Vexa's meeting bots.
 |---|---|---|
 | **`docker`** (default) | its own container via the Docker socket — brought up with `make all` | ✅ Shipped (open core) |
 | **`process`** | a child process, no Docker socket required | ✅ Available |
-| **`k8s`** | a bare **Pod** (`kubectl run --restart=Never`), scheduled across a cluster | 🟡 Lifecycle implemented; workspace-mount + Helm chart landing |
+| **`k8s`** | a bare **Pod** (`kubectl run --restart=Never`), scheduled across a cluster | ✅ Lifecycle + per-mount workspace isolation; Helm chart in `deploy/helm` |
 
 Same control plane, same `unit.v1` dispatch, same worker — only *how* the container is created changes.
 That's what lets Vexa scale from one laptop to a Kubernetes/OpenShift cluster **inside your walls**,
@@ -202,8 +204,8 @@ starts, and agents prepare before it and process after it.
 > **Status (honest):** meeting capture, transcription, and speaker attribution are **production**. The
 > agent dispatch core — an agent in an isolated container over your workspace, streaming its output, with
 > durable chat memory — is **built and proven live** (verified end-to-end on Docker and in the Terminal).
-> The bucket-backed workspace store, live-meeting copilot, scheduled auto-join, and the Kubernetes
-> workspace-mount are **on the 0.12 roadmap** — see [Status](#-status--roadmap).
+> The bucket-backed workspace store and live-meeting copilot are **on the 0.12 roadmap** — see
+> [Status](#-status--roadmap).
 
 ---
 
@@ -448,7 +450,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 | **Runtime — Docker backend** (container per workload) | ✅ Production |
 | **Agent chat / routines / events over your workspace** | ✅ Built & proven live |
 | Workspace — git Markdown / OKF `kg/` bundle | 🟡 core proven; bucket-backed store landing |
-| **Runtime — Kubernetes backend** (Pod per dispatch) | 🟡 Lifecycle done; mount + Helm landing |
+| **Runtime — Kubernetes backend** (Pod per dispatch) | ✅ Lifecycle + per-mount isolation; Helm in `deploy/helm` |
 | Live-meeting copilot (cards as the call runs) | 🔵 Next |
 | Calendar sync (ICS) · planned meetings · scheduled auto-join | ✅ Production |
 | Shared workspaces & shared meetings (invites, real-time feed) | ✅ Built & proven live |

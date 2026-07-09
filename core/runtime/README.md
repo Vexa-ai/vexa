@@ -36,6 +36,11 @@ uv run pytest -q
 
 ## Status
 - ✅ delivered — `runtime.v1` lifecycle over process / Docker / K8s backends, with quotas (O-RT-2)
+- ✅ delivered — **workspace tenant isolation, enforced by the substrate on all three backends**
+  (`mounts.py` + `isolation.py`): docker = one volume-subpath bind per granted mount (engine ≥ v26 for
+  named-volume stores; `:ro` roles enforced); k8s = per-mount `subPath`+`readOnly` volumeMounts; process
+  (lite) = per-subject uid + per-shared-workspace gids, 0700 tiers, default-deny sweep. A worker's
+  filesystem contains ONLY its dispatch's mounts; no opt-out.
 - ✅ delivered — durable `RuntimeEvent` callback delivery (enqueue + retry-until-ack)
 - ✅ delivered — store port (InMemory / Redis) so workloads survive a process restart
 - ✅ delivered — `schedule.v1` Scheduler: `scheduler:jobs` sorted set, `tick()` every 5s, HTTP dispatch, exponential-backoff retry, cron re-arm, idempotency, orphan recovery

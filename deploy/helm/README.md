@@ -59,11 +59,12 @@ Docker to build the images. It proves the control plane stands up and `/health` 
 
 ## Known boundaries (v0.12)
 
-- **Bot spawn** works on k8s (the bot's config arrives as one env var). **Agent-worker** dispatch
-  needs the shared `/workspaces` store mounted into the spawned worker Pod — the current
-  `K8sBackend` does `kubectl run` with env + command but no volume mounts, and k3s `local-path` is
-  RWO-only. Full agent dispatch on k8s is a follow-up: extend `K8sBackend` with volume mounts and
-  use an RWX storage class (NFS/Longhorn), then set `agentApi.workspaces.accessMode: ReadWriteMany`.
+- **Bot spawn** works on k8s (the bot's config arrives as one env var). **Agent-worker** Pods mount
+  the workspace store with **per-mount tenant isolation**: one `subPath` + `readOnly` volumeMount per
+  granted workspace against the store PVC (`runtime_kernel/mounts.py:k8s_volume_mounts`) — a worker's
+  filesystem contains only its dispatch's workspaces. Multi-node clusters need an **RWX** storage
+  class for the store PVC (NFS/Longhorn; k3s `local-path` is RWO-only — single node works), with
+  `agentApi.workspaces.accessMode: ReadWriteMany`.
 - The `runtime` image bundles `kubectl` for the k8s backend; the docker/process backends ignore it.
 
 ## Contracts
