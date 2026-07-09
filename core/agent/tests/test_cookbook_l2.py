@@ -39,6 +39,13 @@ from vexa_slim.client import Slim                             # noqa: E402
 pytestmark = pytest.mark.asyncio   # core/agent runs asyncio in strict mode — mark this module's tests
 
 
+@pytest.fixture(autouse=True)
+def _model_creds_configured(monkeypatch):
+    """The cookbook's chat verb crosses /api/chat's credential preflight (live-env oracle) — pin a
+    credential so this module dispatches deterministically on any machine (same as test_api.py)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-model-credential")
+
+
 class _FakeRuntime:
     def spawn(self, workload_id, profile, env): return workload_id
     def await_done(self, workload_id, timeout_sec=0.0): return "completed"

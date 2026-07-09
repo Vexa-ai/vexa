@@ -5,11 +5,29 @@ spawns a now-dispatch and streams its Stream back as SSE; chat is an honest 501 
 """
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from control_plane.api import create_app
 from shared.config import load_settings
 from control_plane.dispatch import Dispatcher
+
+_MODEL_CRED_KEYS = ("HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                    "CLAUDE_CODE_OAUTH_TOKEN", "VEXA_LLM_API_KEY")
+
+
+@pytest.fixture(autouse=True)
+def _model_creds_configured(monkeypatch):
+    """/api/chat now runs a credential preflight (config.v1 ``model_inference``, read from the LIVE
+    env) before dispatching. Pin one credential so every chat test in this module dispatches
+    deterministically on any machine; the preflight tests below delenv these explicitly."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-model-credential")
+
+
+def _clear_model_creds(monkeypatch):
+    for k in _MODEL_CRED_KEYS:
+        monkeypatch.delenv(k, raising=False)
+
 
 VALID_INV = {
     "identity": {"subject": "u_jane", "launcher": "user:u_jane"},
@@ -119,6 +137,82 @@ def test_chat_streams_sse_and_records_session():
     sessions = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
     assert any(s["session"] == "s1" for s in sessions)
     assert r.headers["X-Unit-Id"] == "agent-u_jane-chat-s1"  # the per-thread warm unit id
+
+
+# ── chat credential preflight (config.v1 model_inference) ────────────────────────────────────────
+
+class _FakeModelConfig:
+    """Settings → Models resolver fake. ``cfg`` = the resolved dict; an Exception instance raises."""
+    def __init__(self, cfg):
+        self._cfg = cfg
+
+    def resolve(self, subject):
+        if isinstance(self._cfg, Exception):
+            raise self._cfg
+        return self._cfg
+
+
+def _preflight_client(model_config=None):
+    runtime = _FakeRuntime()
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), runtime, _FakeIdentity(), model_config=model_config),
+        stream_reader=_FakeReader(),
+    ))
+    return c, runtime
+
+
+def test_chat_refuses_cleanly_without_model_credentials(monkeypatch):
+    """No deployment credential + no per-user config → the turn is refused BEFORE any worker spawn,
+    with an actionable ``error`` frame (never the claude CLI's own "Not logged in · Please run /login")."""
+    _clear_model_creds(monkeypatch)
+    c, runtime = _preflight_client()
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    assert '"error"' in r.text and '"turn-complete"' in r.text
+    for key in _MODEL_CRED_KEYS:
+        assert key in r.text                       # the frame names exactly what to set
+    assert "Settings" in r.text
+    assert "Not logged in" not in r.text
+    assert runtime.spawned == []                   # refused upstream — no container, no cold start
+    sessions = c.get("/api/sessions", params={"subject": "u_jane"}).json()["sessions"]
+    assert sessions == []                          # no ghost thread in the durable index
+
+
+def test_chat_preflight_passes_with_env_credential(monkeypatch):
+    _clear_model_creds(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    c, runtime = _preflight_client()
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    assert '"message-delta"' in r.text             # the fake reader's frames — the turn dispatched
+    assert len(runtime.spawned) == 1
+
+
+def test_chat_preflight_honors_user_custom_model_config(monkeypatch):
+    """A per-user Settings → Models custom endpoint is a real credential path — the gate must let it
+    dispatch even with the deployment env empty. But ``custom`` WITHOUT a base_url is inert (the
+    overlay stamps nothing) — that one is refused."""
+    _clear_model_creds(monkeypatch)
+    c, runtime = _preflight_client(
+        _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com", "api_key": "sk-x"}))
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200 and len(runtime.spawned) == 1
+
+    c2, runtime2 = _preflight_client(_FakeModelConfig({"mode": "custom", "base_url": ""}))
+    r2 = c2.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r2.status_code == 200 and '"error"' in r2.text
+    assert runtime2.spawned == []
+
+
+def test_chat_preflight_fails_open_when_model_config_lookup_errors(monkeypatch):
+    """A DOWN identity service must never block a turn (dispatch's own contract) — the resolver
+    raising means we can't prove the user lacks a credential, so the turn dispatches; the worker's
+    auth taxonomy still reports cleanly if it then fails."""
+    _clear_model_creds(monkeypatch)
+    c, runtime = _preflight_client(_FakeModelConfig(RuntimeError("admin-api down")))
+    r = c.post("/api/chat", json={"prompt": "hi", "subject": "u_jane", "session": "s1"})
+    assert r.status_code == 200
+    assert len(runtime.spawned) == 1
 
 
 def test_chat_subject_is_server_derived_from_header_not_client_body():

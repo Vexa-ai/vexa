@@ -80,6 +80,31 @@ def test_dispatcher_spawns_isolated_container_with_minted_token():
     assert env["VEXA_UNIT_OUT_TOPIC"] == f"unit:{wid}:out"
 
 
+def test_dispatcher_resolve_model_config_tristate():
+    """The public seam the chat credential preflight reads: ``{}`` = no resolver wired / resolved
+    empty; the dict passthrough; ``None`` = the lookup FAILED (callers fail OPEN)."""
+    settings = load_settings()
+
+    class _Resolver:
+        def __init__(self, cfg):
+            self._cfg = cfg
+
+        def resolve(self, subject):
+            if isinstance(self._cfg, Exception):
+                raise self._cfg
+            return self._cfg
+
+    assert dispatch.Dispatcher(settings, _FakeRuntime(), _FakeIdentity()).resolve_model_config("u") == {}
+    cfg = {"mode": "custom", "base_url": "https://gw.example.com"}
+    d = dispatch.Dispatcher(settings, _FakeRuntime(), _FakeIdentity(), model_config=_Resolver(cfg))
+    assert d.resolve_model_config("u") == cfg
+    d = dispatch.Dispatcher(settings, _FakeRuntime(), _FakeIdentity(), model_config=_Resolver(None))
+    assert d.resolve_model_config("u") == {}                     # resolved-empty normalizes to {}
+    d = dispatch.Dispatcher(settings, _FakeRuntime(), _FakeIdentity(),
+                            model_config=_Resolver(RuntimeError("admin-api down")))
+    assert d.resolve_model_config("u") is None
+
+
 def test_dispatcher_worker_env_carries_configured_model():
     settings = load_settings(agent_model="deepseek/deepseek-v4-pro")
     rt = _FakeRuntime()

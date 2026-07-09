@@ -387,6 +387,18 @@ class Dispatcher:
     def settings(self) -> Settings:
         return self._settings
 
+    def resolve_model_config(self, subject: str) -> Optional[dict]:
+        """The subject's effective Settings → Models config (user pref > platform setting).
+        ``{}`` = resolved empty / no resolver wired; ``None`` = the lookup FAILED — callers fail
+        OPEN (a down identity service must never block a turn, same contract as dispatch)."""
+        if self._model_config is None:
+            return {}
+        try:
+            return self._model_config.resolve(subject) or {}
+        except Exception:  # noqa: BLE001
+            logger.warning("model-config lookup failed for subject=%s — treating as env defaults", subject)
+            return None
+
     def dispatch(self, invocation: dict) -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
 
@@ -411,13 +423,10 @@ class Dispatcher:
                                identity["subject"])
         # Settings → Models: resolve the subject's effective model config (fail soft — a down
         # identity service must never block a turn; the deployment env defaults still dispatch).
-        model_config = None
-        if self._model_config is not None:
-            try:
-                model_config = self._model_config.resolve(identity["subject"])
-            except Exception:  # noqa: BLE001
-                logger.warning("model-config lookup failed for subject=%s — dispatching on env defaults",
-                               identity["subject"])
+        # NOTE: /api/chat gates message-triggers upstream (credential preflight) — this path stays
+        # ungated so async triggers (scheduled/event/transcription) never lose a dispatch; their
+        # credential-less failure mode is the clean rewritten done frame (llm/errors taxonomy).
+        model_config = self.resolve_model_config(identity["subject"])
         env = build_unit_env(self._settings, invocation, unit_id=uid, token=token, memberships=memberships,
                              model_config=model_config)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a

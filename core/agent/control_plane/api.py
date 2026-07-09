@@ -36,6 +36,7 @@ from pydantic import BaseModel
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import routines as routines_mod
+from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
 from shared import units
 from control_plane import workspace_routines as workspace_routines_mod
 from shared.agent_config import default_meeting_model, load_meeting_config
@@ -530,6 +531,23 @@ def _sse(events) -> Iterator[str]:
         ev, sid = item if isinstance(item, tuple) else (item, None)
         prefix = f"id: {sid}\n" if sid else ""
         yield f"{prefix}data: {json.dumps(ev)}\n\n"
+
+
+def _has_custom_model_endpoint(cfg: dict) -> bool:
+    """True iff a per-user Settings → Models config actually delivers a credential to the worker.
+    Mirrors overlay_model_config's inertness rule (dispatch.py): only ``mode=custom`` WITH a
+    ``base_url`` stamps auth env; ``api_key`` is optional (a keyless local gateway is legitimate)."""
+    return (cfg.get("mode") or "").strip() == "custom" and bool((cfg.get("base_url") or "").strip())
+
+
+def _model_creds_error_message() -> str:
+    keys = ", ".join(missing_capability_keys("model_inference"))
+    return (
+        "No model credentials are configured, so the agent cannot run. "
+        f"Set one of {keys} in the deployment environment "
+        "(deploy/compose/.env for the compose stack, then `make all`), "
+        "or add a custom endpoint under Settings → Models."
+    )
 
 
 MEETING_CHAT_TRANSCRIPT_SEGMENTS = 400  # bound the live transcript folded into a meeting-chat prompt
@@ -1214,7 +1232,24 @@ def create_app(
                 # a terminal event the worker wrote while the client was gone. NO second dispatch.
                 resume = retry_from
             else:
-                # Fresh turn. Snapshot the out-Stream tail BEFORE dispatching and attach the reader from
+                # Fresh turn — credential preflight FIRST (config.v1 ``model_inference``, the
+                # request-path oracle): with no deployment credential AND no per-user custom
+                # endpoint, the worker's claude CLI can only fail with its own "Not logged in ·
+                # Please run /login" — an adapter internal that means nothing to an API consumer.
+                # Refuse HERE with an actionable frame instead: no worker spawn, no ghost session
+                # entry. A FAILED config lookup (None) fails OPEN — a down identity service must
+                # never block a turn; the worker-side auth taxonomy still catches it cleanly.
+                if capability_state("model_inference") == NOT_CONFIGURED:
+                    cfg = dispatcher.resolve_model_config(subject)
+                    if cfg is not None and not _has_custom_model_endpoint(cfg):
+                        return StreamingResponse(
+                            _sse([{"type": "error", "message": _model_creds_error_message()},
+                                  {"type": "turn-complete"}]),
+                            media_type="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                     "X-Unit-Id": unit_id, "X-Chat-Session": session},
+                        )
+                # Snapshot the out-Stream tail BEFORE dispatching and attach the reader from
                 # it — attaching at ``$`` raced the worker (events written between dispatch and attach,
                 # or a whole turn that finished in the gap, were invisible: the 'Reconnecting' hang).
                 # The thread's Stream holds PRIOR turns too, so the snapshot (not stream start) is the
