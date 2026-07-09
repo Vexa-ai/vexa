@@ -4,7 +4,7 @@
  *  Participants) fold behind one "Manage workspace" toggle.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { ServicesProvider, createContainer, reg } from "../../platform";
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 import * as api from "../workspaceApi";
@@ -98,13 +98,17 @@ describe("WorkspaceManagePanel — own workspace with a GitHub home", () => {
     await waitFor(() => expect(api.pushWorkspace).toHaveBeenCalledWith({ slug: "acme-1234", token: "ghp_test" }));
   });
 
-  it("header Share enables sharing and pops the invite dialog", async () => {
+  it("header Share enables sharing and opens the invite MODAL (portaled — never lost below a long README)", async () => {
     vi.mocked(api.shareEnableWorkspace).mockResolvedValue({ workspace_id: "acme-ws-1" } as never);
+    vi.mocked(api.mintInvite).mockResolvedValue({ token: "tok123" } as never);
     renderPanel({ slug: "acme-1234", shared: false, name: "ACME deal" });
     await screen.findByText("ACME deal");
     fireEvent.click(screen.getByText("Share").closest("button")!);
     await waitFor(() => expect(api.shareEnableWorkspace).toHaveBeenCalledWith("acme-1234"));
-    expect(await screen.findByText("Create link")).toBeTruthy();  // invite dialog open in the unfolded section
+    const dialog = await screen.findByRole("dialog");                     // a real modal, not an inline row
+    fireEvent.click(within(dialog).getByText("Create link"));
+    await waitFor(() => expect(api.mintInvite).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: "acme-ws-1", mode: "open" })));
+    expect((within(dialog).getByDisplayValue(/invite=tok123/) as HTMLInputElement).value).toContain("tok123");  // copyable link minted in place
   });
 });
 

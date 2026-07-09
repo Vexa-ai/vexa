@@ -15,6 +15,7 @@ import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../work
 import { registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
+import { Modal } from "../ui-kit/Modal";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { DocMetaContext } from "../ui-kit/docLinks";
@@ -103,18 +104,30 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
   const [shareWsId, setShareWsId] = useState<string | null>(shared ? slug : null);
   useEffect(() => { setShareWsId(shared ? slug : null); }, [shared, slug]);
 
-  // README is the page; the deeper sections fold behind ONE quiet toggle. Share/meta/⋯ open the fold;
-  // inviteSignal tells Participants to pop its invite dialog (the Share button's whole point).
+  // README is the page; the deeper sections fold behind ONE quiet toggle (meta row / ⋯ open it).
   const [manage, setManage] = useState(false);
-  const [inviteSignal, setInviteSignal] = useState(0);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);  // header meta only — Participants keeps its own list
   useEffect(() => {
     if (!shareWsId) { setMembers([]); return; }
     void listWorkspaceMembers(shareWsId).then(setMembers).catch(() => setMembers([]));
   }, [shareWsId, manage]);
+  // The header's Share opens a MODAL (portaled — never lost below a long README): enable sharing on an
+  // own private workspace first, then mint an invite link / email invite right there.
+  const [invite, setInvite] = useState<{ mode: "link" | "email"; role: string; ttlDays: number; emails: string; link: string | null } | null>(null);
+  const [inviteWsId, setInviteWsId] = useState<string | null>(null);
   const doShare = () => run(async () => {
-    if (!shareWsId && !shared) { const { workspace_id } = await shareEnableWorkspace(slug); setShareWsId(workspace_id); loadCore(); }
-    setManage(true); setInviteSignal((n) => n + 1);
+    let wsId = shareWsId;
+    if (!wsId && !shared) { ({ workspace_id: wsId } = await shareEnableWorkspace(slug)); setShareWsId(wsId); loadCore(); }
+    if (!wsId) return;
+    setInviteWsId(wsId);
+    setInvite({ mode: "link", role: "contributor", ttlDays: 7, emails: "", link: null });
+  });
+  const doMintHeader = (s: NonNullable<typeof invite>) => run(async () => {
+    if (!inviteWsId) return;
+    const emails = s.mode === "email" ? s.emails.split(/[,\s]+/).map((e) => e.trim()).filter(Boolean) : undefined;
+    const minted = await mintInvite({ workspace_id: inviteWsId, role: s.role, mode: s.mode === "email" ? "restricted" : "open",
+      expires_in_sec: s.ttlDays * 86400, max_uses: s.mode === "email" ? 1 : 50, allowed_emails: emails });
+    setInvite({ ...s, link: `${window.location.origin}/?invite=${encodeURIComponent(minted.token)}` });
   });
 
   return (
@@ -149,9 +162,23 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
           <ParticipantsSection
             ownSlug={shared ? null : slug} shared={shared} shareWsId={shareWsId} myRole={shared ? myRole : undefined}
             setShareWsId={setShareWsId} busy={busy} onRun={run} reload={loadCore}
-            layout={layout} tabId={id} inviteSignal={inviteSignal}
+            layout={layout} tabId={id}
           />
         </>)}
+
+        {invite && (
+          <Modal title={`Share “${displayName}”`} onClose={() => setInvite(null)}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {(["link", "email"] as const).map((m) => (
+                <button key={m} disabled={busy} onClick={() => setInvite({ ...invite, mode: m, link: null })}
+                  style={{ ...btn(invite.mode === m ? "primary" : "ghost"), fontSize: 12 }}>
+                  {m === "link" ? "Invite link" : "Add by email"}
+                </button>
+              ))}
+            </div>
+            <InviteDialog s={invite} setS={setInvite} onMint={doMintHeader} busy={busy} plain />
+          </Modal>
+        )}
       </div>
     </div>
   );
@@ -393,19 +420,15 @@ function TokenRow({ label, value, busy, onChange, onSubmit, onCancel, submitLabe
 }
 
 // ── participants (shared membership) ───────────────────────────────────────────────────────────────
-function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId, busy, onRun, reload, layout, tabId, inviteSignal }: {
+function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId, busy, onRun, reload, layout, tabId }: {
   ownSlug: string | null; shared: boolean; shareWsId: string | null; myRole?: string;
   setShareWsId: (id: string) => void; busy: boolean; onRun: (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
-  reload: () => void; layout: LayoutService; tabId: string; inviteSignal?: number;
+  reload: () => void; layout: LayoutService; tabId: string;
 }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [invite, setInvite] = useState<{ mode: "link" | "email"; role: string; ttlDays: number; emails: string; link: string | null } | null>(null);
   const loadMembers = () => { if (shareWsId) void listWorkspaceMembers(shareWsId).then(setMembers).catch(() => setMembers([])); };
   useEffect(() => { loadMembers(); }, [shareWsId]);  // eslint-disable-line react-hooks/exhaustive-deps
-  // The header's Share button — pop the invite dialog (sharing was already enabled by the caller).
-  useEffect(() => {
-    if (inviteSignal && shareWsId) setInvite({ mode: "link", role: "contributor", ttlDays: 7, emails: "", link: null });
-  }, [inviteSignal, shareWsId]);
 
   // An OWN workspace that isn't shared yet → the CTA that turns on sharing.
   if (!shareWsId) {
@@ -469,13 +492,16 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
   );
 }
 
-function InviteDialog({ s, setS, onMint, busy }: {
+function InviteDialog({ s, setS, onMint, busy, plain }: {
   s: { mode: "link" | "email"; role: string; ttlDays: number; emails: string; link: string | null };
-  setS: (s: any) => void; onMint: (s: any) => void; busy: boolean;
+  setS: (s: any) => void; onMint: (s: any) => void; busy: boolean; plain?: boolean;
 }) {
+  // `plain` = hosted in the header's Share MODAL, which brings its own chrome/title — skip the box.
   return (
-    <div style={{ marginTop: 12, padding: "12px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>{s.mode === "email" ? "Add by email" : "Invite link"}</div>
+    <div style={plain
+      ? { display: "flex", flexDirection: "column", gap: 8 }
+      : { marginTop: 12, padding: "12px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+      {!plain && <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>{s.mode === "email" ? "Add by email" : "Invite link"}</div>}
       <div style={{ display: "flex", gap: 8 }}>
         <select value={s.role} disabled={busy} onChange={(e) => setS({ ...s, role: e.target.value, link: null })} style={{ ...field, flex: 1 }}>
           <option value="contributor">member (read + write)</option>
