@@ -175,6 +175,16 @@ function MeetingPrepTab({ params }: TabProps) {
     finally { setBusy(false); }
   };
 
+  // Frame 6 (first-run-onboarding): brief WITHOUT sharing — the agent interviews the user in
+  // chat (the prep tab's meeting grounding rides the turn) and writes the brief into their OWN
+  // workspace, so it follows the series without creating a shared space.
+  const startBriefChat = () => {
+    const name = m?.title_custom || title || "this meeting";
+    window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+      detail: { prompt: `Interview me to build the brief for "${name}" — ask what you can't know from my records (who's in the room, what I want out of it, what the notetaker should listen for), research the attendees in my knowledge, then write the brief as this meeting's note in my own workspace (no shared workspace) so it can be reused across this meeting's series.` },
+    }));
+  };
+
   const remove = async () => {
     if (!m) return;
     if (typeof window !== "undefined" && !window.confirm("Delete this planned meeting?")) return;
@@ -239,9 +249,11 @@ function MeetingPrepTab({ params }: TabProps) {
             onClear={() => void patch({ scheduled_at: null })}
           />
           {m.meeting_url && (
+            /* "Open meeting" not "Join" — the human opens the URL; the notetaker is a separate verb
+               (first-run-onboarding frame 6: Join/Send-bot/Auto-join read as flavors of one verb). */
             <a href={m.meeting_url} target="_blank" rel="noreferrer"
               style={{ background: "var(--accent)", color: "var(--on-accent)", borderRadius: 7, padding: "5px 14px", fontSize: 12.5, fontWeight: 600, textDecoration: "none" }}>
-              Join
+              Open meeting
             </a>
           )}
           {!readOnly && (
@@ -300,15 +312,24 @@ function MeetingPrepTab({ params }: TabProps) {
         ) : readOnly ? (
           <div style={{ margin: "18px 0 0", fontSize: 12.5, color: "var(--t3)" }}>No workspace bound.</div>
         ) : (
+          /* No-brief state (first-run-onboarding frame 6, owner-ruled): two REAL actions. Brief chat
+             = the agent interviews you here (the prep tab's meeting grounding rides the turn) and the
+             brief lands in YOUR default workspace, reused across the series. Shared workspace = the
+             existing collaborative flow, repositioned as the explicit sharing choice. */
           <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 9 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>No brief yet</div>
             <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
-              No brief yet — a prep workspace holds it, and everyone you share it with sees this
-              meeting (and its live transcript) the moment they join.
+              A brief makes the notetaker useful — who&rsquo;s in the room, what you want out of it, what
+              to listen for.
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button disabled={busy} onClick={() => startBriefChat()}
+                style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Start brief chat
+              </button>
               <button disabled={busy} onClick={() => void createAndBind()}
-                style={{ background: "var(--accentbg)", color: "var(--accent)", border: "none", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                + Create a prep workspace
+                style={{ background: "transparent", color: "var(--accent)", border: "1px dashed var(--line2)", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                + Create a workspace to share
               </button>
               {shares.length > 0 && (
                 <select defaultValue="" disabled={busy} onChange={(e) => { if (e.target.value) void patch({ workspace_id: e.target.value }); }}
@@ -317,6 +338,12 @@ function MeetingPrepTab({ params }: TabProps) {
                   {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>{s.workspace_id}</option>)}
                 </select>
               )}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5 }}>
+              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Brief chat</b> — the agent interviews you and
+              writes the brief into your own workspace, reused across this series.{" "}
+              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Shared workspace</b> — everyone you invite sees
+              the brief and the live transcript the moment they join.
             </div>
           </div>
         )}
@@ -358,7 +385,7 @@ function MeetingPrepTab({ params }: TabProps) {
             <button disabled={busy || !m.native_id} onClick={() => void sendNow()}
               title={m.native_id ? "Send the bot now instead of waiting" : "Attach a meeting link first"}
               style={{ background: "none", border: "none", color: m.native_id ? "var(--accent)" : "var(--t3)", fontSize: 12, fontWeight: 600, cursor: m.native_id ? "pointer" : "default", padding: 0, borderBottom: `1px dotted ${m.native_id ? "var(--accent)" : "var(--t3)"}` }}>
-              Send bot now
+              Send notetaker now
             </button>
           )}
           {!readOnly && (
