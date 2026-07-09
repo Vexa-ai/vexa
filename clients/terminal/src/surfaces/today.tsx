@@ -22,6 +22,8 @@ import { useLiveMeetings, fetchDurableTranscript } from "./liveMeetings";
 import { groupMeetings, type MeetingGroup } from "./meetingGroups";
 import { meetingTab } from "./meeting";
 import { MeetingsOnboarding } from "./meetingsOnboarding";
+import { findBriefNote } from "./briefNote";
+import { listWorkspaceTree } from "./workspaceApi";
 
 // ── reviewed-recaps store (localStorage) — opening a recap retires its phrase ──────────────────
 const REVIEWED_KEY = "vexa.reviewedMeetings";
@@ -108,14 +110,32 @@ export function pastFeed(groups: MeetingGroup[], cap: number = PAST_CAP): PastDa
   return [...days.values()].sort((a, b) => b.date.getTime() - a.date.getTime());
 }
 
-/** ONE deviation phrase per row (the rendering law) — or null for the quiet default. */
-export function deviationPhrase(g: MeetingGroup): { text: string; tone: "live" | "danger" | "accent" } | null {
+/** ONE deviation phrase per row (the rendering law) — or null for the quiet default.
+ *  `hasOwnBrief`: an unbound meeting whose brief lives as this meeting's note in the user's OWN
+ *  workspace (frame-6 flow) is PREPARED — quiet, same as a bound workspace. */
+export function deviationPhrase(g: MeetingGroup, hasOwnBrief = false): { text: string; tone: "live" | "danger" | "accent" } | null {
   const m = g.current;
   if (g.phase === "live") return { text: "in meeting →", tone: "live" };
   if (m.auto_join_error) return { text: "couldn’t import — no meeting link", tone: "danger" };
   if (!m.native_id && !m.meeting_url) return { text: "no meeting link", tone: "danger" };
-  if (!m.workspace_id) return { text: "no brief yet", tone: "accent" };
+  if (!m.workspace_id && !hasOwnBrief) return { text: "no brief yet", tone: "accent" };
   return null;
+}
+
+// ── own-workspace brief notes (frame 6): ONE tree fetch feeds every row's phrase ───────────────
+const OWN_TREE_POLL_MS = 60_000;
+function useOwnWorkspaceTree(): string[] | null {
+  const [files, setFiles] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const look = () => void listWorkspaceTree()
+      .then((f) => { if (alive) setFiles(f); })
+      .catch(() => { /* keep last good — a blip must not flip rows back to "no brief yet" */ });
+    look();
+    const t = setInterval(() => { if (document.visibilityState === "visible") look(); }, OWN_TREE_POLL_MS);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  return files;
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────────────────────
@@ -154,10 +174,12 @@ function Faces({ m }: { m: MeetingMock }) {
   );
 }
 
-function EventRow({ g }: { g: MeetingGroup }) {
+function EventRow({ g, ownTree }: { g: MeetingGroup; ownTree: string[] | null }) {
   const m = g.current;
   const nav = usePreviewPinTab<HTMLDivElement>(meetingTab(m));
-  const dev = deviationPhrase(g);
+  const hasOwnBrief = !m.workspace_id && !!ownTree
+    && !!findBriefNote(ownTree, { title: label(m), nativeId: m.native_id });
+  const dev = deviationPhrase(g, hasOwnBrief);
   return (
     <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick}
       style={{ display: "flex", alignItems: "baseline", gap: 9, padding: "3px 2px", cursor: "pointer", flexWrap: "wrap" }}>
@@ -175,7 +197,7 @@ function EventRow({ g }: { g: MeetingGroup }) {
   );
 }
 
-function DayRow({ day, isToday }: { day: AgendaDay; isToday: boolean }) {
+function DayRow({ day, isToday, ownTree }: { day: AgendaDay; isToday: boolean; ownTree: string[] | null }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "64px 1fr", gap: "0 14px", padding: "11px 14px",
       borderTop: "1px dashed var(--line)" }}>
@@ -192,7 +214,7 @@ function DayRow({ day, isToday }: { day: AgendaDay; isToday: boolean }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
         {day.groups.length === 0
           ? <span style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 0" }}>No events today</span>
-          : day.groups.map((g) => <EventRow key={g.key} g={g} />)}
+          : day.groups.map((g) => <EventRow key={g.key} g={g} ownTree={ownTree} />)}
       </div>
     </div>
   );
@@ -256,6 +278,7 @@ function PastRow({ e, reviewedIds }: { e: PastEntry; reviewedIds: Set<string> })
 function TodayView() {
   const meetings = useLiveMeetings();
   const reviewedIds = useReviewed();
+  const ownTree = useOwnWorkspaceTree();
   const [weekOffset, setWeekOffset] = useState(0);
   const now = new Date();
   const groups = groupMeetings(meetings);
@@ -290,7 +313,7 @@ function TodayView() {
             <div style={{ marginTop: 14, border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)" }}>
               {days.length === 0
                 ? <div style={{ padding: "14px 16px", fontSize: 12.5, color: "var(--t3)" }}>Nothing this week.</div>
-                : days.map((d) => <DayRow key={d.key} day={d} isToday={d.key === todayKey} />)}
+                : days.map((d) => <DayRow key={d.key} day={d} isToday={d.key === todayKey} ownTree={ownTree} />)}
             </div>
           </>
         )}
