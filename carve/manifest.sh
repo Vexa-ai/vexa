@@ -80,7 +80,7 @@ export CARVE_OVERRIDES=(
 # Hook: carve/transform.sh runs in the carve working dir each seed/sync.
 export CARVE_TRANSFORM="$MONO/carve/transform.sh"
 
-# docs/docs is currently UNTRACKED in the mono (staged on disk only); until it is
-# committed upstream, seed/sync source it from the working tree. Flip to 0 once
-# docs/docs is committed on $SRC_BRANCH so it flows through git history normally.
-export CARVE_DOCS_FROM_WORKTREE="${CARVE_DOCS_FROM_WORKTREE:-1}"
+# docs/docs is fully git-tracked in the mono — docs flow through git history like
+# everything else (authorship preserved; uncommitted local edits can no longer leak
+# into a carve). The worktree mode (=1) remains only as a manual escape hatch.
+export CARVE_DOCS_FROM_WORKTREE="${CARVE_DOCS_FROM_WORKTREE:-0}"
