@@ -13,7 +13,7 @@ import { registerTab, type TabProps } from "../contributions";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
-import { Markdown } from "../ui-kit/Markdown";
+import { MdxDoc } from "../ui-kit/MdxDoc";
 import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
 import { useLiveMeetings, refreshMeetings } from "./liveMeetings";
@@ -89,7 +89,7 @@ function Brief({ slug, title }: { slug: string; title: string }) {
         </button>
       </div>
       <div style={{ padding: "4px 16px 12px", maxHeight: 460, overflow: "auto" }}>
-        <Markdown style={{ fontSize: 13, lineHeight: 1.55 }}>{text}</Markdown>
+        <MdxDoc style={{ fontSize: 13, lineHeight: 1.55 }}>{text}</MdxDoc>
       </div>
     </div>
   );
@@ -144,7 +144,7 @@ function OwnBrief({ note, onSteer }: { note: { path: string; text: string }; onS
         </button>
       </div>
       <div style={{ padding: "4px 16px 12px", maxHeight: 460, overflow: "auto" }}>
-        <Markdown style={{ fontSize: 13, lineHeight: 1.55 }}>{note.text}</Markdown>
+        <MdxDoc style={{ fontSize: 13, lineHeight: 1.55 }}>{note.text}</MdxDoc>
       </div>
     </div>
   );

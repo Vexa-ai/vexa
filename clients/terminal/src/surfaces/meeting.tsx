@@ -4,7 +4,7 @@
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
 import { useEffect, useRef, useState } from "react";
-import { useService, useStore } from "../platform";
+import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
 import { Icon } from "../ui-kit";
@@ -12,7 +12,6 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { type MeetingMock } from "./meetingModel";
 import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
-import { groupMeetings } from "./meetingGroups";
 import { usePreviewPinTab } from "./previewPinTab";
 import { parseMeetingInput } from "./meetingId";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
@@ -622,18 +621,9 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
 // ── Meetings LIST (left) ─────────────────────────────────────────────────────────
 function MeetingsList() {
   const layout = useService(LayoutServiceId);
-  // v4: while the TODAY tab is the center, the sidebar list COLLAPSES to its actions — the day
-  // itself renders once (in the center), not twice (design-spec §v4 anti-pattern: same list twice).
-  const { activeTab } = useStore(layout.store);
-  const todayOpen = activeTab?.kind === "today";
+  // The meeting LIST lives on the Today page (the center) — the sidebar never renders it too
+  // (design-spec §v4 anti-pattern: same list twice). The rail keeps only its ACTIONS + a link to Today.
   const all = useLiveMeetings();                                   // real meetings (live + past) from agent-api
-  // Three buckets over GROUPED meetings (meeting ≠ run, v4 BUG-1 fix): a meeting renders ONCE,
-  // under its CURRENT state — a finished sibling run of an upcoming meeting no longer leaks a
-  // duplicate row into "Recorded".
-  const groups = groupMeetings(all);
-  const upcomingOnes = groups.filter((g) => g.phase === "prep").map((g) => g.current);
-  const liveOnes = groups.filter((g) => g.phase === "live").map((g) => g.current);
-  const pastOnes = groups.filter((g) => g.phase === "post").map((g) => g.current);
   const autoOpened = useRef(false);
   useEffect(() => {                                                // a live meeting opens itself, once
     const firstLive = all.find((m) => m.status === "live");
@@ -701,21 +691,12 @@ function MeetingsList() {
           <CalendarSyncButton variant="row" />
         </div>
       </div>
-      {todayOpen ? (
-        // Today is open in the center — that IS the list; the sidebar keeps only its actions.
-        <div style={{ padding: "10px 9px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
-          Your meetings are in Today →
-        </div>
-      ) : (
-        <>
-          {all.length === 0 && <div style={{ padding: "8px 9px", fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>No meetings yet — paste a Meet link above and I&apos;ll send the bot.</div>}
-          {upcomingOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Upcoming</div>}
-          {upcomingOnes.map((m) => <MeetingRow key={m.id} m={m} />)}
-          {liveOnes.map((m) => <MeetingRow key={m.id} m={m} />)}
-          {pastOnes.length > 0 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", padding: "12px 9px 4px" }}>Recorded</div>}
-          {pastOnes.map((m) => <MeetingRow key={m.id} m={m} />)}
-        </>
-      )}
+      {/* The day itself renders in the center (Today) — the sidebar only links there. */}
+      <button onClick={() => layout.openTab({ id: "today", title: "Today", kind: "today", params: {} })}
+        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "10px 9px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, cursor: "pointer" }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t2)")} onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t3)")}>
+        {all.length === 0 ? "No meetings yet — paste a Meet link above, or open Today →" : "Your meetings are in Today →"}
+      </button>
     </div>
   );
 }
