@@ -3,7 +3,7 @@ title: "Calendar sync"
 description: "Connect your calendar with its secret ICS address — upcoming meetings import automatically and the bot joins them at start."
 ---
 
-Connect a calendar once and Vexum keeps your **Upcoming** meetings in sync: every calendar event
+Connect a calendar once and Vexa keeps your **Upcoming** meetings in sync: every calendar event
 with a Meet/Zoom/Teams link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
 and the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start
 time. No OAuth, no calendar permissions — it works off the **secret ICS address** your calendar
@@ -22,7 +22,7 @@ already provides.
     <Warning>
     **Not** the field above it. The *Public address in iCal format* (`…/public/basic.ics`) only
     works for calendars you've made fully public — for a normal private calendar Google answers
-    it with `401`/`404`, and Vexum will show you exactly that error. The *Public URL* and *Embed
+    it with `401`/`404`, and Vexa will show you exactly that error. The *Public URL* and *Embed
     code* are web pages, not feeds — pasting one is rejected at save with a pointer back here.
     </Warning>
 
@@ -52,7 +52,7 @@ already provides.
 </Tabs>
 
 <Warning>
-The ICS address is a **secret** — anyone holding it can read your calendar. Vexum stores it
+The ICS address is a **secret** — anyone holding it can read your calendar. Vexa stores it
 accordingly: it is never shown back in full (reads return a masked form), and the sync fetch runs
 through the same server-side request guard as webhooks. Revoke it anytime from your calendar's
 settings ("Reset" in Google Calendar) — then reconnect with the new address.

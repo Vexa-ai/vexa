@@ -3,16 +3,16 @@ title: "SDKs & clients"
 description: "The canonical interface is the REST API; published libraries wrap it."
 ---
 
-Vexum's contract is its **HTTP API** — the [Meetings API](/api/meetings) and [Agent API](/api/agent) are
+Vexa's contract is its **HTTP API** — the [Meetings API](/api/meetings) and [Agent API](/api/agent) are
 the same surface whether you self-host or use the hosted service. Any HTTP client works.
 
 ## What ships today
 
-The open-core ships three ways to drive Vexum:
+The open-core ships three ways to drive Vexa:
 
 - **The HTTP API** — the canonical interface. Every capability is reachable over plain REST + WebSocket;
   see the [API reference](/api/agent).
-- **`vexa-slim`** — a minimal **Python** client ([`clients/slim`](https://github.com/Vexa-ai/vexa-core/tree/main/clients/slim)).
+- **`vexa-slim`** — a minimal **Python** client ([`clients/slim`](https://github.com/Vexa-ai/vexa/tree/main/clients/slim)).
   Gateway-only (it speaks `api.v1` and holds no domain internals), with two peer sub-clients
   (`slim.agent.*`, `slim.meetings.*`) and a high-level cookbook (`listen_to_meeting`, `agent_on_meeting`,
   `harvest`). Doubles as the living proof that the `meetings ⊥ agent` boundary holds.

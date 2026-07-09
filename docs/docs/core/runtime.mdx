@@ -31,7 +31,7 @@ worker's filesystem at all**, so even a prompt-injected agent cannot read or wri
 ## Where it runs
 
 The runtime is **orchestration-agnostic**. The kernel owns the
-[`runtime.v1`](https://github.com/Vexa-ai/vexa-core/tree/main/core/runtime/contracts/runtime.v1)
+[`runtime.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/runtime/contracts/runtime.v1)
 lifecycle — `starting → running → stopping → stopped → destroyed`, emitting an event on every
 transition — and delegates the one substrate-specific question (*how* do I start, observe, and stop a
 workload?) to a pluggable **Backend** with a five-method port: `start` · `exit_code` · `terminate` ·
@@ -73,5 +73,5 @@ and the one-container **lite** (`make lite`) — see [Deployment](/deployment). 
 
 ## Already in production
 
-Vexum's [meeting bots](/core/meetings) are browser containers spawned by this exact runtime. Running
+Vexa's [meeting bots](/core/meetings) are browser containers spawned by this exact runtime. Running
 agents this way is the same machinery, a different workload type — not a new system to stand up.

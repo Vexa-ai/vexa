@@ -36,8 +36,8 @@ v0.1 — Google's open, vendor-neutral standard for markdown knowledge. Each ent
 ```markdown
 ---
 type: company            # OKF's only required key
-id: acme-corp            # Vexum-required: stable slug, unique per type
-title: Acme Corp         # Vexum-required: human title
+id: acme-corp            # Vexa-required: stable slug, unique per type
+title: Acme Corp         # Vexa-required: human title
 description: Design-partner prospect, met at OSFF.   # OKF recommended
 resource: https://acme.example.com                   # OKF recommended
 tags: [prospect]
@@ -48,8 +48,8 @@ Body is plain markdown. Entities cross-reference each other with [[wikilinks]]
 by title — the knowledge graph emerges from the links.
 ```
 
-Vexum's frontmatter contract (`type`/`id`/`title` required, per the
-[`workspace.v1` schema](https://github.com/Vexa-ai/vexa-core/blob/main/core/agent/contracts/workspace.v1/workspace.schema.json))
+Vexa's frontmatter contract (`type`/`id`/`title` required, per the
+[`workspace.v1` schema](https://github.com/Vexa-ai/vexa/blob/main/core/agent/contracts/workspace.v1/workspace.schema.json))
 is a strict superset of OKF, which requires only `type` — so every workspace is a conformant bundle any
 OKF consumer can read, and `[[wikilinks]]` are a tolerated extension.
 
@@ -62,7 +62,7 @@ Two **reserved filenames** carry no frontmatter and are not entities:
 
 Because the bundle is just files in git, it is portable by construction: `tree` + `file` above read it
 over the API, and a `git clone` (or the swap endpoint below) moves the whole knowledge base between
-tools — nothing about it is Vexum-specific.
+tools — nothing about it is Vexa-specific.
 
 ## Upload documents
 

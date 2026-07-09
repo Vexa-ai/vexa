@@ -1,9 +1,9 @@
 ---
 title: "Concepts"
-description: "The primitives Vexum is built from — workspace, meeting, agent, container, identity, scheduler."
+description: "The primitives Vexa is built from — workspace, meeting, agent, container, identity, scheduler."
 ---
 
-Everything in Vexum composes from a handful of primitives. A unit of work — a **dispatch** — is one
+Everything in Vexa composes from a handful of primitives. A unit of work — a **dispatch** — is one
 [agent](#agent), in one [container](#container), over a person's [workspace](#workspace), authorized by an
 [identity](#identity) token, fired by the [scheduler](#scheduler). The data those agents grow on comes
 from [meetings](#meeting) and docs.
@@ -19,7 +19,7 @@ The knowledge itself lives in the `kg/` subtree as an
 [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF)
 v0.1 bundle — one markdown file per entity at `kg/entities/<type>/<slug>.md`, YAML frontmatter on top,
 `index.md` listings for navigation. Knowledge-as-code: portable, diffable, and readable by any OKF
-consumer, not just Vexum. See [Browse the workspace](/how-to/workspace-files#the-knowledge-graph-is-an-okf-bundle).
+consumer, not just Vexa. See [Browse the workspace](/how-to/workspace-files#the-knowledge-graph-is-an-okf-bundle).
 
 ## Meeting
 

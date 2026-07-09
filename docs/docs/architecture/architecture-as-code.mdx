@@ -3,10 +3,10 @@ title: "Architecture as Code (CALM)"
 description: "The runtime architecture is a validated FINOS CALM model — nodes, data carriers, single-writer ownership, and a self-hostable meeting-intelligence pattern, enforced in CI."
 ---
 
-The Vexum runtime is modeled as code using **[FINOS CALM](https://calm.finos.org/)** (Common Architecture
+The Vexa runtime is modeled as code using **[FINOS CALM](https://calm.finos.org/)** (Common Architecture
 Language Model). There is **one chart** — the repo-root
-[`architecture.calm.json`](https://github.com/Vexa-ai/vexa-core/blob/main/architecture.calm.json) — the
-single source of truth; [`calm/`](https://github.com/Vexa-ai/vexa-core/tree/main/calm) holds the governance
+[`architecture.calm.json`](https://github.com/Vexa-ai/vexa/blob/main/architecture.calm.json) — the
+single source of truth; [`calm/`](https://github.com/Vexa-ai/vexa/tree/main/calm) holds the governance
 controls and the reusable pattern that validate it. Two CI gates keep it honest: `pnpm gate:calm` (FINOS
 pattern conformance) and `pnpm gate:dataflow` (model↔disk completeness, ownership enforcement, and a
 reality diff against the code) — so the architecture description can't silently drift from the system.
@@ -59,7 +59,7 @@ pattern and validate your own deployment against it with the FINOS [`calm-cli`](
 ## Generated views
 
 Diagram views are **carved from the chart, never drawn by hand**. `pnpm arch:dsl --write` regenerates
-[`docs/views/`](https://github.com/Vexa-ai/vexa-core/tree/main/docs/views) deterministically, and
+[`docs/views/`](https://github.com/Vexa-ai/vexa/tree/main/docs/views) deterministically, and
 `gate:dataflow` fails when they are stale:
 
 | View | Shows |

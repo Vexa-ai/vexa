@@ -1,9 +1,9 @@
 ---
 title: "Deployment"
-description: "Self-host Vexum with Docker Compose — air-gapped, with bring-your-own inference."
+description: "Self-host Vexa with Docker Compose — air-gapped, with bring-your-own inference."
 ---
 
-Vexum runs **in your own environment** — open-source, self-hostable, air-gappable. Data, recordings, and
+Vexa runs **in your own environment** — open-source, self-hostable, air-gappable. Data, recordings, and
 agent state stay on infrastructure you control.
 
 ## Quick start (Docker Compose)
@@ -13,7 +13,7 @@ workspace as an isolated volume subpath — older engines fail worker creation),
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa-core
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 
 make all      # full stack via Docker Compose — each service in its own container
 make bot      # build the meeting bot FROM SOURCE — required before a bot can join a meeting
@@ -61,8 +61,8 @@ absent).
 
 Speech-to-text is the one **GPU workload**, so it is **carved out** of the main stack: `make all`
 runs GPU-free and anywhere, and the STT service is its own deploy unit at
-[`deploy/transcription`](https://github.com/Vexa-ai/vexa-core/tree/main/deploy/transcription)
-([`core/meetings/services/transcription`](https://github.com/Vexa-ai/vexa-core/tree/main/core/meetings/services/transcription)
+[`deploy/transcription`](https://github.com/Vexa-ai/vexa/tree/main/deploy/transcription)
+([`core/meetings/services/transcription`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/services/transcription)
 is the brick — faster-whisper / CTranslate2 behind an OpenAI-compatible `/v1/audio/transcriptions`).
 
 Stand it up wherever a GPU lives (the same host or a dedicated GPU box):

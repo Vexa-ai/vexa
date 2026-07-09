@@ -2,7 +2,7 @@
 
 **Status: ⬜ planned**
 
-Push per-meeting status to the Vexum EI terminal over the existing gateway `/ws`,
+Push per-meeting status to the Vexa EI terminal over the existing gateway `/ws`,
 on a **user-scoped** channel, and replace the terminal's 4s poll. Add an INTENT
 phase (`idle` · `scheduled`) **before** the bot FSM, where the **user dropdown is
 the source of truth**; leave the bot lifecycle FSM untouched.

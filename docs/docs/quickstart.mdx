@@ -18,7 +18,7 @@ with one command.
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-git clone https://github.com/Vexa-ai/vexa-core.git && cd vexa-core
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 make all          # full Docker Compose stack — seeds .env, builds, and prints your API key
 make bot          # build the meeting bot from source — needed before a bot can join (§2′)
 ```
@@ -26,7 +26,7 @@ make bot          # build the meeting bot from source — needed before a bot ca
 `make all` brings up the whole stack and **prints an API key + your URLs** when it finishes:
 
 ```text
-  Vexum is up.
+  Vexa is up.
     Terminal UI : http://localhost:13000
     API gateway : http://localhost:18056
     API key     : vxa_…
@@ -96,7 +96,7 @@ frames mark anything the agent recorded. See the [Agent API](/api/agent).
 
 ## 4. Third win — connect your calendar
 
-Stop pasting links: give Vexum your calendar's **secret ICS address** (Google Calendar → Settings →
+Stop pasting links: give Vexa your calendar's **secret ICS address** (Google Calendar → Settings →
 your calendar → *Integrate calendar* → **Secret address in iCal format**, the `…/private-…/basic.ics`
 one — *not* the public address above it) and every upcoming meeting with a Meet/Zoom/Teams link
 imports on its own — and the bot **auto-joins at start time**. Connecting syncs immediately and

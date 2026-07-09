@@ -1,0 +1,56 @@
+---
+title: "Kubernetes (Helm)"
+description: "Deploy Vexa on Kubernetes or OpenShift with the Helm chart — a Pod per bot and per agent, scalable to thousands of users."
+---
+
+The Helm chart at [`deploy/helm/charts/vexa`](https://github.com/Vexa-ai/vexa/tree/main/deploy/helm)
+deploys the same control plane as the Compose stack, with the runtime pointed at the cluster:
+`RUNTIME_BACKEND=k8s` makes **every bot and every agent dispatch its own bare Pod**
+(`restart: Never`), so capacity is your cluster's scheduler — not a bigger box.
+
+## What the chart deploys
+
+| Component | Form |
+|---|---|
+| gateway · admin-api · meeting-api · agent-api · runtime | Deployments (RollingUpdate, `maxUnavailable: 0`) |
+| terminal (web workbench) | Deployment + ingress |
+| postgres | StatefulSet (or point values at your managed DB) |
+| redis · minio | Deployments (+ minio init Job) |
+| DB migrations | Job |
+| pgbouncer | optional connection pooling |
+| RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
+
+Hardened defaults throughout: containers run non-root with all capabilities dropped,
+PodDisruptionBudgets on the control plane, and rolling updates that never take the last
+replica down.
+
+## Install
+
+```bash
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+helm install vexa deploy/helm/charts/vexa -f deploy/helm/charts/vexa/values.yaml
+```
+
+`values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
+(`helm lint` + template tests) live under `deploy/helm/tests/`.
+
+## The runtime on Kubernetes
+
+The runtime kernel owns one `runtime.v1` lifecycle (`starting → running → stopping → stopped →
+destroyed`) and delegates only the substrate question — *how do I start, observe, and stop a
+workload?* — to the backend. On `k8s`, a workload is a bare Pod; the same dispatch, contracts,
+and worker run identically to the Docker backend. See [Execution](/architecture/execution).
+
+## Honest status
+
+The k8s backend **lifecycle is implemented and exercised**; the workspace-mount for agent
+workers on k8s and chart polish are still landing — track the
+[status page](/roadmap/status). For production today, the Compose stack is the proven path;
+the chart is the right starting point for a cluster evaluation.
+
+## Air-gapped clusters
+
+Everything the chart deploys pulls from images you build and host in your own registry; pair it
+with the [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) and
+your own LLM endpoint ([Configuration](/configuration)) for a zero-egress posture. See
+[Security & compliance](/security-compliance).
