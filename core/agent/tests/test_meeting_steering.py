@@ -71,7 +71,8 @@ def test_prep_grounding_without_workspace_says_so():
     _ctx, _tools, prompt = _meeting_grounding(
         {"kind": "meeting", "meeting": {"native_id": "n1", "status": "idle", "title": "Untitled"}},
         session="s", prompt="hi", redis_url=None)
-    assert "No prep workspace is bound" in prompt
+    assert "No shared prep workspace is bound" in prompt
+    assert "user's OWN workspace" in prompt  # own-workspace brief note is the steer, not a dead end
     assert "(no time set yet)" in prompt
 
 

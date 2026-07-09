@@ -666,7 +666,11 @@ def _meeting_grounding(
             f"The prep workspace bound to this meeting is \"{workspace}\" — ground your research and "
             f"write the brief there (its kg/ entities cover the attendees and companies). "
             if workspace
-            else "No prep workspace is bound to this meeting yet — say so when it matters. "
+            else (
+                "No shared prep workspace is bound to this meeting — the brief lives (or will live) "
+                "as this meeting's note under kg/entities/meeting/ in the user's OWN workspace, "
+                "reused across the meeting's series. "
+            )
         )
         return (ctx, [], meeting_steering.render("prep", fields) + prompt)
 
