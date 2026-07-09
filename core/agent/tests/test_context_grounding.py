@@ -9,7 +9,15 @@ replaces ambient), and back-compat (legacy ``active``-only bodies behave exactly
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+
+def _soon(hours=2):
+    """A stable-by-construction future timestamp: the digest windows rows against the REAL
+    clock, so fixture dates must be relative — a literal date rots the day after it is
+    written (the 2026-07-09 flake this replaces)."""
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 from control_plane.api import ChatBody, ChatContextBody, _ambient_gated, _context_grounding
 
@@ -29,7 +37,7 @@ def _ground(body, *, rows=None, mounts=None):
 
 def _sched_row(rid=51, status="scheduled", title="Acme intro", native="abc-defg-hij"):
     return {"id": rid, "status": status, "platform": "google_meet", "native_meeting_id": native,
-            "data": {"title": title, "scheduled_at": "2026-07-09T09:00:00Z",
+            "data": {"title": title, "scheduled_at": _soon(),
                      "workspace_id": "acme-deal"},
             "end_time": None, "start_time": None, "updated_at": None}
 
@@ -98,7 +106,7 @@ def test_linkless_planned_row_enriches_via_row_id_in_native_slot():
     """The terminal's tab param is the ROW id; a link-less planned meeting has NO native id, so
     the id arrives in native_id — enrichment must still find the row (the live-verify gap)."""
     row = {"id": 76, "status": "scheduled", "platform": "unknown", "native_meeting_id": None,
-           "data": {"title": "Context bundle smoke", "scheduled_at": "2026-07-09T10:00:00Z"},
+           "data": {"title": "Context bundle smoke", "scheduled_at": _soon(3)},
            "end_time": None, "start_time": None, "updated_at": None}
     focus = {"kind": "meeting", "native_id": "76", "platform": "google_meet"}
     body = _body(context={"surface": {"tab": {"kind": "meetingPrep"}}, "focus": focus})

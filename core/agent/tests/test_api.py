@@ -1116,10 +1116,14 @@ def test_chat_accepts_context_bundle_and_folds_digest_into_prompt():
     """Context bundle (slice 1): /api/chat accepts ``context`` (no 422); when the surface gates
     the ambient digest ON, the schedule block reaches the dispatched worker's inline prompt
     (VEXA_START env) — server-derived rows via the injected schedule_source seam."""
+    import datetime as _dt
     runtime = _FakeRuntime()
     rows = [{"id": 51, "status": "scheduled", "platform": "google_meet",
              "native_meeting_id": "abc-defg-hij",
-             "data": {"title": "Acme intro", "scheduled_at": "2026-07-09T09:00:00Z"},
+             "data": {"title": "Acme intro",
+                      # relative, not literal: the digest windows against the real clock
+                      "scheduled_at": (_dt.datetime.now(_dt.timezone.utc)
+                                       + _dt.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")},
              "end_time": None, "start_time": None, "updated_at": None}]
     c = TestClient(create_app(
         Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=_FakeReader(),
