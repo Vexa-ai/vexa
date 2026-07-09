@@ -47,3 +47,37 @@ encryption detail.
 | **Planned meetings + auto-join** — plan ahead (`POST /meetings`), one record plan→transcript, the bot joins scheduled meetings at start | ✅ done | core/meetings, core/gateway, clients/terminal |
 | **Calendar sync** — secret-ICS import → planned meetings, auto-join by default | ✅ done | core/meetings, core/identity, clients/terminal |
 | **Calendar (OAuth)** — Google/Microsoft OAuth calendars (two-way, invite-aware) | 🟦 deferred | core/identity, core/meetings |
+
+## Capability truth table
+
+Where each partially-landed capability actually stands, layer by layer — verified against the tree
+(route tables, module code, tests), not planning docs. "Module-tested" means unit/seam tests with fake
+transports pass in CI; it is **not** an end-to-end claim.
+
+| Capability | Bot / module | Service API | Terminal UI | Honest note |
+|---|---|---|---|---|
+| **Bot browser view** (watch the bot's browser live) | n/a | ❌ none | ❌ none | Not a product feature today. noVNC/x11vnc is baked into the bot image and the lite supervisor **for operator debugging only** (localhost-bound). |
+| **Voice agent — TTS speak** | ✅ implemented + proven live (acts.v1 `speak` → TTS → virtual mic; June full-cycle matrix) | ❌ not wired — the gateway mounts `POST …/speak` per the sealed `api.v1` but the open-core meeting-api has no route behind it → `404`; nothing publishes the speak act | ❌ none | Contract-sealed and module-tested (mock-bot speak-ack gate), **not user-reachable**. Also flagged in the [Meetings API](/api/meetings) and the [changelog](/changelog). |
+| **Recording playback** | ✅ capture + chunking proven (acquire) | ✅ live + module-tested — `GET /recordings`, `/{id}`, `/{id}/master`, `…/raw` through the gateway | ❌ no player — retrieval is API/curl only ([how-to](/how-to/recordings)) | The full live loop (in-meeting capture → object storage → playback) has **not** been validated end-to-end. |
+| **User webhooks** (your URL, signed events) | — | ✅ built + module-tested — self-serve config (URL/secret/events, secret-masked) and the `webhook.v1` HMAC delivery module with retry queue | ❌ no settings UI | **Never fired against a real external receiver** — module tests use an in-memory transport. Treat as untested until a live delivery is proven. |
+| **Service webhooks** (in-stack lifecycle callbacks) | — | ✅ wired (`/bots/internal/callback/lifecycle`, `/runtime/callback`) + seam-tested | n/a | Internal plumbing; exercised implicitly by live bot runs, no dedicated E2E harness. |
+| **MCP server** | — | 🟡 ported 0.10.6 meeting-control server runs as its own compose service, module-tested; **not gateway-mounted** (no `/mcp`) | n/a | Untested against a real MCP client. Direction (one MCP server fronted by the gateway) is in the [changelog](/changelog). |
+
+## 0.10.x features not (yet) in 0.12
+
+The wire contract is sealed hash-equal to 0.10.x's OpenAPI 1.5.0, but a sealed endpoint is not
+automatically a wired capability. What 0.10.x users had that 0.12 does not ship today — the
+[changelog parity section](/changelog#parity-with-the-010x-line) is the source of truth, with
+per-row verification notes:
+
+| 0.10.x capability | 0.12 status |
+|---|---|
+| Mid-call bot config (`PUT …/config`) | contract-sealed, not wired — `404` |
+| Voice agent / TTS speak (`POST …/speak`) | contract-sealed, not wired — `404` |
+| Interactive bots beyond speak (in-meeting chat · screen share · avatar) | contract-sealed, not mounted — planned back in 0.12.x |
+| Transcript public share links | contract-sealed, not mounted (was dashboard-coupled) |
+| Meeting participants endpoint (`GET …/participants`) | post-seal — next `api.v1` revision |
+| `discord` ingest platform | post-seal — next `api.v1` revision |
+| Zoom authorized join (OBF/ZAK tokens, native SDK) | not carried — 0.12 joins Zoom via web client only; planned in the 0.12.x Zoom track |
+| Segment-latency env knobs | partial — programmatic config exists, no env wiring |
+| Swagger auth-scheme fixes | not carried — cosmetic DX gap in served docs |
