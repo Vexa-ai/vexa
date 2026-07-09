@@ -29,7 +29,7 @@ COMPOSE_FILE = COMPOSE_DIR / "docker-compose.yml"
 # is not collected at all, so the default gate:compose collection is unchanged (a compat/conftest.py
 # cannot own this gate — a second module named `conftest` shadows this one and breaks imports).
 collect_ignore_glob = [] if os.getenv("V010_COMPAT") == "1" else ["compat/*"]
-PROJECT = os.getenv("COMPOSE_PROJECT", "vexa-compose-gate")  # override on a shared host (e.g. bbb prod box)
+PROJECT = os.getenv("COMPOSE_PROJECT", "vexa-compose-gate")  # override on a shared host
 
 # The built services + the host ports they publish. The ports read from the same env vars the
 # compose file interpolates. Routine gates can request dynamic ports so a proof stack can run beside
@@ -273,7 +273,7 @@ def _cleanup(s: Stack) -> None:
     # Remove any bot containers the runtime spawned on the HOST daemon (outside the compose project)
     # so `down -v` leaves nothing behind. Scoped to THIS project's network: the runtime attaches every
     # workload to DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa, and a bare name=^vexa-mtg- would rm -f
-    # ANOTHER stack's live meeting bots on a shared host (the exact bbb-prod-box scenario COMPOSE_PROJECT
+    # ANOTHER stack's live meeting bots on a shared host (the exact shared-host scenario COMPOSE_PROJECT
     # exists for).
     try:
         names = subprocess.run(
