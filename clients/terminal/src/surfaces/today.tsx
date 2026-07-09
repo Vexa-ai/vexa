@@ -21,6 +21,7 @@ import type { MeetingMock } from "./meetingModel";
 import { useLiveMeetings, fetchDurableTranscript } from "./liveMeetings";
 import { groupMeetings, type MeetingGroup } from "./meetingGroups";
 import { meetingTab } from "./meeting";
+import { MeetingsOnboarding } from "./meetingsOnboarding";
 
 // ── reviewed-recaps store (localStorage) — opening a recap retires its phrase ──────────────────
 const REVIEWED_KEY = "vexa.reviewedMeetings";
@@ -280,18 +281,18 @@ function TodayView() {
         </div>
 
         {empty ? (
-          <div style={{ marginTop: 18, border: "1px dashed var(--line2)", borderRadius: 10, padding: "16px 18px",
-            fontSize: 12.5, color: "var(--t2)", lineHeight: 1.6, display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <Icon name="cal" size={16} style={{ color: "var(--t3)", flex: "none", marginTop: 1 }} />
-            <span>No meetings yet. Paste a Google Meet link in the sidebar to send the bot,
-            plan a meeting, or connect your calendar so scheduled meetings appear here by themselves.</span>
-          </div>
+          /* user onboarding, frame 4: three paths (calendar primary / plan / drop bot) */
+          <MeetingsOnboarding variant="full" />
         ) : (
-          <div style={{ marginTop: 14, border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)" }}>
-            {days.length === 0
-              ? <div style={{ padding: "14px 16px", fontSize: 12.5, color: "var(--t3)" }}>Nothing this week.</div>
-              : days.map((d) => <DayRow key={d.key} day={d} isToday={d.key === todayKey} />)}
-          </div>
+          <>
+            {/* the STANDING calendar affordance — stays while this user has no calendar connected */}
+            <MeetingsOnboarding variant="slim" />
+            <div style={{ marginTop: 14, border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)" }}>
+              {days.length === 0
+                ? <div style={{ padding: "14px 16px", fontSize: 12.5, color: "var(--t3)" }}>Nothing this week.</div>
+                : days.map((d) => <DayRow key={d.key} day={d} isToday={d.key === todayKey} />)}
+            </div>
+          </>
         )}
 
         {past.map((day) => (

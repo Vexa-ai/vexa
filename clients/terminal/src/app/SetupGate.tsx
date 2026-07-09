@@ -357,6 +357,11 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
 
   const finish = () => {
     void setGlobalSetting("setup", { completed: "true" }).catch(() => undefined);
+    // The admin→user onboarding seam: "Go to Meetings" must actually LAND on Meetings. The
+    // workbench's layout store initializes its rail from this persisted key (layout.ts LS_LIST)
+    // and it is created only when the workbench mounts — i.e. after this gate unhides — so a
+    // plain localStorage write is the whole hand-off.
+    try { localStorage.setItem("vexa.terminal.activeList.v1", "meetings"); } catch { /* noop */ }
     setPhase("hidden");
   };
 
