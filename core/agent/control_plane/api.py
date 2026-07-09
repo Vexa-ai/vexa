@@ -2168,6 +2168,57 @@ def create_app(
             return {"memberships": mindex.list(subject)}
         except Exception:
             return {"memberships": []}
+
+    # ── Settings → Models "Test" buttons (on-demand credential tests, fail-loud surface) ────────
+    # Both test the caller's EFFECTIVE config — the same user > global > env resolution the
+    # dispatch overlay / bot_spawn apply — so what's tested is what a turn/bot actually gets.
+
+    @app.get("/api/models/test")
+    def models_test(request: Request):
+        """Test the effective model credentials NOW: custom mode = a real 1-token completion
+        against the endpoint; subscription = mounted-credentials expiry check (the recurring
+        stale-Keychain 401 surfaces here with its remedy instead of at the next chat turn)."""
+        from control_plane import config_test as _ct
+        subject = subject_of(request)
+        cfg: dict = {}
+        mc = getattr(dispatcher, "_model_config", None)
+        if mc is not None:
+            try:
+                cfg = mc.resolve(subject) or {}
+            except Exception as exc:  # resolver down → still test the env floor, but SAY so
+                out = _ct.run_models_test({})
+                out["summary"] += f" (settings resolver unavailable: {exc} — tested env defaults)"
+                return out
+        return _ct.run_models_test(cfg)
+
+    @app.get("/api/transcription/test")
+    def transcription_test(request: Request):
+        """Probe the effective STT backend with its token (GET /balance): catches dead URLs,
+        rejected tokens, and the zero-balance-external-account case that 402s every segment."""
+        from control_plane import config_test as _ct
+        subject = subject_of(request)
+        url, token, source = "", "", "env"
+        settings = dispatcher.settings
+        admin = (settings.admin_api_url or "").rstrip("/")
+        if admin:  # same internal edge bot_spawn uses (bot-context carries the resolved override)
+            import urllib.request as _ur
+            try:
+                req = _ur.Request(f"{admin}/internal/users/{subject}/bot-context",
+                                  headers={"X-Internal-Secret":
+                                           settings.internal_api_secret.get_secret_value()})
+                with _ur.urlopen(req, timeout=5) as r:
+                    body = json.loads(r.read())
+                t = body.get("transcription") or {}
+                if t.get("url") or t.get("token"):
+                    url, token, source = t.get("url") or "", t.get("token") or "", "settings"
+            except Exception:
+                pass  # fall through to env — the probe result still says what was tested
+        if not url:
+            url = os.environ.get("TRANSCRIPTION_SERVICE_URL", "")
+            token = token or os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
+        elif not token:
+            token = os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
+        return _ct.run_transcription_test(url, token, source)
     return app
 
 

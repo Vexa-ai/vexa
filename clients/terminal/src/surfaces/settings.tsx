@@ -9,7 +9,7 @@ import { registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
 import { getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
-import { getModelPrefs, setModelPrefs, getTranscriptionPrefs, setTranscriptionPrefs, getGlobalSetting, setGlobalSetting } from "./settingsApi";
+import { getModelPrefs, setModelPrefs, getTranscriptionPrefs, setTranscriptionPrefs, getGlobalSetting, setGlobalSetting, testModels, testTranscription, type ConfigTestResult } from "./settingsApi";
 
 type SectionId = "calendar" | "models" | "tokens" | "github" | "account";
 const SECTIONS: Array<{ id: SectionId; label: string; icon: string }> = [
@@ -160,6 +160,39 @@ function ConfigForm({ fields, load, save, note }: {
   );
 }
 
+/** On-demand credential test row (fail-loud surface): runs the EFFECTIVE config — the same
+ *  user > global > env resolution a chat turn / bot spawn applies — against the real backend
+ *  and prints the verdict inline, remedy included. What Save can't tell you, Test does. */
+function TestRow({ label, run }: { label: string; run: () => Promise<ConfigTestResult> }) {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<ConfigTestResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const doTest = async () => {
+    setBusy(true); setErr(null); setRes(null);
+    try { setRes(await run()); }
+    catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  const provenance = res ? [res.mode, res.source && `via ${res.source}`].filter(Boolean).join(" · ") : "";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 460, marginTop: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button disabled={busy} onClick={() => void doTest()}
+          style={{ ...btn, opacity: busy ? 0.5 : 1 }}>
+          {busy ? "Testing…" : label}
+        </button>
+        {res && (
+          <span style={{ fontSize: 11.5, color: res.ok ? "var(--green)" : "var(--danger)" }}>
+            {res.ok ? "✓" : "✗"} {provenance && <span style={{ color: "var(--t3)" }}>[{provenance}] </span>}
+            {res.summary}
+          </span>
+        )}
+        {err && <span role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ test failed: {err}</span>}
+      </div>
+    </div>
+  );
+}
+
 /** Models — which LLM the agent runs on and which STT backend the bot transcribes with; your own
  *  settings first, the deployment-wide defaults below for admins. Empty fields = the level below
  *  decides (global settings, then the deployment env). */
@@ -205,9 +238,11 @@ function ModelsSection() {
       <div style={head}>Your models</div>
       <ConfigForm fields={modelFields} load={async () => asStrings(await getModelPrefs())}
         save={async (u) => asStrings(await setModelPrefs(u))} />
+      <TestRow label="Test model credentials" run={testModels} />
       <div style={head}>Your transcription backend</div>
       <ConfigForm fields={transcriptionFields} load={async () => asStrings(await getTranscriptionPrefs())}
         save={async (u) => asStrings(await setTranscriptionPrefs(u))} />
+      <TestRow label="Test transcription backend" run={testTranscription} />
       {globalAdmin && <>
         <div style={{ ...head, marginTop: 22, color: "var(--accent)" }}>Global defaults (admin — every user without own settings)</div>
         <ConfigForm fields={modelFields} load={async () => (await getGlobalSetting("models")) ?? {}}

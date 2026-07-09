@@ -322,6 +322,24 @@
       "default": "false",
       "description": "when true, reject callers lacking the gateway-signed X-Gateway-Verified identity marker (hardened multi-tenant topology); default false preserves dev/direct-edge access",
       "targets": []
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_URL",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "Settings→Models Test button: the deployment-default STT backend URL probed by GET /api/transcription/test when no user/global override exists (the same env floor bot_spawn falls back to in meeting-api; rides in via env_file .env). Empty → the test reports 'no backend configured'",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_TOKEN",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "SECRET — the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings→Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
+      "targets": [
+        "compose"
+      ]
     }
   ],
   "capabilities": {
