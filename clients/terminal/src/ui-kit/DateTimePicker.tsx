@@ -3,7 +3,7 @@
  *
  *  Replaces the native `datetime-local` input (tiny hit-targets, locale-hostile formatting) on the
  *  planned-meeting surfaces. One button shows the friendly value ("Mon, Jul 13 · 10:00"); clicking
- *  opens a popover with quick-pick chips, a month grid, and a 30-minute time list. Emits an ISO
+ *  opens a popover with quick-pick chips, a month grid, and a 15-minute time list. Emits an ISO
  *  string via `onChange` when BOTH halves are chosen (picking a day keeps the current time;
  *  picking a time keeps the current day). `onClear` (optional) renders a "No time" action —
  *  clearing a planned meeting's time flips it back to `idle`.
@@ -26,7 +26,7 @@ function atTime(day: Date, h: number, m: number): Date {
 /** Round UP to the next half-hour boundary — the default for a fresh plan. */
 export function nextHalfHour(from = new Date()): Date {
   const d = new Date(from); d.setSeconds(0, 0);
-  d.setMinutes(d.getMinutes() + (30 - (d.getMinutes() % 30)));
+  d.setMinutes(d.getMinutes() + (15 - (d.getMinutes() % 15)));
   return d;
 }
 
@@ -63,7 +63,7 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
   // scroll the time list to the selected (or working-hours) slot when the popover opens
   useEffect(() => {
     if (!open || !timeListRef.current) return;
-    const idx = selected ? selected.getHours() * 2 + (selected.getMinutes() >= 30 ? 1 : 0) : 18; // 09:00
+    const idx = selected ? selected.getHours() * 4 + Math.floor(selected.getMinutes() / 15) : 36; // 09:00
     timeListRef.current.scrollTop = Math.max(0, idx * 26 - 52);
   }, [open, selected]);
 
@@ -156,11 +156,11 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
             </div>
             {/* time slots */}
             <div ref={timeListRef} style={{ flex: 1, maxHeight: 208, overflowY: "auto", borderLeft: "1px solid var(--line)", paddingLeft: 10 }}>
-              {Array.from({ length: 48 }).map((_, i) => {
-                const h = Math.floor(i / 2), m = i % 2 === 0 ? 0 : 30;
+              {Array.from({ length: 96 }).map((_, i) => {
+                const h = Math.floor(i / 4), m = (i % 4) * 15;
                 const label = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
                 const isSel = selected != null && selected.getHours() === h
-                  && (selected.getMinutes() >= 30 ? 30 : 0) === m;
+                  && selected.getMinutes() - (selected.getMinutes() % 15) === m;
                 return (
                   <button key={label} type="button" onClick={() => { pickTime(h, m); setOpen(false); }}
                     style={{
