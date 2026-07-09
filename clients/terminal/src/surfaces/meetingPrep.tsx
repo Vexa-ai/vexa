@@ -228,6 +228,16 @@ function MeetingPrepTab({ params }: TabProps) {
       const ws = await createSharedWorkspace(name);
       await updatePlannedMeeting(m.id, { workspace_id: ws.workspace_id });
       refreshMeetings();
+      // Creating the shared workspace IS a scaffolding run (prep-v3 ruling, owner 2026-07-09):
+      // the agent must know the workspace is brand-new and exists to collaborate with the other
+      // participants around this meeting — its README is the team brief. Any brief already built
+      // in the user's own workspace is the starting point, not discarded.
+      const carry = ownBrief
+        ? ` I already have a brief for this meeting in my own workspace at ${ownBrief.path} — carry its content over as the starting brief, then keep improving it.`
+        : "";
+      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+        detail: { prompt: `I just created the shared workspace "${ws.workspace_id}" for the meeting "${m.title_custom || title || headline}" — it is brand-new (empty) and exists so the other participants and I can collaborate on this meeting and its series. Scaffold it now: write its README as the team brief (audience = everyone in the room, so keep my private context out unless I confirm it), set up whatever structure the series needs, and interview me for what you can't know from my records.${carry} Write early and keep updating as we talk — the README renders live on the meeting page.` },
+      }));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
