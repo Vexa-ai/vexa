@@ -82,6 +82,32 @@ def test_parse_stream_json_partial_messages_stream_incrementally():
     assert evs[3]["reply"] == "Hello world"
 
 
+def test_parse_stream_json_rewrites_cli_auth_failure():
+    # A credential-less/expired CLI ends the turn with its OWN auth text — an adapter internal
+    # ("/login" doesn't exist for an API consumer). The done frame must carry the platform's
+    # actionable message instead, with the raw CLI text preserved in `detail`.
+    lines = [json.dumps({"type": "result", "subtype": "error", "is_error": True,
+                         "result": "Not logged in · Please run /login", "session_id": "s3"})]
+    (done,) = parse_stream_json(lines)
+    assert done["type"] == "done" and done["ok"] is False
+    assert "Not logged in" not in done["reply"] and "/login" not in done["reply"]
+    for key in ("HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_TOKEN", "VEXA_LLM_API_KEY"):
+        assert key in done["reply"]
+    assert "Settings → Models" in done["reply"]
+    assert done["detail"] == "Not logged in · Please run /login"
+
+
+def test_parse_stream_json_keeps_non_auth_failure_verbatim():
+    # Only auth signatures are rewritten — any other failure text passes through untouched.
+    lines = [json.dumps({"type": "result", "subtype": "error", "is_error": True,
+                         "result": "context window exceeded", "session_id": "s4"})]
+    (done,) = parse_stream_json(lines)
+    assert done["ok"] is False
+    assert done["reply"] == "context window exceeded"
+    assert "detail" not in done
+
+
 # ── the argv (the CLI contract) ──────────────────────────────────────────────
 
 def test_build_argv_core_flags_and_session_model():

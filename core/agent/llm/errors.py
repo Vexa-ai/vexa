@@ -34,7 +34,9 @@ _AUTH_SIGNATURE_RE = re.compile(
     r"|invalid[ _-]*(?:x-)?api[ _-]*key"
     r"|authentication[ _-]*error"
     r"|no auth credentials"
-    r"|user not found",  # OpenRouter's 401 body for a bad key
+    r"|user not found"  # OpenRouter's 401 body for a bad key
+    r"|not[ _-]*logged[ _-]*in"  # claude CLI: subscription credential absent or expired
+    r"|please run /login",  # the claude CLI's remediation line for the same failure
     re.IGNORECASE,
 )
 

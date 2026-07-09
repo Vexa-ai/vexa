@@ -323,6 +323,7 @@ def test_looks_like_auth_failure_signatures():
     assert worker.looks_like_auth_failure("invalid bearer token")
     assert worker.looks_like_auth_failure("authentication_error: invalid x-api-key")
     assert worker.looks_like_auth_failure(RuntimeError("401 No auth credentials found"))
+    assert worker.looks_like_auth_failure("Not logged in · Please run /login")  # claude CLI, no/expired cred
     assert not worker.looks_like_auth_failure("upstream timeout 504")
     assert not worker.looks_like_auth_failure("")
     assert not worker.looks_like_auth_failure(None)
