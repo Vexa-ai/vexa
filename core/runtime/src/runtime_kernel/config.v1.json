@@ -256,16 +256,6 @@
    "default": "<tempdir>/vexa-workloads",
    "description": "process-backend workload log dir — per-workload stdout/stderr capture (the process analog of docker logs); fail-open to DEVNULL if unwritable",
    "targets": []
-  },
-  {
-   "key": "VEXA_WORKSPACE_ISOLATION",
-   "class": "defaulted",
-   "default": "strict",
-   "description": "workspace tenant isolation: strict (default — per-mount binds on docker/k8s, per-subject uid+gid POSIX enforcement on the process backend) | legacy (pre-isolation whole-store exposure — the escape hatch for docker engines < v26 without volume Subpath)",
-   "targets": [
-    "helm",
-    "lite"
-   ]
   }
  ],
  "capabilities": {

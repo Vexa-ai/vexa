@@ -55,8 +55,8 @@ class ProcessBackend:
         # Workspace mount set (WP-A1.1): the lite/process backend shares the HOST filesystem — there is
         # nothing to bind, so tenant isolation is POSIX instead (runtime_kernel.isolation): the worker
         # drops to a per-subject uid, private tiers are 0700-owned, shared workspaces get per-workspace
-        # gids. Unavailable conditions (non-root runtime, non-numeric subject, legacy mode) degrade
-        # LOUDLY to the old shared-trust spawn.
+        # gids. Unavailable conditions (non-root runtime, non-numeric subject) degrade LOUDLY to the
+        # old shared-trust spawn.
         mounts = mount_set(env)
         if len(mounts) > 1:
             log.info("workload %s: %d active workspace mounts: %s",
@@ -96,7 +96,7 @@ class ProcessBackend:
                 stdout=out_fh if out_fh is not None else subprocess.DEVNULL,
                 stderr=subprocess.STDOUT if out_fh is not None else subprocess.DEVNULL,
                 start_new_session=True,
-                preexec_fn=preexec,   # None = shared-trust (legacy / isolation unavailable)
+                preexec_fn=preexec,   # None = shared-trust (isolation unavailable — logged loudly)
             )
         finally:
             if out_fh is not None:

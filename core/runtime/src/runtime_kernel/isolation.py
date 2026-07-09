@@ -27,7 +27,7 @@ import stat
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional
 
-from .mounts import isolation_mode, mount_set
+from .mounts import mount_set
 
 logger = logging.getLogger("runtime_kernel.isolation")
 
@@ -53,8 +53,6 @@ class ProcessIsolation:
 
 def plan_process_isolation(env: Mapping[str, str], *, euid: Optional[int] = None) -> Optional[ProcessIsolation]:
     """Env → the isolation plan, or ``None`` (with ONE loud log naming why) when unavailable."""
-    if isolation_mode(env) != "strict":
-        return None
     if euid is None:
         euid = os.geteuid()
     subject = (env.get("VEXA_OWNER") or "").strip()
@@ -85,8 +83,8 @@ def plan_process_isolation(env: Mapping[str, str], *, euid: Optional[int] = None
 
 
 def _unavailable(reason: str) -> None:
-    logger.warning("workspace isolation UNAVAILABLE for this dispatch (%s) — worker runs shared-trust "
-                   "(legacy). Fix the condition or set VEXA_WORKSPACE_ISOLATION=legacy to silence.", reason)
+    logger.warning("workspace isolation UNAVAILABLE for this dispatch (%s) — worker runs shared-trust. "
+                   "Fix the condition; there is no supported opt-out.", reason)
     return None
 
 

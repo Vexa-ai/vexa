@@ -17,12 +17,9 @@ from runtime_kernel.isolation import (
 )
 
 
-def _env(mounts, *, root="/workspaces", subject="17", isolation=None):
-    e = {"VEXA_WORKSPACE_MOUNT_TARGET": root, "VEXA_OWNER": subject,
-         "VEXA_MOUNTS": json.dumps(mounts)}
-    if isolation is not None:
-        e["VEXA_WORKSPACE_ISOLATION"] = isolation
-    return e
+def _env(mounts, *, root="/workspaces", subject="17"):
+    return {"VEXA_WORKSPACE_MOUNT_TARGET": root, "VEXA_OWNER": subject,
+            "VEXA_MOUNTS": json.dumps(mounts)}
 
 
 MOUNTS = [
@@ -31,11 +28,6 @@ MOUNTS = [
     {"slug": "_system", "path": "/workspaces/.system/17", "role": "system", "write": True},
     {"slug": "deal-9", "path": "/workspaces/deal-9", "role": "shared", "write": True},
 ]
-
-
-@pytest.fixture(autouse=True)
-def _no_ambient_isolation_env(monkeypatch):
-    monkeypatch.delenv("VEXA_WORKSPACE_ISOLATION", raising=False)
 
 
 # ── the plan (pure) ───────────────────────────────────────────────────────────
@@ -50,8 +42,6 @@ def test_plan_maps_subject_to_uid_and_buckets_the_mounts():
 
 
 def test_plan_unavailable_paths_degrade_loudly_to_none(caplog):
-    # legacy mode → no plan, silently (explicitly requested)
-    assert plan_process_isolation(_env(MOUNTS, isolation="legacy"), euid=0) is None
     # non-root runtime → None + a WARNING naming the condition
     with caplog.at_level("WARNING"):
         assert plan_process_isolation(_env(MOUNTS), euid=501) is None

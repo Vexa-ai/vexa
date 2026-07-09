@@ -190,11 +190,10 @@ class DockerBackend:
 
         # Workspace mount set (Workspace primitive + WP-A1.1): the dispatch's granted git folders are
         # PORTED IN, not cloned. The mount plumbing is SHARED across all three backends
-        # (runtime_kernel.mounts.workspace_binds). STRICT isolation (default): one bind PER MOUNT, so the
-        # container physically contains ONLY this dispatch's workspaces — a named-volume store rides the
-        # Mounts API's VolumeOptions.Subpath (engine ≥ v26; older engines set
-        # VEXA_WORKSPACE_ISOLATION=legacy to restore the whole-store bind). Read-only roles are enforced
-        # by the bind itself now, not just the commit token.
+        # (runtime_kernel.mounts.workspace_binds): one bind PER MOUNT, so the container physically
+        # contains ONLY this dispatch's workspaces — a named-volume store rides the Mounts API's
+        # VolumeOptions.Subpath (REQUIRES engine ≥ v26; older engines fail the create loudly).
+        # Read-only roles are enforced by the bind itself, not just the commit token.
         binds: list[str] = []
         api_mounts: list[dict[str, Any]] = []
         for b in workspace_binds(env):

@@ -3,50 +3,27 @@ docker/k8s/process backends share, proven offline (no docker, no kubectl).
 
 STRICT isolation (default): one bind PER MOUNT — the worker's filesystem contains ONLY the dispatch's
 declared workspaces (tenant isolation enforced by the mount table). A named-volume store rides
-``volume_subpath`` (docker VolumeOptions.Subpath); a host-path store joins the subpath; k8s uses native
-``subPath`` + ``readOnly``. LEGACY (``VEXA_WORKSPACE_ISOLATION=legacy``): the pre-isolation whole-store
-bind, kept as the escape hatch for docker engines < v26."""
+``volume_subpath`` (docker VolumeOptions.Subpath, engine ≥ v26); a host-path store joins the subpath;
+k8s uses native ``subPath`` + ``readOnly``. The whole-store bind is never emitted."""
 from __future__ import annotations
 
 import json
 
-import pytest
-
-from runtime_kernel.mounts import MountBind, isolation_mode, k8s_volume_mounts, mount_set, workspace_binds
+from runtime_kernel.mounts import MountBind, k8s_volume_mounts, mount_set, workspace_binds
 from runtime_kernel.docker_backend import DockerBackend  # for the docker bind-string shape
 from runtime_kernel.k8s_backend import pod_overrides
 from runtime_kernel.profiles import Runnable
 
 
-def _env(mounts=None, *, source="agent-workspaces", target="/workspaces", path="/workspaces/u1",
-         isolation=None):
+def _env(mounts=None, *, source="agent-workspaces", target="/workspaces", path="/workspaces/u1"):
     e = {"VEXA_WORKSPACE_MOUNT_SOURCE": source, "VEXA_WORKSPACE_MOUNT_TARGET": target,
          "VEXA_WORKSPACE_PATH": path}
     if mounts is not None:
         e["VEXA_MOUNTS"] = json.dumps(mounts)
-    if isolation is not None:
-        e["VEXA_WORKSPACE_ISOLATION"] = isolation
     return e
 
 
-@pytest.fixture(autouse=True)
-def _no_ambient_isolation_env(monkeypatch):
-    """isolation_mode falls back to the SERVICE environ — keep tests hermetic from the dev shell."""
-    monkeypatch.delenv("VEXA_WORKSPACE_ISOLATION", raising=False)
-
-
-# ── mode resolution ──────────────────────────────────────────────────────────
-
-def test_isolation_mode_defaults_strict_and_honors_legacy(monkeypatch):
-    assert isolation_mode({}) == "strict"
-    assert isolation_mode({"VEXA_WORKSPACE_ISOLATION": "legacy"}) == "legacy"
-    assert isolation_mode({"VEXA_WORKSPACE_ISOLATION": "STRICT"}) == "strict"
-    # operator-level fallback: the runtime service's own environ decides when the dispatch is silent
-    monkeypatch.setenv("VEXA_WORKSPACE_ISOLATION", "legacy")
-    assert isolation_mode({}) == "legacy"
-
-
-# ── STRICT (default): one bind per mount, nothing else reachable ─────────────
+# ── one bind per mount, nothing else reachable ───────────────────────────────
 
 def test_strict_emits_one_volume_subpath_bind_per_in_store_mount():
     """The tenant-isolation core: NO store-root bind; each in-store mount becomes its own bind of the
@@ -107,32 +84,6 @@ def test_strict_legacy_dispatch_still_binds_its_baseline():
     """A dispatch predating VEXA_MOUNTS (only VEXA_WORKSPACE_PATH) gets its one private-baseline bind."""
     binds = workspace_binds(_env())
     assert binds == [MountBind("agent-workspaces", "/workspaces/u1", read_only=False, volume_subpath="u1")]
-
-
-# ── LEGACY: the pre-isolation whole-store bind (escape hatch) ─────────────────
-
-def test_legacy_store_bind_exposes_every_in_store_mount():
-    mounts = [
-        {"slug": "seed", "path": "/workspaces/u1", "role": "private", "write": True, "primary": True},
-        {"slug": "shared-x", "path": "/workspaces/.attached/u1/shared-x", "role": "private", "write": True},
-    ]
-    binds = workspace_binds(_env(mounts, isolation="legacy"))
-    assert binds == [MountBind("agent-workspaces", "/workspaces", read_only=False)]
-
-
-def test_legacy_out_of_store_and_global_mounts_get_their_own_binds():
-    mounts = [
-        {"slug": "seed", "path": "/workspaces/u1", "role": "private", "write": True, "primary": True},
-        {"slug": "shared-z", "path": "/shared-store/team-z", "role": "shared", "write": False},
-        {"slug": "_global", "source": "/srv/vexa-global", "path": "/workspaces/_global",
-         "role": "global", "write": False},
-    ]
-    binds = workspace_binds(_env(mounts, isolation="legacy"))
-    assert binds[0] == MountBind("agent-workspaces", "/workspaces", read_only=False)
-    assert MountBind("/shared-store/team-z", "/shared-store/team-z", read_only=True) in binds
-    assert MountBind("/srv/vexa-global", "/workspaces/_global", read_only=True) in binds
-    strings = [f"{b.source}:{b.target}:ro" if b.read_only else f"{b.source}:{b.target}" for b in binds]
-    assert "/srv/vexa-global:/workspaces/_global:ro" in strings
 
 
 def test_no_store_configured_yields_direct_binds_only():
@@ -196,12 +147,6 @@ def test_k8s_strict_emits_per_mount_subpath_readonly():
         {"name": "workspace-store", "mountPath": "/workspaces/deal-9", "subPath": "deal-9", "readOnly": True},
     ]
     assert not any(vm["mountPath"] == "/workspaces" for vm in vmounts)   # whole store never mounted
-
-
-def test_k8s_legacy_binds_the_store_pvc_at_the_root():
-    volumes, vmounts = k8s_volume_mounts(_env(isolation="legacy"), pvc_name="vexa-agent-workspaces",
-                                         store_target="/workspaces")
-    assert vmounts == [{"name": "workspace-store", "mountPath": "/workspaces"}]
 
 
 def test_k8s_pod_overrides_carry_the_per_mount_spec():

@@ -62,29 +62,16 @@ def _under(path: str, root: str) -> bool:
     return p == r or p.startswith(r.rstrip("/") + "/")
 
 
-def isolation_mode(env: Mapping[str, str]) -> str:
-    """The workspace-isolation mode for one dispatch: ``strict`` (default — each worker sees ONLY its
-    declared mount set, tenant isolation enforced by the substrate) or ``legacy`` (the pre-isolation
-    whole-store bind — the escape hatch for docker engines < v26, which lack volume ``Subpath``).
-    The dispatch env wins; the runtime SERVICE's own environ is the operator-level fallback."""
-    raw = env.get("VEXA_WORKSPACE_ISOLATION") or os.environ.get("VEXA_WORKSPACE_ISOLATION") or ""
-    return "legacy" if raw.strip().lower() == "legacy" else "strict"
-
-
 def workspace_binds(env: Mapping[str, str]) -> list[MountBind]:
-    """The ordered binds a backend must materialize for one dispatch.
+    """The ordered binds a backend must materialize for one dispatch — one bind PER MOUNT in the set,
+    so the container's filesystem physically contains ONLY the dispatch's declared workspaces: another
+    tenant's data simply isn't reachable (tenant isolation enforced by the mount table, not by prompt
+    instructions). The whole-store root bind is never emitted.
 
-    STRICT (default): one bind PER MOUNT in the set — the container's filesystem physically contains
-    ONLY the dispatch's declared workspaces, so another tenant's data simply isn't reachable (tenant
-    isolation enforced by the mount table, not by prompt instructions). An in-store mount is exposed as
-    the store's subpath: a host-path store joins the path; a named-volume store rides ``volume_subpath``
-    (docker ``VolumeOptions.Subpath``, engine ≥ v26). Read-only roles bind ``:ro`` — now enforced.
-
-    LEGACY (``VEXA_WORKSPACE_ISOLATION=legacy``): the pre-isolation shape — the whole store bound rw at
-    the root (exposes every tenant) + extra binds only for out-of-store mounts. Kept as the escape hatch
-    for substrates without subpath support.
-
-    De-duplicated, order-preserving either way."""
+    An in-store mount is exposed as the store's subpath: a host-path store joins the path; a
+    named-volume store rides ``volume_subpath`` (docker ``VolumeOptions.Subpath`` — REQUIRES engine
+    ≥ v26; older engines fail the container create loudly). Read-only roles bind ``:ro`` — enforced.
+    De-duplicated, order-preserving."""
     binds: list[MountBind] = []
     seen: set[tuple[str, str]] = set()
 
@@ -96,18 +83,12 @@ def workspace_binds(env: Mapping[str, str]) -> list[MountBind]:
 
     src = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
-    strict = isolation_mode(env) == "strict"
-
-    if not strict and src and root:
-        add(src, root, read_only=False)  # legacy: the whole store; the token is the only write gate
 
     for m in mount_set(env):
         path = m["path"]
         source = m.get("source")
         read_only = not m.get("write", True)
         if not source and root and _under(path, root):
-            if not strict:
-                continue  # legacy: already exposed by the store-root bind
             if not src:
                 continue  # no store backing declared (process backend env) — nothing to bind
             rel = os.path.relpath(os.path.normpath(path), os.path.normpath(root))
@@ -121,7 +102,7 @@ def workspace_binds(env: Mapping[str, str]) -> list[MountBind]:
                 add(src, path, read_only, volume_subpath=rel)
             continue
         # A mount with its OWN host source (the _global GLOBAL SYSTEM tier, a future cross-store shared
-        # workspace) — or one outside the store root — binds source→target directly, in both modes.
+        # workspace) — or one outside the store root — binds source→target directly.
         add(source or path, path, read_only)
 
     return binds
@@ -144,21 +125,19 @@ def mount_set(env: Mapping[str, str]) -> list[dict]:
 def k8s_volume_mounts(env: Mapping[str, str], *, pvc_name: str, store_target: str) -> tuple[list[dict], list[dict]]:
     """The k8s ``volumes`` + ``volumeMounts`` for the mount set, from the SAME env the docker binds read.
 
-    The workspace store is ONE RWX PVC (``pvc_name``). STRICT (default): one ``volumeMount`` PER MOUNT
-    in the set — same PVC, per-mount ``subPath`` + ``readOnly`` — so the Pod's filesystem contains only
-    the dispatch's declared workspaces (``subPath`` is native k8s; no version caveat). LEGACY: the
-    pre-isolation single whole-store mount at the root. A mount with its OWN host source (``_global``)
-    is SKIPPED with a warning in both modes — hostPath volumes were never emitted here (k8s deployments
-    bake ``_global`` differently); an out-of-store mount on its own PVC is a later WP. Pure + env-driven
-    (no kubectl) so the k8s mount plumbing is unit-tested offline.
+    The workspace store is ONE RWX PVC (``pvc_name``): one ``volumeMount`` PER MOUNT in the set — same
+    PVC, per-mount ``subPath`` + ``readOnly`` — so the Pod's filesystem contains only the dispatch's
+    declared workspaces (``subPath`` is native k8s; no version caveat). The whole-store root mount is
+    never emitted. A mount with its OWN host source (``_global``) is SKIPPED with a warning — hostPath
+    volumes were never emitted here (k8s deployments bake ``_global`` differently); an out-of-store
+    mount on its own PVC is a later WP. Pure + env-driven (no kubectl) so the k8s mount plumbing is
+    unit-tested offline.
 
     Returns ``(volumes, volume_mounts)`` ready to splat into a Pod ``--overrides`` spec."""
     if not pvc_name or not store_target:
         return [], []
     vol_name = "workspace-store"
     volumes = [{"name": vol_name, "persistentVolumeClaim": {"claimName": pvc_name}}]
-    if isolation_mode(env) != "strict":
-        return volumes, [{"name": vol_name, "mountPath": store_target}]
     volume_mounts: list[dict] = []
     seen: set[str] = set()
     for m in mount_set(env):

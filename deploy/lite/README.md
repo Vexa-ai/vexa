@@ -107,7 +107,7 @@ docker exec vexa-lite ps aux | grep dist/index.js # running bot processes
 
 | | Lite | Compose |
 |---|---|---|
-| Bot / agent isolation | POSIX (per-subject uid, 0700 tiers, per-share gids — `VEXA_WORKSPACE_ISOLATION=strict`, the default) | separate containers (per-mount binds) |
+| Bot / agent isolation | POSIX (per-subject uid, 0700 tiers, per-share gids) | separate containers (per-mount binds) |
 | Docker socket | not needed | required (runtime spawns over it) |
 | Datastores | postgres + minio sidecars | in-stack |
 | Setup | `make lite` | `make all` |
