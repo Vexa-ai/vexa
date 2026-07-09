@@ -2102,7 +2102,13 @@ async def transcribe_meeting(
         segments = _map_speakers_to_segments(speaker_events, segments)
         logger.info(f"Mapped {len(speaker_events)} speaker events to {len(segments)} segments")
 
-    # 7. Store segments in transcriptions table
+    # 7. Store segments in transcriptions table.
+    # Batch commits every 200 rows: on 2026-07-08 an hour-long Teams meeting
+    # produced ~1000 segments which the old single-commit path pushed as one
+    # 124KB INSERT; asyncpg dropped the connection halfway through when the
+    # caller (Aimable) cancelled at its 30s timeout, and NOTHING landed. With
+    # smaller commits, either the whole set makes it or we keep the prefix.
+    BATCH_SIZE = 200
     stored = 0
     for seg in segments:
         start = float(seg.get("start", 0))
@@ -2124,6 +2130,8 @@ async def transcribe_meeting(
         )
         db.add(t)
         stored += 1
+        if stored % BATCH_SIZE == 0:
+            await db.commit()
 
     # 8. Update meeting.data with transcribed_at timestamp
     meeting_data["transcribed_at"] = datetime.utcnow().isoformat()

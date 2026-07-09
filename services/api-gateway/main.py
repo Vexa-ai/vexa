@@ -769,9 +769,19 @@ async def update_recording_config_proxy(request: Request):
           summary="Transcribe a completed meeting recording",
           dependencies=[Depends(api_key_scheme)])
 async def transcribe_meeting_proxy(meeting_id: int, request: Request):
-    """Forward transcribe request to Bot Manager."""
-    url = f"{MEETING_API_URL}/meetings/{meeting_id}/transcribe"
-    return await forward_request(app.state.http_client, "POST", url, request)
+    """Forward transcribe request to Bot Manager.
+
+    The default gateway http_client has a 30s timeout, which is far too short
+    for /transcribe: the endpoint synchronously downloads the audio, calls
+    Whisper, and bulk-inserts ~1k rows. On 2026-07-08 that pattern killed
+    the transcription of meeting 118 (76 min Teams) — the gateway timed out
+    at 30s while meeting-api was still committing, which cancelled the
+    downstream asyncpg context and lost the whole transcript. Use a dedicated
+    client with a 10-min read window to match Aimable's client-side timeout.
+    """
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=30.0)) as long_client:
+        url = f"{MEETING_API_URL}/meetings/{meeting_id}/transcribe"
+        return await forward_request(long_client, "POST", url, request)
 
 # --- Transcription Collector Routes ---
 @app.get("/meetings",
