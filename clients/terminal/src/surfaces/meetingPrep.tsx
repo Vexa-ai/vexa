@@ -19,7 +19,8 @@ import { copyText } from "../ui-kit/ContextMenu";
 import { useLiveMeetings, refreshMeetings } from "./liveMeetings";
 import type { MeetingMock } from "./meetingModel";
 import { updatePlannedMeeting, deletePlannedMeeting } from "./plannedApi";
-import { createSharedWorkspace, listSharedMemberships, mintInvite, readWorkspaceFile, type Membership } from "./workspaceApi";
+import { createSharedWorkspace, listSharedMemberships, listWorkspaceTree, mintInvite, readWorkspaceFile, type Membership } from "./workspaceApi";
+import { findBriefNote, isExampleNote } from "./briefNote";
 import { manageTabDescriptor } from "./workspaceManage";
 import { ASK_CHAT_EVENT } from "../canvas/actions";
 
@@ -94,6 +95,61 @@ function Brief({ slug, title }: { slug: string; title: string }) {
   );
 }
 
+/** Own-workspace brief (frame 6, owner-ruled 2026-07-09): with NO shared workspace bound, the brief
+ *  is this meeting's note in the user's OWN workspace — and the prep page renders it LIVE while the
+ *  brief chat writes it, instead of sitting on the "No brief yet" state. Polls the own-workspace
+ *  tree (short interval while the tab is up — agents write mid-chat) and re-reads the note. */
+const OWN_BRIEF_POLL_MS = 12_000;
+
+function useOwnBriefNote(enabled: boolean, title: string, nativeId?: string | null) {
+  const [note, setNote] = useState<{ path: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!enabled) { setNote(null); return; }
+    let alive = true;
+    const look = async () => {
+      try {
+        const files = await listWorkspaceTree();
+        const path = findBriefNote(files, { title, nativeId });
+        if (!path) { if (alive) setNote(null); return; }
+        const text = await readWorkspaceFile(path);
+        if (!alive) return;
+        if (!text || !text.trim() || isExampleNote(text)) setNote(null);
+        else setNote({ path, text });
+      } catch { /* keep the last good render — a poll blip must not blank the brief */ }
+    };
+    void look();
+    const t = setInterval(() => { if (document.visibilityState === "visible") void look(); }, OWN_BRIEF_POLL_MS);
+    return () => { alive = false; clearInterval(t); };
+  }, [enabled, title, nativeId]);
+  return note;
+}
+
+function OwnBrief({ note, onSteer }: { note: { path: string; text: string }; onSteer: () => void }) {
+  const layout = useService(LayoutServiceId);
+  return (
+    <div style={{ margin: "18px 0 0", border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px 0" }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />
+        <span style={{ fontSize: 10, color: "var(--t3)", letterSpacing: ".08em", fontFamily: "var(--mono)" }}>
+          your brief · this meeting&rsquo;s note
+        </span>
+        <span style={{ flex: 1 }} />
+        <button onClick={() => layout.openTab({ id: `doc:${note.path}`, title: note.path.split("/").pop() ?? note.path, kind: "doc", params: { path: note.path } })}
+          title="Open as a document" style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          open
+        </button>
+        <button onClick={onSteer} title="Steer the brief in chat"
+          style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          update via chat
+        </button>
+      </div>
+      <div style={{ padding: "4px 16px 12px", maxHeight: 460, overflow: "auto" }}>
+        <Markdown style={{ fontSize: 13, lineHeight: 1.55 }}>{note.text}</Markdown>
+      </div>
+    </div>
+  );
+}
+
 function MeetingPrepTab({ params }: TabProps) {
   const layout = useService(LayoutServiceId);
   const all = useLiveMeetings();
@@ -114,6 +170,7 @@ function MeetingPrepTab({ params }: TabProps) {
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);       // ⋯ row: link edit / unbind / delete
   const [rebindOpen, setRebindOpen] = useState(false);   // "change" → the bind select
+  const [briefChatStarted, setBriefChatStarted] = useState(false); // own-brief interview dispatched
 
   // seed the form once PER MEETING (live refreshes must not clobber in-progress edits; a
   // preview swap to another meeting must re-seed)
@@ -180,8 +237,10 @@ function MeetingPrepTab({ params }: TabProps) {
   // workspace, so it follows the series without creating a shared space.
   const startBriefChat = () => {
     const name = m?.title_custom || title || "this meeting";
+    const key = m?.native_id ? ` Name the note's file so it includes the meeting id ${m.native_id} (kg/entities/meeting/…${m.native_id}….md) — the meeting page finds and renders it by that id.` : "";
+    setBriefChatStarted(true);
     window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
-      detail: { prompt: `Interview me to build the brief for "${name}" — ask what you can't know from my records (who's in the room, what I want out of it, what the notetaker should listen for), research the attendees in my knowledge, then write the brief as this meeting's note in my own workspace (no shared workspace) so it can be reused across this meeting's series.` },
+      detail: { prompt: `Interview me to build the brief for "${name}" — ask what you can't know from my records (who's in the room, what I want out of it, what the notetaker should listen for), research the attendees in my knowledge and public sources, then write the brief as this meeting's note in my own workspace (no shared workspace) so it can be reused across this meeting's series.${key} Write the note EARLY and keep updating it as we talk — it renders live on the meeting page.` },
     }));
   };
 
@@ -196,6 +255,9 @@ function MeetingPrepTab({ params }: TabProps) {
 
   const autoJoin = m?.auto_join !== false;   // absent = ON
   const headline = useMemo(() => m?.title_custom || m?.title || "Planned meeting", [m]);
+  // own-workspace brief (frame 6): only hunted while the meeting is unbound — a bound workspace's
+  // README is the brief and wins.
+  const ownBrief = useOwnBriefNote(!!m && !m.workspace_id && !readOnly && isIntent, headline, m?.native_id);
 
   // B2 tab hygiene: a calendar sweep DELETES + recreates rows (new ids) — a tab keyed to the old
   // row would dangle on "Loading meeting…" forever. Once the store has data and the row is gone,
@@ -311,6 +373,14 @@ function MeetingPrepTab({ params }: TabProps) {
           <Brief slug={m.workspace_id} title={headline} />
         ) : readOnly ? (
           <div style={{ margin: "18px 0 0", fontSize: 12.5, color: "var(--t3)" }}>No workspace bound.</div>
+        ) : ownBrief ? (
+          /* the own-workspace note IS the brief — rendered live while the chat writes it */
+          <OwnBrief note={ownBrief} onSteer={() => startBriefChat()} />
+        ) : briefChatStarted ? (
+          <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--t3)" }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flex: "none" }} />
+            Brief chat running — the brief renders here as the agent writes it.
+          </div>
         ) : (
           /* No-brief state (first-run-onboarding frame 6, owner-ruled): two REAL actions. Brief chat
              = the agent interviews you here (the prep tab's meeting grounding rides the turn) and the
