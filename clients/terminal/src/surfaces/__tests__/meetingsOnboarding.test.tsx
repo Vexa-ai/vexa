@@ -54,18 +54,27 @@ describe("connectOutcome", () => {
   });
 });
 
-describe("slim — the standing calendar affordance", () => {
-  it("renders while NO calendar is connected", async () => {
+describe("slim — the standing affordances on a populated Meetings page", () => {
+  it("calendar card renders while NO calendar is connected", async () => {
     stubCalendarApi({ connected: false });
     render(<MeetingsOnboarding variant="slim" />);
     await waitFor(() => expect(screen.getByText(/No calendar connected/)).toBeTruthy());
   });
 
-  it("disappears once connected", async () => {
+  it("calendar card disappears once connected — plan + drop-bot STAY", async () => {
     const calls = stubCalendarApi({ connected: true });
     const { container } = render(<MeetingsOnboarding variant="slim" />);
     await waitFor(() => expect(calls.some((c) => c.url.includes("/api/user/calendar"))).toBe(true));
     expect(container.textContent).not.toContain("No calendar connected");
+    expect(screen.getByText("+ Plan a meeting")).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Paste a Google Meet link/)).toBeTruthy();
+  });
+
+  it("plan + drop-bot are there in the disconnected state too", async () => {
+    stubCalendarApi({ connected: false });
+    render(<MeetingsOnboarding variant="slim" />);
+    await waitFor(() => expect(screen.getByText("+ Plan a meeting")).toBeTruthy());
+    expect(screen.getByPlaceholderText(/Paste a Google Meet link/)).toBeTruthy();
   });
 });
 

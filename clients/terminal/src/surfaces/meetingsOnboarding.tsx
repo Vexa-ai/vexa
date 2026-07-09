@@ -194,20 +194,31 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
     finally { setPlanning(false); }
   };
 
-  // slim = the standing affordance: exists ONLY while this user has no calendar connected.
+  // slim = the STANDING affordances on a populated Meetings page: plan + drop-bot are ALWAYS
+  // available (owner ruling 2026-07-09); the calendar card additionally shows while this user
+  // has no calendar connected.
   if (variant === "slim") {
-    if (connected !== false) return null;
     return (
       <>
-        <div style={{ ...cardBase, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 }}>
-          <Icon name="cal" size={15} style={{ color: "var(--t3)", flex: "none" }} />
-          <span style={{ ...cardBody, flex: 1 }}>
-            <b style={{ color: "var(--t2)" }}>No calendar connected</b> — connect your calendar&rsquo;s secret
-            ICS feed and scheduled meetings appear here by themselves; with auto-join on, the bot joins when
-            they start.
-          </span>
-          <button style={{ ...cta, flex: "none" }} onClick={() => setModal(true)}>Connect calendar →</button>
+        {connected === false && (
+          <div style={{ ...cardBase, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 }}>
+            <Icon name="cal" size={15} style={{ color: "var(--t3)", flex: "none" }} />
+            <span style={{ ...cardBody, flex: 1 }}>
+              <b style={{ color: "var(--t2)" }}>No calendar connected</b> — connect your calendar&rsquo;s secret
+              ICS feed and scheduled meetings appear here by themselves; with auto-join on, the bot joins when
+              they start.
+            </span>
+            <button style={{ ...cta, flex: "none" }} onClick={() => setModal(true)}>Connect calendar →</button>
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <button onClick={() => void plan()} disabled={planning}
+            style={{ flex: "none", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "7px 11px", fontSize: 12, cursor: "pointer" }}>
+            {planning ? "Planning…" : "+ Plan a meeting"}
+          </button>
+          <div style={{ flex: 1, minWidth: 220 }}><DropBotInline /></div>
         </div>
+        {planErr && <div role="alert" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4 }}>⚠ {planErr}</div>}
         {modal && <ConnectCalendarModal onClose={() => setModal(false)} onConnected={reprobe} />}
       </>
     );
