@@ -15,8 +15,7 @@ Markdown knowledge base your team owns. Self-hosted, Apache-2.0, air-gap-ready.
 [![Self-hosted](https://img.shields.io/badge/deploy-self--hosted-success.svg)](#-quickstart)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2.svg)](https://discord.gg/vexa)
 
-**▶ Explore the live demo at [core.vexa.ai](https://core.vexa.ai)** — the Terminal workbench running
-the full stack, no install.
+**[vexa.ai](https://vexa.ai)** still runs the 0.10.6.13 line — it will host **0.12**.
 
 </div>
 
@@ -92,8 +91,8 @@ When `make all` finishes it prints your key and URLs:
 
 ### Explore in the Terminal (the fast path)
 
-**The Terminal is the way to see what Vexa can do.** Open **`http://localhost:13000`** (or the hosted
-[core.vexa.ai](https://core.vexa.ai)) — you're already signed in to a self-host account. From the
+**The Terminal is the way to see what Vexa can do.** Open **`http://localhost:13000`** — you're
+already signed in to a self-host account. From the
 workbench you can, with no curl:
 
 - **Send a bot** — paste a Meet / Zoom / Teams URL; a bot joins as a participant.
@@ -283,7 +282,7 @@ is the primary source). You get the full service — bots, transcripts, agents, 
 subscription you already pay for.
 
 **2. Cloud — Helm on Kubernetes / OpenShift, scalable to thousands of users.**
-The chart in [`deploy/helm`](deploy/helm) deploys the same control plane with
+The chart in [`deploy/helm`](https://github.com/Vexa-ai/vexa/tree/main/deploy/helm) deploys the same control plane with
 `RUNTIME_BACKEND=k8s`: **every bot and every agent is its own Kubernetes workload** (a bare Pod
 per dispatch), so capacity is your cluster's scheduler, not a bigger box — built multi-tenant and
 multiuser from the start. One compliance rule when you go multiuser: other users' turns must run
@@ -343,6 +342,10 @@ Vexa is the one combination the others don't offer: a **permissively-licensed (A
 meeting-bot-API server** that is **self-hosted × real-time × multi-platform × knowledge-you-own.**
 And it's *complementary* to the document-RAG and "second brain" tools — feed them Vexa's clean,
 attributed transcripts and let them do what they're good at.
+
+The full field — including [Attendee](https://github.com/attendee-labs/attendee) (the other
+open-source meeting-bot API) and the local-notetaker tools — is mapped honestly, trade-offs and
+all, in [How Vexa compares](https://docs.vexa.ai/comparison).
 
 ---
 
@@ -452,7 +455,6 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 
 ## 🤝 Community & contributing
 
-- **Try it hosted** — [core.vexa.ai](https://core.vexa.ai) (the Terminal workbench, full stack, no install)
 - **Docs** — [docs.vexa.ai](https://docs.vexa.ai)
 - **Discord** — [discord.gg/vexa](https://discord.gg/vexa)
 - **Issues & PRs** — welcome. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
