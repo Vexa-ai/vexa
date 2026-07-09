@@ -96,7 +96,6 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
   const mounted = shared
     ? activeSet.some((m) => m.role === "shared" && m.slug === slug)
     : activeSet.some((m) => m.slug === slug);
-  const isBorn = !shared && !meta?.repo;                       // vexa-born (no external origin) — publishable
   const myRole = memberships.find((m) => m.workspace_id === slug)?.role;
 
   // The shared workspace_id the participants section operates on: a shared row IS the id; an own workspace
@@ -155,7 +154,7 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
 
           <GitHubSection
             slug={slug} status={status} published_url={isSeed ? (attached.published_url ?? null) : null}
-            canPublish={isBorn && isSeed} defaultRepoName={defaultRepoName(displayName)}
+            defaultRepoName={defaultRepoName(displayName)}
             busy={busy} onRun={run} reload={loadCore}
           />
 
@@ -324,8 +323,8 @@ function PurposeSection({ slug }: { slug: string }) {
 }
 
 // ── GitHub sync ──────────────────────────────────────────────────────────────────────────────────
-function GitHubSection({ slug, status, published_url, canPublish, defaultRepoName, busy, onRun, reload }: {
-  slug: string; status: GitRemoteStatus | null; published_url: string | null; canPublish: boolean;
+function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onRun, reload }: {
+  slug: string; status: GitRemoteStatus | null; published_url: string | null;
   defaultRepoName: string; busy: boolean; onRun: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; reload: () => void;
 }) {
   const [pushTok, setPushTok] = useState<{ open: boolean; token: string }>({ open: false, token: "" });
@@ -339,7 +338,7 @@ function GitHubSection({ slug, status, published_url, canPublish, defaultRepoNam
   // token: prompt value → else the saved token (backend fills it in when omitted).
   const doPush = () => onRun(async () => { await pushWorkspace({ slug, token: pushTok.token.trim() || undefined }); setPushTok({ open: false, token: "" }); reload(); }, "Pushed to GitHub.");
   const doPull = () => onRun(async () => { const r = await pullWorkspace({ slug, token: pullTok.token.trim() || undefined }); setPullTok({ open: false, token: "" }); reload(); return r; }, "Pulled — fast-forwarded from GitHub.");
-  const doPublish = (f: { name: string; priv: boolean; token: string }) => onRun(async () => { await publishWorkspace(f.name.trim(), f.priv, f.token.trim() || undefined); setPub(null); reload(); }, "Published to GitHub.");
+  const doPublish = (f: { name: string; priv: boolean; token: string }) => onRun(async () => { await publishWorkspace(f.name.trim(), f.priv, f.token.trim() || undefined, undefined, slug); setPub(null); reload(); }, "Published to GitHub.");
   // With a saved token, push/pull run straight away (no prompt); otherwise open the one-off token row.
   const onPush = () => { if (hasSaved) void doPush(); else { setPushTok({ open: true, token: "" }); setPullTok({ open: false, token: "" }); } };
   const onPull = () => { if (hasSaved) void doPull(); else { setPullTok({ open: true, token: "" }); setPushTok({ open: false, token: "" }); } };
@@ -347,7 +346,9 @@ function GitHubSection({ slug, status, published_url, canPublish, defaultRepoNam
   return (
     <Section icon="github" title="GitHub"
       right={status?.branch && <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--t2)" }}>{status.branch}</span>}>
-      {hasHome ? (<>
+      {status === null ? (
+        <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Checking the GitHub state…</div>
+      ) : hasHome ? (<>
         <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "var(--t2)", marginBottom: 10, flexWrap: "wrap" }}>
           {url && <a href={url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />Open on GitHub</a>}
           <AheadBehind ahead={status!.ahead} behind={status!.behind} tracked={status!.tracked} />
@@ -367,7 +368,9 @@ function GitHubSection({ slug, status, published_url, canPublish, defaultRepoNam
             onChange={(t) => setPullTok({ open: true, token: t })} onSubmit={doPull} onCancel={() => setPullTok({ open: false, token: "" })}
             submitLabel={busy ? "Pulling…" : "Pull"} />
         )}
-      </>) : canPublish ? (<>
+      </>) : (<>
+        {/* No home yet ⇒ this is a vexa-born workspace (attached clones always have origin) — offer
+            Publish on ANY of them, own or shared (the backend permission-checks the slug). */}
         <div style={{ fontSize: 12.5, color: "var(--t2)", marginBottom: 10 }}>Not published yet — create a GitHub repo and push this workspace's full history.</div>
         {pub === null ? (
           <button disabled={busy} onClick={() => setPub({ name: defaultRepoName, priv: true, token: "" })} style={btn("primary")}>Publish to GitHub…</button>
@@ -384,9 +387,7 @@ function GitHubSection({ slug, status, published_url, canPublish, defaultRepoNam
             </div>
           </div>
         )}
-      </>) : (
-        <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No GitHub home yet. Attach a repo (from the Workspaces list) or publish to sync this workspace.</div>
-      )}
+      </>)}
     </Section>
   );
 }

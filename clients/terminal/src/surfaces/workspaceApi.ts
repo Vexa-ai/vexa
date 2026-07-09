@@ -222,11 +222,12 @@ export interface PublishResult { repo_url: string; pushed_ref: string; head_sha:
  *  caller's PAT — used server-side for this one call (repo creation + push), NEVER stored (P15).
  *  Re-publish to the same repo is a plain push (fast-forward, or a clear error — never a force push):
  *  pass `remoteUrl` (the workspace's published home) to PUSH UPDATES there instead of creating a repo. */
-export async function publishWorkspace(repoName: string, priv: boolean, token?: string, remoteUrl?: string): Promise<PublishResult> {
+export async function publishWorkspace(repoName: string, priv: boolean, token?: string, remoteUrl?: string, slug?: string): Promise<PublishResult> {
   return getJson(`/api/workspace/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(remoteUrl ? { remote_url: remoteUrl, token } : { repo_name: repoName, private: priv, token }),
+    // `slug` targets ANY workspace the caller can manage (own slot or shared membership); omitted = seed.
+    body: JSON.stringify(remoteUrl ? { remote_url: remoteUrl, token, slug } : { repo_name: repoName, private: priv, token, slug }),
   });
 }
 

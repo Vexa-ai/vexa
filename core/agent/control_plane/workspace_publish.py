@@ -162,30 +162,43 @@ def publish_workspace(
     org: Optional[str] = None,
     remote_url: Optional[str] = None,
     create_repo: Optional[CreateRepoFn] = None,
+    ws_dir: Optional[Path] = None,
 ) -> PublishResult:
-    """Publish the subject's ACTIVE workspace to GitHub: create the repo (unless ``remote_url``
-    targets a pre-created/empty one) and push the current branch's FULL history.
+    """Publish a workspace to GitHub: create the repo (unless ``remote_url`` targets a
+    pre-created/empty one) and push the current branch's FULL history. Default target is the
+    subject's ACTIVE (seed-slot) workspace; ``ws_dir`` targets ANY workspace dir the API already
+    resolved for the caller (own parked slot or shared membership — the endpoint's ``_manage_dir``).
 
     Vexa-born only: an ATTACHED external repo is refused (it already has an origin; use that).
     Re-publish to the same remote is a plain push — fast-forward or a clear error on divergence,
     never a force push. The ``token`` authenticates both ops and is never persisted (P15)."""
     rootp = Path(root)
-    ws = _safe_subject_dir(rootp, subject)  # raises ValueError on a bad subject (API → 400)
+    ws = Path(ws_dir) if ws_dir is not None else _safe_subject_dir(rootp, subject)  # ValueError on a bad subject (API → 400)
     if not (token or "").strip():
         raise ValueError("a GitHub access token is required")  # bad input (API → 400), not a git failure
     token = token.strip()
 
     if not (ws / ".git").exists():
-        raise PublishError("no active workspace to publish — initialize it first")
+        raise PublishError("no workspace to publish — initialize it first")
 
-    # Vexa-born gate: the active slot carrying a repo URL means an ATTACHED external workspace.
-    state = attached_workspaces(rootp, subject)
-    active = state.get("active")
-    if active not in (None, SEED_SLOT) and state.get("slots", {}).get(active, {}).get("repo"):
-        raise PublishError(
-            "the active workspace is attached from an external repo — it already has a home; "
-            "push to that repo instead (publish is for vexa-born workspaces)"
-        )
+    # Vexa-born gate. Explicit target: an `origin` remote means an ATTACHED external clone — its home
+    # is that repo. Legacy seed-slot path: the active slot carrying a repo URL means the same thing.
+    if ws_dir is not None:
+        origin = subprocess.run(["git", "-C", str(ws), "remote", "get-url", "origin"],
+                                capture_output=True, text=True, env=scrubbed_git_env())
+        if origin.returncode == 0 and origin.stdout.strip():
+            raise PublishError(
+                "this workspace is attached from an external repo — it already has a home; "
+                "push to that repo instead (publish is for vexa-born workspaces)"
+            )
+    else:
+        state = attached_workspaces(rootp, subject)
+        active = state.get("active")
+        if active not in (None, SEED_SLOT) and state.get("slots", {}).get(active, {}).get("repo"):
+            raise PublishError(
+                "the active workspace is attached from an external repo — it already has a home; "
+                "push to that repo instead (publish is for vexa-born workspaces)"
+            )
 
     # The branch to push: the workspace's current branch (full history rides along with it).
     branch = _git_out(ws, "rev-parse", "--abbrev-ref", "HEAD", token=token)

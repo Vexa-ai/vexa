@@ -350,6 +350,7 @@ class WorkspacePublishBody(BaseModel):
     token: Optional[str] = None        # GitHub PAT (repo-creation + push); OPTIONAL — falls back to the caller's SAVED token
     org: Optional[str] = None          # create under this org instead of the user's account
     remote_url: Optional[str] = None   # skip creation and push to this (pre-created/empty) repo
+    slug: Optional[str] = None         # target workspace (own slot or shared membership); omitted = the seed-slot workspace
 
 
 class WorkspaceRenameBody(BaseModel):
@@ -1627,6 +1628,9 @@ def create_app(
                 wsr.root, subject,
                 token=token, repo_name=body.repo_name, private=body.private,
                 org=body.org or None, remote_url=body.remote_url or None,
+                # slug → any workspace the caller can manage (own parked slot or shared membership,
+                # resolved + permission-checked by _manage_dir); omitted keeps the legacy seed target.
+                ws_dir=_manage_dir(subject, body.slug) if body.slug else None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc) or "invalid subject")

@@ -1059,6 +1059,59 @@ def test_workspace_publish_pushes_born_workspace_to_remote(tmp_path, monkeypatch
     assert r3.status_code == 400
 
 
+def test_workspace_publish_slug_targets_that_workspace(tmp_path, monkeypatch):
+    """POST /api/workspace/publish with `slug` publishes THAT workspace (own non-seed slot here) —
+    the bare remote receives the slot's history, the seed workspace gains no publish remote, and an
+    unknown slug is a 404 (resolved via _manage_dir, membership-checked)."""
+    import subprocess
+    from control_plane import workspace_publish as wp
+    from control_plane.workspace_reader import WorkspaceReader
+
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "CLAUDE.md").write_text("SEED\n")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+
+    bare = tmp_path / "remote.git"
+    bare.mkdir()
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main"], cwd=bare, check=True)
+    monkeypatch.setattr(wp, "_github_create_repo", lambda name, private, token, org: str(bare))
+
+    workspaces = tmp_path / "ws"
+    c = TestClient(create_app(
+        Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()),
+        reader=WorkspaceReader(str(workspaces)),
+    ))
+    h = {"X-User-Id": "u_jane"}
+    c.post("/api/workspace/init", headers=h)
+    assert c.post("/api/workspace/new", headers=h, json={"name": "Acme"}).status_code == 201
+
+    slot = workspaces / ".attached" / "u_jane" / "workspace-1"
+    if not (slot / ".git").exists():  # ensure the slot is a committed git repo (publish needs history)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=slot, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=slot, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=slot, check=True)
+    (slot / "kg").mkdir(exist_ok=True)
+    (slot / "kg" / "acme.md").write_text("acme body\n")
+    subprocess.run(["git", "add", "-A"], cwd=slot, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "acme content"], cwd=slot, check=True)
+
+    r = c.post("/api/workspace/publish", headers=h,
+               json={"repo_name": "acme-ws", "token": "ghp_SECRET", "slug": "workspace-1"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    slot_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=slot,
+                               capture_output=True, text=True, check=True).stdout.strip()
+    assert body["head_sha"] == slot_head                     # the SLOT's history landed, not the seed's
+    assert "ghp_SECRET" not in (slot / ".git" / "config").read_text()   # P15 holds on the slug path too
+    seed_cfg = workspaces / "u_jane" / ".git" / "config"
+    assert "vexa-publish" not in (seed_cfg.read_text() if seed_cfg.exists() else "")  # seed untouched
+
+    r404 = c.post("/api/workspace/publish", headers=h,
+                  json={"repo_name": "x", "token": "t", "slug": "not-a-workspace"})
+    assert r404.status_code == 404
+
+
 def test_chat_accepts_context_bundle_and_folds_digest_into_prompt():
     """Context bundle (slice 1): /api/chat accepts ``context`` (no 422); when the surface gates
     the ambient digest ON, the schedule block reaches the dispatched worker's inline prompt

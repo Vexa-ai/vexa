@@ -19,6 +19,7 @@ vi.mock("../workspaceApi", async (importOriginal) => ({
   readWorkspaceFile: vi.fn(),
   listWorkspaceMembers: vi.fn(),
   pushWorkspace: vi.fn(),
+  publishWorkspace: vi.fn(),
   shareEnableWorkspace: vi.fn(),
   mintInvite: vi.fn(),
 }));
@@ -96,6 +97,19 @@ describe("WorkspaceManagePanel — own workspace with a GitHub home", () => {
     fireEvent.change(tok, { target: { value: "ghp_test" } });
     fireEvent.keyDown(tok, { key: "Enter" });
     await waitFor(() => expect(api.pushWorkspace).toHaveBeenCalledWith({ slug: "acme-1234", token: "ghp_test" }));
+  });
+
+  it("a workspace WITHOUT a git home gets the Publish CTA, publishing with its slug", async () => {
+    vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: false, remote: null, url: null, branch: "master", tracked: false, ahead: 0, behind: 0 } as never);
+    vi.mocked(api.publishWorkspace).mockResolvedValue({ repo_url: "https://github.com/me/acme", pushed_ref: "master", head_sha: "abc", created: true } as never);
+    renderPanel({ slug: "acme-1234", shared: false, name: "ACME deal" });
+    await expandManage();
+    fireEvent.click(await screen.findByText("Publish to GitHub…"));
+    const tok = screen.getByPlaceholderText(/GitHub token/);
+    fireEvent.change(tok, { target: { value: "ghp_x" } });
+    fireEvent.click(screen.getByText("Publish"));
+    // slug rides along so the backend publishes THIS workspace, not the seed
+    await waitFor(() => expect(api.publishWorkspace).toHaveBeenCalledWith("acme-deal", true, "ghp_x", undefined, "acme-1234"));
   });
 
   it("header Share enables sharing and opens the invite MODAL (portaled — never lost below a long README)", async () => {

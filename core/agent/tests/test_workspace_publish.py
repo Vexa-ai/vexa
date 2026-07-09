@@ -223,3 +223,32 @@ def test_published_remote_url_quiet_on_non_repo(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
     assert published_remote_url(plain) is None
+
+
+def test_publish_ws_dir_targets_explicit_workspace(tmp_path):
+    """`ws_dir` publishes THAT workspace (an own parked slot / shared dir the API resolved), not the
+    subject's seed dir — the slug-aware endpoint path."""
+    root = tmp_path / "workspaces"
+    _workspace(root, "u1", commits=1)                       # the seed dir — must NOT be pushed
+    other = _workspace(root / ".attached" / "u1", "acme-1", commits=2)
+    (other / "kg").mkdir(); (other / "kg" / "x.md").write_text("acme\n")
+    _run(other, "add", "-A"); _run(other, "commit", "-q", "-m", "acme content")
+    bare = _bare(tmp_path / "remote.git")
+
+    res = publish_workspace(root, "u1", token=TOKEN, repo_name="acme",
+                            create_repo=lambda n, p, t, o: str(bare), ws_dir=other)
+    assert res.created is True
+    assert _run(bare, "rev-parse", "main") == _run(other, "rev-parse", "HEAD")
+    assert published_remote_url(other)                       # the explicit dir carries the publish remote
+    assert published_remote_url(root / "u1") is None         # the seed dir was untouched
+
+
+def test_publish_ws_dir_refuses_attached_clone(tmp_path):
+    """An explicit target with an `origin` remote is an ATTACHED external clone — refused (its home is
+    that repo; publish is for vexa-born workspaces)."""
+    root = tmp_path / "workspaces"
+    other = _workspace(root / ".attached" / "u1", "clone-1", commits=1)
+    _run(other, "remote", "add", "origin", "https://github.com/me/upstream.git")
+    with pytest.raises(PublishError, match="attached from an external repo"):
+        publish_workspace(root, "u1", token=TOKEN, repo_name="x",
+                          create_repo=lambda n, p, t, o: "unused", ws_dir=other)
