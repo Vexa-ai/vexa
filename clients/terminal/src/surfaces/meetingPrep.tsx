@@ -432,65 +432,10 @@ function MeetingPrepTab({ params }: TabProps) {
           </div>
         )}
 
-        {/* ── the brief = the stage (prep-v3 carve) ───────────────── */}
-        {m.workspace_id ? (
-          <Brief slug={m.workspace_id} title={headline} />
-        ) : readOnly ? (
-          <div style={{ margin: "18px 0 0", fontSize: 12.5, color: "var(--t3)" }}>No workspace bound.</div>
-        ) : ownBrief ? (
-          /* the own-workspace note IS the brief — rendered live while the chat writes it */
-          <OwnBrief note={ownBrief} onSteer={() => startBriefChat()} />
-        ) : briefChatStarted ? (
-          <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--t3)" }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flex: "none" }} />
-            Brief chat running — the brief renders here as the agent writes it.
-          </div>
-        ) : (
-          /* No-brief state (first-run-onboarding frame 6, owner-ruled): two REAL actions. Brief chat
-             = the agent interviews you here (the prep tab's meeting grounding rides the turn) and the
-             brief lands in YOUR default workspace, reused across the series. Shared workspace = the
-             existing collaborative flow, repositioned as the explicit sharing choice. */
-          <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 9 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>No brief yet</div>
-            <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
-              A brief makes the notetaker useful — who&rsquo;s in the room, what you want out of it, what
-              to listen for.
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button disabled={busy} onClick={() => startBriefChat()}
-                style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                Start brief chat
-              </button>
-              <button disabled={busy} onClick={() => void createAndBind()}
-                style={{ background: "transparent", color: "var(--accent)", border: "1px dashed var(--line2)", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                + Create a workspace to share
-              </button>
-              {shares.length > 0 && (
-                <select defaultValue="" disabled={busy} onChange={(e) => { if (e.target.value) void patch({ workspace_id: e.target.value }); }}
-                  style={{ ...field, minWidth: 180, color: "var(--t3)" }}>
-                  <option value="" disabled>or bind an existing one…</option>
-                  {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>{s.workspace_id}</option>)}
-                </select>
-              )}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5 }}>
-              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Brief chat</b> — the agent interviews you and
-              writes the brief into your own workspace, reused across this series.{" "}
-              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Shared workspace</b> — everyone you invite sees
-              the brief and the live transcript the moment they join.
-            </div>
-          </div>
-        )}
-
-        {inviteLink && (
-          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-            <input readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} style={{ ...field, flex: 1, fontSize: 11.5 }} />
-            <button onClick={() => void copyText(inviteLink)} style={{ fontSize: 12, padding: "4px 12px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 7, cursor: "pointer" }}>Copy</button>
-          </div>
-        )}
-
-        {/* ── ONE quiet utility row (prep-v3 carve): workspace as a word · share · send · ⋯ ── */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", marginTop: 22, paddingTop: 12, borderTop: "1px solid var(--line)", fontSize: 12, color: "var(--t3)" }}>
+        {/* ── ONE quiet utility row (prep-v3 carve): workspace as a word · share · send · ⋯ ──
+            Moved to the TOP (owner ruling): the actions sit above the brief so a long brief never
+            buries them. The popouts (rebind select, ⋯ block, invite link) render right here. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--line)", fontSize: 12, color: "var(--t3)" }}>
           {m.workspace_id && (
             <span style={{ display: "inline-flex", gap: 6, alignItems: "baseline" }}>
               workspace{" "}
@@ -540,7 +485,7 @@ function MeetingPrepTab({ params }: TabProps) {
           )}
         </div>
         {rebindOpen && !readOnly && shares.length > 0 && (
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginBottom: 8 }}>
             <select defaultValue="" disabled={busy}
               onChange={(e) => { if (e.target.value) { void patch({ workspace_id: e.target.value }); setRebindOpen(false); } }}
               style={{ ...field, minWidth: 200 }}>
@@ -550,7 +495,7 @@ function MeetingPrepTab({ params }: TabProps) {
           </div>
         )}
         {moreOpen && !readOnly && (
-          <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
             {m.workspace_id && (
               <button disabled={busy} onClick={() => { void patch({ workspace_id: null }); setMoreOpen(false); }}
                 style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--t3)", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
@@ -561,6 +506,62 @@ function MeetingPrepTab({ params }: TabProps) {
               style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--danger)", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
               Delete meeting
             </button>
+          </div>
+        )}
+        {inviteLink && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <input readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} style={{ ...field, flex: 1, fontSize: 11.5 }} />
+            <button onClick={() => void copyText(inviteLink)} style={{ fontSize: 12, padding: "4px 12px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 7, cursor: "pointer" }}>Copy</button>
+          </div>
+        )}
+
+        {/* ── the brief = the stage (prep-v3 carve) ───────────────── */}
+        {m.workspace_id ? (
+          <Brief slug={m.workspace_id} title={headline} />
+        ) : readOnly ? (
+          <div style={{ margin: "18px 0 0", fontSize: 12.5, color: "var(--t3)" }}>No workspace bound.</div>
+        ) : ownBrief ? (
+          /* the own-workspace note IS the brief — rendered live while the chat writes it */
+          <OwnBrief note={ownBrief} onSteer={() => startBriefChat()} />
+        ) : briefChatStarted ? (
+          <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--t3)" }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flex: "none" }} />
+            Brief chat running — the brief renders here as the agent writes it.
+          </div>
+        ) : (
+          /* No-brief state (first-run-onboarding frame 6, owner-ruled): two REAL actions. Brief chat
+             = the agent interviews you here (the prep tab's meeting grounding rides the turn) and the
+             brief lands in YOUR default workspace, reused across the series. Shared workspace = the
+             existing collaborative flow, repositioned as the explicit sharing choice. */
+          <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 9 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>No brief yet</div>
+            <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+              A brief makes the notetaker useful — who&rsquo;s in the room, what you want out of it, what
+              to listen for.
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button disabled={busy} onClick={() => startBriefChat()}
+                style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Start brief chat
+              </button>
+              <button disabled={busy} onClick={() => void createAndBind()}
+                style={{ background: "transparent", color: "var(--accent)", border: "1px dashed var(--line2)", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                + Create a workspace to share
+              </button>
+              {shares.length > 0 && (
+                <select defaultValue="" disabled={busy} onChange={(e) => { if (e.target.value) void patch({ workspace_id: e.target.value }); }}
+                  style={{ ...field, minWidth: 180, color: "var(--t3)" }}>
+                  <option value="" disabled>or bind an existing one…</option>
+                  {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>{s.workspace_id}</option>)}
+                </select>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5 }}>
+              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Brief chat</b> — the agent interviews you and
+              writes the brief into your own workspace, reused across this series.{" "}
+              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Shared workspace</b> — everyone you invite sees
+              the brief and the live transcript the moment they join.
+            </div>
           </div>
         )}
 
