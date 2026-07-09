@@ -71,6 +71,12 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
       });
     }
 
+    // 204/205/304 are null-body statuses: new Response(body, …) throws for them (undici),
+    // which would land in the catch below and turn a successful DELETE into a 502.
+    if (upstream.status === 204 || upstream.status === 205 || upstream.status === 304) {
+      return new Response(null, { status: upstream.status, headers: { "Cache-Control": "no-cache" } });
+    }
+
     return new Response(await upstream.text(), {
       status: upstream.status,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
