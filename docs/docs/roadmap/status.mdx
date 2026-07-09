@@ -5,6 +5,37 @@ description: "Where we are — honestly."
 
 <Note>This page is the honest, current state — updated as we go, never aspirational.</Note>
 
+## What 0.12 is
+
+0.12 is a **complete refactoring of the 0.10 line into software of the same shape** — the same
+services, the same wire surface (`api.v1` sealed hash-equal to 0.10.x's OpenAPI) — rebuilt so
+that **every service is a modular monolith**.
+
+The rule underneath everything: **a module owns exactly one concern, and is the single source
+of truth for that concern.** Larger structures are built from modules — capture bricks compose
+into the meeting bot, modules compose into services, services compose into deployments.
+
+Modules join only through **contracts**: defined once, rarely changed, and **sealed** — a
+sha256 per contract in `contracts.seal.json`, enforced in CI. If a seal breaks, we know;
+a contract can never drift silently.
+
+Why this shape:
+
+- **Test in isolation.** Because a module's concern is exact and singular, it is tested fully
+  in isolation against fixtures — and debugged the same way, by manipulating the fixtures.
+- **Test at any scale.** A chain of modules joined by sealed contracts tests in integration
+  with the same fixtures — so a bug is reproduced and debugged at exactly the scale it lives at.
+- **AI-native by construction.** Every unit ships three things: the running code, the
+  adversarial code (tests that harness it), and the data (goldens that validate the module or
+  contract). All ports are deterministic for deterministic input, so the verify loop is simple
+  enough for an agent to own.
+- **Fixtures come from reality.** We collect them from real meetings — real audio, speaker
+  activations, and environment metadata — and replay them through the system, so the whole
+  stack is harnessed against the real world largely autonomously.
+
+The full map — module tree, the sealed contract registry (owner → consumers), and the four
+eval levels — is [Modules & Seams](/architecture/modules).
+
 **Proven in production (pre-existing Vexa):** the [Runtime](/core/runtime) (meeting bots are browser
 workloads), transcription → `transcript.v1`, redis [streaming](/architecture/streaming).
 
