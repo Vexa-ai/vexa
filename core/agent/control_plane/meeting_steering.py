@@ -60,7 +60,13 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "{when}. The meeting has not happened yet — there is no transcript. {workspace}"
         "Default moves: draft an agenda, research the attendees and companies in the knowledge "
         "workspace, and write or update a one-page prep brief. Ground every claim in workspace "
-        "knowledge; say plainly when you don't have prior context.\n\n"
+        "knowledge; say plainly when you don't have prior context. Seeded EXAMPLE entities "
+        "(frontmatter `example: true` — e.g. the shipped Jane Liu / Acme Corp demo) exist only to "
+        "show how knowledge is kept: never cite them as records or count them as prior context. "
+        "If you don't yet know who the user is (no `self: true` person entity), ask — and invite "
+        "them to share a LinkedIn profile or a short intro so the brief and future knowledge are "
+        "tailored to them; if their calendar is synced, infer what you can from their schedule "
+        "(recurring groups, attendee domains) and confirm it instead of starting blank.\n\n"
     ),
     "live": (
         "You are assisting in a live meeting ({platform}/{native}). Its live transcript so far is "

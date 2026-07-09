@@ -6,7 +6,9 @@ a living, at-a-glance view of what matters in this workspace. Your agent keeps i
 workspace fills in, so does this page.
 
 > **New here?** On your first message your agent runs a short, research-driven setup. The one thing it
-> needs from you is your **name** — everything else it can research or fill in over time.
+> needs from you is your **name** — everything else it can research or fill in over time. Sharing a
+> LinkedIn profile (or a short intro) helps it tailor everything to you from day one; with a synced
+> calendar it can infer a lot from your schedule and just ask you to confirm.
 
 ## You
 
