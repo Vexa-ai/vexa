@@ -18,8 +18,8 @@ import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
 import { parseMeetingInput } from "./meetingId";
 import { refreshMeetings } from "./liveMeetings";
-import { createPlannedMeeting, getCalendarConfig, setCalendarConfig, syncCalendarNow, type CalendarSyncStamp } from "./plannedApi";
-import { prepTabDescriptor } from "./meetingPrep";
+import { getCalendarConfig, setCalendarConfig, syncCalendarNow, type CalendarSyncStamp } from "./plannedApi";
+import { prepDraftTabDescriptor } from "./meetingPrep";
 
 /** The success line after a connect: lead with what the sync actually FOUND. */
 export function connectOutcome(stamp: CalendarSyncStamp): { ok: boolean; text: string } {
@@ -180,19 +180,9 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
   const [connected, reprobe] = useCalendarConnected();
   const [modal, setModal] = useState(false);
   const layout = useService(LayoutServiceId);
-  const [planning, setPlanning] = useState(false);
-  const [planErr, setPlanErr] = useState<string | null>(null);
-
-  const plan = async () => {
-    if (planning) return;
-    setPlanning(true); setPlanErr(null);
-    try {
-      const row = await createPlannedMeeting({});
-      refreshMeetings();
-      layout.openTab(prepTabDescriptor({ id: String(row.id), title: "New meeting" }));
-    } catch (e) { setPlanErr(e instanceof Error ? e.message : String(e)); }
-    finally { setPlanning(false); }
-  };
+  // "+ Plan a meeting" opens a DRAFT prep tab — no backend row until the user fills something in, so
+  // an abandoned draft leaves no empty meeting behind (the prep tab creates the row lazily).
+  const plan = () => layout.openTab(prepDraftTabDescriptor());
 
   // slim = the STANDING affordances on a populated Meetings page: plan + drop-bot are ALWAYS
   // available (owner ruling 2026-07-09); the calendar card additionally shows while this user
@@ -212,13 +202,12 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-          <button onClick={() => void plan()} disabled={planning}
+          <button onClick={() => plan()}
             style={{ flex: "none", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "7px 11px", fontSize: 12, cursor: "pointer" }}>
-            {planning ? "Planning…" : "+ Plan a meeting"}
+            + Plan a meeting
           </button>
           <div style={{ flex: 1, minWidth: 220 }}><DropBotInline /></div>
         </div>
-        {planErr && <div role="alert" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4 }}>⚠ {planErr}</div>}
         {modal && <ConnectCalendarModal onClose={() => setModal(false)} onConnected={reprobe} />}
       </>
     );
@@ -244,8 +233,7 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
         <div style={cardBase}>
           <span style={cardTitle}><Icon name="plus" size={14} /> Plan a meeting</span>
           <span style={cardBody}>Create one meeting by hand — title, time, Meet link. Good for a first trial run.</span>
-          <button style={cta} onClick={() => void plan()} disabled={planning}>{planning ? "Planning…" : "+ Plan a meeting"}</button>
-          {planErr && <span role="alert" style={{ fontSize: 11, color: "var(--danger)" }}>⚠ {planErr}</span>}
+          <button style={cta} onClick={() => plan()}>+ Plan a meeting</button>
         </div>
         <div style={cardBase}>
           <span style={cardTitle}><Icon name="send" size={14} /> Drop a bot in now</span>

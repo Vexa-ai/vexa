@@ -16,8 +16,8 @@ import { groupMeetings } from "./meetingGroups";
 import { usePreviewPinTab } from "./previewPinTab";
 import { parseMeetingInput } from "./meetingId";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
-import { createPlannedMeeting, deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
-import { prepTabDescriptor } from "./meetingPrep";
+import { deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
+import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
 //    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
@@ -476,32 +476,17 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   );
 }
 
-// ── "+ Plan a meeting" — ONE CLICK: create the planned row (idle, untitled) and open its PREP
-//    TAB, where the real form lives (title, modern date/time picker, link, workspace, share). No
-//    inline sidebar form — the center tab is the editing surface. ─────────────────────────────────
+// ── "+ Plan a meeting" — opens a DRAFT prep tab. No backend row is created here; the prep tab
+//    creates the row lazily on the first real input (title/link/date, brief chat, …), so abandoning
+//    the tab never leaves an empty "Untitled meeting" behind. ───────────────────────────────────────
 function PlanMeetingButton() {
   const layout = useService(LayoutServiceId);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const plan = async () => {
-    if (busy) return;
-    setBusy(true); setErr(null);
-    try {
-      const row = await createPlannedMeeting({});          // idle, untitled — the prep tab edits it
-      refreshMeetings();
-      layout.openTab(prepTabDescriptor({ id: String(row.id), title: "New meeting" }));
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
-  };
   return (
-    <>
-      <button onClick={() => void plan()} disabled={busy}
-        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginBottom: 2, opacity: busy ? 0.6 : 1 }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-        {busy ? "Planning…" : "+ Plan a meeting"}
-      </button>
-      {err && <div role="alert" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.4 }}>⚠ {err}</div>}
-    </>
+    <button onClick={() => layout.openTab(prepDraftTabDescriptor())}
+      style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginBottom: 2 }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+      + Plan a meeting
+    </button>
   );
 }
 

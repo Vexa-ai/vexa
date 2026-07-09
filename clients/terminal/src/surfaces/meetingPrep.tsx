@@ -8,7 +8,7 @@
  *  prep JTBD is: bind (or create) a prep workspace → research into it with the agent → share it
  *  with the people you're meeting → the bot auto-joins at start → notes land on the same row.
  *  Once the row leaves the intent statuses the row click routes to the live meeting tab instead. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { registerTab, type TabProps } from "../contributions";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
@@ -18,7 +18,7 @@ import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
 import { useLiveMeetings, refreshMeetings } from "./liveMeetings";
 import type { MeetingMock } from "./meetingModel";
-import { updatePlannedMeeting, deletePlannedMeeting } from "./plannedApi";
+import { createPlannedMeeting, updatePlannedMeeting, deletePlannedMeeting } from "./plannedApi";
 import { createSharedWorkspace, listSharedMemberships, listWorkspaceTree, mintInvite, readWorkspaceFile, type Membership } from "./workspaceApi";
 import { findBriefNote, isExampleNote } from "./briefNote";
 import { manageTabDescriptor } from "./workspaceManage";
@@ -150,16 +150,48 @@ function OwnBrief({ note, onSteer }: { note: { path: string; text: string }; onS
   );
 }
 
+// A synthetic empty PLANNED meeting for a DRAFT tab — no backend row yet. Idle intent so the prep
+// form renders; every field empty. Replaced by the real row the moment lazy-create fires.
+const DRAFT_M: MeetingMock = {
+  id: "", title: "", when: "", status: "past", live_status: "idle", platform: "Google Meet",
+  participants: [], mentioned: [], actions: [], transcript: [], insights: [],
+};
+
 function MeetingPrepTab({ params }: TabProps) {
   const layout = useService(LayoutServiceId);
   const all = useLiveMeetings();
   const meetingId = String(params.meetingId ?? "");
-  const m: MeetingMock | undefined = all.find((x) => x.id === meetingId);
+  const isDraft = !meetingId && !!params.draft;   // "+ Plan a meeting" tab, no row created yet
+  const found: MeetingMock | undefined = meetingId ? all.find((x) => x.id === meetingId) : undefined;
+  // In a draft tab, render against the empty placeholder until the row is created (then we hand off
+  // to the canonical prep:<id> tab). A real tab whose row hasn't loaded yet shows "Loading…" below.
+  const m: MeetingMock | undefined = found ?? (isDraft ? DRAFT_M : undefined);
   const readOnly = !!m?.shared;
   const isIntent = m?.live_status === "idle" || m?.live_status === "scheduled";
 
   const [title, setTitle] = useState("");
   const [link, setLink] = useState("");
+  // lazy row creation: a draft creates its backend row on the FIRST real input, passing whatever the
+  // user has typed, then hands the tab off to prep:<id>. `creating` guards against a double-create
+  // from two near-simultaneous inputs; `mounted` guards setState after the handoff unmounts us.
+  const creating = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+  const ensureRow = async (): Promise<string | null> => {
+    if (meetingId) return meetingId;               // already a real row
+    if (creating.current) return null;             // a create is already in flight
+    creating.current = true;
+    const row = await createPlannedMeeting({
+      title: title.trim() || undefined,
+      meeting_url: link.trim() || undefined,
+    });
+    const id = String(row.id);
+    refreshMeetings();
+    // hand off: the canonical prep tab owns the created meeting; the draft tab closes.
+    layout.openTab(prepTabDescriptor({ id, title: title.trim() || "New meeting" }));
+    layout.closeTab(PREP_DRAFT_TAB_ID);
+    return id;
+  };
   // seed marker is the MEETING ID, not a boolean: the shared preview panel swaps params to a
   // DIFFERENT meeting without remounting — a boolean kept the previous meeting's title/link on
   // screen, and a blur would PATCH them onto the wrong row (observed live 2026-07-08).
@@ -190,9 +222,13 @@ function MeetingPrepTab({ params }: TabProps) {
   const patch = async (body: Parameters<typeof updatePlannedMeeting>[1]) => {
     if (!m || readOnly) return;
     setBusy(true); setErr(null);
-    try { await updatePlannedMeeting(m.id, body); refreshMeetings(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    try {
+      const id = await ensureRow();               // draft → create the row first (with title/link)
+      if (!id) return;
+      await updatePlannedMeeting(id, body); refreshMeetings();
+    }
+    catch (e) { if (mounted.current) setErr(e instanceof Error ? e.message : String(e)); }
+    finally { if (mounted.current) setBusy(false); }
   };
 
   const sendNow = async () => {
@@ -224,9 +260,11 @@ function MeetingPrepTab({ params }: TabProps) {
     if (!m) return;
     setBusy(true); setErr(null);
     try {
+      const id = await ensureRow();               // draft → create the row first
+      if (!id) return;
       const name = (m.title_custom || title || "meeting-prep").slice(0, 60);
       const ws = await createSharedWorkspace(name);
-      await updatePlannedMeeting(m.id, { workspace_id: ws.workspace_id });
+      await updatePlannedMeeting(id, { workspace_id: ws.workspace_id });
       refreshMeetings();
       // Creating the shared workspace IS a scaffolding run (prep-v3 ruling, owner 2026-07-09):
       // the agent must know the workspace is brand-new and exists to collaborate with the other
@@ -238,24 +276,35 @@ function MeetingPrepTab({ params }: TabProps) {
       window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
         detail: { prompt: `I just created the shared workspace "${ws.workspace_id}" for the meeting "${m.title_custom || title || headline}" — it is brand-new (empty) and exists so the other participants and I can collaborate on this meeting and its series. Scaffold it now: write its README as the team brief (audience = everyone in the room, so keep my private context out unless I confirm it), set up whatever structure the series needs, and interview me for what you can't know from my records.${carry} Write early and keep updating as we talk — the README renders live on the meeting page.` },
       }));
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    } catch (e) { if (mounted.current) setErr(e instanceof Error ? e.message : String(e)); }
+    finally { if (mounted.current) setBusy(false); }
   };
 
   // Frame 6 (first-run-onboarding): brief WITHOUT sharing — the agent interviews the user in
   // chat (the prep tab's meeting grounding rides the turn) and writes the brief into their OWN
-  // workspace, so it follows the series without creating a shared space.
-  const startBriefChat = () => {
-    const name = m?.title_custom || title || "this meeting";
-    const key = m?.native_id ? ` Name the note's file so it includes the meeting id ${m.native_id} (kg/entities/meeting/…${m.native_id}….md) — the meeting page finds and renders it by that id.` : "";
-    setBriefChatStarted(true);
-    window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
-      detail: { prompt: `Interview me to build the brief for "${name}" — ask what you can't know from my records (who's in the room, what I want out of it, what the notetaker should listen for), research the attendees in my knowledge and public sources, then write the brief as this meeting's note in my own workspace (no shared workspace) so it can be reused across this meeting's series.${key} Write the note EARLY and keep updating it as we talk — it renders live on the meeting page.` },
-    }));
+  // workspace, so it follows the series without creating a shared space. Starting the brief is a real
+  // commitment → create the draft's row first (so the note keys to a real meeting and reuses across it).
+  const startBriefChat = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const id = await ensureRow();
+      if (!id) return;
+      // re-read the row so the note filename can key to its native id if a link was set
+      const row = all.find((x) => x.id === id);
+      const name = row?.title_custom || title || "this meeting";
+      const nid = row?.native_id;
+      const key = nid ? ` Name the note's file so it includes the meeting id ${nid} (kg/entities/meeting/…${nid}….md) — the meeting page finds and renders it by that id.` : "";
+      setBriefChatStarted(true);
+      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+        detail: { prompt: `Interview me to build the brief for "${name}" — ask what you can't know from my records (who's in the room, what I want out of it, what the notetaker should listen for), research the attendees in my knowledge and public sources, then write the brief as this meeting's note in my own workspace (no shared workspace) so it can be reused across this meeting's series.${key} Write the note EARLY and keep updating it as we talk — it renders live on the meeting page.` },
+      }));
+    } catch (e) { if (mounted.current) setErr(e instanceof Error ? e.message : String(e)); }
+    finally { if (mounted.current) setBusy(false); }
   };
 
   const remove = async () => {
     if (!m) return;
+    if (isDraft) { layout.closeTab(PREP_DRAFT_TAB_ID); return; }   // nothing persisted — just discard the draft
     if (typeof window !== "undefined" && !window.confirm("Delete this planned meeting?")) return;
     setBusy(true);
     try { await deletePlannedMeeting(m.id); refreshMeetings(); layout.closeTab(`prep:${m.id}`); }
@@ -267,12 +316,17 @@ function MeetingPrepTab({ params }: TabProps) {
   const headline = useMemo(() => m?.title_custom || m?.title || "Planned meeting", [m]);
   // own-workspace brief (frame 6): only hunted while the meeting is unbound — a bound workspace's
   // README is the brief and wins.
-  const ownBrief = useOwnBriefNote(!!m && !m.workspace_id && !readOnly && isIntent, headline, m?.native_id);
+  // No brief hunt on a draft (no row/title yet) — it would match nothing or the wrong note.
+  const ownBrief = useOwnBriefNote(!isDraft && !!m && !m.workspace_id && !readOnly && isIntent, headline, m?.native_id);
 
   // B2 tab hygiene: a calendar sweep DELETES + recreates rows (new ids) — a tab keyed to the old
   // row would dangle on "Loading meeting…" forever. Once the store has data and the row is gone,
   // the tab closes itself (the meeting lives on under its new row, reachable from Today).
-  const rowGone = all.length > 0 && !m;
+  // Grace: only self-close a row we have ACTUALLY SEEN (then lost). A just-created tab whose row
+  // hasn't loaded into the store yet (the draft → prep:<id> hand-off) must NOT close — it loads in.
+  const everSeen = useRef(false);
+  useEffect(() => { if (found) everSeen.current = true; }, [found]);
+  const rowGone = !isDraft && !!meetingId && everSeen.current && all.length > 0 && !found;
   useEffect(() => {
     if (rowGone) layout.closeTab(`prep:${meetingId}`);
   }, [rowGone, layout, meetingId]);
@@ -518,5 +572,13 @@ function MeetingPrepTab({ params }: TabProps) {
 
 export const prepTabDescriptor = (m: { id: string; title: string }) =>
   ({ id: `prep:${m.id}`, title: m.title, kind: "meetingPrep", params: { meetingId: m.id } });
+
+// A DRAFT "+ Plan a meeting" tab — no backend row yet. The row is created lazily on the first real
+// input (title/link/date, or Start brief chat / Create workspace / bind), then the tab hands off to
+// the canonical prep:<id> tab. Abandoning a draft leaves NO empty meeting behind. Stable id so
+// repeated "+ Plan a meeting" clicks reuse the one open draft rather than stacking blank tabs.
+export const PREP_DRAFT_TAB_ID = "prep:draft";
+export const prepDraftTabDescriptor = () =>
+  ({ id: PREP_DRAFT_TAB_ID, title: "New meeting", kind: "meetingPrep", params: { meetingId: "", draft: true } });
 
 registerTab("meetingPrep", MeetingPrepTab);
