@@ -79,7 +79,7 @@ export function createUserToken(userId: string | number): Promise<AdminResult<{ 
 //    security-relevant may ever be derived from it.
 
 export type ValidatedUser =
-  | { ok: true; userId: string | number; email: string }
+  | { ok: true; userId: string | number; email: string; isAdmin: boolean }
   | { ok: false; status: number; error: string };
 
 export async function validateAuthToken(token: string): Promise<ValidatedUser> {
@@ -100,14 +100,73 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
     });
     if (res.status === 401) return { ok: false, status: 401, error: "Not authenticated" };
     if (!res.ok) return { ok: false, status: 503, error: `Token validation failed (admin-api returned ${res.status})` };
-    const data = (await res.json()) as { user_id?: string | number; email?: string };
+    const data = (await res.json()) as { user_id?: string | number; email?: string; is_admin?: boolean };
     if (data.user_id === undefined || data.user_id === null || !data.email) {
       return { ok: false, status: 502, error: "Token validation returned no identity" };
     }
-    return { ok: true, userId: data.user_id, email: data.email };
+    return { ok: true, userId: data.user_id, email: data.email, isAdmin: data.is_admin === true };
   } catch (err) {
     const e = err as Error;
     return { ok: false, status: 503, error: e.name === "TimeoutError" ? "Token validation timed out" : "Token validation unavailable" };
+  }
+}
+
+// ── first-run bootstrap admin — a fresh instance has NO admin; the first successful sign-in
+//    claims the role (admin-api serializes concurrent claims). A configured VEXA_ADMIN_EMAILS
+//    allowlist means the instance ALREADY has admins → the claim machinery stays off entirely,
+//    which also keeps existing deployments (allowlist-run) from handing admin to the next login.
+
+function allowlistConfigured(): boolean {
+  return (process.env.VEXA_ADMIN_EMAILS || "").split(",").some((e) => e.trim());
+}
+
+async function internalRequest<T>(path: string, init: RequestInit = {}): Promise<AdminResult<T>> {
+  const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret) {
+    return { ok: false, status: 503, error: "Admin API internal edge is not configured (VEXA_ADMIN_API_URL / VEXA_INTERNAL_API_SECRET)" };
+  }
+  try {
+    const res = await fetch(`${url}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret, ...init.headers },
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 500);
+      return { ok: false, status: res.status, error: detail || `admin-api returned ${res.status}` };
+    }
+    return { ok: true, status: res.status, data: (await res.json()) as T };
+  } catch (err) {
+    const e = err as Error;
+    return { ok: false, status: 0, error: e.name === "TimeoutError" ? "admin-api request timed out" : e.message };
+  }
+}
+
+/** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins).
+ *  FAIL-SAFE towards true: if the probe can't answer, the login surface shows plain sign-in
+ *  rather than dangling a claim screen that can't succeed. */
+export async function instanceHasAdmin(): Promise<boolean> {
+  if (allowlistConfigured()) return true;
+  const res = await internalRequest<{ admin_exists?: boolean }>("/internal/instance", { method: "GET" });
+  if (!res.ok || !res.data) return true;
+  return res.data.admin_exists === true;
+}
+
+/** Claim the admin role for this user IF the instance has none — the "first sign-in = admin"
+ *  step, called on every successful login (admin-api makes it a no-op once an admin exists).
+ *  BEST-EFFORT: a failure must never block sign-in; the claim screen simply reappears. */
+async function bootstrapAdminClaim(userId: string | number): Promise<void> {
+  if (allowlistConfigured()) return; // allowlist-run instance → role claims stay off
+  const res = await internalRequest<{ claimed?: boolean }>("/internal/bootstrap-admin", {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (res.ok && res.data?.claimed) {
+    console.info(`[terminal-auth] bootstrap: user ${userId} claimed the admin role (first sign-in)`);
+  } else if (!res.ok) {
+    console.warn(`[terminal-auth] bootstrap-admin claim failed (sign-in continues): ${res.error}`);
   }
 }
 
@@ -205,6 +264,10 @@ export async function findOrCreateUserToken(
   if (!minted.ok || !minted.data?.token) {
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
   }
+  // First-run bootstrap: on a fresh instance the FIRST successful sign-in claims the admin role
+  // (no-op everywhere else — admin exists, or an allowlist runs the instance). Covers both the
+  // direct email login and the OAuth signIn callback, which both land here.
+  await bootstrapAdminClaim(user.id);
   // On genuine account creation ("account start"), eagerly provision the user's workspace tiers so the
   // Personal baseline + `_system` exist before their first chat. Best-effort (idempotent + lazy fallback).
   if (justCreated) {

@@ -16,7 +16,8 @@ import { GET as meRoute } from "../admin/me/route";
 import { GET as overviewRoute } from "../admin/overview/route";
 import { POST as probeRoute } from "../admin/probe/route";
 
-/** A fake admin-api /internal/validate: token "admin-tok" → dmitry (allowlisted), "user-tok" → bob. */
+/** A fake admin-api /internal/validate: token "admin-tok" → dmitry (allowlisted), "user-tok" → bob,
+ *  "role-tok" → carol (DB-backed is_admin role, NOT allowlisted). */
 function stubValidate() {
   const calls: { url: string; secret?: string; body?: string }[] = [];
   vi.stubGlobal(
@@ -31,6 +32,7 @@ function stubValidate() {
         const { token } = JSON.parse((init?.body as string) || "{}");
         if (token === "admin-tok") return new Response(JSON.stringify({ user_id: 1, email: "dmitry@vexa.ai" }), { status: 200 });
         if (token === "user-tok") return new Response(JSON.stringify({ user_id: 2, email: "bob@example.com" }), { status: 200 });
+        if (token === "role-tok") return new Response(JSON.stringify({ user_id: 3, email: "carol@example.com", is_admin: true }), { status: 200 });
         return new Response("Invalid token", { status: 401 });
       }
       if (url.includes("/api/admin/overview")) {
@@ -74,13 +76,20 @@ describe("admin gate — verified allowlist, fail-closed", () => {
     expect(await requireAdmin()).toBeNull();
   });
 
-  it("no allowlist configured → closed for everyone (validate never called)", async () => {
+  it("no allowlist configured → closed for a validated NON-role user", async () => {
     delete process.env.VEXA_ADMIN_EMAILS;
-    cookieJar = { "vexa-token": "admin-tok" };
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
+    cookieJar = { "vexa-token": "admin-tok" }; // validated email, but no is_admin and no allowlist
+    stubValidate();
     expect(await requireAdmin()).toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("DB-backed is_admin role passes WITHOUT an allowlist (bootstrap-claimed admin)", async () => {
+    delete process.env.VEXA_ADMIN_EMAILS;
+    cookieJar = { "vexa-token": "role-tok" };
+    stubValidate();
+    const admin = await requireAdmin();
+    expect(admin?.email).toBe("carol@example.com");
+    expect(admin?.userId).toBe(3);
   });
 
   it("oracle unreachable → closed", async () => {

@@ -15,6 +15,7 @@ import { Workbench } from "../workbench/Workbench";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { OnboardingGate } from "./OnboardingGate";
+import { SetupGate } from "./SetupGate";
 import { meetingsOnly } from "./mode";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import "../surfaces";
@@ -147,11 +148,15 @@ export function App() {
   return (
     <AuthGate>
       <InviteGate>
-        <OnboardingGate>
-          <ServicesProvider container={container}>
-            <Workbench />
-          </ServicesProvider>
-        </OnboardingGate>
+        {/* SetupGate: the bootstrap-claimed admin's first-run wizard (models + transcription,
+            smoke-tested). Non-admins and completed instances fall straight through. */}
+        <SetupGate>
+          <OnboardingGate>
+            <ServicesProvider container={container}>
+              <Workbench />
+            </ServicesProvider>
+          </OnboardingGate>
+        </SetupGate>
       </InviteGate>
     </AuthGate>
   );

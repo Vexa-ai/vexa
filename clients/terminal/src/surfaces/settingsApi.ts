@@ -50,15 +50,19 @@ export async function setTranscriptionPrefs(update: { url?: string; token?: stri
   }));
 }
 
+/** The admin-writable platform-settings keys: the two config domains + the first-run wizard's
+ *  durable "setup" state. */
+export type GlobalSettingKey = "models" | "transcription" | "setup";
+
 /** null ⇒ caller is not an admin (the route 404s) — the global card simply doesn't render. */
-export async function getGlobalSetting(key: "models" | "transcription"): Promise<GlobalSetting | null> {
+export async function getGlobalSetting(key: GlobalSettingKey): Promise<GlobalSetting | null> {
   const res = await fetch(`/api/admin/settings/${key}`, { cache: "no-store" });
   if (res.status === 404) return null;
   const body = await jsonOrThrow(res) as { value?: GlobalSetting };
   return body.value ?? {};
 }
 
-export async function setGlobalSetting(key: "models" | "transcription", update: GlobalSetting): Promise<GlobalSetting> {
+export async function setGlobalSetting(key: GlobalSettingKey, update: GlobalSetting): Promise<GlobalSetting> {
   const res = await fetch(`/api/admin/settings/${key}`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update),
   });

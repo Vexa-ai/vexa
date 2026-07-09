@@ -135,7 +135,12 @@ class CalendarUpdate(BaseModel):
 MODEL_MODES = ("subscription", "custom")
 _MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key")
 _TRANSCRIPTION_FIELDS = ("url", "token")
-SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS}
+# "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
+# completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
+# no secrets, admin-gated like the other keys.
+_SETUP_FIELDS = ("models", "transcription", "completed")
+SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
+                "setup": _SETUP_FIELDS}
 
 
 class ModelPrefsUpdate(BaseModel):
@@ -485,6 +490,9 @@ def create_app() -> FastAPI:
             "scopes": scopes,
             "max_concurrent": user.max_concurrent_bots,
             "email": user.email,
+            # DB-backed admin role (bootstrap-claimed on a fresh instance) — the terminal's
+            # admin gate reads THIS, with its VEXA_ADMIN_EMAILS allowlist kept as an override.
+            "is_admin": (user.data or {}).get("is_admin") is True if isinstance(user.data, dict) else False,
         }
         data_blob = user.data if isinstance(user.data, dict) else {}
         if data_blob.get("webhook_url"):
@@ -524,6 +532,47 @@ def create_app() -> FastAPI:
         if user is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
         return user
+
+    # --- internal tier: instance identity — admin existence + the first-sign-in admin claim.
+    #     A fresh install has NO admin; the login surface (via the terminal, which fronts this
+    #     edge) shows a one-time "set up your instance" claim screen, and the first successful
+    #     sign-in becomes the admin. The claim is race-safe: a pg advisory xact lock serializes
+    #     concurrent first sign-ins so exactly ONE claims the role. ---
+    _BOOTSTRAP_ADMIN_LOCK = 0x5EC4_AD31  # arbitrary app-wide advisory-lock key for the claim
+
+    async def _admin_exists(db: AsyncSession) -> bool:
+        row = (await db.execute(
+            select(User.id).where(User.data["is_admin"].astext == "true").limit(1)
+        )).first()
+        return row is not None
+
+    @app.get("/internal/instance", include_in_schema=False)
+    async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
+        _check_internal(request)
+        return {"admin_exists": await _admin_exists(db)}
+
+    @app.post("/internal/bootstrap-admin", include_in_schema=False)
+    async def bootstrap_admin(payload: dict, request: Request,
+                              db: AsyncSession = Depends(get_db)):
+        """Claim the admin role for `user_id` IF no admin exists yet. Idempotent and race-safe:
+        under the advisory lock the first caller claims, every later caller gets claimed=False.
+        A user who already IS the admin re-claims harmlessly (claimed=False, admin_exists=True)."""
+        from sqlalchemy import text as sa_text
+        from sqlalchemy.orm import attributes
+
+        _check_internal(request)
+        user = await _load_user(str(payload.get("user_id", "")), db)
+        await db.execute(sa_text("SELECT pg_advisory_xact_lock(:key)"),
+                         {"key": _BOOTSTRAP_ADMIN_LOCK})
+        if await _admin_exists(db):
+            return {"claimed": False, "admin_exists": True}
+        data = dict(user.data or {})
+        data["is_admin"] = True
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        return {"claimed": True, "admin_exists": True}
 
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
