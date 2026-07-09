@@ -52,6 +52,7 @@ Three things make that possible — and no one else has all three:
 - [The agentic runtime](#-the-agentic-runtime)
 - [Agents & your workspace](#-agents--your-workspace)
 - [How-to recipes](#-how-to-recipes)
+- [Deployment options](#-deployment-options)
 - [Deploy & configure](#-deploy--configure)
 - [How Vexa is different](#-how-vexa-is-different)
 - [For regulated enterprises](#-for-regulated-enterprises)
@@ -236,6 +237,32 @@ curl -X POST "$API_BASE/agent/events" -H "X-API-Key: $API_KEY" -H "Content-Type:
 > **Live-meeting copilot** — cards for people, decisions, and action items *during* the call
 > (`POST /agent/meeting/start` → stream `GET /agent/meeting/stream`) — is on the roadmap; see
 > [Status](#-status--roadmap).
+
+---
+
+## 🚀 Deployment options
+
+Two ways to run Vexa, one codebase:
+
+**1. Personal / dev — Docker on your Mac, Linux, or Windows machine.**
+Single container (`make lite` — the all-in-one Vexa Lite image) or the full Compose stack
+(`make all`). **Reuse your Claude subscription**: workers run the official `claude` CLI against
+your own Pro/Max credential, which is a covered, credit-metered use under Anthropic's terms for a
+personal deployment — your subscription, your turns, your machine. See
+[Model credentials & licensing](https://docs.vexa.ai/model-credentials-licensing) for the exact
+terms mapping ([Anthropic's Agent SDK plan-usage article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+is the primary source). You get the full service — bots, transcripts, agents, Terminal — on the
+subscription you already pay for.
+
+**2. Cloud — Helm on Kubernetes / OpenShift, scalable to thousands of users.**
+The chart in [`deploy/helm`](deploy/helm) deploys the same control plane with
+`RUNTIME_BACKEND=k8s`: **every bot and every agent is its own Kubernetes workload** (a bare Pod
+per dispatch), so capacity is your cluster's scheduler, not a bigger box — built multi-tenant and
+multiuser from the start. One compliance rule when you go multiuser: other users' turns must run
+on an **API key** (Commercial Terms), never a personal subscription credential — the
+[licensing page](https://docs.vexa.ai/model-credentials-licensing) spells out the boundary, and
+Settings → Models enforces per-user/global credential resolution. K8s backend status is tracked
+honestly in [Status](#-status--roadmap).
 
 ---
 
