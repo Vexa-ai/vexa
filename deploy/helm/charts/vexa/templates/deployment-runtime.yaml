@@ -42,6 +42,10 @@ spec:
           env:
             - name: RUNTIME_BACKEND
               value: {{ .Values.runtime.backend | quote }}
+            # Workspace tenant isolation (strict = per-mount subPath+readOnly volumeMounts on worker
+            # Pods / per-mount binds on docker; legacy = the pre-isolation whole-store mount).
+            - name: VEXA_WORKSPACE_ISOLATION
+              value: {{ .Values.runtime.workspaceIsolation | default "strict" | quote }}
             {{- if eq .Values.runtime.backend "k8s" }}
             - name: POD_NAMESPACE
               valueFrom:

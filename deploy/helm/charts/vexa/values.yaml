@@ -145,6 +145,9 @@ runtime:
   #   docker → host /var/run/docker.sock (single-node k3s fallback; mounts the socket — see below).
   #   process→ child processes (no containers).
   backend: "k8s"
+  # Workspace tenant isolation: "strict" (default — each worker Pod mounts ONLY its dispatch's
+  # workspaces via per-mount subPath+readOnly) | "legacy" (pre-isolation whole-store mount).
+  workspaceIsolation: "strict"
   replicaCount: 1               # keep at 1 unless backend=k8s (Redis is the state-of-record)
   image:
     repository: vexaai/v012-runtime

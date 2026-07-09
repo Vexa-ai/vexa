@@ -37,6 +37,7 @@ export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
 export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-changeme}}"
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-lite-internal-secret}"
+export VEXA_WORKSPACE_ISOLATION="${VEXA_WORKSPACE_ISOLATION:-strict}"   # per-subject uid/gid POSIX tenant isolation (legacy = shared-trust)
 
 export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
 export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"

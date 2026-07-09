@@ -30,12 +30,16 @@ logger = logging.getLogger("runtime_kernel.mounts")
 @dataclass(frozen=True)
 class MountBind:
     """One substrate bind: expose host ``source`` at container ``target``. ``read_only`` reflects the
-    mount's write flag (a viewer-role / ro mount binds ``:ro``); the store backing bind is always rw
-    (the token at the agent boundary is the real write gate — the bind just ports the bytes in)."""
+    mount's write flag (a viewer-role / ro mount binds ``:ro``).
+
+    ``volume_subpath`` (strict isolation, named-volume store only): ``source`` is the store VOLUME and
+    only this store-relative subpath of it is exposed — the docker backend materializes it via the
+    Mounts API's ``VolumeOptions.Subpath`` (engine ≥ v26). ``None`` = a plain source→target bind."""
 
     source: str
     target: str
     read_only: bool = False
+    volume_subpath: Optional[str] = None
 
 
 def _parse_mounts(raw: Optional[str]) -> list[dict]:
@@ -58,36 +62,67 @@ def _under(path: str, root: str) -> bool:
     return p == r or p.startswith(r.rstrip("/") + "/")
 
 
-def workspace_binds(env: Mapping[str, str]) -> list[MountBind]:
-    """The ordered store + mount-set binds a backend must materialize for one dispatch.
+def isolation_mode(env: Mapping[str, str]) -> str:
+    """The workspace-isolation mode for one dispatch: ``strict`` (default — each worker sees ONLY its
+    declared mount set, tenant isolation enforced by the substrate) or ``legacy`` (the pre-isolation
+    whole-store bind — the escape hatch for docker engines < v26, which lack volume ``Subpath``).
+    The dispatch env wins; the runtime SERVICE's own environ is the operator-level fallback."""
+    raw = env.get("VEXA_WORKSPACE_ISOLATION") or os.environ.get("VEXA_WORKSPACE_ISOLATION") or ""
+    return "legacy" if raw.strip().lower() == "legacy" else "strict"
 
-    Always starts with the store-backing bind (source→target) when both are set — that single bind
-    exposes every in-store mount. Then, for each ``VEXA_MOUNTS`` entry whose path is OUTSIDE that root,
-    one extra bind (a future cross-store shared workspace). De-duplicated, order-preserving."""
+
+def workspace_binds(env: Mapping[str, str]) -> list[MountBind]:
+    """The ordered binds a backend must materialize for one dispatch.
+
+    STRICT (default): one bind PER MOUNT in the set — the container's filesystem physically contains
+    ONLY the dispatch's declared workspaces, so another tenant's data simply isn't reachable (tenant
+    isolation enforced by the mount table, not by prompt instructions). An in-store mount is exposed as
+    the store's subpath: a host-path store joins the path; a named-volume store rides ``volume_subpath``
+    (docker ``VolumeOptions.Subpath``, engine ≥ v26). Read-only roles bind ``:ro`` — now enforced.
+
+    LEGACY (``VEXA_WORKSPACE_ISOLATION=legacy``): the pre-isolation shape — the whole store bound rw at
+    the root (exposes every tenant) + extra binds only for out-of-store mounts. Kept as the escape hatch
+    for substrates without subpath support.
+
+    De-duplicated, order-preserving either way."""
     binds: list[MountBind] = []
     seen: set[tuple[str, str]] = set()
 
-    def add(source: str, target: str, read_only: bool) -> None:
+    def add(source: str, target: str, read_only: bool, volume_subpath: Optional[str] = None) -> None:
         key = (source, target)
         if source and target and key not in seen:
             seen.add(key)
-            binds.append(MountBind(source, target, read_only))
+            binds.append(MountBind(source, target, read_only, volume_subpath))
 
     src = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
-    if src and root:
-        add(src, root, read_only=False)  # the whole store; per-workspace write is gated by the token
+    strict = isolation_mode(env) == "strict"
 
-    for m in _parse_mounts(env.get("VEXA_MOUNTS")):
+    if not strict and src and root:
+        add(src, root, read_only=False)  # legacy: the whole store; the token is the only write gate
+
+    for m in mount_set(env):
         path = m["path"]
         source = m.get("source")
-        # A mount rides the store-root bind ONLY when it lives under the root AND has no distinct host
-        # source. The _global GLOBAL SYSTEM tier is bound at ``<root>/_global`` (under the root) but is
-        # backed by a SEPARATE host repo (``source``) — so it needs its OWN read-only bind even though
-        # its target sits under the store root; likewise a future cross-store shared workspace.
+        read_only = not m.get("write", True)
         if not source and root and _under(path, root):
-            continue  # already exposed by the store-root bind — no extra bind needed
-        add(source or path, path, read_only=not m.get("write", True))
+            if not strict:
+                continue  # legacy: already exposed by the store-root bind
+            if not src:
+                continue  # no store backing declared (process backend env) — nothing to bind
+            rel = os.path.relpath(os.path.normpath(path), os.path.normpath(root))
+            if rel == ".":
+                continue  # a mount AT the root would re-expose the whole store — never emit it
+            if src.startswith("/"):
+                # host-path store: expose exactly this workspace by joining the subpath
+                add(os.path.join(src, rel), path, read_only)
+            else:
+                # named-volume store: the backend mounts the volume's subpath (docker ≥ v26)
+                add(src, path, read_only, volume_subpath=rel)
+            continue
+        # A mount with its OWN host source (the _global GLOBAL SYSTEM tier, a future cross-store shared
+        # workspace) — or one outside the store root — binds source→target directly, in both modes.
+        add(source or path, path, read_only)
 
     return binds
 
@@ -109,16 +144,33 @@ def mount_set(env: Mapping[str, str]) -> list[dict]:
 def k8s_volume_mounts(env: Mapping[str, str], *, pvc_name: str, store_target: str) -> tuple[list[dict], list[dict]]:
     """The k8s ``volumes`` + ``volumeMounts`` for the mount set, from the SAME env the docker binds read.
 
-    The whole workspace store is ONE RWX PVC (``pvc_name``) bound at the store root (``store_target``) —
-    that single volumeMount exposes every in-store active workspace (they all live under the root), so N
-    mounts need no extra k8s volumes. An out-of-store mount (a future cross-store shared workspace on its
-    OWN PVC) would add a volume here; none exist yet, so this returns the single store volume. Pure +
-    env-driven (no kubectl) so the k8s mount plumbing is unit-tested offline.
+    The workspace store is ONE RWX PVC (``pvc_name``). STRICT (default): one ``volumeMount`` PER MOUNT
+    in the set — same PVC, per-mount ``subPath`` + ``readOnly`` — so the Pod's filesystem contains only
+    the dispatch's declared workspaces (``subPath`` is native k8s; no version caveat). LEGACY: the
+    pre-isolation single whole-store mount at the root. A mount with its OWN host source (``_global``)
+    is SKIPPED with a warning in both modes — hostPath volumes were never emitted here (k8s deployments
+    bake ``_global`` differently); an out-of-store mount on its own PVC is a later WP. Pure + env-driven
+    (no kubectl) so the k8s mount plumbing is unit-tested offline.
 
     Returns ``(volumes, volume_mounts)`` ready to splat into a Pod ``--overrides`` spec."""
     if not pvc_name or not store_target:
         return [], []
     vol_name = "workspace-store"
     volumes = [{"name": vol_name, "persistentVolumeClaim": {"claimName": pvc_name}}]
-    volume_mounts = [{"name": vol_name, "mountPath": store_target}]
+    if isolation_mode(env) != "strict":
+        return volumes, [{"name": vol_name, "mountPath": store_target}]
+    volume_mounts: list[dict] = []
+    seen: set[str] = set()
+    for m in mount_set(env):
+        path = m["path"]
+        if m.get("source") or not _under(path, store_target):
+            logger.warning("k8s: mount %s has its own source / sits outside the store — not exposed "
+                           "(hostPath is never emitted; give it a PVC in a later WP)", m.get("slug"))
+            continue
+        rel = os.path.relpath(os.path.normpath(path), os.path.normpath(store_target))
+        if rel == "." or path in seen:
+            continue  # never re-expose the whole store; de-dup targets
+        seen.add(path)
+        volume_mounts.append({"name": vol_name, "mountPath": path, "subPath": rel,
+                              "readOnly": not m.get("write", True)})
     return volumes, volume_mounts

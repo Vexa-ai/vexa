@@ -15,6 +15,7 @@ import tempfile
 from typing import Optional
 
 from .backend import WorkloadHandle
+from .isolation import apply_process_isolation, child_env_for, plan_process_isolation, preexec_for
 from .mounts import mount_set
 from .profiles import Runnable
 
@@ -51,14 +52,30 @@ class ProcessBackend:
     def start(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> WorkloadHandle:
         if not runnable.command:
             raise ValueError("process backend requires a command")
-        # Workspace mount set (WP-A1.1): the lite/process backend shares the HOST filesystem, so there is
-        # nothing to bind — every active workspace in the set is already reachable at its absolute path.
-        # We still resolve the set (VEXA_MOUNTS) for observability + parity with docker/k8s so the mount
-        # plumbing is N-mount-aware on all three backends, not special-cased to one.
+        # Workspace mount set (WP-A1.1): the lite/process backend shares the HOST filesystem — there is
+        # nothing to bind, so tenant isolation is POSIX instead (runtime_kernel.isolation): the worker
+        # drops to a per-subject uid, private tiers are 0700-owned, shared workspaces get per-workspace
+        # gids. Unavailable conditions (non-root runtime, non-numeric subject, legacy mode) degrade
+        # LOUDLY to the old shared-trust spawn.
         mounts = mount_set(env)
         if len(mounts) > 1:
-            log.info("workload %s: %d active workspace mounts (host-shared): %s",
+            log.info("workload %s: %d active workspace mounts: %s",
                      workload_id, len(mounts), ", ".join(m.get("slug", "?") for m in mounts))
+        preexec = None
+        child_env = {**os.environ, **env}
+        try:
+            iso = plan_process_isolation(env)
+            if iso is not None:
+                iso = apply_process_isolation(iso)
+                preexec = preexec_for(iso)
+                child_env = child_env_for(iso, child_env)
+                log.info("workload %s: POSIX-isolated as uid %d (%d shared group(s))",
+                         workload_id, iso.uid, len(iso.groups))
+        except OSError as e:
+            # a broken store layout must not brick dispatch — but say exactly what didn't apply
+            log.error("workload %s: isolation setup failed (%s) — spawning shared-trust", workload_id, e)
+            preexec = None
+            child_env = {**os.environ, **env}
         # Capture the child's output to a per-workload file (both streams interleaved, like
         # `docker logs`). Fail-open: if the log dir is unwritable we fall back to DEVNULL rather
         # than refusing to start the workload.
@@ -75,10 +92,11 @@ class ProcessBackend:
         try:
             proc = subprocess.Popen(
                 runnable.command,
-                env={**os.environ, **env},
+                env=child_env,
                 stdout=out_fh if out_fh is not None else subprocess.DEVNULL,
                 stderr=subprocess.STDOUT if out_fh is not None else subprocess.DEVNULL,
                 start_new_session=True,
+                preexec_fn=preexec,   # None = shared-trust (legacy / isolation unavailable)
             )
         finally:
             if out_fh is not None:
