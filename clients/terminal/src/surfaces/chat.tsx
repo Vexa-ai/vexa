@@ -190,15 +190,27 @@ function meetingTokenFromTitle(title: string): ReferenceToken {
 const CONTEXT_BLOCKS: Array<[RegExp, RegExp]> = [
   [/^## Referencing knowledge \(always\)/, /or use plain text\.\s*/],
   [/^## Your mounted workspaces/, /do not guess or invent mount paths\.\s*/],
-  [/^<schedule>/, /<\/schedule>\s*/],
+  [/^<schedule[ >]/, /<\/schedule>\s*/],   // the digest opens with attributes (tz/now) — match them
   [/^The user's meeting schedule is in <schedule>/, /notes files or ask\.\s*/],
   [/^You are assisting in a live meeting/, /(?:<\/transcript>\s*|no transcript yet\.\s*)/],
-  [/^You are helping the user PREPARE/, /don't have prior context\.\s*/],
+  // the prep steering grew (proactive-research + example-entities + identity clauses); anchor on its
+  // CURRENT tail. ("don't have prior context." now appears mid-block, so it can't be the terminator.)
+  [/^You are helping the user PREPARE/, /starting blank\.\s*/],
   [/^The meeting "/, /(?:<\/transcript>\s*|invent its content\.\s*)/],
   [/^The user is looking at the workspace/, /(?:<\/readme>\s*|context is missing\.\s*)/],
 ];
 
+// The server marks the grounding→user boundary with this sentinel (control_plane/api.py). When present,
+// ONE cut removes every folded block regardless of wording drift; the regex blocks below are the
+// fallback for chats stored before the sentinel shipped.
+const CONTEXT_SENTINEL = "<!--vexa:user-input-below-->";
+
 export function stripContextBlocks(raw: string): string {
+  const si = raw.lastIndexOf(CONTEXT_SENTINEL);
+  if (si >= 0) {
+    const after = raw.slice(si + CONTEXT_SENTINEL.length).trimStart();
+    if (after) return after;   // everything up to & including the sentinel is server grounding
+  }
   let text = raw;
   let guard = 0;
   outer: while (guard++ < 12) {
@@ -236,7 +248,9 @@ function compactStoredUserText(text: string): string {
   if (activeFile) {
     return appendReferenceToken(activeFile[2], { kind: "file", value: activeFile[1], raw: `@file:${activeFile[1]}` });
   }
-  return text;
+  // The default is the CONTEXT-STRIPPED text (sentinel/regex) — NOT the raw stored prompt. Returning
+  // `text` here silently discarded the strip, leaking the whole grounding preamble into the bubble.
+  return raw;
 }
 
 const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };

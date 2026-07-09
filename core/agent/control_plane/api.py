@@ -697,6 +697,14 @@ def _meeting_grounding(
     return (ctx, [], preamble + prompt)
 
 
+# The grounding/user-message boundary marker. Every server-folded context block (kg-links + mounts,
+# added by the WORKER, land BEFORE the user prompt too; schedule digest; meeting/workspace grounding)
+# sits BEFORE this sentinel; the user's actual words are AFTER it. The terminal strips everything up to
+# and including it in ONE cut — robust to preamble wording drift, unlike per-block regexes. An HTML
+# comment so the model treats it as inert. Old chats (no sentinel) fall back to the client's regexes.
+CONTEXT_SENTINEL = "<!--vexa:user-input-below-->"
+
+
 # ── terminal-state context bundle (slice 1) — the grounding orchestrator ────────────────────────────
 # A chat turn's prompt is assembled [ambient <schedule> digest] + [focus fold] + user prompt.
 #   ambient — the schedule digest, SURFACE-GATED (Meetings list / Today tab / meeting-ish tab focused)
@@ -1178,6 +1186,12 @@ def create_app(
             workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
                                       + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
         )
+        # Mark the grounding→user boundary so the terminal strips ALL folded context in one cut. Every
+        # branch returns `<grounding> + body.prompt`, so the user's words are the exact suffix; insert the
+        # sentinel right before them (no-op when nothing was folded). The kg/mounts preambles the worker
+        # prepends land before `prompt`, hence before the sentinel too — so they're stripped as well.
+        if body.prompt and prompt.endswith(body.prompt) and len(prompt) > len(body.prompt):
+            prompt = prompt[: len(prompt) - len(body.prompt)] + CONTEXT_SENTINEL + body.prompt
         # Attribute this turn's commits to the human editor by EMAIL (gateway-injected, trusted) rather
         # than the bare subject id — the git author NAME becomes the email; the synthetic author email
         # (<subject>@vexa.local) stays for the you/member classification (workspace_reader.git_state_at).
