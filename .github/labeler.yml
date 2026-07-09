@@ -1,5 +1,0 @@
-"lane:contract":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "contracts/**"
-          - "MANIFEST.md"

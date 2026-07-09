@@ -1,0 +1,14 @@
+{
+  "ts": "2026-06-21T10:00:01.310Z",
+  "level": "debug",
+  "service": "gateway",
+  "trace_id": "9f1c0b7a8d2e4f6a",
+  "span": "proxy",
+  "audience": "system",
+  "event": "downstream_forwarded",
+  "fields": {
+    "method": "POST",
+    "path": "/bots",
+    "downstream_status": 201
+  }
+}

@@ -1,0 +1,107 @@
+---
+title: "Browse, upload, and swap the workspace"
+description: "Read the knowledge base over the API, add documents, or attach your own git repo."
+---
+
+The [workspace](/concepts#workspace) is a git folder of Markdown — knowledge, plans, and the agent's
+session, all just files. The knowledge itself follows an open standard
+([OKF](#the-knowledge-graph-is-an-okf-bundle), below). Every workspace route derives your identity from the
+API key; you never pass a subject.
+
+## Browse and read
+
+```bash
+# the file tree
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/tree"
+# → { "files": ["kg/entities/acme.md", "meetings/2026-06-29-acme.md", ...] }
+
+# one file's content (404 if absent)
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=kg/entities/acme.md"
+# → { "path": "...", "content": "..." }
+
+# git state — branch, uncommitted changes, recent commits
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/git"
+```
+
+Pass `hidden=true` to `tree` to include dotfiles. `git` is the durable state and the undo — every agent
+write is a commit.
+
+## The knowledge graph is an OKF bundle
+
+The `kg/` subtree follows the
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF)
+v0.1 — Google's open, vendor-neutral standard for markdown knowledge. Each entity is one file at
+`kg/entities/<type>/<slug>.md` with YAML frontmatter:
+
+```markdown
+---
+type: company            # OKF's only required key
+id: acme-corp            # Vexa-required: stable slug, unique per type
+title: Acme Corp         # Vexa-required: human title
+description: Design-partner prospect, met at OSFF.   # OKF recommended
+resource: https://acme.example.com                   # OKF recommended
+tags: [prospect]
+timestamp: 2026-07-02T14:00:00Z
+---
+
+Body is plain markdown. Entities cross-reference each other with [[wikilinks]]
+by title — the knowledge graph emerges from the links.
+```
+
+Vexa's frontmatter contract (`type`/`id`/`title` required, per the
+[`workspace.v1` schema](https://github.com/Vexa-ai/vexa/blob/main/core/agent/contracts/workspace.v1/workspace.schema.json))
+is a strict superset of OKF, which requires only `type` — so every workspace is a conformant bundle any
+OKF consumer can read, and `[[wikilinks]]` are a tolerated extension.
+
+Two **reserved filenames** carry no frontmatter and are not entities:
+
+- `index.md` — a per-directory listing (`- [Title](file.md) — description`) for progressive
+  disclosure; seeded workspaces ship them generated, and the agent maintains them as entities are
+  added or removed.
+- `log.md` — optional change history, newest first, grouped under `## YYYY-MM-DD` headings.
+
+Because the bundle is just files in git, it is portable by construction: `tree` + `file` above read it
+over the API, and a `git clone` (or the swap endpoint below) moves the whole knowledge base between
+tools — nothing about it is Vexa-specific.
+
+## Upload documents
+
+Add files to the workspace so agents can ground on them (multipart; ≤25 MB each):
+
+```bash
+curl -X POST "$API_BASE/agent/workspace/upload" \
+  -H "X-API-Key: $API_KEY" \
+  -F "files=@./contract.pdf" -F "files=@./notes.md"
+# → { "files": [ { "name": "contract.pdf", "path": "..." }, ... ] }
+```
+
+## Initialize a fresh workspace
+
+Idempotent — seeds the workspace if it doesn't exist yet:
+
+```bash
+curl -X POST "$API_BASE/agent/workspace/init" -H "X-API-Key: $API_KEY"
+# → 201 { "workspace": "...", "seeded": true, "already_initialized": false }
+```
+
+## Attach your own git repo
+
+Swap in an external git repo as the active workspace — the current one is **parked**, not lost:
+
+```bash
+curl -X POST "$API_BASE/agent/workspace/swap" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"repo":"https://github.com/acme/knowledge.git","ref":"main","token":"<git-token>"}'
+```
+
+Omit `repo` to swap back to the seed workspace. Check what's attached:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/attached"
+# → { "active": {...}, "parked": [...] }
+```
+
+## Next
+
+Put an agent to work on what's here — [chat with the workspace](/how-to/chat-workspace) or run an
+[unattended routine](/how-to/daily-brief) over it.

@@ -1,0 +1,8 @@
+{
+  "cron": "0 9 * * 1",
+  "request": {
+    "method": "POST",
+    "url": "http://agent-api:8100/runtime/weekly-digest"
+  },
+  "metadata": { "source": "agent-api" }
+}

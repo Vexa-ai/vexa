@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/flagged-issue.v1",
+  "title": "flagged-issue.v1",
+  "description": "A flagged transcript/attribution bug — the record that turns a live meeting defect into a reproducible OFFLINE test (O-TEL-3). A user OR the system (analyze.mjs auto-flag) raises one; it carries enough to locate the offending segment, links to the captured-signal.v1 / tape the signal lives in, and routes to the O-TEL-2 replay. issue_type derives from what analyze.mjs already detects (mis-attribution, oversegmentation).",
+  "$defs": {
+    "IssueType": {
+      "description": "What kind of defect — derived from analyze.mjs's oracles (mis-attribution, oversegmentation) plus the loss/hallucination families.",
+      "enum": ["mis-attribution", "oversegment", "lost-content", "hallucination", "other"]
+    },
+    "Severity": {
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "FlaggedBy": {
+      "description": "Who raised it — a human via the feedback UI, the feedback API, or the system auto-flagger.",
+      "enum": ["system", "human", "feedback-api"]
+    },
+    "Status": {
+      "enum": ["open", "investigating", "fixed", "wontfix"]
+    },
+    "SignalLink": {
+      "description": "Where the offending raw signal lives, so the issue routes to the O-TEL-2 replay. At least one of captured_signal / tape must be present for the issue to be replayable.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "captured_signal": { "type": "string", "description": "path/uri to the captured-signal.v1 JSONL the segment's frames are in" },
+        "tape": { "type": "string", "description": "path/uri to the legacy raw-signal tape, when that is the stored form" },
+        "frame_seq_start": { "type": "integer", "minimum": 0, "description": "first captured-signal frame seq covering the segment" },
+        "frame_seq_end": { "type": "integer", "minimum": 0, "description": "last captured-signal frame seq covering the segment" }
+      }
+    },
+    "FlaggedIssue": {
+      "description": "One flagged issue. The locator (platform/native/session/segment/speaker/text/start/end) identifies the offending segment; signal links it to the replayable raw signal.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issue_id", "platform", "native_meeting_id", "session_start_time", "segment_id", "speaker", "text", "start", "end", "issue_type", "severity", "flagged_by", "status", "created_at"],
+      "properties": {
+        "issue_id": { "type": "string", "description": "stable id for the flagged issue" },
+        "trace_id": { "type": "string", "description": "the distributed trace_id (logevent.v1) of the meeting/segment where the defect occurred — pulls every structured log across the system for that meeting AND links to the captured-signal.v1 with the same trace_id, so the bug routes to both its full cross-system trace and its deterministic O-TEL-2 replay" },
+        "platform": { "type": "string" },
+        "native_meeting_id": { "type": "string" },
+        "session_start_time": { "type": "string", "format": "date-time" },
+        "segment_id": { "type": "string", "description": "the offending transcript.v1 segment_id" },
+        "speaker": { "type": "string", "description": "the label the segment carried (the disputed attribution)" },
+        "text": { "type": "string" },
+        "start": { "type": "number", "description": "segment start (seconds from session start)" },
+        "end": { "type": "number", "description": "segment end (seconds from session start)" },
+        "issue_type": { "$ref": "#/$defs/IssueType" },
+        "severity": { "$ref": "#/$defs/Severity" },
+        "description": { "type": "string", "description": "free-text explanation of the defect" },
+        "signal": { "$ref": "#/$defs/SignalLink" },
+        "ground_truth": { "type": "string", "description": "the correct value (e.g. the true speaker / the correct text), when known" },
+        "flagged_by": { "$ref": "#/$defs/FlaggedBy" },
+        "status": { "$ref": "#/$defs/Status" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

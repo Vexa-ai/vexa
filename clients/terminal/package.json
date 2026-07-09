@@ -1,0 +1,52 @@
+{
+  "name": "@vexa/terminal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vexa Terminal — an AI-first knowledge-worker terminal (Claude Code × Outlook) on the Vexa meeting-bot + agentic-runtime backend. Self-hostable (VPC / air-gapped) with BYO inference.",
+  "scripts": {
+    "dev": "PORT=3000 node server.mjs",
+    "build": "next build",
+    "start": "PORT=3000 NODE_ENV=production node server.mjs",
+    "lint": "next lint",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mdx-js/mdx": "^3.1.1",
+    "acorn": "^8.17.0",
+    "acorn-walk": "^8.3.5",
+    "allotment": "^1.20.5",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "dockview": "^7.0.2",
+    "dockview-react": "^7.0.2",
+    "geist": "^1.3.1",
+    "lucide-react": "^0.556.0",
+    "next": "15.5.19",
+    "next-auth": "^4.24.14",
+    "next-themes": "^0.4.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "remark-gfm": "^4.0.1",
+    "sonner": "^2.0.7",
+    "sucrase": "^3.35.1",
+    "tailwind-merge": "^3.4.0",
+    "tinykeys": "^4.0.0",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/mdx": "^2.0.14",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.3",
+    "jsdom": "^29.1.1",
+    "tailwindcss": "^4",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.9"
+  }
+}

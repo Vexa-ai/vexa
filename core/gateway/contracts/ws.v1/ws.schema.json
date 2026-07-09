@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/ws.v1",
+  "title": "ws.v1 — the public live WebSocket multiplex (/ws), frozen to vexa main",
+  "description": "The /ws endpoint api-gateway serves: api_key auth (x-api-key header or ?api_key=), a subscribe/unsubscribe control protocol, and forwarded live data messages — transcript (the per-speaker confirmed/pending bundle) + transcription_segment from tc:meeting:{id}:mutable, meeting.status from bm:meeting:{id}:status, chat_message from va:meeting:{id}:chat. The gateway forwards the raw redis payload verbatim, so data messages are type-tagged and additive (extra fields allowed). Shapes are the canonical 0.10.6 contract (vexa-0.11 api-gateway + meetings.publish_meeting_status_change).",
+  "$defs": {
+    "MeetingRef": {
+      "type": "object",
+      "required": ["platform", "native_id"],
+      "properties": {
+        "platform": { "type": "string", "enum": ["google_meet", "zoom", "teams", "browser_session"] },
+        "native_id": { "type": "string" }
+      }
+    },
+    "SubscribeRequest": {
+      "type": "object",
+      "description": "client → server: subscribe to live updates for meetings",
+      "required": ["action", "meetings"],
+      "properties": {
+        "action": { "const": "subscribe" },
+        "meetings": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/MeetingRef" } }
+      }
+    },
+    "UnsubscribeRequest": {
+      "type": "object",
+      "description": "client → server: stop receiving updates for meetings",
+      "required": ["action", "meetings"],
+      "properties": {
+        "action": { "const": "unsubscribe" },
+        "meetings": { "type": "array", "items": { "$ref": "#/$defs/MeetingRef" } }
+      }
+    },
+    "Subscribed": {
+      "type": "object",
+      "description": "server → client: ack of a subscribe (the meetings actually authorized + subscribed)",
+      "required": ["type", "meetings"],
+      "properties": {
+        "type": { "const": "subscribed" },
+        "meetings": { "type": "array", "items": { "$ref": "#/$defs/MeetingRef" } }
+      }
+    },
+    "Unsubscribed": {
+      "type": "object",
+      "description": "server → client: ack of an unsubscribe",
+      "required": ["type", "meetings"],
+      "properties": {
+        "type": { "const": "unsubscribed" },
+        "meetings": { "type": "array", "items": { "$ref": "#/$defs/MeetingRef" } }
+      }
+    },
+    "TranscriptionSegment": {
+      "type": "object",
+      "description": "server → client: a single live transcript segment (forwarded from tc:meeting:{id}:mutable). type + text are the floor; the producer adds speaker/timing/segment_id.",
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "transcription_segment" },
+        "text": { "type": "string" },
+        "speaker": { "type": ["string", "null"] },
+        "start_time": { "anyOf": [{ "type": "number" }, { "type": "string" }] },
+        "end_time": { "anyOf": [{ "type": "number" }, { "type": "string" }] },
+        "language": { "type": ["string", "null"] },
+        "completed": { "type": ["boolean", "null"] },
+        "segment_id": { "type": ["string", "null"] },
+        "session_uid": { "type": ["string", "null"] }
+      }
+    },
+    "Transcript": {
+      "type": "object",
+      "description": "server → client: the canonical 0.10.6 per-speaker transcript bundle (forwarded from tc:meeting:{id}:mutable) — `confirmed` (completed) + `pending` (in-progress) segment arrays for one speaker tick. This is what the collector publishes + the dashboard consumes live.",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "transcript" },
+        "speaker": { "type": ["string", "null"] },
+        "meeting": { "type": "object" },
+        "confirmed": { "type": "array", "items": { "type": "object" } },
+        "pending": { "type": "array", "items": { "type": "object" } },
+        "ts": { "type": ["string", "null"] }
+      }
+    },
+    "MeetingStatus": {
+      "type": "object",
+      "description": "server → client: the canonical 0.10.6 meeting/bot status update (forwarded verbatim from bm:meeting:{id}:status). Status lives under `payload.status`; a `meeting` ref + `user_id` + `ts` are carried alongside (vexa-0.11 meetings.publish_meeting_status_change). Replaces the drifted `bot_status` frame.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "meeting.status" },
+        "meeting": {
+          "type": "object",
+          "properties": {
+            "id": { "type": ["integer", "string"] },
+            "platform": { "type": ["string", "null"] },
+            "native_id": { "type": ["string", "null"] }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "type": "string" },
+            "data": { "type": ["object", "null"] }
+          }
+        },
+        "user_id": { "type": ["integer", "string", "null"] },
+        "ts": { "type": ["string", "null"] }
+      }
+    },
+    "ChatMessage": {
+      "type": "object",
+      "description": "server → client: a chat message from the bot (forwarded from va:meeting:{id}:chat)",
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "chat_message" },
+        "sender": { "type": ["string", "null"] },
+        "text": { "type": "string" }
+      }
+    },
+    "Error": {
+      "type": "object",
+      "description": "server → client: a protocol/auth error. `error` is a fixed code from the vocabulary below (formalized as the enum on the property, so the conformance harness's emitted codes are machine-checked against this contract). Control/auth codes (exercised by the offline /ws conformance harness): missing_api_key, invalid_json, invalid_subscribe_payload, invalid_unsubscribe_payload, unknown_action. Downstream-auth codes — emitted by the deployed gateway's POST /ws/authorize-subscribe path (adapters.AdminApiAuthorizer), so they are PRODUCTION-ONLY and NOT reachable by the synchronous offline harness: authorization_service_error (downstream returned non-200; carries `status` + `detail`), authorization_call_failed (the downstream call raised; carries `details`).",
+      "required": ["type", "error"],
+      "properties": {
+        "type": { "const": "error" },
+        "error": {
+          "type": "string",
+          "enum": [
+            "missing_api_key",
+            "invalid_json",
+            "invalid_subscribe_payload",
+            "invalid_unsubscribe_payload",
+            "unknown_action",
+            "authorization_service_error",
+            "authorization_call_failed"
+          ]
+        },
+        "details": { "anyOf": [{ "type": "string" }, { "type": "array" }, { "type": "object" }] },
+        "status": { "type": "integer" },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}

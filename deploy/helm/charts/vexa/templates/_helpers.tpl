@@ -96,15 +96,33 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/* The on-demand bot image the runtime spawns (BROWSER_IMAGE). The bot is published, never built by
+this chart. runtime.browserImage is the explicit value; global.imageTag (set) pins the standard repo. */}}
 {{- define "vexa.botImage" -}}
-{{- if .Values.global.imageTag -}}
+{{- if .Values.runtime.browserImage -}}
+{{- .Values.runtime.browserImage -}}
+{{- else if .Values.global.imageTag -}}
 {{- printf "vexaai/vexa-bot:%s" .Values.global.imageTag -}}
-{{- else if .Values.runtimeApi.browserImage -}}
-{{- .Values.runtimeApi.browserImage -}}
-{{- else if .Values.meetingApi.botImageName -}}
-{{- .Values.meetingApi.botImageName -}}
 {{- else -}}
-{{- printf "%s:%s" .Values.meetingApi.image.repository .Values.meetingApi.image.tag -}}
+vexaai/vexa-bot:v012
+{{- end -}}
+{{- end -}}
+
+{{/* The agent-api image ref (AGENT_IMAGE the runtime spawns workers from). global.imageTag wins. */}}
+{{- define "vexa.agentImage" -}}
+{{- if .Values.global.imageTag -}}
+{{- printf "%s:%s" .Values.agentApi.image.repository .Values.global.imageTag -}}
+{{- else -}}
+{{- .Values.runtime.agentImage | default (printf "%s:%s" .Values.agentApi.image.repository .Values.agentApi.image.tag) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image). */}}
+{{- define "vexa.agentWorkerImage" -}}
+{{- if .Values.global.imageTag -}}
+{{- printf "vexaai/v012-agent-worker:%s" .Values.global.imageTag -}}
+{{- else -}}
+{{- .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
 {{- end -}}
 {{- end -}}
 

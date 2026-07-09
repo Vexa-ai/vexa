@@ -1,116 +1,59 @@
-# Deployment
+# deploy — the v0.12 container composition (Compose)
 
+Brings up the whole v0.12 control plane as one ordered, health-gated stack: the infra
+(`postgres:17` · `redis:7` · `minio` + `minio-init`) and the four long-running Python
+services — **admin-api · runtime · agent-api · meeting-api · gateway** — each building its own
+slim `uv` image, plus the dev hot-reload overlay and the dashboard overlay. This is the
+*composition* layer (it owns no service code); it also owns the **`execution-targets.v1`**
+contract — the machine-readable "where can work run, and what does it need?" registry a plan
+resolves against in planning, before execution (ADR-0020).
 
-## Why
+## Seams
 
-Vexa can be used without any deployment — the hosted service at [vexa.ai](https://vexa.ai) gives you an API key and you start sending bots immediately.
+| Direction | Neighbour | Via | What crosses |
+|---|---|---|---|
+| spawns-over | the 4 core services + dashboard | `<service>/Dockerfile` build + `python -m <pkg>` | container images, env wiring, ordered health-gated bring-up |
+| spawns-over | infra | `redis:7-alpine` · `postgres:17-alpine` · `minio` + `minio/mc` | the backing stores every service `depends_on: service_healthy` |
+| spawns-over | bot | `runtime` → `/var/run/docker.sock`, `BROWSER_IMAGE=vexaai/vexa-bot:v012` | on-demand per-meeting bot container (published image, never built here) |
+| produces | `scripts/gates.mjs` (`gate:execution-env`) + planning preflight | `execution-targets.v1` JSON (`deploy/execution-targets.json`, gitignored) | the resolved targets[]/resources[] registry; `secret_ref` references only (P14) |
+| calls | host secret store | `secret_ref: vexa-secrets:<path>` / `env:<NAME>` | references to credentials — never inline secret values |
+| publishes | dev loop | `docker-compose.dev.yml` source bind-mounts + `watchfiles` | host checkout → process restart, no image rebuild |
 
-Self-hosting gives you control over your data and infrastructure. Three options, from simplest to most flexible.
+## Contracts
 
-## What
+**Owns:** [`deploy/contracts/execution-targets.v1`](contracts/execution-targets.v1/) — the
+host/user-specific execution-target & resource registry (sealed in
+[`contracts.seal.json`](../contracts.seal.json); a leaf contract, depends on nothing).
+**Consumes:** none — the compose files *reference* the sealed service/invocation/lifecycle/
+runtime/schedule schemas indirectly (each service vendors and validates its own by path); deploy
+itself reads no `*.v1`.
 
-### Option 0: Hosted (no deployment)
+## Lite — the single-container shape
 
-Get an API key at [vexa.ai/account](https://vexa.ai/account). Start sending bots. No infrastructure needed.
+[`deploy/lite`](lite/) is the all-in-one alternative to this compose stack: the SAME service code
+in ONE container, with the runtime on the **process backend** (`RUNTIME_BACKEND=process`) so bots
+and agent workers run as child processes instead of socket-spawned containers. `make lite` (root)
+provisions postgres + minio sidecars and runs the rest in a single image — quick evaluation /
+small teams; use this compose stack for dev / production. See [`deploy/lite/README.md`](lite/README.md).
 
-### Option 1: Lite (easiest self-host)
+## Isolated evaluation
 
-Single Docker container. Needs external Postgres + transcription service.
-See [lite/README.md](lite/README.md).
-
-### Option 2: Docker Compose (development)
-
-Full stack locally. All services, Postgres, Redis.
-See [compose/README.md](compose/README.md) and the root Makefile: `make all`.
-
-### Option 3: Helm (production K8s)
-
-Two charts: `vexa` (full) and `vexa-lite` (single-pod).
-See [helm/README.md](helm/README.md).
-
-### Transcription service
-
-All self-hosted deployments need a transcription service:
-
-- **Ready to go:** Use Vexa transcription — sign up at [vexa.ai](https://vexa.ai), get a transcription API key. No GPU needed.
-- **Self-host:** Run [services/transcription-service](../services/transcription-service/) on your own GPU for full data sovereignty.
-
-## Image Tagging
-
-Every build produces an immutable timestamp tag (`YYMMDD-HHMM`). Mutable tags (`dev`, `staging`, `latest`) are pointers updated only during publication — never during builds.
-
-### Tag hierarchy
-
-
-| Tag           | Created by             | Mutates?         | Purpose                            |
-| ------------- | ---------------------- | ---------------- | ---------------------------------- |
-| `YYMMDD-HHMM` | `make build`           | Never            | The actual identity of a build     |
-| `dev`         | `make publish`         | Yes — re-pointed | Latest published development build |
-| `staging`     | `make promote-staging` | Yes — re-pointed | Staging cluster deployment         |
-| `latest`      | `make promote-latest`  | Yes — re-pointed | Production-ready release           |
-
-
-### Registry
-
-All images live on DockerHub under the `vexaai/` namespace:
-
-- `vexaai/api-gateway`, `vexaai/admin-api`, `vexaai/meeting-api`, `vexaai/agent-api`, `vexaai/runtime-api`, `vexaai/mcp`, `vexaai/dashboard`, `vexaai/tts-service`, `vexaai/vexa-bot`
-
-### Dev cycle
+`deploy/compose/tests/` — `stack_test.py` (the **`gate:compose`** proof) brings up the real
+stack under an isolated project name, proves health + auth + transcript bus + recordings→minio +
+lifecycle wiring, then `down -v` in a guaranteed finally (docker absent → green skip). The
+`execution-targets.v1` contract is gated separately via `validate.mjs` against `golden/`.
 
 ```bash
-make build              # builds all images → vexaai/*:260330-1415 (saved to .last-tag)
-make up                 # runs those exact images
-make publish            # pushes to DockerHub + updates :dev pointer
-make promote-staging    # re-points :staging → specific build
-make promote-latest     # re-points :latest → specific build
+make -C deploy/compose stack-test        # L3 integration — always-on subset (gate:compose)
+make -C deploy/compose stack-test-bot    # L4 live — + real bot-spawn proof (COMPOSE_BOT=1, ~7GB)
+node deploy/contracts/execution-targets.v1/validate.mjs   # L1 contract — schema + golden
 ```
 
-During development, you always run images with a specific timestamp tag, so you know exactly what code is in each container.
+## Status
 
-## How
-
-### Environment variables
-
-One env-example covers both modes: [env/env-example](env/env-example)
-
-
-| Variable                      | Required     | Description                                 |
-| ----------------------------- | ------------ | ------------------------------------------- |
-| `DASHBOARD_PATH`              | Compose only | Absolute path to vexa-dashboard checkout    |
-| `TRANSCRIPTION_SERVICE_URL`   | Yes          | Transcription API endpoint                  |
-| `TRANSCRIPTION_SERVICE_TOKEN` | If needed    | Auth token for transcription                |
-| `LOCAL_TRANSCRIPTION`         | No           | Set `true` to run GPU transcription locally |
-| `REMOTE_DB`                   | No           | Set `true` to use external Postgres         |
-| `ADMIN_API_TOKEN`             | No           | Admin API auth token (default: `changeme`)  |
-
-
-### Which mode?
-
-
-| You want...                         | Use                                  |
-| ----------------------------------- | ------------------------------------ |
-| Use Vexa without deploying anything | Hosted at [vexa.ai](https://vexa.ai) |
-| Easiest self-host                   | Lite                                 |
-| Develop / contribute                | `make all` (Docker Compose)          |
-| Production with scaling             | Helm                                 |
-
-
-## Definition of Done
-
-| # | Item | Weight | Status | Evidence | Last checked |
-|---|------|--------|--------|----------|--------------|
-| 1 | Lite option documented and working | 20 | PASS | Lite validated 2026-04-05, 14/14 services, transcription OK | 2026-04-05T18:50Z |
-| 2 | Compose option documented and working | 20 | PASS | Compose validated in previous sessions, make all works | 2026-04-05 |
-| 3 | Helm option documented | 10 | SKIP | Charts exist but not tested on cluster | — |
-| 4 | Image tagging docs match Makefile | 15 | PASS | YYMMDD-HHMM tags confirmed in builds | 2026-04-05 |
-| 5 | Transcription service options explained | 10 | PASS | Hosted + self-host both documented | 2026-04-05 |
-| 6 | Environment variable reference complete | 15 | PARTIAL | env-example exists, lite vars now complete, compose vars need audit | 2026-04-05 |
-| 7 | All registry image names correct | 10 | SKIP | Not verified this run | — |
-
-## Confidence
-
-Score: 65/100
-Last validated: 2026-04-05 (full-stack-lite run)
-Ceiling: Helm untested, compose env vars need audit, registry image names unverified
-
+- ✅ delivered — five-service + infra compose, every service health-gated with ordered `depends_on`
+- ✅ delivered — `docker-compose.dev.yml` hot-reload overlay (source mounts + `watchfiles`)
+- ✅ delivered — dashboard overlay (`docker-compose.dashboard.yml`) + `provision-token`
+- ✅ delivered — runtime spawns the bot via host docker.sock (published image, not built)
+- ✅ delivered — `execution-targets.v1` contract (sealed) + `gate:execution-env` + example template
+- ✅ delivered — `gate:compose` real-stack readiness proof (`deploy/compose/tests/`)

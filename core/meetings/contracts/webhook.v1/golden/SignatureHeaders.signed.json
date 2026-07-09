@@ -1,0 +1,6 @@
+{
+  "Content-Type": "application/json",
+  "Authorization": "Bearer whsec_demo_secret",
+  "X-Webhook-Signature": "sha256=3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b",
+  "X-Webhook-Timestamp": "1771401720"
+}

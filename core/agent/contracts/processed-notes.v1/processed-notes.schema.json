@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/processed-notes.v1",
+  "title": "processed-notes.v1",
+  "description": "The processed-notes contract: the per-meeting cleaned-transcript stream proc:meeting:{row_id} (agent-worker[Py] → meeting-api db-writer[Py] + agent-api SSE). A stream entry carries `note` (JSON Note) + optional `params` (JSON Params), or is the terminal ViewEnd marker. Cross-process agent→meetings seam (P4); the agent-worker is the single writer (P23); ADR 0027.",
+  "$defs": {
+    "Note": {
+      "description": "One cleaned note, 1:1 with a transcript segment (id == segment_id). Re-emitting an id UPGRADES the note in place (baseline at ingest, LLM polish per beat) — consumers upsert by id, never append duplicates.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": { "type": "string", "description": "the source segment_id — the upsert key" },
+        "text": { "type": "string", "description": "the cleaned utterance (latest pass wins)" },
+        "speaker": { "type": ["string", "null"] },
+        "chapter": { "type": ["string", "null"], "description": "running chapter heading; may be cleared by a later pass" },
+        "t": { "type": ["number", "null"], "description": "segment start, seconds (epoch)" },
+        "pass": { "type": "integer", "minimum": 0, "description": "rewrite pass that produced this text (0 = ingest baseline)" },
+        "frozen": { "type": "boolean", "description": "true once no further passes may rewrite this note" }
+      }
+    },
+    "Params": {
+      "description": "Provenance stamped on note entries: what pipeline/provider/model produced the cleaning. Persisted verbatim into the durable view's params (reproducibility).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pipeline", "version"],
+      "properties": {
+        "pipeline": { "type": "string" },
+        "version": { "type": "integer" },
+        "provider": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] }
+      }
+    },
+    "ViewEnd": {
+      "description": "The terminal marker (ADR 0027): the worker XADDs it after its final post-session_end beat — the stream is COMPLETE at this entry. The db-writer flushes the durable view on it (a missing marker is covered by a bounded deadline, never assumed); the live SSE closes on it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "view_end" },
+        "cursor": { "type": "string", "description": "the last raw tc:meeting:{row_id} stream id processed — makes completion auditable" }
+      }
+    }
+  }
+}

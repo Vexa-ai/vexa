@@ -1,0 +1,61 @@
+---
+title: "Concepts"
+description: "The primitives Vexa is built from — workspace, meeting, agent, container, identity, scheduler."
+---
+
+Everything in Vexa composes from a handful of primitives. A unit of work — a **dispatch** — is one
+[agent](#agent), in one [container](#container), over a person's [workspace](#workspace), authorized by an
+[identity](#identity) token, fired by the [scheduler](#scheduler). The data those agents grow on comes
+from [meetings](#meeting) and docs.
+
+## Workspace
+
+A git **folder**, stored in an (encrypted) bucket, with an `id` and an access **mode** (`ro`/`rw`). A
+dispatch mounts a list — typically `system` (ro) + `company` (ro) + `user` (rw). It holds knowledge,
+plans, and the agent's session — all just files, with **no dictated structure**. git is the durable state
+and the undo.
+
+The knowledge itself lives in the `kg/` subtree as an
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF)
+v0.1 bundle — one markdown file per entity at `kg/entities/<type>/<slug>.md`, YAML frontmatter on top,
+`index.md` listings for navigation. Knowledge-as-code: portable, diffable, and readable by any OKF
+consumer, not just Vexa. See [Browse the workspace](/how-to/workspace-files#the-knowledge-graph-is-an-okf-bundle).
+
+## Meeting
+
+**One record from plan to transcript.** A meeting is born in a user-owned *intent* status —
+planned ahead by hand or imported from a calendar (`idle`/`scheduled`) — is **claimed in place**
+by the bot lifecycle when the bot joins (`requested → … → completed`), and ends with its
+speaker-attributed transcript on the same record. Because it is one record, everything attached to
+the plan survives the meeting: the title, and the **workspace binding** — bind a meeting to a
+shared workspace and every member sees it (the plan, the live feed, the transcript). `scheduled`
+means the bot **joins on its own** at start time (the auto-join sweep; per-meeting opt-out). See
+[Meetings](/core/meetings).
+
+## Agent
+
+A generic CLI coding agent selected by a **runner** (Claude Code is one; others and BYO-inference plug in
+the same way). It works the mounted workspace with a scoped toolbelt and commits. It is **untrusted** —
+outside the trust boundary — so it carries a signed token but enforces nothing. Its outbound capabilities
+(email, calendar, web) are **integrations**: cred-gated tools reached over MCP, never built into the
+backend. See [Agents](/core/agents).
+
+## Container
+
+The isolated, ephemeral unit an agent runs in, spawned by the [runtime](/core/runtime). Sub-second to
+start, reaped on idle, no egress except through brokered tools — thousands run in parallel with no
+lateral movement. Its live output streams to the client over a per-dispatch channel.
+
+## Identity
+
+The chain of custody. The launcher proves itself (a user session, or a signed delegation grant for a
+schedule/integration); the identity service mints a **short-lived signed dispatch token**
+(*subject* = on whose behalf · *launcher* = who triggered · scope); the runtime **attests the workload**
+(SPIFFE/SPIRE); and **every boundary verifies** the token — never the agent. Tool calls exchange it for
+an audience-scoped credential (Keycloak / RFC 8693) at an MCP gateway, so the agent never holds a raw key.
+
+## Scheduler
+
+Redis. The one mechanism that **dispatches agents**, on a trigger — a schedule entry (cron), an
+integration event (e.g. new email), or *now* (chat). It holds the user-manageable schedule; a meeting
+ending is just another event that dispatches an agent.

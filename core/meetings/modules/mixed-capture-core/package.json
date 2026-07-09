@@ -1,0 +1,23 @@
+{
+  "name": "@vexa/mixed-capture-core",
+  "version": "0.1.0",
+  "description": "Mixed-lane capture core (browser): single mixed-audio tap + WebRTC remote-audio hook. Platform-agnostic; zoom/teams build on it. Emits mixed-capture.v1 audio frames.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx src/mixed-capture-core.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

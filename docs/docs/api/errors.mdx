@@ -1,0 +1,67 @@
+---
+title: "Errors"
+description: "Status codes, error shape, and what each one means across the Meetings and Agent APIs."
+---
+
+All public routes are fronted by the gateway and return conventional HTTP status codes. Error bodies
+follow FastAPI's convention — a JSON object with a `detail` field:
+
+```json
+{ "detail": "Missing API key" }
+```
+
+`detail` is a human-readable string for client errors, or a list of field errors for request-validation
+failures (`422`).
+
+## Status codes
+
+| Status | When | Example `detail` |
+|---|---|---|
+| `200` / `201` / `202` | success (`201` create, `202` accepted-for-dispatch) | — |
+| `204` | success, no body (e.g. token deleted, bot stopped) | — |
+| `400` | malformed request — non-conformant envelope on `POST /invocations` | `Invocation envelope is not conformant` |
+| `401` | missing or invalid API key — no/unknown/revoked `X-API-Key` | `Missing API key` · `Invalid API key` |
+| `403` | under-scoped key, or bad/missing admin token | `Token scope not authorized for this endpoint` · `Invalid or missing admin token.` |
+| `404` | resource not found — user, token, meeting, or workspace file | `User not found` · `not found` |
+| `422` | semantic validation failed — bad field, invalid scope, event with no plan | `Invalid scope(s): ['foo']. Valid: ['bot', 'browser', 'tx']` |
+| `500` | unexpected server error | — |
+
+## By surface
+
+**Authentication / admin** (`/admin/*`)
+- `403` on a missing **or** wrong admin token (`detail: "Invalid or missing admin token."`).
+- `404` minting a token for a non-existent user id.
+- `422` minting with an invalid scope (valid: `bot`, `tx`, `browser`).
+
+**Meetings API** (`/meetings`, `/bots`, `/transcripts/*`)
+- `401` on a missing or invalid `X-API-Key`; `403` when the key lacks the route's scope.
+- `404` reading a transcript for a meeting that was never started.
+- `POST /meetings` (plan) → `409` when a non-terminal meeting already exists for that link; `422`
+  on an unrecognizable `meeting_url`.
+- `PATCH`/`DELETE /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting
+  is only editable while it's still planned); `409` on `PATCH` when the new link collides with
+  another active meeting.
+- `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
+  fine — the spawn claims it); `429` past your concurrency limit.
+- A bot that fails to join surfaces in `GET /bots/status` rather than as an HTTP error on `POST /bots`
+  — see [Troubleshooting](/troubleshooting#bot-wont-join).
+
+**Agent API** (`/agent/*`)
+- `POST /invocations` → `400` if the `unit.v1` envelope is non-conformant.
+- `POST /events` → `400` if the `event.v1` event is non-conformant; **`422` if the event carries no plan**.
+- Workspace reads → `404` (`detail: "not found"`) if the path is absent (`GET /agent/workspace/file?path=...`).
+
+## Streaming errors
+
+Streamed endpoints (`POST /agent/chat`, `GET /agent/meeting/stream`) open with `200` and report
+problems **in-band** as SSE frames, not as a status code:
+
+- `rejected` — a write was blocked by governance; the frame carries `violations`.
+- `done` with `ok: false` — the turn ended unsuccessfully.
+- On a dropped meeting stream, reconnect with the last `id:` echoed as `Last-Event-ID` to resume gaplessly.
+
+## Rate limits
+
+Self-hosted Vexa imposes **no gateway rate limit** — throughput is bounded by your own infrastructure and
+by per-user concurrency (`max_concurrent_bots`, set when the user is created). The hosted service applies
+plan-based limits; a throttled request returns `429` with a `Retry-After` header.

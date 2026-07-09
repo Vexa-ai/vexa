@@ -18,6 +18,14 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
       # See deployment-minio.yaml header for the full rationale. Symmetric
       # spread across postgres/redis/minio/tts-service so that on a 2+

@@ -18,12 +18,12 @@ spec:
       http:
         paths:
           {{ range .Values.ingress.paths }}
-          {{- $svc := .service | default "api-gateway" -}}
+          {{- $svc := .service | default "gateway" -}}
           - path: {{ .path | quote }}
             pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ if eq $svc "apiGateway" }}{{ include "vexa.componentName" (list $ "api-gateway") }}{{ else if eq $svc "adminApi" }}{{ include "vexa.componentName" (list $ "admin-api") }}{{ else }}{{ include "vexa.componentName" (list $ $svc) }}{{ end }}
+                name: {{ include "vexa.componentName" (list $ $svc) }}
                 port:
                   number: {{ .servicePort }}
           {{ end }}

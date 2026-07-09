@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# eval — entrypoint for the synthetic-meeting harness. Sources secrets.env, then
+# runs a stage. Usage:
+#   ./bin/eval.sh launch     # send the speaker bots into the meeting (staggered)
+#   ./bin/eval.sh drive      # make admitted bots speak the timeline + log truth
+#   ./bin/eval.sh noise      # FAILURE-MODE injector — one bot emits brief noise bursts (active-speaker flicker)
+#   ./bin/eval.sh judge      # score the live transcript vs ground truth
+#   ./bin/eval.sh corpus     # (re)generate the TTS clip pools (FORCE_REGEN=1)
+#   ./bin/eval.sh observe    # LIVE-watch a session's transcript dynamics (local, no secrets)
+#   ./bin/eval.sh replay <sig>  # replay a tape OR captured-signal.v1 into the desktop ingest (deterministic repro)
+#   ./bin/eval.sh analyze <p> <native> [--flag-issues] # score a transcript; --flag-issues emits flagged-issue.v1 (O-TEL-3)
+#   ./bin/eval.sh replay-test   # O-TEL-2 DETERMINISTIC replay gate (offline, no server) — the gate:replay target
+#   ./bin/eval.sh flag-test     # O-TEL-3 flag→store→surface→replay-routing eval (offline, no meeting)
+#   ./bin/eval.sh benchmark <tape> [p] [native] # LOSS oracle: re-transcribe full tape audio offline, diff vs live (needs STT env)
+# All knobs are env (see README / src/drive.mjs). e.g. GAP_MEAN=-0.5 ./bin/eval.sh drive
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# `observe` is a LOCAL live-watch (taps the desktop /ws on localhost) — no secrets, no deps.
+[ "${1:-}" = "observe" ] && exec node "$HERE/src/observe.mjs" "${@:2}"
+# `replay` re-sends a recorded tape into the LOCAL desktop ingest — no secrets needed.
+[ "${1:-}" = "replay" ] && exec node "$HERE/src/replay.mjs" "${@:2}"
+# 'analyze' scores a transcript from the LOCAL gateway — no secrets needed (--flag-issues = O-TEL-3 auto-flag).
+[ "${1:-}" = "analyze" ] && exec node "$HERE/src/analyze.mjs" "${@:2}"
+# 'replay-test' is the O-TEL-2 DETERMINISTIC replay gate (offline, in the bot pkg where the lane resolves).
+[ "${1:-}" = "replay-test" ] && exec pnpm --filter @vexa/bot run replay
+# 'flag-test' is the O-TEL-3 flag→store→surface→replay-routing eval (offline, no meeting, no secrets).
+[ "${1:-}" = "flag-test" ] && exec node "$HERE/flag.test.mjs" "${@:2}"
+# 'capture' checks RAW-SIGNAL health of a tape (ch999 minted? silent? stalls?) — no secrets.
+[ "${1:-}" = "capture" ] && exec node "$HERE/src/capture.mjs" "${@:2}"
+# 'benchmark' re-transcribes a tape's full audio offline (needs STT env, NOT the bot secrets).
+[ "${1:-}" = "benchmark" ] && exec node "$HERE/src/benchmark.mjs" "${@:2}"
+SECRETS="${SECRETS:-$HERE/secrets.env}"
+[ -f "$SECRETS" ] && { set -a; . "$SECRETS"; set +a; } || { echo "no secrets.env ($SECRETS) — cp secrets.env.example secrets.env"; exit 1; }
+case "${1:-}" in
+  launch) exec node "$HERE/src/launch.mjs" ;;
+  drive)  exec node "$HERE/src/drive.mjs" ;;
+  noise)  exec node "$HERE/src/noise.mjs" ;;
+  corpus) exec node "$HERE/src/corpus.mjs" ;;
+  judge)  exec python3 "$HERE/src/judge.py" ;;
+  *) echo "usage: eval.sh {launch|drive|noise|analyze|capture|benchmark|judge|corpus|observe|replay|replay-test|flag-test}"; exit 2 ;;
+esac

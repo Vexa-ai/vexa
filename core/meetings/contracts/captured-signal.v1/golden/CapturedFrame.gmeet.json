@@ -1,0 +1,10 @@
+{
+  "seq": 0,
+  "ts": 1718000000123,
+  "speakerIndex": 0,
+  "speakerName": "Alice",
+  "pcm": "AAD2vgAA8L4AAOq+AADkvgAA3r4AANi+AADSvgAAzL4=",
+  "pcm_len": 8,
+  "rms": 0.44027267330084063,
+  "lane": "gmeet"
+}

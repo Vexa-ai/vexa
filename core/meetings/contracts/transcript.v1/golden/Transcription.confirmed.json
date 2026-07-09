@@ -1,0 +1,21 @@
+{
+  "type": "transcription",
+  "session_uid": "sess-uid",
+  "meeting_id": "42",
+  "segments": [
+    {
+      "segment_id": "sess-uid:ch-0:1:1500",
+      "speaker": "Alice",
+      "speaker_key": "ch-0:1",
+      "text": "hello world",
+      "start": 1.5,
+      "end": 2.5,
+      "language": "en",
+      "completed": true,
+      "absolute_start_time": "2026-06-18T10:00:01.500Z",
+      "absolute_end_time": "2026-06-18T10:00:02.500Z",
+      "source": "glow-bound",
+      "confidence": 1
+    }
+  ]
+}

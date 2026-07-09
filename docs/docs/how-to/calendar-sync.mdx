@@ -1,0 +1,139 @@
+---
+title: "Calendar sync"
+description: "Connect your calendar with its secret ICS address — upcoming meetings import automatically and the bot joins them at start."
+---
+
+Connect a calendar once and Vexa keeps your **Upcoming** meetings in sync: every calendar event
+with a Meet/Zoom/Teams link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
+and the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start
+time. No OAuth, no calendar permissions — it works off the **secret ICS address** your calendar
+already provides.
+
+## 1. Find your secret ICS address
+
+<Tabs>
+  <Tab title="Google Calendar">
+    1. Open [Google Calendar settings](https://calendar.google.com/calendar/r/settings) → pick your
+       calendar under **Settings for my calendars**.
+    2. Scroll to **Integrate calendar**.
+    3. Copy **Secret address in iCal format** — it looks like
+       `https://calendar.google.com/calendar/ical/you%40company.com/private-…/basic.ics`.
+
+    <Warning>
+    **Not** the field above it. The *Public address in iCal format* (`…/public/basic.ics`) only
+    works for calendars you've made fully public — for a normal private calendar Google answers
+    it with `401`/`404`, and Vexa will show you exactly that error. The *Public URL* and *Embed
+    code* are web pages, not feeds — pasting one is rejected at save with a pointer back here.
+    </Warning>
+
+    <Accordion title="No 'Secret address in iCal format' field? (Google Workspace)">
+    On a **Google Workspace** domain the secret address is governed by an admin policy, and under
+    the Workspace default (*"Only free/busy information"*) Google **hides the field entirely** —
+    the section ends at the public address. A Workspace admin unlocks it domain-wide:
+
+    1. [admin.google.com](https://admin.google.com) → **Apps → Google Workspace → Calendar**
+    2. **Sharing settings** → **External sharing options for primary calendars**
+    3. Select **"Share all information, but outsiders cannot change calendars"** and save.
+
+    Propagation usually takes minutes (Google says up to 24 h). Reload the calendar settings page
+    and the **Secret address in iCal format** field appears below the public one.
+
+    This only enables the *possibility* of detailed external sharing — nothing is exposed until a
+    user actually hands out their secret address, and each address is revocable per calendar
+    (**Reset** next to the field).
+    </Accordion>
+  </Tab>
+  <Tab title="Outlook / Microsoft 365">
+    1. Outlook on the web → **Settings → Calendar → Shared calendars**.
+    2. Under **Publish a calendar**, pick your calendar, permissions **Can view all details**, and
+       click **Publish**.
+    3. Copy the **ICS** link.
+  </Tab>
+</Tabs>
+
+<Warning>
+The ICS address is a **secret** — anyone holding it can read your calendar. Vexa stores it
+accordingly: it is never shown back in full (reads return a masked form), and the sync fetch runs
+through the same server-side request guard as webhooks. Revoke it anytime from your calendar's
+settings ("Reset" in Google Calendar) — then reconnect with the new address.
+</Warning>
+
+## 2. Connect it — and get an answer immediately
+
+In the Terminal's **Meetings** list, click **Connect your calendar** (under *+ Plan a meeting*; the
+calendar icon in the header opens the same panel and stays there for managing the connection).
+Paste the address and hit **Connect**.
+
+**Connecting runs a sync on the spot** — within seconds the panel answers with the result, not
+silence:
+
+- `✓ Synced just now — imported 3` — done; the meetings are under **Upcoming**.
+- `✓ Synced just now — no meetings with joinable links found` — the feed is fine, but no upcoming
+  event carries a Meet/Zoom/Teams link (see [what imports](#what-imports-and-what-doesnt)).
+- `⚠ Last sync failed: …` — the actual reason, named (see the
+  [error reference](#reading-the-sync-status) below).
+
+The panel keeps showing the **last sync status**, and the **Sync now** button re-pulls the feed on
+demand — no waiting on the background cycle (default 5 minutes) after you add an event.
+
+Over the API:
+
+```bash Connect
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/private-…/basic.ics"}'
+```
+
+```bash Sync right now → the fresh result
+curl -X POST "$API_BASE/user/calendar/sync" -H "X-API-Key: $API_KEY"
+# {"last_sync":"2026-07-08T15:30:00+00:00","last_error":null,"counts":{"created":3,"updated":0,"cancelled":0}}
+```
+
+```bash Read the last sync status
+curl "$API_BASE/user/calendar/sync" -H "X-API-Key: $API_KEY"
+```
+
+## Reading the sync status
+
+Every failure names its fix — these are the messages the panel (and the API stamp's `last_error`)
+can show:
+
+| Message | What it means | Fix |
+|---|---|---|
+| `the URL answered HTTP 401` / `HTTP 404` | You pasted the **public** iCal address of a private calendar. | Use the **secret** address (`…/private-…/basic.ics`). |
+| `the URL returns a web page, not a calendar feed` | An embed/share *page* URL, not a feed. (Google's embed page is also rejected at save.) | Copy the address from **Integrate calendar**, not the browser's address bar. |
+| `the URL redirects — paste the final feed URL` | The address bounces through a redirect; the guarded fetch doesn't follow them. | Paste the URL the redirect lands on. |
+| `the URL doesn't return an ICS calendar (no BEGIN:VCALENDAR)` | The server answered, but not with calendar data. | Check you copied the full `.ics` address. |
+| `the feed is too large (over 2 MB)` | Unusually huge feed. | Sync a specific calendar rather than an aggregate. |
+| `couldn't reach the URL (unreachable, timed out, or a blocked/internal address)` | Network failure, or the address points somewhere the server-side guard refuses (internal hosts). | Verify the URL opens from a browser; use the calendar provider's public host. |
+
+## What imports (and what doesn't)
+
+- **Only events with a recognizable meeting link** — Meet, Zoom, or Teams, found in the event's
+  conferencing field, location, or description. Events without one (lunches, focus blocks) are
+  ignored.
+- **One meeting per event — the next occurrence only.** A recurring series tracks its next
+  upcoming occurrence; the one after imports once the current completes.
+- **Moves and cancellations follow the feed.** A rescheduled event moves its meeting; a cancelled
+  or deleted event removes it — unless the bot already joined, in which case sync never touches it.
+- **Your manual plans are respected.** If you already planned a meeting on the same link, the
+  calendar event links up with it instead of creating a duplicate — your title and workspace
+  binding win.
+
+## Auto-join for imported meetings
+
+The calendar panel has one global switch — **Auto-join imported meetings** (default on). It sets
+the default for every meeting the sync creates; you can still flip auto-join per meeting in its
+prep view. Turn the global switch off if you want the calendar only to *populate* Upcoming while
+you send the bot by hand.
+
+## Disconnect
+
+Calendar icon → **Disconnect** (or `PUT /user/calendar` with `{"ics_url": null}`). Already-imported
+meetings stay; they just stop following the feed.
+
+## It's not syncing?
+
+The panel's status line is the first stop — it names the failure. For the broader checklist
+(self-host env, link-less events, timing) see
+[Troubleshooting → Calendar isn't syncing](/troubleshooting#calendar-isnt-syncing).

@@ -1,0 +1,210 @@
+---
+title: "Identity"
+description: "The one place that decides who is asking, what they own, and whether they are allowed — for every request in the system."
+---
+
+Identity is the platform checkpoint: accounts, keys, and the rule that you only touch what you own. Every
+other domain assumes a request already passed through it.
+
+On every request it resolves three things:
+
+1. **Who is asking** — resolved once at the edge, never from the client's word.
+2. **What they touch, and who owns it** — every meeting, recording, and workspace has an owner.
+3. **Whether they are allowed** — a default-deny decision.
+
+It also mints **short-lived, single-purpose tokens** so an agent acts on your behalf without holding your
+API key (see [zero-trust](#where-we-are-going-zero-trust)).
+
+Two forms, on purpose:
+
+- **`admin-api`** (`core/identity/services/admin-api`) — the live, database-backed service: user accounts,
+  API tokens, and the `/internal/validate` oracle the gateway calls.
+- **`identity_core`** (`core/identity/src/identity_core`) — a pure, dependency-free library of the rules
+  (mint a token, check access, mint a dispatch token, broker a secret), sealed as the
+  [`identity.v1`](#building-blocks) contract so every service decides the same way.
+
+<Note>This page is the identity **domain** — accounts, the access model, what's built, and the roadmap.
+The cross-cutting **trust flow** — how a dispatch's authorization is proven and verified at every hop —
+is its own document: [Identity & trust](/architecture/identity-and-trust).</Note>
+
+---
+
+## The model
+
+Six rules — the reasoning, the mechanism, and the established practice each comes from.
+
+| Rule | Why | Mechanism | Maps to |
+|---|---|---|---|
+| **Verified caller** | A claimed identity can be faked; verify it once at the edge, then trust it. | Gateway resolves the key to a user, stamps `X-User-Id`, strips any client-supplied identity. | Zero-trust edge / policy enforcement point (Google BeyondCorp) |
+| **Owned resources** | Being logged in isn't being allowed; check the object's owner, not just the session. | `meetings.user_id`; a workspace is named for its owner. | Least privilege; prevents IDOR / broken object-level authZ (OWASP API1:2023 BOLA) |
+| **Check per request** | A check you can skip isn't a check; decide on every access, never in the UI. | [`OwnerOnlyPolicy`](#building-blocks) on each read. | Complete mediation (Saltzer & Schroeder) |
+| **One decision point** | Rules copied across services drift; keep one decider and have services call it. | `identity_core` decides; services enforce. | PDP/PEP separation (XACML lineage; OPA · AWS Cedar) |
+| **Default deny** | A forgotten check should fail closed; deny unless explicitly allowed. | `OwnerOnlyPolicy` allows the owner, denies the rest with a reason. | Fail-safe defaults (Saltzer & Schroeder) |
+| **No shared keys** | A master key can do everything; hand out a token good for one thing, briefly. | Signed [dispatch tokens](/architecture/identity-and-trust); credentials are brokered, never handed over. | OAuth 2.0 token exchange (RFC 8693); avoids the confused-deputy problem |
+
+<Note>The agent (the LLM) is **outside** the trust boundary — it carries proof but never enforces it.
+Compromise it via prompt injection ([OWASP LLM01](https://genai.owasp.org/)) and it still cannot exceed
+its token's scope; the boundaries enforce, not the model. See
+[Identity & trust](/architecture/identity-and-trust).</Note>
+
+---
+
+## The request path (grounded)
+
+Everything reaches the domains through the [gateway](/architecture/modules); the [terminal](/concepts) is
+one client. For every call the gateway resolves the key to a user and forwards to the owning domain with
+`X-User-Id` stamped on.
+
+```
+terminal ──(API key, from your login)──▶  GATEWAY  ──(X-User-Id, verified)──▶  meetings / agent domain
+                                            │ resolve key → user (fail-closed)
+                                            │ strip any client-supplied identity (anti-spoof)
+                                            │ check the route's coarse scope
+```
+
+The full public surface, grouped by **what it protects** — this is the real attack surface, and what the
+security model has to cover (nothing more):
+
+| Group | Endpoints | Owner rule | Scope |
+|---|---|---|---|
+| **Front door** | `GET /health`, `GET /auth/me`, `WS /ws` | n/a / "who am I" / per-meeting subscribe | — |
+| **Meetings** (you must own the meeting) | `GET·POST /bots`, `…/bots/{platform}/{native}` (delete · config · speak), `GET /transcripts/{platform}/{native}`, `GET /recordings…`, `GET /meetings…` | owner = `meetings.user_id` | `bot` · `browser` · `tx` |
+| **Your agent space** (yours by construction) | `POST /agent/chat`, `GET /agent/meeting/stream`, and `/agent/*` → `chat`, `workspace/{tree,file,init,swap,git,upload}`, `sessions`, `routines`, `models`, `meeting/{start,process,stream}` | owner = you, **by partition** (you can only name your own workspace/session) | none today |
+
+Two safety shapes result:
+
+- **Agent space** is safe by partition — a workspace, session, or routine is addressed by your id, so no
+  explicit check is needed.
+- **Meetings** are owned in the meetings domain, so the owner-checked path runs there (`GET /transcripts`,
+  `/ws` subscribe authorization).
+
+The leak is where the agent domain reads a meeting directly instead of via the meetings domain — see
+[adoption gaps](#where-we-are).
+
+---
+
+## Building blocks
+
+What actually exists today, with the real names.
+
+**`identity_core`** — the pure rule library, sealed as `identity.v1` (`core/identity/contracts/identity.v1`):
+
+- **Tokens** (`tokens.py`) — `ScopedToken(subject, scopes, expires_at)`; scopes are `bot · tx · browser`;
+  `mint_token` / `validate_token`.
+- **Access** (`access.py`) — `Resource(kind, id, owner)` for kinds `meeting_transcript · recording ·
+  ws_subscribe`; `AccessDecision(allow, subject, …, reason)`; `OwnerOnlyPolicy` (default-deny, allow iff
+  `subject == owner`); the front-door function `can_access(subject, resource, action)`.
+- **Dispatch tokens** (`dispatch_tokens.py`) — a JWT-style, audience-scoped bearer token signed HS256 in
+  dev (SPIFFE [SVIDs](https://spiffe.io/) in production): `DispatchClaims(subject, launcher, workspaces[],
+  tools[], iat, exp)`; `mint_dispatch_token` / `verify_dispatch_token`. `subject` is *who you act for*;
+  `launcher` is *what triggered it*. `may_mount(id, mode)` and `may_call(tool)` are the limits a boundary
+  checks. This is the "single-purpose pass."
+- **Secrets** (`secrets.py`) — the brokered-secrets pattern ([HashiCorp Vault](https://www.vaultproject.io/)):
+  `SecretsPort` returns a redacted `BrokeredSecret` (its `repr` never prints the value) and writes an audit
+  log; the value is fetched on demand, never logged. The real vault (lease, rotation) is deferred — see
+  [encryption](#data-at-rest-encryption).
+
+**`admin-api`** — accounts and the live oracle:
+
+- Tables: `User` and `APIToken(token, user_id, scopes[], expires_at, …)`; tokens look like
+  `vxa_<scope>_<random>`.
+- `POST /internal/validate` — the gateway calls this (behind an internal secret, fail-closed) to turn an
+  API key into `{user_id, scopes, …}`.
+- Three tiers: **admin** (`X-Admin-API-Key`, create users/tokens), **user** (`X-API-Key`, e.g. set a
+  webhook), **internal** (`X-Internal-Secret`, the validate oracle).
+
+**Gateway** — the edge that resolves the key, stamps `X-User-Id`, enforces coarse route scopes, and runs
+the `/ws` multiplex.
+
+---
+
+## Where we are
+
+Honest status. The **design is frozen and the primitives are built** — the gap is *adoption*: the rules
+exist as a library but are not yet wired into every path that needs them. The constitution names this risk
+directly: **P20** (complete mediation) records that the `canAccess` seam "was designed but never wired, so
+it **rotted**," and **P9** holds that an unenforced rule is only aspirational — a rule that does not turn
+CI red can be crossed.
+
+| Piece | State |
+|---|---|
+| Per-dispatch signed token (`DispatchClaims`, HS256) | ✅ **built, proven live** |
+| `identity_core` library + sealed `identity.v1` | ✅ **built** |
+| `admin-api` (users, tokens, `/internal/validate`) | ✅ **built** |
+| Gateway: key → user, `X-User-Id`, route scopes, `/ws` | ✅ **built** |
+| Agent-api derives `subject` from `X-User-Id`, ignores the client body | ✅ **built** (P20) |
+| Client identity is real (terminal sends the logged-in user's key via OAuth) | ✅ **fixed** — the old hardcoded `u_live` is gone from the client |
+| `can_access` / `OwnerOnlyPolicy` **adopted on every meeting path** | ⚠️ **partial** — meeting-api owner-checks its own way; the agent domain's `chat` / `meeting/stream` / `meeting/start` / `meeting/process` do **not** call it yet |
+| Server-side live-meeting **owner attribution** | ⚠️ **pre-M2** — the live-meeting watcher is started with the default `subject = "u_live"` (`control_plane/api.py:880` → `transcription_watcher.py:203`); live-meeting dispatch (M2) is not yet delivered, so this default must be replaced with the real owner before it ships |
+| **Auth spine** end-to-end (opaque token → user → scoped access, everywhere) | ⬜ **planned** (Stage 2) |
+| Workload identity in production (SPIRE), Keycloak, RFC 8693, MCP Gateway | ⬜ **planned** (Stage 2) |
+| SSO (Okta/Entra) + SCIM | ⬜ **planned** (Stage 5) |
+
+The front door is real; a few agent-domain endpoints read a meeting's data directly instead of via the
+meetings domain, skipping the owner check that already exists in the library. Closing it is wiring, not
+design: route those reads through the owning domain and decide with `OwnerOnlyPolicy`.
+
+---
+
+## Where we are going (zero-trust)
+
+The target — a **chain of custody** where a dispatch's authorization is proven and verified at every hop
+(signed tokens, [RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693) exchange at the tool boundary,
+SPIRE/Keycloak via [kagenti](https://github.com/kagenti/kagenti)) — is one document:
+[Identity & trust](/architecture/identity-and-trust). It lands as [Stage 2 — Trust](/roadmap/stages).
+
+The point for this domain is narrow: we run an **untrusted, prompt-injectable agent on private data**, so
+safety must come from boundaries that verify, not from trusting the model.
+
+---
+
+## Roadmap — by principle
+
+Each item ties a declared principle to its code reality and the concrete next step, plus the gate or stage
+that makes it real (P9: an ungated rule is aspirational). Foundations:
+[the agent is untrusted](/concepts), [identity is a chain of custody](/concepts),
+[self-host & air-gap by default](/concepts).
+
+| Principle | Today (in code) | Next step | Lands as |
+|---|---|---|---|
+| **P20 — complete mediation**: authorize every access, default-deny `canAccess` on API · WS · agent | deny test on the library only (`core/identity/tests/test_access.py`, `gate:access`); meeting-api owner-checks **implicitly per query**; agent meeting paths unchecked (`can_access` count = 0 in `control_plane/api.py`) | wire `can_access(subject, resource, action)` onto every meeting path (`chat` · `meeting/stream` · `meeting/start` · `meeting/process`); extend `gate:access` to the wired paths | ADR-0012 · `gate:access` |
+| **Identity is a chain of custody** | `x-user-id` is plaintext, trusted by network position (`gateway/app.py:192`); the per-dispatch token is minted (`control_plane/dispatch.py:36`) but not yet verified at a boundary | a **signed** user-assertion verified at each hop; verify the dispatch token at the workspace/tool boundaries | Stage 2 — SPIRE · Keycloak · RFC 8693 · MCP Gateway |
+| **Scoped agent domain** | `/api/*` carries **no** scope — any valid key reaches any agent route (`gateway/app.py:153-156`) | per-route scopes for the agent domain | Stage 3 |
+| **P15 — secrets behind a port** | broker pattern **wired** for the per-user git token (`agent/shared/adapters.py:135-162`); the store is the stand-in `PassthroughSecretsBroker` | real vault — lease · rotation · BYOK — behind `SecretsPort` | P16 · ADR-0003 |
+| **P15 — data encrypted at rest** | buckets bind-mounted; transcripts and tokens in cleartext | the three at-rest stores → see [Data at rest](#data-at-rest-encryption) | Stage 0 contract · planned |
+| **Multi-tenant attribution** | the live-meeting watcher is started with the default `subject = "u_live"` (`control_plane/api.py:880` → `transcription_watcher.py:203,339`); live-meeting dispatch (M2) is not yet delivered | arm the copilot as the real meeting owner before M2 ships | Auth spine · M2 |
+| **P9 / P6 — one front door** | `_resolve_user_id` is duplicated across four meeting-api routers (`collector` · `bot_spawn` · `lifecycle` · `recordings`) | fold identity resolution into the shared `identity` front door | cleanup |
+
+<Note>`subject_of` (`control_plane/api.py`) has a `VEXA_AGENT_DEFAULT_SUBJECT` fallback for a gateway-less
+single-user self-host. It is fail-closed (401) when unset; it **must stay unset** in any multi-tenant
+deployment, or every caller collapses to one subject.</Note>
+
+## Data at rest (encryption)
+
+Three stores hold sensitive data at rest (data **in transit** is encrypted with TLS — the standard that
+secures HTTPS connections). State and plan:
+
+| Store | What is in it | Today | Plan |
+|---|---|---|---|
+| **Workspace buckets** | Your whole workspace — notes, meeting docs, chat transcripts — a git folder in object storage (minio/S3) | bind-mounted local dirs (M1); contract reserves an `encryption` field on `workspace.v1` | **Per-workspace envelope encryption** (the KMS data-key pattern): a data key per workspace, wrapped by a master key the identity layer brokers; decrypted **only inside the sandboxed container**; keys stay in-VPC for air-gap |
+| **Transcripts** | The durable source of truth: the meetings **Postgres** `transcriptions` table (what `GET /transcripts` reads). The redis `transcription_segments` / `tc:…:mutable` stream is the live carrier; the workspace Markdown is a derived copy | persisted in Postgres; carried in redis; derived copy in the workspace bucket | Encrypt at rest in the **meetings database** (the SSOT); protect the redis carrier (auth/TLS, restricted ACLs); the workspace copy is covered by bucket encryption above |
+| **User API tokens** | The keys in `api_tokens.token` that unlock an account | stored and matched as **cleartext** | Store only a **hash** and verify by hashing the presented key — the same practice as passwords (argon2 / bcrypt) — or encrypt at rest, so a database leak yields no usable keys |
+
+These are tracked in the [roadmap status](/roadmap/status); workspace/bucket encryption is already part of
+the `workspace.v1` contract shape in [Stage 0](/roadmap/stages).
+
+---
+
+## Why this much, and not more
+
+Measures are sized to the system: a multi-user product where each person owns meetings and a private
+workspace, agents run untrusted in isolated containers, all driven from the terminal. The API reduces to
+"is this yours?", so the priorities are:
+
+- owner checks on meetings and workspaces (cross-user exposure is the real risk);
+- credentials out of the agent (the one untrusted, injectable component);
+- encryption of the three at-rest stores.
+
+Heavier machinery — SPIRE everywhere, SSO/SCIM, full air-gap — is staged ([Stage 5](/roadmap/stages)) for
+self-host and regulated verticals. The interfaces (`can_access`, the token shapes) do not change when it
+lands; only what sits behind them does.

@@ -1,45 +1,35 @@
 name: gates
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
+on: [push, pull_request]
 
 jobs:
-  gate-isolation:
-    name: "gate:isolation"
+  gates:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run per-brick isolation checks
-        run: |
-          set -e
-          found=0
-          for f in packages/*/scripts/check-isolation*; do
-            [ -e "$f" ] || continue
-            found=1
-            echo "== $f"
-            case "$f" in
-              *.js)  node "$f" ;;
-              *.sh)  bash "$f" ;;
-              *)     "$f" ;;
-            esac
-          done
-          if [ "$found" -eq 0 ]; then
-            echo "gate:isolation — no bricks with check-isolation yet (pre-MVP1); gate is armed and green."
-          fi
-
-  gate-registry-parity:
-    name: "gate:registry-parity"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - name: Install deps
-        run: pip install "pyyaml>=6,<7"
-      - name: Check tests3/registry.yaml is in sync with its generator
-        run: python3 tests3/lib/migrate-registry.py --check
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
+      - uses: astral-sh/setup-uv@v5
+      # CI runners have no GPU: skip onnxruntime-node's postinstall CUDA EP download — it is
+      # large, raced across the two resolved onnxruntime versions, and flaked main's first run
+      # (ENOENT in /tmp cleanup). The CPU binaries tests use are bundled in the package itself.
+      - run: pnpm install --frozen-lockfile
+        env: { ONNXRUNTIME_NODE_INSTALL: skip }
+      # the compliance bar — each gate is its own step so a failure is unambiguous
+      - run: pnpm gate:readme
+      - run: pnpm gate:isolation
+      - run: pnpm gate:exports
+      - run: pnpm gate:graph
+      - run: pnpm gate:schema
+      - run: pnpm gate:contract-version
+      - run: pnpm gate:config-contract
+      - run: pnpm gate:dataflow
+      - run: pnpm gate:calm
+      # the runtime docker-backend lifecycle test creates containers via the docker socket API,
+      # which (unlike `docker run`) does NOT implicit-pull — pre-pull its fixture image
+      - run: docker pull alpine
+      - run: pnpm gate:python
+      - run: pnpm gate:licenses
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test

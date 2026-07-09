@@ -1,0 +1,92 @@
+{
+  "contract": "config.v1",
+  "service": "example-api",
+  "keys": [
+    {
+      "key": "SIGNING_TOKEN",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "signs the per-request token; unset, every request would 500 — so the boot refuses instead (P18)"
+    },
+    {
+      "key": "REDIS_URL",
+      "class": "defaulted",
+      "default": "redis://redis:6379/0",
+      "description": "the stream/pub-sub backing"
+    },
+    {
+      "key": "POLL_INTERVAL_S",
+      "class": "defaulted",
+      "default": "5",
+      "description": "an in-code dial no deploy surface plumbs (targets: [])",
+      "targets": []
+    },
+    {
+      "key": "STT_URL",
+      "class": "capability",
+      "capability": "stt",
+      "description": "the STT endpoint spawned bots transcribe against",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "STT_TOKEN",
+      "class": "capability",
+      "capability": "stt",
+      "secret": true,
+      "description": "the STT bearer token (must match the STT unit's API_TOKEN)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "PROVIDER_API_KEY",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "API-key credential path"
+    },
+    {
+      "key": "PROVIDER_CREDENTIALS_FILE",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "mounted-subscription credential path — a DOCKER-HOST path (either path suffices — mode: any)"
+    }
+  ],
+  "capabilities": {
+    "stt": {
+      "description": "spawned bots can transcribe",
+      "mode": "all",
+      "when_unconfigured": "POST /bots with transcribe_enabled=true answers a typed 503 naming the unset key(s); bots join+capture but never transcribe",
+      "probe": {
+        "kind": "http",
+        "timeout_s": 2,
+        "ttl_s": 60,
+        "http": {
+          "method": "POST",
+          "url_key": "STT_URL",
+          "path": "/v1/audio/transcriptions",
+          "auth_key": "STT_TOKEN",
+          "unauthorized_statuses": [401, 403]
+        }
+      }
+    },
+    "model_inference": {
+      "description": "workers get WORKING model-provider credentials brokered in",
+      "mode": "any",
+      "when_unconfigured": "agent turns fail with a provider auth error at dispatch time",
+      "probe": {
+        "kind": "file",
+        "ttl_s": 60,
+        "file": {
+          "path_key": "PROVIDER_CREDENTIALS_FILE",
+          "fallback_paths": ["/var/lib/example/host-credentials"]
+        }
+      }
+    }
+  },
+  "surface_only": [
+    {
+      "key": "LEGACY_FLAG",
+      "reason": "set by compose historically; the service never reads it — documented drift, candidate for a deploy-surface cleanup"
+    }
+  ]
+}

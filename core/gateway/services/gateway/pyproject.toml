@@ -1,0 +1,25 @@
+[project]
+name = "vexa-gateway"
+version = "0.12.0"
+description = "Gateway lane (Group-6) PRODUCTION edge: the v0.12 carve of services/api-gateway/main.py — create_app(authorizer, downstream, redis) builds the REST proxy (fail-closed auth, scope 403, verbatim body passthrough), the /ws multiplex (subscribe/unsubscribe/ping + redis fan-in), and /health. Collaborators are injected as ports so the same app runs with real adapters in prod and injected fakes in tests; the O-API-1 conformance suite drives THIS shipped app."
+requires-python = ">=3.11"
+dependencies = [
+    # FastAPI + Starlette — the gateway app + TraceMiddleware (no network at import time).
+    "fastapi>=0.110",
+    "starlette>=0.37",
+    # TestClient transport for the unit tests (httpx is also the real DownstreamClient runtime).
+    "httpx>=0.27",
+    "pydantic>=2",
+    "pytest>=8",
+    # pytest-asyncio drives the /ws multiplex unit tests (asyncio_mode=auto).
+    # No SQLAlchemy-async here → no greenlet pin needed.
+    "pytest-asyncio>=0.23",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+asyncio_mode = "auto"

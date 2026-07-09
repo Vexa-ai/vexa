@@ -1,0 +1,23 @@
+# Self-contained debug image for the isolated joining layer.
+# Depends on NOTHING from vexa-bot/core — its own deps only.
+# Reproduces the prod-faithful setup: Linux + Xvfb display + humanized X11 input,
+# and exposes the live view over noVNC (port 6080).
+# Inherits the join layer's runtime shape (the source of truth, Dockerfile.env).
+# Build vexa/meet-join-env:dev first (make env).
+FROM vexa/meet-join-env:dev
+
+WORKDIR /pkg
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Bake the package's OWN deps (incl. tsx) — the reproducible environment.
+# src/ and scripts/ are a baseline here but are MOUNTED live by `make debug`,
+# so the running container executes host source via tsx — no rebuild on edit.
+# The base image already ships the browsers at /ms-playwright — don't let
+# npm's postinstall re-download them (saved several minutes).
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+COPY package.json package-lock.json* tsconfig.json ./
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund
+COPY src ./src
+COPY scripts ./scripts
+
+ENTRYPOINT ["bash", "scripts/docker-entrypoint.sh"]

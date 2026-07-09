@@ -1,0 +1,139 @@
+---
+title: "Troubleshooting"
+description: "The common failures, what causes them, and how to fix them."
+---
+
+## Bot won't join the meeting
+
+A `POST /bots` returns success once the bot is **dispatched**, not once it's in the call — a join can
+still fail. Check the bot's live state:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
+```
+
+- **Bot image not built (self-host)** — the meeting bot is **built from source** (`make bot`), not
+  pulled. If it's missing, the bot can't spawn and the meeting sticks at `requested`; if you're on the
+  stale published `vexaai/vexa-bot:dev` (the old 0.10 line) the bot reaches `joining` then fails the
+  `lifecycle.v1` handshake. Fix: `make bot`, and point `BROWSER_IMAGE` at the built tag.
+- **Bad meeting id** — `native_meeting_id` is the id *inside* the join URL (e.g. `abc-defg-hij`), not the
+  whole URL. Wrong platform value also fails: use `google_meet`, `zoom`, or `teams`.
+- **Waiting room / admission** — on Meet and Teams the bot may be parked in a lobby until a host admits
+  it. Admit it like any guest.
+- **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
+  created). Stop an existing bot or raise the cap.
+
+## A scheduled meeting didn't auto-join
+
+Auto-join sends the bot ~60 s before the scheduled time (see
+[Configuration](/configuration#auto-join--calendar-sync)). If the bot never appeared, check the
+meeting's row in the Terminal — auto-join failures are stamped **onto the meeting** as a visible
+`auto_join_error`, never swallowed. The usual causes:
+
+- **No meeting link** — a plan without a Meet/Zoom/Teams link has nothing to join. Attach the link
+  in the meeting's prep view.
+- **Auto-join is off** — the per-meeting toggle (prep view), or for imported meetings the global
+  switch in the calendar popover.
+- **Concurrency cap** — you were already running `max_concurrent_bots` bots at start time. The row
+  shows the cap error and retries after a backoff (default 5 min).
+- **The start time is long past** — a meeting more than the grace window (default 10 min) past its
+  start is skipped deliberately; the bot never joins hours late.
+- **STT not configured** — like a manual spawn, an auto-spawn refuses to launch a bot that could
+  never transcribe; the row shows the unset keys. See
+  [Bot joins but there's no transcript](#bot-joins-but-theres-no-transcript).
+
+## Calendar isn't syncing
+
+**Start with the panel's status line** — the calendar panel shows the last sync's outcome and
+every failure names itself (`⚠ Last sync failed: …`). **Sync now** re-runs it on demand, and the
+API mirrors both: `GET /user/calendar/sync` (last status), `POST /user/calendar/sync` (run now).
+The full message-by-message reference is in
+[Calendar sync → Reading the sync status](/how-to/calendar-sync#reading-the-sync-status). The
+usual causes:
+
+- **Wrong URL kind** — you need the **secret ICS address** (Google: *Secret address in iCal
+  format*, `…/private-…/basic.ics`; Outlook: the published **ICS** link). The **public** iCal
+  address of a private calendar answers `HTTP 401`/`404`; a calendar *page* URL (embed/share) is
+  rejected at save. Reads via `GET /user/calendar` show the connected feed masked.
+- **The secret-address field is missing** (Google Workspace) — a restrictive Workspace sharing
+  policy hides it. An admin unlocks it: **admin.google.com → Apps → Google Workspace → Calendar →
+  Sharing settings → External sharing options for primary calendars → "Share all information…"**.
+  Details in [Calendar sync](/how-to/calendar-sync#1-find-your-secret-ics-address).
+- **The event has no meeting link** — only events with a recognizable Meet/Zoom/Teams link import;
+  everything else is skipped by design. A healthy feed with none of those reads
+  `✓ Synced — no meetings with joinable links found`.
+- **Self-host wiring** — confirm `ADMIN_API_URL` and `INTERNAL_API_SECRET` are set for
+  meeting-api; without them the sync loop is disabled (and `POST /user/calendar/sync` answers
+  `503`).
+- **Feed too large / unreachable / redirecting** — feeds over 2 MB, behind redirects, or resolving
+  to blocked/internal addresses are refused; the status line records which.
+
+## Bot joins but there's no transcript
+
+The bot is capturing audio, but transcription isn't configured.
+
+- Confirm `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` are set (see
+  [Configuration](/configuration#transcription-stt)). Unset → audio is recorded, no text is produced.
+- Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
+  normal, not a failure.
+- A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
+  `GET /api/meeting/relay-health` rather than as silent dead air.
+
+## Authentication failures
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `401 Missing API key` | no `X-API-Key` header | add the header |
+| `401 Invalid API key` | unknown or revoked key | mint a fresh one ([Authentication](/authentication)) |
+| `403 Token scope not authorized` | key lacks the route's scope | mint with the right `scopes=` |
+| `403 Invalid or missing admin token.` on `/admin/*` | missing or wrong `ADMIN_TOKEN` | use the `X-Admin-API-Key` matching your `ADMIN_TOKEN` |
+
+## Agent chat says no model credentials are configured
+
+`POST /agent/chat` streams a single `error` frame — *"No model credentials are configured, so the
+agent cannot run…"* — and no turn runs. This is the credential preflight: the deployment has no
+model credential and your user has no custom endpoint, so a worker could only fail. Fix either side:
+
+- **Deployment-wide** — set ONE of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `VEXA_LLM_API_KEY` or `HOST_CLAUDE_CREDENTIALS` in `deploy/compose/.env`,
+  then `make all` (the frame names exactly the keys it found unset).
+- **Per-user** — add a custom endpoint under **Settings → Models** in the Terminal (a `custom`
+  config needs its `base_url`; the API key is optional for keyless local gateways).
+
+A turn that *starts* and then fails with **"Model credentials are missing or expired for this
+deployment"** (a `done` frame, `ok:false`) is the mid-flight variant: a credential that existed at
+dispatch went stale — on macOS typically the Keychain-exported `HOST_CLAUDE_CREDENTIALS` file
+(install the [sync daemon](/configuration#claude-subscription-credentials-host_claude_credentials));
+otherwise refresh/rotate the key. The raw provider text rides in the frame's `detail` field.
+
+## Containers don't spawn (self-host)
+
+The [runtime](/core/runtime) spawns bot and agent containers via the Docker socket.
+
+- The runtime needs access to the host Docker socket and the right group — set `DOCKER_GID` to the host's
+  docker group id.
+- The meeting bot (`BROWSER_IMAGE`) is **built from source** (`make bot`) and the runtime spawns it
+  **without pulling** — it must exist locally first. Confirm it's there (`docker image inspect "$BROWSER_IMAGE"`);
+  the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by
+  `make all` — confirm it resolves and `IMAGE_TAG` matches what you built.
+
+## Agent write was rejected
+
+A streamed turn can end with a `rejected` frame carrying `violations`. This is governance, not a bug:
+**untrusted input** (email, web) runs [propose-only](/architecture/governance) and cannot write directly —
+it emits proposal cards a human approves. Trusted input (your chat) may write. If a legitimate trusted
+write is rejected, check that the dispatch's trigger is `message`/`scheduled` (which mount the workspace
+`rw`), not an untrusted event.
+
+## The stack won't come up
+
+- `make all` brings the compose stack up health-gated; tail the logs with `make logs` or
+  `docker compose -p vexa-v012 logs -f` to see which service is wedged.
+- Port already in use → override the host port (e.g. `API_GATEWAY_HOST_PORT`) in `deploy/compose/.env`.
+- Wipe and restart from clean: `make down` (or `docker compose -p vexa-v012 down -v` to drop the
+  postgres + minio volumes too), then `make all`.
+
+## Still stuck?
+
+Open an issue or ask on the [GitHub repo](https://github.com/Vexa-ai/vexa). Include the failing request,
+the response (status + `detail`), and the relevant `docker logs`.

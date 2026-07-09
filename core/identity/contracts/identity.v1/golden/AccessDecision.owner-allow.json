@@ -1,0 +1,8 @@
+{
+  "allow": true,
+  "subject": "42",
+  "resource_kind": "meeting_transcript",
+  "resource_id": "meeting-1001",
+  "action": "read",
+  "reason": "owner"
+}

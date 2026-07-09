@@ -8,7 +8,6 @@ metadata:
 spec:
   serviceName: {{ include "vexa.componentName" (list . "minio") }}
   replicas: 1
-  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}
@@ -19,6 +18,14 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: minio
     spec:
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-4 fix).
       #
       # Linode LKE g6-standard-* nodes cap at 7 attached block volumes

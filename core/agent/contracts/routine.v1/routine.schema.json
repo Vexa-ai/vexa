@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/routine.v1",
+  "title": "routine.v1",
+  "description": "A saved recurring/event unit — (name, trigger, plan). A routine is the authoring entity the user creates (e.g. with /routine); it COMPILES DOWN to a schedule.v1 cron job (for kind=scheduled) or an event-source subscription (kind=event) whose body is a unit.v1 Invocation. A higher-level wrapper over the sealed scheduler — it adds no new execution mechanism.",
+  "$defs": {
+    "RoutineTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["scheduled", "event"] },
+        "cron": { "type": "string", "description": "cron expression when kind=scheduled (compiled to a schedule.v1 job)" },
+        "event": { "type": "string", "description": "event name when kind=event, e.g. email.received" }
+      }
+    },
+    "Routine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner", "name", "trigger", "plan"],
+      "properties": {
+        "id": { "type": "string" },
+        "owner": { "type": "string", "description": "identity.v1 subject = the person" },
+        "name": { "type": "string" },
+        "trigger": { "$ref": "#/$defs/RoutineTrigger" },
+        "plan": {
+          "type": "object",
+          "description": "WHAT the unit does each fire — either a workspace plan doc (ref) or an inline prompt. Compiles to the unit.v1 Invocation's plan.",
+          "additionalProperties": false,
+          "anyOf": [ { "required": ["ref"] }, { "required": ["prompt"] } ],
+          "properties": {
+            "ref": { "type": "string", "description": "workspace plan doc path" },
+            "prompt": { "type": "string", "description": "inline plan prompt (when no plan doc is authored)" }
+          }
+        },
+        "lifecycle": { "enum": ["oneshot", "warm"], "default": "oneshot" },
+        "enabled": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}

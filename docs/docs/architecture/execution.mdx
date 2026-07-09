@@ -1,0 +1,48 @@
+---
+title: "Execution"
+description: "The agent runs in a runtime-spawned container, over a mounted workspace folder, resuming from a session file."
+---
+
+1. The [Scheduler](/concepts#scheduler) fires; agent-api asks the [Runtime](/core/runtime) to
+   spawn (it touches **no docker** itself).
+2. The container mounts **only** the granted [workspaces](/concepts#workspace) — one bind per mount, no
+   clone; another tenant's workspace is not in the filesystem at all — + brokers creds.
+3. The agent **resumes from the session file** in the rw folder (continuity is a file), runs the
+   [runner](/concepts#agent), and **commits freeform** changes.
+4. It emits events on its [Stream](/architecture/streaming); the container is **reaped when idle**.
+
+The workspace folder (+ its session file) is the only durable state; the container is disposable.
+
+## Implemented — the live path
+
+A dispatch **is** the in-container worker `agent_api.worker`. The Runtime injects everything it needs as
+env + a bind-mount, and the worker drives the [runner](/concepts#agent) over the mounted folder:
+
+```text
+trigger → Scheduler → Runtime spawns the `agent` container  (CMD: python -m agent_api.worker)
+  ├─ bind-mounts ONLY the granted workspaces, one per mount  (ported in, not cloned; :ro roles enforced)
+  ├─ injects the signed dispatch token + REDIS_URL + the unit:<id>:in / unit:<id>:out topics + `start`
+  └─ brokers the model credential                            (never in the dispatch envelope)
+worker → one governed turn:  runner → workspace.v1 re-validate → git commit
+  ├─ XADD each UnitEvent to unit:<id>:out                    (the Stream)
+  └─ block on unit:<id>:in for the next message; idle ⇒ exit ⇒ container reaped  (TTL-on-idle)
+```
+
+**Continuity is files in the workspace.** Both the session id (`.claude/.session`) **and the chat
+transcript** are saved in the folder — claude-code's transcript dir is symlinked into
+`<workspace>/.claude/projects` — so a fresh container [resumes](/concepts#workspace) the same
+conversation from the durable git folder, no warm container needed.
+
+<Note>Proven end-to-end on docker: a `unit.v1` dispatch → isolated `vexa-agent-<id>` container → a real
+claude turn → a `workspace.v1`-governed commit → events on `unit:<id>:out`. Code:
+`core/agent/services/agent-api/src/agent_api/worker.py` (the harness),
+`core/runtime/src/runtime_kernel/docker_backend.py` (mount + credential brokering).</Note>
+
+## The same run, any substrate
+
+The flow above is the **Docker** path (the open-core default). agent-api never spawns anything itself —
+it hands the [Runtime](/core/runtime) a `runtime.v1` workload, and the kernel's pluggable backend turns
+that *same* workload into a child process, a container, or a **Kubernetes Pod** (`RUNTIME_BACKEND=k8s`)
+— same lifecycle, same dispatch, same worker. Only *how* the container is created changes; the run does
+not. The per-backend mechanics — and what the k8s path does and does **not** wire
+up yet — are in [Runtime → Where it runs](/core/runtime#where-it-runs).

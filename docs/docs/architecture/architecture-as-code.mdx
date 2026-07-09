@@ -1,0 +1,81 @@
+---
+title: "Architecture as Code (CALM)"
+description: "The runtime architecture is a validated FINOS CALM model — nodes, data carriers, single-writer ownership, and a self-hostable meeting-intelligence pattern, enforced in CI."
+---
+
+The Vexa runtime is modeled as code using **[FINOS CALM](https://calm.finos.org/)** (Common Architecture
+Language Model). There is **one chart** — the repo-root
+[`architecture.calm.json`](https://github.com/Vexa-ai/vexa/blob/main/architecture.calm.json) — the
+single source of truth; [`calm/`](https://github.com/Vexa-ai/vexa/tree/main/calm) holds the governance
+controls and the reusable pattern that validate it. Two CI gates keep it honest: `pnpm gate:calm` (FINOS
+pattern conformance) and `pnpm gate:dataflow` (model↔disk completeness, ownership enforcement, and a
+reality diff against the code) — so the architecture description can't silently drift from the system.
+
+## What's modeled
+
+The chart carries both lenses at once: the complete **module / service / contract inventory** (every
+`core/*` service, module, and sealed contract is registered — adding one without registering it turns CI
+red) and the **runtime / data-flow view**: the standing services
+([gateway](/architecture/identity-and-trust), `meeting-api`, `agent-api`, `admin-api`,
+[`runtime`](/architecture/execution)), the **runtime-spawned workers** (`bot`, `agent-worker` —
+[`deployed-in` the runtime kernel](/architecture/execution)), the redis transcript fabric, the durable
+stores (postgres, object storage), and the **first-party, self-hostable STT** boundary.
+
+| Layer | Nodes |
+|---|---|
+| Edge | `gateway` — the one authenticated door (auth · routing · WS fan-out) |
+| Services | `meeting-api` (collector hub) · `agent-api` (copilot) · `admin-api` (identity) |
+| Workers | `bot` · `agent-worker` — ephemeral, spawned per meeting / per dispatch |
+| Carriers | the redis [streams + pub/sub](/architecture/streaming) (transcript live + durable planes) |
+| Stores | postgres (transcripts · identity) · object storage (recordings) |
+| STT | `transcription` — first-party GPU service, **tenant-hosted by default** |
+
+## Controls (governance, machine-checked)
+
+The model carries [governance](/architecture/governance) controls, each backed by a JSON-Schema
+requirement in `calm/controls/`:
+
+- **single-writer (P23)** — every data carrier declares exactly one producer; readers never re-derive a
+  producer's data.
+- **render-only** — the terminal renders transcript and cards; it never re-derives or republishes.
+- **data-egress** — the `bot → transcription` edge declares its egress posture. Default is
+  **tenant-hosted**, so meeting audio need not leave the tenant.
+
+## The pattern
+
+`calm/patterns/meeting-intelligence.pattern.json` is a reusable CALM **pattern** a meeting-intelligence
+deployment must conform to: a single authenticated edge, a capture worker, a collector, a copilot, a
+render-only client, and a **declared STT egress boundary**. Conformance is **fail-closed** — a design that
+omits the egress control or the render-only client is rejected:
+
+```bash
+pnpm gate:calm
+# = calm validate -p calm/patterns/meeting-intelligence.pattern.json -a architecture.calm.json
+```
+
+Because the model is standard CALM, you can also `calm generate` a conformant starter architecture from the
+pattern and validate your own deployment against it with the FINOS [`calm-cli`](https://www.npmjs.com/package/@finos/calm-cli).
+
+## Generated views
+
+Diagram views are **carved from the chart, never drawn by hand**. `pnpm arch:dsl --write` regenerates
+[`docs/views/`](https://github.com/Vexa-ai/vexa/tree/main/docs/views) deterministically, and
+`gate:dataflow` fails when they are stale:
+
+| View | Shows |
+|---|---|
+| `architecture.dsl` | compact text projection — the always-in-context LLM index |
+| `containers.mmd` | systems, services, clients, and the protocols between them |
+| `ownership.mmd` | every data carrier and its writers/readers (multi-writer carriers highlighted) |
+| `flow-*.mmd` | one sequence diagram per declared flow (live transcript · agent dispatch) |
+| `deployment.mmd` | the runtime.v1 spawn topology |
+| `egress.mmd` | the tenant trust boundary and every egress-controlled edge |
+
+The chart is also **sealed** (`architecture.seal.json`): any edit fails CI until deliberately re-sealed
+with `pnpm seal:arch`, so ownership or boundary changes are always a reviewed act.
+
+## Why this exists
+
+A standard, validated model gives one diffable source of truth for the architecture, makes the
+[single-writer](/architecture/streaming) and [trust-boundary](/architecture/identity-and-trust) invariants
+machine-checkable, and lets the design be consumed by any CALM tooling — not a bespoke diagram that rots.

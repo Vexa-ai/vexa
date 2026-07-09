@@ -1,0 +1,45 @@
+%% GENERATED — pnpm arch:dsl --write
+flowchart LR
+  segments_stream[("transcription_segments (stream)")]
+  tc_mutable[("tc:meeting:{id}:mutable (pubsub)")]
+  style tc_mutable stroke-dasharray: 5 5,stroke-width:3px
+  tc_stream[("tc:meeting:{id} (stream)")]
+  proc_stream[("proc:meeting:{id} (stream)")]
+  out_stream[("unit:{id}:out (stream)")]
+  segments_table[("transcription_segments (table)")]
+  recording_blob[("recordings bucket (blob)")]
+  style recording_blob stroke-dasharray: 5 5,stroke-width:3px
+  bm_status[("bm:meeting:{id}:status (pubsub)")]
+  u_meetings[("u:{user}:meetings (pubsub)")]
+  bot_commands[("bot_commands:meeting:{id} (pubsub)")]
+  unit_in[("unit:{id}:in (stream)")]
+  va_chat[("va:meeting:{id}:chat (pubsub)")]
+  identity_db[("identity (users/api_tokens)")]
+  bot -->|write| segments_stream
+  bot -->|write| tc_mutable
+  meeting_api -.->|read| segments_stream
+  meeting_api -->|write| tc_mutable
+  meeting_api -->|write| segments_table
+  meeting_api -->|write| tc_stream
+  agent_api -.->|read| tc_stream
+  gateway -.->|read| tc_mutable
+  terminal -.->|read| tc_stream
+  terminal -.->|read| proc_stream
+  terminal -.->|read| out_stream
+  bot -->|write| recording_blob
+  gateway -.->|read| recording_blob
+  bot -.->|read| bot_commands
+  meeting_api -->|write| bm_status
+  meeting_api -->|write| u_meetings
+  meeting_api -->|write| bot_commands
+  meeting_api -->|write| recording_blob
+  agent_api -.->|read| segments_stream
+  agent_api -.->|read| out_stream
+  agent_worker -.->|read| tc_stream
+  agent_worker -->|write| out_stream
+  agent_worker -->|write| proc_stream
+  agent_worker -.->|read| unit_in
+  gateway -.->|read| bm_status
+  gateway -.->|read| u_meetings
+  gateway -.->|read| va_chat
+  admin_api -->|write| identity_db

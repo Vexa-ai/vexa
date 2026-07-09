@@ -1,0 +1,11 @@
+{
+  "type": "meeting.status",
+  "meeting": { "id": 42, "platform": "google_meet", "native_id": "abc-defg-hij" },
+  "payload": { "status": "scheduled" },
+  "user_id": 7,
+  "ts": "2026-06-25T18:00:00Z",
+  "meeting_id": 42,
+  "native": "abc-defg-hij",
+  "status": "scheduled",
+  "when": "2026-06-25T18:00:00Z"
+}

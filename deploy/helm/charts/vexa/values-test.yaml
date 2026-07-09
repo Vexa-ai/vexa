@@ -1,97 +1,69 @@
-# Test values for automated LKE cluster provisioning.
-# No ingress, no TLS — uses NodePort to expose gateway + dashboard.
-# Usage: helm install vexa ./deploy/helm/charts/vexa -f ./deploy/helm/charts/vexa/values-test.yaml
+# Smoke overlay for a single-node cluster (local k3s). Locally-built images imported into the node's
+# containerd, so never pull; everything single-replica; PDBs off (a PDB minAvailable:1 on a single
+# replica blocks drains); gateway + MinIO via NodePort; dummy secrets.
+#
+#   helm install vexa deploy/helm/charts/vexa -n vexa --create-namespace -f values-test.yaml
+#
+# Proves the control plane stands up + /health is green. Does NOT exercise live bot/agent spawn
+# (needs the bot image present on the node + RWX workspace storage — see README).
 
 global:
-  imagePullPolicy: Always
+  imagePullPolicy: IfNotPresent
 
 secrets:
-  adminApiToken: "test-admin-token-t3"
+  adminApiToken: "test-admin-token"
+  internalApiSecret: "vexa-internal-secret"
+  transcriptionServiceToken: ""
+  dispatchSigningKey: "dev-dispatch-signing-key"
 
-# ---------- Components ----------
-
-apiGateway:
-  enabled: true
-  image:
-    repository: vexaai/api-gateway
-    tag: dev
+gateway:
+  replicaCount: 1
   service:
     type: NodePort
-    port: 8000
     nodePort: 30056
 
 adminApi:
-  enabled: true
-  image:
-    repository: vexaai/admin-api
-    tag: dev
+  replicaCount: 1
 
 meetingApi:
-  enabled: true
-  botImageName: "vexaai/vexa-bot:dev"
-  image:
-    repository: vexaai/meeting-api
-    tag: dev
+  replicaCount: 1
 
-runtimeApi:
-  enabled: true
-  orchestrator: kubernetes
-  browserImage: "vexaai/vexa-bot:dev"
-  image:
-    repository: vexaai/runtime-api
-    tag: dev
+runtime:
+  replicaCount: 1
+  backend: "k8s"          # exercise the real cloud spawn path (SA + RBAC + kubectl in-image)
 
-ttsService:
-  enabled: true
-  image:
-    repository: vexaai/tts-service
-    tag: dev
+agentApi:
+  replicaCount: 1
+  workspaces:
+    size: 1Gi
 
-mcp:
-  enabled: true
-  image:
-    repository: vexaai/mcp
-    tag: dev
-
-dashboard:
-  enabled: true
-  image:
-    repository: vexaai/dashboard
-    tag: dev
-  service:
-    type: NodePort
-    port: 3000
-    nodePort: 30001
-  env:
-    VEXA_PUBLIC_API_URL: ""       # set at install time via --set
-    NEXT_PUBLIC_APP_URL: ""       # set at install time via --set
-    NEXT_PUBLIC_HOSTED_MODE: "false"
-
-# Bundled deps
 postgres:
-  enabled: true
-  image: postgres:17-alpine
   persistence:
-    enabled: true
-    size: 10Gi
-
-redis:
-  enabled: true
-  persistence:
-    enabled: true
     size: 2Gi
 
-minio:
-  enabled: true
+redis:
   persistence:
-    size: 10Gi
+    size: 1Gi
 
-# No ingress — NodePort only
+minio:
+  service:
+    type: NodePort
+    nodePort: 30900
+  persistence:
+    size: 2Gi
+
 ingress:
   enabled: false
 
-migrations:
-  enabled: true
-  image:
-    repository: vexaai/meeting-api
-    tag: dev
+# Single replica everywhere ⇒ no PDBs (they'd block node drains on one node).
+podDisruptionBudgets:
+  gateway:
+    enabled: false
+  adminApi:
+    enabled: false
+  meetingApi:
+    enabled: false
+  runtime:
+    enabled: false
+  agentApi:
+    enabled: false

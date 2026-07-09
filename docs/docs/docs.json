@@ -1,0 +1,112 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Vexa",
+  "logo": {
+    "light": "/logo/vexa.svg",
+    "dark": "/logo/vexa.svg"
+  },
+  "favicon": "/logo/vexa.svg",
+  "theme": "mint",
+  "colors": {
+    "primary": "#0d9488",
+    "light": "#2dd4bf",
+    "dark": "#0f766e"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start here",
+        "pages": [
+          "index",
+          "quickstart",
+          "authentication",
+          "comparison"
+        ]
+      },
+      {
+        "group": "How-to: Meetings",
+        "pages": [
+          "how-to/overview",
+          "how-to/calendar-sync",
+          "how-to/send-a-bot",
+          "how-to/stream-transcript",
+          "how-to/recordings"
+        ]
+      },
+      {
+        "group": "How-to: Agents",
+        "pages": [
+          "how-to/chat-workspace",
+          "how-to/workspace-files",
+          "how-to/daily-brief",
+          "how-to/email-triage"
+        ]
+      },
+      {
+        "group": "How-to: Meetings + agents",
+        "pages": [
+          "how-to/plan-a-meeting",
+          "how-to/live-copilot",
+          "how-to/post-meeting-report"
+        ]
+      },
+      {
+        "group": "Core",
+        "pages": [
+          "core/meetings",
+          "core/agents",
+          "core/runtime",
+          "core/identity"
+        ]
+      },
+      {
+        "group": "Concepts",
+        "pages": [
+          "concepts"
+        ]
+      },
+      {
+        "group": "Architecture",
+        "pages": [
+          "architecture/modules",
+          "architecture/execution",
+          "architecture/dispatch",
+          "architecture/streaming",
+          "architecture/identity-and-trust",
+          "architecture/governance",
+          "architecture/architecture-as-code"
+        ]
+      },
+      {
+        "group": "API reference",
+        "pages": [
+          "api/meetings",
+          "api/agent",
+          "api/errors"
+        ]
+      },
+      {
+        "group": "Deployment & operations",
+        "pages": [
+          "deployment",
+          "deployment-kubernetes",
+          "configuration",
+          "model-credentials-licensing",
+          "security-compliance",
+          "troubleshooting",
+          "sdks",
+          "changelog"
+        ]
+      },
+      {
+        "group": "Roadmap",
+        "pages": [
+          "roadmap/approach",
+          "roadmap/stages",
+          "roadmap/status",
+          "roadmap/swarm"
+        ]
+      }
+    ]
+  }
+}

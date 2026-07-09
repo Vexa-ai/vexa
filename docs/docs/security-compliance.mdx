@@ -1,0 +1,59 @@
+---
+title: "Security & compliance"
+description: "The one-page answer for a security or procurement review — deployment posture, trust model, isolation, and the audit artifacts the repo ships."
+---
+
+Vexa is built for the buyer whose question is not *"which cloud?"* but *"how do we run this
+**without** a cloud?"* — banks, healthcare, government, and anyone whose meeting content cannot
+transit a vendor's infrastructure. This page collects what a security review asks for.
+
+## Deployment posture
+
+- **Self-hosted, single perimeter.** Every service — capture bots, transcription, storage,
+  agents, the web workbench — runs on infrastructure you control ([Deployment](/deployment),
+  [Kubernetes](/deployment-kubernetes)). Services bind to loopback; the gateway is the one
+  front door.
+- **Air-gapped / zero egress.** Nothing phones home. Pair the stack with the
+  [self-hosted GPU transcription unit](/deployment#transcription-the-separate-gpu-unit) and
+  your own LLM endpoint and no request leaves your network.
+- **Bring your own models.** LLM and speech-to-text endpoints are configuration
+  ([Configuration](/configuration)); credential terms are documented in
+  [Model credentials & licensing](/model-credentials-licensing).
+- **Own, don't rent.** Apache-2.0. Transcripts and derived knowledge are Markdown in a git
+  repo you hold — leaving the product does not orphan the data.
+
+## Trust model
+
+- **Agents are untrusted by design.** They are prompt-injectable, so they enforce nothing
+  themselves. Every agent runs in an **isolated, ephemeral container** with no egress except
+  brokered tools, scoped to only the workspaces it was granted — agents never run in the
+  control plane. See [Identity & trust](/architecture/identity-and-trust).
+- **Trusted vs untrusted input.** You, in chat, write to the workspace directly (git is the
+  undo). Untrusted input — an email, a web page — runs **propose-only**: the agent suggests,
+  a human approves, trusted code applies. Irreversible effects (send, order) are always gated.
+  See [Governance](/architecture/governance).
+- **Identity at the edge.** The gateway derives identity from your API key server-side;
+  internal services trust only the gateway's asserted identity, not client-supplied fields.
+
+## Audit artifacts in the repo
+
+| Artifact | What it gives a reviewer |
+|---|---|
+| [`architecture.calm.json`](https://github.com/Vexa-ai/vexa/blob/main/architecture.calm.json) | Machine-readable architecture (FINOS **CALM**): every service, data carrier, and flow — drift-gated in CI. See [Architecture as Code](/architecture/architecture-as-code). |
+| [`SECURITY.md`](https://github.com/Vexa-ai/vexa/blob/main/SECURITY.md) | Vulnerability reporting policy and contact. |
+| [`security-insights.yml`](https://github.com/Vexa-ai/vexa/blob/main/security-insights.yml) | OpenSSF Security Insights manifest. |
+| [`license-exceptions.json`](https://github.com/Vexa-ai/vexa/blob/main/license-exceptions.json) | FINOS license gating: deps are Category-A permissive; every exception is explicit and reasoned. |
+| [`LICENSE`](https://github.com/Vexa-ai/vexa/blob/main/LICENSE) | Apache-2.0. |
+| CI gates | Isolation, contract seals, config contract, license audit, and a full-stack readiness proof run on every push (`scripts/gates.mjs`). |
+
+## Known gaps (honest)
+
+At-rest encryption for workspaces, transcripts, and tokens is **planned, not shipped** — today
+you bring your own disk/volume encryption. Mid-call bot control endpoints are not wired in the
+open-core stack. Track both on the [status page](/roadmap/status).
+
+## Reporting a vulnerability
+
+Follow [`SECURITY.md`](https://github.com/Vexa-ai/vexa/blob/main/SECURITY.md) — report
+privately to the maintainer contact listed there; please do not open public issues for
+security reports.

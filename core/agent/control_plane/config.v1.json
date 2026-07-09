@@ -1,0 +1,382 @@
+{
+  "contract": "config.v1",
+  "service": "agent-api",
+  "keys": [
+    {
+      "key": "VEXA_AGENT_API_PORT",
+      "class": "defaulted",
+      "default": "8100",
+      "description": "uvicorn bind port"
+    },
+    {
+      "key": "VEXA_LOG_LEVEL",
+      "class": "defaulted",
+      "default": "INFO",
+      "description": "app log level"
+    },
+    {
+      "key": "VEXA_RUNTIME_API_URL",
+      "class": "defaulted",
+      "default": "http://runtime-api:8090",
+      "description": "the runtime kernel's runtime.v1 surface the dispatcher spawns workers on (+ schedule.v1 for routines)"
+    },
+    {
+      "key": "VEXA_AGENT_PROFILE",
+      "class": "defaulted",
+      "default": "agent",
+      "description": "the opaque runtime.v1 profile the worker is spawned under (P11)"
+    },
+    {
+      "key": "VEXA_AGENT_API_SELF_URL",
+      "class": "defaulted",
+      "default": "http://agent-api:8100",
+      "description": "how the runtime's scheduler reaches THIS service's /invocations sink when a routine fires"
+    },
+    {
+      "key": "VEXA_WORKSPACE_PATH",
+      "class": "defaulted",
+      "default": "/workspace",
+      "description": "where the dispatch's workspaces materialize inside the worker",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_REF",
+      "class": "defaulted",
+      "default": "main",
+      "description": "workspace git ref the dispatch pins",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_STORE_URL",
+      "class": "defaulted",
+      "default": "s3://vexa-workspaces",
+      "description": "the workspace store (object bucket) the runtime syncs granted workspaces from",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_MOUNT_SOURCE",
+      "class": "defaulted",
+      "default": "agent-workspaces",
+      "description": "host path / docker named volume the runtime binds into the worker as the workspace store backing",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_MOUNTS",
+      "class": "defaulted",
+      "default": "(unset — derived per dispatch: the private baseline only)",
+      "description": "the ordered THREE-TIER mount STACK the dispatch stamps into the worker spec — a JSON list [{slug,path,role,write,primary}], one entry per mount: _global (RO) + the active workspaces (RW) + _system (RW) (AMENDMENT 4 / WP-A1.1). Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
+      "class": "defaulted",
+      "default": "(unset — no _global mount; the stack degrades to the active set + _system)",
+      "description": "host path / repo dir of the platform-owned GLOBAL SYSTEM workspace (_global) mounted READ-ONLY into EVERY worker — behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Absent → the _global tier is skipped",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_REF",
+      "class": "defaulted",
+      "default": "(unset — mount HEAD/main)",
+      "description": "pin the _global mount to a ref (branch/tag/sha) for safe rollout of a global behaviour change; empty = mount HEAD (AMENDMENT 4, Q17)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_PRINCIPAL_NAME",
+      "class": "defaulted",
+      "default": "(unset — defaults to the dispatch subject)",
+      "description": "the authenticated human principal's name the dispatch stamps for per-mount commit attribution (D4: git author = principal, committer = platform). Runtime-injected per dispatch",
+      "targets": []
+    },
+    {
+      "key": "VEXA_PRINCIPAL_EMAIL",
+      "class": "defaulted",
+      "default": "(unset — defaults to <subject>@vexa.local)",
+      "description": "the authenticated human principal's email for per-mount commit attribution (D4). Runtime-injected per dispatch",
+      "targets": []
+    },
+    {
+      "key": "VEXA_AGENT_DEFAULT_SUBJECT",
+      "class": "defaulted",
+      "default": "(empty \u2014 FAIL-CLOSED: 401 when the gateway's X-User-Id is absent)",
+      "description": "single-user fallback subject for a direct/self-host deploy with no gateway in front"
+    },
+    {
+      "key": "VEXA_REDIS_URL",
+      "class": "defaulted",
+      "default": "redis://redis:6379/0",
+      "description": "the per-dispatch unit:<id>:out/:in streams the control plane relays (SSE) + the transcript tail"
+    },
+    {
+      "key": "VEXA_WORKSPACES_DIR",
+      "class": "defaulted",
+      "default": "/workspaces",
+      "description": "the per-subject workspace tree this control plane reads (WorkspaceReader) and seeds"
+    },
+    {
+      "key": "VEXA_WS_WRITE_LOCK_TIMEOUT_S",
+      "class": "defaulted",
+      "default": "30",
+      "description": "Lane W: seconds a turn-commit waits on the per-shared-workspace write lock (cross-process flock serializing concurrent members' commits, shared/adapters.py) before raising WorkspaceBusyError — bounded so a wedged holder can never stall a workspace forever",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_SEEDS_DIR",
+      "class": "defaulted",
+      "default": "/app/workspace-seeds",
+      "description": "the registry of workspace templates (one validated seed per subdir)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_SEED_DIR",
+      "class": "defaulted",
+      "default": "(unset \u2014 resolve via VEXA_WORKSPACE_SEEDS_DIR + template)",
+      "description": "explicit, already-resolved seed dir override (tests / special deploys)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_DEFAULT_TEMPLATE",
+      "class": "defaulted",
+      "default": "finos",
+      "description": "which workspace template new subjects are seeded from",
+      "targets": []
+    },
+    {
+      "key": "VEXA_AGENT_MODEL",
+      "class": "defaulted",
+      "default": "(subscription/provider default)",
+      "description": "the claude model alias/name for chat + workspace turns"
+    },
+    {
+      "key": "VEXA_MEETING_MODEL",
+      "class": "defaulted",
+      "default": "(subscription/provider default)",
+      "description": "the streaming/meeting-copilot model label"
+    },
+    {
+      "key": "VEXA_LLM_PROVIDER",
+      "class": "defaulted",
+      "default": "(openai-compat)",
+      "description": "llm-module CompletionPort adapter key forwarded into workers by dispatch",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_MODEL",
+      "class": "defaulted",
+      "default": "(adapter default)",
+      "description": "llm-module deployment-default model forwarded into workers by dispatch",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MODEL_ALLOWLIST",
+      "class": "defaulted",
+      "default": "(empty \u2014 allow any workspace-pinned model)",
+      "description": "operator gate on workspace-pinned models (comma-separated)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MEETING_IDLE_TIMEOUT_SEC",
+      "class": "defaulted",
+      "default": "14400",
+      "description": "live-meeting copilot idle timeout (s)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CHAT_IDLE_TIMEOUT_SEC",
+      "class": "defaulted",
+      "default": "900",
+      "description": "chat worker warm-serve window after its last turn (s) — a follow-up inside it lands on the warm worker",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TOOLS_SEED_DIR",
+      "class": "defaulted",
+      "default": "/app/tools-seed",
+      "description": "tool.v1 descriptors + MCP launch specs a unit's tools resolve against",
+      "targets": []
+    },
+    {
+      "key": "VEXA_ROUTINE_RECONCILE_INTERVAL_SEC",
+      "class": "defaulted",
+      "default": "60",
+      "description": "workspace-authored routines reconcile interval (0 disables the reconciler)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_AGENT_IDENTITY_TOKEN",
+      "class": "defaulted",
+      "default": "(empty \u2014 no brokered identity)",
+      "secret": true,
+      "description": "brokered, scoped identity the worker presents (ADR-0003)",
+      "targets": []
+    },
+    {
+      "key": "VEXA_DISPATCH_SIGNING_KEY",
+      "class": "defaulted",
+      "default": "dev-dispatch-signing-key",
+      "secret": true,
+      "description": "the shared key per-dispatch tokens are signed with (dev tier; k8s \u2192 SPIRE behind the same seam)"
+    },
+    {
+      "key": "VEXA_GATEWAY_URL",
+      "class": "defaulted",
+      "default": "http://gateway:8000",
+      "description": "the gateway base URL for 'add bot from URL' (POST /bots) and the transcript relay's numeric\u2192native resolve"
+    },
+    {
+      "key": "VEXA_BOT_API_KEY",
+      "class": "capability",
+      "capability": "bot_gateway",
+      "secret": true,
+      "description": "API key this control plane presents to the gateway (mint one via admin-api / `make all`)"
+    },
+    {
+      "key": "HOST_CLAUDE_CREDENTIALS",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "DOCKER-HOST path to a claude credentials JSON. agent-api does not use it itself \u2014 the RUNTIME bind-mounts it into every spawned worker at /root/.claude/.credentials.json (see the runtime's config.v1) \u2014 but the agent plane's /health surfaces whether ANY model-credential path is configured, because that is where the operator looks when chat fails",
+      "targets": [
+        "compose",
+        "lite"
+      ]
+    },
+    {
+      "key": "ANTHROPIC_API_KEY",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "API-key credential path (brokered into workers by the runtime; surfaced here for the agent plane's /health row)"
+    },
+    {
+      "key": "ANTHROPIC_AUTH_TOKEN",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "OAuth/OpenRouter-style bearer credential path (brokered into workers by the runtime; surfaced here for the agent plane's /health row)"
+    },
+    {
+      "key": "CLAUDE_CODE_OAUTH_TOKEN",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "claude CLI subscription OAuth token \u2014 the env-delivered credential path: dispatch stamps it (MODEL_AUTH_ENV_ALLOWLIST) into every worker spec env, the k8s/helm counterpart of the HOST_CLAUDE_CREDENTIALS mount"
+    },
+    {
+      "key": "VEXA_LLM_API_KEY",
+      "class": "capability",
+      "capability": "model_inference",
+      "secret": true,
+      "description": "llm-module completion-adapter credential \u2014 dispatch stamps it into every worker spec env (adapters fall back ANTHROPIC_AUTH_TOKEN \u2192 ANTHROPIC_API_KEY when unset)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_BASE_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 adapter default; openai-compat requires one via this or ANTHROPIC_BASE_URL)",
+      "description": "llm-module completion endpoint \u2014 an endpoint selector, not a credential alternative; dispatch stamps it into every worker spec env",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "ANTHROPIC_BASE_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 api.anthropic.com)",
+      "description": "claude-CLI/gateway endpoint \u2014 an endpoint selector, not a credential alternative; dispatch stamps it (with the credential it pairs with) into every worker spec env"
+    },
+    {
+      "key": "VEXA_ADMIN_API_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 in-memory membership index)",
+      "description": "Lane M: identity admin-api base URL for the users.data.memberships[] index mirror; empty = in-memory index (policy/members.json in the workspace git repo stays authoritative)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MEETING_API_URL",
+      "class": "defaulted",
+      "default": "http://meeting-api:8080",
+      "description": "meeting-api base URL \u2014 agent-api owner-scopes the live SSE feed (GET /api/meeting/stream) by hitting GET /meetings/{id} on it before opening the redis transcript stream (P0 cross-tenant leak fix, SSE sibling of the by-id ownership check)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_INTERNAL_API_SECRET",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "Lane M: X-Internal-Secret for the admin-api membership-index internal edge (same value the gateway uses)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_REQUIRE_GATEWAY_IDENTITY",
+      "class": "defaulted",
+      "default": "false",
+      "description": "when true, reject callers lacking the gateway-signed X-Gateway-Verified identity marker (hardened multi-tenant topology); default false preserves dev/direct-edge access",
+      "targets": []
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_URL",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "Settings→Models Test button: the deployment-default STT backend URL probed by GET /api/transcription/test when no user/global override exists (the same env floor bot_spawn falls back to in meeting-api; rides in via env_file .env). Empty → the test reports 'no backend configured'",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "TRANSCRIPTION_SERVICE_TOKEN",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "SECRET — the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings→Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
+      "targets": [
+        "compose"
+      ]
+    }
+  ],
+  "capabilities": {
+    "bot_gateway": {
+      "description": "this control plane can call the gateway as a client \u2014 'add bot from URL' + the transcript relay's numeric\u2192native meeting-id resolve",
+      "mode": "all",
+      "when_unconfigured": "POST /api/meeting/bot fails loud; /api/meeting/relay-health reports a typed native_resolve error (kind=unauthorized/not-configured) instead of silent dead air"
+    },
+    "model_inference": {
+      "description": "spawned agent-workers will have a model-provider credential path available \u2014 dispatch stamps the model-auth allowlist from this service's env into every worker spec env (uniform across docker/k8s/process backends); the docker runtime additionally brokers/mounts creds itself (see the runtime's config.v1 for the mount mechanics + file probe)",
+      "mode": "any",
+      "when_unconfigured": "terminal chat / workspace turns fail inside the worker ('Model inference failed: Not logged in') \u2014 set CLAUDE_CODE_OAUTH_TOKEN (subscription OAuth), an ANTHROPIC_* key, VEXA_LLM_API_KEY (completion adapters), or HOST_CLAUDE_CREDENTIALS (docker subscription mount)"
+    }
+  },
+  "surface_only": [
+    {
+      "key": "ANTHROPIC_MODEL",
+      "reason": "not read by the control plane \u2014 the runtime brokers it into workers; present on this service historically"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+      "reason": "not read by the control plane \u2014 the runtime brokers it into workers; present on this service historically"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "reason": "not read by the control plane \u2014 the runtime brokers it into workers; present on this service historically"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "reason": "not read by the control plane \u2014 the runtime brokers it into workers; present on this service historically"
+    }
+  ]
+}

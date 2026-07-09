@@ -1,133 +1,73 @@
-# Vexa Helm Charts
+# deploy/helm — the v0.12 control-plane chart (Kubernetes)
 
-## Why
+The `helm` target of the lite/compose/helm trio: the full v0.12 stack as a Kubernetes release —
+the control plane **gateway · admin-api · meeting-api · runtime · agent-api**, the **terminal** web
+UI, and infra (`postgres:17` · `redis:7` · `minio` + a `minio-init` bucket Job). The **terminal** is
+the human front door (Next.js; proxies `/ws` → gateway and REST/login → agent-api/admin-api
+server-side); the gateway stays the API front door for programmatic use. The difference from compose
+is the **spawn substrate**: on k8s the `runtime` launches the bot and agent-worker as **Pods** (via
+`kubectl`, under a chart-provided ServiceAccount/RBAC), selected by `RUNTIME_BACKEND=k8s` — not the
+host Docker socket.
 
-Docker Compose gets you running locally but doesn't scale, self-heal, or manage secrets properly. For production Kubernetes deployments, you need proper resource limits, RBAC for bot pod spawning, health probes, ingress routing, and secrets management. These Helm charts package all of that — two charts covering the full multi-service topology and the simpler single-pod Lite deployment.
+## Chart
 
-## What
+[`charts/vexa`](charts/vexa/) — the full multi-service deployment. Production-hardened scaffolding
+carried from the 0.10.6.3 baseline: zero-downtime `RollingUpdate` (maxSurge 1 / maxUnavailable 0),
+PodDisruptionBudgets on stateless services, the Redis durability paired invariant, secret-sourced
+DB/admin/provider credentials, optional PgBouncer for managed Postgres.
 
-Helm charts for deploying Vexa on Kubernetes. Includes the Vexa Dashboard.
-
-## How
-
-- `vexa`: Full, multi-service deployment matching the upstream Docker Compose topology, with optional Vexa Dashboard deployment.
-- `vexa-lite`: Single-container deployment intended for simpler setups, with optional Vexa Dashboard deployment.
-
-### Prerequisites
-
-- Kubernetes cluster (v1.22+ recommended)
-- Helm v3
-- Container images published to DockerHub (`vexaai/` namespace)
-
-### Image tags
-
-Charts default to `vexaai/*:latest`. For production, pin to a specific immutable tag:
+## Quick start (any cluster)
 
 ```bash
-helm install vexa ./deploy/helm/charts/vexa \
-  --set apiGateway.image.tag=260330-1415 \
-  --set adminApi.image.tag=260330-1415 \
-  --set meetingApi.image.tag=260330-1415
+# 1. Pin the image tag your build produced (build-once promotion), fill secrets.
+helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --create-namespace \
+  --set global.imageTag=YYMMDD-HHMM \
+  --set secrets.adminApiToken=$ADMIN_TOKEN \
+  --set secrets.internalApiSecret=$INTERNAL_API_SECRET \
+  --set secrets.transcriptionServiceToken=$STT_TOKEN \
+  --wait --timeout 10m
+
+# 2. Watch it come up, then probe the front door.
+kubectl -n vexa rollout status deploy/vexa-vexa-gateway
+kubectl -n vexa port-forward svc/vexa-vexa-gateway 8000:8000 &
+curl -sf localhost:8000/health
 ```
 
-Mutable tags (`:staging`, `:latest`) are pointers managed by `make promote-staging` / `make promote-latest` in the compose Makefile. They always point to a known immutable `YYMMDD-HHMM` build.
-
-(`values-staging.yaml` was deprecated and removed in v0.10.5 — `values.yaml` + your operator-side overlay is the canonical pattern; `values-test.yaml` is the test-infrastructure config and remains.)
-
-### Quickstart
-
-Install the full chart from this repo:
+## Local k3s smoke (no registry)
 
 ```bash
-helm install vexa ./deploy/helm/charts/vexa \
-  --set secrets.adminApiToken=CHANGE_ME \
-  --set secrets.transcriptionServiceToken=CHANGE_ME \
-  --set database.host=postgres \
-  --set redisConfig.url=redis://redis:6379
+make -C deploy/helm test     # static gate:helm — lint + render assertions, no cluster
+make -C deploy/helm smoke    # build 5 images → import into k3s containerd → install → status
+make -C deploy/helm down     # uninstall + drop namespace
 ```
 
-Install the lite chart:
+`smoke` needs `sudo` (k3s writes a root-only kubeconfig at `/etc/rancher/k3s/k3s.yaml`) and a local
+Docker to build the images. It proves the control plane stands up and `/health` is green.
 
-```bash
-helm install vexa-lite ./deploy/helm/charts/vexa-lite \
-  --set vexa.databaseUrl=postgres://USER:PASS@HOST:5432/vexa \
-  --set vexa.adminApiToken=CHANGE_ME \
-  --set vexa.transcriptionServiceToken=CHANGE_ME
-```
+## Configuration that matters
 
-### Configuration
+| Knob | Default | Notes |
+|---|---|---|
+| `global.imageTag` | `""` | Set to a pinned `YYMMDD-HHMM` tag — overrides every service tag (build-once). |
+| `runtime.backend` | `k8s` | `k8s` spawns Pods via RBAC (real cloud); `docker` mounts the host socket (single-node only); `process` runs child processes. |
+| `secrets.*` | placeholders | `adminApiToken`, `internalApiSecret`, `transcriptionServiceToken`, `dispatchSigningKey`, `nextauthSecret`, `anthropic*`. Or set `secrets.existingSecretName` (must carry `ADMIN_API_TOKEN`, `INTERNAL_API_SECRET`, `TRANSCRIPTION_SERVICE_TOKEN`, `VEXA_DISPATCH_SIGNING_KEY`, `NEXTAUTH_SECRET`). |
+| `postgres.enabled` / `redis.enabled` / `minio.enabled` | `true` | Flip to `false` to use managed backing; then set `database.*` / `redisConfig.*` and a pre-existing `postgres.credentialsSecretName`. |
+| `pgbouncer.enabled` | `false` | Transaction pooler for managed Postgres with a fixed slot budget. |
+| `terminal.enabled` | `true` | The web UI. Set `terminal.publicUrl` (NEXTAUTH_URL/TERMINAL_URL) when fronted by ingress; add OAuth via `terminal.extraEnv`. |
+| `ingress.enabled` | `false` | Fronts the **terminal** by default; set `host`/`className`/`tls`. Add a second path to `gateway` to also expose the raw API. |
+| `minio.service.type` | `ClusterIP` | `NodePort` to reach presigned download URLs browser-side on dev clusters. |
 
-### vexa
+## Known boundaries (v0.12)
 
-Key values in `charts/vexa/values.yaml`:
+- **Bot spawn** works on k8s (the bot's config arrives as one env var). **Agent-worker** Pods mount
+  the workspace store with **per-mount tenant isolation**: one `subPath` + `readOnly` volumeMount per
+  granted workspace against the store PVC (`runtime_kernel/mounts.py:k8s_volume_mounts`) — a worker's
+  filesystem contains only its dispatch's workspaces. Multi-node clusters need an **RWX** storage
+  class for the store PVC (NFS/Longhorn; k3s `local-path` is RWO-only — single node works), with
+  `agentApi.workspaces.accessMode: ReadWriteMany`.
+- The `runtime` image bundles `kubectl` for the k8s backend; the docker/process backends ignore it.
 
-- `secrets.adminApiToken`, `secrets.transcriptionServiceToken`: Required for auth and service communication.
-- `database.host`, `database.user`, `database.name`: Used by admin-api, meeting-api.
-- `redisConfig.url` (or `redisConfig.host`/`port`): Required if `redis.enabled=false`.
-- `meetingApi.recordingEnabled`: `"true"` (required) — enables audio recording in bot containers.
-- `runtimeApi.orchestrator`: `process` (default), `kubernetes` (K8s pods with RBAC), or `docker`.
-- `runtimeApi.browserImage`: Bot container image (defaults to meetingApi image).
-- `secrets.internalApiSecret`: Shared secret for gateway↔admin-api internal calls.
-- `secrets.vexaApiKey`: Pre-provisioned API key for dashboard proxy (optional).
-- `whisperLive.profile`: `cpu` or `gpu` (use with GPU resources and node selectors).
-- `ingress.*`: Optional ingress for `api-gateway`.
+## Contracts
 
-Bundled dev dependencies:
-
-- `postgres.enabled=true` and `redis.enabled=true` create in-cluster Postgres/Redis for development.
-
-### vexa-lite
-
-Key values in `charts/vexa-lite/values.yaml`:
-
-- `vexa.databaseUrl`, `vexa.adminApiToken`, `vexa.transcriptionServiceToken`: Required unless `vexa.existingSecret` is set.
-- `vexa.orchestrator`: Defaults to `process` (no Docker socket required).
-- `dashboard.enabled`: Deploys a separate dashboard container.
-- `ingress.*`: Optional ingress for the lite API and dashboard.
-
-### Notes
-
-- All images are on DockerHub under `vexaai/`. No GHCR setup required.
-- For production, pin image tags to specific `YYMMDD-HHMM` builds rather than using `:latest`.
-
-## Development Notes
-
-### Verification checklist
-
-After deploying, verify:
-
-1. `helm template` renders without errors
-2. `helm install --dry-run` succeeds
-3. All pods reach Running state (no CrashLoopBackOff)
-4. All services have endpoints
-5. Ingress routes correctly
-6. Secrets are created
-7. PVCs are bound
-8. Bot RBAC works (can spawn pods, if using kubernetes orchestrator)
-9. Inter-service connectivity (api-gateway can reach admin-api, meeting-api, etc.)
-10. Health endpoints respond on each service
-
-## Definition of Done
-
-
-| #   | Item                            | Weight | Status   | Evidence                                          | Last checked |
-| --- | ------------------------------- | ------ | -------- | ------------------------------------------------- | ------------ |
-| 1   | vexa chart installs on K8s      | 20     | PASS     | 60/60 smoke checks pass on LKE (589344)           | 2026-04-08   |
-| 2   | vexa-lite chart installs on K8s | 10     | SKIP     | Not tested                                        | —            |
-| 3   | Images pulled from registry     | 8      | PASS     | All 10 pods running with :dev tags                | 2026-04-08   |
-| 4   | Images built + pushed work      | 8      | PASS     | global.imageTag=0.10.0-260408-1826, all 7 pods running | 2026-04-09   |
-| 5   | DB load from dump               | 10     | PASS     | 1761 users, 9587 meetings, 507K transcriptions via pg-loader pod | 2026-04-08   |
-| 6   | Values documented               | 10     | PASS     | RBAC, orchestrator, recording, secrets documented | 2026-04-08   |
-| 7   | Image tags match chart defaults | 7      | PASS     | values-test.yaml uses :dev consistently           | 2026-04-08   |
-| 8   | Secrets management documented   | 10     | PASS     | internalApiSecret, vexaApiKey, adminApiToken      | 2026-04-08   |
-| 9   | Health probes configured        | 7      | PASS     | K8S_DEPLOYMENTS_READY + K8S_NO_CRASHLOOP checks   | 2026-04-08   |
-| 10  | Smoke checks pass               | 10     | PASS     | 60/60: docs 4, static 14, env 7, health 14, contracts 21 | 2026-04-08   |
-
-
-## Confidence
-
-Score: 90/100  
-Last validated: 2026-04-09  
-Tests: 60 smoke + dashboard + containers + webhooks + browser-session + auth-meeting  
-Ceiling: vexa-lite chart SKIP
-
+This is a composition layer — it owns no service code and consumes none of the `*.v1` schemas
+directly (each service vendors its own). It mirrors the [`deploy/compose`](../compose/) env contract.

@@ -1,0 +1,25 @@
+{
+  "segments": [
+    { "start": 12.4, "speaker": "Dmitry", "text": "Let's kick off with the Q3 roadmap." },
+    { "start": 31.9, "speaker": "Anna", "text": "Acme wants the SSO integration before renewal." }
+  ],
+  "data": {
+    "processed": {
+      "views": [
+        {
+          "id": "copilot-notes",
+          "kind": "cleaned_transcript",
+          "params": { "provider": "openai", "model": "gpt-5", "pipeline": "copilot.v1" },
+          "source_cursor": "1751673601000-4",
+          "updated_at": "2026-07-04T21:14:09Z",
+          "doc": {
+            "notes": [
+              { "id": "seg-1", "speaker": "Dmitry", "chapter": "Kickoff", "text": "I want to kick off with the Q3 roadmap.", "t": 12.4, "pass": 3, "frozen": true },
+              { "id": "seg-2", "speaker": "Anna", "chapter": "Customer asks", "text": "Acme wants the SSO integration before their renewal.", "t": 31.9, "pass": 2, "frozen": false }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

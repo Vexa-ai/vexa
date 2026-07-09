@@ -1,235 +1,169 @@
-.PHONY: all up up-local down test env preflight init-db build build-local push build-and-push set-latest set-dev setup-builder help _pull-image _run-container
+# =============================================================================
+# Vexa Lite (v0.12) — single-container build + deploy
+# =============================================================================
+# `make lite` (from repo root) → this Makefile's `all`: provisions PostgreSQL + MinIO sidecar
+# containers, pulls/builds the all-in-one image, runs it on the host network with the process
+# backend, and verifies the front doors. The app image is lean; postgres/minio stay external.
+.PHONY: all up down init-db test env preflight build push build-and-push set-latest set-dev setup-builder help
 
 # --- Paths ---
-ROOT := $(shell git rev-parse --show-toplevel)
-ENV_FILE := $(ROOT)/.env
-ENV_EXAMPLE := $(ROOT)/deploy/env-example
+ROOT       := $(shell git rev-parse --show-toplevel)
+ENV_FILE   := $(ROOT)/.env
+DOCKERFILE := $(ROOT)/deploy/lite/Dockerfile.lite
+CONTEXT    := $(ROOT)
 
-# DockerHub configuration
+# --- DockerHub / image ---
 DOCKERHUB_USER ?= vexaai
-IMAGE_NAME ?= vexa-lite
-TAG ?= dev
-
-# Multi-arch platforms
-PLATFORMS ?= linux/amd64,linux/arm64
-
-# Buildx builder name
-BUILDER_NAME ?= vexa-multiarch
-
-# Paths (Makefile is in deploy/lite/, Dockerfile is in same dir, context is repo root)
-DOCKERFILE := $(shell pwd)/Dockerfile.lite
-CONTEXT := $(shell pwd)/../..
-LOCAL_TAG := $(IMAGE_NAME):$(TAG)
-
-# Generate unique timestamp tag: YYMMDD-HHMM
-UNIQUE_TAG := $(shell date +%y%m%d-%H%M)
+IMAGE_NAME     ?= vexa-lite
+TAG            ?= dev
+LOCAL_TAG      := $(IMAGE_NAME):$(TAG)
+PLATFORMS      ?= linux/amd64,linux/arm64
+BUILDER_NAME   ?= vexa-multiarch
+UNIQUE_TAG     := $(shell date +%y%m%d-%H%M)
 UNIQUE_DOCKERHUB_TAG := $(DOCKERHUB_USER)/$(IMAGE_NAME):$(UNIQUE_TAG)
-LAST_TAG_FILE := .last-tag
+LAST_TAG_FILE  := $(ROOT)/deploy/lite/.last-tag
+
+# --- Network + sidecars + storage defaults ---
+# A user-defined bridge so the app's INTERNAL services live on the container's own loopback (no host
+# port collisions); only the front doors are published. postgres/minio join the same bridge and the
+# app reaches them by container name. Override HOST_*_PORT to avoid conflicts on a busy host.
+NETWORK         ?= vexa-lite-net
+PG_CONTAINER    ?= vexa-lite-postgres
+MINIO_CONTAINER ?= vexa-lite-minio
+APP_CONTAINER   ?= vexa-lite
+HOST_GATEWAY_PORT   ?= 8056
+HOST_DASHBOARD_PORT ?= 3000
+HOST_TERMINAL_PORT  ?= 3001
+HOST_AGENT_PORT     ?= 8100
+MINIO_ACCESS_KEY ?= vexa-access-key
+MINIO_SECRET_KEY ?= vexa-secret-key
+MINIO_BUCKET     ?= vexa
 
 define set_tag
-	@echo "Setting '$(1)' tag to point to $(2)..."
+	@echo "Setting '$(1)' → $(2)..."
 	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(IMAGE_NAME):$(1) $(DOCKERHUB_USER)/$(IMAGE_NAME):$(2)
-	@echo "'$(1)' tag updated to $(2)"
 endef
 
 help:
-	@echo "Vexa Lite Docker Build & Push (Multi-Arch)"
-	@echo ""
-	@echo "Usage:"
-	@echo "  make build              - Build locally for current platform (tagged as vexa-lite:dev)"
-	@echo "  make build-local        - Build locally and tag as vexaai/vexa-lite:dev (use with up-local)"
-	@echo "  make up                 - Pull from DockerHub and start"
-	@echo "  make up-local           - Start using locally built image (requires build-local first)"
-	@echo "  make push               - Build multi-arch (amd64+arm64), push with timestamp tag, update 'dev' tag"
-	@echo "  make build-and-push     - Alias for push"
-	@echo "  make set-latest [TAG=]  - Set 'latest' tag to specified tag (or last pushed)"
-	@echo "  make set-dev [TAG=]     - Set 'dev' tag to specified tag (or last pushed)"
-	@echo "  make setup-builder      - Create/bootstrap the multi-arch buildx builder"
-	@echo ""
-	@echo "Configuration:"
-	@echo "  PLATFORMS=$(PLATFORMS)"
+	@echo "Vexa Lite (v0.12)"
+	@echo "  make -C deploy/lite all     # provision + run + verify (this is `make lite` from root)"
+	@echo "  make -C deploy/lite down    # stop + remove app + sidecars"
+	@echo "  make -C deploy/lite build   # build the image locally (tagged :dev)"
+	@echo "  make -C deploy/lite push    # multi-arch build+push, move the 'dev' tag"
+	@echo "  make -C deploy/lite test    # probe the front doors"
 
-setup-builder:
-	@if ! docker buildx inspect $(BUILDER_NAME) >/dev/null 2>&1; then \
-		echo "Creating buildx builder '$(BUILDER_NAME)'..."; \
-		docker buildx create --name $(BUILDER_NAME) --driver docker-container --bootstrap; \
-	else \
-		echo "Builder '$(BUILDER_NAME)' already exists"; \
+# ── Deploy lifecycle ──────────────────────────────────────────────────────────────────────────────
+all: env preflight up init-db test
+	@HOST=$$(hostname -I 2>/dev/null | awk '{print $$1}'); HOST=$${HOST:-localhost}; \
+	echo ""; echo "Vexa Lite is running."; \
+	echo "  Dashboard: http://$$HOST:$(HOST_DASHBOARD_PORT)"; \
+	echo "  Terminal:  http://$$HOST:$(HOST_TERMINAL_PORT)"; \
+	echo "  API docs:  http://$$HOST:$(HOST_GATEWAY_PORT)/docs"; \
+	echo "  Agent API: http://$$HOST:$(HOST_AGENT_PORT)"
+
+## env — ensure a repo-root .env exists (seed from compose/.env if present, else a minimal template).
+env:
+	@if [ ! -f "$(ENV_FILE)" ]; then \
+		if [ -f "$(ROOT)/deploy/compose/.env" ]; then \
+			echo "Seeding $(ENV_FILE) from deploy/compose/.env"; cp "$(ROOT)/deploy/compose/.env" "$(ENV_FILE)"; \
+		else \
+			echo "Creating minimal $(ENV_FILE) (edit TRANSCRIPTION_SERVICE_* for transcripts)"; \
+			printf 'ADMIN_TOKEN=changeme\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=latest\n' > "$(ENV_FILE)"; \
+		fi; \
 	fi
 
-build:
-	@echo "Building $(LOCAL_TAG) for current platform..."
-	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
-	@echo "Build complete: $(LOCAL_TAG)"
+## preflight — Docker must be up.
+preflight:
+	@docker info > /dev/null 2>&1 || { echo "ERROR: Docker is not running."; exit 1; }
 
-build-local:
-	@echo "Building $(DOCKERHUB_USER)/$(IMAGE_NAME):$(TAG) from local source..."
-	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) -t $(DOCKERHUB_USER)/$(IMAGE_NAME):$(TAG) --label local-build=true $(CONTEXT)
-	@echo "Build complete — use 'make up-local' to run without pulling from DockerHub"
+## up — a bridge network, postgres + minio sidecars (by name), then the all-in-one container with
+## only the front doors published. Internal services live on the container's own loopback.
+up: preflight
+	@set -e; \
+	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
+	ADMIN_TK=$$(grep -E '^ADMIN_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); ADMIN_TK=$${ADMIN_TK:-changeme}; \
+	TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); \
+	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); \
+	IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); IMAGE_TAG=$${IMAGE_TAG:-latest}; \
+	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	echo "Starting PostgreSQL ($(PG_CONTAINER))..."; \
+	if ! docker ps -q -f name=$(PG_CONTAINER) | grep -q .; then \
+		docker rm -f $(PG_CONTAINER) 2>/dev/null || true; \
+		docker run -d --name $(PG_CONTAINER) --network $(NETWORK) --restart unless-stopped \
+			-e POSTGRES_DB=vexa -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+			-e TZ=UTC -e PGTZ=UTC \
+			-v vexa-lite-pgdata:/var/lib/postgresql/data \
+			postgres:17-alpine -c idle_in_transaction_session_timeout=60000 > /dev/null; \
+		for i in $$(seq 1 24); do docker exec $(PG_CONTAINER) pg_isready -U postgres -d vexa -q 2>/dev/null && break; sleep 2; done; \
+	fi; echo "  ✓ PostgreSQL ready"; \
+	echo "Starting MinIO ($(MINIO_CONTAINER))..."; \
+	if ! docker ps -q -f name=$(MINIO_CONTAINER) | grep -q .; then \
+		docker rm -f $(MINIO_CONTAINER) 2>/dev/null || true; \
+		docker run -d --name $(MINIO_CONTAINER) --network $(NETWORK) --restart unless-stopped \
+			-e MINIO_ROOT_USER=$(MINIO_ACCESS_KEY) -e MINIO_ROOT_PASSWORD=$(MINIO_SECRET_KEY) \
+			-v vexa-lite-miniodata:/data \
+			minio/minio:latest server /data --console-address ":9001" > /dev/null; \
+		sleep 4; \
+		docker run --rm --network $(NETWORK) --entrypoint sh minio/mc:latest -c \
+			"mc alias set vexa http://$(MINIO_CONTAINER):9000 $(MINIO_ACCESS_KEY) $(MINIO_SECRET_KEY) && mc mb --ignore-existing vexa/$(MINIO_BUCKET)" >/dev/null 2>&1 || true; \
+	fi; echo "  ✓ MinIO ready"; \
+	echo "Starting Vexa Lite ($$IMG)..."; \
+	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
+	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
+		--env-file $(ENV_FILE) \
+		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_DASHBOARD_PORT):3000 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
+		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
+		-e ADMIN_API_TOKEN=$$ADMIN_TK -e ADMIN_TOKEN=$$ADMIN_TK \
+		-e TRANSCRIPTION_SERVICE_URL=$$TX_URL -e TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN \
+		-e MINIO_ENDPOINT=$(MINIO_CONTAINER):9000 -e MINIO_ACCESS_KEY=$(MINIO_ACCESS_KEY) \
+		-e MINIO_SECRET_KEY=$(MINIO_SECRET_KEY) -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
+		-e VEXA_PUBLIC_API_URL=http://localhost:$(HOST_GATEWAY_PORT) \
+		-e TERMINAL_PUBLIC_URL=http://localhost:$(HOST_TERMINAL_PORT) \
+		$$IMG > /dev/null; \
+	echo "  Waiting for the gateway (up to 3 min)..."; \
+	for i in $$(seq 1 36); do curl -sf -o /dev/null http://localhost:$(HOST_GATEWAY_PORT)/health 2>/dev/null && break; sleep 5; done; \
+	echo "  ✓ Vexa Lite running"
+
+## init-db — schema converges on each service's startup (admin/meeting ensure_schema); no-op hook.
+init-db:
+	@echo "  ✓ Schema converges in-process on service startup"
+
+## test — probe the published front doors.
+test:
+	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_DASHBOARD_PORT):dashboard" "$(HOST_TERMINAL_PORT):terminal"; do \
+		PORT=$${ep%%:*}; NAME=$${ep##*:}; \
+		if curl -sf -o /dev/null http://localhost:$$PORT/ 2>/dev/null || curl -sf -o /dev/null http://localhost:$$PORT/health 2>/dev/null; then \
+			echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding (:$$PORT)"; FAIL=1; fi; \
+	done; exit $$FAIL
+
+## down — stop + remove app + sidecars + network (volumes persist; `docker volume rm vexa-lite-pgdata vexa-lite-miniodata` to wipe).
+down:
+	@echo "Stopping Vexa Lite..."
+	@docker rm -f $(APP_CONTAINER) $(PG_CONTAINER) $(MINIO_CONTAINER) 2>/dev/null || true
+	@docker network rm $(NETWORK) 2>/dev/null || true
+	@echo "  ✓ Stopped (data volumes kept)"
+
+# ── Image build / publish ──────────────────────────────────────────────────────────────────────────
+build: preflight
+	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
+	@echo "Built $(LOCAL_TAG)"
+
+setup-builder:
+	@docker buildx inspect $(BUILDER_NAME) >/dev/null 2>&1 || \
+		docker buildx create --name $(BUILDER_NAME) --driver docker-container --bootstrap
 
 push: setup-builder
-	@echo "Building multi-arch $(UNIQUE_DOCKERHUB_TAG) for $(PLATFORMS)..."
-	docker buildx build \
-		--builder $(BUILDER_NAME) \
-		--platform $(PLATFORMS) \
-		-f $(DOCKERFILE) \
-		-t $(UNIQUE_DOCKERHUB_TAG) \
-		--push \
-		$(CONTEXT)
+	docker buildx build --builder $(BUILDER_NAME) --platform $(PLATFORMS) \
+		-f $(DOCKERFILE) -t $(UNIQUE_DOCKERHUB_TAG) --push $(CONTEXT)
 	@echo "$(UNIQUE_TAG)" > $(LAST_TAG_FILE)
-	@echo "Push complete: $(UNIQUE_DOCKERHUB_TAG)"
 	$(call set_tag,dev,$(UNIQUE_TAG))
 
 build-and-push: push
 
 set-latest:
-	@if [ -z "$(TAG)" ]; then \
-		if [ -f $(LAST_TAG_FILE) ]; then \
-			TAG_TO_USE=$$(cat $(LAST_TAG_FILE)); \
-		else \
-			echo "Error: No TAG specified and $(LAST_TAG_FILE) not found"; exit 1; \
-		fi; \
-	else \
-		TAG_TO_USE=$(TAG); \
-	fi; \
-	echo "Setting 'latest' tag to point to $$TAG_TO_USE..."; \
-	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(IMAGE_NAME):latest $(DOCKERHUB_USER)/$(IMAGE_NAME):$$TAG_TO_USE; \
-	echo "'latest' tag updated to $$TAG_TO_USE"
+	@T=$${TAG:-$$(cat $(LAST_TAG_FILE) 2>/dev/null)}; [ -n "$$T" ] || { echo "No TAG / .last-tag"; exit 1; }; \
+	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(IMAGE_NAME):latest $(DOCKERHUB_USER)/$(IMAGE_NAME):$$T
 
 set-dev:
-	@if [ -z "$(TAG)" ]; then \
-		if [ -f $(LAST_TAG_FILE) ]; then \
-			TAG_TO_USE=$$(cat $(LAST_TAG_FILE)); \
-		else \
-			echo "Error: No TAG specified and $(LAST_TAG_FILE) not found"; exit 1; \
-		fi; \
-	else \
-		TAG_TO_USE=$(TAG); \
-	fi; \
-	echo "Setting 'dev' tag to point to $$TAG_TO_USE..."; \
-	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(IMAGE_NAME):dev $(DOCKERHUB_USER)/$(IMAGE_NAME):$$TAG_TO_USE; \
-	echo "'dev' tag updated to $$TAG_TO_USE"
-
-# ============================================================================
-# Deployment (make lite from repo root)
-# ============================================================================
-
--include $(ENV_FILE)
-
-all: env preflight up init-db test
-	@HOST_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
-	HOST=$${HOST_IP:-localhost}; \
-	echo ""; \
-	echo "Vexa Lite is running."; \
-	echo "  Dashboard: http://$$HOST:3000"; \
-	echo "  API docs:  http://$$HOST:8056/docs"
-
-# --- Environment (reuse compose env target) ---
-env:
-	@$(MAKE) --no-print-directory -C $(ROOT)/deploy/compose env
-
-# --- Preflight (reuse compose preflight target) ---
-preflight:
-	@$(MAKE) --no-print-directory -C $(ROOT)/deploy/compose preflight
-
-# --- Up ---
-up:
-	@$(MAKE) --no-print-directory _pull-image _run-container
-
-up-local:
-	@IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	IMAGE_TAG=$${IMAGE_TAG:-latest}; \
-	if ! docker image inspect $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG 2>/dev/null | \
-		python3 -c "import sys,json; l=json.load(sys.stdin)[0]['Config'].get('Labels') or {}; exit(0 if l.get('local-build')=='true' else 1)" 2>/dev/null; then \
-		echo "ERROR: No local build found. Run 'make build-local' first."; exit 1; \
-	fi
-	@$(MAKE) --no-print-directory _run-container
-
-_pull-image:
-	@if ! docker info > /dev/null 2>&1; then echo "ERROR: Docker is not running."; exit 1; fi
-	@IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	IMAGE_TAG=$${IMAGE_TAG:-latest}; \
-	echo "Pulling $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG..."; \
-	docker pull $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG
-
-_run-container:
-	@if ! docker info > /dev/null 2>&1; then echo "ERROR: Docker is not running."; exit 1; fi
-	@IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	IMAGE_TAG=$${IMAGE_TAG:-latest}; \
-	TX_URL=$$(grep -E '^LITE_TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	TX_URL=$${TX_URL:-$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2)}; \
-	TX_TOKEN=$$(grep -E '^LITE_TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	TX_TOKEN=$${TX_TOKEN:-$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2)}; \
-	ADMIN_TK=$$(grep -E '^ADMIN_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	ADMIN_TK=$${ADMIN_TK:-changeme}; \
-	echo "Starting PostgreSQL..."; \
-	if docker ps -q -f name=vexa-postgres 2>/dev/null | grep -q .; then \
-		echo "  PostgreSQL already running"; \
-	else \
-		docker rm -f vexa-postgres 2>/dev/null || true; \
-		docker run -d --name vexa-postgres --network host \
-			-e POSTGRES_DB=vexa \
-			-e POSTGRES_USER=postgres \
-			-e POSTGRES_PASSWORD=postgres \
-			postgres:17-alpine \
-			-c listen_addresses=127.0.0.1 \
-			-c idle_in_transaction_session_timeout=60000 > /dev/null; \
-		echo "  Waiting for PostgreSQL..."; \
-		for i in $$(seq 1 12); do \
-			docker exec vexa-postgres pg_isready -U postgres -d vexa -q 2>/dev/null && break; \
-			sleep 5; \
-		done; \
-	fi; \
-	echo "  ✓ PostgreSQL ready"; \
-	echo "Starting Vexa Lite..."; \
-	docker rm -f vexa-lite 2>/dev/null || true; \
-	docker run -d --name vexa-lite --shm-size=2g --network host \
-		-v vexa-lite-recordings:/var/lib/vexa/recordings \
-		--env-file $(ENV_FILE) \
-		-e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/vexa \
-		-e DB_PASSWORD=postgres \
-		-e DB_SSL_MODE=disable \
-		-e REDIS_URL=redis://localhost:6379/0 \
-		-e ADMIN_API_TOKEN=$$ADMIN_TK \
-		-e VEXA_AUTH_COOKIE_NAME=vexa-token-lite \
-		-e VEXA_USER_INFO_COOKIE_NAME=vexa-user-info-lite \
-		-e TRANSCRIPTION_SERVICE_URL=$$TX_URL \
-		-e TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN \
-		$(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG > /dev/null; \
-	echo "  Waiting for services (up to 2 min)..."; \
-	for i in $$(seq 1 24); do \
-		curl -sf -o /dev/null http://localhost:8056/ 2>/dev/null && break; \
-		sleep 5; \
-	done; \
-	echo "  ✓ Vexa Lite running"
-
-# --- Init DB ---
-init-db:
-	@echo "Running schema sync..."
-	@docker exec vexa-lite python3 -c \
-		"import asyncio; from admin_models.database import init_db; asyncio.run(init_db())" 2>/dev/null || true
-	@docker exec vexa-lite python3 -c \
-		"import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())" 2>/dev/null || true
-	@echo "  ✓ Schema sync complete"
-
-# --- Test ---
-test:
-	@echo "Checking services..."
-	@for ep in "8056:API Gateway" "8057:Admin API" "3000:Dashboard"; do \
-		PORT=$${ep%%:*}; \
-		NAME=$${ep##*:}; \
-		if curl -sf -o /dev/null http://localhost:$$PORT/ 2>/dev/null; then \
-			echo "  ✓ $$NAME (port $$PORT)"; \
-		else \
-			echo "  ✗ $$NAME not responding (port $$PORT)"; \
-		fi; \
-	done
-
-# --- Down ---
-down:
-	@echo "Stopping Vexa Lite..."
-	@docker stop vexa-lite 2>/dev/null || true
-	@docker rm vexa-lite 2>/dev/null || true
-	@docker stop vexa-postgres 2>/dev/null || true
-	@docker rm vexa-postgres 2>/dev/null || true
-	@echo "  ✓ Stopped"
+	@T=$${TAG:-$$(cat $(LAST_TAG_FILE) 2>/dev/null)}; [ -n "$$T" ] || { echo "No TAG / .last-tag"; exit 1; }; \
+	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(IMAGE_NAME):dev $(DOCKERHUB_USER)/$(IMAGE_NAME):$$T

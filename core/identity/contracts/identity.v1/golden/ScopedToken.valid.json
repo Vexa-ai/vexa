@@ -1,0 +1,7 @@
+{
+  "subject": "42",
+  "scopes": ["bot", "tx"],
+  "expires_at": "2999-01-01T00:00:00Z",
+  "email": "owner@vexa.ai",
+  "issued_at": "2026-06-20T12:00:00Z"
+}

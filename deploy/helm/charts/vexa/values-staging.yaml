@@ -1,0 +1,78 @@
+# LKE (Akamai) staging overlay for the v0.12 control plane.
+#
+# Deployed into its OWN namespace (vexa-v012-staging) so the live 0.11 `vexa-platform` staging in
+# `vexa-staging` is untouched. Secrets come from a pre-created Secret (see deploy/helm/README, never
+# in this file); transcription reuses the funded staging tx-gateway across namespaces.
+#
+#   kubectl --context lke590708-ctx create namespace vexa-v012-staging
+#   # create the vexa-v012-secrets Secret (ADMIN_API_TOKEN, INTERNAL_API_SECRET,
+#   #   TRANSCRIPTION_SERVICE_TOKEN, VEXA_DISPATCH_SIGNING_KEY) from vexa-secrets (sops, in-memory)
+#   helm --kube-context lke590708-ctx upgrade --install vexa deploy/helm/charts/vexa \
+#     -n vexa-v012-staging -f deploy/helm/charts/vexa/values-staging.yaml --wait
+
+global:
+  imageTag: "0.12-staging"     # pinned immutable tag pushed to DockerHub (build-once)
+  imagePullPolicy: Always
+  # LKE node pools are tainted vexa.ai/pool; staging workloads run on the `temp` pool (mirrors the
+  # live 0.11 staging). Pin there + tolerate the taint, else pods stay Pending (no schedulable node).
+  nodeSelector:
+    vexa.ai/pool: temp
+  tolerations:
+    - key: vexa.ai/pool
+      operator: Equal
+      value: temp
+      effect: NoSchedule
+
+# Credentials live in a pre-created Secret (sops-decrypted in-memory), not in values.
+secrets:
+  existingSecretName: "vexa-v012-secrets"
+
+runtime:
+  backend: "k8s"               # real cloud spawn path (SA + RBAC + kubectl)
+
+# Modest single-replica footprint on the shared staging cluster (raise for load tests).
+gateway:
+  replicaCount: 1
+adminApi:
+  replicaCount: 1
+meetingApi:
+  replicaCount: 1
+  # Reuse the funded staging transcription gateway (cross-namespace DNS). Token is in the Secret.
+  transcriptionServiceUrl: "http://vexa-platform-transcription-gateway.vexa-staging.svc.cluster.local:8084/v1/audio/transcriptions"
+agentApi:
+  replicaCount: 1
+  workspaces:
+    size: 2Gi
+
+terminal:
+  replicaCount: 1
+  # Served at the staging dashboard hostname (caddy swap). NEXTAUTH_URL/TERMINAL_URL must match the
+  # external https origin for cookie security + login redirects.
+  publicUrl: "https://dashboard.staging.vexa.ai"
+
+# LKE block storage (default SC is linode-block-storage-retain; leave SC unset to use it).
+postgres:
+  persistence:
+    size: 5Gi
+redis:
+  persistence:
+    size: 2Gi
+minio:
+  persistence:
+    size: 5Gi
+
+ingress:
+  enabled: false               # reach via port-forward for the first proof; add ingress/LB next
+
+# Single replica ⇒ no PDBs.
+podDisruptionBudgets:
+  gateway:
+    enabled: false
+  adminApi:
+    enabled: false
+  meetingApi:
+    enabled: false
+  runtime:
+    enabled: false
+  agentApi:
+    enabled: false

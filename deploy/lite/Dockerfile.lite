@@ -1,316 +1,235 @@
+# syntax=docker/dockerfile:1
 # =============================================================================
-# Vexa Lite - All-in-One Docker Image
+# Vexa Lite (v0.12) — all-in-one Docker image
 # =============================================================================
+# The single-container analog of deploy/compose. One container runs the whole v0.12 control
+# plane — gateway (:8056) · admin-api (:8001) · meeting-api (:8080) · runtime (:8090) ·
+# agent-api (:8100) · dashboard (:3000) — over an internal redis + a shared Xvfb/PulseAudio
+# stack. The runtime uses the PROCESS backend (RUNTIME_BACKEND=process): bots and agent
+# workers run as CHILD PROCESSES, not docker-socket-spawned containers — so lite needs NO
+# docker socket. PostgreSQL + MinIO are external (the `make lite` sidecars).
 #
-# Single container with all Vexa services:
-# - API Gateway (:8056) — main entry point, routes to all services
-# - Admin API (:8057) — user/token management
-# - Meeting API (:8080) — bot orchestration (process mode via Runtime API)
-# - Runtime API (:8090) — container lifecycle (process backend, no Docker)
-# - Agent API (:8100) — AI agent chat runtime
-# - Dashboard (:3000) — Next.js web UI
-# - Vexa Bot (Node.js/Playwright) — spawned as child processes
-# - MCP Service (:18888) — Model Context Protocol
-# - TTS Service (:8059) — text-to-speech
+# Self-contained: built on the official Playwright image (the bot pins playwright 1.56.0) and
+# installs its own browser/X11/audio stack — it does NOT depend on the bot's published
+# meet-join-env base. The bot workspace is built from source in the bot-builder stage below.
 #
-# Build:
-#   docker build -f deploy/lite/Dockerfile.lite -t vexa-lite .
-#
-# Run:
-#   docker run -d \
-#     -p 8056:8056 -p 3000:3000 \
-#     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
-#     -e ADMIN_API_TOKEN="your-secret-token" \
-#     -e TRANSCRIPTION_SERVICE_URL="http://host:8083/v1/audio/transcriptions" \
-#     -e TRANSCRIPTION_SERVICE_TOKEN="<api-key>" \
-#     vexa-lite
+#   Build:  docker build -f deploy/lite/Dockerfile.lite -t vexa-lite:dev .   (context = repo root)
+#   Run:    see deploy/lite/Makefile (`make lite`)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Base Image: Playwright with browsers pre-installed
+# Stage 1: dashboard-builder — the vendored Next.js app (clients/dashboard) standalone build.
+# Mirrors clients/dashboard/Dockerfile; baked to talk to the in-container gateway on :8056.
 # -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS base
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends --fix-missing \
-    python3 \
-    python3-pip \
-    python3-venv \
-    python3-dev \
-    build-essential \
-    gcc \
-    g++ \
-    xvfb \
-    x11vnc \
-    xdotool \
-    xclip \
-    novnc \
-    python3-websockify \
-    fluxbox \
-    pulseaudio \
-    ffmpeg \
-    libsndfile1 \
-    supervisor \
-    postgresql-client \
-    redis-tools \
-    redis-server \
-    awscli \
-    curl \
-    wget \
-    git \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && usermod -aG pulse-access root
-
-# Create directory structure
+FROM node:20-alpine AS dashboard-builder
 WORKDIR /app
-RUN mkdir -p \
-    /app/api-gateway \
-    /app/admin-api \
-    /app/meeting-api \
-    /app/runtime-api \
-    /app/agent-api \
-    /app/vexa-bot \
-    /app/mcp \
-    /app/tts-service \
-    /app/admin-models \
-    /app/schema-sync \
-    /var/log/supervisor \
-    /var/log/vexa-bots \
-    /var/lib/redis \
-    /var/run/redis
 
-# -----------------------------------------------------------------------------
-# Python Dependencies
-# -----------------------------------------------------------------------------
-
-COPY deploy/lite/requirements.txt /tmp/requirements.txt
-COPY services/mcp/requirements.txt /tmp/requirements-mcp.txt
-
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
-RUN rm -f /tmp/requirements-*.txt
-
-# Copy shared libraries
-COPY libs/schema-sync /app/schema-sync
-COPY libs/admin-models /app/admin-models
-
-# meeting-api package must be importable by api-gateway (for schemas, security_headers)
-# We copy the full service and add its parent to PYTHONPATH
-COPY services/meeting-api/ /app/meeting-api/
-
-ENV PYTHONPATH="/app/schema-sync:/app/admin-models:/app/meeting-api${PYTHONPATH:+:${PYTHONPATH}}"
-
-# Verify imports
-RUN python3 -c "from admin_models.models import User; print('admin_models OK')" \
-    && python3 -c "from meeting_api.schemas import Platform; print('meeting_api OK')"
-
-# -----------------------------------------------------------------------------
-# Application Code — Python Services
-# -----------------------------------------------------------------------------
-
-# API Gateway
-COPY services/api-gateway/ /app/api-gateway/
-
-# Admin API
-COPY services/admin-api/ /app/admin-api/
-
-# Runtime API (process backend — no Docker socket needed)
-COPY services/runtime-api/ /app/runtime-api/
-
-# Agent API
-COPY services/agent-api/ /app/agent-api/
-
-# MCP Service
-COPY services/mcp/ /app/mcp/
-
-# TTS Service
-COPY services/tts-service/ /app/tts-service/
-
-# -----------------------------------------------------------------------------
-# Node.js Bot Build
-# -----------------------------------------------------------------------------
-
-COPY services/vexa-bot/core/ /app/vexa-bot/
-RUN chmod +x /app/vexa-bot/entrypoint.sh
-# Entrypoint references /app/vexa-bot/core/ — symlink to self for compatibility
-RUN ln -sf /app/vexa-bot /app/vexa-bot/core
-# LITE-ONLY: per-bot X display isolation so concurrent in-process bots don't
-# collide on the shared :99 (humanized XTEST is screen-global). Override the bot
-# entrypoint with a wrapper that claims a dedicated Xvfb display, then execs the
-# UNMODIFIED core entrypoint. Confined to the lite image — core/compose/helm untouched.
-COPY deploy/lite/bot-slot-wrapper.sh /app/vexa-bot/bot-slot-wrapper.sh
-RUN mv /app/vexa-bot/entrypoint.sh /app/vexa-bot/entrypoint.real.sh \
- && cp /app/vexa-bot/bot-slot-wrapper.sh /app/vexa-bot/entrypoint.sh \
- && chmod +x /app/vexa-bot/entrypoint.sh /app/vexa-bot/entrypoint.real.sh
-WORKDIR /app/vexa-bot
-RUN npm ci --omit=dev 2>/dev/null || npm install \
-    && npm run build
-# LITE-ONLY: make Chrome's CDP debug port (9222) and the Node relay (9223) per-bot so
-# concurrent in-process bots don't collide. The 9222 collision is FATAL (Chrome: "Cannot
-# start http server for devtools" → launch timeout → bot dies). Patch the COMPILED dist
-# in the lite image only — core source and compose/helm bot images are untouched, so they
-# need no re-test. The wrapper sets VEXA_CDP_PORT/VEXA_RELAY_PORT per slot; defaults
-# (9222/9223) preserve single-bot behaviour. grep-guarded so a string drift fails the build
-# loudly instead of silently no-op'ing.
-# CDP port patching is now in source (constans.ts / index.ts) — no sed needed here.
-RUN npx playwright install msedge --with-deps || true
-RUN node build-browser-utils.js || true
-
-# -----------------------------------------------------------------------------
-# Dashboard Build (Next.js)
-# -----------------------------------------------------------------------------
-
-WORKDIR /app
-RUN mkdir -p /app/dashboard-build
-
-# Copy transcript-rendering dependency
 COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
 COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
+COPY clients/dashboard/package.json ./
+RUN sed -i 's|"@vexaai/transcript-rendering": "file:../../packages/transcript-rendering"|"@vexaai/transcript-rendering": "file:/transcript-rendering"|' package.json \
+ && npm install --ignore-scripts --no-audit --no-fund \
+ && rm -rf node_modules/@vexaai/transcript-rendering && cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
 
-# Copy dashboard source (package.json only — no lockfile, to avoid path mismatch after sed)
-COPY services/dashboard/package.json /app/dashboard-build/
-RUN cd /app/dashboard-build && \
-    sed -i 's|file:../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
-    npm install --ignore-scripts --legacy-peer-deps && \
-    rm -rf node_modules/@vexaai/transcript-rendering && \
-    cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
+COPY clients/dashboard/src ./src
+COPY clients/dashboard/public ./public
+COPY clients/dashboard/scripts ./scripts
+COPY clients/dashboard/next.config.ts clients/dashboard/tsconfig.json clients/dashboard/postcss.config.mjs clients/dashboard/eslint.config.mjs clients/dashboard/components.json ./
+# next.config.ts bakes the /ws + /b rewrites from VEXA_API_URL at build time. Lite's front door
+# is the in-container gateway on localhost:8056.
+ENV VEXA_API_URL=http://localhost:8056 \
+    NEXT_PUBLIC_VEXA_OSS_VERSION=0.12.0 \
+    NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=2026-06-21
+RUN npm run build
 
-COPY services/dashboard/src /app/dashboard-build/src
-COPY services/dashboard/public /app/dashboard-build/public
-# v0.10.5.3 Pack D-1 (#265 follow-up): scripts/ contains generate-release-version.js
-# which the package.json prebuild hook invokes. Without it, npm run build fails
-# with `Cannot find module .../scripts/generate-release-version.js`.
-COPY services/dashboard/scripts /app/dashboard-build/scripts
-# The dashboard release-version generator validates any env/build-arg override
-# against the canonical VERSION and Chart.yaml copied into /repo. That keeps
-# Lite's embedded dashboard from shipping a stale visible release identity.
-COPY VERSION /repo/VERSION
-COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
-ARG NEXT_PUBLIC_VEXA_OSS_VERSION
-ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
-ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
-ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
-ENV VEXA_REPO_ROOT=/repo
-COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs /app/dashboard-build/
-COPY services/dashboard/components.json /app/dashboard-build/
-# No tailwind.config — postcss handles it
+# -----------------------------------------------------------------------------
+# Stage 2: bot-builder — build the @vexa/bot workspace slice from source.
+# Mirrors core/meetings/services/bot/Dockerfile (builder), but on the official Playwright
+# image instead of the published meet-join-env base. Browsers come from /ms-playwright.
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS bot-builder
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    CI=1
+RUN corepack enable && corepack prepare pnpm@11.7.0 --activate && pnpm --version
 
-# Build-time env: rewrites in next.config.ts bake VEXA_API_URL into routes-manifest
-ENV VEXA_API_URL=http://localhost:8056
-RUN cd /app/dashboard-build && npm run build && npm run assert-release-version
+WORKDIR /build
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json turbo.json ./
+COPY core ./core
+COPY scripts ./scripts
+RUN --mount=type=cache,id=pnpm-store-lite,target=/pnpm/store \
+    pnpm install --frozen-lockfile=false
+# Build the page-side capture bricks first (browser bundles, not bot deps), then @vexa/bot + deps.
+RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" run build
+RUN pnpm --filter "@vexa/bot..." run build
+RUN test -f /build/core/meetings/services/bot/dist/index.js \
+ && test -s /build/core/meetings/services/bot/dist/browser-utils.global.js
+# Mixed-lane (Zoom/Teams) diarization model — best-effort; the gmeet lane never loads it, so a
+# restricted-network build still succeeds (the lane simply downloads on first use if reachable).
+ENV VEXA_HF_CACHE=/opt/hf-cache
+RUN cd /build && node core/meetings/services/bot/warm-hf-cache.mjs || echo "[bot-builder] HF cache warm skipped"
 
-# Move standalone output to final location
-# Next.js standalone: .next/standalone/ has server.js + node_modules
-# .next/standalone/.next/ has build artifacts (BUILD_ID, server/)
-# .next/static/ has static assets (must be at .next/static/ relative to server.js)
-RUN cp -r /app/dashboard-build/.next/standalone /app/dashboard-standalone && \
-    mkdir -p /app/dashboard && \
-    cp -r /app/dashboard-standalone/* /app/dashboard/ && \
-    cp -r /app/dashboard-standalone/.next /app/dashboard/.next 2>/dev/null || true && \
-    cp -r /app/dashboard-build/.next/static /app/dashboard/.next/static && \
-    cp -r /app/dashboard-build/public /app/dashboard/public 2>/dev/null || true && \
-    rm -rf /app/dashboard-standalone
+# -----------------------------------------------------------------------------
+# Stage 2b: terminal-builder — the agent-domain workbench (clients/terminal). A Next.js app run
+# under its OWN custom server (server.mjs: SSE relay + /ws upgrade proxy), so we keep the full
+# runtime node_modules (npm prune --omit=dev) rather than a standalone trace. Built on the SAME
+# Playwright base as the final stage so any native addon (ws' bufferutil) is ABI-compatible.
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS terminal-builder
+WORKDIR /app/terminal
+COPY clients/terminal/package.json clients/terminal/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY clients/terminal/ ./
+# next build needs the dev deps (typescript/tailwind); prune them after so the runtime tree is lean.
+RUN npm run build && npm prune --omit=dev
 
-COPY services/dashboard/docker-entrypoint.sh /app/dashboard/docker-entrypoint.sh
-RUN chmod +x /app/dashboard/docker-entrypoint.sh
+# -----------------------------------------------------------------------------
+# Stage 3: final — assemble the all-in-one runtime image on the same Playwright base.
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS final
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Clean up build artifacts
-RUN rm -rf /app/dashboard-build /transcript-rendering
+# System stack: Python (the 5 services) · supervisor · redis · X11/audio (Xvfb/fluxbox/pulse) ·
+# noVNC (browser view) · postgres client (pg_isready) · git (agent governance ops).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-venv python3-dev build-essential \
+      supervisor redis-server postgresql-client \
+      xvfb fluxbox x11vnc novnc python3-websockify \
+      pulseaudio xdotool xclip socat ffmpeg libsndfile1 \
+      curl git ca-certificates \
+ && usermod -aG pulse-access root 2>/dev/null || true \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# uv (the per-service venvs are resolved from each service's own pyproject + uv.lock).
+RUN pip3 install --no-cache-dir uv==0.9.22
+
+ENV UV_LINK_MODE=copy \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    DISPLAY=:99
 
 WORKDIR /app
+RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces
 
-# -----------------------------------------------------------------------------
-# Configuration Files
-# -----------------------------------------------------------------------------
+# ── Python venvs — one per service (avoids cross-service dependency-pin conflicts). Each mirrors
+#    that service's Dockerfile (uv sync --frozen + the production-only ASGI/DB extras). ────────────
+# admin-api
+COPY core/identity/services/admin-api/pyproject.toml core/identity/services/admin-api/uv.lock /tmp/admin/
+RUN cd /tmp/admin && uv venv /opt/venvs/admin \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin uv sync --frozen --no-install-project \
+ && uv pip install --python /opt/venvs/admin/bin/python "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0"
+# runtime
+COPY core/runtime/pyproject.toml core/runtime/uv.lock /tmp/runtime/
+RUN cd /tmp/runtime && uv venv /opt/venvs/runtime \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime uv sync --frozen --no-install-project \
+ && uv pip install --python /opt/venvs/runtime/bin/python "uvicorn[standard]==0.34.0"
+# meeting-api
+COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock /tmp/meeting/
+RUN cd /tmp/meeting && uv venv /opt/venvs/meeting \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/meeting uv sync --frozen --no-install-project \
+ && uv pip install --python /opt/venvs/meeting/bin/python "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0" "boto3==1.35.0"
+# gateway
+COPY core/gateway/services/gateway/pyproject.toml core/gateway/services/gateway/uv.lock /tmp/gateway/
+RUN cd /tmp/gateway && uv venv /opt/venvs/gateway \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/gateway uv sync --frozen --no-install-project \
+ && uv pip install --python /opt/venvs/gateway/bin/python "uvicorn[standard]==0.34.0" "redis==5.2.1"
+# agent (control-plane group ⇒ fastapi/uvicorn; base deps cover the worker too)
+COPY core/agent/pyproject.toml core/agent/uv.lock /tmp/agent/
+RUN cd /tmp/agent && uv venv /opt/venvs/agent \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/agent uv sync --frozen --no-install-project --no-default-groups --group control-plane
+RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent
 
+# Claude Code (the agent worker's model+tooling runtime) — npm global, on PATH for every spawned worker.
+RUN npm install -g @anthropic-ai/claude-code
+
+# ── Service source + the sealed contracts each loads BY PATH (layout mirrors each service image,
+#    re-rooted under /app/<service> so the import walk-up resolves the same relative tree). ────────
+# admin-api  (PYTHONPATH=/app/admin-api/src)
+COPY core/identity/services/admin-api/src /app/admin-api/src
+# runtime    (PYTHONPATH=/app/runtime/src)
+COPY core/runtime/src /app/runtime/src
+# gateway    (PYTHONPATH=/app/gateway/src)
+COPY core/gateway/services/gateway/src /app/gateway/src
+# meeting-api (PYTHONPATH=/app/meeting-api/src; repo_root walk-up == /app/meeting-api)
+COPY core/meetings/services/meeting-api/src /app/meeting-api/src
+COPY core/meetings/contracts/invocation.v1/invocation.schema.json /app/meeting-api/meetings/contracts/invocation.v1/invocation.schema.json
+COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   /app/meeting-api/meetings/contracts/lifecycle.v1/lifecycle.schema.json
+COPY core/meetings/contracts/webhook.v1/webhook.schema.json       /app/meeting-api/meetings/contracts/webhook.v1/webhook.schema.json
+COPY core/runtime/contracts/runtime.v1/runtime.schema.json        /app/meeting-api/runtime/contracts/runtime.v1/runtime.schema.json
+COPY core/runtime/contracts/schedule.v1/schedule.schema.json      /app/meeting-api/runtime/contracts/schedule.v1/schedule.schema.json
+# agent control plane + worker (PYTHONPATH=/app/agent; repo_root walk-up == /app/agent).
+# This tree mirrors the WORKER image's /app layout (core/agent/worker/Dockerfile): worker + llm +
+# shared + contracts + the seed registries. llm/ is LOAD-BEARING — worker.py's first import is
+# `from llm import …`; omitting it kills every agent dispatch with ModuleNotFoundError.
+COPY core/agent/shared          /app/agent/shared
+COPY core/agent/control_plane   /app/agent/control_plane
+COPY core/agent/worker          /app/agent/worker
+COPY core/agent/llm             /app/agent/llm
+COPY core/agent/contracts       /app/agent/contracts
+COPY core/agent/workspace-seeds /app/agent/workspace-seeds
+COPY core/agent/tools-seed      /app/agent/tools-seed
+COPY core/meetings/contracts/transcript.v1/transcript.schema.json /app/agent/meetings/contracts/transcript.v1/transcript.schema.json
+COPY core/agent/contracts/workspace.v1/workspace.schema.json      /app/agent/agent/contracts/workspace.v1/workspace.schema.json
+COPY core/agent/contracts/invoke.v1/invoke.schema.json            /app/agent/agent/contracts/invoke.v1/invoke.schema.json
+COPY core/agent/contracts/unit.v1/unit.schema.json                /app/agent/agent/contracts/unit.v1/unit.schema.json
+COPY core/agent/contracts/routine.v1/routine.schema.json          /app/agent/agent/contracts/routine.v1/routine.schema.json
+COPY core/agent/contracts/event.v1/event.schema.json              /app/agent/agent/contracts/event.v1/event.schema.json
+COPY core/agent/contracts/tool.v1/tool.schema.json                /app/agent/agent/contracts/tool.v1/tool.schema.json
+# Build-time guard: the curated /app/agent tree must import as the worker the launcher execs
+# (vexa-agent-worker → `python -m worker`). Catches an incomplete copy — the exact bug class that
+# shipped a tree without llm/ and killed every chat dispatch — at build time, not first dispatch.
+RUN cd /app/agent && PYTHONPATH=/app/agent /opt/venvs/agent/bin/python -c "import worker.worker"
+
+# ── Bot workspace (built tree) — placed at /app so the bot resolves /app/browser-utils.global.js
+#    and its package-relative schema/deps exactly as in the bot container. The runtime spawns it
+#    via /usr/local/bin/vexa-bot-launch (cd /app/core/meetings/services/bot && node dist/index.js). ─
+COPY --from=bot-builder /build/core              /app/core
+COPY --from=bot-builder /build/node_modules      /app/node_modules
+COPY --from=bot-builder /build/package.json /build/pnpm-workspace.yaml /build/pnpm-lock.yaml /build/tsconfig.base.json /build/turbo.json /app/
+COPY --from=bot-builder /build/core/meetings/services/bot/dist/browser-utils.global.js /app/browser-utils.global.js
+COPY --from=bot-builder /opt/hf-cache /opt/hf-cache
+ENV VEXA_HF_CACHE=/opt/hf-cache
+
+# ── Dashboard (Next.js standalone) → /app/dashboard (supervisord runs `node server.js` there). ────
+COPY --from=dashboard-builder /app/.next/standalone /app/dashboard
+COPY --from=dashboard-builder /app/.next/static     /app/dashboard/.next/static
+COPY --from=dashboard-builder /app/public           /app/dashboard/public
+
+# ── Terminal (Next.js + custom server.mjs) → /app/terminal (supervisord runs `node server.mjs`). ──
+COPY --from=terminal-builder /app/terminal /app/terminal
+
+# ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
+COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh /usr/local/bin/
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 COPY deploy/lite/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-RUN mkdir -p /var/lib/vexa/recordings /var/log/vexa-bots
+RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker \
+      /usr/local/bin/setup-pulseaudio-sinks.sh /usr/local/bin/provision-key.sh /entrypoint.sh
 
-# Test audio for transcription startup check
-COPY tests3/testdata/test-speech-en.wav /app/test-speech-en.wav
-
-# -----------------------------------------------------------------------------
-# Environment Variables (defaults)
-# -----------------------------------------------------------------------------
-
-# Orchestrator — runtime-api uses process backend in lite
-ENV ORCHESTRATOR_BACKEND=process \
-    BOT_SCRIPT_PATH=/app/vexa-bot/dist/docker.js \
-    BOT_WORKING_DIR=/app/vexa-bot \
-    BOT_CALLBACK_BASE_URL=http://localhost:8080
-
-# Internal service URLs for api-gateway
-ENV ADMIN_API_URL=http://localhost:8057 \
-    MEETING_API_URL=http://localhost:8080 \
-    TRANSCRIPTION_COLLECTOR_URL=http://localhost:8080 \
-    MCP_URL=http://localhost:18888 \
-    AGENT_API_URL=http://localhost:8100 \
-    RUNTIME_API_URL=http://localhost:8090
-
-# TTS Service
-ENV TTS_SERVICE_URL=http://localhost:8059 \
-    OPENAI_API_KEY= \
-    PIPER_DEFAULT_VOICES=major \
-    PIPER_LOAD_VOICES=en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium \
-    PIPER_PRELOAD_STRICT=true
-
-# Display for headless browsers
-ENV DISPLAY=:99
-
-# Logging
+# ── Env defaults (every var supervisord interpolates must be SET; entrypoint derives the rest) ────
 ENV LOG_LEVEL=info \
-    PYTHONUNBUFFERED=1
+    RUNTIME_BACKEND=process \
+    BOT_COMMAND=/usr/local/bin/vexa-bot-launch \
+    AGENT_WORKER_COMMAND=/usr/local/bin/vexa-agent-worker \
+    DB_HOST=localhost DB_PORT=5432 DB_NAME=vexa DB_USER=postgres DB_PASSWORD=postgres \
+    REDIS_HOST=localhost REDIS_PORT=6379 \
+    ADMIN_API_TOKEN=changeme INTERNAL_API_SECRET=lite-internal-secret \
+    TRANSCRIPTION_SERVICE_URL= TRANSCRIPTION_SERVICE_TOKEN= \
+    MINIO_ENDPOINT= MINIO_ACCESS_KEY= MINIO_SECRET_KEY= MINIO_BUCKET=vexa MINIO_SECURE=false \
+    VEXA_AGENT_DEFAULT_SUBJECT=u_live VEXA_DISPATCH_SIGNING_KEY=dev-dispatch-signing-key \
+    VEXA_BOT_API_KEY= VEXA_AGENT_MODEL= VEXA_MEETING_MODEL= HOST_CLAUDE_CREDENTIALS= \
+    ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= ANTHROPIC_BASE_URL= ANTHROPIC_MODEL= \
+    ANTHROPIC_DEFAULT_OPUS_MODEL= ANTHROPIC_DEFAULT_SONNET_MODEL= ANTHROPIC_DEFAULT_HAIKU_MODEL= \
+    VEXA_PUBLIC_API_URL=http://localhost:8056 VEXA_API_KEY= \
+    TERMINAL_PUBLIC_URL=http://localhost:3001 \
+    NEXTAUTH_SECRET=vexa-lite-nextauth-secret JWT_SECRET=vexa-lite-jwt-secret
 
-# Recording storage defaults (lite — local filesystem)
-ENV RECORDING_ENABLED=true \
-    STORAGE_BACKEND=local \
-    LOCAL_STORAGE_DIR=/var/lib/vexa/recordings \
-    LOCAL_STORAGE_FSYNC=true \
-    MINIO_ENDPOINT= \
-    MINIO_ACCESS_KEY= \
-    MINIO_SECRET_KEY= \
-    MINIO_BUCKET=vexa-recordings \
-    MINIO_SECURE=false \
-    AWS_REGION=us-east-1 \
-    AWS_ACCESS_KEY_ID= \
-    AWS_SECRET_ACCESS_KEY= \
-    S3_BUCKET= \
-    S3_ENDPOINT= \
-    S3_SECURE=true
+# Front doors: gateway (8056) · dashboard (3000) · terminal (3001) · agent control plane (8100).
+EXPOSE 8056 3000 3001 8100 6080
 
-# Database defaults (override at runtime)
-ENV DB_HOST=localhost \
-    DB_PORT=5432 \
-    DB_NAME=vexa \
-    DB_USER=postgres
-
-# Redis defaults
-ENV REDIS_HOST=localhost \
-    REDIS_PORT=6379
-
-# -----------------------------------------------------------------------------
-# Ports
-# -----------------------------------------------------------------------------
-
-# API Gateway (main entry point) + Dashboard
-EXPOSE 8056 3000
-
-# -----------------------------------------------------------------------------
-# Health Check
-# -----------------------------------------------------------------------------
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -sf http://localhost:8056/docs > /dev/null || exit 1
-
-# -----------------------------------------------------------------------------
-# Entrypoint
-# -----------------------------------------------------------------------------
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -sf http://localhost:8056/health > /dev/null || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/vexa.conf"]

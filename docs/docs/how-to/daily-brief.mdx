@@ -1,0 +1,55 @@
+---
+title: "Brief me every morning"
+description: "An unattended agent that runs on a schedule and commits to your workspace."
+---
+
+A **routine** is a scheduler entry — a trigger plus a plan. The agent runs with
+no one watching, works your [workspace](/concepts#workspace), and commits; the output is replayable later.
+
+## Create the routine
+
+```bash
+curl -X POST "$API_BASE/agent/routines" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "name":"Morning brief",
+    "cron":"0 8 * * 1-5",
+    "prompt":"Brief me from overnight activity — new meetings, decisions, and follow-ups due today. Write it to brief/today.md.",
+    "run_now":true
+  }'
+# → 201 {"routine":{...},"job_id":"job_...","ran_now":true}
+```
+
+`cron` is a standard five-field expression — `0 8 * * 1-5` is 08:00 every weekday. `run_now:true` also
+fires it once immediately so you can verify the output without waiting.
+
+## Manage it
+
+```bash
+# list
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/routines"
+
+# pause / resume
+curl -X PATCH "$API_BASE/agent/routines/Morning%20brief/enabled" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"enabled":false}'
+
+# delete (by routine id)
+curl -X DELETE "$API_BASE/agent/routines/<routine_id>" -H "X-API-Key: $API_KEY"
+```
+
+## Read the result
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=brief/today.md"
+```
+
+## Variations
+
+Same machinery, different trigger or plan:
+
+- **On an event** — run when something happens (e.g. a new email) instead of on a clock:
+  [Triage incoming email](/how-to/email-triage).
+- **After a meeting** — write a report when a call ends: [Report after every meeting](/how-to/post-meeting-report).
+
+Only the trigger changes — same agent, same isolation, same governance.

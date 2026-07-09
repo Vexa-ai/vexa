@@ -1,491 +1,191 @@
-.PHONY: all all-build env build build-bot-image build-transcript-rendering up down ps logs test test-transcription init-db restore-db check_docker preflight publish promote-staging promote-latest help-tags setup-api-key
+# deploy/compose — the v0.12 control-plane stack (P4) + its readiness proof (P5, gate:compose).
+#
+# The stack-readiness proof (tests/stack_test.py) owns the full up→prove→down lifecycle in its
+# session fixture, so `make stack-test` is the one entrypoint the gate calls. The bare up/down
+# targets below are for hand-driving the stack during development.
+PROJECT ?= vexa-v012
+BROWSER_IMAGE ?= mock-bot:dev
+EMAIL ?= self-host@vexa.ai
+SCOPES ?= bot,tx
+COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
+# The meeting bot is built FROM SOURCE (matching this stack's lifecycle.v1), never pulled — see `bot`.
+REPO_ROOT := $(abspath ../..)
+BOT_IMAGE ?= vexaai/vexa-bot:v012
 
-# --- Paths ---
-ROOT := $(shell git rev-parse --show-toplevel)
-COMPOSE_FILE := $(ROOT)/deploy/compose/docker-compose.yml
-ENV_FILE := $(ROOT)/.env
-ENV_EXAMPLE := $(ROOT)/deploy/env-example
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up down build ps logs bot _preflight _bot_check _creds_check _access
 
-LAST_TAG_FILE := $(ROOT)/deploy/compose/.last-tag
+## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
+## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
+##   DASHBOARD_API_KEY=$$(make -s provision-token ADMIN_TOKEN=<secret>) \
+##     docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
+provision-token:
+	@ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" ./bin/provision-token
 
-# --- Image tagging ---
-# BUILD_TAG: always a fresh timestamp for `make build`. Never from .env.
-# IMAGE_TAG: what `make up` runs. Comes from .env (default: dev) or .last-tag after build.
-VERSION := $(shell cat $(ROOT)/VERSION 2>/dev/null || echo "0.0.0")
-BUILD_TAG := $(VERSION)-$(shell date +%y%m%d-%H%M)
+## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
+## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).
+## Needs mock-bot:dev + vexa-dashboard:dev (docker build -f clients/dashboard/Dockerfile --build-arg
+## VEXA_API_URL=http://gateway:8000 -t vexa-dashboard:dev ../.. from the repo root).
+dashboard-harness:
+	./bin/dashboard-harness.sh
 
-# DockerHub namespace
-DOCKERHUB_USER ?= vexaai
+## stack-test — the always-on gate:compose proof (brings the stack up + down itself).
+stack-test:
+	./bin/stack-test
 
-# All images that get built and published.
-# agent-api remains NO-SHIP for v0.10.x (see docker-compose.yml); do not
-# promote a non-deployed image to :dev/:latest as part of public releases.
-IMAGES := api-gateway admin-api runtime-api meeting-api mcp dashboard tts-service vexa-lite
-BOT_IMAGE := vexa-bot
+## stack-test-bot — + the real bot-spawn proof (COMPOSE_BOT=1; slow, needs vexaai/vexa-bot:v012).
+stack-test-bot:
+	COMPOSE_BOT=1 ./bin/stack-test
 
--include $(ENV_FILE)
+## stack-test-stress — the control plane under CONCURRENT load (A:V2): N mock bots at once, no cap overspill.
+## Needs mock-bot:dev. Tune STRESS_N / STRESS_CAP. Pass COMPOSE_PROJECT + MINIO_HOST_PORT to isolate on a shared dev host.
+stack-test-stress:
+	COMPOSE_STRESS=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test
 
-COMPOSE_CMD = docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
+## stack-test-chaos — the control plane RECOVERS from injected faults (A:V3): a redis/meeting-api blip
+## (docker pause/unpause) mid-run → the FSM still reaches terminal. Needs mock-bot:dev.
+stack-test-chaos:
+	COMPOSE_CHAOS=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test chaos_test.py
 
-# ============================================================================
-# Main targets
-# ============================================================================
+## stack-test-mock — the FULL control-plane lifecycle at L3 via the mock bot (A:V1). Needs mock-bot:dev
+## (build: docker build -f ../../core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev ../../). Runs
+## the always-on subset PLUS the MOCK_BOT scenarios (normal/reject/crash/timeout/emit/stop/max-bots/
+## speak/canAccess) — no browser/STT. Pass COMPOSE_PROJECT to isolate on a shared host.
+stack-test-mock:
+	MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test
 
-all: env preflight up init-db setup-api-key test
-	@HOST_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
-	HOST=$${HOST_IP:-localhost}; \
-	echo "Vexa is running. API: http://$$HOST:$${API_GATEWAY_HOST_PORT:-8056}/docs"
+## stack-test-v010 — the 0.10 API backward-compat behavioral suite (release DoD 6): a 0.10-style
+## client's real REST + WS flows against the running 0.12 stack, MOCK_BOT scenarios only. Opt-in
+## via V010_COMPAT=1 (without it the compat dir is not even collected — the default gate:compose
+## collection is unchanged). Needs mock-bot:dev, like stack-test-mock. Runs ONLY tests/compat/.
+stack-test-v010:
+	V010_COMPAT=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test compat
 
-all-build: env preflight build up init-db setup-api-key test
-	@HOST_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
-	HOST=$${HOST_IP:-localhost}; \
-	echo "Vexa is running (built from source). API: http://$$HOST:$${API_GATEWAY_HOST_PORT:-8056}/docs"
+## up / down / build — hand-drive the stack (dev only; the proof manages its own lifecycle).
+## `up` is the zero-friction entrypoint: seeds .env from .env.example if absent, brings the stack up,
+## then mints + prints an API key (via the idempotent bin/provision-token) with the URLs.
+up:
+	@$(MAKE) --no-print-directory _preflight
+	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
+	$(COMPOSE) up -d --build
+	$(COMPOSE) build agent-worker  # profiles:[build-only] keeps it out of `up` — build it explicitly or first chat fails to spawn
+	@$(MAKE) --no-print-directory _bot_check
+	@$(MAKE) --no-print-directory _creds_check
+	@$(MAKE) --no-print-directory _access
 
-help-tags:
-	@echo "Image Tagging Workflow"
-	@echo ""
-	@echo "  make build              - Build all images with fresh timestamp tag (saved to .last-tag)"
-	@echo "  make up                 - Start services (uses .last-tag if built, else IMAGE_TAG from .env)"
-	@echo "  make publish            - Push all images to DockerHub + update :dev pointer"
-	@echo "  make promote-staging    - Set :staging tag to TAG= (or last published)"
-	@echo "  make promote-latest     - Set :latest tag to TAG= (or last published)"
-	@echo ""
-	@echo "Last built: $$(cat $(LAST_TAG_FILE) 2>/dev/null || echo '(none — using IMAGE_TAG from .env)')"
-	@echo "IMAGE_TAG in .env: $(IMAGE_TAG)"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make all                           # pulls IMAGE_TAG from .env (default: dev)"
-	@echo "  make all-build                     # builds fresh + starts"
-	@echo "  make publish                       # pushes + sets :dev"
-	@echo "  make promote-staging TAG=260330-1415"
+## _preflight — fail fast on a too-old Docker engine: agent workers mount workspaces via the Mounts
+## API's named-volume Subpath, which needs engine ≥ v26 — an older engine fails every worker create
+## AFTER the stack looks healthy, which is far harder to diagnose than failing here.
+_preflight:
+	@v=$$(docker version --format '{{.Server.Version}}' 2>/dev/null); v=$${v#v}; \
+	 if [ -z "$$v" ]; then echo "✗ cannot reach the Docker engine — is Docker running?"; exit 1; fi; \
+	 major=$${v%%.*}; \
+	 case "$$major" in \
+	   ''|*[!0-9]*) echo "⚠ unrecognized Docker engine version '$$v' — continuing (this stack needs ≥ v26)";; \
+	   *) if [ "$$major" -lt 26 ]; then \
+	        echo ""; \
+	        echo "✗ Docker engine v$$v is too old — this stack requires engine ≥ v26."; \
+	        echo "  Agent workers mount workspaces with named-volume subpaths (Mounts API"; \
+	        echo "  VolumeOptions.Subpath); older engines reject the container create."; \
+	        echo "  Upgrade Docker, then re-run: make all"; \
+	        exit 1; \
+	      fi;; \
+	 esac
 
-# --- Environment ---
-env:
-	@if [ ! -f $(ENV_FILE) ]; then \
-		cp $(ENV_EXAMPLE) $(ENV_FILE); \
-		echo "Created .env from env-example. Edit $(ENV_FILE) before running."; \
-		echo "  - Set TRANSCRIPTION_SERVICE_URL to your transcription endpoint"; \
-		echo "  - Set TRANSCRIPTION_SERVICE_TOKEN"; \
-	else \
-		added=0; \
-		while IFS= read -r line; do \
-			key=$$(echo "$$line" | sed -n 's/^#*[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); \
-			if [ -n "$$key" ] && ! grep -qE "^#*\s*$$key=" $(ENV_FILE); then \
-				echo "$$line" >> $(ENV_FILE); \
-				added=$$((added+1)); \
-			fi; \
-		done < $(ENV_EXAMPLE); \
-		if [ $$added -gt 0 ]; then \
-			echo ".env patched: $$added new variable(s) added from env-example."; \
-		else \
-			echo ".env is up to date."; \
-		fi; \
-	fi
-	@if ! grep -qE '^DOCKER_GID=' $(ENV_FILE) 2>/dev/null; then \
-		GID=$$(getent group docker 2>/dev/null | cut -d: -f3); \
-		if [ -n "$$GID" ]; then \
-			echo "DOCKER_GID=$$GID" >> $(ENV_FILE); \
-			echo "Auto-detected DOCKER_GID=$$GID (written to .env)"; \
-		fi; \
-	fi
-	@BRANCH=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main"); \
-	if [ "$$BRANCH" = "main" ]; then TAG=latest; else TAG=dev; fi; \
-	CURRENT=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	if [ "$$CURRENT" != "$$TAG" ]; then \
-		sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$$TAG|" $(ENV_FILE); \
-		sed -i "s|^BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:$$TAG|" $(ENV_FILE); \
-		echo "Auto-set IMAGE_TAG=$$TAG (branch=$$BRANCH)"; \
-	fi
+## bot — build the meeting bot FROM SOURCE (the v0.12 bot that matches this stack's lifecycle.v1).
+## The published vexaai/vexa-bot:dev on Docker Hub is the OLDER 0.10 line and is NOT compatible — the
+## bot is built here, never pulled. Builds the join-env base first, then the bot, tagged BOT_IMAGE.
+## Point BROWSER_IMAGE (.env) at BOT_IMAGE so the runtime spawns it.
+bot:
+	@echo "→ [1/2] join-env base: vexa/meet-join-env:dev"
+	docker build -f $(REPO_ROOT)/core/meetings/modules/join/Dockerfile.env -t vexa/meet-join-env:dev $(REPO_ROOT)/core/meetings/modules/join
+	@echo "→ [2/2] meeting bot: $(BOT_IMAGE)"
+	docker build -t $(BOT_IMAGE) -f $(REPO_ROOT)/core/meetings/services/bot/Dockerfile $(REPO_ROOT)
+	@_rt=$$($(COMPOSE) ps -q runtime 2>/dev/null); _live=""; \
+	 [ -n "$$_rt" ] && _live=$$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $$_rt 2>/dev/null \
+	   | grep '^BROWSER_IMAGE=' | cut -d= -f2-); \
+	 if [ "$$_live" = "$(BOT_IMAGE)" ]; then \
+	   echo "✓ built $(BOT_IMAGE) — done. The running stack spawns bots from this tag;"; \
+	   echo "  the next bot will use the image you just built (no restart needed)."; \
+	 else \
+	   echo "✓ built $(BOT_IMAGE) — set BROWSER_IMAGE=$(BOT_IMAGE) in .env, then: make all"; \
+	 fi
 
-# --- Preflight — validate credentials before starting anything ---
-preflight:
-	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	if [ "$$TX_TOKEN" = "ci-placeholder" ]; then \
-		echo "  CI mode: skipping transcription validation (ci-placeholder token)"; \
-		exit 0; \
-	fi; \
-	if [ -z "$$TX_TOKEN" ] || [ "$$TX_TOKEN" = "your-token" ]; then \
-		echo ""; \
-		echo "  Vexa uses transcription.vexa.ai to process meeting audio."; \
-		echo "  If you use a different provider, edit .env and re-run make all."; \
-		echo ""; \
-		printf "  Press Enter to continue: "; \
-		read -r CONFIRM < /dev/tty; \
-		echo ""; \
-		echo "  Get your token at: https://vexa.ai/account"; \
-		echo ""; \
-		printf "  Paste your transcription token: "; \
-		read -r TX_TOKEN < /dev/tty; \
-		echo ""; \
-		if [ -z "$$TX_TOKEN" ]; then \
-			echo "  ✗ No token provided. Run 'make all' again when you have one."; exit 1; \
-		fi; \
-		sed -i "s|^TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN|" $(ENV_FILE); \
-		echo "  ✓ Token saved to .env"; \
-	fi; \
-	if [ -z "$$TX_URL" ]; then \
-		echo "  ✗ TRANSCRIPTION_SERVICE_URL not set in .env"; exit 1; \
-	fi; \
-	if [ -z "$$TX_TOKEN" ]; then \
-		echo "  ✗ TRANSCRIPTION_SERVICE_TOKEN not set in .env"; exit 1; \
-	fi; \
-	HTTP=$$(curl -s -o /dev/null -w '%{http_code}' -X POST "$$TX_URL" \
-		-H "Authorization: Bearer $$TX_TOKEN" \
-		-F "file=@$(ROOT)/tests3/testdata/test-speech-en.wav" \
-		-F "language=en" -F "model=large-v3-turbo" --max-time 10 2>/dev/null); \
-	if [ "$$HTTP" = "200" ]; then \
-		echo "  ✓ Transcription token valid"; \
-	elif [ "$$HTTP" = "403" ]; then \
-		echo "  ✗ TRANSCRIPTION_SERVICE_TOKEN rejected (403). Token expired — get a new one."; exit 1; \
-	elif [ "$$HTTP" = "000" ]; then \
-		echo "  ⚠ Transcription unreachable ($$TX_URL). Continuing..."; \
-	else \
-		echo "  ⚠ Transcription HTTP $$HTTP. Continuing..."; \
-	fi; \
-	COOKIE_BACKEND=$$(grep -E '^COOKIE_STORAGE_BACKEND=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	COOKIE_BACKEND=$${COOKIE_BACKEND:-s3}; \
-	if [ "$$COOKIE_BACKEND" != "http" ]; then exit 0; fi; \
-	COOKIE_URL=$$(grep -E '^COOKIE_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	COOKIE_TOKEN=$$(grep -E '^COOKIE_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	if [ -z "$$COOKIE_URL" ]; then \
-		echo "  ✗ COOKIE_STORAGE_BACKEND=http but COOKIE_SERVICE_URL not set in .env"; exit 1; \
-	fi; \
-	HEALTH=$$(curl -s -o /dev/null -w '%{http_code}' "$$COOKIE_URL/health" --max-time 5 2>/dev/null); \
-	if [ "$$HEALTH" != "200" ]; then \
-		echo "  ✗ Cookie service unreachable at $$COOKIE_URL/health (HTTP $$HEALTH)"; exit 1; \
-	fi; \
-	if [ -n "$$COOKIE_TOKEN" ]; then \
-		PROBE=$$(curl -s -o /dev/null -w '%{http_code}' \
-			-H "Authorization: Bearer $$COOKIE_TOKEN" \
-			"$$COOKIE_URL/userdata/__contract_probe__" --max-time 5 2>/dev/null); \
-	else \
-		PROBE=$$(curl -s -o /dev/null -w '%{http_code}' \
-			"$$COOKIE_URL/userdata/__contract_probe__" --max-time 5 2>/dev/null); \
-	fi; \
-	if [ "$$PROBE" = "200" ] || [ "$$PROBE" = "404" ]; then \
-		echo "  ✓ Cookie service contract valid ($$COOKIE_URL)"; \
-	elif [ "$$PROBE" = "401" ]; then \
-		echo "  ✗ Cookie service returned 401 — check COOKIE_SERVICE_TOKEN in .env"; exit 1; \
-	else \
-		echo "  ✗ Cookie service contract violation at $$COOKIE_URL (HTTP $$PROBE)"; exit 1; \
-	fi
+## _bot_check — FAIL LOUD if the meeting bot image isn't built locally. The bot is built here, never
+## pulled (the published vexaai/vexa-bot:dev is the old 0.10 line). Without this the failure was silent:
+## bots sat in `requested` and the meeting was reaped to `completed`/0-segments. Now it is screamingly visible.
+_bot_check:
+	@_bi=$$(grep -E '^BROWSER_IMAGE=' .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); \
+	 if [ -n "$$_bi" ] && ! docker image inspect "$$_bi" >/dev/null 2>&1; then \
+	   echo ""; \
+	   echo "═══════════════════════════════════════════════════════════"; \
+	   echo "  ⚠️  meeting bot image '$$_bi' is NOT built locally."; \
+	   echo "      The bot is built FROM SOURCE here, never pulled (the published"; \
+	   echo "      vexaai/vexa-bot:dev is the old 0.10 line, incompatible with this stack)."; \
+	   echo "      Bots will FAIL TO JOIN until you build it:"; \
+	   echo "          make -C deploy/compose bot"; \
+	   echo "═══════════════════════════════════════════════════════════"; \
+	   echo ""; \
+	 fi
 
-# --- Docker check ---
-check_docker:
-	@if ! docker info > /dev/null 2>&1; then \
-		echo "ERROR: Docker is not running."; \
-		exit 1; \
-	fi
+## _creds_check — WARN (never fail) when .env leaves a capability unconfigured: empty STT creds mean
+## bots join + record but produce NO transcript; no model credential means agent chat refuses at first
+## use. Mirrors agent-api's config.v1 `model_inference` capability (mode=any: any ONE key configures it).
+_creds_check:
+	@_envv() { grep -E "^$$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	 stt=1; [ -n "$$(_envv TRANSCRIPTION_SERVICE_URL)" ] && [ -n "$$(_envv TRANSCRIPTION_SERVICE_TOKEN)" ] && stt=0; \
+	 model=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN VEXA_LLM_API_KEY HOST_CLAUDE_CREDENTIALS; do \
+	   [ -n "$$(_envv $$k)" ] && model=0; done; \
+	 if [ $$stt -eq 1 ] || [ $$model -eq 1 ]; then \
+	   echo ""; \
+	   echo "═══════════════════════════════════════════════════════════"; \
+	   if [ $$stt -eq 1 ]; then \
+	     echo "  ⚠️  transcription is NOT configured (TRANSCRIPTION_SERVICE_URL /"; \
+	     echo "      TRANSCRIPTION_SERVICE_TOKEN empty in .env)."; \
+	     echo "      Bots will join and record but produce NO transcript."; \
+	     echo "      Get a free token at https://vexa.ai/account (or self-host"; \
+	     echo "      deploy/transcription), set both, then: make all"; \
+	   fi; \
+	   if [ $$stt -eq 1 ] && [ $$model -eq 1 ]; then echo "  ─────────────────────────────────────────────────────────"; fi; \
+	   if [ $$model -eq 1 ]; then \
+	     echo "  ⚠️  no model credential is configured — agent chat will refuse to run."; \
+	     echo "      Set ONE of CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY,"; \
+	     echo "      ANTHROPIC_AUTH_TOKEN, VEXA_LLM_API_KEY or HOST_CLAUDE_CREDENTIALS"; \
+	     echo "      in .env, then: make all — or configure Settings → Models in the UI."; \
+	   fi; \
+	   echo "═══════════════════════════════════════════════════════════"; \
+	   echo ""; \
+	 fi
+down:
+	$(COMPOSE) down -v --remove-orphans
 
-# --- Build ---
-build-bot-image: check_docker
-	@echo "Building $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG)..."
-	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG) -f $(ROOT)/services/vexa-bot/Dockerfile $(ROOT)/services/vexa-bot
-
-build-lite: check_docker
-	@echo "Building $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG)..."
-	@# v0.10.5.3 Pack D-1 follow-up: pass NEXT_PUBLIC_VEXA_OSS_VERSION as build-arg
-	@# so the dashboard's prebuild generator inside the lite container has a
-	@# version source. VERSION file is the canonical truth.
-	docker build --platform linux/amd64 \
-		--build-arg NEXT_PUBLIC_VEXA_OSS_VERSION=$(VERSION) \
-		--build-arg NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$(shell date +%Y-%m-%d) \
-		-t $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG) \
-		-f $(ROOT)/deploy/lite/Dockerfile.lite $(ROOT)
-
-build-transcript-rendering:
-	@echo "Building transcript-rendering package..."
-	@cd $(ROOT)/packages/transcript-rendering && npm install && npm run build
-
-build: check_docker build-bot-image build-transcript-rendering build-lite
-	@echo "Building all images with tag: $(BUILD_TAG)"
-	@# v0.10.5.3 Pack D-1 follow-up: VEXA_VERSION + VEXA_RELEASE_DATE are
-	@# read by docker-compose.yml's dashboard service `args:` block to feed
-	@# the prebuild generator inside the dashboard image build.
-	IMAGE_TAG=$(BUILD_TAG) VEXA_VERSION=$(VERSION) VEXA_RELEASE_DATE=$(shell date +%Y-%m-%d) $(COMPOSE_CMD) build
-	@echo "$(BUILD_TAG)" > $(LAST_TAG_FILE)
-	@echo ""
-	@echo "All images tagged: $(BUILD_TAG)"
-	@echo "Tag saved to $(LAST_TAG_FILE)"
-	@docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}' | grep "$(BUILD_TAG)" || true
-
-# --- Up / Down ---
-# IMAGE_TAG comes from .env (default: dev = pre-built from DockerHub).
-# `make build` writes a local tag to .last-tag which overrides .env.
-up: check_docker preflight
-	@if [ -f $(LAST_TAG_FILE) ]; then \
-		export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
-		export BROWSER_IMAGE="$(DOCKERHUB_USER)/$(BOT_IMAGE):$$IMAGE_TAG"; \
-		echo "Using locally-built images (IMAGE_TAG=$$IMAGE_TAG from .last-tag)"; \
-		echo "Using bot image $$BROWSER_IMAGE"; \
-	else \
-		export IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "dev"); \
-		export BROWSER_IMAGE=$$(grep -E '^BROWSER_IMAGE=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-		echo "Using images (IMAGE_TAG=$$IMAGE_TAG from .env)"; \
-		if [ -n "$$BROWSER_IMAGE" ]; then echo "Using bot image $$BROWSER_IMAGE"; fi; \
-	fi; \
-	if ! docker network ls | grep -q "vexa-network"; then \
-		docker network create vexa-network || true; \
-	fi; \
-	$(COMPOSE_CMD) up -d --pull=missing; \
-	BOT_TAG=$$(cat $(LAST_TAG_FILE) 2>/dev/null || echo "$(IMAGE_TAG)"); \
-	BOT_IMG=$(DOCKERHUB_USER)/$(BOT_IMAGE):$$BOT_TAG; \
-	if ! docker image inspect $$BOT_IMG > /dev/null 2>&1; then \
-		echo "Pulling bot image: $$BOT_IMG..."; \
-		docker pull $$BOT_IMG; \
-	fi; \
-	if grep -qE '^LOCAL_TRANSCRIPTION=true' $(ENV_FILE) 2>/dev/null; then \
-		echo "LOCAL_TRANSCRIPTION=true — starting transcription-service..."; \
-		cd $(ROOT)/services/transcription-service && docker compose up -d; \
-	fi
-
-down: check_docker
-	$(COMPOSE_CMD) down
-	@cd $(ROOT)/services/transcription-service && docker compose down 2>/dev/null || true
-
-# --- Service API key (dashboard WS auth) ---
-# Creates a default user (if needed) and a bot+browser+tx API key, writes VEXA_API_KEY to .env.
-# The dashboard uses this for WebSocket auth and transcript reads.
-setup-api-key: check_docker
-	@# v0.10.5 R3 fix (2026-04-27): validate existing VEXA_API_KEY before
-	@# skipping. The earlier "skip-if-set" default left stale tokens in
-	@# .env after redeploy when admin-api re-seeded credentials, causing
-	@# dashboard 401 from /bots/status (DASHBOARD_API_KEY_VALID gate red).
-	@# Now: if a key is present we PROBE the gateway with it; on 200 keep,
-	@# on anything else drop+regenerate so dashboard is always seeded with
-	@# a token the gateway accepts.
-	@API_PORT=$$(grep -E '^API_GATEWAY_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	API_PORT=$${API_PORT:-8056}; \
-	EXISTING_KEY=$$(grep -E '^VEXA_API_KEY=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	if [ -n "$$EXISTING_KEY" ]; then \
-		HTTP=$$(curl -s -o /dev/null -w '%{http_code}' \
-			-H "X-API-Key: $$EXISTING_KEY" \
-			"http://localhost:$$API_PORT/bots/status" 2>/dev/null || echo "000"); \
-		if [ "$$HTTP" = "200" ] || [ "$$HTTP" = "304" ]; then \
-			echo "VEXA_API_KEY in .env validates against gateway (HTTP $$HTTP) — keeping."; \
-			exit 0; \
-		fi; \
-		echo "VEXA_API_KEY in .env is stale (gateway returned HTTP $$HTTP) — regenerating."; \
-		sed -i.bak '/^VEXA_API_KEY=/d' $(ENV_FILE) && rm -f $(ENV_FILE).bak; \
-	fi; \
-	ADMIN_TK=$$(grep -E '^ADMIN_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	ADMIN_TK=$${ADMIN_TK:-changeme}; \
-	USER_ID=$$(curl -sf "http://localhost:$$API_PORT/admin/users?limit=1" \
-		-H "X-Admin-API-Key: $$ADMIN_TK" 2>/dev/null \
-		| python3 -c "import sys,json; u=json.load(sys.stdin); print(u[0]['id'] if u else '')" 2>/dev/null); \
-	if [ -z "$$USER_ID" ]; then \
-		echo "No users found — creating default user..."; \
-		USER_ID=$$(curl -sf -X POST "http://localhost:$$API_PORT/admin/users" \
-			-H "X-Admin-API-Key: $$ADMIN_TK" -H "Content-Type: application/json" \
-			-d '{"email":"admin@vexa.ai","name":"Admin","max_concurrent_bots":10}' 2>/dev/null \
-			| python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null); \
-	fi; \
-	if [ -z "$$USER_ID" ]; then \
-		echo "WARNING: Could not find or create user (admin API not ready?). Dashboard WS will require login."; \
-	else \
-		TOKEN=$$(curl -sf -X POST "http://localhost:$$API_PORT/admin/users/$$USER_ID/tokens?scopes=bot,browser,tx&name=dashboard-ws" \
-			-H "X-Admin-API-Key: $$ADMIN_TK" 2>/dev/null \
-			| python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null); \
-		if [ -n "$$TOKEN" ]; then \
-			echo "VEXA_API_KEY=$$TOKEN" >> $(ENV_FILE); \
-			echo "Created VEXA_API_KEY for user $$USER_ID (dashboard WS auth)."; \
-			if [ -f $(LAST_TAG_FILE) ]; then \
-				export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
-			else \
-				export IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "dev"); \
-				IMAGE_TAG=$${IMAGE_TAG:-dev}; \
-			fi; \
-			$(COMPOSE_CMD) up -d dashboard; \
-		else \
-			echo "WARNING: Could not create API key for user $$USER_ID. Dashboard WS will require login."; \
-		fi; \
-	fi
-
-# --- Status ---
-ps: check_docker
-	$(COMPOSE_CMD) ps
-
+## _access — wait for admin-api, mint the self-host API key, print it + the URLs (used by `up`).
+_access:
+	@_envv() { grep -E "^$$1=" .env | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	 ADMIN_TOKEN=$$(_envv ADMIN_TOKEN); \
+	 APORT=$$(_envv ADMIN_API_PORT); APORT=$${APORT:-18057}; \
+	 GW=$$(_envv API_GATEWAY_HOST_PORT); GW=$${GW:-18056}; \
+	 UI=$$(_envv TERMINAL_PORT); UI=$${UI:-13000}; \
+	 echo "⏳ minting your self-host API key..."; \
+	 KEY=""; for i in $$(seq 1 60); do \
+	   KEY=$$(ADMIN_TOKEN=$$ADMIN_TOKEN ADMIN_API_URL=http://127.0.0.1:$$APORT EMAIL=$(EMAIL) SCOPES=$(SCOPES) ./bin/provision-token 2>/dev/null) && [ -n "$$KEY" ] && break; \
+	   sleep 2; done; \
+	 echo ""; \
+	 echo "═══════════════════════════════════════════════════════════"; \
+	 echo "  Vexa is up."; \
+	 echo "    Terminal UI : http://localhost:$$UI"; \
+	 echo "    API gateway : http://localhost:$$GW"; \
+	 if [ -n "$$KEY" ]; then echo "    API key     : $$KEY"; \
+	 else echo "    API key     : admin-api not ready — mint later with:"; \
+	      echo "                  make -s provision-token ADMIN_TOKEN=<your ADMIN_TOKEN>"; fi; \
+	 STT=1; [ -n "$$(_envv TRANSCRIPTION_SERVICE_URL)" ] && [ -n "$$(_envv TRANSCRIPTION_SERVICE_TOKEN)" ] && STT=0; \
+	 MODEL=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN VEXA_LLM_API_KEY HOST_CLAUDE_CREDENTIALS; do \
+	   [ -n "$$(_envv $$k)" ] && MODEL=0; done; \
+	 if [ $$STT -eq 1 ]; then echo "    ⚠ transcription: not configured — bots record, NO transcript"; fi; \
+	 if [ $$MODEL -eq 1 ]; then echo "    ⚠ agent chat  : no model credential — chat will refuse"; fi; \
+	 echo "═══════════════════════════════════════════════════════════"
+build:
+	$(COMPOSE) build
+ps:
+	$(COMPOSE) ps
 logs:
-	$(COMPOSE_CMD) logs -f
-
-# --- Test ---
-test: check_docker
-	@echo "Waiting for services to be ready..."
-	@DASH_PORT=$$(grep -E '^DASHBOARD_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "3001"); \
-	DASH_PORT=$${DASH_PORT:-3001}; \
-	for i in 1 2 3 4 5; do \
-		curl -sf "http://localhost:$$DASH_PORT/" > /dev/null 2>&1 && break; \
-		sleep 2; \
-	done
-	@echo "Checking services..."
-	@API_PORT=$$(grep -E '^API_GATEWAY_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "8056"); \
-	ADMIN_PORT=$$(grep -E '^ADMIN_API_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "8057"); \
-	DASH_PORT=$$(grep -E '^DASHBOARD_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "3001"); \
-	API_PORT=$${API_PORT:-8056}; ADMIN_PORT=$${ADMIN_PORT:-8057}; DASH_PORT=$${DASH_PORT:-3001}; \
-	if curl -sf "http://localhost:$$API_PORT/" > /dev/null 2>&1; then \
-		echo "  ✓ API Gateway (port $$API_PORT)"; \
-	else \
-		echo "  ✗ API Gateway not responding (port $$API_PORT)"; \
-	fi; \
-	if curl -sf "http://localhost:$$ADMIN_PORT/" > /dev/null 2>&1; then \
-		echo "  ✓ Admin API (port $$ADMIN_PORT)"; \
-	else \
-		echo "  ✗ Admin API not responding (port $$ADMIN_PORT)"; \
-	fi; \
-	if curl -sf "http://localhost:$$DASH_PORT/" > /dev/null 2>&1; then \
-		echo "  ✓ Dashboard (port $$DASH_PORT)"; \
-	else \
-		echo "  ✗ Dashboard not responding (port $$DASH_PORT)"; \
-	fi; \
-	echo ""; \
-	HOST_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
-	if [ -n "$$HOST_IP" ] && [ "$$HOST_IP" != "127.0.0.1" ]; then \
-		echo "Dashboard: http://$$HOST_IP:$$DASH_PORT"; \
-		echo "API docs:  http://$$HOST_IP:$$API_PORT/docs"; \
-		echo "Admin:     http://$$HOST_IP:$$ADMIN_PORT/docs"; \
-	else \
-		echo "Dashboard: http://localhost:$$DASH_PORT"; \
-		echo "API docs:  http://localhost:$$API_PORT/docs"; \
-		echo "Admin:     http://localhost:$$ADMIN_PORT/docs"; \
-	fi; \
-	echo ""; \
-	echo "Image tag: $$(cat $(LAST_TAG_FILE) 2>/dev/null || echo 'unknown')"; \
-	echo "To test: open the dashboard and join a Google Meet."
-	@$(MAKE) --no-print-directory test-transcription
-
-# --- Transcription test ---
-# Sends a real audio file to the transcription service and verifies text comes back.
-# Catches: wrong URL, wrong token, service down, model mismatch.
-TEST_AUDIO := $(ROOT)/tests3/testdata/test-speech-en.wav
-
-test-transcription:
-	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	if [ -z "$$TX_URL" ]; then \
-		echo "  ✗ Transcription: TRANSCRIPTION_SERVICE_URL not set in .env"; \
-		exit 1; \
-	fi; \
-	if [ ! -f "$(TEST_AUDIO)" ]; then \
-		echo "  ✗ Transcription: test audio file not found at $(TEST_AUDIO)"; \
-		exit 1; \
-	fi; \
-	echo "Testing transcription at $$TX_URL ..."; \
-	RESP=$$(curl -s -X POST "$$TX_URL" \
-		-H "Authorization: Bearer $$TX_TOKEN" \
-		-F "file=@$(TEST_AUDIO)" \
-		-F "language=en" \
-		-F "model=large-v3-turbo" \
-		-w "\n%{http_code}" 2>&1); \
-	HTTP=$$(echo "$$RESP" | tail -1); \
-	BODY=$$(echo "$$RESP" | sed '$d'); \
-        echo "$$BODY"; \
-	if [ "$$HTTP" = "200" ]; then \
-                TEXT=$$(printf "%s\n" "$$BODY" | jq -r 'select(type=="object") | (.text // .data.text // .output // "")' | head -c 80); \
-		if [ -n "$$TEXT" ]; then \
-			echo "  ✓ Transcription works: \"$$TEXT\""; \
-		else \
-			echo "  ✗ Transcription returned 200 but no text"; \
-			exit 1; \
-		fi; \
-	elif [ "$$HTTP" = "401" ] || [ "$$HTTP" = "403" ]; then \
-		echo "  ✗ Transcription auth failed ($$HTTP). Check TRANSCRIPTION_SERVICE_TOKEN in .env"; \
-		exit 1; \
-	else \
-		echo "  ✗ Transcription failed (HTTP $$HTTP)"; \
-		echo "    $$BODY" | head -3; \
-		exit 1; \
-	fi
-
-# ============================================================================
-# Publishing & Promotion
-# ============================================================================
-
-# Push all images to DockerHub with immutable tag, then tag as :dev
-# Uses docker tag + push (same manifest/SHA) instead of imagetools create (wraps in manifest list)
-publish: check_docker
-	@if [ ! -f $(LAST_TAG_FILE) ]; then \
-		echo "ERROR: No .last-tag found. Run 'make build' first."; exit 1; \
-	fi
-	@TAG=$$(cat $(LAST_TAG_FILE)); \
-	echo "Publishing all images with tag: $$TAG"; \
-	for img in $(IMAGES) $(BOT_IMAGE); do \
-		echo "  Pushing $(DOCKERHUB_USER)/$$img:$$TAG..."; \
-		docker push $(DOCKERHUB_USER)/$$img:$$TAG; \
-		echo "  Tagging $(DOCKERHUB_USER)/$$img:dev → $$TAG"; \
-		docker tag $(DOCKERHUB_USER)/$$img:$$TAG $(DOCKERHUB_USER)/$$img:dev; \
-		docker push $(DOCKERHUB_USER)/$$img:dev; \
-	done; \
-	echo ""; \
-	echo "Published $$TAG. :dev tags updated."
-
-# Promote a tag to :staging
-promote-staging: check_docker
-	@TAG_TO_USE="$(TAG)"; \
-	if [ -z "$$TAG_TO_USE" ]; then \
-		if [ -f $(LAST_TAG_FILE) ]; then \
-			TAG_TO_USE=$$(cat $(LAST_TAG_FILE)); \
-		else \
-			echo "ERROR: No TAG specified and .last-tag not found."; exit 1; \
-		fi; \
-	fi; \
-	echo "Promoting $$TAG_TO_USE → :staging"; \
-	for img in $(IMAGES) $(BOT_IMAGE); do \
-		echo "  $(DOCKERHUB_USER)/$$img:staging → $$TAG_TO_USE"; \
-		docker pull $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
-		docker tag $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE $(DOCKERHUB_USER)/$$img:staging; \
-		docker push $(DOCKERHUB_USER)/$$img:staging; \
-	done; \
-	echo "Done. :staging now points to $$TAG_TO_USE"
-
-# Promote a tag to :latest
-promote-latest: check_docker
-	@TAG_TO_USE="$(TAG)"; \
-	if [ -z "$$TAG_TO_USE" ]; then \
-		if [ -f $(LAST_TAG_FILE) ]; then \
-			TAG_TO_USE=$$(cat $(LAST_TAG_FILE)); \
-		else \
-			echo "ERROR: No TAG specified and .last-tag not found."; exit 1; \
-		fi; \
-	fi; \
-	echo "Promoting $$TAG_TO_USE → :latest"; \
-	for img in $(IMAGES) $(BOT_IMAGE); do \
-		echo "  $(DOCKERHUB_USER)/$$img:latest → $$TAG_TO_USE"; \
-		docker pull $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
-		docker tag $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE $(DOCKERHUB_USER)/$$img:latest; \
-		docker push $(DOCKERHUB_USER)/$$img:latest; \
-	done; \
-	echo "Done. :latest now points to $$TAG_TO_USE"
-
-# ============================================================================
-# Database schema sync (idempotent — no Alembic, no migration versions)
-# ============================================================================
-
-init-db: check_docker
-	@set -e; \
-	if [ "$(REMOTE_DB)" != "true" ]; then \
-		if ! $(COMPOSE_CMD) ps -q postgres | grep -q .; then \
-			echo "ERROR: postgres not running. Run 'make up' first."; exit 1; \
-		fi; \
-		count=0; \
-		DB_USER=$$(grep -E '^DB_USER=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "postgres"); \
-		DB_NAME=$$(grep -E '^DB_NAME=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "vexa"); \
-		DB_USER=$${DB_USER:-postgres}; DB_NAME=$${DB_NAME:-vexa}; \
-		while ! $(COMPOSE_CMD) exec -T postgres pg_isready -U $$DB_USER -d $$DB_NAME -q; do \
-			if [ $$count -ge 12 ]; then echo "ERROR: DB not ready in 60s."; exit 1; fi; \
-			sleep 5; count=$$((count+1)); \
-		done; \
-	fi; \
-	echo "Running idempotent schema sync..."; \
-	$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from admin_models.database import init_db; asyncio.run(init_db())"; \
-	$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())"; \
-	echo "Schema sync complete."
-
-# Restore a production dump into the local postgres.
-# Extracts only the public schema, loads data, then runs schema sync.
-#   make restore-db DUMP=~/secrets/production-dump.sql
-restore-db: check_docker
-	@if [ -z "$(DUMP)" ]; then \
-		echo "Usage: make restore-db DUMP=<path-to-dump.sql>"; exit 1; \
-	fi
-	$(ROOT)/deploy/compose/scripts/restore-prod-dump.sh "$(DUMP)"
+	$(COMPOSE) logs -f

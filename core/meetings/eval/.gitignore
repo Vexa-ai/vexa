@@ -1,0 +1,9 @@
+# Secrets + ground truth + fixtures NEVER live in the repo (real transcripts are sensitive).
+# Live values are in ~/vexa-test-rig/secrets.env; clip pools in ~/vexa-test-rig/cache.
+secrets.env
+cache/
+truth*.jsonl
+noise*.jsonl
+*.log
+# O-TEL-3 flag.test.mjs writes a transient flag-out here; the committed fixtures stay.
+replay-fixture/.flag-out.tmp.json

@@ -1,80 +1,57 @@
 #!/usr/bin/env bash
+# Render the v0.12 vexa chart (no cluster required) and assert the carved control plane is present:
+# 5 service Deployments, postgres + minio StatefulSets, redis, minio-init Job, runtime SA/Role/
+# RoleBinding (k8s backend), agent-workspaces PVC. This is the gate:helm static proof.
 set -euo pipefail
 
-# Helm template validation test (no cluster required)
-# Usage: ./deploy/helm/tests/test_template.sh
+HELM_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CHART="$HELM_DIR/charts/vexa"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$SCRIPT_DIR"
-
-PASS=0
-FAIL=0
-RESULTS=""
-
-check() {
-  local name="$1"
-  shift
-  if "$@" >/dev/null 2>&1; then
-    RESULTS+="PASS: $name\n"
-    ((PASS++))
-  else
-    RESULTS+="FAIL: $name\n"
-    ((FAIL++))
-  fi
-}
-
-echo "=== Helm Template Validation Test ==="
-echo "Started: $(date -Iseconds)"
-echo ""
-
-# Find charts
-CHARTS_DIR="$SCRIPT_DIR/charts"
-if [ ! -d "$CHARTS_DIR" ]; then
-  echo "FAIL: charts/ directory not found at $CHARTS_DIR"
-  exit 1
+if ! command -v helm >/dev/null 2>&1; then
+  echo "SKIP: helm not installed"; exit 0
 fi
 
-# Test each chart
-for chart_dir in "$CHARTS_DIR"/*/; do
-  chart_name=$(basename "$chart_dir")
-  echo ">>> Testing chart: $chart_name"
+RENDER="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml")"
 
-  # Template render
-  check "$chart_name: helm template" helm template "test-$chart_name" "$chart_dir"
+fail=0
+need() {  # need <count> <grep-pattern> <label>
+  local want="$1" pat="$2" label="$3" got
+  got="$(printf '%s\n' "$RENDER" | grep -cE "$pat" || true)"
+  if [ "$got" -ge "$want" ]; then echo "  OK: $label ($got)"; else echo "  FAIL: $label — want >=$want got $got"; fail=1; fi
+}
 
-  # Lint
-  check "$chart_name: helm lint" helm lint "$chart_dir"
+echo "=== gate:helm — template render assertions ==="
+# 6 long-running services (+ terminal) + redis = 7 Deployments
+need 7 '^kind: Deployment'    "Deployments"
+need 2 '^kind: StatefulSet'   "StatefulSets (postgres+minio)"
+need 9 '^kind: Service$'      "Services"
+need 1 'name: vexa-vexa-terminal' "terminal present"
+need 1 '^kind: ServiceAccount' "runtime ServiceAccount"
+need 1 '^kind: Role$'         "runtime Role"
+need 1 '^kind: RoleBinding'   "runtime RoleBinding"
+need 1 '^kind: Job'           "minio-init Job"
+need 2 '^kind: PersistentVolumeClaim' "PVCs (redis+workspaces)"
+need 1 'name: vexa-vexa-agent-api' "agent-api present"
+need 1 'RUNTIME_BACKEND'      "runtime backend env"
+need 1 'serviceAccountName: vexa-vexa-runtime' "runtime SA bound"
+# model-auth wiring: worker creds ride the dispatch spec env FROM agent-api, so agent-api must
+# carry the optional secret refs (values-test leaves auth unset — CI has no creds; render + boot
+# must stay green, the env ref is optional:true).
+need 1 'key: CLAUDE_CODE_OAUTH_TOKEN' "agent-api CLAUDE_CODE_OAUTH_TOKEN secret ref"
+need 2 'key: ANTHROPIC_AUTH_TOKEN'    "ANTHROPIC_AUTH_TOKEN secret refs (agent-api + runtime)"
 
-  # Dry run (requires cluster connection)
-  export KUBECONFIG="${KUBECONFIG:-/home/dima/.kube/config}"
-  if kubectl cluster-info >/dev/null 2>&1; then
-    check "$chart_name: dry-run install" helm install "test-$chart_name" "$chart_dir" --dry-run --generate-name
-  else
-    RESULTS+="SKIP: $chart_name: dry-run (no cluster)\n"
-  fi
+# auth unset (values-test) → the chart Secret must NOT carry the key; auth set → it must.
+if printf '%s\n' "$RENDER" | grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN:'; then
+  echo "  FAIL: CLAUDE_CODE_OAUTH_TOKEN rendered into the Secret with auth UNSET"; fail=1
+else
+  echo "  OK: Secret omits CLAUDE_CODE_OAUTH_TOKEN when unset"
+fi
+RENDER_AUTH="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set secrets.claudeCodeOauthToken=sk-test-oauth)"
+if printf '%s\n' "$RENDER_AUTH" | grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth"'; then
+  echo "  OK: CLAUDE_CODE_OAUTH_TOKEN lands in the Secret when set"
+else
+  echo "  FAIL: CLAUDE_CODE_OAUTH_TOKEN missing from the Secret when set"; fail=1
+fi
 
-  echo ""
-done
-
-# Verify chart dependencies
-for chart_dir in "$CHARTS_DIR"/*/; do
-  chart_name=$(basename "$chart_dir")
-  if [ -f "$chart_dir/Chart.yaml" ]; then
-    check "$chart_name: Chart.yaml valid" helm show chart "$chart_dir"
-  fi
-  if [ -f "$chart_dir/values.yaml" ]; then
-    check "$chart_name: values.yaml exists" test -f "$chart_dir/values.yaml"
-  fi
-done
-
-# Report
-echo "=== RESULTS ==="
-echo -e "$RESULTS"
-echo "PASS: $PASS  FAIL: $FAIL"
-echo "Finished: $(date -Iseconds)"
-
-# Save results
-mkdir -p tests/results
-echo -e "$(date -Iseconds)\n\n$RESULTS\nPASS: $PASS  FAIL: $FAIL" > tests/results/last_run.txt
-
-[ "$FAIL" -eq 0 ] && exit 0 || exit 1
+[ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

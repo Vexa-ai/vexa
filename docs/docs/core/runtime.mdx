@@ -1,0 +1,77 @@
+---
+title: "Runtime"
+description: "Isolated, ephemeral containers — the execution layer."
+---
+
+The **runtime** spawns, reuses, and reaps the [containers](/concepts#container) that agents (and meeting
+bots) run in. It is the only thing that touches the orchestrator; the control plane just asks it to run a
+dispatch.
+
+## Why it exists: safety
+
+An agent is an untrusted, tool-using process operating on sensitive data. So every dispatch runs
+**isolated** (its own container), **sandboxed** (no egress except through brokered tools), and scoped to
+**only the workspaces and tools it was granted**. Isolation is what makes the governance real rather than
+advisory — which is why agents never run in the control plane.
+
+The workspace grant is **enforced by the substrate**, not by instructions to the model: docker binds one
+volume subpath per granted mount (read-only roles bind `:ro`; requires engine ≥ v26 for named-volume
+stores); Kubernetes emits one `subPath` + `readOnly` volumeMount per mount against the store PVC; the
+lite process backend drops each worker to a **per-subject uid** with `0700` private tiers and
+per-shared-workspace groups. Another tenant's workspace isn't merely off-limits — it is **not in the
+worker's filesystem at all**, so even a prompt-injected agent cannot read or write it.
+
+## One lifecycle, one substrate
+
+- **TTL-on-idle** — a container lives while it works and is reaped when idle. No warm/oneshot
+  bookkeeping; continuity is the [session file in the workspace](/concepts#workspace).
+- **Sub-second, ephemeral, thousands in parallel** — the single-machine coding-agent model, made
+  multi-tenant and cheap.
+
+## Where it runs
+
+The runtime is **orchestration-agnostic**. The kernel owns the
+[`runtime.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/runtime/contracts/runtime.v1)
+lifecycle — `starting → running → stopping → stopped → destroyed`, emitting an event on every
+transition — and delegates the one substrate-specific question (*how* do I start, observe, and stop a
+workload?) to a pluggable **Backend** with a five-method port: `start` · `exit_code` · `terminate` ·
+`kill` · `cleanup`. The same control plane and the same `unit.v1` dispatch drive every backend; only
+the implementation behind that port differs:
+
+- **Process** — agents and bots are spawned as **child processes**, no Docker socket required.
+- **Docker** — each workload is its own container via the Docker socket. This is what the open core
+  ships, brought up with **Docker Compose** (`make all`).
+- **Kubernetes** — the same workload model scheduled as a **Pod** across a cluster.
+
+The backend is selected per deployment by `RUNTIME_BACKEND` (default `docker`). Because all three
+honour the same port, the lifecycle a caller observes is **identical** across substrates — a bot and an
+agent are the same `runtime.v1` workload, differing only by [profile](/concepts#container) and env.
+
+### On Kubernetes
+
+With `RUNTIME_BACKEND=k8s`, a workload is a **bare Pod**, created with `kubectl run … --restart=Never`
+(the kernel shells out to `kubectl` — no client library, mirroring the Docker backend). Two choices are
+deliberate:
+
+- **`--restart=Never`** — the *kernel* owns restart and reaping (TTL-on-idle, max-lifetime, per-owner
+  quotas). A Pod that resurrected itself would defeat the kernel's "has it stopped?" detection, so the
+  Pod must stay dead once it exits.
+- **A bare Pod, not a Deployment/Job** — a dispatch is a single ephemeral run, not a replicated
+  service. The Pod is named `vexa-<workloadId>` (DNS-1123) in the namespace the runtime reads from the
+  downward API (`POD_NAMESPACE`). Pod phase drives the backend's exit check (`Pending`/`Running` → still
+  running; `Succeeded` → exit 0; `Failed` → the container's terminated exit code), which the kernel turns
+  into the terminal state `stopped` with reason `completed` (exit 0) or `failed` (nonzero).
+
+<Note>**Current state (open core):** the Kubernetes backend implements the lifecycle **and the
+workspace mount** — worker Pods get one `subPath` + `readOnly` volumeMount per granted workspace
+against the store PVC (the same per-mount isolation the Docker backend enforces with volume-subpath
+binds). The in-cluster substrate — ServiceAccount + RBAC to create Pods, the store PVC — ships as the
+**Helm chart** in `deploy/helm`. The simplest self-hosted paths remain **Docker Compose** (`make all`)
+and the one-container **lite** (`make lite`) — see [Deployment](/deployment). Code:
+`core/runtime/src/runtime_kernel/k8s_backend.py` + `mounts.py:k8s_volume_mounts` (Pod spec) vs
+`docker_backend.py` (the reference bind + credential path).</Note>
+
+## Already in production
+
+Vexa's [meeting bots](/core/meetings) are browser containers spawned by this exact runtime. Running
+agents this way is the same machinery, a different workload type — not a new system to stand up.

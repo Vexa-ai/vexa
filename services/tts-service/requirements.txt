@@ -1,7 +1,0 @@
-fastapi>=0.128.8
-uvicorn>=0.39.0
-h11>=0.16.0                       # CVE-2025-43859 (uvicorn transitive)
-idna>=3.15
-piper-tts>=1.4.0
-numpy>=1.22.0,<2.0.0
-langdetect>=1.0.9

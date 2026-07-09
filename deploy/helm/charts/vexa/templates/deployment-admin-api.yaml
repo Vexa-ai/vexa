@@ -50,8 +50,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_USER
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -67,18 +65,26 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            - name: LOG_LEVEL
+              value: {{ .Values.adminApi.logLevel | default "info" | quote }}
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 40
           readinessProbe:
             httpGet:
-              path: /docs
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /docs
+              path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20

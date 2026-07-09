@@ -1,0 +1,13 @@
+{
+  "name": "@vexa/eval",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "meetings L4 gate — synthetic-meeting e2e validator: launch speaker bots into a live meeting via the service API, play known TTS on a controlled timeline (length + overlap dials), then score the captured transcript.v1 against ground truth. Deployment-agnostic (validates 0.11 now, 0.12 as it lands).",
+  "scripts": {
+    "launch": "bin/eval.sh launch",
+    "drive": "bin/eval.sh drive",
+    "corpus": "bin/eval.sh corpus",
+    "judge": "bin/eval.sh judge"
+  }
+}

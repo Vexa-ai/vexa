@@ -1,0 +1,28 @@
+{
+  "name": "@vexa/mixed-pipeline",
+  "version": "0.1.0",
+  "description": "The mixed lane: one mixed audio stream → pyannote segmenter (cut-only, the only ONNX) + shared buffer/whisper + hints namer → transcript segments. Names from time-windowed hints; no diarization/clustering.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx src/confirm-loop.golden.test.ts && tsx src/pending-stability.test.ts && tsx src/naming.smoke.test.ts && tsx src/claim.smoke.test.ts && tsx src/priority.smoke.test.ts && tsx src/concurrency.smoke.test.ts && tsx src/flicker.smoke.test.ts && tsx src/hint-evidence.smoke.test.ts && tsx src/ending-context.smoke.test.ts && tsx src/short-ui-switch.smoke.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
+  },
+  "dependencies": {
+    "@vexa/transcribe-buffer": "workspace:*",
+    "@vexa/transcribe-whisper": "workspace:*",
+    "@huggingface/transformers": "^4.2.0",
+    "onnxruntime-node": "^1.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

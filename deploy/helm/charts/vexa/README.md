@@ -1,88 +1,37 @@
-# Vexa Helm Chart
+# vexa — v0.12 control-plane Helm chart
 
-## What
-Deploys the Vexa real-time meeting transcription platform to Kubernetes.
-
-## Why
-Self-hosted deployment of the full Vexa stack: bot management, per-speaker transcription, real-time delivery via WebSocket, and a dashboard UI.
-
-## Architecture
+Deploys the full v0.12 stack to Kubernetes: the control plane **gateway · admin-api · meeting-api ·
+runtime · agent-api**, the **terminal** web UI, and infra (`postgres` · `redis` · `minio` + a
+`minio-init` bucket Job). The `runtime` spawns the bot and agent-worker as on-demand Pods
+(`RUNTIME_BACKEND=k8s`, under the chart's ServiceAccount/RBAC); they are not long-running services.
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────────┐
-│  Dashboard   │────>│  API Gateway  │────>│  Admin API          │
-│  (Next.js)   │     │  (FastAPI)    │     │  (FastAPI)          │
-└─────────────┘     └──────┬───────┘     └─────────────────────┘
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-   ┌──────▼───────┐ ┌─────▼──────┐  ┌──────▼─────┐
-   │ Meeting API   │ │ Agent API  │  │ Runtime API │
-   │ (FastAPI)     │ │ (FastAPI)  │  │ (FastAPI)   │
-   └──────┬───────┘ └────────────┘  └──────┬──────┘
-          │                                │
-   ┌──────▼───────┐                 ┌──────▼──────┐
-   │  Bot Pods     │                │   Postgres   │
-   │  (Playwright) │                │   Redis      │
-   └──────────────┘                └─────────────┘
+            ┌──────────┐
+  client ──>│ gateway  │──> admin-api ──┐
+            └────┬─────┘                ├─> postgres
+                 └────> meeting-api ────┘
+                          │  └─> minio (recordings)
+                          └─> runtime ──(kubectl run)──> bot Pod / agent-worker Pod
+            agent-api ──> runtime                        redis (streams/pubsub)
 ```
 
-## Services
-
-| Service | Description | Port |
-|---------|-------------|------|
-| api-gateway | HTTP + WebSocket API entry point | 8000 |
-| admin-api | User/token CRUD, meeting management | 8001 |
-| meeting-api | Meeting domain — bot lifecycle, transcription pipeline, recordings, webhooks | 8080 |
-| agent-api | AI agent chat runtime — streaming, workspaces, scheduling | 8100 |
-| runtime-api | Container lifecycle — Docker, K8s, process backends | 8090 |
-| transcription-service | GPU inference (Whisper) — optional, can run externally | 8000 |
-| mcp | Model Context Protocol server | 18888 |
-| tts-service | Text-to-speech | 8002 |
-| dashboard | Next.js meeting dashboard | 3000 |
-| postgres | Database (bundled, optional) | 5432 |
-| redis | Stream + pub/sub (bundled, optional) | 6379 |
-
-## Quick Start
+## Install
 
 ```bash
-helm install vexa ./deploy/helm/charts/vexa \
-  --set secrets.adminApiToken=your-secret \
-  --set database.host=your-pg-host \
-  --set redisConfig.host=your-redis-host
+helm upgrade --install vexa . -n vexa --create-namespace \
+  --set global.imageTag=YYMMDD-HHMM \
+  --set secrets.adminApiToken=$ADMIN_TOKEN \
+  --set secrets.internalApiSecret=$INTERNAL_API_SECRET
 ```
 
-## Bot Orchestration
+See [`../../README.md`](../../README.md) for the cookbook (local k3s smoke, managed backing,
+ingress) and the values table. Key knobs: `global.imageTag`, `runtime.backend`
+(`k8s`|`docker`|`process`), `secrets.*` (or `secrets.existingSecretName`), `postgres/redis/minio.enabled`,
+`pgbouncer.enabled`, `ingress.*`.
 
-The meeting-api delegates container lifecycle to Runtime API, which supports three orchestrator modes:
+## Validate (no cluster)
 
-- **process** (default): Bots run as child processes. Simple, no extra permissions. Recommended for small deployments.
-- **kubernetes**: Bots spawn as separate Pods. Requires RBAC. Best for scale.
-- **docker**: Bots spawn as Docker containers. Requires Docker socket mount. Not recommended for K8s.
-
-## Transcription Service
-
-The transcription-service requires a GPU. Options:
-- **External**: Run on a GPU machine outside K8s. Set `transcriptionService.enabled=false` and configure the URL in meeting-api.
-- **In-cluster**: Set `transcriptionService.enabled=true` with a GPU node pool.
-
-## Configuration
-
-See `values.yaml` for all options. Key overrides for production:
-
-```yaml
-secrets:
-  adminApiToken: "strong-random-token"
-  transcriptionServiceToken: "match-transcription-service-API_TOKEN"
-
-database:
-  host: "your-postgres-host"
-
-ingress:
-  enabled: true
-  host: "gateway.yourdomain.com"
-  className: "nginx"
-  tls:
-    - secretName: vexa-tls
-      hosts: ["gateway.yourdomain.com"]
+```bash
+helm lint .
+helm template vexa . -n vexa -f values-test.yaml
 ```

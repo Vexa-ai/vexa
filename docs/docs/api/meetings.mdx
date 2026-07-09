@@ -1,0 +1,264 @@
+---
+title: "Meetings API"
+description: "Plan meetings ahead, sync your calendar, send a bot, get the real-time transcript, manage the bot, retrieve recordings."
+---
+
+The Meetings API covers a meeting's whole life: **plan** it ahead (or import it from a calendar),
+**send a bot** into the call (or let auto-join do it), and read the **transcript in real time**. It
+is the public Vexa API — the same surface whether you use the hosted service or self-host.
+
+## Base URL & auth
+
+| | |
+|---|---|
+| Hosted | `https://api.cloud.vexa.ai` |
+| Self-hosted | `http://localhost:18056` (the gateway; `API_GATEWAY_HOST_PORT`, default `18056`) |
+
+Every request carries your key:
+
+```bash
+-H "X-API-Key: <API_KEY>"
+```
+
+## Platforms
+
+Pass one of these as `platform`:
+
+| Platform | `platform` value |
+|---|---|
+| Google Meet | `google_meet` |
+| Zoom | `zoom` |
+| Microsoft Teams | `teams` |
+
+The bot joins like any participant — no plugins, no host configuration.
+
+## Meeting statuses
+
+A meeting is **one record from plan to transcript**:
+
+| Phase | `status` values | Who owns it |
+|---|---|---|
+| Planned (intent) | `idle` (no time) · `scheduled` (time set) | you — freely editable |
+| Live (bot FSM) | `requested` · `joining` · `awaiting_admission` · `needs_help` · `active` · `stopping` | the bot lifecycle |
+| Terminal | `completed` · `failed` | — |
+
+Sending a bot to a planned meeting (yours or auto-join's) **upgrades the same record in place** —
+its title, workspace binding, and transcript stay together. `PATCH`/`DELETE` work only while the
+record is still planned; once the bot lifecycle owns it they answer `409`.
+
+## Plan a meeting
+
+Create a meeting **before it happens** — no bot is spawned. All fields are optional: a plan can be
+just a title, and the link can be attached later.
+
+<ParamField body="title" type="string">What the meeting is about — shown in the Meetings list.</ParamField>
+<ParamField body="scheduled_at" type="string">ISO-8601 start time. Present → status `scheduled` (and [auto-join](#auto-join) arms); absent → `idle`.</ParamField>
+<ParamField body="meeting_url" type="string">A Meet/Zoom/Teams link — parsed server-side into `platform` + `native_meeting_id`. Unrecognized links are rejected with `422`.</ParamField>
+<ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript.</ParamField>
+<ParamField body="auto_join" type="boolean">Send the bot automatically at start time. Default `true`.</ParamField>
+
+```bash POST /meetings
+curl -X POST "$API_BASE/meetings" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"title":"Q3 kickoff with Acme","scheduled_at":"2026-07-10T15:00:00Z",
+       "meeting_url":"https://meet.google.com/abc-defg-hij","workspace_id":"ws-acme"}'
+```
+
+Returns `201` with the meeting record. `409` when a non-terminal meeting already exists for the
+same link.
+
+### Edit or delete a plan
+
+Planned meetings are addressed **by record id** (a plan without a link has no platform/native
+path). Send only the fields you're changing; `null` clears a field (`scheduled_at: null` flips the
+status back to `idle`, `meeting_url: null` detaches the link, `workspace_id: null` unbinds).
+
+```bash PATCH /meetings/{meeting_id}
+curl -X PATCH "$API_BASE/meetings/12345" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"scheduled_at":"2026-07-10T16:00:00Z","auto_join":false}'
+```
+
+```bash DELETE /meetings/{meeting_id}
+curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
+```
+
+Both answer `404` for a record you don't own and `409` once the bot lifecycle owns the record.
+
+## Auto-join
+
+A `scheduled` meeting **with a link** is joined automatically: a background sweep sends the bot
+~60 s before `scheduled_at` (never more than 10 min after — a stale plan is skipped, not joined
+late). Opt out per meeting with `auto_join: false`. Failures are loud: a concurrency-cap or spawn
+failure stamps `auto_join_error` into the meeting's `data` and retries after a backoff. Timing is
+tunable on a self-host — see [Configuration](/configuration).
+
+## Calendar sync
+
+Connect a calendar's **secret ICS address** and upcoming meetings import as planned records
+automatically (only events carrying a recognizable Meet/Zoom/Teams link; one record per event —
+the next occurrence of a recurring series). The URL is a secret: read-backs return it **masked**.
+`auto_join` here is the **global default** stamped onto imported meetings.
+
+```bash PUT /user/calendar
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"ics_url":"https://calendar.google.com/calendar/ical/…/basic.ics","auto_join":true}'
+```
+
+```bash GET /user/calendar
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar"
+```
+
+```json Response
+{ "ics_url_set": true, "ics_url_masked": "calendar.google.com/…s.ics", "auto_join": true }
+```
+
+Pasting the wrong kind of URL fails at save: a calendar *page* (e.g. Google's `/calendar/embed`)
+is rejected with a `422` that points at the right field — the **Secret address in iCal format**
+(on Google Workspace domains an admin policy can hide that field; see
+[Calendar sync](/how-to/calendar-sync#1-find-your-secret-ics-address) for the unlock).
+
+**Sync feedback** — connecting from the Terminal runs a sync immediately; over the API the same
+two edges are yours:
+
+```bash POST /user/calendar/sync — run the sync NOW, get the result
+curl -X POST "$API_BASE/user/calendar/sync" -H "X-API-Key: $API_KEY"
+```
+
+```json Response
+{ "last_sync": "2026-07-08T15:30:00+00:00", "last_error": null,
+  "counts": { "created": 3, "updated": 0, "cancelled": 0 } }
+```
+
+```bash GET /user/calendar/sync — the last sync's status
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/calendar/sync"
+```
+
+`last_error`, when set, is a human-readable reason (wrong-URL kind, HTTP status, oversize,
+redirect, not-ICS content) — the same strings the Terminal panel shows. `404` on the POST means no
+feed is connected; `503` means the deployment has calendar sync disabled (see
+[Configuration](/configuration#auto-join--calendar-sync)).
+
+Disconnect with `{"ics_url": null}`. See [Calendar sync](/how-to/calendar-sync) for where to find
+the secret address.
+
+## Send a bot to a meeting
+
+<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
+<ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
+<ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
+<ParamField body="language" type="string">ISO code (e.g. `en`); omit to auto-detect.</ParamField>
+<ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
+
+```bash POST /bots
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa","language":"en"}'
+```
+
+If a **planned** meeting exists for the same link, the spawn **claims it**: the same record moves
+to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
+already active on that link; `429` past your concurrency limit.
+
+## Get the transcript
+
+```bash GET /transcripts/{platform}/{native_meeting_id}
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/transcripts/google_meet/abc-defg-hij"
+```
+
+```json Response
+{
+  "segments": [
+    {
+      "segment_id": "sess_9c2a:spk1:12400",
+      "speaker": "Jane Liu",
+      "text": "Let's lock the renewal pricing by July 1.",
+      "start": 12.4, "end": 15.1,
+      "language": "en",
+      "completed": true,
+      "confidence": 0.93,
+      "words": [{ "word": "Let's", "start": 12.4, "end": 12.6, "probability": 0.98 }]
+    }
+  ]
+}
+```
+
+Segments stream in while the meeting runs — poll this endpoint, or subscribe over **WebSocket** for live,
+per-segment updates. Live drafts arrive as `completed: false` and are replaced by `completed: true`
+confirmations.
+
+## Manage the bot
+
+```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"language":"es","task":"translate"}'
+```
+
+```bash Stop / leave — DELETE /bots/{platform}/{native_meeting_id}
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
+```
+
+```bash Running bots — GET /bots/status
+curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
+```
+
+```bash Make the bot speak — POST /bots/{platform}/{native_meeting_id}/speak
+curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"text":"Thanks everyone, wrapping up."}'
+```
+
+<Note>
+**Config** (`PUT …/config`, change language/task mid-call) and **speak** (`POST …/speak`, TTS into the
+call) ride the live bot-control plane and are not yet wired in the v0.12 open-core stack — they currently
+return `404`. Send-a-bot, stop, **running bots** (`GET /bots/status`), list, and transcripts are live.
+</Note>
+
+```bash List meetings — GET /meetings
+curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
+```
+
+```bash Single meeting — GET /meetings/{meeting_id}
+curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
+```
+
+## Speaker-attributed transcripts
+
+Each segment is **diarized** — attributed to a speaker (a bound display name, or a provisional label
+until it binds) — with **word-level timestamps** (`words[]`) and a `confidence`. Speaker attribution is
+text-level (who said what), via speaker binding / clustering / captions — *not* separate audio tracks.
+Times are seconds from session start; `absolute_start_time` / `absolute_end_time` give wall-clock.
+
+The same segments arrive **live** (`completed: false`, a pending draft) and then **confirmed**
+(`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
+runs.
+
+## Recordings
+
+The meeting's **audio recording** is uploaded to object storage — on a self-host, your own MinIO bucket,
+so it never leaves your environment. This is the meeting audio, stored separately from the diarized
+transcript above (there is no "per-speaker audio" — speaker separation lives in the transcript as text).
+
+```bash List recordings — GET /recordings
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings"
+```
+
+```bash Recording detail — GET /recordings/{recording_id}
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
+```
+
+```bash Master metadata (finalize-on-read) — GET /recordings/{recording_id}/master?type=audio
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"
+```
+
+The master metadata returns a `raw_url` pointing at the byte stream
+`GET /recordings/{recording_id}/media/{media_file_id}/raw`, which the player loads.
+
+---
+
+In Vexa's [runtime](/core/runtime) terms, a bot is a browser [container](/concepts#container); the
+transcript it produces compiles into the [workspace](/concepts#workspace), where
+[agents](/core/agents) act on it. See [Meetings](/core/meetings).

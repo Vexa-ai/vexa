@@ -1,0 +1,12 @@
+---
+title: "The dispatch"
+description: "One agent run — the composition of the seven primitives."
+---
+
+A **dispatch** is one run of an agent. It is the [model](/concepts)'s single object. See the
+shape in the [primitives overview](/concepts).
+
+- **Lifecycle** = TTL-on-idle (the [Runtime](/core/runtime) reaps it when nothing is computing).
+- **subject vs launcher** — on-behalf-of vs who-triggered (see [Identity](/architecture/identity-and-trust)).
+- **`trust` and `output` are derived**, not stored: `trust` = (all workspaces `ro` && irreversible tools
+  gated), set by the trigger→grant policy; `output` = `unit:<dispatch_id>:out`.

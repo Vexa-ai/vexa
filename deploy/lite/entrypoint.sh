@@ -1,398 +1,117 @@
 #!/bin/bash
 # =============================================================================
-# Vexa Lite - Container Entrypoint
+# Vexa Lite (v0.12) — container entrypoint
 # =============================================================================
-# 1. Waits for external services (PostgreSQL, Redis)
-# 2. Initializes database schema
-# 3. Starts all services via supervisord
+# 1. Normalizes the runtime env (every var supervisord references via %(ENV_X)s MUST exist,
+#    or supervisord refuses to start that program — so we default them all here).
+# 2. Derives DATABASE_URL + REDIS_URL from parts (or parses a supplied URL into parts).
+# 3. Waits for the (external) PostgreSQL — schema convergence runs in-process on each
+#    service's startup (admin-api/meeting-api ensure_schema()).
+# 4. Hands off to supervisord, which brings up the whole control plane.
 # =============================================================================
-
 set -e
 
 echo "=============================================="
-echo "  Vexa Lite - Starting Container"
+echo "  Vexa Lite (v0.12) — starting container"
 echo "=============================================="
-echo ""
 
-# -----------------------------------------------------------------------------
-# Environment Setup
-# -----------------------------------------------------------------------------
-
-# Redis configuration - supports REDIS_URL or individual vars
-USE_INTERNAL_REDIS=false
-if [ -z "$REDIS_HOST" ] || [ "$REDIS_HOST" = "localhost" ] || [ "$REDIS_HOST" = "127.0.0.1" ]; then
-    USE_INTERNAL_REDIS=true
-    export REDIS_HOST="localhost"
-    export REDIS_PORT="${REDIS_PORT:-6379}"
-    export REDIS_USER=""
-    export REDIS_PASSWORD=""
-    export REDIS_URL="redis://localhost:${REDIS_PORT}/0"
-elif [ -n "$REDIS_URL" ]; then
-    REDIS_URL_NO_SCHEME="${REDIS_URL#*://}"
-    if [[ "$REDIS_URL_NO_SCHEME" == *"@"* ]]; then
-        REDIS_AUTH="${REDIS_URL_NO_SCHEME%%@*}"
-        REDIS_HOSTPORTDB="${REDIS_URL_NO_SCHEME#*@}"
-        if [[ "$REDIS_AUTH" == *":"* ]]; then
-            export REDIS_USER="${REDIS_AUTH%%:*}"
-            export REDIS_PASSWORD="${REDIS_AUTH#*:}"
-        else
-            export REDIS_USER="$REDIS_AUTH"
-            export REDIS_PASSWORD=""
-        fi
-    else
-        REDIS_HOSTPORTDB="$REDIS_URL_NO_SCHEME"
-        export REDIS_USER=""
-        export REDIS_PASSWORD=""
-    fi
-    REDIS_HOSTPORT="${REDIS_HOSTPORTDB%%/*}"
-    export REDIS_HOST="${REDIS_HOSTPORT%%:*}"
-    export REDIS_PORT="${REDIS_HOSTPORT#*:}"
-else
+# ─── Redis (internal by default; an external REDIS_URL is honored) ────────────────────────────────
+if [ -z "${REDIS_URL:-}" ]; then
     export REDIS_HOST="${REDIS_HOST:-localhost}"
     export REDIS_PORT="${REDIS_PORT:-6379}"
-    export REDIS_USER=""
-    export REDIS_PASSWORD=""
     export REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
 fi
 
-# Database configuration
+# ─── Database — DB_* only. Each service builds its own async URL (postgresql+asyncpg://) from these
+#     (admin_api/_database_url, meeting_api/_database_url). We deliberately do NOT export DATABASE_URL:
+#     a plain `postgresql://` would force SQLAlchemy onto the psycopg2 (sync) driver, which lite does
+#     not install (asyncpg only). For an external managed DB, set DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD.
 export DB_HOST="${DB_HOST:-localhost}"
 export DB_PORT="${DB_PORT:-5432}"
 export DB_NAME="${DB_NAME:-vexa}"
 export DB_USER="${DB_USER:-postgres}"
-export DB_PASSWORD="${DB_PASSWORD:-}"
+export DB_PASSWORD="${DB_PASSWORD:-postgres}"
 
-if [ -z "$DATABASE_URL" ]; then
-    if [ -n "$DB_PASSWORD" ]; then
-        export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
-    else
-        export DATABASE_URL="postgresql://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
-    fi
-else
-    export DATABASE_URL="${DATABASE_URL/postgres:\/\//postgresql:\/\/}"
-    DB_URL_BASE="${DATABASE_URL%%\?*}"
-    DB_URL_NO_SCHEME="${DB_URL_BASE#*://}"
-    DB_USERPASS="${DB_URL_NO_SCHEME%%@*}"
-    DB_HOSTPORTDB="${DB_URL_NO_SCHEME#*@}"
-    if [[ "$DB_USERPASS" == *":"* ]]; then
-        export DB_USER="${DB_USERPASS%%:*}"
-        export DB_PASSWORD="${DB_USERPASS#*:}"
-    else
-        export DB_USER="$DB_USERPASS"
-    fi
-    DB_HOSTPORT="${DB_HOSTPORTDB%%/*}"
-    export DB_NAME="${DB_HOSTPORTDB#*/}"
-    if [[ "$DB_HOSTPORT" == *":"* ]]; then
-        export DB_HOST="${DB_HOSTPORT%%:*}"
-        export DB_PORT="${DB_HOSTPORT#*:}"
-    else
-        export DB_HOST="$DB_HOSTPORT"
-    fi
-    if [[ "$DATABASE_URL" == *"sslmode="* ]]; then
-        SSL_MODE_PARAM="${DATABASE_URL##*sslmode=}"
-        SSL_MODE_PARAM="${SSL_MODE_PARAM%%&*}"
-        export DB_SSL_MODE="$SSL_MODE_PARAM"
-    fi
-fi
-
-export DB_SSL_MODE="${DB_SSL_MODE:-disable}"
+# ─── Defaults for every var supervisord interpolates (empty is fine; must be SET) ─────────────────
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
+export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-changeme}}"
+export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-lite-internal-secret}"
 
-# Recording enabled by default in lite (uses local filesystem)
-export RECORDING_ENABLED="${RECORDING_ENABLED:-true}"
+export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
+export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
+
+export MINIO_ENDPOINT="${MINIO_ENDPOINT:-}"
+export MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-}"
+export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"
+export MINIO_BUCKET="${MINIO_BUCKET:-vexa}"
+export MINIO_SECURE="${MINIO_SECURE:-false}"
+
+# Process-backend launchers — DEFAULTS ONLY: an operator-provided BOT_COMMAND /
+# AGENT_WORKER_COMMAND on the container env wins. supervisord interpolates these into the
+# runtime program via %(ENV_…)s — never hardcode them there (that clobbers operator env).
+export BOT_COMMAND="${BOT_COMMAND:-/usr/local/bin/vexa-bot-launch}"
+export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-worker}"
+
+# Agent control plane + worker (BYO inference; credentials brokered by the runtime).
+export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
+export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
+export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
+export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
+export VEXA_MEETING_MODEL="${VEXA_MEETING_MODEL:-}"
+# HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
+# INSIDE this lite container (mount it in, e.g. -v ~/.claude/.credentials.json:/claude-creds.json:ro
+# and set HOST_CLAUDE_CREDENTIALS=/claude-creds.json). Lite's runtime uses the process backend, so
+# the worker reads the file directly; the runtime's config.v1 file probe verifies it on /health.
+# Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
+export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
+export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-}"
+export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-}"
+export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
+
+# Dashboard + terminal (both Next.js UIs)
+export VEXA_PUBLIC_API_URL="${VEXA_PUBLIC_API_URL:-http://localhost:8056}"
+export VEXA_API_KEY="${VEXA_API_KEY:-}"
+export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
+export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-vexa-lite-nextauth-secret}"
+export JWT_SECRET="${JWT_SECRET:-vexa-lite-jwt-secret}"
+
+# Workspace store for the agent (shared dir; the worker runs in-process, no volume bind).
+mkdir -p /workspaces /var/lib/redis /var/run/redis
+chmod 777 /workspaces 2>/dev/null || true
 
 echo "Configuration:"
-echo "  - Redis URL: ${REDIS_URL}"
-echo "  - Database URL: ${DATABASE_URL}"
-echo "  - Database SSL Mode: ${DB_SSL_MODE}"
-echo "  - Transcription URL: ${TRANSCRIPTION_SERVICE_URL:-${TRANSCRIBER_URL:-NOT SET}}"
-echo "  - Log Level: ${LOG_LEVEL}"
-echo "  - Storage Backend: ${STORAGE_BACKEND:-local}"
+echo "  - Redis URL:        ${REDIS_URL}"
+echo "  - Database:         postgresql+asyncpg://${DB_USER}:***@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+echo "  - Transcription:    ${TRANSCRIPTION_SERVICE_URL:-NOT SET (bots capture, no transcript)}"
+echo "  - Object storage:   ${MINIO_ENDPOINT:-NOT SET (recordings disabled)}"
+echo "  - Log level:        ${LOG_LEVEL}"
 echo ""
 
-# -----------------------------------------------------------------------------
-# Wait for PostgreSQL
-# -----------------------------------------------------------------------------
-
-if [ -n "$DB_HOST" ] && [ "$DB_HOST" != "localhost" ]; then
+# ─── Wait for PostgreSQL (external) ───────────────────────────────────────────────────────────────
+if [ -n "$DB_HOST" ]; then
     echo "Waiting for PostgreSQL at ${DB_HOST}:${DB_PORT}..."
-    max_attempts=30
-    attempt=0
-    while [ $attempt -lt $max_attempts ]; do
+    for attempt in $(seq 1 30); do
         if pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -q 2>/dev/null; then
-            echo "PostgreSQL is ready!"
+            echo "PostgreSQL is ready."
             break
         fi
-        attempt=$((attempt + 1))
-        echo "  Attempt $attempt/$max_attempts - PostgreSQL not ready, waiting..."
+        [ "$attempt" -eq 30 ] && echo "WARNING: PostgreSQL not reachable after 30 attempts; starting anyway."
         sleep 2
     done
-    if [ $attempt -eq $max_attempts ]; then
-        echo "WARNING: Could not connect to PostgreSQL after $max_attempts attempts"
-    fi
     echo ""
 fi
 
-# -----------------------------------------------------------------------------
-# Setup Internal Redis (if using localhost)
-# -----------------------------------------------------------------------------
+# Background: once admin-api is up, mint a self-host API key and hand it to the UIs (zero-login).
+# No-op if VEXA_API_KEY was supplied. Only meaningful for the supervisord CMD (the real bring-up).
+case "$*" in
+    *supervisord*) /usr/local/bin/provision-key.sh & ;;
+esac
 
-if [ "$USE_INTERNAL_REDIS" = "true" ]; then
-    echo "Using internal Redis server..."
-    mkdir -p /var/lib/redis /var/run/redis
-    chmod 755 /var/lib/redis /var/run/redis
-    echo ""
-else
-    echo "Waiting for external Redis at ${REDIS_HOST}:${REDIS_PORT}..."
-    max_attempts=30
-    attempt=0
-    REDIS_CLI_CMD="redis-cli -h $REDIS_HOST -p $REDIS_PORT"
-    if [ -n "$REDIS_PASSWORD" ]; then
-        REDIS_CLI_CMD="$REDIS_CLI_CMD -a $REDIS_PASSWORD --no-auth-warning"
-    fi
-    while [ $attempt -lt $max_attempts ]; do
-        if $REDIS_CLI_CMD ping 2>/dev/null | grep -q PONG; then
-            echo "Redis is ready!"
-            break
-        fi
-        attempt=$((attempt + 1))
-        echo "  Attempt $attempt/$max_attempts - Redis not ready, waiting..."
-        sleep 2
-    done
-    if [ $attempt -eq $max_attempts ]; then
-        echo "WARNING: Could not connect to Redis after $max_attempts attempts"
-    fi
-    echo ""
-fi
-
-# -----------------------------------------------------------------------------
-# Database Schema Initialization
-# -----------------------------------------------------------------------------
-
-echo "Initializing database schema..."
-if pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -q 2>/dev/null; then
-    # Use schema-sync ensure_schema() — handles both fresh and existing databases
-    cd /app/meeting-api
-    python3 -c "
-import asyncio
-import sys
-sys.path.insert(0, '/app/admin-models')
-sys.path.insert(0, '/app/schema-sync')
-from meeting_api.database import init_db
-asyncio.run(init_db())
-print('Database schema initialized')
-" 2>&1 || echo "  WARNING: Schema initialization failed (may already be up to date)"
-    cd /app
-else
-    echo "  WARNING: Database not accessible, skipping schema init"
-fi
-echo ""
-
-# -----------------------------------------------------------------------------
-# Verify Database Connection
-# -----------------------------------------------------------------------------
-
-echo "Verifying database connection..."
-if pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -q 2>/dev/null; then
-    if PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-        -c "SELECT 1;" >/dev/null 2>&1; then
-        echo "  Database connection successful"
-    else
-        echo "  ERROR: Cannot connect to database '$DB_NAME'"
-        exit 1
-    fi
-else
-    echo "  ERROR: PostgreSQL server at $DB_HOST:$DB_PORT is not reachable"
-    exit 1
-fi
-echo ""
-
-# -----------------------------------------------------------------------------
-# Verify Transcription Service
-# -----------------------------------------------------------------------------
-
-echo "Verifying transcription service..."
-# Canonical names: TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN
-# Backward compat: TRANSCRIBER_URL -> TRANSCRIPTION_SERVICE_URL
-#                   TRANSCRIBER_API_KEY -> TRANSCRIPTION_SERVICE_TOKEN
-#                   REMOTE_TRANSCRIBER_URL -> TRANSCRIPTION_SERVICE_URL
-export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-${TRANSCRIBER_URL:-${REMOTE_TRANSCRIBER_URL:-}}}"
-export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-${TRANSCRIBER_API_KEY:-${REMOTE_TRANSCRIBER_API_KEY:-}}}"
-
-if [ -z "$TRANSCRIPTION_SERVICE_URL" ]; then
-    echo "  ERROR: TRANSCRIPTION_SERVICE_URL is not set — transcription will not work"
-    echo "  Set TRANSCRIPTION_SERVICE_URL and TRANSCRIPTION_SERVICE_TOKEN"
-    exit 1
-elif [ "${SKIP_TRANSCRIPTION_CHECK:-false}" = "true" ]; then
-    echo "  Skipping transcription check (SKIP_TRANSCRIPTION_CHECK=true)"
-else
-    # Send a real audio file to the transcription service and verify text comes back.
-    # This catches: wrong URL, bad API key, service down, GPU not loaded, model broken.
-    AUTH_HEADER=""
-    if [ -n "$TRANSCRIPTION_SERVICE_TOKEN" ]; then
-        AUTH_HEADER="Authorization: Bearer $TRANSCRIPTION_SERVICE_TOKEN"
-    fi
-
-    if [ -n "$AUTH_HEADER" ]; then
-        HTTP_CODE=$(curl -s --max-time 15 -X POST \
-            -F file=@/app/test-speech-en.wav -F model=large-v3-turbo -F language=en \
-            -H "$AUTH_HEADER" \
-            -o /tmp/transcription-check.json -w '%{http_code}' "$TRANSCRIPTION_SERVICE_URL" 2>/dev/null)
-    else
-        HTTP_CODE=$(curl -s --max-time 15 -X POST \
-            -F file=@/app/test-speech-en.wav -F model=large-v3-turbo -F language=en \
-            -o /tmp/transcription-check.json -w '%{http_code}' "$TRANSCRIPTION_SERVICE_URL" 2>/dev/null)
-    fi
-    RESULT=$(cat /tmp/transcription-check.json 2>/dev/null)
-    rm -f /tmp/transcription-check.json
-
-    if [ "$HTTP_CODE" = "000" ]; then
-        echo "  ERROR: Transcription service not reachable at $TRANSCRIPTION_SERVICE_URL"
-        echo "  Set SKIP_TRANSCRIPTION_CHECK=true to start without transcription"
-        exit 1
-    fi
-
-    if [ "$HTTP_CODE" -ge 400 ] 2>/dev/null; then
-        echo "  ERROR: Transcription service returned HTTP $HTTP_CODE"
-        echo "  URL: $TRANSCRIPTION_SERVICE_URL"
-        echo "  Response: $RESULT"
-        echo "  Check TRANSCRIPTION_SERVICE_TOKEN is set correctly"
-        echo "  Set SKIP_TRANSCRIPTION_CHECK=true to start without transcription"
-        exit 1
-    fi
-
-    # Verify we got actual text back (not empty, not error JSON)
-    TEXT=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('text',''))" 2>/dev/null)
-    if [ -z "$TEXT" ]; then
-        echo "  ERROR: Transcription service returned HTTP $HTTP_CODE but no text"
-        echo "  Response: $RESULT"
-        echo "  Set SKIP_TRANSCRIPTION_CHECK=true to start without transcription"
-        exit 1
-    fi
-
-    echo "  Transcription OK (HTTP $HTTP_CODE): \"${TEXT:0:60}...\""
-fi
-echo ""
-
-# -----------------------------------------------------------------------------
-# PulseAudio & ALSA Configuration
-# -----------------------------------------------------------------------------
-
-echo "Configuring PulseAudio and ALSA..."
-cat > /root/.asoundrc <<'ALSA_EOF'
-pcm.!default {
-    type pulse
-}
-ctl.!default {
-    type pulse
-}
-ALSA_EOF
-
-cat > /usr/local/bin/setup-pulseaudio-sinks.sh <<'PA_EOF'
-#!/bin/bash
-for i in $(seq 1 15); do
-    if pactl info >/dev/null 2>&1; then break; fi
-    sleep 1
-done
-if ! pactl info >/dev/null 2>&1; then
-    echo "[PulseAudio Setup] ERROR: PulseAudio not available after 15s"
-    exit 1
-fi
-pactl load-module module-null-sink sink_name=zoom_sink sink_properties=device.description="ZoomAudioSink" 2>/dev/null || true
-pactl load-module module-null-sink sink_name=tts_sink sink_properties=device.description="TTSAudioSink" 2>/dev/null || true
-pactl load-module module-remap-source master=tts_sink.monitor source_name=virtual_mic source_properties=device.description="VirtualMicrophone" 2>/dev/null || true
-pactl set-default-source virtual_mic 2>/dev/null || true
-echo "[PulseAudio Setup] Done"
-PA_EOF
-chmod +x /usr/local/bin/setup-pulseaudio-sinks.sh
-echo "  Done"
-echo ""
-
-# -----------------------------------------------------------------------------
-# Create Required Directories
-# -----------------------------------------------------------------------------
-
-mkdir -p /var/log/supervisor /var/log/vexa-bots /var/run /var/lib/redis /var/run/redis
-chmod 755 /var/lib/redis /var/run/redis
-mkdir -p "${LOCAL_STORAGE_DIR:-/var/lib/vexa/recordings}"
-mkdir -p /var/lib/vexa/recordings/spool
-
-# -----------------------------------------------------------------------------
-# Post-Startup Health Validation
-# -----------------------------------------------------------------------------
-# Runs in background after supervisord starts. Verifies all internal services
-# are actually responding. Logs clearly so `docker logs vexa` shows the result.
-
-cat > /usr/local/bin/post-startup-check.sh <<'HEALTH_EOF'
-#!/bin/bash
-sleep 20
-
-echo ""
-echo "=============================================="
-echo "  Post-Startup Health Validation"
-echo "=============================================="
-
-FAILED=0
-
-check() {
-    local name="$1" url="$2"
-    if curl -sf --max-time 5 "$url" >/dev/null 2>&1; then
-        echo "  OK: $name"
-    else
-        echo "  FAIL: $name ($url)"
-        FAILED=$((FAILED + 1))
-    fi
-}
-
-check "API Gateway"    "http://localhost:8056/"
-check "Meeting API"    "http://localhost:8080/health"
-check "Runtime API"    "http://localhost:8090/health"
-check "Agent API"      "http://localhost:8100/health"
-check "Dashboard"      "http://localhost:3000/"
-check "TTS Service"    "http://localhost:8059/health"
-
-if redis-cli ping 2>/dev/null | grep -q PONG; then
-    echo "  OK: Redis"
-else
-    echo "  FAIL: Redis"
-    FAILED=$((FAILED + 1))
-fi
-
-if [ "${SKIP_TRANSCRIPTION_CHECK:-false}" != "true" ] && [ -n "$TRANSCRIPTION_SERVICE_URL" ]; then
-    BASE_URL=$(echo "$TRANSCRIPTION_SERVICE_URL" | sed 's|/v1/.*||')
-    check "Transcription" "$BASE_URL/health"
-fi
-
-echo ""
-if [ $FAILED -eq 0 ]; then
-    echo "  ALL SERVICES HEALTHY"
-else
-    echo "  WARNING: $FAILED service(s) failed — check supervisor logs"
-fi
-echo "=============================================="
-HEALTH_EOF
-chmod +x /usr/local/bin/post-startup-check.sh
-
-# -----------------------------------------------------------------------------
-# Start Services
-# -----------------------------------------------------------------------------
-
-echo "=============================================="
-echo "  Starting Vexa Services via Supervisor"
-echo "=============================================="
-echo ""
-echo "Service Endpoints:"
-echo "  - API Gateway:    http://localhost:8056"
-echo "  - Admin API:      http://localhost:8057"
-echo "  - Meeting API:    http://localhost:8080"
-echo "  - Runtime API:    http://localhost:8090"
-echo "  - Agent API:      http://localhost:8100"
-echo "  - Dashboard:      http://localhost:3000"
-echo "  - API Docs:       https://docs.vexa.ai"
-echo ""
-
-# Run post-startup validation in background
-/usr/local/bin/post-startup-check.sh &
-
+echo "Starting services via supervisord..."
 exec "$@"

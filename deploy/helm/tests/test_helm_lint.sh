@@ -1,49 +1,24 @@
-#!/bin/bash
-# Validate Helm chart structure and lint.
-# Requires helm CLI. Skips gracefully if not installed.
+#!/usr/bin/env bash
+# Structural + lint check for the v0.12 vexa chart (no cluster required).
+# Skips lint gracefully if helm is absent.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-HELM_DIR="$ROOT/deploy/helm"
+HELM_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CHART="$HELM_DIR/charts/vexa"
 
-echo "=== Helm chart validation ==="
-
-# Check charts exist
-for chart in vexa vexa-lite; do
-  chart_dir="$HELM_DIR/charts/$chart"
-  if [ ! -d "$chart_dir" ]; then
-    echo "FAIL: chart directory $chart not found"
-    exit 1
-  fi
-  echo "  OK: charts/$chart/ exists"
-
-  if [ ! -f "$chart_dir/Chart.yaml" ]; then
-    echo "FAIL: $chart/Chart.yaml not found"
-    exit 1
-  fi
-  echo "  OK: $chart/Chart.yaml exists"
-
-  if [ ! -d "$chart_dir/templates" ]; then
-    echo "FAIL: $chart/templates/ not found"
-    exit 1
-  fi
-  echo "  OK: $chart/templates/ exists"
+echo "=== Helm chart structure (vexa v0.12) ==="
+for f in Chart.yaml values.yaml values-test.yaml templates; do
+  [ -e "$CHART/$f" ] || { echo "FAIL: missing $f"; exit 1; }
+  echo "  OK: $f"
 done
 
-# Lint with helm if available
-if command -v helm &>/dev/null; then
-  for chart in vexa vexa-lite; do
-    chart_dir="$HELM_DIR/charts/$chart"
-    echo "  Linting $chart..."
-    if helm lint "$chart_dir" 2>&1 | tail -3; then
-      echo "  OK: $chart passes helm lint"
-    else
-      echo "  WARN: $chart has helm lint warnings (non-fatal)"
-    fi
-  done
+if command -v helm >/dev/null 2>&1; then
+  echo "  Linting (default values)..."
+  helm lint "$CHART"
+  echo "  Linting (values-test)..."
+  helm lint "$CHART" -f "$CHART/values-test.yaml"
 else
-  echo "  SKIP: helm not installed, skipping lint"
+  echo "  SKIP: helm not installed"
 fi
 
-echo ""
-echo "Helm chart validation: PASS"
+echo "Helm chart lint: PASS"

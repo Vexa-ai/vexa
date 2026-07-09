@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/workspace.v1",
+  "title": "workspace.v1",
+  "description": "A workspace is a USER git repo (the agent's durable memory) — data, not platform code. vexa owns ONLY the init template (the repo layout, see README) + this BASE entity-frontmatter convention. The kg/ subtree is an Open Knowledge Format (OKF) v0.1 bundle (github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf): OKF requires only `type`; we additionally require `id` + `title` (a stricter, still-conformant superset — OKF consumers must tolerate extra keys). Customers extend the frontmatter per entity type (P11: the entity schema is config, not platform). Not a wire payload.",
+  "$defs": {
+    "EntityFrontmatter": {
+      "description": "The typed YAML frontmatter atop a markdown entity (kg/entities/<type>/<slug>.md). OKF v0.1 superset: `type` is OKF's sole required key; `title`, `description`, `resource`, `tags`, `timestamp` are OKF's recommended keys. Extensible — customers add fields per entity type. Reserved OKF files (index.md, log.md) carry NO frontmatter and are not entities.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id", "title"],
+      "properties": {
+        "type": { "type": "string", "description": "entity type, e.g. contact | company | meeting (OKF: the only required key)" },
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string", "description": "OKF recommended: one-line summary of the concept" },
+        "resource": { "type": "string", "description": "OKF recommended: URI of the external system-of-record this concept describes" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "OKF recommended: last-modification time of the knowledge in this document" },
+        "created": { "type": "string", "format": "date-time" },
+        "updated": { "type": "string", "format": "date-time" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "aliases": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

@@ -1,9 +1,10 @@
 apiVersion: v2
 name: vexa
-description: Vexa - self-hosted real-time meeting transcription platform
+description: Vexa v0.12 — self-hostable real-time meeting transcription + agent control plane
 type: application
-version: 0.10.6+3
-appVersion: "0.10.6.3.14"
+# Chart version (SemVer). appVersion tracks the v0.12 control-plane image tag the chart deploys.
+version: 0.12.0
+appVersion: "0.12.0"
 home: https://github.com/Vexa-ai/vexa
 sources:
   - https://github.com/Vexa-ai/vexa
@@ -11,5 +12,6 @@ keywords:
   - vexa
   - meeting-bot
   - transcription
+  - agent
 maintainers:
   - name: Vexa community

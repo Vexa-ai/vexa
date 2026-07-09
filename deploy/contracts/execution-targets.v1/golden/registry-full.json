@@ -1,0 +1,66 @@
+{
+  "version": "v1",
+  "default_target": "bbb",
+  "targets": [
+    {
+      "name": "bbb",
+      "kind": "ssh",
+      "host": "bbb",
+      "arch": "amd64",
+      "caps": ["docker", "compose", "amd64-bot", "redis", "multicore"],
+      "notes": "amd64 Linux docker host; the proven O6/eval venue; authoritative for gate:compose + stress/chaos + the real bot."
+    },
+    {
+      "name": "ci",
+      "kind": "ci",
+      "arch": "amd64",
+      "caps": ["green-or-skip-gates"],
+      "notes": "GitHub Actions; runs the green-or-skip gate suite (docker-compose gates self-skip without a docker runner)."
+    },
+    {
+      "name": "throwaway-linode",
+      "kind": "ssh",
+      "arch": "amd64",
+      "caps": ["docker", "compose", "amd64-bot"],
+      "provision": "linode-cli linodes create (akamai-staging token); destroy when done",
+      "notes": "provisioned on demand for isolated/parallel runs; not standing."
+    }
+  ],
+  "resources": [
+    {
+      "name": "prod-cloud",
+      "kind": "service",
+      "endpoint": "https://api.cloud.vexa.ai",
+      "notes": "the production Vexa stack that launches + drives the speaking bots for the Lane B (L4) meeting eval."
+    },
+    {
+      "name": "speaker-tokens",
+      "kind": "credential-set",
+      "secret_ref": "vexa-secrets:throwaway/test-users.enc.env",
+      "env": ["TOK_A", "TOK_B", "TOK_V", "TOK_C", "TOK_D", "TOK_E", "TOK_F", "TOK_G", "TOK_H"],
+      "notes": "one service test-account token per synthetic speaker; N tokens ⇒ an N-speaker meeting."
+    },
+    {
+      "name": "stt",
+      "kind": "service",
+      "secret_ref": "env:TRANSCRIPTION_SERVICE_TOKEN",
+      "env": ["TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"],
+      "notes": "the bot's STT; sourced from the runtime container env on bbb (Lane B)."
+    },
+    {
+      "name": "minio",
+      "kind": "storage",
+      "notes": "recording master object store; in-stack on compose (Lane A) / configured for Lane B."
+    },
+    {
+      "name": "meeting",
+      "kind": "meeting",
+      "notes": "a live Google Meet (per-run NATIVE_ID) the bot + speakers join (Lane B)."
+    },
+    {
+      "name": "admit",
+      "kind": "human-gate",
+      "notes": "the one human step: admit the bot in the Meet UI (Lane B); the harness waits and smoke-degrades if absent."
+    }
+  ]
+}

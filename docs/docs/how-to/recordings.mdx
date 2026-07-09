@@ -1,0 +1,54 @@
+---
+title: "Retrieve a meeting recording"
+description: "List recordings and stream the audio — from your own object storage on a self-host."
+---
+
+<Note>
+Recording retrieval is **API-only today** — the terminal has no built-in player yet. The endpoints below
+are live and covered by service tests; the full live loop (in-meeting capture → object storage →
+playback) has not been validated end-to-end. See the [capability truth table](/roadmap/status#capability-truth-table).
+</Note>
+
+Alongside the diarized transcript, each meeting's **audio recording** is uploaded to object storage — on a
+self-host, your own MinIO bucket, so it never leaves your environment. The recording is the meeting audio,
+stored separately from the transcript (speaker separation lives in the transcript as text — there is no
+per-speaker audio).
+
+## List recordings
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings"
+```
+
+Get the detail for one:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42"
+```
+
+## Get the playable audio
+
+Resolve the master metadata (finalize-on-read), which points at the raw byte stream:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"
+```
+
+The response carries a `raw_url` of the form
+`GET /recordings/{recording_id}/media/{media_file_id}/raw` — the actual audio bytes the player loads:
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings/42/media/<media_file_id>/raw" -o meeting-42.audio
+```
+
+## Where it's stored
+
+Recordings live in the bucket configured by `MINIO_*` ([Configuration](/configuration#database-storage)).
+On a self-host that's infrastructure you control; air-gapped deployments keep recordings entirely in-VPC.
+
+<Note>
+A recording is the raw meeting audio. For the **text** of who-said-what with timestamps, use the
+[transcript](/how-to/send-a-bot#2-read-the-transcript) — see the
+[Meetings API](/api/meetings#speaker-attributed-transcripts).
+</Note>

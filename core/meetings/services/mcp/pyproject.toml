@@ -1,0 +1,25 @@
+[project]
+name = "vexa-mcp"
+version = "0.12.0"
+description = "MCP service (v0.12 port of services/mcp from 0.10.6) — a stateless FastAPI app exposing the Vexa PUBLIC API (the gateway) as Model Context Protocol tools + prompts. Every tool call forwards the caller's API key (Authorization: Bearer / X-API-Key) to the gateway as X-API-Key; no DB, no redis, no direct service access."
+requires-python = ">=3.11"
+dependencies = [
+    # FastAPI app + the MCP mount. fastapi-mcp is MIT (tadata-org/fastapi_mcp); it brings the
+    # official `mcp` python SDK (MIT) — both Category A per ADR-0004.
+    "fastapi>=0.110,<1",
+    "fastapi-mcp>=0.4.0,<0.5",
+    # Transport to the gateway (BSD-3).
+    "httpx>=0.27,<1",
+    "pydantic>=2,<3",
+    # Test harness (in-process, no network — the tests inject an httpx.MockTransport gateway).
+    "pytest>=8",
+    "pytest-asyncio>=0.23,<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+asyncio_mode = "auto"
