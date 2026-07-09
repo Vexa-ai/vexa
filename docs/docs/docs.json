@@ -84,6 +84,7 @@
         "pages": [
           "deployment",
           "configuration",
+          "model-credentials-licensing",
           "troubleshooting",
           "sdks",
           "changelog"
