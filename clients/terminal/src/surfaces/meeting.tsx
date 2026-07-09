@@ -774,6 +774,39 @@ function ModelChips() {
   );
 }
 
+/** Bot lifecycle controls on the meeting page header (owner ask 2026-07-09): Stop while the bot
+ *  is in the call, Re-send once it stopped/completed/failed. Reuses the row-action map verbatim
+ *  (same endpoints, same status vocabulary) — only bot actions surface here; row management
+ *  (schedule/cancel/delete) stays in the sidebar menu. */
+function BotControls({ m }: { m: MeetingMock }) {
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const acts = actionsFor(m).filter((a) => a.id === "stop" || a.id === "resend" || a.id === "send");
+  if (acts.length === 0) return null;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
+      {acts.map((a) => {
+        const danger = a.tone === "live";
+        return (
+          <button key={a.id} disabled={busy}
+            onClick={() => {
+              setErr(null); setBusy(true);
+              void Promise.resolve(a.run((f) => setErr(f.message))).finally(() => setBusy(false));
+            }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent",
+              border: `1px solid ${danger ? "var(--danger)" : "var(--line2)"}`,
+              color: danger ? "var(--danger)" : "var(--accent)",
+              borderRadius: 7, padding: "4px 11px", fontSize: 12, fontWeight: 600,
+              cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}>
+            {a.id === "stop" ? "Stop bot" : "Send bot again"}
+          </button>
+        );
+      })}
+      {err && <span role="alert" style={{ fontSize: 11, color: "var(--danger)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={err}>⚠ {err}</span>}
+    </span>
+  );
+}
+
 function MeetingTab({ params }: TabProps) {
   const liveList = useLiveMeetings();
   const requestedMeetingId = params.meetingId as string;
@@ -800,6 +833,7 @@ function MeetingTab({ params }: TabProps) {
             {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
           </div>
           <div style={{ flex: 1 }} />
+          {m && <BotControls m={m} />}
           {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
           <ModelChips />
         </div>
