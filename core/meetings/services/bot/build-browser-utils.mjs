@@ -140,4 +140,5 @@ console.log('📦 window.VexaBrowserUtils exposes:');
 console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1 / pickBoundName');
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
 console.log('  - createMixedAudioCapture / installRemoteAudioHook');
+console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
 console.log('  - window.performLeaveAction');
