@@ -13,8 +13,8 @@
  * durable store. Cache/GPU/IndexedDB junk is excluded — ~200KB, not the full profile.
  */
 import { execSync } from 'child_process';
-import { existsSync, unlinkSync, mkdirSync, cpSync, mkdtempSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, unlinkSync, mkdirSync, cpSync, mkdtempSync, rmSync, readdirSync, readlinkSync, statSync } from 'fs';
+import { join, dirname, basename } from 'path';
 
 export const BROWSER_DATA_DIR = process.env.BROWSER_DATA_DIR || '/tmp/browser-data';
 
@@ -29,7 +29,39 @@ export const BROWSER_DATA_DIR = process.env.BROWSER_DATA_DIR || '/tmp/browser-da
  */
 export function makeEphemeralProfileDir(): string {
   mkdirSync(dirname(BROWSER_DATA_DIR), { recursive: true });
+  sweepStaleProfileDirs();
   return mkdtempSync(`${BROWSER_DATA_DIR}-`);
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+/**
+ * Remove sibling ephemeral profile dirs whose browser is gone. A workload killed hard
+ * (runtime stop = SIGKILL) never runs its close() cleanup, so each launch sweeps instead:
+ * Chromium's SingletonLock is a symlink to `<host>-<pid>` — dead pid ⇒ stale dir; no lock
+ * at all ⇒ stale after 1h (browser never launched, or launched+closed cleanly elsewhere).
+ * Best-effort by design: pid reuse just defers removal to a later sweep.
+ */
+export function sweepStaleProfileDirs(): void {
+  const parent = dirname(BROWSER_DATA_DIR);
+  const prefix = `${basename(BROWSER_DATA_DIR)}-`;
+  let names: string[];
+  try { names = readdirSync(parent).filter((n) => n.startsWith(prefix)); } catch { return; }
+  for (const n of names) {
+    const p = join(parent, n);
+    try {
+      let stale: boolean;
+      try {
+        const pid = Number(readlinkSync(join(p, 'SingletonLock')).split('-').pop());
+        stale = !(pid > 0 && pidAlive(pid));
+      } catch {
+        stale = Date.now() - statSync(p).mtimeMs > 60 * 60 * 1000;
+      }
+      if (stale) rmSync(p, { recursive: true, force: true });
+    } catch { /* best-effort */ }
+  }
 }
 
 /** Best-effort removal of a profile dir created by makeEphemeralProfileDir(). */
