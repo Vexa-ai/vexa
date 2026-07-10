@@ -4,7 +4,7 @@
 # =============================================================================
 # The single-container analog of deploy/compose. One container runs the whole v0.12 control
 # plane — gateway (:8056) · admin-api (:8001) · meeting-api (:8080) · runtime (:8090) ·
-# agent-api (:8100) · dashboard (:3000) — over an internal redis + a shared Xvfb/PulseAudio
+# agent-api (:8100) — over an internal redis + a shared Xvfb/PulseAudio
 # stack. The runtime uses the PROCESS backend (RUNTIME_BACKEND=process): bots and agent
 # workers run as CHILD PROCESSES, not docker-socket-spawned containers — so lite needs NO
 # docker socket. PostgreSQL + MinIO are external (the `make lite` sidecars).
@@ -18,32 +18,7 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Stage 1: dashboard-builder — the vendored Next.js app (clients/dashboard) standalone build.
-# Mirrors clients/dashboard/Dockerfile; baked to talk to the in-container gateway on :8056.
-# -----------------------------------------------------------------------------
-FROM node:20-alpine AS dashboard-builder
-WORKDIR /app
-
-COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
-COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
-COPY clients/dashboard/package.json ./
-RUN sed -i 's|"@vexaai/transcript-rendering": "file:../../packages/transcript-rendering"|"@vexaai/transcript-rendering": "file:/transcript-rendering"|' package.json \
- && npm install --ignore-scripts --no-audit --no-fund \
- && rm -rf node_modules/@vexaai/transcript-rendering && cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
-
-COPY clients/dashboard/src ./src
-COPY clients/dashboard/public ./public
-COPY clients/dashboard/scripts ./scripts
-COPY clients/dashboard/next.config.ts clients/dashboard/tsconfig.json clients/dashboard/postcss.config.mjs clients/dashboard/eslint.config.mjs clients/dashboard/components.json ./
-# next.config.ts bakes the /ws + /b rewrites from VEXA_API_URL at build time. Lite's front door
-# is the in-container gateway on localhost:8056.
-ENV VEXA_API_URL=http://localhost:8056 \
-    NEXT_PUBLIC_VEXA_OSS_VERSION=0.12.0 \
-    NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=2026-06-21
-RUN npm run build
-
-# -----------------------------------------------------------------------------
-# Stage 2: bot-builder — build the @vexa/bot workspace slice from source.
+# Stage 1: bot-builder — build the @vexa/bot workspace slice from source.
 # Mirrors core/meetings/services/bot/Dockerfile (builder), but on the official Playwright
 # image instead of the published meet-join-env base. Browsers come from /ms-playwright.
 # -----------------------------------------------------------------------------
@@ -192,10 +167,6 @@ COPY --from=bot-builder /build/core/meetings/services/bot/dist/browser-utils.glo
 COPY --from=bot-builder /opt/hf-cache /opt/hf-cache
 ENV VEXA_HF_CACHE=/opt/hf-cache
 
-# ── Dashboard (Next.js standalone) → /app/dashboard (supervisord runs `node server.js` there). ────
-COPY --from=dashboard-builder /app/.next/standalone /app/dashboard
-COPY --from=dashboard-builder /app/.next/static     /app/dashboard/.next/static
-COPY --from=dashboard-builder /app/public           /app/dashboard/public
 
 # ── Terminal (Next.js + custom server.mjs) → /app/terminal (supervisord runs `node server.mjs`). ──
 COPY --from=terminal-builder /app/terminal /app/terminal
@@ -225,8 +196,8 @@ ENV LOG_LEVEL=info \
     TERMINAL_PUBLIC_URL=http://localhost:3001 \
     NEXTAUTH_SECRET=vexa-lite-nextauth-secret JWT_SECRET=vexa-lite-jwt-secret
 
-# Front doors: gateway (8056) · dashboard (3000) · terminal (3001) · agent control plane (8100).
-EXPOSE 8056 3000 3001 8100 6080
+# Front doors: gateway (8056) · terminal (3001) · agent control plane (8100).
+EXPOSE 8056 3001 8100 6080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf http://localhost:8056/health > /dev/null || exit 1

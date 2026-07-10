@@ -6,12 +6,12 @@ from the repo root provisions PostgreSQL + MinIO and runs everything else in a s
 ## Why
 
 Everything except the datastores runs in one container — gateway, admin, meeting-api, runtime,
-agent control plane, dashboard, redis, and the X11/audio stack. No Docker socket, no per-service
+agent control plane, redis, and the X11/audio stack. No Docker socket, no per-service
 containers. The runtime uses the **process backend**: meeting bots and agent workers run as
 **child processes** inside the container, not socket-spawned containers.
 
 - One app container instead of eight + on-demand workers
-- Full API + dashboard + meeting bots + agent
+- Full API + terminal + meeting bots + agent
 - No GPU required — transcription runs via an external API (or your own GPU service)
 
 ## Quick start
@@ -29,7 +29,6 @@ host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 
 After it finishes:
 
-- **Dashboard:** `http://YOUR_IP:3000`
 - **Terminal:** `http://YOUR_IP:3001` (the agent-domain browser-CLI workbench)
 - **API:** `http://YOUR_IP:8056` (the gateway — auth, routing) · docs at `/docs`
 - **Agent API:** `http://YOUR_IP:8100`
@@ -48,7 +47,6 @@ Supervised by `supervisord`:
 | meeting-api | 8080 | bots, transcripts, recordings (→ MinIO) |
 | runtime | 8090 | spawns bot + agent workers as **child processes** (process backend) |
 | agent-api | **8100** | the agent control plane — dispatch, chat (SSE), routines |
-| dashboard | **3000** | Next.js web UI (meetings + transcripts) |
 | terminal | **3001** | agent-domain browser-CLI workbench (Next.js + custom `server.mjs` SSE/`/ws` relay) |
 | redis | 6379 | bus + scheduler + per-dispatch streams (internal) |
 | Xvfb · fluxbox · PulseAudio | :99 | display + audio for the headful bot browser |
@@ -63,8 +61,8 @@ agent workspaces).
 +--------------------------------------------------------------+
 |                    Vexa Lite container                       |
 |                                                              |
-|  dashboard  gateway  admin-api  meeting-api  runtime         |
-|   :3000      :8056     :8001      :8080       :8090           |
+|  gateway  admin-api  meeting-api  runtime                    |
+|   :8056     :8001      :8080       :8090                      |
 |                                                              |
 |  agent-api   redis   Xvfb  fluxbox  PulseAudio  noVNC        |
 |   :8100      :6379    :99                        :6080       |
