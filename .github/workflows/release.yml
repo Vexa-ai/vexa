@@ -1,0 +1,42 @@
+name: release
+# The release sequence AS MACHINERY (so "tag last" is not a rule anyone remembers):
+# pushing tag vX.Y.Z is the release button, and this workflow refuses to produce a
+# Release unless the image set already exists on Docker Hub at that tag with matching
+# git revision (gate:release-set). Sequence for the releasing human/agent:
+#
+#   1. merge the release PR              (branch protection: gates + release/vm-validated)
+#   2. deploy/release/build-set.sh vX.Y.Z    — full image set, OCI-labelled
+#   3. deploy/lite/tests/concurrent-bots.sh  — smoke the PUBLISHED lite image on a clean VM
+#   4. git push origin vX.Y.Z                — the button; this workflow takes it from here
+#
+# The Release is created as a DRAFT: publishing the announcement text stays a human act.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: write   # create the draft release
+  statuses: read
+
+jobs:
+  release-set-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: gate:release-set — every image present at ${{ github.ref_name }} with this commit's revision
+        run: deploy/release/verify-set.sh "${{ github.ref_name }}" "${{ github.sha }}"
+
+  draft-release:
+    needs: release-set-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: create DRAFT release (human publishes the final text)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 && { echo "release exists — noop"; exit 0; }
+          gh release create "${{ github.ref_name }}" --draft --verify-tag \
+            --title "Vexa ${{ github.ref_name }}" \
+            --generate-notes \
+            --notes "Image set (verified by gate:release-set): \`vexaai/vexa-lite\`, \`vexaai/v012-{gateway,admin-api,meeting-api,runtime,agent-api,agent-worker,mcp,terminal}\`, \`vexaai/vexa-bot\` — all at \`${{ github.ref_name }}\`, revision \`${{ github.sha }}\`."
