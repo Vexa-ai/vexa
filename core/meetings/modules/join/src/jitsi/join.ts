@@ -6,6 +6,7 @@ import {
   jitsiJoinButtonSelector,
   jitsiPasswordInputSelector,
   jitsiHangupButtonSelectors,
+  jitsiGuestEntryTexts,
 } from "./selectors";
 
 // NOTE vs the other platforms: Jitsi Meet is SELF-HOSTABLE — meet.jit.si is just
@@ -79,6 +80,43 @@ async function isConferenceLive(page: Page): Promise<boolean> {
 }
 
 /**
+ * Clear a deployment's auth landing, if one fronts the app. Some self-hosted
+ * deployments show "Sign in to Jitsi" (an SSO button + a guest option) before any
+ * jitsi UI mounts; a recorder bot enters as a guest. Polls briefly for a guest-entry
+ * button/link and clicks it DOM-direct; a deployment without a landing falls through
+ * silently. Returns true if a guest entry was clicked.
+ */
+async function enterAsGuestIfGated(page: Page): Promise<boolean> {
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    const clicked = await page.evaluate((phrases: string[]) => {
+      const candidates = Array.from(
+        document.querySelectorAll('button, a, [role="button"]'),
+      ) as HTMLElement[];
+      for (const el of candidates) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text && phrases.some((p) => text.includes(p))) {
+          el.click();
+          return text;
+        }
+      }
+      return null;
+    }, jitsiGuestEntryTexts).catch(() => null);
+    if (clicked) {
+      log(`[Jitsi] Auth landing detected — entered as guest (clicked "${clicked}")`);
+      await page.waitForTimeout(2000);
+      return true;
+    }
+    // No guest affordance yet — if the real jitsi UI is already up, there is no landing.
+    const jitsiUiUp = await page.locator(jitsiNameInputSelector).first()
+      .isVisible({ timeout: 200 }).catch(() => false);
+    if (jitsiUiUp || await isConferenceLive(page)) return false;
+    await page.waitForTimeout(500);
+  }
+  return false;
+}
+
+/**
  * Handle a password-protected room. Jitsi surfaces the password prompt as a
  * dialog AFTER the join attempt. With a passcode in botConfig we fill + submit;
  * without one we fail fast with a structured reason — the dialog never
@@ -126,6 +164,10 @@ export async function joinJitsiMeeting(
     log("[Jitsi] No prejoin screen — conference already live");
     return;
   }
+
+  // A deployment may front the app with an auth landing ("Sign in …" + a guest
+  // option) — clear it before waiting on any jitsi UI.
+  await enterAsGuestIfGated(page);
 
   const nameField = page.locator(jitsiNameInputSelector).first();
   const havePrejoin = await nameField.isVisible({ timeout: 15000 }).catch(() => false);

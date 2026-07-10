@@ -35,6 +35,18 @@ export const jitsiPrejoinScreenSelectors: string[] = [
   '.prejoin-input-area',
 ];
 
+// ---- Auth landing (deployment-specific pre-gate) ----
+// Some self-hosted deployments front the app with a sign-in landing ("Sign in to Jitsi" +
+// an SSO button + a guest option). A recorder bot enters as a guest; these raw phrases are
+// matched (case-insensitive) against button/link text inside page.evaluate — not Playwright
+// selectors.
+export const jitsiGuestEntryTexts = [
+  "continue as guest",
+  "join as guest",
+  "continue without an account",
+  "continue without account",
+];
+
 // ---- Password-protected rooms ----
 // The password prompt renders as a dialog with a password input. Generic
 // type/placeholder matches cover the dialog across versions.
