@@ -513,6 +513,11 @@ jobs:
           done
           echo "::error ::lite front-door probes failed after 10 attempts"
           exit 1
+      # #478 shipped in rc.10 because no release check ever ran TWO bots: lite's process
+      # backend shares one filesystem, so a shared Chromium profile dir kills every bot
+      # after the first (SingletonLock). Front-door probes can't see that class — this can.
+      - name: Concurrent-bots smoke (the #478 class — ≥2 bots, per-bot profile dirs)
+        run: ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
       - name: Lite state on failure
         if: failure()
         run: |
