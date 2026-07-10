@@ -13,10 +13,29 @@
  * durable store. Cache/GPU/IndexedDB junk is excluded — ~200KB, not the full profile.
  */
 import { execSync } from 'child_process';
-import { existsSync, unlinkSync, mkdirSync, cpSync } from 'fs';
+import { existsSync, unlinkSync, mkdirSync, cpSync, mkdtempSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 
 export const BROWSER_DATA_DIR = process.env.BROWSER_DATA_DIR || '/tmp/browser-data';
+
+/**
+ * A fresh, caller-owned Chromium profile dir: `${BROWSER_DATA_DIR}-XXXXXX`.
+ *
+ * Concurrent browsers MUST NOT share a profile dir: Chromium takes a SingletonLock on it,
+ * and a second launch against a locked dir prints "Opening in existing browser session."
+ * and exits — every bot after the first dies <1s (#478). Anything that may launch more
+ * than one browser per filesystem (process-mode bots in vexa-lite) gets its dir from here
+ * and removes it with removeProfileDir() on teardown.
+ */
+export function makeEphemeralProfileDir(): string {
+  mkdirSync(dirname(BROWSER_DATA_DIR), { recursive: true });
+  return mkdtempSync(`${BROWSER_DATA_DIR}-`);
+}
+
+/** Best-effort removal of a profile dir created by makeEphemeralProfileDir(). */
+export function removeProfileDir(dir: string): void {
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
 
 export const BROWSER_CACHE_EXCLUDES = [
   '*/Cache/*', '*/Code Cache/*', '*/GrShaderCache/*', '*/ShaderCache/*', '*/GraphiteDawnCache/*',
@@ -79,8 +98,8 @@ export function s3Sync(localDir: string, s3Path: string, config: S3Config, direc
   );
 }
 
-export function syncBrowserDataFromS3(config: S3Config): void {
-  s3Sync(BROWSER_DATA_DIR, `${config.userdataS3Path}/browser-data`, config, 'down', BROWSER_CACHE_EXCLUDES);
+export function syncBrowserDataFromS3(config: S3Config, dataDir: string = BROWSER_DATA_DIR): void {
+  s3Sync(dataDir, `${config.userdataS3Path}/browser-data`, config, 'down', BROWSER_CACHE_EXCLUDES);
 }
 
 export function syncBrowserDataToS3(config: S3Config): void {
