@@ -7,6 +7,14 @@ This is the one-page index of the system: **which module owns what**, **which se
 contracts join them**, and **how each level is proven**. Every module entry links to its
 in-tree README — the README is the source of truth; this page is the map.
 
+Why the system has this shape: **a [module](/concepts#module) owns exactly one concern and
+is the single source of truth for it**; every service is a **modular monolith** built from
+such modules; modules join only through **[sealed contracts](/concepts#contract)** that CI
+refuses to let drift. The payoff is debuggability at every scale — a module alone against
+its fixtures, or a chain of modules at the scale a bug lives at — and a verify loop
+(code + adversarial tests + goldens, deterministic ports, fixtures from real meetings)
+simple enough for AI agents to own. The narrative: [What 0.12 is](/roadmap/status#what-012-is).
+
 ## The module tree
 
 Five core domains, a client, and the composition layer. Each domain owns its contracts +

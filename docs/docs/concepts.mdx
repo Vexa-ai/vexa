@@ -1,6 +1,6 @@
 ---
 title: "Concepts"
-description: "The primitives Vexa is built from — workspace, meeting, agent, container, identity, scheduler."
+description: "The primitives Vexa is built from — workspace, meeting, agent, container, identity, scheduler — and the two beneath them: module and contract."
 ---
 
 Everything in Vexa composes from a handful of primitives. A unit of work — a **dispatch** — is one
@@ -59,3 +59,28 @@ an audience-scoped credential (Keycloak / RFC 8693) at an MCP gateway, so the ag
 Redis. The one mechanism that **dispatches agents**, on a trigger — a schedule entry (cron), an
 integration event (e.g. new email), or *now* (chat). It holds the user-manageable schedule; a meeting
 ending is just another event that dispatches an agent.
+
+---
+
+Two more primitives live one level down, in the **code itself** — they are how everything above
+is built:
+
+## Module
+
+The unit of construction. **A module owns exactly one concern and is the single source of truth
+for that concern** — that's the rule, everywhere. Capture bricks compose into the meeting bot,
+modules compose into services (each service a **modular monolith**), services compose into
+deployments. Because its concern is exact and singular, a module is tested — and debugged —
+**fully in isolation** against fixtures. Every module ships three things: the running code, the
+adversarial code (tests that harness it), and the data (goldens that validate it). Fixtures are
+collected from real meetings — real audio, speaker activations, environment metadata — so the
+harness replays reality. The full tree: [Modules & Seams](/architecture/modules).
+
+## Contract
+
+The only way modules join. A contract is **defined once, rarely changed, and sealed** — a sha256
+per contract in `contracts.seal.json`, enforced in CI, so a seal can break loudly but a contract
+can never drift silently. Chains of modules joined by contracts test in integration with the same
+fixtures — a bug is reproduced at exactly the scale it lives at. All ports are deterministic for
+deterministic input, which keeps the verify loop simple enough for an AI agent to own. The
+registry (owner → consumers, all 16 seals): [Modules & Seams](/architecture/modules#contract-registry).
