@@ -3,7 +3,9 @@ terminal's ``clients/terminal/src/surfaces/meetingId.ts`` (same id formats, same
 
 Used by ``POST /meetings`` / ``PATCH /meetings/{id}`` (a planned meeting created from a pasted
 link) and by ``calendar_sync`` (extracting the joinable link out of an ICS event's LOCATION /
-DESCRIPTION). Pure string logic — no I/O, no framework imports.
+DESCRIPTION). Pure string logic — no I/O, no framework imports; the one config read is
+``VEXA_JITSI_HOSTS`` (P14, declared in config.v1.json), consulted per call so tests and
+reloads see the live env.
 
 Id formats (mirrors the dashboard join-form):
   * google_meet → ``abc-defg-hij``
@@ -14,6 +16,7 @@ Id formats (mirrors the dashboard join-form):
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Optional
 from urllib.parse import unquote, urlparse
@@ -25,6 +28,15 @@ _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
 # A Jitsi room is the URL path's single segment; permissive by design (jitsi accepts nearly any
 # room string) but excludes separators/whitespace so a mangled URL never yields a bogus room.
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
+
+
+def _configured_jitsi_hosts() -> set[str]:
+    """Deployment-declared Jitsi hostnames (``VEXA_JITSI_HOSTS``, comma-separated) — for
+    self-hosted deployments whose hostname carries neither "jitsi" nor a "meet" label. A
+    listed host is as explicit as meet.jit.si, so it is honoured in EVERY mode, including
+    the calendar (ICS) free-text scan."""
+    raw = os.getenv("VEXA_JITSI_HOSTS", "")
+    return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
 def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple[str, str]]:
@@ -73,6 +85,7 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
         # (``meeting_url``) so a self-hosted room joins on ITS deployment, not the template's.
         is_jitsi_host = (
             host == "meet.jit.si"
+            or host in _configured_jitsi_hosts()     # deployment-declared (VEXA_JITSI_HOSTS)
             or "jitsi" in host                       # a host naming jitsi is a jitsi deployment
             # A "meet" hostname LABEL anywhere (meet.example.org, eu.meet.example.org) — jitsi's
             # recommended naming, regionalized. Pasted-link-only (too loose for the ICS scan).

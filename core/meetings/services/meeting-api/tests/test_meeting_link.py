@@ -64,6 +64,27 @@ class TestFindMeetingLinkJitsi:
         got = find_meeting_link("Join us: https://meet.jit.si/VexaStandup today")
         assert got == ("jitsi", "VexaStandup", "https://meet.jit.si/VexaStandup")
 
+    def test_meet_label_host_not_imported_from_free_text(self):
+        # The meet-label convention is pasted-link-only — an ICS full of arbitrary
+        # links must not guess rooms. Declaring the host (below) is the opt-in.
+        assert find_meeting_link("agenda: https://eu.meet.example.org/Weekly") is None
+
+
+class TestConfiguredJitsiHosts:
+    def test_declared_host_parses_and_imports(self, monkeypatch):
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "eu.meet.example.org, calls.example.io")
+        # Pasted link on a declared host — parses in strict mode too.
+        assert parse_meeting_url("https://eu.meet.example.org/Weekly", generic_hosts=False) == ("jitsi", "Weekly")
+        # A declared host with NO jitsi/meet naming at all.
+        assert parse_meeting_url("https://calls.example.io/Standup", generic_hosts=False) == ("jitsi", "Standup")
+        # Calendar (ICS) free-text scan now imports it — the point of the setting.
+        got = find_meeting_link("agenda: https://eu.meet.example.org/Weekly today")
+        assert got == ("jitsi", "Weekly", "https://eu.meet.example.org/Weekly")
+
+    def test_unset_env_declares_nothing(self, monkeypatch):
+        monkeypatch.delenv("VEXA_JITSI_HOSTS", raising=False)
+        assert parse_meeting_url("https://calls.example.io/Standup") is None
+
 
 class TestConstructMeetingUrl:
     def test_jitsi_constructs_on_canonical_host(self):
