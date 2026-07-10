@@ -38,9 +38,13 @@ class TestParseJitsi:
 
     def test_self_hosted_meet_convention_inferred_on_paste(self):
         assert parse_meeting_url("https://meet.example.org/TeamSync") == ("jitsi", "TeamSync")
-        # …but NOT in the free-text (ICS) scan, where meet.* is too loose.
-        assert parse_meeting_url("https://meet.example.org/TeamSync", generic_hosts=False) is None
-        # meet.google.com is claimed by the Meet rule first — never captured by meet.*.
+        # Regionalized deployments put "meet" mid-hostname.
+        assert parse_meeting_url("https://eu.meet.example.org/QualifiedRoomName") == ("jitsi", "QualifiedRoomName")
+        # "meet" must be a whole label — meetings.example.org is NOT a jitsi convention.
+        assert parse_meeting_url("https://meetings.example.org/Room") is None
+        # …and NOT in the free-text (ICS) scan, where the meet-label rule is too loose.
+        assert parse_meeting_url("https://eu.meet.example.org/TeamSync", generic_hosts=False) is None
+        # meet.google.com is claimed by the Meet rule first — never captured by the fallback.
         assert parse_meeting_url("https://meet.google.com/abc-defg-hij") == ("google_meet", "abc-defg-hij")
 
 

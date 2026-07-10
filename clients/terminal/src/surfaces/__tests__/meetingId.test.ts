@@ -78,7 +78,7 @@ describe("parseMeetingInput", () => {
     });
   });
 
-  it("infers jitsi for self-hosted conventions (*jitsi* and meet.* hosts)", () => {
+  it("infers jitsi for self-hosted conventions (*jitsi* hosts, and a 'meet' host label)", () => {
     expect(parseMeetingInput("https://jitsi.example.org/MyRoom")).toEqual({
       platform: "jitsi",
       native_meeting_id: "MyRoom",
@@ -87,7 +87,14 @@ describe("parseMeetingInput", () => {
       platform: "jitsi",
       native_meeting_id: "TeamSync",
     });
-    // meet.google.com is claimed by the Meet rule above — never captured by the meet.* fallback.
+    // Regionalized deployments put "meet" mid-hostname (eu.meet.example.org).
+    expect(parseMeetingInput("https://eu.meet.example.org/QualifiedRoomName")).toEqual({
+      platform: "jitsi",
+      native_meeting_id: "QualifiedRoomName",
+    });
+    // "meet" must be a whole label — meetings.example.org is NOT a jitsi convention.
+    expect(parseMeetingInput("https://meetings.example.org/Room")).toBeNull();
+    // meet.google.com is claimed by the Meet rule above — never captured by the fallback.
     expect(parseMeetingInput("https://meet.google.com/abc-defg-hij")?.platform).toBe("google_meet");
   });
 

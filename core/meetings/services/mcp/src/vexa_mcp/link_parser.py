@@ -169,10 +169,11 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         return ParseMeetingLinkResponse(platform="zoom", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
 
     # Jitsi Meet — the canonical public deployment plus the self-hosted conventions: a host
-    # containing "jitsi" (jitsi.example.org) or a bare meet.* host (jitsi's recommended naming).
+    # containing "jitsi" (jitsi.example.org) or a "meet" hostname label anywhere
+    # (meet.example.org, eu.meet.example.org — jitsi's recommended naming, regionalized).
     # Checked LAST so every known provider above claims its hosts first. The room is the path's
     # single segment; the bot receives the full URL so it always lands on the right deployment.
-    if host == "meet.jit.si" or "jitsi" in host or host.startswith("meet."):
+    if host == "meet.jit.si" or "jitsi" in host or "meet" in host.split("."):
         room = path.strip("/")
         if not room or "/" in room:
             raise HTTPException(

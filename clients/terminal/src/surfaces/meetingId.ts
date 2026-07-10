@@ -57,12 +57,13 @@ export function parseMeetingInput(raw: string): ParsedMeeting | null {
       return m ? { platform: "zoom", native_meeting_id: m[0] } : null;
     }
     // Jitsi: the canonical public deployment, plus the common self-hosted conventions —
-    // a host containing "jitsi" (jitsi.example.org) or a bare "meet.*" host (meet.example.org,
-    // jitsi's own recommended naming). Known platforms (meet.google.com, zoom, teams) are
-    // matched ABOVE, so this only fires for unclaimed hosts. The room is the path's single
-    // segment, kept exactly as pasted (case + percent-encoding preserved — the raw URL rides
-    // along as meeting_url, so the bot lands on the right deployment).
-    const jitsiHost = host === "meet.jit.si" || host.includes("jitsi") || host.startsWith("meet.");
+    // a host containing "jitsi" (jitsi.example.org) or a "meet" hostname LABEL anywhere
+    // (meet.example.org, eu.meet.example.org — jitsi's own recommended naming, regionalized).
+    // Known platforms (meet.google.com, zoom, teams) are matched ABOVE, so this only fires for
+    // unclaimed hosts. The room is the path's single segment, kept exactly as pasted (case +
+    // percent-encoding preserved — the raw URL rides along as meeting_url, so the bot lands on
+    // the right deployment).
+    const jitsiHost = host === "meet.jit.si" || host.includes("jitsi") || host.split(".").includes("meet");
     if (jitsiHost) {
       const room = url.pathname.replace(/^\/+|\/+$/g, "");
       return room && JITSI_ROOM.test(room) ? { platform: "jitsi", native_meeting_id: room } : null;

@@ -74,7 +74,9 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
         is_jitsi_host = (
             host == "meet.jit.si"
             or "jitsi" in host                       # a host naming jitsi is a jitsi deployment
-            or (generic_hosts and host.startswith("meet."))  # pasted-link-only convention
+            # A "meet" hostname LABEL anywhere (meet.example.org, eu.meet.example.org) — jitsi's
+            # recommended naming, regionalized. Pasted-link-only (too loose for the ICS scan).
+            or (generic_hosts and "meet" in host.split("."))
         )
         if is_jitsi_host:
             room = parsed.path.strip("/")

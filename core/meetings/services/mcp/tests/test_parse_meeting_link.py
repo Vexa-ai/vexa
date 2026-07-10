@@ -211,6 +211,15 @@ class TestJitsi:
         assert r.platform == "jitsi"
         assert r.native_meeting_id == "TeamSync"
 
+    def test_regionalized_meet_label_inferred(self):
+        r = parse("https://eu.meet.example.org/QualifiedRoomName")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "QualifiedRoomName"
+        assert r.meeting_url == "https://eu.meet.example.org/QualifiedRoomName"
+
+    def test_meet_substring_label_not_inferred(self):
+        assert_422("https://meetings.example.org/Room", "unknown provider")
+
 
 class TestMisc:
     def test_empty_url_rejected(self):
