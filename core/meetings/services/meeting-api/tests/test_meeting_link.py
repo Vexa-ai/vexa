@@ -87,8 +87,11 @@ class TestConfiguredJitsiHosts:
 
 
 class TestConstructMeetingUrl:
-    def test_jitsi_constructs_on_canonical_host(self):
-        assert construct_meeting_url("jitsi", "VexaStandup") == "https://meet.jit.si/VexaStandup"
+    def test_jitsi_requires_explicit_url(self):
+        # A jitsi room name is deployment-scoped — constructing a URL from the bare id
+        # would join the PUBLIC meet.jit.si room of that name (the wrong meeting), so
+        # jitsi has no template: callers pass meeting_url, like zoom.
+        assert construct_meeting_url("jitsi", "VexaStandup") is None
 
     def test_zoom_still_requires_explicit_url(self):
         assert construct_meeting_url("zoom", "84335626851") is None

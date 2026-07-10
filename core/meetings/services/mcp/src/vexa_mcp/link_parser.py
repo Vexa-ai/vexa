@@ -8,6 +8,7 @@ FastAPI tool route (and the MCP transport on top of it) surfaces a proper error.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from typing import List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -168,17 +169,30 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         passcode = (query.get("pwd") or [None])[0]
         return ParseMeetingLinkResponse(platform="zoom", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
 
-    # Jitsi Meet — the canonical public deployment plus the self-hosted conventions: a host
-    # containing "jitsi" (jitsi.example.org) or a "meet" hostname label anywhere
+    # Jitsi Meet — the canonical public deployment, VEXA_JITSI_HOSTS-declared deployments
+    # (the SAME setting meeting-api's parser honours), and the self-hosted naming conventions:
+    # a host containing "jitsi" (jitsi.example.org) or a "meet" hostname label anywhere
     # (meet.example.org, eu.meet.example.org — jitsi's recommended naming, regionalized).
     # Checked LAST so every known provider above claims its hosts first. The room is the path's
-    # single segment; the bot receives the full URL so it always lands on the right deployment.
-    if host == "meet.jit.si" or "jitsi" in host or "meet" in host.split("."):
+    # single URL-safe segment (the id round-trips into path params, so whitespace is invalid);
+    # the bot receives the full URL so it always lands on the right deployment.
+    configured_hosts = {
+        h.strip().lower() for h in os.getenv("VEXA_JITSI_HOSTS", "").split(",") if h.strip()
+    }
+    explicit_jitsi = host == "meet.jit.si" or host in configured_hosts
+    inferred_jitsi = "jitsi" in host or "meet" in host.split(".")
+    if explicit_jitsi or inferred_jitsi:
         room = path.strip("/")
-        if not room or "/" in room:
+        if not room or not re.fullmatch(r"[^/?#\s]+", room):
             raise HTTPException(
                 status_code=422,
                 detail="Unsupported Jitsi URL format. Expected https://<jitsi-host>/<RoomName>.",
+            )
+        if not explicit_jitsi:
+            warnings.append(
+                "Host inferred as a self-hosted Jitsi deployment from its name. If this is not a "
+                "Jitsi meeting the bot will fail to join; declare the host in VEXA_JITSI_HOSTS to "
+                "silence this warning."
             )
         return ParseMeetingLinkResponse(
             platform="jitsi",

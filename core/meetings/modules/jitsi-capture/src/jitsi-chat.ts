@@ -61,23 +61,26 @@ export function sendJitsiChatMessage(text: string): boolean {
   }
 }
 
-/** Defensive read of the chat feature state → the full message list. */
-function messagesFromRedux(): Array<{ sender: string; text: string; key: string }> | null {
+/** Defensive read of the chat feature state → the RAW message list (jitsi's own array;
+ *  append-only, so callers may consume it with a cursor). */
+function rawReduxMessages(): any[] | null {
   try {
     const app = (globalThis as any).APP;
     const state = app?.store?.getState?.();
     const msgs = state?.["features/chat"]?.messages;
-    if (!Array.isArray(msgs)) return null;
-    return msgs
-      .filter((m: any) => m && typeof m.message === "string" && m.messageType !== "error")
-      .map((m: any) => ({
-        sender: (m.displayName || "").trim() || "Unknown",
-        text: m.message,
-        key: String(m.id ?? `${m.timestamp ?? ""}|${m.displayName ?? ""}|${m.message}`),
-      }));
+    return Array.isArray(msgs) ? msgs : null;
   } catch {
     return null;
   }
+}
+
+/** One redux entry → an emittable message, or null for non-messages: errors, and the
+ *  bot's OWN messages (messageType 'local' — echoing them back would let an embedder
+ *  that auto-replies to chat converse with itself). */
+function toChatMessage(m: any): JitsiChatMessage | null {
+  if (!m || typeof m.message !== "string") return null;
+  if (m.messageType === "error" || m.messageType === "local") return null;
+  return { sender: (m.displayName || "").trim() || "Unknown", text: m.message };
 }
 
 export function createJitsiChat(opts: JitsiChatOptions): JitsiChat {
@@ -97,16 +100,23 @@ export function createJitsiChat(opts: JitsiChatOptions): JitsiChat {
     try { opts.onMessage(msg); } catch { /* never break capture */ }
   };
 
-  // ── redux source (primary) ──
+  // ── redux source (primary) — cursor over jitsi's append-only message array, so a
+  // tick costs O(new messages), not O(all messages ever). ──
   let primed = false;
+  let cursor = 0;
+  let emitSeq = 0;
   const pollRedux = (): boolean => {
-    const msgs = messagesFromRedux();
+    const msgs = rawReduxMessages();
     if (msgs === null) return false;
     mode = "redux";
-    // First read PRIMES the seen-set without emitting: history from before the
+    // First read PRIMES the cursor without emitting: history from before the
     // bot joined is not "new messages" to the embedder.
-    if (!primed) { for (const m of msgs) seenKeys.add(m.key); primed = true; return true; }
-    for (const m of msgs) emit({ sender: m.sender, text: m.text }, m.key);
+    if (!primed) { cursor = msgs.length; primed = true; return true; }
+    if (msgs.length < cursor) cursor = 0; // the store was replaced (rare) — resync
+    for (; cursor < msgs.length; cursor++) {
+      const m = toChatMessage(msgs[cursor]);
+      if (m) emit(m, `redux:${emitSeq++}`);
+    }
     return true;
   };
 

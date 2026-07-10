@@ -34,15 +34,11 @@ The only thing that changes between platforms is the `platform` value.
   </Tab>
   <Tab title="Jitsi Meet">
     ```bash
-    # meet.jit.si room — the room name is the id
+    # the room name is the id; meeting_url is REQUIRED — a room name is scoped to a
+    # deployment (meet.jit.si or your self-hosted instance), so the URL says which one
     curl -X POST "$API_BASE/bots" \
       -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-      -d '{"platform":"jitsi","native_meeting_id":"MyRoom","bot_name":"Vexa"}'
-
-    # self-hosted Jitsi — pass the full meeting_url on your deployment
-    curl -X POST "$API_BASE/bots" \
-      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-      -d '{"platform":"jitsi","native_meeting_id":"MyRoom","meeting_url":"https://jitsi.example.org/MyRoom","bot_name":"Vexa"}'
+      -d '{"platform":"jitsi","native_meeting_id":"MyRoom","meeting_url":"https://meet.jit.si/MyRoom","bot_name":"Vexa"}'
     ```
   </Tab>
 </Tabs>

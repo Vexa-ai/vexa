@@ -36,7 +36,7 @@ import {
 } from '@vexa/remote-browser';
 import { getJoinBrowserArgs } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
-import type { Invocation } from './config.js';
+import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
 import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
@@ -128,7 +128,7 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // tracks, and hooking RTCPeerConnection is version-proof where its DOM <audio> ids are not.
   // MUST run before the page builds its RTCPeerConnections; addInitScript
   // runs at document-start, after the bundle above has defined window.VexaBrowserUtils. (L4 — Zoom/Teams.)
-  if (inv.platform === 'zoom' || inv.platform === 'teams' || inv.platform === 'jitsi') {
+  if (isMixedLanePlatform(inv.platform)) {
     await context.addInitScript(
       `try { window.VexaBrowserUtils && window.VexaBrowserUtils.installRemoteAudioHook && window.VexaBrowserUtils.installRemoteAudioHook({}); } catch (e) {}`,
     ).catch(() => { /* non-fatal */ });
@@ -172,7 +172,7 @@ export async function startCaptureBridge(
    *  the composition root publishes it as a transcript.v1 `source:'chat'` segment. */
   onChat?: (sender: string, text: string) => void,
 ): Promise<() => Promise<void>> {
-  const mixed = inv.platform === 'zoom' || inv.platform === 'teams' || inv.platform === 'jitsi';
+  const mixed = isMixedLanePlatform(inv.platform);
   const jitsi = inv.platform === 'jitsi';
   const lane: 'gmeet' | 'mixed' = mixed ? 'mixed' : 'gmeet';
 
@@ -389,17 +389,11 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
       const click = (sel: string) => doc?.querySelector(sel)?.click();
       if (platform === 'teams') click('#microphone-button');
       else if (platform === 'zoom') click('.join-audio-container__btn');
-      else if (platform === 'jitsi') {
-        // Jitsi Meet: the toolbar audio toggle carries a mute/microphone aria-label
-        // ("Toggle mute audio" on stock builds); match by label like the Meet path.
-        const btn = Array.from(doc?.querySelectorAll('[role="button"],button') ?? [])
-          .find((b: any) => /mute audio|microphone/i.test(b.getAttribute('aria-label') ?? '')) as any;
-        btn?.click();
-      }
       else {
-        // Google Meet: the mic button is identified by an aria-label containing "microphone".
+        // Google Meet / Jitsi: the mic toggle is identified by its aria-label —
+        // "microphone" on Meet, "Toggle mute audio" on stock jitsi builds.
         const btn = Array.from(doc?.querySelectorAll('[role="button"],button') ?? [])
-          .find((b: any) => /microphone/i.test(b.getAttribute('aria-label') ?? '')) as any;
+          .find((b: any) => /microphone|mute audio/i.test(b.getAttribute('aria-label') ?? '')) as any;
         btn?.click();
       }
       void on; // toggle is a click; on/off intent is logged by the caller

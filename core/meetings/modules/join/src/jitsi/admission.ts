@@ -12,37 +12,47 @@ import {
   jitsiRemovalTexts,
 } from "./selectors";
 
+/** The app's own runtime verdict — the SAME probe join/admission/removal all trust.
+ *  jitsi-meet exposes the APP global on every stock deployment; "no-api" = a custom
+ *  build stripped it, so the caller falls back to DOM signals. */
+export async function getAppJoinedState(page: Page): Promise<"joined" | "not-joined" | "no-api"> {
+  return await page.evaluate(() => {
+    try {
+      const app = (globalThis as any).APP;
+      if (app?.conference?.isJoined) return app.conference.isJoined() === true ? "joined" : "not-joined";
+      return "no-api";
+    } catch { return "no-api"; }
+  }).catch(() => "no-api") as "joined" | "not-joined" | "no-api";
+}
+
+/** The hangup control is footer-only — never rendered on the prejoin or lobby screens. */
+export async function isHangupVisible(page: Page): Promise<boolean> {
+  for (const sel of jitsiHangupButtonSelectors) {
+    if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+  }
+  return false;
+}
+
 /**
  * Check if the bot is confirmed inside the conference.
  *
- * Primary:   the app's own runtime verdict — `APP.conference.isJoined()`.
- *            jitsi-meet exposes the APP global on every stock deployment; it is
- *            the same oracle the app's UI renders from, so it cannot false-
- *            positive on lobby/prejoin (isJoined() is false while knocking).
- * Fallback1: a hangup control is visible — footer-only, never rendered on the
- *            prejoin or lobby screens.
+ * Primary:   `getAppJoinedState` — the app's own verdict; it cannot false-positive
+ *            on lobby/prejoin (isJoined() is false while knocking).
+ * Fallback1: a hangup control is visible (never on prejoin/lobby screens).
  * Fallback2: conference stage present (#largeVideoContainer) AND no prejoin or
  *            lobby indicators — for custom builds that strip both the APP
  *            global and the stock hangup classes. The stage alone is NOT
  *            sufficient (some builds mount it behind the lobby screen), hence
  *            the exclusions.
  */
-async function isAdmitted(page: Page): Promise<boolean> {
+export async function isAdmitted(page: Page): Promise<boolean> {
   try {
-    const viaApp = await page.evaluate(() => {
-      try {
-        const app = (globalThis as any).APP;
-        if (app?.conference?.isJoined) return app.conference.isJoined() === true ? "joined" : "not-joined";
-        return "no-api";
-      } catch { return "no-api"; }
-    }).catch(() => "no-api");
+    const viaApp = await getAppJoinedState(page);
     if (viaApp === "joined") return true;
     if (viaApp === "not-joined") return false; // authoritative negative — skip DOM guesswork
 
     // APP global absent (custom build) — DOM fallbacks.
-    for (const sel of jitsiHangupButtonSelectors) {
-      if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
-    }
+    if (await isHangupVisible(page)) return true;
 
     const inLobby = await isInLobby(page);
     if (inLobby) return false;

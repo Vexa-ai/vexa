@@ -28,6 +28,14 @@ import { fileURLToPath } from 'node:url';
 export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
+/** True for platforms that ride the MIXED capture lane (one combined WebRTC audio
+ *  stream + pyannote separation); google_meet rides the per-channel gmeet lane.
+ *  The ONE predicate the browser hook, the capture bridge, and the pipeline pick
+ *  must all agree on — never restate it inline. */
+export function isMixedLanePlatform(p: Platform | string): boolean {
+  return p === 'zoom' || p === 'teams' || p === 'jitsi';
+}
+
 export interface AutomaticLeave {
   waitingRoomTimeout?: number;
   noOneJoinedTimeout?: number;

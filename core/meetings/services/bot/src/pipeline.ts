@@ -29,7 +29,7 @@ import {
   type ChunkSegment,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import type { Invocation } from './config.js';
+import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -206,7 +206,7 @@ export function createBotPipeline(
   opts: { transcribe?: Transcribe; config?: SpeakerStreamManagerConfig; onError?: (e: unknown) => void } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
-  if (inv.platform === 'zoom' || inv.platform === 'teams' || inv.platform === 'jitsi') {
+  if (isMixedLanePlatform(inv.platform)) {
     return createMixedBotPipeline(transcribe, sink, inv.language ?? undefined, opts.onError);
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);

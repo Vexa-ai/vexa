@@ -377,6 +377,8 @@ services:
       - PORT=8010
       - VEXA_ENV=${VEXA_ENV:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.
+      - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/health').status==200 else 1)"]
       interval: 10s

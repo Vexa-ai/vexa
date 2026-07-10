@@ -56,18 +56,6 @@ export function parseMeetingInput(raw: string): ParsedMeeting | null {
       const m = url.pathname.match(ZOOM_ID) || url.search.match(ZOOM_ID);
       return m ? { platform: "zoom", native_meeting_id: m[0] } : null;
     }
-    // Jitsi: the canonical public deployment, plus the common self-hosted conventions —
-    // a host containing "jitsi" (jitsi.example.org) or a "meet" hostname LABEL anywhere
-    // (meet.example.org, eu.meet.example.org — jitsi's own recommended naming, regionalized).
-    // Known platforms (meet.google.com, zoom, teams) are matched ABOVE, so this only fires for
-    // unclaimed hosts. The room is the path's single segment, kept exactly as pasted (case +
-    // percent-encoding preserved — the raw URL rides along as meeting_url, so the bot lands on
-    // the right deployment).
-    const jitsiHost = host === "meet.jit.si" || host.includes("jitsi") || host.split(".").includes("meet");
-    if (jitsiHost) {
-      const room = url.pathname.replace(/^\/+|\/+$/g, "");
-      return room && JITSI_ROOM.test(room) ? { platform: "jitsi", native_meeting_id: room } : null;
-    }
     if (host.includes("teams.microsoft.com") || host.includes("teams.live.com")) {
       // Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
       const decoded = decodeURIComponent(input);
@@ -78,6 +66,19 @@ export function parseMeetingInput(raw: string): ParsedMeeting | null {
       const short = url.pathname.match(/\/meet\/([^/?#]+)/i);
       if (short) return { platform: "teams", native_meeting_id: short[1] };
       return null;
+    }
+    // Jitsi: LAST, so every known platform above claims its hosts first (mirrors the server
+    // parser's ordering). The canonical public deployment, plus the common self-hosted
+    // conventions — a host containing "jitsi" (jitsi.example.org) or a "meet" hostname LABEL
+    // anywhere (meet.example.org, eu.meet.example.org — jitsi's own recommended naming,
+    // regionalized). The room is the path's single segment, kept exactly as pasted (case +
+    // percent-encoding preserved — the raw URL rides along as meeting_url, so the bot lands
+    // on the right deployment). A VEXA_JITSI_HOSTS-declared host with no jitsi/meet naming
+    // parses server-side (API/calendar) but not here — the client has no env channel.
+    const jitsiHost = host === "meet.jit.si" || host.includes("jitsi") || host.split(".").includes("meet");
+    if (jitsiHost) {
+      const room = url.pathname.replace(/^\/+|\/+$/g, "");
+      return room && JITSI_ROOM.test(room) ? { platform: "jitsi", native_meeting_id: room } : null;
     }
     return null;
   }

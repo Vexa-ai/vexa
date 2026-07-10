@@ -77,12 +77,12 @@ export const jitsiConferenceIndicators: string[] = [
 // With lobby enabled, the app shows a "knocking" screen after the join click
 // until a moderator admits or declines. Members-only rooms show a
 // waiting-for-host dialog instead.
+// Structural indicators only — the lobby PHRASES live in jitsiLobbyTexts (one owner;
+// the body-text scan covers every phrase, so duplicating them as text= selectors
+// would only add dead per-poll lookups).
 export const jitsiLobbyIndicators: string[] = [
   '[data-testid="lobby.joiningMessage"]',
   '.lobby-screen',
-  'text=Asking to join',
-  'text=Waiting for a moderator',
-  'text=Waiting for the host',
 ];
 export const jitsiLobbyTexts = [
   'Asking to join',
@@ -98,12 +98,14 @@ export const jitsiRejectionTexts = [
   'request to join has been rejected',
   'declined by a moderator',
 ];
+// NB: no "disconnected" phrasing here — jitsi shows a "You have been disconnected"
+// overlay during TRANSIENT reconnects it recovers from on its own; treating it as
+// terminal would tear the bot out of a meeting that resumes seconds later. The
+// isJoined() debounce owns connection-loss detection.
 export const jitsiRemovalTexts = [
   'kicked out of the meeting',
   'You have been kicked',
-  'The meeting has been terminated',
   'meeting has been terminated',
-  'You have been disconnected',
   'The conference has ended',
 ];
 

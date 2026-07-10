@@ -160,7 +160,7 @@ def _segment_to_api(seg: dict) -> dict:
         "text": seg.get("text", ""),
         "language": seg.get("language"),
     }
-    for k in ("speaker", "completed", "segment_id", "absolute_start_time", "absolute_end_time", "created_at"):
+    for k in ("speaker", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time", "created_at"):
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out

@@ -135,15 +135,15 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             )
         # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
         # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
-        # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams/jitsi), or the caller
-        # supplied an explicit meeting_url (required for zoom + white-label/unknown platforms; also how
-        # a SELF-HOSTED jitsi deployment is addressed).
+        # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
+        # explicit meeting_url (required for zoom AND jitsi — a jitsi room name is deployment-scoped, so
+        # only the full URL says WHICH deployment to join).
         if not meeting_url and construct_meeting_url(platform, native_meeting_id) is None:
             raise HTTPException(
                 status_code=422,
                 detail=(
                     f"unsupported platform '{platform}' without a meeting_url — "
-                    "use google_meet/teams/jitsi, or provide meeting_url (required for zoom)"
+                    "use google_meet/teams, or provide meeting_url (required for zoom/jitsi)"
                 ),
             )
 

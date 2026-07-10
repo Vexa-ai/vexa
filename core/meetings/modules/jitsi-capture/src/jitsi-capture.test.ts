@@ -85,11 +85,13 @@ async function main() {
     { id: "m2", displayName: "Bob", message: "agenda is in the doc", messageType: "remote", timestamp: 2 },
     { id: "m3", displayName: "", message: "anonymous ping", messageType: "remote", timestamp: 3 },
     { id: "m4", displayName: "Eve", message: "boom", messageType: "error", timestamp: 4 },
+    { id: "m5", displayName: "Vexa", message: "sent by the bot itself", messageType: "local", timestamp: 5 },
   ];
   await sleep(40);
   check("new message emitted", got.some((m) => m.sender === "Bob" && m.text === "agenda is in the doc"), JSON.stringify(got));
   check("missing displayName → Unknown", got.some((m) => m.sender === "Unknown" && m.text === "anonymous ping"), JSON.stringify(got));
   check("error-type messages filtered", !got.some((m) => m.text === "boom"), JSON.stringify(got));
+  check("the bot's own (local) messages never echo back", !got.some((m) => m.text === "sent by the bot itself"), JSON.stringify(got));
 
   const before = got.length;
   await sleep(30);

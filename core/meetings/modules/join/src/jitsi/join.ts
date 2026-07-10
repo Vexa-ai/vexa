@@ -1,11 +1,11 @@
 import { Page } from "playwright";
 import { log, callJoiningCallback } from "../_host";
 import { BotConfig } from "../_host";
+import { isAdmitted } from "./admission";
 import {
   jitsiNameInputSelector,
   jitsiJoinButtonSelector,
   jitsiPasswordInputSelector,
-  jitsiHangupButtonSelectors,
   jitsiGuestEntryTexts,
 } from "./selectors";
 
@@ -65,20 +65,6 @@ export function buildJitsiMeetingUrl(
   return url.toString();
 }
 
-/** True if the conference UI is already live on the page (prejoin disabled /
- *  already past it). Checked via the app's own runtime API first — stable
- *  across deployment versions — with the hangup control as the DOM fallback. */
-async function isConferenceLive(page: Page): Promise<boolean> {
-  const viaApp = await page.evaluate(() => {
-    try { return !!(globalThis as any).APP?.conference?.isJoined?.(); } catch { return false; }
-  }).catch(() => false);
-  if (viaApp) return true;
-  for (const sel of jitsiHangupButtonSelectors) {
-    if (await page.locator(sel).first().isVisible({ timeout: 200 }).catch(() => false)) return true;
-  }
-  return false;
-}
-
 /**
  * Clear a deployment's auth landing, if one fronts the app. Some self-hosted
  * deployments show "Sign in to Jitsi" (an SSO button + a guest option) before any
@@ -110,7 +96,7 @@ async function enterAsGuestIfGated(page: Page): Promise<boolean> {
     // No guest affordance yet — if the real jitsi UI is already up, there is no landing.
     const jitsiUiUp = await page.locator(jitsiNameInputSelector).first()
       .isVisible({ timeout: 200 }).catch(() => false);
-    if (jitsiUiUp || await isConferenceLive(page)) return false;
+    if (jitsiUiUp || await isAdmitted(page)) return false;
     await page.waitForTimeout(500);
   }
   return false;
@@ -124,9 +110,10 @@ async function enterAsGuestIfGated(page: Page): Promise<boolean> {
  */
 async function handlePasswordPrompt(page: Page, botConfig: BotConfig): Promise<void> {
   const pwField = page.locator(jitsiPasswordInputSelector).first();
-  // waitFor (NOT isVisible) — the prompt renders a beat after the join attempt.
+  // The prompt arrives over the XMPP round-trip, seconds after the join click on a
+  // slow deployment — wait long enough that a supplied passcode is actually used.
   const visible = await pwField
-    .waitFor({ state: "visible", timeout: 1500 })
+    .waitFor({ state: "visible", timeout: 5000 })
     .then(() => true)
     .catch(() => false);
   if (!visible) return;
@@ -164,7 +151,7 @@ export async function joinJitsiMeeting(
   // Prejoin screen may be disabled per-deployment (config.prejoinConfig.enabled=false)
   // — in that case the app enters the conference (or the lobby) directly and the
   // name is already set via the userInfo.displayName hash param.
-  if (await isConferenceLive(page)) {
+  if (await isAdmitted(page)) {
     log("[Jitsi] No prejoin screen — conference already live");
     return;
   }
@@ -182,8 +169,7 @@ export async function joinJitsiMeeting(
     .catch(() => false);
   if (havePrejoin) {
     // Fill the display name with REAL keyboard events — jitsi's prejoin is a React
-    // form; typing (not a synthetic value-set) reliably enables the join button
-    // (same lesson as the Zoom web client).
+    // form; typing (not a synthetic value-set) reliably enables the join button.
     const current = await nameField.inputValue().catch(() => "");
     if (current !== botName) {
       await nameField.click({ timeout: 5000 }).catch(() => {});

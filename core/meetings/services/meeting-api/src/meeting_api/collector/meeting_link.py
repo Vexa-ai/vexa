@@ -11,8 +11,10 @@ Id formats (mirrors the dashboard join-form):
   * google_meet → ``abc-defg-hij``
   * zoom        → 9–11 digits
   * teams       → the ``19:meeting_…@thread.v2`` thread id, or the ``/meet/<id>`` short-link segment
-  * jitsi       → the room name (the URL path on meet.jit.si; self-hosted deployments are not
-                  host-inferable — those ride an explicit ``meeting_url`` + ``platform=jitsi``)
+  * jitsi       → the room name (the URL's path segment). Hosts: meet.jit.si and
+                  ``VEXA_JITSI_HOSTS``-declared deployments always; *jitsi* / meet-labelled
+                  hosts on pasted links only. The room name is deployment-scoped, so the raw
+                  URL rides alongside as ``meeting_url`` — never reconstructed from the id.
 """
 from __future__ import annotations
 
@@ -86,10 +88,13 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
         is_jitsi_host = (
             host == "meet.jit.si"
             or host in _configured_jitsi_hosts()     # deployment-declared (VEXA_JITSI_HOSTS)
-            or "jitsi" in host                       # a host naming jitsi is a jitsi deployment
-            # A "meet" hostname LABEL anywhere (meet.example.org, eu.meet.example.org) — jitsi's
-            # recommended naming, regionalized. Pasted-link-only (too loose for the ICS scan).
-            or (generic_hosts and "meet" in host.split("."))
+            # Naming HEURISTICS — pasted-link-only (a deliberate user action): a host naming
+            # jitsi, or a "meet" hostname LABEL anywhere (meet.example.org, eu.meet.example.org —
+            # jitsi's recommended naming, regionalized). Both are too loose for the ICS scan,
+            # where an event description full of arbitrary links (jitsi.github.io docs, vendor
+            # meet.* products) must not import as joinable rooms — there, only the explicit
+            # hosts above count; VEXA_JITSI_HOSTS is the opt-in.
+            or (generic_hosts and ("jitsi" in host or "meet" in host.split(".")))
         )
         if is_jitsi_host:
             room = parsed.path.strip("/")

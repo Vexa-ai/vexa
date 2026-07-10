@@ -47,12 +47,13 @@ _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "sto
 _TERMINAL_STATUSES = ("completed", "failed")
 
 # Construct-URL templates per platform (the parent's ``Platform.construct_meeting_url``, core set).
-# jitsi resolves against the canonical public deployment; a self-hosted Jitsi lives on an arbitrary
-# host, so those callers pass an explicit ``meeting_url`` (same passthrough zoom uses).
+# NO jitsi template: a jitsi room name is scoped to a DEPLOYMENT (meet.jit.si is only the public
+# one), so constructing a URL from the bare id would silently join the public room of that name —
+# the wrong meeting, on someone else's deployment. jitsi callers pass an explicit ``meeting_url``
+# (same passthrough zoom uses); the UI, MCP, and calendar paths all carry it.
 _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
     "teams": "https://teams.microsoft.com/l/meetup-join/{native_meeting_id}",
-    "jitsi": "https://meet.jit.si/{native_meeting_id}",
 }
 
 

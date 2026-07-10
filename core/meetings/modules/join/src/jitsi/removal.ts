@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { log } from "../_host";
+import { getAppJoinedState, isHangupVisible } from "./admission";
 import {
-  jitsiHangupButtonSelectors,
   jitsiRemovalTexts,
   jitsiPostMeetingIndicators,
 } from "./selectors";
@@ -66,13 +66,7 @@ export function startJitsiRemovalMonitor(
     try {
       // 1. The app's own verdict. "not-joined" is authoritative but debounced —
       //    jitsi briefly reports false during an ICE restart / visitor-mode move.
-      const joinedState = await page.evaluate(() => {
-        try {
-          const app = (globalThis as any).APP;
-          if (app?.conference?.isJoined) return app.conference.isJoined() === true ? "joined" : "not-joined";
-          return "no-api";
-        } catch { return "no-api"; }
-      }).catch(() => "no-api");
+      const joinedState = await getAppJoinedState(page);
 
       if (joinedState === "not-joined" && Date.now() - joinedAtMs >= GRACE_PERIOD_MS) {
         consecutiveNotJoined++;
@@ -84,26 +78,23 @@ export function startJitsiRemovalMonitor(
         consecutiveNotJoined = 0;
       }
 
-      // 2. Removal / termination dialog text.
-      const detected = await page.evaluate((texts: string[]) => {
-        const bodyText = (document.body?.innerText || "").toLowerCase();
-        return texts.find((t) => bodyText.includes(t.toLowerCase())) || null;
-      }, jitsiRemovalTexts).catch(() => null);
-      if (detected) {
-        await triggerRemoval(`Removal detected via text: "${detected}"`);
-        return;
+      // 2. Removal / termination dialog text — grace-gated like every other signal
+      //    (the conference UI can flash transitional overlays while media initializes).
+      if (Date.now() - joinedAtMs >= GRACE_PERIOD_MS) {
+        const detected = await page.evaluate((texts: string[]) => {
+          const bodyText = (document.body?.innerText || "").toLowerCase();
+          return texts.find((t) => bodyText.includes(t.toLowerCase())) || null;
+        }, jitsiRemovalTexts).catch(() => null);
+        if (detected) {
+          await triggerRemoval(`Removal detected via text: "${detected}"`);
+          return;
+        }
       }
 
       // 3/4. DOM fallback for builds without the APP global: hangup gone for
       //      N consecutive polls, confirmed by a post-meeting indicator.
       if (joinedState === "no-api") {
-        let hangupVisible = false;
-        for (const sel of jitsiHangupButtonSelectors) {
-          if (await page.locator(sel).first().isVisible({ timeout: 300 }).catch(() => false)) {
-            hangupVisible = true;
-            break;
-          }
-        }
+        const hangupVisible = await isHangupVisible(page);
         if (!hangupVisible && Date.now() - joinedAtMs >= GRACE_PERIOD_MS) {
           consecutiveHangupMisses++;
           if (consecutiveHangupMisses >= HANGUP_MISS_THRESHOLD) {
