@@ -29,6 +29,7 @@ import * as path from 'path';
 import * as googlemeet from '../googlemeet/selectors';
 import * as msteams from '../msteams/selectors';
 import * as zoom from '../zoom/selectors';
+import * as jitsi from '../jitsi/selectors';
 
 const playwrightPkgDir = path.dirname(require.resolve('playwright/package.json'));
 const coreDir = path.dirname(
@@ -38,7 +39,7 @@ const { Selectors } = require(path.join(coreDir, 'lib', 'server', 'selectors.js'
 const validator = new Selectors([], undefined);
 
 const SELECTOR_ARRAY = /(Selectors|Indicators)$/;
-const modules: Record<string, Record<string, unknown>> = { googlemeet, msteams, zoom };
+const modules: Record<string, Record<string, unknown>> = { googlemeet, msteams, zoom, jitsi };
 
 let checked = 0;
 let arrays = 0;

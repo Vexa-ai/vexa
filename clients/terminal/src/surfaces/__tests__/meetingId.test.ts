@@ -21,6 +21,14 @@ describe("isValidMeetingId", () => {
     expect(isValidMeetingId("teams", "19:meeting_xyz@thread.v2")).toBe(true);
     expect(isValidMeetingId("teams", "")).toBe(false);
   });
+
+  it("accepts a single URL-safe Jitsi room, rejects separators/whitespace", () => {
+    expect(isValidMeetingId("jitsi", "VexaStandup")).toBe(true);
+    expect(isValidMeetingId("jitsi", "Team%20Sync")).toBe(true); // encoded form IS the id
+    expect(isValidMeetingId("jitsi", "a/b")).toBe(false);
+    expect(isValidMeetingId("jitsi", "has space")).toBe(false);
+    expect(isValidMeetingId("jitsi", "")).toBe(false);
+  });
 });
 
 describe("parseMeetingInput", () => {
@@ -57,6 +65,23 @@ describe("parseMeetingInput", () => {
       platform: "teams",
       native_meeting_id: "33832851446746",
     });
+  });
+
+  it("parses a meet.jit.si room URL (case + encoding preserved)", () => {
+    expect(parseMeetingInput("https://meet.jit.si/VexaStandup")).toEqual({
+      platform: "jitsi",
+      native_meeting_id: "VexaStandup",
+    });
+    expect(parseMeetingInput("https://meet.jit.si/Team%20Sync/")).toEqual({
+      platform: "jitsi",
+      native_meeting_id: "Team%20Sync",
+    });
+  });
+
+  it("does not infer jitsi for a bare origin or a self-hosted deployment", () => {
+    expect(parseMeetingInput("https://meet.jit.si/")).toBeNull();
+    // Self-hosted Jitsi is not host-inferable — the API takes platform=jitsi + meeting_url.
+    expect(parseMeetingInput("https://jitsi.example.org/MyRoom")).toBeNull();
   });
 
   it("returns null for garbage", () => {

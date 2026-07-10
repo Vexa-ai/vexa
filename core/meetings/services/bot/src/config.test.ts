@@ -1,7 +1,7 @@
 /**
  * L1/L2 — invocation.v1 boot config (ARCHITECTURE.md §5). Drives the real ajv-backed
  * parser against the PUBLISHED goldens (P8: the goldens are the spec) and asserts:
- *   • both committed goldens (minimal + full) parse;
+ *   • every committed golden (minimal + full + jitsi) parses;
  *   • the env helper round-trips VEXA_BOT_CONFIG;
  *   • off-contract input (missing required, unknown action, bad enum, non-JSON, absent)
  *     fails fast with an InvocationError (P14).
@@ -24,7 +24,7 @@ const throws = (fn: () => unknown): Error | null => { try { fn(); return null; }
 
 // ── every committed invocation.v1 golden parses ──
 const goldens = readdirSync(GOLDEN_DIR).filter((n) => n.startsWith('Invocation.') && n.endsWith('.json'));
-check('found both invocation goldens', goldens.length === 2, `got ${goldens.join(', ')}`);
+check('found all invocation goldens', goldens.length === 3, `got ${goldens.join(', ')}`);
 for (const g of goldens) {
   const raw = readFileSync(join(GOLDEN_DIR, g), 'utf8');
   const err = throws(() => parseInvocation(raw));
@@ -38,6 +38,13 @@ for (const g of goldens) {
   check('full: recordingEnabled true', full.recordingEnabled === true);
   check('full: automaticLeave threaded', full.automaticLeave?.waitingRoomTimeout === 300000, String(full.automaticLeave?.waitingRoomTimeout));
   check('full: secret token present (not logged)', typeof full.token === 'string' && full.token.length > 0);
+}
+
+// ── typed access on the jitsi golden (the platform enum accepts jitsi) ──
+{
+  const jitsi = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.jitsi.json'), 'utf8'));
+  check('jitsi: platform = jitsi', jitsi.platform === 'jitsi', jitsi.platform);
+  check('jitsi: meetingUrl carries the deployment host', jitsi.meetingUrl === 'https://meet.jit.si/VexaStandup', String(jitsi.meetingUrl));
 }
 
 // ── the env helper (P7: config by env) ──

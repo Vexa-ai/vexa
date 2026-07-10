@@ -1,9 +1,11 @@
 /** Meeting-link → {platform, native_meeting_id} parsing + validation for the "Add bot" flow.
  *  Id formats mirror the dashboard join-form (clients/dashboard/src/components/join/join-form.tsx):
- *    google_meet → abc-defg-hij   ·   zoom → 9–11 digits   ·   teams → non-empty (passcode handled elsewhere).
+ *    google_meet → abc-defg-hij   ·   zoom → 9–11 digits   ·   teams → non-empty (passcode handled elsewhere)
+ *    jitsi → the meet.jit.si room name (a single URL-safe path segment; self-hosted deployments
+ *    are not host-inferable — those ride the API with platform=jitsi + an explicit meeting_url).
  *  Accepts either a raw id or a full meeting URL the user pasted. */
 
-export type Platform = "google_meet" | "teams" | "zoom";
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
 
 export interface ParsedMeeting {
   platform: Platform;
@@ -12,6 +14,9 @@ export interface ParsedMeeting {
 
 const GMEET_ID = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const ZOOM_ID = /\d{9,11}/;
+// A Jitsi room: one URL-safe path segment (no separators/whitespace) — the id is embedded
+// back into the construct-URL template, so the encoded form is the id.
+const JITSI_ROOM = /^[^/?#\s]+$/;
 
 /** True if `id` is a valid native id for `platform`. */
 export function isValidMeetingId(platform: Platform, id: string): boolean {
@@ -19,6 +24,7 @@ export function isValidMeetingId(platform: Platform, id: string): boolean {
   if (!v) return false;
   if (platform === "google_meet") return GMEET_ID.test(v.toLowerCase());
   if (platform === "zoom") return /^\d{9,11}$/.test(v);
+  if (platform === "jitsi") return JITSI_ROOM.test(v);
   return v.length > 0; // teams
 }
 
@@ -49,6 +55,12 @@ export function parseMeetingInput(raw: string): ParsedMeeting | null {
     if (host.includes("zoom")) {
       const m = url.pathname.match(ZOOM_ID) || url.search.match(ZOOM_ID);
       return m ? { platform: "zoom", native_meeting_id: m[0] } : null;
+    }
+    if (host === "meet.jit.si") {
+      // Canonical public Jitsi: the room is the path's single segment, kept exactly as it
+      // appears (case + percent-encoding preserved — it round-trips into the meeting URL).
+      const room = url.pathname.replace(/^\/+|\/+$/g, "");
+      return room && JITSI_ROOM.test(room) ? { platform: "jitsi", native_meeting_id: room } : null;
     }
     if (host.includes("teams.microsoft.com") || host.includes("teams.live.com")) {
       // Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).

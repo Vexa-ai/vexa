@@ -1,6 +1,6 @@
 ---
 title: "Send a bot and get a transcript"
-description: "Capture a Google Meet, Zoom, or Teams call in real time."
+description: "Capture a Google Meet, Zoom, Teams, or Jitsi call in real time."
 ---
 
 A Vexa bot joins a call like any participant and streams back a **speaker-attributed** transcript. No
@@ -32,12 +32,27 @@ The only thing that changes between platforms is the `platform` value.
       -d '{"platform":"teams","native_meeting_id":"<meeting-id>","bot_name":"Vexa"}'
     ```
   </Tab>
+  <Tab title="Jitsi Meet">
+    ```bash
+    # meet.jit.si room — the room name is the id
+    curl -X POST "$API_BASE/bots" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d '{"platform":"jitsi","native_meeting_id":"MyRoom","bot_name":"Vexa"}'
+
+    # self-hosted Jitsi — pass the full meeting_url on your deployment
+    curl -X POST "$API_BASE/bots" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d '{"platform":"jitsi","native_meeting_id":"MyRoom","meeting_url":"https://jitsi.example.org/MyRoom","bot_name":"Vexa"}'
+    ```
+  </Tab>
 </Tabs>
 
-`native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet), not the whole URL.
+`native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet, the room name for
+Jitsi), not the whole URL.
 Optional: `language` (ISO code, omit to auto-detect) and `task` (`transcribe` default, or `translate`).
 
-On Meet and Teams the bot may wait in the lobby until a host admits it.
+On Meet and Teams the bot may wait in the lobby until a host admits it; a Jitsi room with the
+lobby enabled behaves the same way.
 
 <Note>
 You often don't need this call at all: a [**planned** meeting](/how-to/plan-a-meeting) with a time

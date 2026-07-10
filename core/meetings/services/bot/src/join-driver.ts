@@ -9,8 +9,8 @@ import type { Page } from '@vexa/remote-browser';
 import {
   joinMeeting,
   AdmissionError,
-  leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting,
-  startGoogleRemovalMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor,
+  leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, leaveJitsiMeeting,
+  startGoogleRemovalMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor, startJitsiRemovalMonitor,
   type JoinState, type Platform as JoinPlatform, type AdmissionOutcome,
 } from '@vexa/join';
 import type { BotStatus } from './contracts.js';
@@ -48,9 +48,9 @@ function mapState(s: JoinState): BotStatus | null {
   }
 }
 
-/** Map the bot's platform string to @vexa/join's Platform ('teams' | 'zoom' | 'google_meet'). */
+/** Map the bot's platform string to @vexa/join's Platform ('teams' | 'zoom' | 'jitsi' | 'google_meet'). */
 function joinPlatform(p: string): JoinPlatform {
-  return (p === 'teams' || p === 'zoom') ? p : 'google_meet';
+  return (p === 'teams' || p === 'zoom' || p === 'jitsi') ? p : 'google_meet';
 }
 
 export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver {
@@ -81,11 +81,13 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
     onRemoval(cb) {
       if (platform === 'teams') return startTeamsRemovalMonitor(page, cb);
       if (platform === 'zoom')  return startZoomRemovalMonitor(page, cb);
+      if (platform === 'jitsi') return startJitsiRemovalMonitor(page, cb);
       return startGoogleRemovalMonitor(page, cb);
     },
     async leave(reason) {
       if (platform === 'teams') { await leaveMicrosoftTeams(page, undefined, reason); return; }
       if (platform === 'zoom')  { await leaveZoomMeeting(page, undefined, reason); return; }
+      if (platform === 'jitsi') { await leaveJitsiMeeting(page, undefined, reason); return; }
       await leaveGoogleMeet(page, undefined, reason);
     },
     async withdraw(reason) {
@@ -102,6 +104,7 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       try {
         if (platform === 'teams')      await leaveMicrosoftTeams(page, undefined, reason);
         else if (platform === 'zoom')  await leaveZoomMeeting(page, undefined, reason);
+        else if (platform === 'jitsi') await leaveJitsiMeeting(page, undefined, reason);
         else                           await leaveGoogleMeet(page, undefined, reason);
       } catch { /* best-effort: fall through to the guaranteed page close */ }
       try {

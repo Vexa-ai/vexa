@@ -1,7 +1,7 @@
 {
   "name": "@vexa/join",
   "version": "0.1.0",
-  "description": "The isolated meeting-joining layer (Google Meet + MS Teams + Zoom web client): enter a meeting and observe its admission verdict. The embedder hands in a Playwright Page and watches JoinState through hooks; recording, transcription, redis, and meeting-api callbacks all live OUTSIDE this boundary (zero coupling to the bot core).",
+  "description": "The isolated meeting-joining layer (Google Meet + MS Teams + Zoom web client + Jitsi Meet): enter a meeting and observe its admission verdict. The embedder hands in a Playwright Page and watches JoinState through hooks; recording, transcription, redis, and meeting-api callbacks all live OUTSIDE this boundary (zero coupling to the bot core).",
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/shared/selector-validity.test.ts && tsx src/googlemeet/admission.test.ts && tsx src/googlemeet/humanized/humanized.test.ts && tsx src/msteams/modals.test.ts && tsx src/zoom/join.test.ts",
+    "test": "tsx src/shared/selector-validity.test.ts && tsx src/googlemeet/admission.test.ts && tsx src/googlemeet/humanized/humanized.test.ts && tsx src/msteams/modals.test.ts && tsx src/zoom/join.test.ts && tsx src/jitsi/join.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {

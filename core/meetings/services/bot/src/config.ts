@@ -25,7 +25,7 @@ const addFormats = addFormatsDefault as unknown as (ajv: Ajv) => Ajv;
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export type Platform = 'google_meet' | 'zoom' | 'teams';
+export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
 export interface AutomaticLeave {

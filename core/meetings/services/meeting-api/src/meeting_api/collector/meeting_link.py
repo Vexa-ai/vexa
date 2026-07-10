@@ -9,6 +9,8 @@ Id formats (mirrors the dashboard join-form):
   * google_meet → ``abc-defg-hij``
   * zoom        → 9–11 digits
   * teams       → the ``19:meeting_…@thread.v2`` thread id, or the ``/meet/<id>`` short-link segment
+  * jitsi       → the room name (the URL path on meet.jit.si; self-hosted deployments are not
+                  host-inferable — those ride an explicit ``meeting_url`` + ``platform=jitsi``)
 """
 from __future__ import annotations
 
@@ -20,6 +22,9 @@ _GMEET_ID = re.compile(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$")
 _ZOOM_ID = re.compile(r"\d{9,11}")
 _TEAMS_THREAD = re.compile(r"19:meeting_[^@%\s/]+@thread\.v2", re.IGNORECASE)
 _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
+# A Jitsi room is the URL path's single segment; permissive by design (jitsi accepts nearly any
+# room string) but excludes separators/whitespace so a mangled URL never yields a bogus room.
+_JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
 
 
 def parse_meeting_url(raw: str) -> Optional[tuple[str, str]]:
@@ -53,6 +58,13 @@ def parse_meeting_url(raw: str) -> Optional[tuple[str, str]]:
             if short:
                 return ("teams", short.group(1))
             return None
+        if host == "meet.jit.si":
+            # Canonical public Jitsi: the room is the path's single segment, kept EXACTLY as it
+            # appears in the URL (case + percent-encoding preserved) — the native id is embedded
+            # back into the construct-URL template and the DELETE path param, so it must stay
+            # URL-safe; decoding here would corrupt rooms with encoded characters.
+            room = parsed.path.strip("/")
+            return ("jitsi", room) if room and _JITSI_ROOM.match(room) else None
         return None
 
     # Bare numeric id → assume Zoom

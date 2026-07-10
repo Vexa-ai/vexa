@@ -29,8 +29,13 @@ Pass one of these as `platform`:
 | Google Meet | `google_meet` |
 | Zoom | `zoom` |
 | Microsoft Teams | `teams` |
+| Jitsi Meet | `jitsi` |
 
 The bot joins like any participant — no plugins, no host configuration.
+
+For `jitsi`, `native_meeting_id` is the room name and resolves against the public
+**meet.jit.si**. A **self-hosted** Jitsi deployment lives on your own host, so pass the full
+`meeting_url` (e.g. `https://jitsi.example.org/MyRoom`) alongside `platform: "jitsi"`.
 
 ## Meeting statuses
 

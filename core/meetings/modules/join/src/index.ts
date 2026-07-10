@@ -1,5 +1,5 @@
 /**
- * @vexa/join — the isolated meeting joining layer (Google Meet + MS Teams + Zoom web client).
+ * @vexa/join — the isolated meeting joining layer (Google Meet + MS Teams + Zoom web client + Jitsi Meet).
  *
  * Public surface. Everything below imports only from within this package
  * (verify with `npm run check:isolation`). The embedder supplies a Page and
@@ -19,6 +19,10 @@ import { joinZoomMeeting, buildZoomWebClientUrl } from "./zoom/join";
 import { waitForZoomMeetingAdmission, checkForZoomAdmissionSilent } from "./zoom/admission";
 import { leaveZoomMeeting, dismissZoomPopups } from "./zoom/leave";
 import { startZoomRemovalMonitor } from "./zoom/removal";
+import { joinJitsiMeeting, buildJitsiMeetingUrl } from "./jitsi/join";
+import { waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent } from "./jitsi/admission";
+import { leaveJitsiMeeting } from "./jitsi/leave";
+import { startJitsiRemovalMonitor } from "./jitsi/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 import { JOIN_BROWSER_ARGS, getJoinBrowserArgs } from "./browser-args";
@@ -29,7 +33,7 @@ export { startDebugView, setHooks };
 // build on this ONE set (browser-args.ts), so join↔bot flags never drift.
 export { JOIN_BROWSER_ARGS, getJoinBrowserArgs };
 
-export type Platform = "google_meet" | "teams" | "zoom";
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
 
 export interface JoinResult {
   admitted: boolean;
@@ -58,9 +62,13 @@ export function resolvePlatform(meetingUrl: string): Platform {
   if (meetingUrl.includes("teams.microsoft.com") || meetingUrl.includes("teams.live.com")) return "teams";
   // Canonical zoom.us / *.zoom.us only — white-label portals (LFX etc.) can't be
   // inferred from the URL; the embedder passes platform: "zoom" explicitly.
+  // Same rule for Jitsi: only the canonical public deployments are inferable —
+  // a self-hosted Jitsi lives on an arbitrary host, so the embedder passes
+  // platform: "jitsi" explicitly.
   try {
     const host = new URL(meetingUrl).hostname;
     if (host === "zoom.us" || host.endsWith(".zoom.us")) return "zoom";
+    if (host === "meet.jit.si" || host === "8x8.vc" || host.endsWith(".8x8.vc")) return "jitsi";
   } catch { /* fall through to throw below */ }
   throw new Error(`Cannot infer platform from meeting URL: ${meetingUrl}`);
 }
@@ -98,6 +106,11 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     admitted = await waitForZoomMeetingAdmission(
       page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
     );
+  } else if (platform === "jitsi") {
+    await joinJitsiMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+    admitted = await waitForJitsiMeetingAdmission(
+      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+    );
   } else {
     await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
     admitted = await waitForGoogleMeetingAdmission(
@@ -116,3 +129,4 @@ export { AdmissionError } from "./googlemeet/admission";
 export type { AdmissionOutcome } from "./googlemeet/admission";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
+export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };

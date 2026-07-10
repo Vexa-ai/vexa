@@ -181,6 +181,31 @@ class TestZoom:
         assert_422("https://events.zoom.us/ev/abc123", "zoom events")
 
 
+class TestJitsi:
+    def test_canonical_room(self):
+        r = parse("https://meet.jit.si/VexaStandup")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "VexaStandup"
+        assert r.passcode is None
+        # The bot always navigates the full URL, so the parser echoes it back.
+        assert r.meeting_url == "https://meet.jit.si/VexaStandup"
+        assert r.warnings == []
+
+    def test_trailing_slash(self):
+        assert parse("https://meet.jit.si/MyRoom/").native_meeting_id == "MyRoom"
+
+    def test_bare_origin_rejected(self):
+        assert_422("https://meet.jit.si/", "jitsi")
+
+    def test_multi_segment_path_rejected(self):
+        assert_422("https://meet.jit.si/a/b", "jitsi")
+
+    def test_self_hosted_host_not_inferred(self):
+        # Self-hosted Jitsi deployments live on arbitrary hosts — not enumerable here;
+        # those callers use POST /bots with platform=jitsi + an explicit meeting_url.
+        assert_422("https://jitsi.example.org/MyRoom", "unknown provider")
+
+
 class TestMisc:
     def test_empty_url_rejected(self):
         assert_422("", "empty")
