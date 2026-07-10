@@ -31,10 +31,17 @@ class TestParseJitsi:
     def test_multi_segment_path_rejected(self):
         assert parse_meeting_url("https://meet.jit.si/a/b") is None
 
-    def test_self_hosted_host_not_inferred(self):
-        # A self-hosted deployment is not host-inferable — callers pass
-        # platform=jitsi + meeting_url to POST /bots instead.
-        assert parse_meeting_url("https://jitsi.example.org/MyRoom") is None
+    def test_self_hosted_jitsi_host_inferred(self):
+        # A host naming jitsi is a jitsi deployment; the caller keeps the raw URL as
+        # meeting_url so the bot joins on that host, not the meet.jit.si template.
+        assert parse_meeting_url("https://jitsi.example.org/MyRoom") == ("jitsi", "MyRoom")
+
+    def test_self_hosted_meet_convention_inferred_on_paste(self):
+        assert parse_meeting_url("https://meet.example.org/TeamSync") == ("jitsi", "TeamSync")
+        # …but NOT in the free-text (ICS) scan, where meet.* is too loose.
+        assert parse_meeting_url("https://meet.example.org/TeamSync", generic_hosts=False) is None
+        # meet.google.com is claimed by the Meet rule first — never captured by meet.*.
+        assert parse_meeting_url("https://meet.google.com/abc-defg-hij") == ("google_meet", "abc-defg-hij")
 
 
 class TestParseExistingPlatformsUnchanged:

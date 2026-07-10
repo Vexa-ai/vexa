@@ -146,25 +146,6 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
             detail="Zoom Events links are not supported. Attendees receive unique per-registrant join links via email; these cannot be shared with a bot.",
         )
 
-    # Jitsi Meet — canonical public deployment. The room is the path's single segment; the
-    # bot receives the full URL so it always lands on the right deployment. Self-hosted
-    # Jitsi hosts are not enumerable here — those callers hit POST /bots with
-    # platform=jitsi + an explicit meeting_url instead of this parser.
-    if host == "meet.jit.si":
-        room = path.strip("/")
-        if not room or "/" in room:
-            raise HTTPException(
-                status_code=422,
-                detail="Unsupported Jitsi URL format. Expected https://meet.jit.si/<RoomName>.",
-            )
-        return ParseMeetingLinkResponse(
-            platform="jitsi",
-            native_meeting_id=room,
-            passcode=None,
-            meeting_url=url,
-            warnings=warnings,
-        )
-
     # Zoom: zoom.us (all subdomains) and zoomgov.com
     if "zoom.us" in host or "zoomgov.com" in host:
         parts = [p for p in path.split("/") if p]
@@ -186,5 +167,24 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
             )
         passcode = (query.get("pwd") or [None])[0]
         return ParseMeetingLinkResponse(platform="zoom", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
+
+    # Jitsi Meet — the canonical public deployment plus the self-hosted conventions: a host
+    # containing "jitsi" (jitsi.example.org) or a bare meet.* host (jitsi's recommended naming).
+    # Checked LAST so every known provider above claims its hosts first. The room is the path's
+    # single segment; the bot receives the full URL so it always lands on the right deployment.
+    if host == "meet.jit.si" or "jitsi" in host or host.startswith("meet."):
+        room = path.strip("/")
+        if not room or "/" in room:
+            raise HTTPException(
+                status_code=422,
+                detail="Unsupported Jitsi URL format. Expected https://<jitsi-host>/<RoomName>.",
+            )
+        return ParseMeetingLinkResponse(
+            platform="jitsi",
+            native_meeting_id=room,
+            passcode=None,
+            meeting_url=url,
+            warnings=warnings,
+        )
 
     raise HTTPException(status_code=422, detail="Unsupported meeting URL (unknown provider).")

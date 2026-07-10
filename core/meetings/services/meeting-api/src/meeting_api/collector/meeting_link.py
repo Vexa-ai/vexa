@@ -27,10 +27,15 @@ _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
 
 
-def parse_meeting_url(raw: str) -> Optional[tuple[str, str]]:
+def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple[str, str]]:
     """Parse a pasted meeting URL (or bare id) → ``(platform, native_meeting_id)``, or ``None``
     when nothing valid can be extracted. Accepts the same inputs the terminal's
-    ``parseMeetingInput`` accepts, so a link that validates client-side also validates here."""
+    ``parseMeetingInput`` accepts, so a link that validates client-side also validates here.
+
+    ``generic_hosts`` widens jitsi inference to the self-hosted conventions (a host containing
+    "jitsi", or a bare ``meet.*`` host) — right for a DELIBERATELY pasted link, too loose for the
+    ICS free-text scan (``find_meeting_link`` passes False so a calendar full of arbitrary links
+    never imports a non-meeting as a jitsi room)."""
     value = (raw or "").strip()
     if not value:
         return None
@@ -58,11 +63,20 @@ def parse_meeting_url(raw: str) -> Optional[tuple[str, str]]:
             if short:
                 return ("teams", short.group(1))
             return None
-        if host == "meet.jit.si":
-            # Canonical public Jitsi: the room is the path's single segment, kept EXACTLY as it
-            # appears in the URL (case + percent-encoding preserved) — the native id is embedded
-            # back into the construct-URL template and the DELETE path param, so it must stay
-            # URL-safe; decoding here would corrupt rooms with encoded characters.
+        # Jitsi: the canonical public deployment, plus (for a deliberately pasted link) the common
+        # self-hosted conventions — a host containing "jitsi", or a bare ``meet.*`` host (jitsi's
+        # own recommended naming). Known platforms are matched ABOVE, so this only fires for
+        # unclaimed hosts. The room is the path's single segment, kept EXACTLY as it appears in
+        # the URL (case + percent-encoding preserved) — the native id is embedded back into the
+        # construct-URL template and the DELETE path param, so it must stay URL-safe; decoding
+        # here would corrupt rooms with encoded characters. Callers keep the raw URL alongside
+        # (``meeting_url``) so a self-hosted room joins on ITS deployment, not the template's.
+        is_jitsi_host = (
+            host == "meet.jit.si"
+            or "jitsi" in host                       # a host naming jitsi is a jitsi deployment
+            or (generic_hosts and host.startswith("meet."))  # pasted-link-only convention
+        )
+        if is_jitsi_host:
             room = parsed.path.strip("/")
             return ("jitsi", room) if room and _JITSI_ROOM.match(room) else None
         return None
@@ -81,7 +95,10 @@ def find_meeting_link(text: str) -> Optional[tuple[str, str, str]]:
         return None
     for m in re.finditer(r"https?://[^\s<>\"']+", text):
         url = m.group(0).rstrip(").,;")
-        parsed = parse_meeting_url(url)
+        # Free-text scan: hold jitsi to the explicit hosts (meet.jit.si / *jitsi*) — a calendar
+        # description is full of arbitrary links, and the pasted-link ``meet.*`` convention
+        # would misread them as rooms.
+        parsed = parse_meeting_url(url, generic_hosts=False)
         if parsed:
             return (parsed[0], parsed[1], url)
     return None

@@ -78,10 +78,22 @@ describe("parseMeetingInput", () => {
     });
   });
 
-  it("does not infer jitsi for a bare origin or a self-hosted deployment", () => {
+  it("infers jitsi for self-hosted conventions (*jitsi* and meet.* hosts)", () => {
+    expect(parseMeetingInput("https://jitsi.example.org/MyRoom")).toEqual({
+      platform: "jitsi",
+      native_meeting_id: "MyRoom",
+    });
+    expect(parseMeetingInput("https://meet.example.org/TeamSync")).toEqual({
+      platform: "jitsi",
+      native_meeting_id: "TeamSync",
+    });
+    // meet.google.com is claimed by the Meet rule above — never captured by the meet.* fallback.
+    expect(parseMeetingInput("https://meet.google.com/abc-defg-hij")?.platform).toBe("google_meet");
+  });
+
+  it("does not infer jitsi for a bare origin or a multi-segment path", () => {
     expect(parseMeetingInput("https://meet.jit.si/")).toBeNull();
-    // Self-hosted Jitsi is not host-inferable — the API takes platform=jitsi + meeting_url.
-    expect(parseMeetingInput("https://jitsi.example.org/MyRoom")).toBeNull();
+    expect(parseMeetingInput("https://jitsi.example.org/a/b")).toBeNull();
   });
 
   it("returns null for garbage", () => {

@@ -200,10 +200,16 @@ class TestJitsi:
     def test_multi_segment_path_rejected(self):
         assert_422("https://meet.jit.si/a/b", "jitsi")
 
-    def test_self_hosted_host_not_inferred(self):
-        # Self-hosted Jitsi deployments live on arbitrary hosts — not enumerable here;
-        # those callers use POST /bots with platform=jitsi + an explicit meeting_url.
-        assert_422("https://jitsi.example.org/MyRoom", "unknown provider")
+    def test_self_hosted_jitsi_host_inferred(self):
+        r = parse("https://jitsi.example.org/MyRoom")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "MyRoom"
+        assert r.meeting_url == "https://jitsi.example.org/MyRoom"
+
+    def test_self_hosted_meet_convention_inferred(self):
+        r = parse("https://meet.example.org/TeamSync")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "TeamSync"
 
 
 class TestMisc:
