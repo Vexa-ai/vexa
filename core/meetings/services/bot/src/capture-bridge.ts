@@ -27,10 +27,10 @@
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
-  ensureBrowserDataDir,
   cleanStaleLocks,
   getAuthenticatedBrowserArgs,
-  BROWSER_DATA_DIR,
+  makeEphemeralProfileDir,
+  removeProfileDir,
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
@@ -93,27 +93,26 @@ export interface BrowserSession {
  * what @vexa/join expects.  // L4 (O6/VM): live-validated against a real meeting.
  */
 export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
-  // Authenticated: restore the S3 userdata into BROWSER_DATA_DIR before launch (index.ts:2313–2347).
+  // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
+  // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
+  // Authenticated: restore the S3 userdata into this bot's dir before launch (index.ts:2313–2347).
+  const dataDir = makeEphemeralProfileDir();
   if (inv.authenticated && inv.userdataS3Path) {
-    ensureBrowserDataDir();
     syncBrowserDataFromS3({
       userdataS3Path: inv.userdataS3Path,
       s3Endpoint: inv.s3Endpoint,
       s3Bucket: inv.s3Bucket,
       s3AccessKey: inv.s3AccessKey,
       s3SecretKey: inv.s3SecretKey,
-    });
-    cleanStaleLocks(BROWSER_DATA_DIR);
+    }, dataDir);
+    cleanStaleLocks(dataDir);
   }
 
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
   const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
-  const { context, page } = await launchPersistentBrowser({
-    dataDir: inv.authenticated ? BROWSER_DATA_DIR : undefined,
-    args,
-  });
+  const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);
@@ -148,6 +147,7 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     page,
     async close() {
       await context.close().catch(() => { /* best-effort */ });
+      removeProfileDir(dataDir);   // per-bot dir — leaking one per bot fills the disk in vexa-lite
     },
   };
 }

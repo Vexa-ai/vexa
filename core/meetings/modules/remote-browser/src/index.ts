@@ -25,6 +25,8 @@ export {
   loadSessionLocal,
   cleanStaleLocks,
   ensureBrowserDataDir,
+  makeEphemeralProfileDir,
+  removeProfileDir,
 } from './session-store';
 export type { S3Config } from './session-store';
 

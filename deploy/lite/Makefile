@@ -32,7 +32,6 @@ PG_CONTAINER    ?= vexa-lite-postgres
 MINIO_CONTAINER ?= vexa-lite-minio
 APP_CONTAINER   ?= vexa-lite
 HOST_GATEWAY_PORT   ?= 8056
-HOST_DASHBOARD_PORT ?= 3000
 HOST_TERMINAL_PORT  ?= 3001
 HOST_AGENT_PORT     ?= 8100
 MINIO_ACCESS_KEY ?= vexa-access-key
@@ -56,7 +55,6 @@ help:
 all: env preflight up init-db test
 	@HOST=$$(hostname -I 2>/dev/null | awk '{print $$1}'); HOST=$${HOST:-localhost}; \
 	echo ""; echo "Vexa Lite is running."; \
-	echo "  Dashboard: http://$$HOST:$(HOST_DASHBOARD_PORT)"; \
 	echo "  Terminal:  http://$$HOST:$(HOST_TERMINAL_PORT)"; \
 	echo "  API docs:  http://$$HOST:$(HOST_GATEWAY_PORT)/docs"; \
 	echo "  Agent API: http://$$HOST:$(HOST_AGENT_PORT)"
@@ -111,7 +109,7 @@ up: preflight
 	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
 	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
 		--env-file $(ENV_FILE) \
-		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_DASHBOARD_PORT):3000 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
+		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN=$$ADMIN_TK -e ADMIN_TOKEN=$$ADMIN_TK \
 		-e TRANSCRIPTION_SERVICE_URL=$$TX_URL -e TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN \
@@ -130,7 +128,7 @@ init-db:
 
 ## test — probe the published front doors.
 test:
-	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_DASHBOARD_PORT):dashboard" "$(HOST_TERMINAL_PORT):terminal"; do \
+	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_TERMINAL_PORT):terminal"; do \
 		PORT=$${ep%%:*}; NAME=$${ep##*:}; \
 		if curl -sf -o /dev/null http://localhost:$$PORT/ 2>/dev/null || curl -sf -o /dev/null http://localhost:$$PORT/health 2>/dev/null; then \
 			echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding (:$$PORT)"; FAIL=1; fi; \
