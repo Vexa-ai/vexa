@@ -124,7 +124,11 @@ async function enterAsGuestIfGated(page: Page): Promise<boolean> {
  */
 async function handlePasswordPrompt(page: Page, botConfig: BotConfig): Promise<void> {
   const pwField = page.locator(jitsiPasswordInputSelector).first();
-  const visible = await pwField.isVisible({ timeout: 1500 }).catch(() => false);
+  // waitFor (NOT isVisible) — the prompt renders a beat after the join attempt.
+  const visible = await pwField
+    .waitFor({ state: "visible", timeout: 1500 })
+    .then(() => true)
+    .catch(() => false);
   if (!visible) return;
 
   const passcode = (botConfig as any).passcode || "";
@@ -169,8 +173,13 @@ export async function joinJitsiMeeting(
   // option) — clear it before waiting on any jitsi UI.
   await enterAsGuestIfGated(page);
 
+  // waitFor (NOT isVisible — which returns the instantaneous state and ignores its
+  // timeout): the prejoin screen mounts a beat after navigation / the auth landing.
   const nameField = page.locator(jitsiNameInputSelector).first();
-  const havePrejoin = await nameField.isVisible({ timeout: 15000 }).catch(() => false);
+  const havePrejoin = await nameField
+    .waitFor({ state: "visible", timeout: 15000 })
+    .then(() => true)
+    .catch(() => false);
   if (havePrejoin) {
     // Fill the display name with REAL keyboard events — jitsi's prejoin is a React
     // form; typing (not a synthetic value-set) reliably enables the join button
