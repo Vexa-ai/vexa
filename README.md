@@ -13,7 +13,7 @@ Markdown knowledge base your team owns. Self-hosted, Apache-2.0, air-gap-ready.
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.12-informational.svg)](#-status--roadmap)
 [![Self-hosted](https://img.shields.io/badge/deploy-self--hosted-success.svg)](#-quickstart)
-[![Discord](https://img.shields.io/badge/chat-Discord-5865F2.svg)](https://discord.gg/vexa)
+[![Discord](https://img.shields.io/badge/chat-Discord-5865F2.svg)](https://discord.gg/Ga9duGkVz9)
 
 **[vexa.ai](https://vexa.ai)** still runs the 0.10.6.13 line — it will host **0.12**.
 
@@ -456,7 +456,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 ## 🤝 Community & contributing
 
 - **Docs** — [docs.vexa.ai](https://docs.vexa.ai)
-- **Discord** — [discord.gg/vexa](https://discord.gg/vexa)
+- **Discord** — [discord.gg/Ga9duGkVz9](https://discord.gg/Ga9duGkVz9)
 - **Issues & PRs** — welcome. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
 
 Vexa is built in the open. If you self-host it, extend it, or run it air-gapped somewhere interesting,
