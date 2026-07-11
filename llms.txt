@@ -11,6 +11,7 @@
 - [README](README.md): what Vexa is, quickstart, deployment options, API tables, honest status
 - [Docs site source](docs/docs/): published at https://docs.vexa.ai
 - [Architecture constitution](docs/ARCHITECTURE.md): principles P1–P23 + the CI gates enforcing them
+- [Delivery constitution](docs/DELIVERY.md): D0–D17 — how work is prepared, proven, and shipped (roadmap, issues, PRs, release)
 - [Machine-readable architecture](architecture.calm.json): FINOS CALM model of every service and data flow
 - [ADRs](docs/adr/): decision records
 
