@@ -11,11 +11,11 @@
 | D-A2 fixture ranges | preparation review: early validations name fixtures | **have** (manual review) |
 | D-R0 two species | branch protection (merge) · `state: ready` maintainer-only | **have** (branch protection) / **TO BUILD** (label permission bot) |
 | D2 one ordered queue | the Vexa Roadmap project board is the single source | **have** (board live) / **TO BUILD** (coverage check) |
-| D2b 3-day intake SLA | intake bot ages `state: incoming` | **TO BUILD** |
+| D2b 3-day intake SLA | report forms auto-label `state: incoming`; intake bot ages them | **have** (forms) / **TO BUILD** (ager) |
 | D3/D4 business meaning + code grounding | preparation review checklist | **have** (manual) |
-| D5/D6 issue shape | issue template with required sections | **TO BUILD** (template) |
-| D7 principle check on fixes | fix-request template section | **TO BUILD** (template) |
-| D8 bundle + diff | PR template requires the observation bundle | **TO BUILD** (template) |
+| D5/D6 issue shape | issue template with required sections | **have** (`.github/ISSUE_TEMPLATE/3-prepared-issue.md`) |
+| D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
+| D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
 | D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |
 | D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency | **TO BUILD** (value-gate bot) |
 | D10 acceptance floor | bundle-vs-table check | **TO BUILD** (bundle checker) |
