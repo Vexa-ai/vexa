@@ -205,6 +205,10 @@ class WorkloadUnknown(Exception):
         super().__init__(f"runtime does not know workload {workload_id!r} (termination unconfirmed)")
 
 
+class TranscriptionNotConfigured(Exception):
+    """transcribe_enabled=true but no transcription backend resolved (Settings nor env)."""
+
+
 class DuplicateMeeting(Exception):
     """The user already has an active/requested meeting for (platform, native_id) → HTTP 409.
 

@@ -24,7 +24,7 @@ Public surface:
 from __future__ import annotations
 
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
-from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
+from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
 from .router import build_router
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
@@ -40,5 +40,6 @@ __all__ = [
     "QuotaExceeded",
     "MaxBotsExceeded",
     "SpawnFailed",
+    "TranscriptionNotConfigured",
     "DuplicateMeeting",
 ]

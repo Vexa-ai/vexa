@@ -36,6 +36,7 @@ from .ports import (
     QuotaExceeded,
     RuntimeClient,
     SpawnFailed,
+    TranscriptionNotConfigured,
 )
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
@@ -245,6 +246,14 @@ async def request_bot(
         # A configured backend's token replaces the env token even when empty — the env token
         # belongs to the ENV backend, never to a user-supplied endpoint.
         transcription_service_token = configured.get("token") or None
+    # C1: Gate uses the same resolver the spawn trusts. If transcribe_enabled but
+    # no backend resolved, fail with a typed reason (not a bare 503 from the router's
+    # env-only check that the wizard's Settings-write can never satisfy).
+    if transcribe_enabled and not transcription_service_url:
+        raise TranscriptionNotConfigured(
+            "no transcription backend configured — set it in Settings or environment variables "
+            "TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN"
+        )
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
     # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
     token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)

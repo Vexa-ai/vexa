@@ -84,6 +84,14 @@ up: preflight
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); \
 	IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); IMAGE_TAG=$${IMAGE_TAG:-latest}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	# Autodetect host Claude credentials and wire the mount automatically (C2/#502)
+	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
+	if [ -f "$$CLAUDE_CREDS" ]; then \
+		echo "  Detected Claude subscription credentials — mounting into container"; \
+		CLAUDE_MOUNT="-v $$CLAUDE_CREDS:/var/lib/vexa/host-claude-credentials:ro -e HOST_CLAUDE_CREDENTIALS=$$CLAUDE_CREDS"; \
+	else \
+		CLAUDE_MOUNT=""; \
+	fi; \
 	echo "Starting PostgreSQL ($(PG_CONTAINER))..."; \
 	if ! docker ps -q -f name=$(PG_CONTAINER) | grep -q .; then \
 		docker rm -f $(PG_CONTAINER) 2>/dev/null || true; \
@@ -117,6 +125,7 @@ up: preflight
 		-e MINIO_SECRET_KEY=$(MINIO_SECRET_KEY) -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
 		-e VEXA_PUBLIC_API_URL=http://localhost:$(HOST_GATEWAY_PORT) \
 		-e TERMINAL_PUBLIC_URL=http://localhost:$(HOST_TERMINAL_PORT) \
+		$$CLAUDE_MOUNT \
 		$$IMG > /dev/null; \
 	echo "  Waiting for the gateway (up to 3 min)..."; \
 	for i in $$(seq 1 36); do curl -sf -o /dev/null http://localhost:$(HOST_GATEWAY_PORT)/health 2>/dev/null && break; sleep 5; done; \

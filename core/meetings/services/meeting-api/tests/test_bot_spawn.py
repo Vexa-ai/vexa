@@ -86,7 +86,9 @@ def test_meeting_token_roundtrips_under_secret():
 
 # ── flow: request_bot eager-creates the session + writes the container back ──────────────────────
 
-async def test_request_bot_eager_creates_session_and_spawns():
+async def test_request_bot_eager_creates_session_and_spawns(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
     meeting = await request_bot(
@@ -103,7 +105,9 @@ async def test_request_bot_eager_creates_session_and_spawns():
     assert repo.sessions[0]["session_uid"] == spawned["connectionId"]
 
 
-async def test_request_bot_dedup_raises():
+async def test_request_bot_dedup_raises(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     from meeting_api.bot_spawn import DuplicateMeeting
 
     repo = InMemoryMeetingRepo()
@@ -115,7 +119,9 @@ async def test_request_bot_dedup_raises():
         await request_bot(repo, runtime, **kw)
 
 
-async def test_request_bot_quota_propagates():
+async def test_request_bot_quota_propagates(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient(quota_exceeded=True)
     with pytest.raises(QuotaExceeded):
@@ -135,6 +141,8 @@ def _client(repo=None, runtime=None):
 
 def test_post_bots_201(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     client = _client()
     r = client.post("/bots", headers=HEADERS,
                     json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
@@ -144,6 +152,8 @@ def test_post_bots_201(monkeypatch):
 
 def test_post_bots_409_on_duplicate(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
     body = {"platform": "google_meet", "native_meeting_id": "dup"}
@@ -153,6 +163,8 @@ def test_post_bots_409_on_duplicate(monkeypatch):
 
 def test_post_bots_429_on_quota(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     client = _client(runtime=FakeRuntimeClient(quota_exceeded=True))
     r = client.post("/bots", headers=HEADERS,
                     json={"platform": "google_meet", "native_meeting_id": "x"})
@@ -161,9 +173,43 @@ def test_post_bots_429_on_quota(monkeypatch):
 
 def test_post_bots_401_without_identity(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     client = _client()
     r = client.post("/bots", json={"platform": "google_meet", "native_meeting_id": "x"})
     assert r.status_code == 401
+
+
+def test_post_bots_transcribe_without_stt_fails_loud(monkeypatch):
+    """No env TRANSCRIPTION_SERVICE_URL and no Settings backend → 503 when transcribe_enabled."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_URL", raising=False)
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_TOKEN", raising=False)
+    client = _client()
+    r = client.post("/bots", headers=HEADERS,
+                    json={"platform": "google_meet", "native_meeting_id": "no-stt"})
+    assert r.status_code == 503
+    assert "no transcription backend configured" in r.text
+
+
+def test_post_bots_transcribe_with_settings_stt_passes(monkeypatch):
+    """Settings-configured backend (monkeypatched _resolve_transcription_backend) → spawn proceeds."""
+    from meeting_api.bot_spawn import service as spawn_service
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+
+    async def fake_resolve(user_id):
+        return {"url": "https://stt-settings.example.com"}
+
+    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    client = _client(repo, runtime)
+    r = client.post("/bots", headers=HEADERS,
+                    json={"platform": "google_meet", "native_meeting_id": "settings-stt"})
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["transcriptionServiceUrl"] == "https://stt-settings.example.com"
 
 
 # ── Settings → transcription backend: the configured STT (user pref > platform) beats the env ────

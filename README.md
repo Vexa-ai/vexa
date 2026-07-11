@@ -70,10 +70,14 @@ Self-host the whole stack on one host, then explore it in the Terminal or drive 
 Linux (Ubuntu 24.04) is the production target; a Mac with Docker Desktop works fine for a local
 evaluation — everything runs in containers either way.
 
-**Prerequisites** — Docker engine ≥ v26 (`make all` checks), and transcription: a free token at
+**Prerequisites** — `make`, **Docker engine ≥ v26** (`make all` checks), and transcription: a free token at
 [vexa.ai/account](https://vexa.ai/account), or self-host the (GPU) transcription unit for a fully
 air-gapped setup. Without transcription, bots still join and record — they just produce no text
 (`make all` warns when the credentials block in `.env` is empty).
+
+> **Build machine:** The full stack (`make all`) requires at least **8 vCPUs and 16 GB RAM**. A smaller
+> box can run `make lite` (the single-container all-in-one image) but `make all` (Docker Compose) will
+> likely fail or timeout. `make lite` is the lighter path for resource-constrained hosts.
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
