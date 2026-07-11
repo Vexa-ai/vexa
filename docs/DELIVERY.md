@@ -286,6 +286,22 @@ one operator, a parser needs none. Never ask for more humans than the observatio
 · *Source:* the test pyramid (Cohn); architecture P19's runtime twin. · *Gate:* per-component
 early validation at module altitude; the live bar stated and scaled in the issue.
 
+**D12b — Every validation names its deployment, and how the setup was built is itself evidence.**
+Vexa ships as more than one thing — Lite single-machine compose, the full compose stack, k8s/helm,
+hosted — and a behavior proven on one is only *proven on that one*. The prepared issue declares
+which deployment(s) the acceptance table must be run against (and which are explicitly out of
+scope); every attestation states the setup it validated on. The build provenance of that setup is
+part of the bundle — repo sha, compose file / values used, fresh-clone or long-lived, the env
+deltas from stock — because "works on my install" without how the install was made is an
+unanchored claim (the D10 anchor rule applied to the *environment*). Lite is called out
+deliberately: it takes the most divergent path through the stack, so a fix proven on the full
+stack may still need its own Lite run — the issue says so when it does. A deployment nobody
+validated stays honestly unclaimed in the bundle, never assumed covered. · *Source:* test-
+environment parity ("it works where, exactly?" — 12-factor dev/prod parity); provenance as
+evidence. · *Gate:* prepared-issue template requires the deployments-to-validate declaration;
+the attestation names its setup + build provenance; the bundle checker flags rows with no named
+deployment.
+
 ## 8. People
 
 **D13 — Humans author; tools assist. Disclosure welcome, co-authorship never.** What ships carries

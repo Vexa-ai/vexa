@@ -16,6 +16,7 @@
 | D5/D6 issue shape | issue template with required sections | **have** (`.github/ISSUE_TEMPLATE/3-prepared-issue.md`) |
 | D5b bundle-by-diff | split/bundle test at preparation review; one acceptance row per stated value | **have** (template note + manual review) / **TO BUILD** (row-per-value in bundle checker) |
 | D6c docs ride the change; docs story human-validated | "docs surface" required before `ready`; PR docs-diff section; attestation covers the docs story | **have** (templates) / **TO BUILD** (bundle checker verifies docs-diff presence) |
+| D12b deployment named + setup provenance | "deployments to validate" required before `ready`; attestation names setup + build provenance | **have** (templates) / **TO BUILD** (bundle checker flags rows with no named deployment) |
 | D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
 | D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |

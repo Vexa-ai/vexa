@@ -19,6 +19,13 @@ labels: ["state: prepared"]
 ### Where we are (honest)
 <!-- Current-code facts, file:line where known. Old reports contribute symptoms only. -->
 
+### Deployments to validate (D12b — a behavior proven on one setup is proven on that one)
+<!-- Which deployments the acceptance table must run against — Lite compose / full compose /
+     k8s-helm / hosted — and which are explicitly out of scope. Lite takes the most divergent
+     path through the stack: say explicitly whether this fix needs its own Lite run.
+     Every attestation must name its setup AND how it was built (sha, compose/values file,
+     fresh-clone or long-lived, env deltas) — an install without provenance anchors nothing. -->
+
 ### Docs surface (D6c — the change isn't delivered until the docs tell it)
 <!-- Name the pages this change must touch and at what altitude — quickstart step / how-to /
      reference / concept. Rarely one line: the same truth usually lands in several places, each

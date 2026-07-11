@@ -34,7 +34,10 @@
      and what they'll watch. The attestation must corroborate with the instrument channels —
      a human/instrument divergence blocks merge until reconciled, and is a finding.
      The attestation also covers the docs story (D6c): the update lands on the right pages, at the
-     right altitudes, consistent with how the docs already teach. -->
+     right altitudes, consistent with how the docs already teach.
+     D12b: state the DEPLOYMENT validated (Lite / full compose / k8s / hosted) and its build
+     provenance — repo sha, compose or values file, fresh-clone vs long-lived, env deltas from
+     stock. Deployments the issue names but nobody ran stay honestly unclaimed here. -->
 
 ## Authorship
 Sole author: the human submitting this. No agent co-author trailers (D13).
