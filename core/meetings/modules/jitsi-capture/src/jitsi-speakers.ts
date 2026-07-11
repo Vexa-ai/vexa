@@ -15,9 +15,11 @@
  *  2. DOM fallback for builds that strip the APP global: the active tile carries a
  *     `dominant-speaker` class; its display-name node carries the name.
  *
- * Debounced speaking start/stop events per participant feed the
- * ChunkedTranscriber's name binder as 'dom-active' hints (same protocol as the
- * Teams/Zoom watchers).
+ * Speaking start/stop events per participant feed the ChunkedTranscriber's name
+ * binder as 'dom-active' hints (same protocol as the Teams/Zoom watchers) —
+ * INCLUDING the ~2s heartbeat the binder's turn model requires: an open hint
+ * turn decays after a short grace, so a speaker who KEEPS talking must be
+ * re-asserted while dominant, or every commit past the grace loses its name.
  */
 
 export interface JitsiSpeakersOptions {
@@ -29,6 +31,9 @@ export interface JitsiSpeakersOptions {
   log?: (msg: string) => void;
   /** Poll interval (ms). Default 400 — dominant-speaker changes are second-scale. */
   pollMs?: number;
+  /** Re-assert interval for a STILL-dominant speaker (ms). Default 2000 — the
+   *  binder's heartbeat contract (must beat its open-turn grace). */
+  heartbeatMs?: number;
 }
 
 export interface JitsiSpeakers {
@@ -91,6 +96,9 @@ export function createJitsiSpeakers(opts: JitsiSpeakersOptions): JitsiSpeakers {
   let mode: "redux" | "dom" | null = null;
   let changes = 0;
 
+  const heartbeatMs = opts.heartbeatMs ?? 2000;
+  let lastAssertMs = 0;
+
   const emit = (name: string, id: string, isEnd: boolean) => {
     try { opts.onSpeaking(name, id, isEnd, Date.now()); } catch { /* never break capture */ }
   };
@@ -104,10 +112,19 @@ export function createJitsiSpeakers(opts: JitsiSpeakersOptions): JitsiSpeakers {
     if (d && self && d.name.trim().toLowerCase() === self) d = null;
 
     const changed = (d?.id ?? null) !== (current?.id ?? null);
-    if (!changed) return;
+    if (!changed) {
+      // HEARTBEAT: a still-dominant speaker is re-asserted so the binder's open
+      // hint turn never decays while they keep talking.
+      if (current && Date.now() - lastAssertMs >= heartbeatMs) {
+        emit(current.name, current.id, false);
+        lastAssertMs = Date.now();
+      }
+      return;
+    }
     if (current) emit(current.name, current.id, true);
     if (d) {
       emit(d.name, d.id, false);
+      lastAssertMs = Date.now();
       log(`dominant speaker → ${d.name}`);
     }
     current = d;

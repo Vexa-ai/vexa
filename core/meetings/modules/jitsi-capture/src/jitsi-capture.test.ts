@@ -49,12 +49,20 @@ async function main() {
   const speakers = createJitsiSpeakers({
     selfName: "Vexa",
     pollMs: 10,
+    heartbeatMs: 30,
     onSpeaking: (name, _id, isEnd) => events.push({ name, isEnd }),
   });
 
   fakeState["features/base/participants"].dominantSpeaker = "p1";
   await sleep(40);
   check("speaker start emitted for Alice", events.some((e) => e.name === "Alice" && !e.isEnd), JSON.stringify(events));
+
+  // A STILL-dominant speaker keeps being re-asserted (the binder's heartbeat contract):
+  // an open hint turn decays after a grace, so an unchanged speaker must re-emit.
+  const assertsBefore = events.filter((e) => e.name === "Alice" && !e.isEnd).length;
+  await sleep(100);
+  const assertsAfter = events.filter((e) => e.name === "Alice" && !e.isEnd).length;
+  check("still-dominant speaker heartbeats", assertsAfter > assertsBefore, `${assertsBefore} → ${assertsAfter}`);
 
   fakeState["features/base/participants"].dominantSpeaker = "p2";
   await sleep(40);
