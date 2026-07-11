@@ -19,6 +19,12 @@ labels: ["state: prepared"]
 ### Where we are (honest)
 <!-- Current-code facts, file:line where known. Old reports contribute symptoms only. -->
 
+### Docs surface (D6c — the change isn't delivered until the docs tell it)
+<!-- Name the pages this change must touch and at what altitude — quickstart step / how-to /
+     reference / concept. Rarely one line: the same truth usually lands in several places, each
+     written for its reader. The validator signs the docs STORY too: right pages, right level,
+     consistent with how the docs already teach. "No docs impact" must be argued, not assumed. -->
+
 ### The components (validation waypoints of the ONE PR that delivers this issue)
 - [ ] **C1** — <business-named waypoint>
 

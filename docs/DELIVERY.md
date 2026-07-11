@@ -211,6 +211,21 @@ recognizing. · *Source:* fast-feedback inner loop (Humble–Farley); human-in-t
 judgment is required. · *Gate:* the PR bundle shows the loop was run (per-component early-validation
 observations), not just a final green.
 
+**D6c — The docs are part of the change, and the docs STORY is part of the human validation.**
+A change isn't delivered until the documentation tells it. Every prepared issue names its docs
+surface up front — which pages, at which altitudes — and the PR carries the docs diff beside the
+code diff. A real docs change is rarely one line: the same truth usually lands in several places
+at several levels (the quickstart step that touches it, the how-to that walks it, the reference
+that specifies it, the concept page that explains why), each written for its reader. The human
+validator's signature covers the docs too, and it is judgment work no checker replaces: does the
+update *follow the docs story* — right pages, right altitude, consistent with how the docs already
+teach, explained from the angles a reader actually arrives from — not merely "words were edited
+somewhere". A docs-less capability or a story-breaking page is an incomplete delivery, same as a
+red acceptance row. · *Source:* documentation as part of done (DoD discipline); Diátaxis — the
+four documentation modes are different readers, not duplication. · *Gate:* prepared-issue template
+requires the "docs surface" section before `ready`; the PR template's bundle includes the docs
+diff; the value attestation includes the docs-story check.
+
 **D7 — Every defect indicts a principle or founds one.** Each fix names the architecture principle
 it restores (verbatim) and the gate that should have caught it; a defect covered by no principle
 is a constitution finding that feeds back into `ARCHITECTURE.md`. · *Source:* five-whys to
