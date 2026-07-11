@@ -191,7 +191,12 @@ separate issues no matter how adjacent — relatedness is recorded as a `same-se
 claim-together recommendation on the board), never a merged item. The two-way test at
 preparation: *would splitting duplicate the same diff across issues?* → bundle; *would bundling
 staple independent diffs into one PR?* → split. This is D8's precondition: issue=PR one-to-one
-only works if the issue is shaped like exactly one change. · *Source:* single responsibility
+only works if the issue is shaped like exactly one change. **The perceiver bounds the atom —
+platform-facing behavior is per-platform:** a Meet user's value is Meet working; they will not
+debug Teams, and a validator can only sign the platform they sit on. Issues about in-meeting
+behavior are prepared one per platform even when the engine diff is shared: the first platform
+issue claimed carries the shared-engine change, its siblings reference it (`same-setup`) and
+validate their own platform's fixtures and live leg. · *Source:* single responsibility
 applied to work items — one reason to change; cohesion/coupling (Constantine). · *Gate:*
 preparation review runs the split/bundle test; the acceptance-table check requires one
 discriminating row per stated value.
