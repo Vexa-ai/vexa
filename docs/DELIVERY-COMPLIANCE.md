@@ -14,6 +14,7 @@
 | D2b 3-day intake SLA | report forms auto-label `state: incoming`; intake bot ages them | **have** (forms) / **TO BUILD** (ager) |
 | D3/D4 business meaning + code grounding | preparation review checklist | **have** (manual) |
 | D5/D6 issue shape | issue template with required sections | **have** (`.github/ISSUE_TEMPLATE/3-prepared-issue.md`) |
+| D5b bundle-by-diff | split/bundle test at preparation review; one acceptance row per stated value | **have** (template note + manual review) / **TO BUILD** (row-per-value in bundle checker) |
 | D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
 | D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |

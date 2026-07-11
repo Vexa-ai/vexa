@@ -181,6 +181,21 @@ two components. · *Source:* minimum marketable feature (Denne–Cleland-Huang);
 (Parnas). · *Gate:* issue template requires the one-sentence value statement + components each
 with a real Target and harness.
 
+**D5b — Bundle by diff, not by theme: one code change = one issue, however many values it
+carries.** Issues are deduplicated by the CODE CHANGE, never by topic. When one change delivers
+several recognizable values (one root cause behind several reports, one seam fix that closes
+several asks), they ride ONE issue: every value is stated in its own value sentence, and the
+acceptance table carries a discriminating row — and a preferred validator — *per value*, so no
+value is silently absorbed into another's. When values require different changes, they stay
+separate issues no matter how adjacent — relatedness is recorded as a `same-setup` note (a
+claim-together recommendation on the board), never a merged item. The two-way test at
+preparation: *would splitting duplicate the same diff across issues?* → bundle; *would bundling
+staple independent diffs into one PR?* → split. This is D8's precondition: issue=PR one-to-one
+only works if the issue is shaped like exactly one change. · *Source:* single responsibility
+applied to work items — one reason to change; cohesion/coupling (Constantine). · *Gate:*
+preparation review runs the split/bundle test; the acceptance-table check requires one
+discriminating row per stated value.
+
 **D6 — Preparation is ours; validation is theirs.** Every issue ships good solutions AND the
 along-the-way forks — mechanism, files, steps, the branches a contributor may hit — so delivery is
 a known motion, not a research project. The contribution asked for is the validation, not the
