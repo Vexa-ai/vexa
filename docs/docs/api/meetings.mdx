@@ -33,11 +33,14 @@ Pass one of these as `platform`:
 
 The bot joins like any participant — no plugins, no host configuration.
 
-For `jitsi`, `native_meeting_id` is the room name, and the full `meeting_url` is **required**
-(like Zoom): a Jitsi room name is scoped to a deployment — `MyRoom` exists on meet.jit.si *and*
-on every self-hosted instance — so only the URL says which one to join. To make **calendar
-sync** recognize a self-hosted deployment's links, list its hostnames in the `VEXA_JITSI_HOSTS`
-env (comma-separated). On Jitsi the transcript also carries the meeting's **chat**: each chat
+For `jitsi`, the full `meeting_url` is **required** (like Zoom): a Jitsi room name is scoped
+to a deployment — `MyRoom` exists on meet.jit.si *and* on every self-hosted instance — so only
+the URL says which one to join. The `native_meeting_id` reflects that scoping: the bare room
+name on meet.jit.si (`MyRoom`), and `room@host` on any other deployment
+(`MyRoom@video.example.org`) — so same-named rooms on different deployments never collide.
+A password-protected room is joined by passing the optional `passcode` field. To make
+**calendar sync** recognize a self-hosted deployment's links, list its hostnames in the
+`VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi the transcript also carries the meeting's **chat**: each chat
 message arrives as a segment with `source: "chat"` (the sender is the `speaker`), and speaker
 names come from the conference's own dominant-speaker signal.
 

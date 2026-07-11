@@ -34,12 +34,17 @@ class TestParseJitsi:
     def test_self_hosted_jitsi_host_inferred(self):
         # A host naming jitsi is a jitsi deployment; the caller keeps the raw URL as
         # meeting_url so the bot joins on that host, not the meet.jit.si template.
-        assert parse_meeting_url("https://jitsi.example.org/MyRoom") == ("jitsi", "MyRoom")
+        # The native id embeds the host (room@host) — a jitsi room is deployment-scoped,
+        # so same-named rooms on different deployments never share an identity key.
+        assert parse_meeting_url("https://jitsi.example.org/MyRoom") == ("jitsi", "MyRoom@jitsi.example.org")
 
     def test_self_hosted_meet_convention_inferred_on_paste(self):
-        assert parse_meeting_url("https://meet.example.org/TeamSync") == ("jitsi", "TeamSync")
+        assert parse_meeting_url("https://meet.example.org/TeamSync") == ("jitsi", "TeamSync@meet.example.org")
         # Regionalized deployments put "meet" mid-hostname.
-        assert parse_meeting_url("https://eu.meet.example.org/QualifiedRoomName") == ("jitsi", "QualifiedRoomName")
+        assert parse_meeting_url("https://eu.meet.example.org/QualifiedRoomName") == (
+            "jitsi",
+            "QualifiedRoomName@eu.meet.example.org",
+        )
         # "meet" must be a whole label — meetings.example.org is NOT a jitsi convention.
         assert parse_meeting_url("https://meetings.example.org/Room") is None
         # …and NOT in the free-text (ICS) scan, where the meet-label rule is too loose.
@@ -73,13 +78,20 @@ class TestFindMeetingLinkJitsi:
 class TestConfiguredJitsiHosts:
     def test_declared_host_parses_and_imports(self, monkeypatch):
         monkeypatch.setenv("VEXA_JITSI_HOSTS", "eu.meet.example.org, calls.example.io")
-        # Pasted link on a declared host — parses in strict mode too.
-        assert parse_meeting_url("https://eu.meet.example.org/Weekly", generic_hosts=False) == ("jitsi", "Weekly")
+        # Pasted link on a declared host — parses in strict mode too. Declared or not, a
+        # non-canonical deployment's native id stays deployment-scoped (room@host).
+        assert parse_meeting_url("https://eu.meet.example.org/Weekly", generic_hosts=False) == (
+            "jitsi",
+            "Weekly@eu.meet.example.org",
+        )
         # A declared host with NO jitsi/meet naming at all.
-        assert parse_meeting_url("https://calls.example.io/Standup", generic_hosts=False) == ("jitsi", "Standup")
+        assert parse_meeting_url("https://calls.example.io/Standup", generic_hosts=False) == (
+            "jitsi",
+            "Standup@calls.example.io",
+        )
         # Calendar (ICS) free-text scan now imports it — the point of the setting.
         got = find_meeting_link("agenda: https://eu.meet.example.org/Weekly today")
-        assert got == ("jitsi", "Weekly", "https://eu.meet.example.org/Weekly")
+        assert got == ("jitsi", "Weekly@eu.meet.example.org", "https://eu.meet.example.org/Weekly")
 
     def test_unset_env_declares_nothing(self, monkeypatch):
         monkeypatch.delenv("VEXA_JITSI_HOSTS", raising=False)

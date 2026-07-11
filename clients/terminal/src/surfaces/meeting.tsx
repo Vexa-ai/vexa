@@ -14,6 +14,7 @@ import { type MeetingMock } from "./meetingModel";
 import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { parseMeetingInput } from "./meetingId";
+import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
 import { deletePlannedMeeting, getCalendarConfig, setCalendarConfig, getCalendarSyncStatus, syncCalendarNow, type CalendarConfig, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
@@ -640,7 +641,7 @@ function MeetingsList() {
     const u = url.trim();
     if (!u || sent === "sending") return;
     // Parse + validate the pasted link/id against the platform formats (mirrors join-form).
-    const parsed = parseMeetingInput(u);
+    const parsed = parseMeetingInput(u, await getJitsiHosts());
     if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setTimeout(() => setSent(null), 5000); return; }
     setSent("sending"); setErrMsg(null);
     try {

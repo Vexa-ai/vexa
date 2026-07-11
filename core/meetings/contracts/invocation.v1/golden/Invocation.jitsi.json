@@ -2,6 +2,7 @@
   "platform": "jitsi",
   "meetingUrl": "https://meet.jit.si/VexaStandup",
   "botName": "Vexa",
+  "passcode": "golden-passcode",
   "nativeMeetingId": "VexaStandup",
   "redisUrl": "redis://redis:6379"
 }

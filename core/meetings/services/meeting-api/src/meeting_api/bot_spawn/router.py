@@ -175,6 +175,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 platform=platform,
                 native_meeting_id=native_meeting_id,
                 bot_name=body.get("bot_name"),
+                passcode=body.get("passcode"),
                 meeting_url=meeting_url,
                 language=body.get("language"),
                 task=body.get("task"),

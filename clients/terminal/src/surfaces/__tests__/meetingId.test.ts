@@ -79,23 +79,35 @@ describe("parseMeetingInput", () => {
   });
 
   it("infers jitsi for self-hosted conventions (*jitsi* hosts, and a 'meet' host label)", () => {
+    // Non-canonical deployments get a deployment-scoped id (room@host) — same-named rooms
+    // on different hosts never share an identity key. Mirrors the server parsers.
     expect(parseMeetingInput("https://jitsi.example.org/MyRoom")).toEqual({
       platform: "jitsi",
-      native_meeting_id: "MyRoom",
+      native_meeting_id: "MyRoom@jitsi.example.org",
     });
     expect(parseMeetingInput("https://meet.example.org/TeamSync")).toEqual({
       platform: "jitsi",
-      native_meeting_id: "TeamSync",
+      native_meeting_id: "TeamSync@meet.example.org",
     });
     // Regionalized deployments put "meet" mid-hostname (eu.meet.example.org).
     expect(parseMeetingInput("https://eu.meet.example.org/QualifiedRoomName")).toEqual({
       platform: "jitsi",
-      native_meeting_id: "QualifiedRoomName",
+      native_meeting_id: "QualifiedRoomName@eu.meet.example.org",
     });
     // "meet" must be a whole label — meetings.example.org is NOT a jitsi convention.
     expect(parseMeetingInput("https://meetings.example.org/Room")).toBeNull();
     // meet.google.com is claimed by the Meet rule above — never captured by the fallback.
     expect(parseMeetingInput("https://meet.google.com/abc-defg-hij")?.platform).toBe("google_meet");
+  });
+
+  it("recognizes VEXA_JITSI_HOSTS-declared hosts via the jitsiHosts parameter", () => {
+    // Without the declared list, a host with no jitsi/meet naming is rejected…
+    expect(parseMeetingInput("https://calls.example.io/Standup")).toBeNull();
+    // …with it, the link parses exactly like it does server-side.
+    expect(parseMeetingInput("https://calls.example.io/Standup", ["calls.example.io"])).toEqual({
+      platform: "jitsi",
+      native_meeting_id: "Standup@calls.example.io",
+    });
   });
 
   it("does not infer jitsi for a bare origin or a multi-segment path", () => {

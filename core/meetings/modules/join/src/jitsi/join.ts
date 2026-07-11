@@ -118,7 +118,7 @@ async function handlePasswordPrompt(page: Page, botConfig: BotConfig): Promise<v
     .catch(() => false);
   if (!visible) return;
 
-  const passcode = (botConfig as any).passcode || "";
+  const passcode = botConfig.passcode || "";
   if (!passcode) {
     throw new Error(
       "[Jitsi] password_required: room is password-protected but botConfig.passcode is empty; " +

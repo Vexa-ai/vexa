@@ -63,6 +63,7 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
           meetingUrl: inv.meetingUrl ?? '',
           platform,
           botName: inv.botName,
+          passcode: inv.passcode,                      // zoom passcode screen / jitsi room password
           authenticated: inv.authenticated,            // join as a signed-in user (persistent context)
           waitingRoomTimeoutMs: inv.automaticLeave?.waitingRoomTimeout,
           hooks: { onState: (s: JoinState) => { const bs = mapState(s); if (bs) void report(bs); } },

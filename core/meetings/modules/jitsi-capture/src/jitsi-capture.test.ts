@@ -104,6 +104,26 @@ async function main() {
   const before = got.length;
   await sleep(30);
   check("no duplicate emissions on re-poll", got.length === before, `${got.length} vs ${before}`);
+
+  // ── store replacement (reconnect / p2p↔JVB move / history cap): the array shrinks to a
+  // retained tail — already-delivered messages must NOT re-emit, and new ones still do. ──
+  fakeState["features/chat"].messages = [
+    { id: "m2", displayName: "Bob", message: "agenda is in the doc", messageType: "remote", timestamp: 2 },
+    { id: "m5", displayName: "Vexa", message: "sent by the bot itself", messageType: "local", timestamp: 5 },
+  ];
+  await sleep(30);
+  check("store replacement re-emits nothing", got.length === before, `${got.length} vs ${before}`);
+  fakeState["features/chat"].messages = [
+    ...fakeState["features/chat"].messages,
+    { id: "m6", displayName: "Carol", message: "fresh after the resync", messageType: "remote", timestamp: 6 },
+  ];
+  await sleep(30);
+  check(
+    "post-resync message emits once",
+    got.filter((m) => m.text === "fresh after the resync").length === 1,
+    JSON.stringify(got),
+  );
+
   check("chat mode = redux", chat.getState().mode === "redux", chat.getState().mode ?? "null");
   chat.destroy();
 

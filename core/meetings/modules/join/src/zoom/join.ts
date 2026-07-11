@@ -246,7 +246,7 @@ export async function joinZoomMeeting(
   const passcodeInputSelector = 'input[placeholder*="passcode" i], input[placeholder*="password" i], input[type="password"]';
   const hasPasscodeField = await page.locator(passcodeInputSelector).first().isVisible({ timeout: 1000 }).catch(() => false);
   if (hasPasscodeField) {
-    const passcode = (botConfig as any).passcode || '';
+    const passcode = botConfig.passcode || '';
     if (passcode) {
       await page.locator(passcodeInputSelector).first().fill(passcode);
       log(`[Zoom Web] Filled passcode field`);

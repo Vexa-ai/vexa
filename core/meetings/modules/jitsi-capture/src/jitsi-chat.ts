@@ -101,22 +101,38 @@ export function createJitsiChat(opts: JitsiChatOptions): JitsiChat {
   };
 
   // ── redux source (primary) — cursor over jitsi's append-only message array, so a
-  // tick costs O(new messages), not O(all messages ever). ──
+  // tick costs O(new messages), not O(all messages ever). Each entry's dedup key is its
+  // STABLE identity (jitsi's message id, or timestamp+sender+text), so when the store is
+  // replaced (reconnect, p2p↔JVB move, history cap) the resync re-walks the array and
+  // `seenKeys` suppresses everything already delivered — never a duplicate emission. ──
+  const reduxKey = (m: any): string =>
+    `redux:${m?.id ?? `${m?.timestamp ?? ""}:${m?.displayName ?? ""}:${m?.message ?? ""}`}`;
   let primed = false;
   let cursor = 0;
-  let emitSeq = 0;
+  let lastKey: string | null = null; // identity of the entry just behind the cursor
   const pollRedux = (): boolean => {
     const msgs = rawReduxMessages();
     if (msgs === null) return false;
     mode = "redux";
-    // First read PRIMES the cursor without emitting: history from before the
-    // bot joined is not "new messages" to the embedder.
-    if (!primed) { cursor = msgs.length; primed = true; return true; }
-    if (msgs.length < cursor) cursor = 0; // the store was replaced (rare) — resync
+    // First read PRIMES the cursor without emitting: history from before the bot joined
+    // is not "new messages" to the embedder — but its keys are recorded, so a later store
+    // replacement can never replay it.
+    if (!primed) {
+      for (const m of msgs) seenKeys.add(reduxKey(m));
+      cursor = msgs.length;
+      lastKey = cursor > 0 ? reduxKey(msgs[cursor - 1]) : null;
+      primed = true;
+      return true;
+    }
+    // The store was replaced when the array shrank OR the entry behind the cursor is no
+    // longer the one we consumed — resync from 0 and let `seenKeys` filter.
+    if (cursor > 0 && (cursor > msgs.length || reduxKey(msgs[cursor - 1]) !== lastKey)) cursor = 0;
     for (; cursor < msgs.length; cursor++) {
       const m = toChatMessage(msgs[cursor]);
-      if (m) emit(m, `redux:${emitSeq++}`);
+      if (m) emit(m, reduxKey(msgs[cursor]));
+      else seenKeys.add(reduxKey(msgs[cursor])); // non-messages count as consumed too
     }
+    lastKey = cursor > 0 ? reduxKey(msgs[cursor - 1]) : lastKey;
     return true;
   };
 

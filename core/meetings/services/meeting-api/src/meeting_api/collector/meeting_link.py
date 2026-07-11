@@ -98,7 +98,14 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
         )
         if is_jitsi_host:
             room = parsed.path.strip("/")
-            return ("jitsi", room) if room and _JITSI_ROOM.match(room) else None
+            if not room or not _JITSI_ROOM.match(room):
+                return None
+            # A jitsi room name is deployment-scoped, so the native id embeds the host for
+            # every non-canonical deployment (room@host — jitsi's own XMPP identity shape).
+            # A bare room would make meet.jit.si/daily and video.corp/daily collide on every
+            # (platform, native_meeting_id) key: duplicate checks, calendar adoption, MCP
+            # idempotency. meet.jit.si keeps the bare room (canonical, unambiguous).
+            return ("jitsi", room if host == "meet.jit.si" else f"{room}@{host}")
         return None
 
     # Bare numeric id → assume Zoom
@@ -115,9 +122,9 @@ def find_meeting_link(text: str) -> Optional[tuple[str, str, str]]:
         return None
     for m in re.finditer(r"https?://[^\s<>\"']+", text):
         url = m.group(0).rstrip(").,;")
-        # Free-text scan: hold jitsi to the explicit hosts (meet.jit.si / *jitsi*) — a calendar
-        # description is full of arbitrary links, and the pasted-link ``meet.*`` convention
-        # would misread them as rooms.
+        # Free-text scan: hold jitsi to the explicit hosts (meet.jit.si + VEXA_JITSI_HOSTS) —
+        # a calendar description is full of arbitrary links, and the pasted-link naming
+        # heuristics (*jitsi* / ``meet.*``) would misread them as rooms.
         parsed = parse_meeting_url(url, generic_hosts=False)
         if parsed:
             return (parsed[0], parsed[1], url)

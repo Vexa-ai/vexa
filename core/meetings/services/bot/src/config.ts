@@ -48,6 +48,7 @@ export interface Invocation {
   platform: Platform;
   meetingUrl: string | null;
   botName: string;
+  passcode?: string;
   nativeMeetingId?: string;
   // ── identity / control plane ──
   token?: string;

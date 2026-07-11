@@ -17,6 +17,7 @@ import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
 import { parseMeetingInput } from "./meetingId";
+import { getJitsiHosts } from "./jitsiHosts";
 import { refreshMeetings } from "./liveMeetings";
 import { getCalendarConfig, setCalendarConfig, syncCalendarNow, type CalendarSyncStamp } from "./plannedApi";
 import { prepDraftTabDescriptor } from "./meetingPrep";
@@ -138,7 +139,7 @@ function DropBotInline() {
   const send = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
-    const parsed = parseMeetingInput(u);
+    const parsed = parseMeetingInput(u, await getJitsiHosts());
     if (!parsed) { setSent("err"); setMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); return; }
     setSent("sending"); setMsg(null);
     try {

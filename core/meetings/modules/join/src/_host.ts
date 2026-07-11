@@ -14,6 +14,8 @@
 export interface BotConfig {
   platform?: "google_meet" | "teams" | "zoom" | "jitsi" | string;
   botName?: string;
+  /** meeting passcode (zoom passcode screen / jitsi room password) */
+  passcode?: string;
   authenticated?: boolean;
   uiInteractionMode?: "humanized" | "synthetic";
   automaticLeave?: {

@@ -430,6 +430,10 @@ services:
       # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
       - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
       - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      # Declared self-hosted Jitsi hostnames — served to the client link parser
+      # (/api/meeting/jitsi-hosts) so pasted links on these hosts are recognized in the UI,
+      # matching meeting-api's and mcp's parsers (same setting).
+      - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       # Composer mic dictation (/api/stt) — same STT service the meeting pipeline uses; token stays
       # server-side. Empty → the mic button reports "not configured" instead of failing silently.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}

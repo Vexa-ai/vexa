@@ -194,9 +194,13 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
                 "Jitsi meeting the bot will fail to join; declare the host in VEXA_JITSI_HOSTS to "
                 "silence this warning."
             )
+        # A jitsi room name is deployment-scoped: the native id embeds the host for every
+        # non-canonical deployment (room@host — jitsi's own XMPP identity shape) so two
+        # deployments' same-named rooms never share an identity key. Mirrors meeting-api's
+        # parse_meeting_url; meet.jit.si keeps the bare room (canonical, unambiguous).
         return ParseMeetingLinkResponse(
             platform="jitsi",
-            native_meeting_id=room,
+            native_meeting_id=room if host == "meet.jit.si" else f"{room}@{host}",
             passcode=None,
             meeting_url=url,
             warnings=warnings,

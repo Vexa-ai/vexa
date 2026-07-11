@@ -45,6 +45,8 @@ export interface JoinOptions {
   /** which platform's join flow to run; default: inferred from meetingUrl */
   platform?: Platform;
   botName?: string;
+  /** meeting passcode — filled into zoom's passcode screen / jitsi's room-password prompt */
+  passcode?: string;
   /** force "humanized" (X11) or "synthetic" (CDP) input; default: humanized for gmeet */
   uiInteractionMode?: "humanized" | "synthetic";
   /** join as a signed-in user — caller hands in a persistent, logged-in context
@@ -84,6 +86,7 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
   const botConfig: BotConfig = {
     platform,
     botName: opts.botName ?? "Vexa Join Layer",
+    passcode: opts.passcode,
     authenticated: opts.authenticated,
     uiInteractionMode: opts.uiInteractionMode,
     automaticLeave: { waitingRoomTimeout: opts.waitingRoomTimeoutMs ?? 180_000 },
