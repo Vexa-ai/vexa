@@ -9,6 +9,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   module capture-codec
   module gmeet-capture
   module gmeet-pipeline
+  module jitsi-capture
   module join
   module mixed-capture-core
   module mixed-pipeline

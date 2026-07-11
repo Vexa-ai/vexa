@@ -1,26 +1,29 @@
-# @vexa/jitsi-capture — Jitsi's WHO + chat signals for the mixed lane
+# @vexa/jitsi-capture — Jitsi's contribution to the mixed lane (browser)
 
-_meetings/ · module (brick) · pure browser code (bundled into the bot's page bundle)._
+_meetings/ · module · Jitsi page → `mixed-capture.v1` hints (the WHO signal) + chat._
 
-**One concern:** the Jitsi-specific page-side signals the mixed capture lane can't get
-from audio alone. Audio itself comes from `@vexa/mixed-capture-core` (the WebRTC hook —
-platform-agnostic); this brick contributes:
+Runs **inside the meeting page**. Like Zoom and Teams, Jitsi delivers one mixed audio stream (captured
+by [`@vexa/mixed-capture-core`](../mixed-capture-core/)), so this brick provides only the **WHO** signal
+and chat — no audio of its own:
 
-- `createJitsiSpeakers` — dominant-speaker watcher → `onSpeaking(name, id, isEnd, tMs)`
-  (the mixed lane's 'dom-active' naming hints, same protocol as `@vexa/teams-capture`).
-  Reads the app's own redux state (`APP.store` — what jitsi's UI renders from), with a
-  DOM fallback (`.dominant-speaker` tile) for builds that strip the global.
-- `createJitsiChat` — chat reader → `onMessage({sender, text})`. Redux-primary, so the
-  chat panel need NOT be open (an advantage over the Teams/Zoom DOM readers); DOM
-  fallback otherwise.
-- `sendJitsiChatMessage(text)` — posts into the conference chat via the app's own
-  `sendTextMessage` API.
+- `createJitsiSpeakers` — watches the app's own dominant-speaker state (`APP.store` redux — what
+  jitsi's UI renders from; `.dominant-speaker` tile DOM fallback for builds that strip the global) and
+  emits speaking start/stop per participant → a `mixed-capture.v1` **hint** (kind `dom-active`). A ~2 s
+  heartbeat re-asserts the still-dominant speaker so a consumer that started mid-turn learns who's
+  talking without waiting for the next transition. This module OWNS the jitsi selector arrays.
+- `createJitsiChat` — reads the conference chat (redux-primary, so the panel need **not** be open; DOM
+  fallback otherwise); emits each new message as `{ sender, text }`.
+- `sendJitsiChatMessage` — posts into the conference chat via the app's own `sendTextMessage` API.
 
-## Depends on
-Nothing (ambient DOM only; devDeps for build/test). Verified by `check:isolation`
-(gate:isolation, P2). ESM; consumed via the front door `index.ts` (P6).
+## Surface
+`createJitsiSpeakers` · `createJitsiChat` · `sendJitsiChatMessage` · the selector arrays
+(`jitsiDominantTileSelectors`, `jitsiTileNameSelectors`, `jitsiChatContainerSelectors`,
+`jitsiChatMessageSelectors`, `jitsiChatSenderSelectors`, `jitsiChatTextSelectors`) (+ types
+`JitsiSpeakers`, `JitsiSpeakersOptions`, `JitsiChat`, `JitsiChatMessage`, `JitsiChatOptions`).
+Front door: [`src/index.ts`](src/index.ts).
 
-## Prove it
-`pnpm --filter @vexa/jitsi-capture build · test` — L2 drives the real observers against
-a fake `APP.store` (no browser). The DOM fallbacks and live behavior are L4 (a real
-meeting), same obligation as every capture brick.
+## Verify
+`pnpm --filter @vexa/jitsi-capture run build` — `tsc` clean. The L2 unit drives both observers against
+a fake `APP.store` (no browser); the DOM fallbacks and live behavior are validated **live** in a real
+Jitsi meeting — consistent with how the lane has always been tested. `tsconfig` adds the `DOM` lib.
+Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.
