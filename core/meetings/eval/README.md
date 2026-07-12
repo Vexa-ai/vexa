@@ -1,6 +1,6 @@
 # meetings/eval — the L4 live+eval gate
 
-_Governed by `docs/ARCHITECTURE.md` (validation pyramid: L1 contract → L2 unit → L3 integration → **L4 live+eval**). This is the meetings domain's L4: a real meeting, scored._
+_Governed by `docs/docs/governance/architecture.mdx` (validation pyramid: L1 contract → L2 unit → L3 integration → **L4 live+eval**). This is the meetings domain's L4: a real meeting, scored._
 
 > **Offline, no live meeting?** See **[`COUNTING-FIXTURES.md`](COUNTING-FIXTURES.md)** — a deterministic
 > 1..N counting oracle (TTS → STT → the real transcript pipeline) that runs autonomously any time and

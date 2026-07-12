@@ -13,7 +13,7 @@ lifecycle, meeting status, and the **transcript** — it is the *single writer* 
 (P23). **It is never about:** the copilot, chat, the agent's workspace, or what gets *extracted* from a
 transcript — that is the **agent** domain. `meetings ⊥ agent`: the two domains never call each other; they
 meet **only at the gateway**, over published contracts (`transcript.v1`, `api.v1`). See
-[`docs/CONTROL-PLANE.md`](../../docs/CONTROL-PLANE.md).
+[`docs/docs/architecture/control-plane.mdx`](../../docs/docs/architecture/control-plane.mdx).
 
 ## Seams
 
