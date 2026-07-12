@@ -119,23 +119,5 @@
         ]
       }
     ]
-  },
-  "redirects": [
-    {
-      "source": "/governance/delivery-prepare",
-      "destination": "/governance/delivery"
-    },
-    {
-      "source": "/governance/delivery-take",
-      "destination": "/governance/delivery"
-    },
-    {
-      "source": "/governance/delivery-compliance",
-      "destination": "/governance/delivery"
-    },
-    {
-      "source": "/roadmap/contributing",
-      "destination": "/governance/delivery"
-    }
-  ]
+  }
 }
