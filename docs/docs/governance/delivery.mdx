@@ -678,6 +678,57 @@ Guarantees of every release: all value witnessed · no regression against the pr
 (the no-regression rows + batch validation) · artifact-pointer truth · the loop closed to every
 reporter.
 
+## The maintenance cycle
+
+The standing duty loop that drives every open PR toward merge and forms release batches — run
+it on every PR event and as a daily sweep. PREPARE and TAKE are per-item prompts; this is the
+orchestrator that invokes them. Only the `ready` stamp, the merge, and the ship are maintainer
+acts (D-R0); everything else in the cycle is species-neutral.
+
+### The prompt
+
+You are running one maintenance cycle over Vexa-ai/vexa. Input: the open PRs, the tracker, the
+board. Output: every open PR advanced exactly one honest state (or explicitly left, with why),
+and a release verdict. You never lower a floor, never merge unsigned value, never let silence
+rot a claim.
+
+**Step 1 — sweep every open PR, oldest first, and classify:**
+
+- **No linked issue** (pre-constitution or drive-by) → the era rule: a PR is *signal + a
+  candidate diff*. Map it: delivers a now-prepared issue → invite adoption (author claims the
+  issue; their diff meets its floor); valuable but unprepared → run PREPARE seeded by the PR;
+  era-superseded → decline with credit and what would reopen it.
+- **Bundle missing** → request it warmly (TAKE step 1) and stop there — never review a diff on
+  vibes.
+- **Awaiting triage** → run TAKE → one verdict.
+- **Changes requested** → heartbeat check: active → wait; silent days → one nudge (issue +
+  Discord); silent past the lease → release the claim, mark the PR draft, thank the author,
+  requeue the issue.
+- **Floor met, awaiting validation** → drive it: ping the preferred signer (the reporter);
+  no signer in reach → recruit any competent non-author (the lane names the species); an
+  owner-only leg → surface it to the owner explicitly, never let it wait silently.
+- **Value-signed** → merge same-day (the promise, honored), label, credit in the thread.
+
+**Step 2 — cross-PR invariants:** two PRs on one issue → the earlier claim holds, the later
+gets an honest note (and its novel value, if any, becomes a fork on the issue). One PR spanning
+two issues → split request (D8). Every touched issue/PR leaves the cycle with exactly one
+`state:` label.
+
+**Step 3 — release ripeness.** After merges, ask: is a release due? Triggers, any one
+sufficient: a P0 fix merged (ship fast) · the value-signed backlog reaches a batch worth
+validating together · a milestone checkpoint or time-box arrives. Ripe → run the
+[ship bar](#release--the-ship-bar) end to end: batch → validate together → publish + move tags
+per policy → notes crediting authors and signers → close-backs to every reporter → milestone
+tick. Not ripe → say what would make it ripe.
+
+**Step 4 — report facts.** End the cycle with the dashboard, not adjectives: PRs by state ·
+each blocked-on-whom (named) · validation legs scheduled · release ETA and its trigger ·
+incident threads owing updates. A cycle that touched nothing states why that is correct.
+
+**Honesty rules:** the floor is the floor (never raised mid-review, never waived for a
+plausible diff) · a human-red is elaborated on instruments before any human is asked again ·
+silence is released, never punished · every decline names its reopen condition (D17).
+
 ## Enforcement map
 
 | Principle | Gate | Status |
