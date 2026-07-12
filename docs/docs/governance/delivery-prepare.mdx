@@ -1,0 +1,110 @@
+---
+title: "PREPARE protocol"
+description: "The agent prompt that turns a queue item into a ready issue — the operational protocol of the PREPARE arc."
+---
+
+
+> Companion of [Delivery](/governance/delivery). This is the operational protocol for the PREPARE arc
+> (Loop step 2): give an agent ONE queue item, get back an issue in full D-book compliance,
+> ready for the maintainer's `state: ready` stamp. The issue body IS the constitution applied.
+
+---
+
+## The prompt
+
+You are preparing ONE issue for Vexa-ai/vexa in full compliance with `docs/docs/governance/delivery.mdx`.
+
+**Input:** one queue item — a value sentence plus its source signals (GitHub issue numbers,
+incident postmortems, failure-mode entries, probe findings) — and a checkout of the current tree.
+
+**Output:** the artifacts in step 6. You post NOTHING; a human reviews and publishes.
+
+### Step 0 — Read the law
+Read `docs/docs/governance/delivery.mdx` end to end and `.github/ISSUE_TEMPLATE/3-prepared-issue.md`. Every
+section you write maps to a principle; when in doubt the principle wins over habit.
+
+### Step 1 — Gather the signal (D4: symptoms only)
+Read every source issue WITH its comments, every named incident report, every failure-mode entry.
+Extract: who hurts, what they observed, on which version and deployment, when. Old reports
+contribute **symptoms only** — never adopt a mechanism-narrative from a stale report.
+
+### Step 2 — Ground in the code as it is (D4, D-A)
+Locate the real modules/seams in the current tree. Every `Target:` you will write must be a path
+that exists — verify each one. If the code moved since the report, the issue is shaped by today's
+tree. Find the module's existing harness and fixtures (D-A): you compose them, you do not invent
+bespoke scaffolding; a missing harness is architecture debt to surface, named in the issue.
+
+### Step 3 — The D5b split/bundle verdict (explicit, first)
+State it before writing the body:
+- Would splitting force the **same diff** into two issues? → bundle: one issue, one value
+  sentence PER value, one acceptance row + preferred validator per value.
+- Would bundling staple **independent diffs** into one PR? → split: emit a split recommendation
+  (two prepared issues) instead of one bloated issue.
+- Adjacent-but-different-diff work → a `same-setup:` note naming the batch, never a merge.
+- **Platform rule (the perceiver bounds the atom):** in-meeting behavior prepares ONE issue per
+  platform, even when the engine diff is shared — a Meet user won't debug Teams, and a validator
+  signs only the platform they sit on. The first platform issue claimed carries the shared-engine
+  change; siblings reference it and validate their own platform's fixtures + live leg.
+
+### Step 4 — Write the body (template sections, in order)
+1. **Title** — name the bug and explain it, plainly (D3: named by the problem): for fixes,
+   `component: the defect — its consequence` (house example: "api-gateway: shared HTTP pool
+   starves token validation under load — valid API keys mass-401"); for probes, the question
+   being measured; for features, the capability. Never an aspirational state-sentence
+   ("The API answers while…") — the title states what is wrong, not the world after the fix.
+2. **Why this matters** — dry, factual stakes: what a user loses, what depends on it, what was
+   observed and where (D3).
+3. **Value this issue delivers** — one witnessable sentence per value (D5/D5b).
+4. **Where we are (honest)** — current-code facts, `file:line` for every claim. Unknowns stated
+   as unknowns. **The era note is mandatory when the report predates the current tree:** state
+   the report's version/era vs today's code explicitly — an old-era report means we are
+   *validating new code against a known failure mode of the old code*, and the body must say so
+   in those words, so nobody mistakes an inherited symptom for a confirmed present-tense bug.
+5. **Components** — each exactly ONE module or seam, `Target:` a real path (D5, D-A); each a
+   business-named waypoint with early validation in that module's own harness lane and a named
+   fixture **range** — deterministic producer / captured live output / hand-authored edge case
+   (D-A2). A solution needing two modules is two components.
+6. **Prepared solution + along-the-way forks** — mechanism, files, steps, and the branches a
+   contributor may actually hit (D6). Alternates welcome, never required.
+7. **Acceptance table** — the floor that guarantees merge (D10). Every row: discriminating
+   (red→green pair), controlled (negative control shown red), anchored (sha/id/timestamp),
+   complete (no-regression rows). One discriminating row per stated value (D5b). Floor, never
+   ceiling — extending value is welcome and credited.
+8. **Deployments to validate** (D12b) — which of Lite compose / full compose / k8s-helm / hosted
+   the table runs against, which are explicitly out of scope, and whether Lite needs its own run
+   (say so either way — Lite takes the most divergent path). State that every attestation must
+   name its setup + build provenance (sha, compose/values file, fresh-clone vs long-lived, env
+   deltas).
+9. **Docs surface** (D6c) — the pages this change must touch and at what altitude: quickstart
+   step / how-to / reference / concept, each for its reader. Usually several files. "No docs
+   impact" must be argued, never assumed.
+10. **Live bar** (D12) — scaled to the observation: speaker behavior 2–5 people, join/API one
+    operator, a parser none. Never more humans than the observation requires.
+11. **Validation request** (D9) — the preferred signer is the originating reporter(s), named;
+    any competent non-author qualifies. Multichannel: what the bot did, what the human saw, what
+    the instruments recorded — channels must corroborate.
+12. **Principle check** (D7, fix-requests only) — the architecture principle this defect indicts
+    (verbatim) and the gate that should have caught it; if none covers it, say so — that is a
+    constitution finding.
+
+### Step 5 — Labels, board, closures
+- Labels: `state: prepared` (only a maintainer flips to `ready`) · `kind: fix-request |
+  evaluation-request | probe` · legacy `type:*` kept · `area:*` · P0 only if production-critical.
+- Board: where it sits in the one ordered queue, and its `same-setup:` batch note.
+- Supersede list: which raw issues close into this one, each with a drafted closing comment that
+  links here and invites the reporter to validate when it ships (D16).
+
+### Step 6 — Self-audit, then emit
+Run the gate checklist: value sentence(s) witnessable · every Target exists · every component has
+a harness + fixture range · table rows discriminating/controlled/anchored/complete · row per
+value · deployments declared · docs surface named · live bar scaled · preferred signer named ·
+D5b verdict stated · D7 check present (fixes). Then emit, in order:
+1. the D5b verdict, 2. the full issue body, 3. the label set, 4. the supersede/close list with
+drafted comments, 5. open questions for the maintainer — anything you could not ground in code or
+signal. **Never guess to fill a section**; an honest open question beats a confident invention.
+
+### Honesty rules (override everything)
+No promise the project can't keep. Every code claim carries `file:line`. Every behavior claim
+names its deployment. Uncertain solutions ship as forks, not as facts. If preparation reveals the
+queue item itself is wrong (already fixed, wrongly bundled, not reproducible), emitting that
+finding IS the deliverable (D11 applies to preparation too).

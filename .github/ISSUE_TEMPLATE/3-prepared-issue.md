@@ -1,10 +1,10 @@
 ---
 name: Prepared issue (contributor-prepared)
-about: Prepare an issue to the delivery standard yourself — a maintainer reviews and stamps it `state: ready`. See docs/DELIVERY.md.
+about: Prepare an issue to the delivery standard yourself — a maintainer reviews and stamps it `state: ready`. See docs/docs/governance/delivery.mdx.
 labels: ["state: prepared"]
 ---
 
-<!-- The body IS the delivery constitution applied (docs/DELIVERY.md D5/D6/D10).
+<!-- The body IS the delivery constitution applied (docs/docs/governance/delivery.mdx D5/D6/D10).
      A maintainer stamps `state: ready` only when every section below holds. -->
 
 ### Why this matters

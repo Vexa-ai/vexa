@@ -1,7 +1,7 @@
 # vexa — agent instructions
 
 Read [AGENTS.md](AGENTS.md) (the working protocol) and
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (the principles the gates enforce)
+[docs/docs/governance/architecture.mdx](docs/docs/governance/architecture.mdx) (the principles the gates enforce)
 before editing. Multiple agents may share this checkout — prefer worktrees for
 multi-file edits, and run `node scripts/gates.mjs` before pushing.
 

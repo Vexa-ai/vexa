@@ -10,8 +10,8 @@
 ## Start here
 - [README](README.md): what Vexa is, quickstart, deployment options, API tables, honest status
 - [Docs site source](docs/docs/): published at https://docs.vexa.ai
-- [Architecture constitution](docs/ARCHITECTURE.md): principles P1–P23 + the CI gates enforcing them
-- [Delivery constitution](docs/DELIVERY.md): D0–D17 — how work is prepared, proven, and shipped (roadmap, issues, PRs, release)
+- [Architecture constitution](docs/docs/governance/architecture.mdx): principles P1–P23 + the CI gates enforcing them
+- [Delivery constitution](docs/docs/governance/delivery.mdx): D0–D17 — how work is prepared, proven, and shipped (roadmap, issues, PRs, release)
 - [Machine-readable architecture](architecture.calm.json): FINOS CALM model of every service and data flow
 - [ADRs](docs/adr/): decision records
 
@@ -26,7 +26,7 @@
 - [Contributing: how delivery works](docs/docs/roadmap/contributing.mdx): the roadmap board, issue state machine, prepared-issue merge promise, value signing — includes the one-call GraphQL roadmap fetch for agents
 - Roadmap board: https://github.com/orgs/Vexa-ai/projects/2 (fields: Lane = who feels the value · Human bar = the validation act · Setup = infra floor · Milestone = version)
 - [AGENTS.md](AGENTS.md): the post-clone contributor contract — your claimed issue is your PRD; claim + Discord hello + heartbeat
-- [DELIVERY-PREPARE.md](docs/DELIVERY-PREPARE.md) · [DELIVERY-TAKE.md](docs/DELIVERY-TAKE.md): the two maintainer protocols (queue item → prepared issue · delivered PR → verdict)
+- [DELIVERY-PREPARE.md](docs/docs/governance/delivery-prepare.mdx) · [DELIVERY-TAKE.md](docs/docs/governance/delivery-take.mdx): the two maintainer protocols (queue item → prepared issue · delivered PR → verdict)
 
 ## Evaluate
 - [SECURITY.md](SECURITY.md): vulnerability reporting

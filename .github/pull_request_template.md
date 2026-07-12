@@ -1,4 +1,4 @@
-<!-- The PR carries TWO artifacts, judged on different axes (docs/DELIVERY.md D8):
+<!-- The PR carries TWO artifacts, judged on different axes (docs/docs/governance/delivery.mdx D8):
      the OBSERVATION BUNDLE answers "is the value real?"; the DIFF answers "is it correct and safe?".
      A diff with no bundle is not reviewable. -->
 

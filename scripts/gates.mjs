@@ -156,7 +156,7 @@ function gateTestIsolation() {
 
 // gate:arch-report (P9) — the architecture-compliance map is GREEN: every modularity principle
 // (P2·P3·P4·P6·P12) resolves to a passing gate. scripts/arch-report.mjs --check re-runs each and fails
-// loud if any is red — so "fully modular" is a claim backed by mechanical evidence, and docs/ARCH-COMPLIANCE.md
+// loud if any is red — so "fully modular" is a claim backed by mechanical evidence, and docs/docs/governance/arch-compliance.mdx
 // is regenerable + current. Green-on-empty before the report generator lands.
 function gateArchReport() {
   const s = join(ROOT, "scripts", "arch-report.mjs");

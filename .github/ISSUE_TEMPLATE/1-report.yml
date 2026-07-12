@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks — reports are step 1 of our delivery loop ([docs/DELIVERY.md](../blob/main/docs/DELIVERY.md)).
+        Thanks — reports are step 1 of our delivery loop ([docs/docs/governance/delivery.mdx](../blob/main/docs/docs/governance/delivery.mdx)).
         Within 3 days this becomes a prepared issue, and when the fix ships you'll be told and invited to validate it.
   - type: textarea
     id: what

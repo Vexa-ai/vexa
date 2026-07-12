@@ -12,7 +12,7 @@ Agents never run in the control plane; isolation *is* the enforcement of governa
 
 **The workspace model an agent turn sees** — the three tiers (`_global` RO / normal / `_system` RW),
 personal + normal single-rank workspaces, the sharing model, and live in-meeting collaboration — is
-documented in **[`docs/WORKSPACES.md`](../../docs/WORKSPACES.md)**.
+documented in **[`docs/docs/core/workspaces.mdx`](../../docs/docs/core/workspaces.mdx)**.
 
 ## Boundary (SoC)
 **This domain is about:** the copilot lifecycle, chat, the user's `workspace.v1`, notes/cards, and agent
@@ -25,7 +25,7 @@ the `transcript.v1` carrier on the bus. What is forbidden is **owning/writing** 
 (P3). `meetings ⊥ agent`: the two domains never call each other's internals; they meet only through
 published contracts (at the gateway, or a `.v1` carrier). Cross-domain composition ("agent on a meeting")
 lives in the cookbook layer *above* both domains, never inside this one. See
-[`docs/CONTROL-PLANE.md`](../../docs/CONTROL-PLANE.md).
+[`docs/docs/architecture/control-plane.mdx`](../../docs/docs/architecture/control-plane.mdx).
 
 ## Seams
 | Direction | Neighbour | Via | What crosses |

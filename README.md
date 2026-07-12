@@ -461,7 +461,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
   lane, with [milestones](https://github.com/Vexa-ai/vexa/milestones) as the version gates.
 - **Contributing** — [how delivery works](docs/docs/roadmap/contributing.mdx): prepared issues
   with acceptance tables that *guarantee* merge, and human validation credited as a first-class
-  contribution (the [delivery constitution](docs/DELIVERY.md) is the full law).
+  contribution (the [delivery constitution](docs/docs/governance/delivery.mdx) is the full law).
 - **Issues & PRs** — welcome. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
 
 Vexa is built in the open. If you self-host it, extend it, or run it air-gapped somewhere interesting,

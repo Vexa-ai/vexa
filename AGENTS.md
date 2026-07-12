@@ -2,9 +2,9 @@
 
 You have a checkout. Two constitutions govern everything in it:
 
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the P-book: what the software must be
+- **[docs/docs/governance/architecture.mdx](docs/docs/governance/architecture.mdx)** — the P-book: what the software must be
   (principles P1–P23, enforced by the CI gate suite). Your change must be a perfect fit to these.
-- **[docs/DELIVERY.md](docs/DELIVERY.md)** — the D-book: how change ships (D0–D17: the
+- **[docs/docs/governance/delivery.mdx](docs/docs/governance/delivery.mdx)** — the D-book: how change ships (D0–D17: the
   issue → PR → proof → release loop). Your work travels through this.
 
 This file is the actor contract between them: how a session — human, agent, or both —
@@ -88,7 +88,7 @@ is yours**, full responsibility, honored as full authorship and credit; no agent
 trailers (D13).
 
 The maintainer triages your PR against the prepared issue by
-**[docs/DELIVERY-TAKE.md](docs/DELIVERY-TAKE.md)** — read it to know exactly how you'll be
+**[docs/docs/governance/delivery-take.mdx](docs/docs/governance/delivery-take.mdx)** — read it to know exactly how you'll be
 read. Then a **non-author validates the value live** (multichannel, provenance-anchored — see
 the [contributing page](docs/docs/roadmap/contributing.mdx)); validators are credited in the
 release notes alongside you, and the reporter of the original bug is the preferred signer of
