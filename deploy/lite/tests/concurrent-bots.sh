@@ -69,15 +69,44 @@ TOKEN=$(X curl -s -X POST "$ADMIN/admin/users/$UID_/tokens?scopes=bot,tx" \
 # the spawn is (correctly) refused with 503 by the STT-config gate, since the lite
 # smoke env wires no transcription backend. (The real fresh-install STT-gate defect
 # a user hits with the default transcribe_enabled=true is a product issue, #502/#504.)
+# ── readiness gate: the front-door probe only proves PORTS answer; the spawns ride the
+#    gateway→meeting-api→db chain, which boots later. The v0.12.1 maiden run 502'd exactly
+#    here — the smoke posted /bots into that gap. Poll an authenticated /meetings until the
+#    whole chain answers 200 before any spawn fires. ──
+ready=""
+for i in $(seq 1 40); do
+  code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "$GATEWAY/meetings" -H "X-API-Key: $TOKEN" || true)
+  if [ "$code" = 200 ]; then ready=1; break; fi
+  echo "…gateway→meeting-api chain not ready (HTTP $code, attempt $i/40)"; sleep 3
+done
+[ -n "$ready" ] || die "gateway→meeting-api chain not ready after 120s"
+
+spawn() { # meeting_id bot_name → echoes the HTTP code
+  curl -s -m 20 -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/bots" \
+    -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
+    -d "{\"platform\":\"google_meet\",\"native_meeting_id\":\"$1\",\"bot_name\":\"$2\",\"transcribe_enabled\":false}"
+}
+
 X bash -c 'rm -f /tmp/vexa-workloads/*.log 2>/dev/null; true'
+CODES_DIR=$(mktemp -d)
 ids=()
 for i in $(seq 1 "$N_BOTS"); do
   mid=$(printf 'aaa-smk%02d-bot' "$i")
-  curl -s -X POST "$GATEWAY/bots" -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
-    -d "{\"platform\":\"google_meet\",\"native_meeting_id\":\"$mid\",\"bot_name\":\"Smoke-$i\",\"transcribe_enabled\":false}" >/dev/null &
+  { spawn "$mid" "Smoke-$i" > "$CODES_DIR/$mid"; } &
   ids+=("$mid")
 done
 wait
+# Spawns must be LOUD: a swallowed 5xx here used to surface 45s later as NOT-FOUND. One
+# sequential retry absorbs a straggler; anything else fails now, with the code named.
+for mid in "${ids[@]}"; do
+  code=$(cat "$CODES_DIR/$mid" 2>/dev/null || echo 000)
+  case "$code" in 2*) echo "spawn $mid: HTTP $code ✓";;
+    *) echo "spawn $mid: HTTP $code — retrying once"; sleep 3
+       code=$(spawn "$mid" "Smoke-retry")
+       case "$code" in 2*) echo "spawn $mid retry: HTTP $code ✓";;
+         *) die "spawn $mid failed (HTTP $code) after retry";; esac;;
+  esac
+done
 echo "launched $N_BOTS bots; observing ${WINDOW}s"
 sleep "$WINDOW"
 
