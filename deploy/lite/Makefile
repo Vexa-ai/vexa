@@ -107,8 +107,13 @@ up: preflight
 	fi; echo "  ✓ MinIO ready"; \
 	echo "Starting Vexa Lite ($$IMG)..."; \
 	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
+	CLAUDE_DIR=$${CLAUDE_CREDS_DIR:-$$HOME/.claude}; CLAUDE_ARGS=""; \
+	if [ -d "$$CLAUDE_DIR" ]; then \
+		CLAUDE_ARGS="-v $$CLAUDE_DIR:/host-claude:ro -e HOST_CLAUDE_CREDENTIALS=/host-claude/.credentials.json"; \
+		echo "  ✓ Claude credentials dir mounted ($$CLAUDE_DIR) — a host 'claude /login' is picked up live"; \
+	fi; \
 	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
-		--env-file $(ENV_FILE) \
+		--env-file $(ENV_FILE) $$CLAUDE_ARGS \
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
 		-e ADMIN_API_TOKEN=$$ADMIN_TK -e ADMIN_TOKEN=$$ADMIN_TK \
