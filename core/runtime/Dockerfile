@@ -29,8 +29,9 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
+# --no-dev: the dev group (pytest) is host-side test tooling, not a runtime dep.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 # Production-only: the ASGI server (fastapi/httpx/redis are already pinned in pyproject).
 RUN --mount=type=cache,target=/root/.cache/uv \

@@ -22,4 +22,4 @@ The sealed identity contract. Two shapes, both derived from the real admin-api t
 `node validate.mjs [--check]` — ajv2020 + ajv-formats, every golden against its `$def` (gate:schema).
 Sealing: `pnpm seal:contracts` from the v0.12 root once the schema is frozen (gate:contract-version).
 
-_Governed by `docs/ARCHITECTURE.md` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._
+_Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._

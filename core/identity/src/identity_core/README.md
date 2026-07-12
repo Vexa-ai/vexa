@@ -14,4 +14,4 @@ The identity CORE. Public surface is `__init__.py` (the lane's `index`):
 
 All emitted shapes conform to `../../contracts/identity.v1`. Tested in `../../tests/`.
 
-_Governed by `docs/ARCHITECTURE.md` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._
+_Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._

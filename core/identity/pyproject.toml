@@ -6,8 +6,11 @@ requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.21,<5",
     "referencing>=0.31",
-    "pytest>=8,<9",
 ]
+
+[dependency-groups]
+# test runner only — this env drives the host-side gates; it is never baked into an image
+dev = ["pytest>=9.0.3"]
 
 [tool.uv]
 package = false

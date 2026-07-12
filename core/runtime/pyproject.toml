@@ -13,8 +13,11 @@ dependencies = [
     "fakeredis>=2.20,<3",
     "croniter>=2,<6",
     "requests-unixsocket>=0.3,<0.5",
-    "pytest>=8,<9",
 ]
+
+[dependency-groups]
+# test runner only — kept out of the production images (uv sync --no-dev in the Dockerfiles)
+dev = ["pytest>=9.0.3"]
 
 [tool.uv]
 package = false

@@ -44,5 +44,8 @@
     "typescript": "^5.9.3",
     "vitest": "^4.1.7"
   },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  },
   "license": "Apache-2.0"
 }

@@ -22,3 +22,7 @@ allowBuilds:
   onnxruntime-node: true
   protobufjs: true
   sharp: true
+# Security floor (GHSA-qx2v-qp2m-jg93): next pins postcss 8.4.31 exactly; postcss 8.5.x is
+# API-compatible. clients/terminal/package.json carries the same floor for its npm lockfile.
+overrides:
+  "postcss@<8.5.10": ">=8.5.10"

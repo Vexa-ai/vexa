@@ -13,7 +13,7 @@ ports so the same shipped `create_app` runs in prod and under the conformance ha
 **composition** across domains (`/ws` fan-in, and cookbook ops that orchestrate ≥2 domain contracts).
 **It is never about:** the business logic of either domain. The two domains (`meetings`, `agent`) never
 talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1`, `transcript.v1`,
-`tool.v1`). See [`docs/CONTROL-PLANE.md`](../../../../docs/CONTROL-PLANE.md).
+`tool.v1`). See [`docs/docs/architecture/control-plane.mdx`](../../../../docs/docs/architecture/control-plane.mdx).
 
 ## Seams
 | Direction | Neighbour | Via | What crosses |
