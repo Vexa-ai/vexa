@@ -64,12 +64,17 @@ TOKEN=$(X curl -s -X POST "$ADMIN/admin/users/$UID_/tokens?scopes=bot,tx" \
 
 # ── launch N bots concurrently (distinct synthetic meetings; the #478 failure
 #    mode fires at browser LAUNCH, before any navigation, so no admission needed) ──
+# transcribe_enabled:false — this is a browser-launch/concurrency smoke, and the
+# synthetic bots never capture audio, so there is nothing to transcribe. Without it
+# the spawn is (correctly) refused with 503 by the STT-config gate, since the lite
+# smoke env wires no transcription backend. (The real fresh-install STT-gate defect
+# a user hits with the default transcribe_enabled=true is a product issue, #502/#504.)
 X bash -c 'rm -f /tmp/vexa-workloads/*.log 2>/dev/null; true'
 ids=()
 for i in $(seq 1 "$N_BOTS"); do
   mid=$(printf 'aaa-smk%02d-bot' "$i")
   curl -s -X POST "$GATEWAY/bots" -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
-    -d "{\"platform\":\"google_meet\",\"native_meeting_id\":\"$mid\",\"bot_name\":\"Smoke-$i\"}" >/dev/null &
+    -d "{\"platform\":\"google_meet\",\"native_meeting_id\":\"$mid\",\"bot_name\":\"Smoke-$i\",\"transcribe_enabled\":false}" >/dev/null &
   ids+=("$mid")
 done
 wait
