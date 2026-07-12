@@ -1,6 +1,6 @@
 # extension — in-tab Google Meet capture driver (MV3)
 
-_Governed by `docs/ARCHITECTURE.md` (P1–P12). A client app, not a library — `"private": true`, so the exports gate skips it._
+_Governed by `docs/docs/governance/architecture.mdx` (P1–P12). A client app, not a library — `"private": true`, so the exports gate skips it._
 
 The live **page-audio capture driver** for the Vexa desktop host. It runs inside
 the Google Meet tab you are already in (no bot, no waiting room), captures each

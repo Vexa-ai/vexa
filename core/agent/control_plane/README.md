@@ -5,7 +5,7 @@ The agent control plane: the FastAPI app (`api.py`) and orchestration that dispa
 ## Workspace membership + invites + roles (Lane M — the access layer for shared workspaces)
 
 > **The full workspace + collaboration model (tiers, personal, sharing, live collaboration, deferred)
-> is documented in [`docs/WORKSPACES.md`](../../../docs/WORKSPACES.md).** This section is the Lane M
+> is documented in [`docs/docs/core/workspaces.mdx`](../../../docs/docs/core/workspaces.mdx).** This section is the Lane M
 > membership/invite mechanism.
 
 `workspace_membership.py` is the access layer for shared workspaces. **Single-rank model (owner ruling
@@ -45,7 +45,7 @@ list members = any member** (`require_role("contributor")`); **unshare / remove 
 shareable (`RESERVED_SLUGS` = `sys` / `_system` / `system` / `_global` / `global` / `seed` /
 `seed-prev`; `ensure_workspace_shareable` refuses them and the private baseline).
 **DEFERRED DECISION** (owner's call): whether to also offer an owner-restricted invite mode — see
-`docs/WORKSPACES.md`.
+`docs/docs/core/workspaces.mdx`.
 
 **`is_member(root, workspace_id, subject) -> role|None`** is the seam Lane A calls for mount-resolution
 and transcript-subscribe-by-membership. This lane provides membership DATA + APIs only — it does NOT

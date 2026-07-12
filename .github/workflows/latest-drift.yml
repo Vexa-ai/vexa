@@ -1,0 +1,33 @@
+name: latest-drift
+# `vexaai/vexa-lite:latest` sat a MONTH stale (a pre-0.12 build) while users ran
+# `make lite` believing they had current code — nothing noticed. This check makes
+# that state impossible to miss: red when :latest's labelled revision is older
+# than 7 days behind main, or carries no revision label at all.
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily, off the hour
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: compare :latest revision age vs main
+        run: |
+          rev=$(docker buildx imagetools inspect vexaai/vexa-lite:latest \
+            --format '{{json .Image}}' | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)
+          imgs=list(d.values()) if isinstance(d,dict) and "config" not in d and "Config" not in d else [d]
+          for i in imgs:
+              lab=(i.get("config") or i.get("Config") or {}).get("Labels") or {}
+              r=lab.get("org.opencontainers.image.revision")
+              if r: print(r); break')
+          [ -n "$rev" ] || { echo "::error::vexaai/vexa-lite:latest has NO revision label — unidentifiable build"; exit 1; }
+          if ! git cat-file -e "$rev" 2>/dev/null; then
+            echo "::error:::latest revision $rev is not a commit in this repo"; exit 1; fi
+          age_days=$(( ( $(git log -1 --format=%ct origin/main) - $(git log -1 --format=%ct "$rev") ) / 86400 ))
+          echo ":latest = $rev (${age_days}d behind main HEAD)"
+          [ "$age_days" -le 7 ] || { echo "::error:::latest is ${age_days} days behind main (limit 7)"; exit 1; }

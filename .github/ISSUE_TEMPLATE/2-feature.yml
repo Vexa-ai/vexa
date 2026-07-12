@@ -1,0 +1,15 @@
+name: Request a capability
+description: What should Vexa do that it doesn't? Enters the same 3-day triage — it lands on the public roadmap as prepared, declared-later, or declined with a reason.
+labels: ["state: incoming", "type: feature"]
+body:
+  - type: textarea
+    id: job
+    attributes:
+      label: The job you're trying to get done
+      description: What you're trying to achieve and where Vexa stops short — the outcome, not the mechanism.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How you work around it today

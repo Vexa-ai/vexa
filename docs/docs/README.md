@@ -2,7 +2,7 @@
 
 Product- and contributor-facing documentation for Vexa's Enterprise Intelligence runtime, rendered by
 Mintlify (`docs.json` is the nav config; `index.mdx` the landing page). It is **complementary** to
-`docs/ARCHITECTURE.md`: ARCHITECTURE is the governing build reference (rules + gates), this site explains
+`docs/docs/governance/architecture.mdx`: ARCHITECTURE is the governing build reference (rules + gates), this site explains
 the vision, primitives, and capabilities at a consumer altitude.
 
 - `foundations/` — vision · landscape · principles · the model (the "why")

@@ -1,0 +1,83 @@
+---
+title: "How Vexa governs itself"
+description: "The full governance map: two constitutions, two protocols, the surfaces and actors of the delivery loop, who enforces what, and how the law itself changes."
+---
+
+Vexa is governed by written, enforced law — not convention. Three documents, each governing a
+different noun; two operational protocols bookending the contribution loop; a set of surfaces
+where humans and agents meet the system; and one amendment mechanism through which the law
+itself evolves. This page is the map.
+
+## The trinity
+
+| Document | Governs | Character |
+|---|---|---|
+| **[Architecture](/governance/architecture)** — the P-book (P1–P23) | the **artifact**: what the software must be — structure, contracts, isolation, data-flow, proof altitudes | timeless · machine-enforced |
+| **[Delivery](/governance/delivery)** — the D-book (D0–D17) | the **flow**: how change earns its way in — intake → prepare → roadmap → claim → deliver → prove → release → close-back | cyclic · process-enforced |
+| **[AGENTS.md](https://github.com/Vexa-ai/vexa/blob/main/AGENTS.md)** — the actor contract | the **actor**: how a session (human, agent, or both) behaves inside a checkout | per-session · ledger-enforced |
+
+AGENTS.md is deliberately the thinnest: it owns no law of its own — it *binds* a session to the
+other two and adds only session mechanics (worktree isolation, the expect→verdict loop, the
+claim heartbeat).
+
+## The two protocols
+
+Each phase of the delivery loop has an operational protocol — an agent-runnable prompt, not
+prose about process:
+
+- **[PREPARE](/governance/delivery#prepare-protocol)** — signal → spec. Turns one queue item (a raw
+  report, an incident, a failure mode) into a prepared issue: code-grounded, harnessed,
+  carrying an acceptance table that *guarantees* merge.
+- **[TAKE](/governance/delivery#take-protocol)** — PR → verdict. Triages a delivered PR against its
+  issue's declared floor: bundle before diff, row-by-row in the issue's own numbering, the
+  floor never moved, the plan-bug rule owned on our side.
+
+The prepared issue is the hinge between them: the *output* of PREPARE and the *input* of a
+contributor's work — a PRD whose acceptance table is a merge promise.
+
+## Surfaces and actors — one pass around the loop
+
+| Stage | Actor | Surface | Governed by |
+|---|---|---|---|
+| Discover | remote agent / human | this site's `/llms.txt` (auto-generated) · [AGENTS.md](https://github.com/Vexa-ai/vexa/blob/main/AGENTS.md) (the repo agent front door, 28+ tools read it natively) · README | — |
+| Feed back | remote agent / user | **GitHub issues** — every report enters `state: incoming`, 3-day triage SLA | D2b |
+| Prepare | maintainer's agents | the tracker | PREPARE |
+| Stamp + roadmap | maintainer | the [board](https://github.com/orgs/Vexa-ai/projects/2): Lane × Milestone × Human bar × Setup | D-R1 / D2 |
+| Pick | contributor's agent | one GraphQL call ([contributing](/governance/delivery#the-roadmap)) | — |
+| Claim | contributor | issue comment + **Discord hello** (the human-to-human channel) + heartbeat | AGENTS.md / D14b |
+| Build | contributor + agent | the checkout: issue-as-PRD, worktree, gates | AGENTS.md binding the P-book |
+| Deliver | contributor | the two-artifact PR: observation bundle + diff | D8 |
+| Take | maintainer | the PR, against the declared floor | TAKE |
+| Validate | **a non-author human** | a real meeting / deployment — multichannel, provenance-anchored | D9 / D12b |
+| Release + close back | maintainer | release notes credit author *and* signer; the reporter is invited to validate | D15 / D16 |
+
+## Who enforces what
+
+- **The P-book: machines.** The CI gate suite (28 gates) — red or it didn't happen. The live
+  map of principle → gate is [Architecture compliance](/governance/arch-compliance), generated,
+  never hand-edited.
+- **The D-book: process.** The state-label machine (exactly one `state:` per issue), acceptance
+  floors, value signing. The enforcement map — including the honestly-marked TO-BUILD rows
+  (the `value-signed` status check, the label bot) — is
+  [the enforcement map](/governance/delivery#enforcement-map).
+- **The actor contract: visibility.** No gate checks the expect→verdict loop — the human
+  reading the ledger *is* the gate.
+
+## How the law itself changes
+
+No principle is edited casually. The amendment loop:
+
+> surprise → root-cause **with a human** → learning → **ADR** on `lane:contract` (human-reviewed)
+> → new principle in the P-book or D-book → new gate that enforces it.
+
+The case law lives in [`docs/adr/`](https://github.com/Vexa-ai/vexa/tree/main/docs/adr) —
+decision records the constitutions cite by number. Machine models keep both books executable:
+the P-book's is [`architecture.calm.json`](https://github.com/Vexa-ai/vexa/blob/main/architecture.calm.json)
+(FINOS CALM, drift-gated); the D-book's is the roadmap board itself.
+
+## The one idea underneath
+
+Agents made code cheap. The scarce input is **verified truth about delivered value** — so every
+mechanism above exists to route human attention to the one thing only humans can give: *"I ran
+it, and I witness the value."* Validation is credited as authorship's equal, invalidation is a
+first-class result, and nothing merges on anyone's say-so alone — including ours.

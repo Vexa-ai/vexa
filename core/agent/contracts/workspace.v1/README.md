@@ -14,5 +14,5 @@ owns only two things, both light:
 
 The agent clones/commits this repo itself (via `env`, see `runtime.v1`); the kernel never sees "workspace".
 Access/sharing + the tier model (`_global`/normal/`_system`) + live collaboration are **delivered** —
-see [`docs/WORKSPACES.md`](../../../../docs/WORKSPACES.md) (ADR-0003 is the original data/sharing policy).
+see [`docs/docs/core/workspaces.mdx`](../../../../docs/docs/core/workspaces.mdx) (ADR-0003 is the original data/sharing policy).
 Goldens validated by `gate:schema`.

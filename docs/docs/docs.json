@@ -56,7 +56,8 @@
           "core/meetings",
           "core/agents",
           "core/runtime",
-          "core/identity"
+          "core/identity",
+          "core/workspaces"
         ]
       },
       {
@@ -74,7 +75,8 @@
           "architecture/streaming",
           "architecture/identity-and-trust",
           "architecture/governance",
-          "architecture/architecture-as-code"
+          "architecture/architecture-as-code",
+          "architecture/control-plane"
         ]
       },
       {
@@ -105,6 +107,15 @@
           "roadmap/stages",
           "roadmap/status",
           "roadmap/swarm"
+        ]
+      },
+      {
+        "group": "Governance",
+        "pages": [
+          "governance/index",
+          "governance/architecture",
+          "governance/arch-compliance",
+          "governance/delivery"
         ]
       }
     ]
