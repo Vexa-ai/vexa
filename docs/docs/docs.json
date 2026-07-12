@@ -106,7 +106,6 @@
           "roadmap/approach",
           "roadmap/stages",
           "roadmap/status",
-          "roadmap/contributing",
           "roadmap/swarm"
         ]
       },
@@ -116,12 +115,27 @@
           "governance/index",
           "governance/architecture",
           "governance/arch-compliance",
-          "governance/delivery",
-          "governance/delivery-prepare",
-          "governance/delivery-take",
-          "governance/delivery-compliance"
+          "governance/delivery"
         ]
       }
     ]
-  }
+  },
+  "redirects": [
+    {
+      "source": "/governance/delivery-prepare",
+      "destination": "/governance/delivery"
+    },
+    {
+      "source": "/governance/delivery-take",
+      "destination": "/governance/delivery"
+    },
+    {
+      "source": "/governance/delivery-compliance",
+      "destination": "/governance/delivery"
+    },
+    {
+      "source": "/roadmap/contributing",
+      "destination": "/governance/delivery"
+    }
+  ]
 }

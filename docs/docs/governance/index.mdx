@@ -25,10 +25,10 @@ claim heartbeat).
 Each phase of the delivery loop has an operational protocol — an agent-runnable prompt, not
 prose about process:
 
-- **[PREPARE](/governance/delivery-prepare)** — signal → spec. Turns one queue item (a raw
+- **[PREPARE](/governance/delivery#prepare-protocol)** — signal → spec. Turns one queue item (a raw
   report, an incident, a failure mode) into a prepared issue: code-grounded, harnessed,
   carrying an acceptance table that *guarantees* merge.
-- **[TAKE](/governance/delivery-take)** — PR → verdict. Triages a delivered PR against its
+- **[TAKE](/governance/delivery#take-protocol)** — PR → verdict. Triages a delivered PR against its
   issue's declared floor: bundle before diff, row-by-row in the issue's own numbering, the
   floor never moved, the plan-bug rule owned on our side.
 
@@ -39,11 +39,11 @@ contributor's work — a PRD whose acceptance table is a merge promise.
 
 | Stage | Actor | Surface | Governed by |
 |---|---|---|---|
-| Discover | remote agent / human | [`llms.txt`](https://github.com/Vexa-ai/vexa/blob/main/llms.txt) (pre-clone entrypoint) · this site's `/llms.txt` · README | — |
+| Discover | remote agent / human | this site's `/llms.txt` (auto-generated) · [AGENTS.md](https://github.com/Vexa-ai/vexa/blob/main/AGENTS.md) (the repo agent front door, 28+ tools read it natively) · README | — |
 | Feed back | remote agent / user | **GitHub issues** — every report enters `state: incoming`, 3-day triage SLA | D2b |
 | Prepare | maintainer's agents | the tracker | PREPARE |
 | Stamp + roadmap | maintainer | the [board](https://github.com/orgs/Vexa-ai/projects/2): Lane × Milestone × Human bar × Setup | D-R1 / D2 |
-| Pick | contributor's agent | one GraphQL call ([contributing](/roadmap/contributing)) | — |
+| Pick | contributor's agent | one GraphQL call ([contributing](/governance/delivery#the-roadmap)) | — |
 | Claim | contributor | issue comment + **Discord hello** (the human-to-human channel) + heartbeat | AGENTS.md / D14b |
 | Build | contributor + agent | the checkout: issue-as-PRD, worktree, gates | AGENTS.md binding the P-book |
 | Deliver | contributor | the two-artifact PR: observation bundle + diff | D8 |
@@ -59,7 +59,7 @@ contributor's work — a PRD whose acceptance table is a merge promise.
 - **The D-book: process.** The state-label machine (exactly one `state:` per issue), acceptance
   floors, value signing. The enforcement map — including the honestly-marked TO-BUILD rows
   (the `value-signed` status check, the label bot) — is
-  [Delivery compliance](/governance/delivery-compliance).
+  [the enforcement map](/governance/delivery#enforcement-map).
 - **The actor contract: visibility.** No gate checks the expect→verdict loop — the human
   reading the ledger *is* the gate.
 
