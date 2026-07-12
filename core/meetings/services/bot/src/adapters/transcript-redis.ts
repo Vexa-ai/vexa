@@ -66,6 +66,38 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
   return { publish };
 }
 
+/** NON-terminal pipeline fault (e.g. STT 503) → the durable `transcription_segments` stream, as a
+ *  `{type:'fault'}` envelope alongside the transcription payloads. The collector fans it out to the
+ *  per-meeting feed (`tc:meeting:{row_id}`) and the terminal SSE renders it as a model-error banner —
+ *  so a saturated/unreachable STT backend fails LOUD on the meeting page instead of a silent bot (#552).
+ *  Throttled: an identical repeating fault publishes at most once per `windowMs`. Best-effort — a
+ *  publish failure must never take the pipeline down with it. */
+export function createFaultPublisher(
+  opts: RedisTranscriptSinkOptions & { windowMs?: number },
+): (err: unknown) => Promise<void> {
+  const { client, meetingId, nativeMeetingId, windowMs = 30_000 } = opts;
+  let lastKey = '';
+  let lastAt = 0;
+  return async function publishFault(err: unknown): Promise<void> {
+    const e = err as { name?: string; message?: string; kind?: string; status?: number };
+    const message = e?.message ?? String(err);
+    const key = `${e?.name ?? ''}|${e?.status ?? ''}|${message}`;
+    const now = Date.now();
+    if (key === lastKey && now - lastAt < windowMs) return;
+    lastKey = key;
+    lastAt = now;
+    const payload = JSON.stringify({
+      type: 'fault', meeting_id: meetingId, native_meeting_id: nativeMeetingId,
+      stage: 'transcription', name: e?.name, kind: e?.kind, status: e?.status, message,
+    });
+    try {
+      await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+    } catch {
+      /* best-effort — the fault is already on the console */
+    }
+  };
+}
+
 /** A live transcript client that also exposes connect/quit so the composition root can
  *  lazily connect and tear down. */
 export type LiveRedisTranscriptClient = RedisTranscriptClient & {

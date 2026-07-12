@@ -169,6 +169,28 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
                 _log_publish_failure(meeting_id, e)
         return 0
+    if msg_type == "fault":
+        # #552: a NON-terminal pipeline fault the bot published (e.g. STT backend 503 after retries).
+        # Fan it out to the per-meeting feed so the terminal SSE surfaces it as a loud model-error on
+        # the meeting page instead of a silently mute bot. Best-effort, never aborts the batch.
+        mid_raw = data.get("meeting_id")
+        try:
+            meeting_id = int(mid_raw) if mid_raw is not None else None
+        except (TypeError, ValueError):
+            meeting_id = None
+        if meeting_id is not None:
+            entry = {
+                "type": "fault",
+                "stage": data.get("stage") or "pipeline",
+                "message": data.get("message") or "pipeline fault",
+            }
+            if data.get("status") is not None:
+                entry["status"] = data.get("status")
+            try:
+                await redis.xadd(_transcript_stream(meeting_id), entry)
+            except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
+                _log_publish_failure(meeting_id, e)
+        return 0
     if msg_type not in ("transcription", "transcript"):
         # session_start / speaker events are out of scope for this segment unit.
         return 0

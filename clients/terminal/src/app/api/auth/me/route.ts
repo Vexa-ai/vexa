@@ -1,9 +1,11 @@
-/** Who-am-I — reads the httpOnly `vexa-user-info` cookie (set at login). The login gate calls this to
- *  decide whether to show the email-entry form. No backend round-trip: presence of the auth + user-info
- *  cookies means authenticated. */
+/** Who-am-I — the login gate calls this to decide whether to show the sign-in card. The token is
+ *  VALIDATED against admin-api's internal oracle: a definitively revoked/deleted token (401) clears
+ *  the cookies and reports unauthenticated, so a server-side user wipe actually logs the browser out
+ *  and first-run onboarding can reappear (#553 — the session was sticky to cookie PRESENCE before).
+ *  Transient oracle failures (admin-api down/unconfigured) keep the session — never flap on a blip. */
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, USER_INFO_COOKIE } from "../adminApi";
+import { AUTH_COOKIE, USER_INFO_COOKIE, validateAuthToken } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +17,15 @@ export async function GET() {
   const info = cookieStore.get(USER_INFO_COOKIE)?.value;
 
   if (!token) {
+    return NextResponse.json({ authenticated: false }, { status: 401, headers: NO_STORE });
+  }
+
+  const validated = await validateAuthToken(token);
+  if (!validated.ok && validated.status === 401) {
+    // The token is definitively dead (revoked, or its user was wiped) — fail closed and clear the
+    // stale cookies so the client re-enters the sign-in / first-run flow.
+    cookieStore.delete(AUTH_COOKIE);
+    cookieStore.delete(USER_INFO_COOKIE);
     return NextResponse.json({ authenticated: false }, { status: 401, headers: NO_STORE });
   }
 

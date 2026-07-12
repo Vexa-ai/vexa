@@ -1864,6 +1864,14 @@ def create_app(
                             "completed": seg.get("completed", True),
                             "id": seg.get("segment_id")}, cursor())
 
+            def fault_events(payload):
+                """A `fault` entry on the transcript feed (bot pipeline fault, e.g. STT 503 — #552) →
+                the `model-error` SSE event the terminal already renders as a warning card + error
+                banner, naming the REAL failing layer instead of a generic stream-drop message."""
+                yield ({"type": "model-error",
+                        "error": {"stage": payload.get("stage") or "pipeline",
+                                  "message": payload.get("message") or "pipeline fault"}}, cursor())
+
             def note_events(entry_fields):
                 """One proc-stream entry → the SAME `note` SSE event the out-stream used to carry
                 (meetingLive.ts upserts by note.id). The `view_end` marker flips completion instead."""
@@ -1887,6 +1895,9 @@ def create_app(
                         ending = True
                         ending_at = _time.monotonic()
                         last.pop(tkey, None)
+                        continue
+                    if payload.get("type") == "fault":
+                        yield from fault_events(payload)
                         continue
                     yield from seg_events(payload)
             if resume_o is None:   # fresh connect → seed the output (cards/agent-activity) replay
@@ -1933,6 +1944,9 @@ def create_app(
                                 ending_at = _time.monotonic()
                                 last.pop(tkey, None)     # session_end is the last transcript entry
                                 break
+                            if payload.get("type") == "fault":
+                                yield from fault_events(payload)
+                                continue
                             yield from seg_events(payload)
                         elif stream == pkey:
                             yield from note_events(fields)

@@ -26,7 +26,7 @@ import { loadInvocation, InvocationError, type Invocation } from './config.js';
 import type { Act, LifecycleEvent } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
-import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
+import { createFaultPublisher, createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
 import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, type BotPipeline } from './pipeline.js';
@@ -174,7 +174,14 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
-    botPipeline = createBotPipeline(inv, transcript, { onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`) });
+    // Pipeline faults (e.g. STT 503 after retries) must fail LOUD, not just to the console: publish
+    // them onto the transcript stream so the collector → terminal SSE surface them on the meeting
+    // page (#552). The publisher throttles repeats and never throws.
+    const publishFault = createFaultPublisher({ client: transcriptClient, meetingId, nativeMeetingId: inv.nativeMeetingId });
+    botPipeline = createBotPipeline(inv, transcript, { onError: (e) => {
+      console.error(`[bot] pipeline fault: ${String(e)}`);
+      void publishFault(e);
+    } });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected
     // window.VexaBrowserUtils and the participant <audio> elements exist. Starting it at launch ran
