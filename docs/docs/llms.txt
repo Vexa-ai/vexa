@@ -68,4 +68,4 @@ most coding agents).
 ## Optional
 
 - Full flattened docs: https://docs.vexa.ai/llms-full.txt (auto-generated, every page)
-- Repo: https://github.com/Vexa-ai/vexa · Board: https://github.com/orgs/Vexa-ai/projects/2 · Discord: https://discord.gg/vexa
+- Repo: https://github.com/Vexa-ai/vexa · Board: https://github.com/orgs/Vexa-ai/projects/2 · Discord: https://discord.gg/Ga9duGkVz9

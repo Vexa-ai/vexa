@@ -63,7 +63,7 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
 ## Claiming — and say hello on Discord
 
 1. **Comment on the issue** to claim it (D14b).
-2. **Announce it on [Discord](https://discord.gg/vexa)** — strongly recommended: one line,
+2. **Announce it on [Discord](https://discord.gg/Ga9duGkVz9)** — strongly recommended: one line,
    "taking #NNN". This opens the human-to-human channel; questions, steering, and validation
    scheduling all move faster once a maintainer knows a person, not just a branch.
 3. **Heartbeat = visible activity** on the issue/PR. Hours of silence release the claim back
