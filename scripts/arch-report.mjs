@@ -66,7 +66,7 @@ if (!CHECK) {
     `**Modularity verdict: ${allOk ? "all gates green — the v0.12 backend is fully modular by the constitution's own definition" : "RED — a modularity gate is failing"}.**`,
     "",
     "Per-service module structure (each a front-doored brick, independently testable): `meeting-api` =",
-    "{lifecycle · bot_spawn · collector · recordings · webhooks · scheduling · sessions · obs}; `runtime` =",
+    "`{lifecycle · bot_spawn · collector · recordings · webhooks · scheduling · sessions · obs}`; `runtime` =",
     "the kernel (imports nothing above); `gateway`/`identity`/`agent-api` per their domains. The test lane is",
     "gated too (`gate:test-isolation`) — a test cannot reach across a module boundary where prod imports can't.",
     "",
