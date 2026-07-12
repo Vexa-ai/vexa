@@ -1,5 +1,16 @@
 name: gates
-on: [push, pull_request]
+# push+pull_request unrestricted ran the suite TWICE per PR-branch push (both events
+# fire) — pure duplication. Push covers main + release tags; pull_request covers PRs.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+# a superseded run's result is worthless — cancel it
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   gates:
