@@ -23,13 +23,26 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
-# The subscription credential file AS THIS SERVICE SEES IT. Honor the deployment's own
-# HOST_CLAUDE_CREDENTIALS (lite mounts it wherever it likes and points the env var at it);
-# fall back to the compose convention (same :ro mount the runtime probes; the docker backend
-# mounts the same host path into workers at /root/.claude/.credentials.json). The hardcoded
-# path alone made this check lie on lite: it reported "HOST_CLAUDE_CREDENTIALS unset" while
-# never reading the env var at all.
-CREDS_PATH = os.getenv("HOST_CLAUDE_CREDENTIALS") or "/var/lib/vexa/host-claude-credentials"
+# The compose-mounted subscription credential file (same :ro mount the runtime probes; the
+# docker backend mounts the same host path into workers at /root/.claude/.credentials.json).
+COMPOSE_CREDS_MOUNT = "/var/lib/vexa/host-claude-credentials"
+
+
+def _resolve_creds_path() -> str:
+    """The subscription credential file AS THIS SERVICE SEES IT. Two deployment conventions:
+    compose mounts the host file at COMPOSE_CREDS_MOUNT (HOST_CLAUDE_CREDENTIALS in its env is a
+    DOCKER-HOST path, meaningless in here); lite points HOST_CLAUDE_CREDENTIALS at an in-container
+    path with no compose mount. Prefer whichever candidate actually EXISTS — path-existence is the
+    discriminator, not the env var (trusting the env var alone made the check fail on whichever
+    deployment it wasn't written for)."""
+    env_path = os.getenv("HOST_CLAUDE_CREDENTIALS") or ""
+    for p in (COMPOSE_CREDS_MOUNT, env_path):
+        if p and os.path.isfile(p):
+            return p
+    return COMPOSE_CREDS_MOUNT if not env_path else env_path
+
+
+CREDS_PATH = _resolve_creds_path()
 
 # The macOS remedy, verbatim — the error message must carry the fix (fail loud AND helpful).
 KEYCHAIN_REFRESH = ('security find-generic-password -s "Claude Code-credentials" -w '
@@ -68,9 +81,12 @@ def _result(ok: bool, summary: str, **extra) -> dict:
 
 # ── models ────────────────────────────────────────────────────────────────────────────────────
 
-def test_subscription_credentials(creds_path: str = CREDS_PATH, *, now: Optional[float] = None) -> dict:
+def test_subscription_credentials(creds_path: Optional[str] = None, *, now: Optional[float] = None) -> dict:
     """The mounted credentials file: present → parseable → unexpired. Expiry IS the recurring
-    local failure (stale Keychain export), so the failure message ships the exact remedy."""
+    local failure (stale Keychain export), so the failure message ships the exact remedy.
+    The path resolves PER CALL (not at import) so a `claude /login` that lands after the
+    service started is picked up by the next re-check."""
+    creds_path = creds_path or _resolve_creds_path()
     if not os.path.isfile(creds_path):
         # docker turns a MISSING host path into an empty dir — same failure, same message.
         return _result(False, "No subscription credentials mounted "
@@ -128,7 +144,7 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
 
 
 def run_models_test(config: dict, env: Optional[dict] = None,
-                    creds_path: str = CREDS_PATH, post: HttpPost = _post) -> dict:
+                    creds_path: Optional[str] = None, post: HttpPost = _post) -> dict:
     """The EFFECTIVE model credential test — same resolution the dispatch overlay applies
     (Settings user > global config already collapsed by admin-api; env is the floor)."""
     env = env if env is not None else dict(os.environ)
