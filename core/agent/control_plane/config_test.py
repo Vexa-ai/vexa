@@ -23,9 +23,13 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
-# The compose-mounted subscription credential file (same :ro mount the runtime probes; the
-# docker backend mounts the same host path into workers at /root/.claude/.credentials.json).
-CREDS_PATH = "/var/lib/vexa/host-claude-credentials"
+# The subscription credential file AS THIS SERVICE SEES IT. Honor the deployment's own
+# HOST_CLAUDE_CREDENTIALS (lite mounts it wherever it likes and points the env var at it);
+# fall back to the compose convention (same :ro mount the runtime probes; the docker backend
+# mounts the same host path into workers at /root/.claude/.credentials.json). The hardcoded
+# path alone made this check lie on lite: it reported "HOST_CLAUDE_CREDENTIALS unset" while
+# never reading the env var at all.
+CREDS_PATH = os.getenv("HOST_CLAUDE_CREDENTIALS") or "/var/lib/vexa/host-claude-credentials"
 
 # The macOS remedy, verbatim — the error message must carry the fix (fail loud AND helpful).
 KEYCHAIN_REFRESH = ('security find-generic-password -s "Claude Code-credentials" -w '

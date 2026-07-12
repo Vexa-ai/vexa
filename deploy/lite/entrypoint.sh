@@ -65,6 +65,13 @@ export VEXA_MEETING_MODEL="${VEXA_MEETING_MODEL:-}"
 # the worker reads the file directly; the runtime's config.v1 file probe verifies it on /health.
 # Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
 export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
+# Process backend: the worker's claude CLI reads ~/.claude/.credentials.json in THIS container —
+# link it to the mounted file so a subscription login actually reaches inference (the mount may be
+# a directory whose file appears after a host `claude /login`; a dangling symlink resolves then).
+if [ -n "$HOST_CLAUDE_CREDENTIALS" ] && [ ! -e /root/.claude/.credentials.json ]; then
+    mkdir -p /root/.claude
+    ln -sf "$HOST_CLAUDE_CREDENTIALS" /root/.claude/.credentials.json
+fi
 export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-}"
