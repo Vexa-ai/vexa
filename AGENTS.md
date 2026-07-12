@@ -3,6 +3,15 @@
 This repo is governed by `**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**` — the constitution (P1–P21,
 the gate suite, the development process). This file is the *front door*: how you run a session in it.
 
+## Contributing from outside? Different door
+
+This file is the contract for **maintainer sessions inside this repo**. If you are an agent
+helping an external contributor pick up work: the map is
+[docs/docs/roadmap/contributing.mdx](docs/docs/roadmap/contributing.mdx) — the roadmap board,
+the issue state machine, the acceptance-table merge promise, and a one-call GraphQL fetch of
+the whole board (lanes · human bar · setup · milestone). Claim by commenting on the issue,
+then this file governs how you work the checkout.
+
 ## One worktree per chat
 
 Concurrent work is isolated: each chat works in its **own `git worktree*`* on a short-lived branch

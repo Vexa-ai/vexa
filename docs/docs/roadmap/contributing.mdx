@@ -102,6 +102,40 @@ Validators are credited in release notes alongside authors. If you reported the 
 An **invalidation is a first-class result**: "I ran the table and row A3 is red" is exactly as
 valuable and exactly as credited as a confirmation.
 
+
+## For agents: the roadmap in one call
+
+Everything above — lanes, human bar, setup, milestone, state — comes back in **one public
+GraphQL call** (any GitHub token can read a public project):
+
+```bash
+gh api graphql -f query='
+query { organization(login: "Vexa-ai") { projectV2(number: 2) {
+  items(first: 100) { nodes {
+    content {
+      ... on Issue { number title url state milestone { title } labels(first: 10) { nodes { name } } }
+      ... on DraftIssue { title body }
+    }
+    fieldValues(first: 20) { nodes {
+      ... on ProjectV2ItemFieldSingleSelectValue {
+        field { ... on ProjectV2SingleSelectField { name } } name }
+    } }
+  } }
+} } }'
+```
+
+Selection rule for your contributor: filter to their **Lane** (what they use), then to the
+**Human bar** and **Setup** they can afford. `state: ready` is claimable now; `state: prepared`
+after the maintainer stamp; items with no issue number are declared direction — ask, don't claim.
+Then read the chosen issue end to end: the acceptance table is the merge promise. Claim by
+commenting on the issue.
+
+<Note>
+This page itself is agent-readable as plain markdown at
+`https://docs.vexa.ai/roadmap/contributing.md`, and the whole docs set is indexed at
+`https://docs.vexa.ai/llms.txt`.
+</Note>
+
 ## Where the details live
 
 - [The delivery constitution](https://github.com/Vexa-ai/vexa/blob/main/docs/DELIVERY.md) — the

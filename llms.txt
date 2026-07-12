@@ -21,6 +21,10 @@
 - [Helm chart](deploy/helm/): Kubernetes/OpenShift, a Pod per bot/agent dispatch
 - [Self-hosted transcription](deploy/transcription/): GPU faster-whisper unit for air-gapped setups
 
+## Contribute
+- [Contributing: how delivery works](docs/docs/roadmap/contributing.mdx): the roadmap board, issue state machine, prepared-issue merge promise, value signing — includes the one-call GraphQL roadmap fetch for agents
+- Roadmap board: https://github.com/orgs/Vexa-ai/projects/2 (fields: Lane = who feels the value · Human bar = the validation act · Setup = infra floor · Milestone = version)
+
 ## Evaluate
 - [SECURITY.md](SECURITY.md): vulnerability reporting
 - [security-insights.yml](security-insights.yml): OpenSSF Security Insights manifest
