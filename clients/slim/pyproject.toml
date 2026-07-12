@@ -2,13 +2,15 @@
 name = "vexa-slim"
 version = "0.12.0"
 description = "Gateway-only client for the meeting/agent control plane (cookbook = intent layer)."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.27,<1",
-    "pytest>=8",
-    # pytest-asyncio drives the async cookbook tests (asyncio_mode=auto).
-    "pytest-asyncio>=0.23",
 ]
+
+[dependency-groups]
+# test runners only (the cookbook itself needs just httpx);
+# pytest-asyncio drives the async cookbook tests (asyncio_mode=auto).
+dev = ["pytest>=9.0.3", "pytest-asyncio>=0.23"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
