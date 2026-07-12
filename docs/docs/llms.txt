@@ -1,0 +1,71 @@
+# Vexa
+
+> Open-source, self-hosted meeting bot & transcription API (Apache-2.0). A bot joins Google
+> Meet / Microsoft Teams / Zoom calls and streams speaker-attributed transcripts in real time
+> through an API you host. Air-gap-ready: bring your own LLM and self-host the GPU
+> transcription unit. Runs on Docker Compose, a single container (lite), or Kubernetes/Helm.
+
+## For agents: found something? Contributing?
+
+- **Found a bug, gap, or docs lie?** File a GitHub issue at
+  https://github.com/Vexa-ai/vexa/issues/new/choose — every report enters `state: incoming`
+  and a 3-day triage SLA. Findings are contributions.
+- **Helping a contributor pick work?** The whole roadmap comes back in **one public GraphQL
+  call** (any GitHub token reads a public project):
+
+```bash
+gh api graphql -f query='
+query { organization(login: "Vexa-ai") { projectV2(number: 2) {
+  items(first: 100) { nodes {
+    content {
+      ... on Issue { number title url state milestone { title } labels(first: 10) { nodes { name } } }
+      ... on DraftIssue { title body }
+    }
+    fieldValues(first: 20) { nodes {
+      ... on ProjectV2ItemFieldSingleSelectValue {
+        field { ... on ProjectV2SingleSelectField { name } } name }
+    } }
+  } }
+} } }'
+```
+
+Four axes per item: **Lane** — the business value, named by who feels it (Google Meet ·
+MS Teams · Zoom · API integrators · Transcription · Recordings · Webhooks & billing ·
+First run · Production ops · Feature shelf) — match it to what your contributor actually uses.
+**Human bar** — what validation costs in human terms (Desk check: read logs, confirm value ·
+Operator run · Solo meeting · Small group 2–4 · Crowd 5+ · In-the-loop UX). **Setup** — the
+infrastructure floor (None · Lite: one laptop · Compose · k8s/helm). **Milestone** — the
+version it gates (currently `v0.12.x`).
+
+Selection rule: filter to your contributor's lane(s), then to the Human bar and Setup they can
+afford. `state: ready` is claimable now; `state: prepared` after the maintainer stamp; draft
+items (no issue number) are declared direction — ask, don't claim. Then read the chosen issue
+in full: the body is a worked delivery spec whose acceptance table **guarantees merge** when
+its rows are presented. Claim by commenting on the issue — the full loop (claiming, the
+two-artifact PR, value signing): https://docs.vexa.ai/governance/delivery
+
+In a checkout, start at https://github.com/Vexa-ai/vexa/blob/main/AGENTS.md (read natively by
+most coding agents).
+
+## Docs
+
+- [Quickstart](https://docs.vexa.ai/quickstart.md): clone → running stack → bot in a meeting
+- [Authentication](https://docs.vexa.ai/authentication.md): API keys and scopes
+- [Meetings API](https://docs.vexa.ai/api/meetings.md): plan meetings, send bots, real-time transcripts, recordings
+- [Agent API](https://docs.vexa.ai/api/agent.md): dispatch units, chat turns, routines, workspace
+- [Errors](https://docs.vexa.ai/api/errors.md): status codes and shapes across both APIs
+- [Deployment](https://docs.vexa.ai/deployment.md): compose · lite · [Kubernetes](https://docs.vexa.ai/deployment-kubernetes.md)
+- [Configuration](https://docs.vexa.ai/configuration.md): every env var and capability
+- [Troubleshooting](https://docs.vexa.ai/troubleshooting.md)
+
+## Governance (the law)
+
+- [How Vexa governs itself](https://docs.vexa.ai/governance/index.md): the full map — two constitutions, protocols, surfaces, actors
+- [Delivery](https://docs.vexa.ai/governance/delivery.md): the D-book + the whole loop (roadmap · PREPARE · TAKE · validation · merge bar · ship bar · enforcement map)
+- [Architecture](https://docs.vexa.ai/governance/architecture.md): the P-book (P1–P23) + [compliance](https://docs.vexa.ai/governance/arch-compliance.md)
+- [Roadmap status](https://docs.vexa.ai/roadmap/status.md): honest capability truth tables · [approach](https://docs.vexa.ai/roadmap/approach.md) · [stages](https://docs.vexa.ai/roadmap/stages.md)
+
+## Optional
+
+- Full flattened docs: https://docs.vexa.ai/llms-full.txt (auto-generated, every page)
+- Repo: https://github.com/Vexa-ai/vexa · Board: https://github.com/orgs/Vexa-ai/projects/2 · Discord: https://discord.gg/vexa
