@@ -1,0 +1,110 @@
+---
+title: "Contributing: how delivery works"
+description: "The roadmap board, the issue state machine, prepared issues, and how a change earns its merge — the public face of the delivery constitution."
+---
+
+Vexa runs contribution as an engineered loop, not a suggestion box. This page is the operating
+manual: how to read the roadmap, how to claim work, and how a change earns its merge. The full
+governing text (principle by principle, with sources and gates) lives in the repo as the
+[delivery constitution](https://github.com/Vexa-ai/vexa/blob/main/docs/DELIVERY.md) — this page
+is its contributor-facing summary.
+
+## The one idea behind all of it
+
+Agents made code cheap. The scarce input is **verified truth about delivered value** — a human who
+ran the thing in a real meeting and can say, with instruments corroborating, "this works." So the
+loop is built around two contributions, both credited as first-class:
+
+- **Delivering** a prepared issue — with whatever tools you like, agents included.
+- **Validating** a delivered change — running it live and signing what you saw. This is the
+  good-first workhorse: no code required, and nothing merges without it.
+
+## Reading the roadmap
+
+The [roadmap board](https://github.com/orgs/Vexa-ai/projects/2) is grouped into **lanes named by
+who feels the work**: Google Meet · MS Teams · Zoom · API integrators · Transcription ·
+Recordings · Webhooks & billing · First run · Production ops · Feature shelf. Pick the lane you
+live in — every issue in it is something you can reproduce, fix, or validate on your own setup.
+
+- **Milestones are versions.** [`v0.12.x`](https://github.com/Vexa-ai/vexa/milestones) is the
+  current patch stream; its progress bar is the roadmap-at-a-glance.
+- **Draft cards with no issue** are declared direction: we state where a lane goes before the
+  work is prepared. They become issues when preparation grounds them in the tree.
+- The staged long arc (what gets built in what order, and why) is
+  [approach](/roadmap/approach) and [stages](/roadmap/stages); the honest current-state tables
+  are [status](/roadmap/status).
+
+## The issue state machine
+
+Every open issue carries exactly one `state:` label. The lifecycle:
+
+| State | Meaning |
+|---|---|
+| `state: incoming` | New report — triaged within 3 days (intake SLA) |
+| `state: prepared` | Full delivery spec written and code-grounded; awaiting the maintainer's ready stamp |
+| `state: ready` | Maintainer-stamped — claimable now |
+| `state: claimed` | Someone is on it (heartbeat lease: renew by activity; ~4h silence releases it back) |
+| `state: awaiting-evaluation` | Delivered — waiting for a non-author to validate the value live |
+| `state: value-signed` | A non-author witnessed the value; merge/close proceeds |
+| `state: accepted` | Feature acknowledged into the queue, not yet prepared |
+| `state: incident-thread` | User-facing thread of a hosted/ops incident — stays open for the reporter while the fix is tracked in the ops lane |
+| `state: needs-info` | A real, dated question is pending; ~14 quiet days → honest stale-close |
+| `declined: *` (closed) | Every close-without-merge names its reason — superseded, stale, out-of-scope, won't-fix — and what would reopen it |
+
+## What a prepared issue gives you
+
+A `prepared` issue is not a wish — it's a worked delivery spec:
+
+- **Where we are (honest):** every code claim carries `file:line` against the current tree, with
+  an era note when the originating report predates it.
+- **Components:** one module or seam each, with the module's existing test harness and fixtures
+  named — you compose, you don't scaffold.
+- **A prepared solution** plus the forks you may actually hit. Alternates welcome, never required.
+- **The acceptance table — a merge promise.** Present the listed observations (each a red→green
+  pair with a negative control and anchors: shas, meeting ids, timestamps) and the PR merges.
+  That's a floor, never a ceiling: value beyond the table is welcome and credited, never scope
+  creep. And if your bundle satisfies the table but something is still wrong, that's *our* bug in
+  the table, not yours.
+- **Deployments to validate** (Lite / full compose / k8s), the **docs surface** the change must
+  touch, and the **preferred validator** — usually the person who reported the problem.
+
+## Claiming and delivering
+
+1. Comment on a `ready` issue to claim it. Activity on the issue/PR is your heartbeat; go silent
+   for hours and the claim releases back to the queue — no hard feelings, no stuck work.
+2. Work however you want. Agents are instruments: **what you ship is yours** — full
+   responsibility, honored as full authorship and credit. No agent co-author trailers.
+3. Open the PR with **two artifacts, judged on different axes**:
+   - the **observation bundle** — what you ran, what you saw, mapped row-by-row to the acceptance
+     table (this answers *"is the value real?"*);
+   - the **diff** — which passes review and the security checks the issue names (this answers
+     *"is it correct and safe?"*).
+   A diff with no bundle is not reviewable, whatever it says.
+
+## Validation — how a change earns its merge
+
+Before merge, a **non-author** runs the change live and signs what they witnessed. The
+attestation is multichannel — what the bot did (logs), what the human saw (the meeting, the
+transcript), what the instruments recorded (test output, API responses) — and the channels must
+**corroborate**: a human/instrument divergence blocks merge until reconciled, as a finding in its
+own right. The attestation also names its setup and build provenance (which deployment, repo sha,
+fresh-clone or long-lived, env deltas) — "works on my install" without how the install was made
+is an unanchored claim.
+
+Validators are credited in release notes alongside authors. If you reported the bug, you're the
+*preferred* signer of its fix — the loop deliberately closes back to the person who opened it.
+An **invalidation is a first-class result**: "I ran the table and row A3 is red" is exactly as
+valuable and exactly as credited as a confirmation.
+
+## Where the details live
+
+- [The delivery constitution](https://github.com/Vexa-ai/vexa/blob/main/docs/DELIVERY.md) — the
+  full law: principles D0–D17, each with its why, its source, and the gate that enforces it.
+- [Issue and PR templates](https://github.com/Vexa-ai/vexa/tree/main/.github) — the forms carry
+  the required sections, so compliance is mostly filling in what's asked.
+- [The roadmap board](https://github.com/orgs/Vexa-ai/projects/2) ·
+  [milestones](https://github.com/Vexa-ai/vexa/milestones) ·
+  [`good-first` issues](https://github.com/Vexa-ai/vexa/issues?q=is%3Aissue+is%3Aopen+label%3Agood-first).
+- Questions: open a discussion on the issue itself, or ask on
+  [Discord](https://discord.gg/vexa) — an honest open question beats a confident invention, in
+  contributions as in code.
