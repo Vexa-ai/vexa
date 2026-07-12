@@ -61,7 +61,6 @@ env:
     vexaai/v012-gateway
     vexaai/v012-mcp
     vexaai/v012-terminal
-    vexaai/vexa-dashboard
     vexaai/vexa-bot
     vexaai/vexa-lite
 
@@ -171,14 +170,6 @@ jobs:
             image: vexaai/v012-terminal
             context: clients/terminal
             dockerfile: clients/terminal/Dockerfile
-          - name: dashboard
-            image: vexaai/vexa-dashboard
-            context: .
-            dockerfile: clients/dashboard/Dockerfile
-            # parity with deploy/compose/docker-compose.dashboard.yml — the Next proxy's
-            # in-cluster gateway SSOT is baked at build time.
-            build_args: |
-              VEXA_API_URL=http://gateway:8000
           - name: lite
             image: vexaai/vexa-lite
             context: .
@@ -324,7 +315,6 @@ jobs:
               vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
               vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
               vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
-              vexaai/vexa-dashboard)    probe "$ref" node -e "require('fs').accessSync('/app/docker-entrypoint.sh'); require('fs').accessSync('/app/server.js')" ;;
               vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
