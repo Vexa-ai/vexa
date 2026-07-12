@@ -668,7 +668,10 @@ honored.**
 3. **Publish** — images built and pushed; **tags move per the declared tag policy** (`:v012`
    moves every release; `:latest` only by explicit, policy-conformant promotion) — artifact
    pointers are part of the release's truth surface.
-4. **Credit** — release notes name authors **and** validators, per change (D11/D15).
+4. **Credit + coverage** — release notes name authors **and** validators, per change (D11/D15),
+   and carry the **coverage statement**: which deployments/platforms each change was validated
+   on and which stay *honestly unclaimed* (D12b). A release is proven on what we name — never
+   a bare "works".
 5. **Close back** — every issue in the batch closes *with the release*; its reporter is invited
    to validate on the shipped artifact (D16). An issue closed without its reporter hearing about
    it is an unclosed loop.
@@ -677,6 +680,26 @@ honored.**
 Guarantees of every release: all value witnessed · no regression against the previous release
 (the no-regression rows + batch validation) · artifact-pointer truth · the loop closed to every
 reporter.
+
+## Asking the human
+
+The human is the scarce oracle (D9) — so every ask of them is engineered, not tossed over the
+wall. Whenever the loop needs a human verdict — a `ready` stamp, a ruling, a validation leg, a
+release call — the request obeys this contract:
+
+- **One concern per ask, one ask at a time.** Never a wall of parallel questions; the queue is
+  ours to hold, not theirs to untangle. The next ask waits for the verdict on this one.
+- **The full bundle in one shot.** Everything the decision needs arrives together: the value at
+  stake, the reasoning, the architecture implications, the recommendation with its
+  trade-off — no follow-up round-trip to assemble context the asker already had.
+- **No jargon — readable at both altitudes in the same text.** The CEO reading (what value,
+  what risk, what it costs) and the CTO reading (which module, which principle, which gate)
+  must both land without translation. Codenames and session shorthand never survive into an ask.
+- **Say exactly what the verdict changes.** An ask is a decision with consequences, never an
+  FYI; if nothing changes on their answer, don't ask.
+- **One eyeball request at a time** (the validation form of the same rule): a human validation
+  ask names one flow, fully instructed, earned by a green instrument first — never "try again"
+  as a probe (D9's human-red rule).
 
 ## The maintenance cycle
 
@@ -706,7 +729,8 @@ rot a claim.
   requeue the issue.
 - **Floor met, awaiting validation** → drive it: ping the preferred signer (the reporter);
   no signer in reach → recruit any competent non-author (the lane names the species); an
-  owner-only leg → surface it to the owner explicitly, never let it wait silently.
+  owner-only leg → surface it to the owner explicitly per [Asking the human](#asking-the-human),
+  never let it wait silently.
 - **Value-signed** → merge same-day (the promise, honored), label, credit in the thread.
 
 **Step 2 — cross-PR invariants:** two PRs on one issue → the earlier claim holds, the later
