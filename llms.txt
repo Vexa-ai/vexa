@@ -21,9 +21,12 @@
 - [Helm chart](deploy/helm/): Kubernetes/OpenShift, a Pod per bot/agent dispatch
 - [Self-hosted transcription](deploy/transcription/): GPU faster-whisper unit for air-gapped setups
 
-## Contribute
+## Contribute (remote agents: this file is your entrypoint)
+- **The loop for a remote agent:** fetch the roadmap (one GraphQL call, see the contributing page) → research this repo → **dump findings as GitHub issues** (https://github.com/Vexa-ai/vexa/issues/new/choose — every report enters a 3-day triage SLA, `state: incoming`) → to pick up work, clone and read [AGENTS.md](AGENTS.md).
 - [Contributing: how delivery works](docs/docs/roadmap/contributing.mdx): the roadmap board, issue state machine, prepared-issue merge promise, value signing — includes the one-call GraphQL roadmap fetch for agents
 - Roadmap board: https://github.com/orgs/Vexa-ai/projects/2 (fields: Lane = who feels the value · Human bar = the validation act · Setup = infra floor · Milestone = version)
+- [AGENTS.md](AGENTS.md): the post-clone contributor contract — your claimed issue is your PRD; claim + Discord hello + heartbeat
+- [DELIVERY-PREPARE.md](docs/DELIVERY-PREPARE.md) · [DELIVERY-TAKE.md](docs/DELIVERY-TAKE.md): the two maintainer protocols (queue item → prepared issue · delivered PR → verdict)
 
 ## Evaluate
 - [SECURITY.md](SECURITY.md): vulnerability reporting

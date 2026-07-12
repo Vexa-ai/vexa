@@ -124,7 +124,9 @@ in the harnessed loop and proven. Because this constitution is public, both phas
 both species; only the `ready` stamp and the merge are maintainer acts. · *Source:* dual-track
 discovery/delivery (Cagan); open governance. · *Gate:* the state machine — `incoming → prepared`
 is PREPARE (anyone); `prepared → ready` is the maintainer stamp; `ready → claimed → value-signed`
-is DELIVER (anyone); `value-signed → merged` is the maintainer honoring the promise.
+is DELIVER (anyone); `value-signed → merged` is the maintainer honoring the promise. Each phase
+has its operational protocol: [`DELIVERY-PREPARE.md`](DELIVERY-PREPARE.md) (queue item → prepared
+issue) and [`DELIVERY-TAKE.md`](DELIVERY-TAKE.md) (delivered PR → verdict against the floor).
 
 **D-R2 — The preparation function: prepare issues and keep the roadmap true.** Preparation is
 species-neutral; only the `ready` stamp is a maintainer act. The function's job: (a) turn raw
