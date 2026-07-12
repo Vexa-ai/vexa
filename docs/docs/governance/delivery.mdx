@@ -677,6 +677,20 @@ honored.**
    it is an unclosed loop.
 6. **The milestone ticks** — the public progress bar is the release ledger.
 
+**The verdict-latency law.** The release loop is only honest if it is also *fast to re-ask*:
+
+- **Re-verdict in ≤10 minutes, no rebuild.** The release verdict (the validate legs) must be
+  re-obtainable against already-published artifacts without rebuilding anything unchanged.
+  Build+publish and validate+promote are separate machinery; a harness fix re-runs only the
+  second. · *Gate:* `release-validate` is independently dispatchable with a version input.
+- **Harness fixes iterate off-main.** A validation-harness change is testable from its branch
+  against the published set *before* it merges — a smoke-script fix must never cost a
+  PR→merge→full-pipeline round trip per attempt (the v0.12.1 maiden run paid 3 × ~20–50 min
+  for two one-line harness fixes; this law is that bill, paid once).
+- **Silence is an incident signal.** A triggered release run that has produced no first job
+  within 10 minutes is stuck, not slow — check the runner queue instead of waiting (the same
+  maiden run lost 50 minutes to an unwatched queue stall).
+
 Guarantees of every release: all value witnessed · no regression against the previous release
 (the no-regression rows + batch validation) · artifact-pointer truth · the loop closed to every
 reporter.
