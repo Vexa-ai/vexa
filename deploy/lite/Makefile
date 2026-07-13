@@ -84,11 +84,14 @@ up: preflight
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); \
 	IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); IMAGE_TAG=$${IMAGE_TAG:-latest}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
-	# Autodetect host Claude credentials and wire the mount automatically (C2/#502)
+	# Autodetect host Claude credentials and wire the mount automatically (C2/#502).
+	# NOTE: in LITE, HOST_CLAUDE_CREDENTIALS must be the IN-CONTAINER path — the process backend
+	# reads the file directly (see deploy/lite/entrypoint.sh). Compose is the opposite: there the
+	# var is a docker-HOST path (deploy/compose/docker-compose.yml mounts it). Don't copy across.
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
 		echo "  Detected Claude subscription credentials — mounting into container"; \
-		CLAUDE_MOUNT="-v $$CLAUDE_CREDS:/var/lib/vexa/host-claude-credentials:ro -e HOST_CLAUDE_CREDENTIALS=$$CLAUDE_CREDS"; \
+		CLAUDE_MOUNT="-v $$CLAUDE_CREDS:/var/lib/vexa/host-claude-credentials:ro -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude-credentials"; \
 	else \
 		CLAUDE_MOUNT=""; \
 	fi; \
