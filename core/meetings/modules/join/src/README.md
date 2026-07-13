@@ -8,7 +8,7 @@ imports host symbols only from [`_host.ts`](_host.ts) (the one seam back to the 
 | `index.ts` | front door: `joinMeeting`, `resolvePlatform`, re-exports |
 | `_host.ts` | the contract/port: `BotConfig`, `Hooks`, `JoinState`, state callbacks (Node builtins only) |
 | `browser-args.ts` | canonical Chromium launch flags (`JOIN_BROWSER_ARGS`) |
-| `googlemeet/` · `msteams/` · `zoom/` | per-platform join · admission · leave · removal · selectors |
+| `googlemeet/` · `msteams/` · `zoom/` · `jitsi/` | per-platform join · admission · leave · removal · selectors |
 | `shared/` | cross-platform helpers (the debug/escalation view) |
 
 Depends on `playwright` + Node builtins only (gate:isolation).

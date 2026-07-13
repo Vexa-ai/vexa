@@ -67,14 +67,14 @@ describe("slim — the standing affordances on a populated Meetings page", () =>
     await waitFor(() => expect(calls.some((c) => c.url.includes("/api/user/calendar"))).toBe(true));
     expect(container.textContent).not.toContain("No calendar connected");
     expect(screen.getByText("+ Plan a meeting")).toBeTruthy();
-    expect(screen.getByPlaceholderText(/Paste a Google Meet link/)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Paste a meeting link/)).toBeTruthy();
   });
 
   it("plan + drop-bot are there in the disconnected state too", async () => {
     stubCalendarApi({ connected: false });
     render(<MeetingsOnboarding variant="slim" />);
     await waitFor(() => expect(screen.getByText("+ Plan a meeting")).toBeTruthy());
-    expect(screen.getByPlaceholderText(/Paste a Google Meet link/)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Paste a meeting link/)).toBeTruthy();
   });
 });
 

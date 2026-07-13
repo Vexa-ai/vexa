@@ -103,6 +103,20 @@ async def test_ingest_keeps_zero_length_pending_draft(store, bus):
     assert payload["confirmed"] == []
 
 
+async def test_ingest_keeps_zero_length_chat_segment(store, bus):
+    """A `chat` segment (transcript.v1 Source) is a point-in-time event — start == end AND
+    completed=True by contract — so the garbage-final filter must pass it, and the stored
+    segment keeps its `source` marker so consumers can distinguish chat from speech."""
+    n = await ingest(store, bus, _message(1, [
+        {"segment_id": "s:chat:1", "start": 5.0, "end": 5.0, "text": "agenda is in the doc",
+         "speaker": "Alice", "completed": True, "source": "chat"},
+    ]))
+    assert n == 1, "a zero-duration chat segment must be kept, not filtered as a garbage final"
+    doc = await store.get_transcript(7, "google_meet", "abc-defg-hij")
+    seg = doc["segments"][0]
+    assert seg["text"] == "agenda is in the doc" and seg["source"] == "chat"
+
+
 async def test_ingest_corrects_inverted_timestamps(store, bus):
     await ingest(store, bus, _message(1, [
         {"segment_id": "inv", "start": 4.0, "end": 1.0, "text": "swapped", "completed": True},
