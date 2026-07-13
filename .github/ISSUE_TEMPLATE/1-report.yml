@@ -1,0 +1,31 @@
+name: Report a problem
+description: Tell us what broke, in your words. Your report enters our 3-day preparation SLA — it will come back as a prepared, ready-to-work issue, never dead-end.
+labels: ["state: incoming", "type: bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks — reports are step 1 of our delivery loop ([docs/docs/governance/delivery.mdx](../blob/main/docs/docs/governance/delivery.mdx)).
+        Within 3 days this becomes a prepared issue, and when the fix ships you'll be told and invited to validate it.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got — your words are the issue's opening.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Meeting platform (if relevant)
+      placeholder: Google Meet / MS Teams / Zoom / n.a.
+  - type: input
+    id: deploy
+    attributes:
+      label: Deployment
+      placeholder: hosted / self-hosted compose / lite / helm — and the image tag if you know it
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, meeting shape
+      description: Anything captured — bot logs, API responses, how many people, which language.

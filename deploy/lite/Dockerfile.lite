@@ -98,7 +98,7 @@ RUN cd /tmp/admin && uv venv /opt/venvs/admin \
 # runtime
 COPY core/runtime/pyproject.toml core/runtime/uv.lock /tmp/runtime/
 RUN cd /tmp/runtime && uv venv /opt/venvs/runtime \
- && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime uv sync --frozen --no-install-project \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime uv sync --frozen --no-install-project --no-dev \
  && uv pip install --python /opt/venvs/runtime/bin/python "uvicorn[standard]==0.34.0"
 # meeting-api
 COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock /tmp/meeting/

@@ -12,6 +12,8 @@ with one command.
 - A Linux host (Ubuntu 24.04 recommended for production), `git`, and **Docker engine ≥ v26**
   (`make all` checks and refuses older engines). A Mac with Docker Desktop works for a local
   evaluation — everything runs in containers either way.
+- On Apple Silicon: arm64 images are published best-effort (not yet CI-validated) — see
+  [Deployment](/deployment#quick-start-docker-compose) for details.
 - A **transcription (STT) token** — get one free at [`vexa.ai/account`](https://vexa.ai/account), or
   [self-host transcription](/deployment#air-gapped) on a GPU. Without it, bots join and record but
   produce no transcript.

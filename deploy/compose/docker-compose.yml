@@ -345,6 +345,25 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
+      # ON by default with generous limits (owner ruling — protection that ships dark protects
+      # nobody). Opt out with GUARD_ENABLED=false in .env; all keys interpolate from .env.
+      # GUARD_WS_ENABLED is the optional /ws hook (off, opt-in): in-memory per-process — does
+      # NOT share ban/rate-limit state with the Redis-backed HTTP layer, and under uvicorn
+      # --workers N>1 each worker keeps an independent WS ban set.
+      - GUARD_ENABLED=${GUARD_ENABLED:-true}
+      - GUARD_WS_ENABLED=${GUARD_WS_ENABLED:-false}
+      - GUARD_ENABLE_REDIS=${GUARD_ENABLE_REDIS:-true}
+      - GUARD_RATE_LIMIT_RPM=${GUARD_RATE_LIMIT_RPM:-600}
+      - GUARD_RATE_LIMIT_WINDOW=${GUARD_RATE_LIMIT_WINDOW:-60}
+      - GUARD_AUTO_BAN_THRESHOLD=${GUARD_AUTO_BAN_THRESHOLD:-10}
+      - GUARD_AUTO_BAN_DURATION=${GUARD_AUTO_BAN_DURATION:-3600}
+      - GUARD_IP_WHITELIST=${GUARD_IP_WHITELIST:-}
+      - GUARD_IP_BLACKLIST=${GUARD_IP_BLACKLIST:-}
+      - GUARD_TRUSTED_PROXIES=${GUARD_TRUSTED_PROXIES:-}
+      - GUARD_TRUST_X_FORWARDED_PROTO=${GUARD_TRUST_X_FORWARDED_PROTO:-false}
+      - GUARD_BLOCKED_COUNTRIES=${GUARD_BLOCKED_COUNTRIES:-}
+      - GUARD_BLOCK_CLOUD_PROVIDERS=${GUARD_BLOCK_CLOUD_PROVIDERS:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
       interval: 10s

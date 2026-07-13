@@ -28,7 +28,7 @@ control-plane = [
 worker = []
 # tests (run with the ambient interpreter, not in either image). Tests exercise the control-plane
 # surface (FastAPI app), so the test env pulls in the control-plane group too.
-dev = ["pytest>=8,<9", "pytest-asyncio>=0.23,<1", "fakeredis>=2.20,<3", {include-group = "control-plane"}]
+dev = ["pytest>=9.0.3", "pytest-asyncio>=1,<2", "fakeredis>=2.20,<3", {include-group = "control-plane"}]
 
 [tool.uv]
 package = false

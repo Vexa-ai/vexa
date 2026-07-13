@@ -1,0 +1,859 @@
+---
+title: "Delivery — the governing reference"
+description: "The delivery constitution D0–D17: how work is chosen, prepared, proven, and shipped."
+---
+
+
+> The delivery constitution — sibling of [`ARCHITECTURE.md`](/governance/architecture). That book governs
+> **how the software is built**; this one governs **how work is chosen, prepared, proven, and
+> shipped** — roadmap, issues, PRs, release. Same discipline: every principle names the practice
+> it comes from *and* the gate that enforces it. **A process rule that isn't enforced is a
+> comment, not a rule** (D1). Gates not yet built are marked **TO BUILD** — honestly, the same
+> way the architecture book ships green-on-empty gates — and tracked in
+> [the enforcement map](#enforcement-map).
+
+---
+
+## 0. The axiom
+
+**D0 — The scarce input is verified truth about value, not code.** Coding agents made writing
+code cheap; what remains scarce — and therefore what this whole system optimizes for — is
+*evidence that a change delivers its intended value in the real world*. We spend our effort
+preparing work so that the scarce thing (human, instrumented validation) is the only thing we ask
+for. · *Source:* the economics shift of agentic coding; Lean "build quality in" (Poppendieck).
+· *Gate:* this constitution is the mechanism.
+
+## 1. The Loop — the shape of the whole system
+
+Everything below is one closed loop. Read it once and you know the system; each principle governs
+one arc, and each arc has a gate.
+
+```
+        ┌──────────────────────── THE WORLD ────────────────────────┐
+        │  reports · incidents · Discord · support · probe results  │
+        └───────────────────────────┬────────────────────────────────┘
+                                    │  raw signal
+                    ┌───────────────▼───────────────┐
+                    │  1. INTAKE            (D2b)   │  ≤3 days: no signal dead-ends
+                    └───────────────┬───────────────┘
+                    ┌───────────────▼───────────────┐
+                    │  2. PREPARE  (D-R1/2 · D5/6 · │  isolate → a ready, harnessed,
+                    │     D10 acceptance floor)     │  merge-guaranteed issue
+                    └───────────────┬───────────────┘
+                                    │  seeded, in priority order
+                    ┌───────────────▼───────────────┐
+                    │  3. ROADMAP   (D2 · D3 · D-R3)│  one ordered queue, three tiers
+                    └───────────────┬───────────────┘
+                                    │  pick from the top / self-propose
+                    ┌───────────────▼───────────────┐
+                    │  4. CLAIM     (D14b)          │  heartbeat lease: 4h, renew or release
+                    └───────────────┬───────────────┘
+                    ┌───────────────▼───────────────┐
+                    │  5. DELIVER (D-A · D6b · D-A2)│  human + agent in the harnessed loop
+                    └───────────────┬───────────────┘
+                                    │  a PR: value bundle + diff
+                    ┌───────────────▼───────────────┐
+                    │  6. PROVE (D8 · D9 · D10 · D12│  non-author witnesses value; channels
+                    │     ) + SECURE (D-S)          │  corroborate; diff passes review+security
+                    └───────────────┬───────────────┘
+                                    │  value-signed + acceptance floor met
+                    ┌───────────────▼───────────────┐
+                    │  7. RELEASE   (D15)           │  batch signed PRs → ship → credit signers
+                    └───────────────┬───────────────┘
+                                    │  shipped value
+        ┌───────────────────────────▼────────────────────────────────┐
+        │  8. CLOSE BACK (D16): your report → this fix → this        │
+        │     release; come validate                                  │
+        └───────────────────────────┬────────────────────────────────┘
+                                    └──► back to THE WORLD
+
+   Off-loop but first-class: INVALIDATED (D11) — honest-negative of a delivery ·
+   DECLINE (D17) — honest-negative of a proposal or stale item · both are results, recorded.
+```
+
+**In one sentence:** the world's feedback becomes a prepared, harnessed, merge-guaranteed issue on
+an ordered roadmap; a human takes it on a heartbeat lease, delivers it with an agent in the
+harnessed loop, and a *different* human witnesses the value — corroborated by instruments, never
+on authority alone — after which it ships in a batch and the loop closes back to whoever raised it.
+
+## 2. Meta
+
+**D1 — Enforced, not aspirational.** Every rule here is machine-checked (a required status, a
+checks bot, a template gate) or it does not exist; a rule that lives only in prose rots exactly as
+an architecture boundary does. Unbuilt checks are marked TO BUILD and tracked — never silently
+assumed. · *Source:* fitness functions (Ford/Parsons/Kua); the mirror of architecture P9.
+· *Gate:* [the enforcement map](#enforcement-map) — the live principle→gate→status map.
+
+## 3. The bridge to architecture
+
+**D-A — Delivery inherits architecture; the issue reuses the modular software.** The architecture
+constitution is the *substrate* every issue is built on. An issue's atoms ARE the architecture's
+isolated units (a module behind a contract, a seam), and their early validation IS that unit's
+existing harness + fixtures. We do not invent test scaffolding per issue; we compose the harnesses
+architecture already mandates. When an issue needs a harness that doesn't exist, building it is
+architecture debt surfaced by delivery (feeds D7). · *Source:* build discipline (P-book) and
+delivery discipline (D-book) share one modular substrate; testability-as-architecture (Feathers;
+Humble–Farley). · *Gate:* every component's `Target:` resolves to a real module/seam and its early
+validation runs in that module's own harness lane — not a bespoke script.
+
+**D-A2 — Fixtures are first-class: every seam carries a range to play with.** Validation is built
+on fixtures, produced and reused wherever possible, so every seam has a *range* of inputs — not
+one happy path. Three kinds, all welcome: **deterministic producers** where raw input must be
+simulated (a generator with a known oracle — e.g. a 1..500 counting fixture, where any drop, dup,
+or misattribution is arithmetic); **captured live output treated as a dataset** (real DOM
+snapshots, real transcripts — sanitized, versioned; a live validation that isn't captured is a
+fixture wasted); **hand-authored edge fixtures** (the broken states a report described). A seam
+without a fixture range is under-harnessed; adding the range is part of the work. · *Source:*
+golden/contract testing (architecture P8); property-based + example-based testing. · *Gate:* each
+component's early validation names its fixture(s); new seams ship a range, not a single case.
+
+## 4. Roles and phases
+
+**D-R0 — Two species: CONTRIBUTOR and MAINTAINER; the maintainer holds exactly two exclusive
+authorities.** A **maintainer** exclusively (1) **approves an issue as `ready`** — the stamp that
+puts it on the guaranteed path — and (2) **merges PRs** — checks the bundle against the acceptance
+table + the closing security bundle and honors the promise. **Everything else is species-neutral**:
+preparing, proposing, claiming, delivering, heartbeating, validating as the non-author, signing,
+authoring probes — contributors and maintainers do all of it under identical rules ("ours
+included"). Why exactly these two: `ready` is where the project's guarantee is *issued*, merge is
+where it is *honored* — a promise needs an accountable guarantor; everything before and after
+stays open. · *Source:* the open-source commit-bit model, minimized. · *Gate:* branch protection
+(merge rights) + the `state: ready` transition restricted to maintainers; every other transition
+open.
+
+**D-R1 — Two phases, one public constitution: PREPARE, then DELIVER.** **PREPARE** — raw input is
+*isolated and shaped* into a ready-to-go issue whose body is governed by these principles (the
+issue body IS the constitution applied). **DELIVER** — a prepared issue is built by human + agent
+in the harnessed loop and proven. Because this constitution is public, both phases are open to
+both species; only the `ready` stamp and the merge are maintainer acts. · *Source:* dual-track
+discovery/delivery (Cagan); open governance. · *Gate:* the state machine — `incoming → prepared`
+is PREPARE (anyone); `prepared → ready` is the maintainer stamp; `ready → claimed → value-signed`
+is DELIVER (anyone); `value-signed → merged` is the maintainer honoring the promise. Each phase
+has its operational protocol below: [PREPARE](#prepare-protocol) (queue item → prepared
+issue) and [TAKE](#take-protocol) (delivered PR → verdict against the floor).
+
+**D-R2 — The preparation function: prepare issues and keep the roadmap true.** Preparation is
+species-neutral; only the `ready` stamp is a maintainer act. The function's job: (a) turn raw
+input into prepared, isolated, harnessed issues within the intake SLA (D2b); (b) seed them onto
+the roadmap in priority order (D2); (c) keep the roadmap a true picture — every known problem
+represented, nothing stale asserted as ready. It is the first step before any dev starts, and the
+highest-leverage work: a well-prepared issue makes delivery a known motion instead of a research
+project. · *Source:* replenishment as a first-class activity (Kanban). · *Gate:* issues reach
+`ready` only in full D5/D6/D10 shape.
+
+**D-R3 — The roadmap holds three tiers; contributors pick or propose.** (1) **prepared issues** —
+ready to pick, merge guaranteed by their acceptance floor; (2) **generic/raw issues** — incoming,
+inside the 3-day SLA; (3) **declared items without issues** — intents too far out to prepare,
+explicitly marked so the picture stays complete without pretending readiness. A contributor either
+**takes a prepared item** (the guaranteed path) or **self-proposes** — welcome, but with **no merge
+guarantee** until it meets the same bars. · *Source:* now/next/later roadmapping; pull with an
+explicit replenishment boundary. · *Gate:* board fields distinguish the tiers; self-proposed PRs
+are judged on the same value + security bars.
+
+## 5. The roadmap
+
+**D2 — The roadmap is one ordered pickup queue.** Every problem we know and every capability we
+intend maps to exactly one ordered item; anyone takes the highest ready item. No hidden backlog,
+no parallel priorities. · *Source:* single-queue pull (Kanban, Anderson). · *Gate:* the GitHub
+Project board is the single source; a coverage check maps every failure mode + committed feature
+to an item. **[TO BUILD: coverage check]**
+
+**D2b — Coverage is a promise with an SLA: world feedback becomes a ready bundle in 3 days.**
+Every incoming signal is triaged and converted into a prepared issue within **3 days**, then
+seeded onto the roadmap. Nothing we know stays unrepresented; no report dead-ends as a raw ticket.
+(`state: needs-info` pauses the clock when only the reporter can unblock.) · *Source:* lead-time
+SLA / class-of-service (Kanban). · *Gate:* intake bot ages `state: incoming` items; >3 days
+without `prepared` alarms. **[TO BUILD: intake bot]**
+
+**D3 — Every item carries business meaning.** A tracker entry states what a user gains or loses,
+in plain language, before any mechanism — named by the problem, opened with dry, factual stakes.
+No jargon titles, no drama. · *Source:* jobs-to-be-done (Christensen). · *Gate:* title +
+"why this matters" check at preparation review.
+
+**D4 — Grounded in the code as it is.** Items are shaped by the *current* module tree and its
+contracts, never by mechanism-narratives reconstructed from old reports; old reports contribute
+the symptom only. · *Source:* the code is the truth (Feathers). · *Gate:* every component's
+`Target:` names a module/seam that exists in the tree.
+
+## 6. The issue
+
+**D5 — Atomicity is two-level: the issue is the atom of VALUE; its components are atoms of CODE.**
+The *issue* is the smallest holistic thing a human recognizes as "this delivers value to me" — the
+smallest complete unit of perceived value, which is what gives a contributor the incentive to take
+it and a clear idea of what they're validating. The *components* are isolated, harnessed code
+atoms — each exactly ONE module or seam (named in a `Target:` line), each with its own
+fixture/golden lane — composing into the issue's one value. A solution that needs two modules is
+two components. · *Source:* minimum marketable feature (Denne–Cleland-Huang); information hiding
+(Parnas). · *Gate:* issue template requires the one-sentence value statement + components each
+with a real Target and harness.
+
+**D5b — Bundle by diff, not by theme: one code change = one issue, however many values it
+carries.** Issues are deduplicated by the CODE CHANGE, never by topic. When one change delivers
+several recognizable values (one root cause behind several reports, one seam fix that closes
+several asks), they ride ONE issue: every value is stated in its own value sentence, and the
+acceptance table carries a discriminating row — and a preferred validator — *per value*, so no
+value is silently absorbed into another's. When values require different changes, they stay
+separate issues no matter how adjacent — relatedness is recorded as a `same-setup` note (a
+claim-together recommendation on the board), never a merged item. The two-way test at
+preparation: *would splitting duplicate the same diff across issues?* → bundle; *would bundling
+staple independent diffs into one PR?* → split. This is D8's precondition: issue=PR one-to-one
+only works if the issue is shaped like exactly one change. **The perceiver bounds the atom —
+platform-facing behavior is per-platform:** a Meet user's value is Meet working; they will not
+debug Teams, and a validator can only sign the platform they sit on. Issues about in-meeting
+behavior are prepared one per platform even when the engine diff is shared: the first platform
+issue claimed carries the shared-engine change, its siblings reference it (`same-setup`) and
+validate their own platform's fixtures and live leg. · *Source:* single responsibility
+applied to work items — one reason to change; cohesion/coupling (Constantine). · *Gate:*
+preparation review runs the split/bundle test; the acceptance-table check requires one
+discriminating row per stated value.
+
+**D6 — Preparation is ours; validation is theirs.** Every issue ships good solutions AND the
+along-the-way forks — mechanism, files, steps, the branches a contributor may hit — so delivery is
+a known motion, not a research project. The contribution asked for is the validation, not the
+invention; alternate solutions are welcome, never required. · *Source:* "make the change easy,
+then make the easy change" (Beck); paved paths. · *Gate:* prepared-solution + along-the-way
+sections required before `ready`.
+
+**D6b — The delivery motion: human + agent, harnessed loop, PR.** An issue is delivered by a human
+who starts it with a capable coding agent, drives the change inside the issue's harnessed
+validation loop (fixtures + early checks give fast, honest feedback), and emerges with a PR whose
+bundle is the record of that loop. The harness does the mechanical proving; the human does the
+recognizing. · *Source:* fast-feedback inner loop (Humble–Farley); human-in-the-loop only where
+judgment is required. · *Gate:* the PR bundle shows the loop was run (per-component early-validation
+observations), not just a final green.
+
+**D6c — The docs are part of the change, and the docs STORY is part of the human validation.**
+A change isn't delivered until the documentation tells it. Every prepared issue names its docs
+surface up front — which pages, at which altitudes — and the PR carries the docs diff beside the
+code diff. A real docs change is rarely one line: the same truth usually lands in several places
+at several levels (the quickstart step that touches it, the how-to that walks it, the reference
+that specifies it, the concept page that explains why), each written for its reader. The human
+validator's signature covers the docs too, and it is judgment work no checker replaces: does the
+update *follow the docs story* — right pages, right altitude, consistent with how the docs already
+teach, explained from the angles a reader actually arrives from — not merely "words were edited
+somewhere". A docs-less capability or a story-breaking page is an incomplete delivery, same as a
+red acceptance row. · *Source:* documentation as part of done (DoD discipline); Diátaxis — the
+four documentation modes are different readers, not duplication. · *Gate:* prepared-issue template
+requires the "docs surface" section before `ready`; the PR template's bundle includes the docs
+diff; the value attestation includes the docs-story check.
+
+**D7 — Every defect indicts a principle or founds one.** Each fix names the architecture principle
+it restores (verbatim) and the gate that should have caught it; a defect covered by no principle
+is a constitution finding that feeds back into `ARCHITECTURE.md`. · *Source:* five-whys to
+systemic cause (Toyota); the two books talk to each other. · *Gate:* "Principle check" section on
+fix-requests.
+
+## 7. Proof — PRs and validation
+
+**D8 — Issue = PR, one to one; a PR carries two artifacts — the value bundle and the diff.** The
+bundle answers *"is the value real?"* (D9/D10); the diff answers *"is it correct and safe?"*
+(review + D-S). They are judged on different axes and neither substitutes for the other. A diff
+with no observation bundle is not reviewable, whatever it says. · *Source:* evidence-based review
+("show your work"). · *Gate:* PR template requires the bundle; value gate checks the bundle,
+review + security gates check the diff.
+
+**D-S — Security is a required lane on the diff, on both sides.** Value never buys a security
+pass. The contributor runs the security checks the issue names (dependency + licence scan —
+architecture P17 — secrets scan, SAST where it applies) and shows them in the PR; the maintainer
+runs the closing security bundle before a change enters a release. · *Source:* shift-left
+DevSecOps; defence in depth. · *Gate:* security-checks required status on the PR + a maintainer
+security bundle before release. **[TO BUILD: contributor security status]**
+
+**D9 — Human validation is an instrument, spent only on the reading machines can't take —
+cross-checked, never sovereign.** The human supplies one irreducible signal: *"this makes sense to
+me — I witness the value."* Everything measurable is captured by machine alongside it — the
+validation is **multichannel**: what the bot did (logs, FSM, egress), what the user saw (the
+eyeball, screenshots, transcript), what the instruments recorded (counters, test output). The
+validator is any competent non-author — a maintainer, another contributor, or the originating
+reporter, who is the *preferred* signer for a fix that closes their own report. **Humans mistake,
+so the human's observation carries no distinctive authority — it is harnessed in the same paradigm
+as every other channel**: a green PR requires the channels to *corroborate*, not the human to
+*assert*, and a human/instrument divergence is a first-class finding that blocks merge until
+reconciled. · *Source:* triangulation / converging evidence; segregation of duties; no single
+oracle. · *Gate:* `gate:value-signed` — green only on a non-author attestation whose multichannel
+bundle is internally consistent. **[TO BUILD: value-gate bot]**
+
+**D10 — Acceptance is a pre-declared experiment that guarantees merge — a floor, never a ceiling
+on value.** Each issue publishes observations that, if presented, **guarantee** the PR merges — a
+promise, not a hurdle. Every required observation is **discriminating** (a red→green pair, not
+just green), **controlled** (a negative control shown red — no green-on-empty), **anchored**
+(shas, ids, timestamps), and **complete** (no-regression rows). We may require some experiments
+and propose others — but we **never forbid** a contributor from defining value the issue missed:
+value is ultimately human-witnessed, and extending it is welcome and credited, never scope creep.
+If a bundle satisfies the table and the PR is still wrong, the table was wrong — our bug, not the
+contributor's (the plan-bug rule). · *Source:* ATDD; design-of-experiments controls; emergent
+requirements (Beck). · *Gate:* acceptance table required before `ready`; the checks bot verifies
+the bundle covers the floor. **[TO BUILD: bundle checker]**
+
+**D11 — Both outcomes are knowledge.** A contributor who follows the prepared path and finds it
+does NOT deliver has produced a first-class result: a signed INVALIDATED bundle kills a wrong
+theory with evidence, credited identically to a confirmation. There is no failure state for an
+honest validator. · *Source:* falsification (Popper); blameless culture. · *Gate:* verdict field
+CONFIRMED/INVALIDATED; both close-or-advance the issue and appear in release notes.
+
+**D12 — Validate at the altitude of the claim, no higher.** Unit/golden for a seam, live for a
+behavior; live bars scale to the observation — speaker behavior needs 2–5 people, join/API needs
+one operator, a parser needs none. Never ask for more humans than the observation requires.
+· *Source:* the test pyramid (Cohn); architecture P19's runtime twin. · *Gate:* per-component
+early validation at module altitude; the live bar stated and scaled in the issue.
+
+**D12b — Every validation names its deployment, and how the setup was built is itself evidence.**
+Vexa ships as more than one thing — Lite single-machine compose, the full compose stack, k8s/helm,
+hosted — and a behavior proven on one is only *proven on that one*. The prepared issue declares
+which deployment(s) the acceptance table must be run against (and which are explicitly out of
+scope); every attestation states the setup it validated on. The build provenance of that setup is
+part of the bundle — repo sha, compose file / values used, fresh-clone or long-lived, the env
+deltas from stock — because "works on my install" without how the install was made is an
+unanchored claim (the D10 anchor rule applied to the *environment*). Lite is called out
+deliberately: it takes the most divergent path through the stack, so a fix proven on the full
+stack may still need its own Lite run — the issue says so when it does. A deployment nobody
+validated stays honestly unclaimed in the bundle, never assumed covered. · *Source:* test-
+environment parity ("it works where, exactly?" — 12-factor dev/prod parity); provenance as
+evidence. · *Gate:* prepared-issue template requires the deployments-to-validate declaration;
+the attestation names its setup + build provenance; the bundle checker flags rows with no named
+deployment.
+
+## 8. People
+
+**D13 — Humans author; tools assist. Disclosure welcome, co-authorship never.** What ships carries
+a human name and a human's full responsibility — the sole author is the human, and responsibility
+is honored as full authorship: full credit, full standing. "The agent wrote it" is neither a
+defense nor a discount. Disclosing your tooling in the PR is welcome as transparency, never
+required, and never an attribution: an agent is not a co-author, gets no `Co-Authored-By` trailer,
+holds no standing. Tools are instruments; instruments don't sign. · *Source:* engineering
+accountability; provenance without diffused responsibility. · *Gate:* commit-trailer check rejects
+agent co-authors; the attestation signer is the accountable author. **[TO BUILD: trailer check]**
+
+**D14 — The tracker is the CI of the human loop.** Labels are truth, not decoration: a state label
+means exactly what it says, enforced by the state machine (`incoming → prepared → ready → claimed
+→ awaiting-evaluation → value-signed → closed-with-release`). Nothing is claimed before `ready`;
+community-authored issues enter the same machine. · *Source:* explicit value stream (Lean);
+make-illegal-states-unrepresentable (Wlaschin). · *Gate:* a label bot enforces legal transitions;
+`ready` is the maintainer stamp. **[TO BUILD: label bot]**
+
+**D14b — A claim is a heartbeat lease, not ownership.** Anyone claims a `ready` item — no
+permission needed. A checkout is a **4-hour lease**; a **heartbeat** (a short "here's what's going
+on" update) renews it for another 4 hours. No heartbeat → the lease expires and the item returns
+to `ready`, claimable by anyone; the prior holder may reclaim with a fresh heartbeat. Work is
+never hoarded and flow never stalls on an absent contributor — and the heartbeats become the front
+of the PR's observation bundle, the loop's narration written as it happens. · *Source:* TTL leases
+(distributed systems); WIP-pull with abandonment; work-stealing. · *Gate:* a lease bot stamps
+`claimed` + expiry, watches heartbeats, auto-releases on a miss — all on the issue timeline.
+**[TO BUILD: lease bot]**
+
+### 8b. The tags — the state machine's alphabet
+
+Five orthogonal dimensions; a tag is a claim, and the bots keep every claim true. **Exactly one
+`state:`, exactly one `kind:` on prepared work, any number of `area:`, `P0` only when
+production-critical, `good-first` only when truly zero-prerequisite.**
+
+| Dimension | Tags | Rule |
+|---|---|---|
+| `state:` | `incoming` · `needs-info` · `prepared` · `ready` · `claimed` · `awaiting-evaluation` · `value-signed` | exactly one, always; transitions only via the machine; `ready` = maintainer stamp; `claimed` = live lease; closure carries no state |
+| `declined:` | `out-of-scope` · `superseded` · `wont-fix` · `too-far` · `stale` | exactly one, on closed-without-merge only (D17) |
+| `kind:` | `fix-request` · `evaluation-request` · `probe` | the prepared ask's contract shape; legacy `type: bug\|feature\|docs` stays as the raw signal's nature — an issue carries both |
+| `area:` | existing taxonomy + `security` | routing; any number |
+| flags | `P0` · `good-first` | strict meanings; never inflate |
+
+Invariants the bots enforce: one `state:` at all times; illegal transitions reverted; `ready`
+maintainer-only on a passing template check; `claimed` only with a live lease; a PR merges only if
+its issue is `value-signed` + security green; `incoming` >3 days alarms; `needs-info` quiet 14
+days → proposed `declined: stale`; every closed-without-merge issue carries one `declined:` reason.
+
+## 9. Release and closure
+
+**D15 — Release closes the loop, fast.** A maintainer batches a few value-signed PRs, runs the
+release machinery (image set, gates, VM-validated) and the closing security bundle, ships, and the
+notes credit every signer — including INVALIDATED ones. The release loop and the contribution loop
+are the same loop. · *Source:* small batches, fast flow (Accelerate/DORA); continuous delivery.
+· *Gate:* release-set + `release/vm-validated` + maintainer-security-bundle required statuses;
+notes generated from signed bundles.
+
+**D16 — The loop closes back to its origin.** When a change ships, the report that seeded it is
+told — "your report → this fix → this release" — and the reporter is invited to the validation. A
+fix that ships without closing back leaves the loop open: the person who gave us the truth never
+learns it landed, and never becomes the repeat contributor they were about to be. · *Source:*
+close the feedback loop (Deming); the flywheel. · *Gate:* release notes link origin reports; a
+ship-closes-report step comments on the originating issue. **[TO BUILD: close-back step]**
+
+**D17 — Decline is a first-class outcome; nothing rots.** Not everything is taken forward, and a
+graceful, reasoned *no* is part of the system: a self-proposed PR not accepted, a prepared issue
+unclaimed too long, a report out of scope — each closed with one stated `declined:` reason,
+recorded and auditable. INVALIDATED is the honest-negative of a *delivery*; decline is the
+honest-negative of a *proposal or a stale item* — both are results. A silent-rot backlog is the
+failure state we refuse. · *Source:* explicit disposition; stop starting, start finishing (Lean).
+· *Gate:* every closed-without-merge issue carries a `declined:` reason; intake/stale bots propose
+declines rather than letting items age. **[TO BUILD: stale proposer]**
+
+---
+
+## 10. How this document changes
+
+Like the architecture book: propose the change, record the decision as an ADR under
+[`docs/adr/`](https://github.com/Vexa-ai/vexa/tree/main/docs/adr) (process decisions live beside build decisions), and update the [enforcement map](#enforcement-map). A
+principle without its gate enters as TO BUILD, never as silently assumed.
+
+
+---
+
+# Part II — Operating the loop
+
+Part I is the law; this part is the loop run day to day, module by module. Each module has one
+concern, one source of truth, and a contract on its edge — the same discipline the
+[architecture](/governance/architecture) applies to the software (P23: one writer per carrier).
+
+## The roadmap
+
+The [roadmap board](https://github.com/orgs/Vexa-ai/projects/2) is the one ordered queue (D2),
+grouped into **lanes named by who feels the work**: Google Meet · MS Teams · Zoom ·
+API integrators · Transcription · Recordings · Webhooks & billing · First run · Production ops ·
+Feature shelf. Four axes on every item:
+
+- **Lane** — the business value: match it to what the contributor actually uses.
+- **Milestone** — the version it gates ([`v0.12.x`](https://github.com/Vexa-ai/vexa/milestones)
+  is the current patch stream; its progress bar is the roadmap-at-a-glance).
+- **Human bar** — what validation costs in human terms: *Desk check* (read the bundle, eyeball
+  the logs) · *Operator run* · *Solo meeting* · *Small group (2–4)* · *Crowd 5+* ·
+  *In-the-loop UX* (walk the flow, judge the experience itself).
+- **Setup** — the infrastructure floor: *None* · *Lite* (one laptop) · *Compose* · *k8s/helm*.
+
+Both bars are **extracted from each issue's own acceptance floor**, never assigned by feel —
+D12's promise (no issue demands more humans than its table justifies) made filterable.
+**Draft cards with no issue number are declared direction** — we state where a lane goes before
+the work is prepared; ask about them, don't claim them. The whole board comes back in one public
+GraphQL call — the query lives in
+[AGENTS.md](https://github.com/Vexa-ai/vexa/blob/main/AGENTS.md), the repo's agent front door.
+
+### The state machine
+
+Every open issue carries exactly one `state:` label:
+
+| State | Meaning |
+|---|---|
+| `state: incoming` | New report — triaged within 3 days (intake SLA, D2b) |
+| `state: prepared` | Full delivery spec, code-grounded; awaiting the maintainer's ready stamp |
+| `state: ready` | Maintainer-stamped — claimable now |
+| `state: claimed` | Someone is on it (heartbeat lease, D14b: renew by activity; ~4h silence releases) |
+| `state: awaiting-evaluation` | Delivered — waiting for a non-author to validate the value live |
+| `state: value-signed` | A non-author witnessed the value; merge proceeds |
+| `state: accepted` | Feature acknowledged into the queue, not yet prepared |
+| `state: incident-thread` | User-facing thread of a hosted/ops incident — open for the reporter; fix tracked in the ops lane |
+| `state: needs-info` | A real, dated question pending; ~14 quiet days → honest stale-close |
+| `declined: *` (closed) | Every close-without-merge names its reason and what would reopen it (D17) |
+
+## PREPARE protocol
+
+### The prompt
+
+You are preparing ONE issue for Vexa-ai/vexa in full compliance with `docs/docs/governance/delivery.mdx`.
+
+**Input:** one queue item — a value sentence plus its source signals (GitHub issue numbers,
+incident postmortems, failure-mode entries, probe findings) — and a checkout of the current tree.
+
+**Output:** the artifacts in step 6. You post NOTHING; a human reviews and publishes.
+
+#### Step 0 — Read the law
+Read `docs/docs/governance/delivery.mdx` end to end and `.github/ISSUE_TEMPLATE/3-prepared-issue.md`. Every
+section you write maps to a principle; when in doubt the principle wins over habit.
+
+#### Step 1 — Gather the signal (D4: symptoms only)
+Read every source issue WITH its comments, every named incident report, every failure-mode entry.
+Extract: who hurts, what they observed, on which version and deployment, when. Old reports
+contribute **symptoms only** — never adopt a mechanism-narrative from a stale report.
+
+#### Step 2 — Ground in the code as it is (D4, D-A)
+Locate the real modules/seams in the current tree. Every `Target:` you will write must be a path
+that exists — verify each one. If the code moved since the report, the issue is shaped by today's
+tree. Find the module's existing harness and fixtures (D-A): you compose them, you do not invent
+bespoke scaffolding; a missing harness is architecture debt to surface, named in the issue.
+
+#### Step 3 — The D5b split/bundle verdict (explicit, first)
+State it before writing the body:
+- Would splitting force the **same diff** into two issues? → bundle: one issue, one value
+  sentence PER value, one acceptance row + preferred validator per value.
+- Would bundling staple **independent diffs** into one PR? → split: emit a split recommendation
+  (two prepared issues) instead of one bloated issue.
+- Adjacent-but-different-diff work → a `same-setup:` note naming the batch, never a merge.
+- **Platform rule (the perceiver bounds the atom):** in-meeting behavior prepares ONE issue per
+  platform, even when the engine diff is shared — a Meet user won't debug Teams, and a validator
+  signs only the platform they sit on. The first platform issue claimed carries the shared-engine
+  change; siblings reference it and validate their own platform's fixtures + live leg.
+
+#### Step 4 — Write the body (template sections, in order)
+1. **Title** — name the bug and explain it, plainly (D3: named by the problem): for fixes,
+   `component: the defect — its consequence` (house example: "api-gateway: shared HTTP pool
+   starves token validation under load — valid API keys mass-401"); for probes, the question
+   being measured; for features, the capability. Never an aspirational state-sentence
+   ("The API answers while…") — the title states what is wrong, not the world after the fix.
+2. **Why this matters** — dry, factual stakes: what a user loses, what depends on it, what was
+   observed and where (D3).
+3. **Value this issue delivers** — one witnessable sentence per value (D5/D5b).
+4. **Where we are (honest)** — current-code facts, `file:line` for every claim. Unknowns stated
+   as unknowns. **The era note is mandatory when the report predates the current tree:** state
+   the report's version/era vs today's code explicitly — an old-era report means we are
+   *validating new code against a known failure mode of the old code*, and the body must say so
+   in those words, so nobody mistakes an inherited symptom for a confirmed present-tense bug.
+5. **Components** — each exactly ONE module or seam, `Target:` a real path (D5, D-A); each a
+   business-named waypoint with early validation in that module's own harness lane and a named
+   fixture **range** — deterministic producer / captured live output / hand-authored edge case
+   (D-A2). A solution needing two modules is two components.
+6. **Prepared solution + along-the-way forks** — mechanism, files, steps, and the branches a
+   contributor may actually hit (D6). Alternates welcome, never required.
+7. **Acceptance table** — the floor that guarantees merge (D10). Every row: discriminating
+   (red→green pair), controlled (negative control shown red), anchored (sha/id/timestamp),
+   complete (no-regression rows). One discriminating row per stated value (D5b). Floor, never
+   ceiling — extending value is welcome and credited.
+8. **Deployments to validate** (D12b) — which of Lite compose / full compose / k8s-helm / hosted
+   the table runs against, which are explicitly out of scope, and whether Lite needs its own run
+   (say so either way — Lite takes the most divergent path). State that every attestation must
+   name its setup + build provenance (sha, compose/values file, fresh-clone vs long-lived, env
+   deltas).
+9. **Docs surface** (D6c) — the pages this change must touch and at what altitude: quickstart
+   step / how-to / reference / concept, each for its reader. Usually several files. "No docs
+   impact" must be argued, never assumed.
+10. **Live bar** (D12) — scaled to the observation: speaker behavior 2–5 people, join/API one
+    operator, a parser none. Never more humans than the observation requires.
+11. **Validation request** (D9) — the preferred signer is the originating reporter(s), named;
+    any competent non-author qualifies. Multichannel: what the bot did, what the human saw, what
+    the instruments recorded — channels must corroborate.
+12. **Principle check** (D7, fix-requests only) — the architecture principle this defect indicts
+    (verbatim) and the gate that should have caught it; if none covers it, say so — that is a
+    constitution finding.
+
+#### Step 5 — Labels, board, closures
+- Labels: `state: prepared` (only a maintainer flips to `ready`) · `kind: fix-request |
+  evaluation-request | probe` · legacy `type:*` kept · `area:*` · P0 only if production-critical.
+- Board: where it sits in the one ordered queue, and its `same-setup:` batch note.
+- Supersede list: which raw issues close into this one, each with a drafted closing comment that
+  links here and invites the reporter to validate when it ships (D16).
+
+#### Step 6 — Self-audit, then emit
+Run the gate checklist: value sentence(s) witnessable · every Target exists · every component has
+a harness + fixture range · table rows discriminating/controlled/anchored/complete · row per
+value · deployments declared · docs surface named · live bar scaled · preferred signer named ·
+D5b verdict stated · D7 check present (fixes). Then emit, in order:
+1. the D5b verdict, 2. the full issue body, 3. the label set, 4. the supersede/close list with
+drafted comments, 5. open questions for the maintainer — anything you could not ground in code or
+signal. **Never guess to fill a section**; an honest open question beats a confident invention.
+
+#### Honesty rules (override everything)
+No promise the project can't keep. Every code claim carries `file:line`. Every behavior claim
+names its deployment. Uncertain solutions ship as forks, not as facts. If preparation reveals the
+queue item itself is wrong (already fixed, wrongly bundled, not reproducible), emitting that
+finding IS the deliverable (D11 applies to preparation too).
+
+## TAKE protocol
+
+### The prompt
+
+You are triaging ONE pull request against Vexa-ai/vexa in full compliance with
+`docs/docs/governance/delivery.mdx`.
+
+**Input:** one PR that claims a prepared issue, and a checkout of the current tree.
+**Output:** one verdict (step 6) with its full evidence map. You are reviewing against a
+**pre-declared floor** — the issue promised that presenting the table merges the PR; TAKE
+exists to keep that promise exactly, in both directions.
+
+#### Step 0 — Read the law and the claim
+
+Read `docs/docs/governance/delivery.mdx`, the claimed issue END TO END (body + comments — rulings and
+sharpenings live in the thread), and the PR (body + every commit). D8: issue = PR, one to
+one. A PR claiming no issue, or several, is returned for scoping before any review.
+
+#### Step 1 — The bundle gate (before reading a line of the diff)
+
+The PR carries two artifacts judged on different axes: the **observation bundle** (is the
+value real?) and the **diff** (is it correct and safe?). **A diff with no bundle is not
+reviewable, whatever it says** — request the bundle, warmly, and stop. Do not review code on
+vibes and do not let a good-looking diff substitute for evidence.
+
+**The machine rows count.** The bundle is assembled from two sources: the harness's runs on the
+PR's head sha (`gates`, `pr-value` — the machine-presented rows) and the contributor's own
+witness (everything above the automation line). Before requesting a bundle, check what the
+harness already presented — asking a contributor to hand-write evidence `pr-value` carries on
+their sha is our process bug, not their gap.
+
+#### Step 2 — Floor mapping, in the issue's own numbering
+
+Rebuild the issue's acceptance table AS DECLARED (A1…An) and map every row to the PR's
+evidence. **Detect renumbering and thinning** — a PR body that re-labels or quietly drops
+rows hides its gaps; the map is always in the issue's numbering, never the PR's. Per row:
+
+- **presented** — red→green pair shown, negative control shown red, anchors present
+  (base+head shas, ids, timestamps); **a green `pr-value`/`gates` run on the head sha is
+  `presented` for every row those legs carry** — link the run, don't re-demand the row;
+- **partial** — claimed but missing its control, its anchor, or its red side;
+- **missing** — including the rows only a live leg can carry. The live row exists precisely
+  because unit greens can lie; never waive it for a plausible diff — but route it to the
+  cheapest rung that carries it (the ladder, §Validation) before routing it to a human.
+
+#### Step 3 — The diff on its own axis
+
+Review correctness, security (the checks the issue names, D-S), and architecture conformance
+(the P-book: fix at the point of introduction, contracts owned by the core, per-runtime front
+doors, comments state the designed present). **Spot-check the PR's code claims in the tree**
+(D10's plan-bug rule cuts both ways — verify before you assert). Two questions always:
+
+1. Does the change hold **at the altitude of the claim** (P19) — is user-facing behavior
+   proven by a live leg, or only by unit green?
+2. Do the negative controls actually discriminate — would the test stay green if the fix
+   were reverted?
+
+#### Step 4 — The plan-bug rule (own our half)
+
+If the bundle satisfies the table but the change is still wrong — or the contributor was
+misled by an imprecise issue — **that is OUR bug in the table, not theirs.** Say so in the
+review in those words, sharpen the issue in its thread so the floor is exact for the next
+attempt, and never let a table defect read as a contributor failure.
+
+#### Step 5 — Tone (first contributions are load-bearing)
+
+Credit what is verifiably right FIRST, and say what you verified ("checked, correct" beats
+silence). Findings carry `file:line` and the failure scenario, never adjectives. On a
+contributor's first PR, post the validation-protocol explanation (the two human layers and
+the exact path to merge) so nothing surprises them after the fixes — the review comment is
+also the onboarding.
+
+#### Step 6 — The verdict (exactly one)
+
+- **Floor met + diff sound** → arrange the value validation: a **non-author** runs it live
+  (preferred signer: the originating reporter, D16/D9), multichannel evidence corroborating,
+  attestation naming setup + build provenance (D12b). On the signature: merge, label
+  `state: value-signed`, credit author AND validator.
+- **Floor not met** → CHANGES_REQUESTED with the row-by-row map from step 2 and the exact,
+  finite path to merge — then restate the promise: present the table and this merges. Nothing
+  beyond the floor may be demanded (value beyond it is welcomed and credited, never required).
+- **Diff unsound** → CHANGES_REQUESTED with the grounded findings; pair every 🔴 with the fix
+  direction the issue's prepared solution already implies.
+- **Wrong work entirely** (doesn't deliver the claimed issue) → decline honestly: what it
+  would take, what would reopen it, and whether the diff carries value worth its own issue.
+
+#### Step 7 — After merge: close the loop
+
+`value-signed` → ships in the next release batch (D15) → the issue closes **with the
+release**, the close-back names the fix and invites the reporter who validated (D16), and
+release notes credit authors and signers by name. An issue closed without its reporter
+hearing about it is an unclosed loop.
+
+#### Honesty rules (override everything)
+
+The floor is a floor: never move it mid-review, never demand past it. Every finding carries
+`file:line` and a concrete failure scenario. A human-red is never bounced back as "try
+again" — fully elaborate the failure on instruments first, then request the next human
+attempt. An invalidation ("row A3 is red") is a first-class, credited result. If TAKE reveals
+the issue itself was wrong, saying so publicly IS the deliverable (D11).
+
+## Validation
+
+### The ladder — machine first, human last
+
+Validation is a ladder; each rung runs **as early and as often as it can be automated**, and a
+human is asked only for what no rung below can see (D9: the human is the scarce oracle). The
+rungs, and where the machinery runs them:
+
+| Rung | Proves | Machinery | When |
+|---|---|---|---|
+| **L1/L2 — sound** | isolation, contracts, units, licenses, build | `gates` | every PR push, ~5 min |
+| **L3 — delivers** | the PR's own tree assembles and drives the full product FSM — join lifecycle, failure attribution, transcript-segment emission, concurrent bots, acts — through the **real** backend (mock bot: real orchestrator + real adapters; only join/audio faked) | `pr-value` | every runtime-surface PR, ~10–15 min |
+| **L3.5 — transcribes** *(to build)* | fixture audio → real pipeline → real CPU STT → **golden words** land via the API — no Meet, no human | wav→words leg | PRs touching the transcription path; every release |
+| **L4 — artifact truth** | the *published* images deliver on every deployment shape (compose · mock-FSM · 0.10-compat · bot-spawn · lite · helm) + fresh-VM concurrent-bots | `release-validate` + VM leg | every release, ≤10 min re-runnable |
+| **L5 — witnessed value** | a real Meet, real audio, real admission → words a human saw land, plus the batch's user-visible values walked once | the release **witness script** over the eval lane (`bot/eval/run.sh`: autonomous verdict; human acts: admit + speak + walk the script, ~10 min) | once per release — the combined pass |
+
+Two laws fall out of the ladder:
+
+- **The machine presents what the machine can prove.** A green `pr-value` run on the PR's head
+  sha **is** the live-leg evidence row for backend-visible behavior — TAKE step 2 consumes it
+  directly. Contributors hand-assemble only the rows above the automation line: platform-specific
+  behavior, UX, real external services. Never ask a contributor or a human validator to
+  re-witness a rung the harness already witnessed on their exact sha.
+- **Claim only your rung** (P19/D12 restated for the ladder). `pr-value` green does not claim
+  audio→words; L3.5 green does not claim real-Meet admission. Every rung's report names what it
+  proved AND the rungs it explicitly does not reach — an over-claimed rung is a false green,
+  treated as an incident (the v0.12.1 lesson: a machinery-green release was published as if
+  value-witnessed; the witness was still unsigned).
+
+### The human signature
+
+Before merge, a **non-author** signs what they witnessed **above the automation line** — after
+the **author's own witness**: the author runs their change live first and their run is the
+bundle's first row; you never ask another human to witness value you haven't witnessed yourself.
+Where every acceptance row sits at or below the automation line (behavior `pr-value`/L3.5 proves
+on the PR's sha), the machine rows stand as the live witness and the non-author signs the
+*review of the evidence*, not a re-run.
+
+The attestation is **multichannel** — what the bot did (logs), what the human saw (the meeting,
+the transcript), what the instruments recorded (test output, API responses) — and the channels
+must **corroborate**: a human/instrument divergence blocks merge until reconciled, as a finding
+in its own right (D9). Per **D12b** it names its setup and build provenance: deployment, repo
+sha, fresh-clone or long-lived, env deltas from stock. Per **D6c** it covers the docs story.
+Validators are credited in release notes alongside authors; the originating reporter is the
+preferred signer (D16); an invalidation is a first-class, credited result (D11).
+
+## Integration — the merge bar
+
+Main is **always releasable, never auto-released**. A PR enters it when: the acceptance floor is
+presented (TAKE, step 2 — machine rows + contributor rows) · the diff passes review + the named
+security checks (D-S) · the value is signed (D9) · sealed-contract changes rode `lane:contract`
+with a human review · the full CI gate suite is green **and `pr-value` is green when the PR
+touches a runtime surface** — the machine contract between every PR and main
+([the live map](/governance/arch-compliance)). **Merge is the promise to the contributor,
+honored.**
+
+## Release — the ship bar
+
+**A release is the promise to users** — a batch event, distinct from merge:
+
+1. **Batch** — the value-signed merges since the last release, cut on the version milestone.
+2. **Validate together** — the release machinery proves the batch as a whole (the compose stack
+   bot-ready end-to-end, L4 evidence); individually-proven changes can still interfere.
+3. **Publish** — images built and pushed; **tags move per the declared tag policy** (`:v012`
+   moves every release; `:latest` only by explicit, policy-conformant promotion) — artifact
+   pointers are part of the release's truth surface.
+4. **Credit + coverage** — release notes name authors **and** validators, per change (D11/D15),
+   and carry the **coverage statement**: which deployments/platforms each change was validated
+   on and which stay *honestly unclaimed* (D12b). A release is proven on what we name — never
+   a bare "works".
+5. **Close back** — every issue in the batch closes *with the release*; its reporter is invited
+   to validate on the shipped artifact (D16). An issue closed without its reporter hearing about
+   it is an unclosed loop.
+6. **The milestone ticks** — the public progress bar is the release ledger.
+
+**The value-witness law.** "All value witnessed" is a *named act*, never an inference from
+machinery green (the v0.12.1 incident: promoted and published on L4 alone, witness unsigned):
+
+- **PR-level value is machine-witnessed.** A PR's value rows are proven by the harness on its
+  own sha (`pr-value`, path-aware legs); no human eyeballs individual PRs. A PR reaches the
+  human only as *proven value + reviewed diff* — or when it needs a genuine ruling.
+- **Every release carries ONE combined-value witness pass.** The release generates a **witness
+  script** from the batch: a single live session (one real meeting on the release candidate +
+  one product walkthrough) in which every user-visible value shipped in the batch is
+  experienced once. The autonomous legs surround it; the human contributes the irreducible
+  minimum — admit the bot, speak, walk the script (~10 min). Backend-invisible changes are
+  listed under the script with their machine evidence, witnessed by proxy and named as such.
+- **Publish and promote are the same act** for witness purposes: neither happens before the
+  witness pass is signed. A release published unwitnessed is retracted to pre-release until
+  the pass is met.
+
+**The verdict-latency law.** The release loop is only honest if it is also *fast to re-ask*:
+
+- **Re-verdict in ≤10 minutes, no rebuild.** The release verdict (the validate legs) must be
+  re-obtainable against already-published artifacts without rebuilding anything unchanged.
+  Build+publish and validate+promote are separate machinery; a harness fix re-runs only the
+  second. · *Gate:* `release-validate` is independently dispatchable with a version input.
+- **Harness fixes iterate off-main.** A validation-harness change is testable from its branch
+  against the published set *before* it merges — a smoke-script fix must never cost a
+  PR→merge→full-pipeline round trip per attempt (the v0.12.1 maiden run paid 3 × ~20–50 min
+  for two one-line harness fixes; this law is that bill, paid once).
+- **Silence is an incident signal.** A triggered release run that has produced no first job
+  within 10 minutes is stuck, not slow — check the runner queue instead of waiting (the same
+  maiden run lost 50 minutes to an unwatched queue stall).
+
+Guarantees of every release: all value witnessed · no regression against the previous release
+(the no-regression rows + batch validation) · artifact-pointer truth · the loop closed to every
+reporter.
+
+## Asking the human
+
+The human is the scarce oracle (D9) — so every ask of them is engineered, not tossed over the
+wall. Whenever the loop needs a human verdict — a `ready` stamp, a ruling, a validation leg, a
+release call — the request obeys this contract:
+
+- **One concern per ask, one ask at a time.** Never a wall of parallel questions; the queue is
+  ours to hold, not theirs to untangle. The next ask waits for the verdict on this one.
+- **The full bundle in one shot.** Everything the decision needs arrives together: the value at
+  stake, the reasoning, the architecture implications, the recommendation with its
+  trade-off — no follow-up round-trip to assemble context the asker already had.
+- **No jargon — readable at both altitudes in the same text.** The CEO reading (what value,
+  what risk, what it costs) and the CTO reading (which module, which principle, which gate)
+  must both land without translation. Codenames and session shorthand never survive into an ask.
+- **Say exactly what the verdict changes.** An ask is a decision with consequences, never an
+  FYI; if nothing changes on their answer, don't ask.
+- **One eyeball request at a time** (the validation form of the same rule): a human validation
+  ask names one flow, fully instructed, earned by a green instrument first — never "try again"
+  as a probe (D9's human-red rule).
+
+## The maintenance cycle
+
+The standing duty loop that drives every open PR toward merge and forms release batches — run
+it on every PR event and as a daily sweep. PREPARE and TAKE are per-item prompts; this is the
+orchestrator that invokes them. Only the `ready` stamp, the merge, and the ship are maintainer
+acts (D-R0); everything else in the cycle is species-neutral.
+
+### The prompt
+
+You are running one maintenance cycle over Vexa-ai/vexa. Input: the open PRs, the tracker, the
+board. Output: every open PR advanced exactly one honest state (or explicitly left, with why),
+and a release verdict. You never lower a floor, never merge unsigned value, never let silence
+rot a claim.
+
+**Step 1 — sweep every open PR, oldest first, and classify:**
+
+- **No linked issue** (pre-constitution or drive-by) → the era rule: a PR is *signal + a
+  candidate diff*. Map it: delivers a now-prepared issue → invite adoption (author claims the
+  issue; their diff meets its floor); valuable but unprepared → run PREPARE seeded by the PR;
+  era-superseded → decline with credit and what would reopen it.
+- **Bundle missing** → request it warmly (TAKE step 1) and stop there — never review a diff on
+  vibes.
+- **Awaiting triage** → run TAKE → one verdict.
+- **Changes requested** → heartbeat check: active → wait; silent days → one nudge (issue +
+  Discord); silent past the lease → release the claim, mark the PR draft, thank the author,
+  requeue the issue.
+- **Floor met, awaiting validation** → drive it: ping the preferred signer (the reporter);
+  no signer in reach → recruit any competent non-author (the lane names the species); an
+  owner-only leg → surface it to the owner explicitly per [Asking the human](#asking-the-human),
+  never let it wait silently.
+- **Value-signed** → merge same-day (the promise, honored), label, credit in the thread.
+
+**Step 2 — cross-PR invariants:** two PRs on one issue → the earlier claim holds, the later
+gets an honest note (and its novel value, if any, becomes a fork on the issue). One PR spanning
+two issues → split request (D8). Every touched issue/PR leaves the cycle with exactly one
+`state:` label.
+
+**Step 3 — release ripeness.** After merges, ask: is a release due? Triggers, any one
+sufficient: a P0 fix merged (ship fast) · the value-signed backlog reaches a batch worth
+validating together · a milestone checkpoint or time-box arrives. Ripe → run the
+[ship bar](#release--the-ship-bar) end to end: batch → validate together → publish + move tags
+per policy → notes crediting authors and signers → close-backs to every reporter → milestone
+tick. Not ripe → say what would make it ripe.
+
+**Step 4 — report facts.** End the cycle with the dashboard, not adjectives — its FIRST line
+is always the pipeline position (intake → prepared → ready → claimed → delivering → validating →
+merged → release), counts per stage, so no one ever asks where we are: PRs by state ·
+each blocked-on-whom (named) · validation legs scheduled · release ETA and its trigger ·
+incident threads owing updates. A cycle that touched nothing states why that is correct.
+
+**Honesty rules:** the floor is the floor (never raised mid-review, never waived for a
+plausible diff) · a human-red is elaborated on instruments before any human is asked again ·
+silence is released, never punished · every decline names its reopen condition (D17).
+
+## Enforcement map
+
+| Principle | Gate | Status |
+|---|---|---|
+| D1 enforced-not-aspirational | this table stays current in every delivery PR | **have** (manual) |
+| D-A targets resolve to real modules | preparation review: `Target:` paths exist | **have** (manual review) |
+| D-A2 fixture ranges | preparation review: early validations name fixtures | **have** (manual review) |
+| D-R0 two species | branch protection (merge) · `state: ready` maintainer-only | **have** (branch protection) / **TO BUILD** (label permission bot) |
+| D2 one ordered queue | the Vexa Roadmap project board is the single source | **have** (board live) / **TO BUILD** (coverage check) |
+| D2b 3-day intake SLA | report forms auto-label `state: incoming`; intake bot ages them | **have** (forms) / **TO BUILD** (ager) |
+| D3/D4 business meaning + code grounding | preparation review checklist | **have** (manual) |
+| D5/D6 issue shape | issue template with required sections | **have** (`.github/ISSUE_TEMPLATE/3-prepared-issue.md`) |
+| D5b bundle-by-diff | split/bundle test at preparation review; one acceptance row per stated value | **have** (template note + manual review) / **TO BUILD** (row-per-value in bundle checker) |
+| D6c docs ride the change; docs story human-validated | "docs surface" required before `ready`; PR docs-diff section; attestation covers the docs story | **have** (templates) / **TO BUILD** (bundle checker verifies docs-diff presence) |
+| D12b deployment named + setup provenance | "deployments to validate" required before `ready`; attestation names setup + build provenance | **have** (templates) / **TO BUILD** (bundle checker flags rows with no named deployment) |
+| D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
+| D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
+| D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |
+| D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency | **TO BUILD** (value-gate bot) |
+| D10 acceptance floor | bundle-vs-table check | **TO BUILD** (bundle checker) |
+| D11 both verdicts credited | release-notes generation from bundles | **TO BUILD** |
+| D12 altitude-scaled validation | stated live bar in every prepared issue | **have** (manual review) |
+| D13 human sole author | commit-trailer check (reject agent co-authors) | **TO BUILD** |
+| D14/D14b state machine + lease | label bot + lease bot | **TO BUILD** |
+| D15 release machinery | release-set gate · `release/vm-validated` | **in flight** (PR #494) |
+| D16 close-back to reporter | ship-closes-report step | **TO BUILD** |
+| D17 declined-with-reason | closed-without-merge requires one `declined:` label | **have** (manual) / **TO BUILD** (stale proposer) |
+
+Machinery tracking: the TO BUILD rows are one work item (the delivery checks bot: label state
+machine, lease TTL, value gate, bundle checker, intake/stale agers, trailer check) — tracked on
+the roadmap as delivery-machinery work.

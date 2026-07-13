@@ -59,6 +59,12 @@ mechanism, the redis scheduler.
 
 ## Delivery tracker
 
+<Note>
+The live pickup queue is the [Vexa Roadmap board](https://github.com/orgs/Vexa-ai/projects/2)
+(grouped by contributor lane) with milestone [`v0.12.x`](https://github.com/Vexa-ai/vexa/milestones)
+as the version gate. How to claim and deliver: [the delivery constitution](/governance/delivery#the-roadmap).
+</Note>
+
 The planned features, the [modules](/architecture/modules) each touches, and status. The
 core features are **⬜ planned**; planned meetings, auto-join, and ICS calendar sync are **✅ done**
 (OAuth calendars are **deferred**). See [Identity](/core/identity) for the auth and
@@ -88,9 +94,9 @@ transports pass in CI; it is **not** an end-to-end claim.
 | Capability | Bot / module | Service API | Terminal UI | Honest note |
 |---|---|---|---|---|
 | **Bot browser view** (watch the bot's browser live) | n/a | ❌ none | ❌ none | Not a product feature today. noVNC/x11vnc is baked into the bot image and the lite supervisor **for operator debugging only** (localhost-bound). |
-| **Voice agent — TTS speak** | ✅ implemented + proven live (acts.v1 `speak` → TTS → virtual mic; June full-cycle matrix) | ❌ not wired — the gateway mounts `POST …/speak` per the sealed `api.v1` but the open-core meeting-api has no route behind it → `404`; nothing publishes the speak act | ❌ none | Contract-sealed and module-tested (mock-bot speak-ack gate), **not user-reachable**. Also flagged in the [Meetings API](/api/meetings) and the [changelog](/changelog). |
-| **Recording playback** | ✅ capture + chunking proven (acquire) | ✅ live + module-tested — `GET /recordings`, `/{id}`, `/{id}/master`, `…/raw` through the gateway | ❌ no player — retrieval is API/curl only ([how-to](/how-to/recordings)) | The full live loop (in-meeting capture → object storage → playback) has **not** been validated end-to-end. |
-| **User webhooks** (your URL, signed events) | — | ✅ built + module-tested — self-serve config (URL/secret/events, secret-masked) and the `webhook.v1` HMAC delivery module with retry queue | ❌ no settings UI | **Never fired against a real external receiver** — module tests use an in-memory transport. Treat as untested until a live delivery is proven. |
+| **Voice agent — TTS speak** | ✅ implemented + proven live (acts.v1 `speak` → TTS → virtual mic; June full-cycle matrix) | ❌ not wired — the gateway mounts `POST …/speak` per the sealed `api.v1` but the open-core meeting-api has no route behind it → `404`; nothing publishes the speak act. **Prepared: [#514](https://github.com/Vexa-ai/vexa/issues/514)** | ❌ none | Contract-sealed and module-tested (mock-bot speak-ack gate), **not user-reachable**. Also flagged in the [Meetings API](/api/meetings) and the [changelog](/changelog). |
+| **Recording playback** | ✅ capture + chunking proven (acquire) | ✅ live + module-tested — `GET /recordings`, `/{id}`, `/{id}/master`, `…/raw` through the gateway | ❌ no player — retrieval is API/curl only ([how-to](/how-to/recordings)) | The full live loop (in-meeting capture → object storage → playback) has **not** been validated end-to-end. Retrieval durability is prepared as [#509](https://github.com/Vexa-ai/vexa/issues/509); the E2E playback proof is a declared roadmap-board direction. |
+| **User webhooks** (your URL, signed events) | — | ✅ built + module-tested — self-serve config (URL/secret/events, secret-masked) and the `webhook.v1` HMAC delivery module with retry queue | ❌ no settings UI | **Never fired against a real external receiver** — module tests use an in-memory transport. Treat as untested until a live delivery is proven. Exactly-once emission and outage-durable retry are prepared as [#519](https://github.com/Vexa-ai/vexa/issues/519)/[#520](https://github.com/Vexa-ai/vexa/issues/520), whose acceptance tables carry the live-receiver leg. |
 | **Service webhooks** (in-stack lifecycle callbacks) | — | ✅ wired (`/bots/internal/callback/lifecycle`, `/runtime/callback`) + seam-tested | n/a | Internal plumbing; exercised implicitly by live bot runs, no dedicated E2E harness. |
 | **MCP server** | — | 🟡 ported 0.10.6 meeting-control server runs as its own compose service, module-tested; **not gateway-mounted** (no `/mcp`) | n/a | Untested against a real MCP client. Direction (one MCP server fronted by the gateway) is in the [changelog](/changelog). |
 
@@ -103,12 +109,12 @@ per-row verification notes:
 
 | 0.10.x capability | 0.12 status |
 |---|---|
-| Mid-call bot config (`PUT …/config`) | contract-sealed, not wired — `404` |
-| Voice agent / TTS speak (`POST …/speak`) | contract-sealed, not wired — `404` |
-| Interactive bots beyond speak (in-meeting chat · screen share · avatar) | contract-sealed, not mounted — planned back in 0.12.x |
-| Transcript public share links | contract-sealed, not mounted (was dashboard-coupled) |
-| Meeting participants endpoint (`GET …/participants`) | post-seal — next `api.v1` revision |
-| `discord` ingest platform | post-seal — next `api.v1` revision |
-| Zoom authorized join (OBF/ZAK tokens, native SDK) | not carried — 0.12 joins Zoom via web client only; planned in the 0.12.x Zoom track |
-| Segment-latency env knobs | partial — programmatic config exists, no env wiring |
-| Swagger auth-scheme fixes | not carried — cosmetic DX gap in served docs |
+| Mid-call bot config (`PUT …/config`) | contract-sealed, not wired — `404` · prepared: [#516](https://github.com/Vexa-ai/vexa/issues/516) |
+| Voice agent / TTS speak (`POST …/speak`) | contract-sealed, not wired — `404` · prepared: [#514](https://github.com/Vexa-ai/vexa/issues/514) |
+| Interactive bots beyond speak (in-meeting chat · screen share · avatar) | contract-sealed, not mounted — Teams chat read/write is ready as [#500](https://github.com/Vexa-ai/vexa/issues/500); screen share · avatar planned back in 0.12.x |
+| Transcript public share links | contract-sealed, not mounted (was dashboard-coupled) — declared on the roadmap board; the sealed-vs-served reconcile is [#541](https://github.com/Vexa-ai/vexa/issues/541) |
+| Meeting participants endpoint (`GET …/participants`) | post-seal — next `api.v1` revision · accepted: [#451](https://github.com/Vexa-ai/vexa/issues/451) |
+| `discord` ingest platform | post-seal — next `api.v1` revision · community adapter accepted: [#463](https://github.com/Vexa-ai/vexa/issues/463) |
+| Zoom authorized join (OBF/ZAK tokens, native SDK) | not carried — 0.12 joins Zoom via web client only; declared on the roadmap board (Zoom lane, with [#515](https://github.com/Vexa-ai/vexa/issues/515)/[#518](https://github.com/Vexa-ai/vexa/issues/518)/[#538](https://github.com/Vexa-ai/vexa/issues/538)/[#539](https://github.com/Vexa-ai/vexa/issues/539)) |
+| Segment-latency env knobs | partial — programmatic config exists, no env wiring · prepared: [#535](https://github.com/Vexa-ai/vexa/issues/535) |
+| Swagger auth-scheme fixes | not carried — and not cosmetic: all 61 secured operations reference a scheme that doesn't exist, so Swagger auth and generated clients fail · prepared: [#531](https://github.com/Vexa-ai/vexa/issues/531) |

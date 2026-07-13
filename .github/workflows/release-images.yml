@@ -1,21 +1,19 @@
-# release-images — build, publish, and PROVE the v0.12 image set (release lane C2/C3).
+# release-images — build + publish the v0.12 image set, then hand off to release-validate
+# (release lane C2/C3). Split per #551: this workflow owns the EXPENSIVE, rarely-wrong half
+# (build + publish); release-validate.yml owns the CHEAP, iterated-on half (prove + promote).
+# A validate-harness fix re-runs release-validate alone (~minutes, dispatchable from any
+# branch) instead of rebuilding 10 unchanged images.
 #
 #   tag push v0.12.* (or workflow_dispatch with an explicit version) →
 #     preflight       secrets present (fail fast + loud) · tag ↔ package.json ↔ Chart.yaml
 #                     appVersion consistency · helm static gates · pinned-render assertions
-#     build (matrix)  the 10 uniform images — buildx, amd64, registry :buildcache cache
+#     build (matrix)  the uniform images — buildx, amd64+arm64, registry :buildcache cache
 #     build-bot       vexaai/vexa-bot — special-cased: FROM the locally-built
 #                     vexa/meet-join-env:dev base, so it uses the classic docker driver
-#     verify          every published manifest resolves + carries linux/amd64
-#     image-identity  every published image CONTAINS what its NAME promises (e.g. agent-worker can
-#                     `import worker` and CMD is `python -m worker`) — a mis-wired matrix entry or
-#                     a cross-tagged push fails HERE, loudly, before any validate leg runs
-#     validate-*      compose / mock-FSM / bot-spawn / lite / helm-k3s — each leg PULLS the
-#                     published :vX.Y.Z images (proves the artifacts, not the local builds)
-#     promote         moving tag :v012 on all images once every leg is green (stable tags
-#                     only); :latest only via the explicit workflow_dispatch input
+#     validate        calls release-validate.yml (manifest verify · image-identity ·
+#                     validate legs · promote) with promote: true — the full ship chain
 #
-# Constitutional guard: this workflow NEVER moves vexaai/vexa-bot:dev or vexaai/vexa-bot:latest —
+# Constitutional guard: this chain NEVER moves vexaai/vexa-bot:dev or vexaai/vexa-bot:latest —
 # the 0.10 line publishes there and live 0.10 deployments pull them at spawn time. It also never
 # moves any :dev tag (dev = locally-built, by convention across the deploy stacks).
 #
@@ -48,22 +46,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  # Every image this release publishes. v012-mcp is not in the helm chart but IS a compose
-  # service — the pull-only compose leg (and users) need it published like the rest.
-  ALL_IMAGES: >-
-    vexaai/v012-admin-api
-    vexaai/v012-runtime
-    vexaai/v012-agent-worker
-    vexaai/v012-agent-api
-    vexaai/v012-meeting-api
-    vexaai/v012-gateway
-    vexaai/v012-mcp
-    vexaai/v012-terminal
-    vexaai/vexa-dashboard
-    vexaai/vexa-bot
-    vexaai/vexa-lite
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────────────────────
@@ -171,14 +153,6 @@ jobs:
             image: vexaai/v012-terminal
             context: clients/terminal
             dockerfile: clients/terminal/Dockerfile
-          - name: dashboard
-            image: vexaai/vexa-dashboard
-            context: .
-            dockerfile: clients/dashboard/Dockerfile
-            # parity with deploy/compose/docker-compose.dashboard.yml — the Next proxy's
-            # in-cluster gateway SSOT is baked at build time.
-            build_args: |
-              VEXA_API_URL=http://gateway:8000
           - name: lite
             image: vexaai/vexa-lite
             context: .
@@ -189,6 +163,7 @@ jobs:
       - name: Free runner disk (large image)
         if: matrix.free_disk == true
         uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -199,8 +174,7 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
-          # amd64 only for v0.12.0 — arm64 is a tracked follow-up (build time × QEMU).
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: ${{ matrix.image }}:${{ needs.preflight.outputs.version }}
           build-args: ${{ matrix.build_args }}
           cache-from: type=registry,ref=${{ matrix.image }}:buildcache
@@ -242,386 +216,16 @@ jobs:
           docker push "vexaai/vexa-bot:$VERSION"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
-  verify-manifests:
+  # The other half (#551): manifest verify → image-identity ∥ validate legs → promote.
+  # Re-runnable standalone via release-validate's own workflow_dispatch — from any branch,
+  # against this already-published version — when a validate-harness fix needs iterating.
+  validate:
     needs: [preflight, build, build-bot]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-    steps:
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Every published manifest resolves and carries linux/amd64
-        run: |
-          set -euo pipefail
-          # `imagetools inspect` prints no Platform line for classic-driver (schema-v2)
-          # manifests even when the registry descriptor says linux/amd64 — the bot image
-          # is built on the classic driver by design, so read the registry descriptor
-          # instead; it is authoritative for both manifest shapes.
-          for img in $ALL_IMAGES; do
-            echo "== $img:$VERSION"
-            docker manifest inspect -v "$img:$VERSION" | python3 -c '
-          import sys, json
-          d = json.load(sys.stdin)
-          items = d if isinstance(d, list) else [d]
-          plats = {(m.get("Descriptor", {}).get("platform", {}).get("os"),
-                    m.get("Descriptor", {}).get("platform", {}).get("architecture"))
-                   for m in items}
-          sys.exit(0 if ("linux", "amd64") in plats else 1)
-          ' || { echo "::error ::$img:$VERSION has no linux/amd64 manifest"; exit 1; }
-          done
-          echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present"
-
-  # ──────────────────────────────────────────────────────────────────────────────────────────
-  # Image-identity smoke — a dumb, loud assertion that every published image CONTAINS what its
-  # NAME promises, before any validate leg spends an hour on it. This is the gate that catches a
-  # matrix entry pointing at the wrong Dockerfile, a cross-tagged push, or any other
-  # right-name/wrong-bytes mixup (the failure mode that shipped agent dispatches dying with
-  # 'No module named worker'). Every image in ALL_IMAGES MUST have a case arm — an unlisted
-  # image fails the job.
-  image-identity:
-    needs: [preflight, verify-manifests]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-    steps:
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Every published image contains what its name promises
-        run: |
-          set -euo pipefail
-          probe() {  # probe <ref> <cmd...> — run the identity one-liner with the entrypoint cleared
-            local ref="$1"; shift
-            docker run --rm --entrypoint "" "$ref" "$@" \
-              || { echo "::error title=image-identity::$ref FAILED its identity probe ($*) — the published image does not contain what its name promises"; exit 1; }
-          }
-          for img in $ALL_IMAGES; do
-            ref="$img:$VERSION"
-            echo "== $ref"
-            docker pull -q "$ref"
-            case "$img" in
-              vexaai/v012-admin-api)    probe "$ref" python -c "import admin_api" ;;
-              vexaai/v012-runtime)      probe "$ref" python -c "import runtime_kernel" ;;
-              vexaai/v012-agent-worker)
-                # The per-dispatch claude-in-container harness — NOT the control plane. It must
-                # carry the worker + llm packages and boot via `python -m worker` (profiles.py
-                # spawns it with exactly that command).
-                probe "$ref" python -c "import worker, llm"
-                CMD="$(docker inspect --format '{{json .Config.Cmd}}' "$ref")"
-                if [ "$CMD" != '["python","-m","worker"]' ]; then
-                  echo "::error title=image-identity::$ref CMD is $CMD, expected [\"python\",\"-m\",\"worker\"] — the published agent-worker is NOT the worker build (core/agent/worker/Dockerfile)"
-                  exit 1
-                fi
-                ;;
-              vexaai/v012-agent-api)    probe "$ref" python -c "import control_plane.api" ;;
-              vexaai/v012-meeting-api)  probe "$ref" python -c "import meeting_api" ;;
-              vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
-              vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
-              vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
-              vexaai/vexa-dashboard)    probe "$ref" node -e "require('fs').accessSync('/app/docker-entrypoint.sh'); require('fs').accessSync('/app/server.js')" ;;
-              vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
-              vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
-              *)
-                echo "::error title=image-identity::no identity assertion for $img — every image in ALL_IMAGES must state what proves its contents match its name"
-                exit 1
-                ;;
-            esac
-            echo "   ✓ $ref contents match its name"
-            docker image rm -f "$ref" >/dev/null 2>&1 || true   # keep runner disk headroom (lite alone is multi-GB)
-          done
-          echo "✓ all $(wc -w <<<"$ALL_IMAGES") published images match their names"
-
-  # ──────────────────────────────────────────────────────────────────────────────────────────
-  # Validation legs — every one pulls the PUBLISHED :$VERSION images (COMPOSE_NO_BUILD=1 /
-  # helm --set global.imageTag / lite IMAGE_TAG). Green here means the artifacts work, not
-  # the working tree.
-  validate-compose:
-    needs: [preflight, verify-manifests, image-identity]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
-      - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
-      # The compose agent-worker service is a build-only profile — `up`/`pull` skip it, and the
-      # runtime spawns workers through the docker socket API. Pre-pull the PUBLISHED worker image so
-      # the runtime's presence check finds it and this leg exercises the published worker bytes.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
-      - name: stack-test (always-on subset) from published images
-        working-directory: deploy/compose
-        env:
-          COMPOSE_NO_BUILD: "1"
-          IMAGE_TAG: ${{ needs.preflight.outputs.version }}
-          BROWSER_IMAGE: vexaai/vexa-bot:${{ needs.preflight.outputs.version }}
-        run: ./bin/stack-test
-      - name: Compose state on failure
-        if: failure()
-        run: |
-          docker ps -a
-          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
-
-  validate-mock-fsm:
-    needs: [preflight, verify-manifests, image-identity]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
-      - name: Build the mock bot (local instrument image, never published)
-        run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
-      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
-      - name: stack-test + MOCK_BOT scenarios from published images
-        working-directory: deploy/compose
-        env:
-          COMPOSE_NO_BUILD: "1"
-          IMAGE_TAG: ${{ needs.preflight.outputs.version }}
-          MOCK_BOT: "1"
-          BROWSER_IMAGE: mock-bot:dev
-        run: ./bin/stack-test
-      - name: Compose state on failure
-        if: failure()
-        run: |
-          docker ps -a
-          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
-
-  # 0.10 API backward-compat (release DoD 6): a 0.10-style client's real REST + WS flows against
-  # the stack FROM THE PUBLISHED IMAGES — passes + strict `V010-BREAK:` xfails only; any unexpected
-  # failure (a compat surface regressing, or a recorded break silently un-breaking) turns this red.
-  validate-v010-compat:
-    needs: [preflight, verify-manifests, image-identity]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
-      - name: Build the mock bot (local instrument image, never published)
-        run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
-      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
-      - name: 0.10 backward-compat suite (V010_COMPAT=1) from published images
-        working-directory: deploy/compose
-        env:
-          COMPOSE_NO_BUILD: "1"
-          IMAGE_TAG: ${{ needs.preflight.outputs.version }}
-          V010_COMPAT: "1"
-          MOCK_BOT: "1"
-          BROWSER_IMAGE: mock-bot:dev
-        run: ./bin/stack-test compat
-      - name: Compose state on failure
-        if: failure()
-        run: |
-          docker ps -a
-          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
-
-  validate-bot-spawn:
-    needs: [preflight, verify-manifests, image-identity]
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Seed compose .env
-        run: cp deploy/compose/.env.example deploy/compose/.env
-      # The runtime spawns bots through the docker socket API, which does NOT implicit-pull —
-      # the published bot image must already be on the daemon.
-      - name: Pre-pull the published bot image
-        run: docker pull "vexaai/vexa-bot:$VERSION"
-      # See validate-compose: the build-only agent-worker profile is never pulled by compose itself.
-      - name: Pre-pull the published agent-worker image
-        run: docker pull "vexaai/v012-agent-worker:$VERSION"
-      - name: stack-test + real bot spawn (COMPOSE_BOT=1) from published images
-        working-directory: deploy/compose
-        env:
-          COMPOSE_NO_BUILD: "1"
-          IMAGE_TAG: ${{ needs.preflight.outputs.version }}
-          COMPOSE_BOT: "1"
-          BROWSER_IMAGE: vexaai/vexa-bot:${{ needs.preflight.outputs.version }}
-        run: ./bin/stack-test
-      - name: Compose state on failure
-        if: failure()
-        run: |
-          docker ps -a
-          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
-
-  validate-lite:
-    needs: [preflight, verify-manifests, image-identity]
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Point lite at the published image
-        run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env
-      - name: Bring lite up (pulls vexaai/vexa-lite:$VERSION)
-        run: make -C deploy/lite up init-db
-      - name: Probe the front doors (make test exits non-zero on failure)
-        run: |
-          for i in $(seq 1 10); do
-            make -C deploy/lite test && exit 0
-            echo "…front doors not all up yet (attempt $i/10)"; sleep 15
-          done
-          echo "::error ::lite front-door probes failed after 10 attempts"
-          exit 1
-      - name: Lite state on failure
-        if: failure()
-        run: |
-          docker ps -a
-          docker logs vexa-lite --tail 300 || true
-
-  validate-helm-k3s:
-    needs: [preflight, verify-manifests, image-identity]
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      # k3s' containerd pulls anonymously by default — authenticate to dodge Docker Hub's
-      # per-IP anonymous rate limit (shared across GitHub runners).
-      - name: Registry auth for k3s
-        run: |
-          sudo mkdir -p /etc/rancher/k3s
-          sudo tee /etc/rancher/k3s/registries.yaml >/dev/null <<EOF
-          configs:
-            registry-1.docker.io:
-              auth:
-                username: ${{ secrets.DOCKERHUB_USERNAME }}
-                password: ${{ secrets.DOCKERHUB_TOKEN }}
-          EOF
-      - name: Install k3s (ephemeral single node)
-        run: |
-          curl -sfL https://get.k3s.io | sudo sh -s - --write-kubeconfig-mode 644
-          # kubectl errors out (rather than waiting) while the API server is still booting —
-          # poll until it answers, then wait for node readiness.
-          for i in $(seq 1 60); do kubectl get nodes >/dev/null 2>&1 && break; sleep 5; done
-          kubectl wait --for=condition=Ready node --all --timeout=300s
-      - name: helm install from published images
-        run: |
-          helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --create-namespace \
-            -f deploy/helm/charts/vexa/values-test.yaml \
-            --set global.imageTag="$VERSION" \
-            --wait --timeout 20m
-      - name: Gateway /health + pod states
-        run: |
-          set -euo pipefail
-          curl -sf --retry 10 --retry-delay 5 --retry-all-errors http://127.0.0.1:30056/health
-          echo
-          BAD="$(kubectl -n vexa get pods --no-headers | awk '$3 !~ /Running|Completed|Succeeded/')"
-          if [ -n "$BAD" ]; then
-            echo "$BAD"
-            echo "::error ::non-Running pods after helm --wait"
-            exit 1
-          fi
-          echo "✓ gateway healthy, all pods Running"
-      - name: Cluster state on failure
-        if: failure()
-        run: |
-          kubectl -n vexa get pods -o wide || true
-          kubectl -n vexa get events --sort-by=.lastTimestamp | tail -50 || true
-          kubectl -n vexa describe pods | tail -150 || true
-
-  # ──────────────────────────────────────────────────────────────────────────────────────────
-  promote:
-    name: promote moving tag
-    needs:
-      - preflight
-      - verify-manifests
-      - image-identity
-      - validate-compose
-      - validate-mock-fsm
-      - validate-v010-compat
-      - validate-bot-spawn
-      - validate-lite
-      - validate-helm-k3s
-    # Stable releases only — an rc rehearsal must never move what users pull.
-    if: needs.preflight.outputs.prerelease == 'false'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      VERSION: ${{ needs.preflight.outputs.version }}
-      PROMOTE_LATEST: ${{ inputs.promote_latest == true }}
-    steps:
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Promote :v012 (and :latest only when explicitly requested)
-        run: |
-          set -euo pipefail
-          move() {
-            local dst="$1:$2" src="$1:$VERSION"
-            case "$dst" in
-              vexaai/vexa-bot:dev|vexaai/vexa-bot:latest|*:dev)
-                echo "::error ::constitutional guard: refusing to move $dst (vexa-bot:{dev,latest} belong to the 0.10 line; :dev is never moved by release CI)"
-                exit 1;;
-            esac
-            echo "→ $dst ⇐ $src"
-            docker buildx imagetools create -t "$dst" "$src"
-          }
-          for img in $ALL_IMAGES; do
-            move "$img" v012
-          done
-          if [ "$PROMOTE_LATEST" = "true" ]; then
-            for img in $ALL_IMAGES; do
-              if [ "$img" = "vexaai/vexa-bot" ]; then
-                echo "· skipping vexaai/vexa-bot:latest (constitutional guard — 0.10 line)"
-                continue
-              fi
-              move "$img" latest
-            done
-          else
-            echo "· :latest untouched (promote_latest not requested)"
-          fi
+    uses: ./.github/workflows/release-validate.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      promote: true
+      promote_latest: ${{ inputs.promote_latest == true }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -11,7 +11,13 @@ agent state stay on infrastructure you control.
 Prerequisites: a Linux host (Ubuntu 24.04) for production, **Docker engine ≥ v26** (agent workers
 mount each granted workspace as an isolated volume subpath — older engines fail worker creation;
 `make all` checks and refuses), `git`, `curl`. A Mac with Docker Desktop works for a local
-evaluation — everything runs in containers either way.
+evaluation — everything runs in containers either way. Published `vexaai/v012-*` images include
+`linux/arm64` variants alongside `linux/amd64`, so Docker on Apple Silicon pulls arm64 where
+available — but the arm64 images are published **best-effort**: release CI currently validates
+only the amd64 images (no arm64 execution leg yet), so treat Apple Silicon as experimental.
+`vexaai/vexa-bot` remains amd64-only (built locally via `make bot`). For GPU transcription on
+Mac, point `TRANSCRIPTION_SERVICE_URL` at any OpenAI-compatible local endpoint
+(see [Configuration](/configuration)).
 
 ```bash
 curl -fsSL https://get.docker.com | sh
@@ -122,6 +128,20 @@ server {
     }
 }
 ```
+
+If you publish the **gateway** (`:18056`) through a reverse proxy and turn on the edge guard
+(`GUARD_ENABLED=true`), set `GUARD_TRUSTED_PROXIES` to the proxy's IP and have the proxy forward the
+real client IP:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Without it, every request keys to the proxy IP — one global rate-limit/ban bucket shared by all
+clients, so one abuser throttles everyone. The gateway honors the `X-Forwarded-For` chain only from an
+IP named in `GUARD_TRUSTED_PROXIES` (it reads the rightmost entry); a spoofed header from any other
+source is ignored, so it cannot rotate an abuser's budget. See
+[Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
 
 The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no auth of its own.
 

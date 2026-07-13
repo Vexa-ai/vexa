@@ -98,6 +98,20 @@ gateway:
     port: 8000
     nodePort: ""
   logLevel: "info"
+  # fastapi-guard edge layer: per-IP throttle + auto-ban at the gateway edge.
+  # ON by default with generous limits (600 req/min per IP); set enabled: false to opt out.
+  guard:
+    enabled: true
+    wsEnabled: false          # optional /ws connect guard (in-memory, per-process; opt-in)
+    enableRedis: true         # reuse REDIS_URL for guard state (vexa:guard: namespace)
+    rateLimitRpm: 600         # per-IP requests per minute (0 disables rate limiting)
+    rateLimitWindow: 60
+    autoBanThreshold: 10
+    autoBanDuration: 3600
+    ipWhitelist: ""           # comma-separated IPs that bypass the guard
+    ipBlacklist: ""           # comma-separated IPs to block (403)
+    trustedProxies: ""        # comma-separated trusted proxy IPs (enables X-Forwarded-For)
+    trustXForwardedProto: false
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 512Mi }
@@ -114,6 +128,20 @@ adminApi:
     type: ClusterIP
     port: 8001
   logLevel: "info"
+  # fastapi-guard edge layer: per-IP throttle + auto-ban at the gateway edge.
+  # ON by default with generous limits (600 req/min per IP); set enabled: false to opt out.
+  guard:
+    enabled: true
+    wsEnabled: false          # optional /ws connect guard (in-memory, per-process; opt-in)
+    enableRedis: true         # reuse REDIS_URL for guard state (vexa:guard: namespace)
+    rateLimitRpm: 600         # per-IP requests per minute (0 disables rate limiting)
+    rateLimitWindow: 60
+    autoBanThreshold: 10
+    autoBanDuration: 3600
+    ipWhitelist: ""           # comma-separated IPs that bypass the guard
+    ipBlacklist: ""           # comma-separated IPs to block (403)
+    trustedProxies: ""        # comma-separated trusted proxy IPs (enables X-Forwarded-For)
+    trustXForwardedProto: false
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 512Mi }
