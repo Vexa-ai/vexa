@@ -24,6 +24,7 @@ failures (`422`).
 | `403` | under-scoped key, or bad/missing admin token | `Token scope not authorized for this endpoint` · `Invalid or missing admin token.` |
 | `404` | resource not found — user, token, meeting, or workspace file | `User not found` · `not found` |
 | `422` | semantic validation failed — bad field, invalid scope, event with no plan | `Invalid scope(s): ['foo']. Valid: ['bot', 'browser', 'tx']` |
+| `429` | rate-limited — per-IP edge throttle or per-user limiter; honor the `Retry-After` header (seconds) | — |
 | `500` | unexpected server error | — |
 
 ## By surface
@@ -62,6 +63,19 @@ problems **in-band** as SSE frames, not as a status code:
 
 ## Rate limits
 
-Self-hosted Vexa imposes **no gateway rate limit** — throughput is bounded by your own infrastructure and
-by per-user concurrency (`max_concurrent_bots`, set when the user is created). The hosted service applies
-plan-based limits; a throttled request returns `429` with a `Retry-After` header.
+Two layers gate the gateway, in order:
+
+1. **Per-IP edge throttle (pre-auth).** An optional fastapi-guard edge layer caps requests per client IP
+   *before* the API key is validated — so an IP flooding invalid keys, or rotating many keys from one IP
+   to defeat the per-user limiter, is answered with `429` at the edge and never reaches admin-api. An IP
+   that keeps offending past a threshold is **auto-banned for a window**. Self-hosted default: **OFF**
+   (`GUARD_ENABLED=false`); set `GUARD_ENABLED=true` + `GUARD_RATE_LIMIT_RPM` to turn it on. Hosted runs
+   it on. See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
+2. **Per-user limiter (post-auth).** A token-bucket limiter keyed by user id fires *after* the key is
+   resolved — it catches one token driving too much traffic across many IPs. Self-hosted: **ON** by
+   default (`GATEWAY_RATE_LIMIT_RPS` / `GATEWAY_RATE_LIMIT_BURST`, see [Configuration](/configuration)).
+
+A throttled request returns `429` with a `Retry-After` header (seconds) — honor it before retrying.
+Beyond rate limits, throughput is bounded by your own infrastructure and per-user concurrency
+(`max_concurrent_bots`, set when the user is created). The hosted service additionally applies
+plan-based limits.
