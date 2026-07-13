@@ -2,6 +2,7 @@ import { Page } from "playwright";
 import { log, callAwaitingAdmissionCallback } from "../_host";
 import { BotConfig } from "../_host";
 import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
+import { fillPasswordPromptIfPresent } from "./password";
 import {
   jitsiHangupButtonSelectors,
   jitsiConferenceIndicators,
@@ -143,6 +144,16 @@ export async function waitForJitsiMeetingAdmission(
     if (await isAdmitted(page)) {
       log("[Jitsi] Bot admitted — conference is live");
       return true;
+    }
+
+    // The room-password dialog arrives over the XMPP round-trip and may land
+    // DURING this wait (after join.ts's early 5s check) — answer it here too.
+    // Idempotent: fills only if the dialog is present and not already submitted;
+    // throws password_required (fail fast) if no passcode was supplied.
+    const pwResult = await fillPasswordPromptIfPresent(page, botConfig);
+    if (pwResult === "submitted") {
+      log("[Jitsi] Password dialog appeared during admission wait — submitted passcode");
+      continue; // re-check admission promptly after the submit
     }
 
     // Track unknown state (neither admitted, nor lobby, nor terminal)

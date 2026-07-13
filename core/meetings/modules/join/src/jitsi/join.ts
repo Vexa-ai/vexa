@@ -2,10 +2,10 @@ import { Page } from "playwright";
 import { log, callJoiningCallback } from "../_host";
 import { BotConfig } from "../_host";
 import { isAdmitted } from "./admission";
+import { fillPasswordPromptIfPresent } from "./password";
 import {
   jitsiNameInputSelector,
   jitsiJoinButtonSelector,
-  jitsiPasswordInputSelector,
   jitsiGuestEntryTexts,
 } from "./selectors";
 
@@ -104,32 +104,29 @@ async function enterAsGuestIfGated(page: Page): Promise<boolean> {
 
 /**
  * Handle a password-protected room. Jitsi surfaces the password prompt as a
- * dialog AFTER the join attempt. With a passcode in botConfig we fill + submit;
- * without one we fail fast with a structured reason — the dialog never
- * self-dismisses and the bot would otherwise sit on it until the lobby timeout.
+ * dialog AFTER the join attempt (over the XMPP round-trip). With a passcode in
+ * botConfig we fill + submit; without one we fail fast with a structured reason
+ * — the dialog never self-dismisses and the bot would otherwise sit on it until
+ * the lobby timeout.
+ *
+ * This is only the EARLY check: the prompt may land even later, during the
+ * admission wait — the admission poll loop calls the same (idempotent) fill on
+ * every iteration, so a late prompt is still answered. The 5s window here is
+ * therefore best-effort, and it is raced against the admitted check so a
+ * password-less join no longer pays an unconditional 5s wait.
  */
 async function handlePasswordPrompt(page: Page, botConfig: BotConfig): Promise<void> {
-  const pwField = page.locator(jitsiPasswordInputSelector).first();
-  // The prompt arrives over the XMPP round-trip, seconds after the join click on a
-  // slow deployment — wait long enough that a supplied passcode is actually used.
-  const visible = await pwField
-    .waitFor({ state: "visible", timeout: 5000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!visible) return;
-
-  const passcode = botConfig.passcode || "";
-  if (!passcode) {
-    throw new Error(
-      "[Jitsi] password_required: room is password-protected but botConfig.passcode is empty; " +
-      "pass the room password to the embedder",
-    );
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const result = await fillPasswordPromptIfPresent(page, botConfig);
+    if (result !== "absent") {
+      await page.waitForTimeout(1000);
+      return;
+    }
+    // No dialog (yet). Already in the conference → no password coming; stop waiting.
+    if (await isAdmitted(page)) return;
+    await page.waitForTimeout(500);
   }
-  await pwField.fill(passcode);
-  // Submit: Enter is the universal dialog confirm across jitsi versions.
-  await page.keyboard.press("Enter");
-  log("[Jitsi] Submitted room password");
-  await page.waitForTimeout(1000);
 }
 
 export async function joinJitsiMeeting(
