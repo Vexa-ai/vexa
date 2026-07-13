@@ -151,6 +151,38 @@ def _upsert_processed_view(
     return out
 
 
+# A relative in-meeting offset never approaches this; anything at/above is an absolute epoch.
+_EPOCH_THRESHOLD_S = 1_000_000_000  # ~2001-09-09
+
+
+def _fill_absolute_times(segments: list, base) -> None:
+    """Fill each segment's ``absolute_start_time``/``absolute_end_time`` (in place) when a producer
+    didn't supply them, so a renderer that keys on absolute time shows the segment.
+
+    ``start``/``end`` carry TWO semantics by producer: a RELATIVE offset into the meeting (the carve —
+    small seconds-since-start, bounded by the 4h ceiling) OR an ABSOLUTE epoch-seconds wall-clock (the
+    live pipeline — ~1.78e9). Doing ``base + start`` unconditionally treated an absolute epoch as a
+    relative offset and added it to ``base`` → year ~2083 (2026 + 56.5 years). Discriminate by
+    magnitude: at/above ``_EPOCH_THRESHOLD_S`` the value is already absolute — use it directly; below,
+    anchor the relative offset to ``base`` (the meeting start)."""
+    from datetime import timedelta
+
+    for s in segments:
+        if s.get("absolute_start_time") or s.get("start") is None:
+            continue
+        try:
+            st = float(s["start"])
+            en = float(s["end"]) if s.get("end") is not None else st
+        except (TypeError, ValueError):
+            continue
+        if st >= _EPOCH_THRESHOLD_S:
+            s["absolute_start_time"] = datetime.fromtimestamp(st, timezone.utc).isoformat()
+            s["absolute_end_time"] = datetime.fromtimestamp(en, timezone.utc).isoformat()
+        elif base is not None:
+            s["absolute_start_time"] = (base + timedelta(seconds=st)).isoformat()
+            s["absolute_end_time"] = (base + timedelta(seconds=en)).isoformat()
+
+
 def _segment_to_api(seg: dict) -> dict:
     """Map a stored/Redis segment to an api.v1 ``TranscriptionSegment`` (start/end/text/language
     required; the optional fields ride along)."""
@@ -254,19 +286,9 @@ class SqlAlchemyTranscriptStore:
                 pass
         segments = sorted((seg_by_id[k] for k in order), key=lambda s: (s.get("start") or 0.0))
         # The dashboard's renderer SKIPS any segment without absolute_start_time
-        # (use-vexa-websocket.ts: `if (!seg.absolute_start_time) continue`). Derive it from the
-        # meeting start + the relative offset when a producer didn't supply it, so the historical
-        # transcript renders (the carve served only relative start/end → the UI dropped every segment).
-        from datetime import timedelta
-        base = meeting.start_time or meeting.created_at
-        if base is not None:
-            for s in segments:
-                if not s.get("absolute_start_time") and s.get("start") is not None:
-                    try:
-                        s["absolute_start_time"] = (base + timedelta(seconds=float(s["start"]))).isoformat()
-                        s["absolute_end_time"] = (base + timedelta(seconds=float(s.get("end") or s["start"]))).isoformat()
-                    except Exception:
-                        pass
+        # (use-vexa-websocket.ts: `if (!seg.absolute_start_time) continue`). Derive it when a producer
+        # didn't supply it, so the historical transcript renders. See `_fill_absolute_times`.
+        _fill_absolute_times(segments, meeting.start_time or meeting.created_at)
         return {
             "id": meeting.id,
             "platform": meeting.platform,
