@@ -39,6 +39,7 @@ L2 unit / L3 in-process integration: `test_health`, `test_proxy` (fail-closed au
 - ✅ delivered — `/auth/me` caller identity + `/health` liveness
 - ✅ delivered — `/ws` multiplex: subscribe-authz, per-meeting redis fan-in, unsubscribe/ping, error vocabulary
 - ✅ delivered — `logevent.v1` tracing (`TraceMiddleware`, `X-Trace-Id` forwarding) + per-user rate limit
+- ✅ delivered — fastapi-guard edge layer (`edge_guard.py`): per-IP throttle + auto-ban at the edge (REST-scoped; optional `/ws` hook via `GUARD_WS_ENABLED`). Off-by-default for self-hosted (`GUARD_ENABLED=false` on deploy surfaces; code default ON for deployments that set no value)
 - ⬜ planned — user-scoped `/ws` (auto-subscribe to `u:{user_id}:*` on auth)
 - ⬜ planned — new `ws.v1` frame `meetings.changed`
 - ⬜ planned — new `ws.v1` frame `workspace.committed`

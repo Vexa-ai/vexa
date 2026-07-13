@@ -53,6 +53,13 @@ spec:
                   key: INTERNAL_API_SECRET
             - name: LOG_LEVEL
               value: {{ .Values.gateway.logLevel | default "info" | quote }}
+            # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
+            # self-hosted default OFF; hosted/cloud enables via env (code default is ON for
+            # deployments that set no value). GUARD_WS_ENABLED is the optional /ws hook (off).
+            - name: GUARD_ENABLED
+              value: "false"
+            - name: GUARD_WS_ENABLED
+              value: "false"
             {{- with .Values.gateway.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

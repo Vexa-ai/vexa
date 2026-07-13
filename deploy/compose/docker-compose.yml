@@ -343,6 +343,11 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
+      # self-hosted default OFF; hosted/cloud enables via env (code default is ON for
+      # deployments that set no value). GUARD_WS_ENABLED is the optional /ws hook (off).
+      - GUARD_ENABLED=false
+      - GUARD_WS_ENABLED=false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
       interval: 10s

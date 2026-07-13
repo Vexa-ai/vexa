@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Dict, List, Optional, Set, Tuple
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
@@ -490,6 +491,22 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     ``va:meeting:{id}:chat`` and forwards every raw payload to the socket (main.py:2204).
     """
     await ws.accept()
+
+    # --- optional WS guard hook (GUARD_WS_ENABLED, default false) ---
+    # HTTP SecurityMiddleware does not intercept /ws (Starlette middleware is HTTP-only).
+    # When the toggle is on, resolve the client IP via the same trusted-proxies XFF logic
+    # as guard's HTTP path and deny over-limit/banned IPs at connect. Opt-in: the default
+    # (false) leaves the WS path unchanged so the conformance harness observes zero change.
+    if os.getenv("GUARD_WS_ENABLED", "").strip().lower() == "true":
+        from .edge_guard import ws_guard_check
+
+        if not ws_guard_check(ws):
+            try:
+                await ws.send_text(json.dumps({"type": "error", "error": "ip_blocked"}))
+            finally:
+                await ws.close(code=4401)  # Unauthorized — IP over-limit or banned
+            return
+
     api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
     if not api_key:
         try:
