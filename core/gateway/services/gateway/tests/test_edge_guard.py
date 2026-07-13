@@ -28,7 +28,12 @@ from starlette.websockets import WebSocketDisconnect
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
 from gateway import edge_guard as _edge_guard
 from gateway.app import run_multiplex
-from gateway.edge_guard import apply_guard, build_guard_config, reset_ws_guard
+from gateway.edge_guard import (
+    _GUARD_EXCLUDE_PATHS,
+    apply_guard,
+    build_guard_config,
+    reset_ws_guard,
+)
 from gateway.ratelimit import PerUserRateLimiter
 
 
@@ -182,6 +187,41 @@ class TestGuardBehavior:
         ) as ac:
             resp = await ac.get("/", headers={"X-Forwarded-For": "10.0.0.9"})
         assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_real_exclude_paths_do_not_neuter_guard(self) -> None:
+        """Regression: guard matches ``exclude_paths`` with ``url_path.startswith``
+        (prefix, not exact), so a bare ``"/"`` in the list matches EVERY path and
+        silently disables the whole guard layer — no rate limit, no IP ban, nothing.
+        The real ``_GUARD_EXCLUDE_PATHS`` must not contain ``"/"``.
+
+        Floods ``/`` with the REAL exclude list (not the ``exclude_paths=[]`` the
+        other behavior tests use) + ``rate_limit=3`` and asserts a 429 on the 4th
+        request: if ``"/"`` were present this would be a silent 200 bypass. Caught
+        by live image testing — the unit suite used ``exclude_paths=[]`` and so
+        missed that the shipped config neutered guard on every route. Unique XFF
+        IP (10.0.0.99) avoids the process-wide RateLimitManager singleton bucket
+        pollution the other behavior tests share."""
+        assert "/" not in _GUARD_EXCLUDE_PATHS  # the load-bearing bug guard
+        app = _make_app(
+            _enforcing_config(
+                rate_limit=3,
+                trusted_proxies=["127.0.0.1"],
+                exclude_paths=_GUARD_EXCLUDE_PATHS,
+            )
+        )
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            for _ in range(3):
+                assert (
+                    await ac.get("/", headers={"X-Forwarded-For": "10.0.0.99"})
+                ).status_code == 200
+            # 4th: over the per-IP budget -> guard 429. If "/" were in exclude_paths
+            # this would be 200 (silent bypass) — the regression.
+            assert (
+                await ac.get("/", headers={"X-Forwarded-For": "10.0.0.99"})
+            ).status_code == 429
 
 
 # ── WS guard hook ──────────────────────────────────────────────────────────────

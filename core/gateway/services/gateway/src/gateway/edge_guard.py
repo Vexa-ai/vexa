@@ -48,12 +48,14 @@ _GUARD_AUTO_BAN_THRESHOLD_DEFAULT = 10
 _GUARD_AUTO_BAN_DURATION_DEFAULT = 3600
 _GUARD_REDIS_URL_DEFAULT = "redis://redis:6379/0"
 
-# Paths that skip the guard pipeline entirely. Kept in sync with the per-key
-# limiter's public-infrastructure surface so the two layers agree on what is public
-# infrastructure vs. real API surface. Adds ``/health`` (the liveness probe) so
-# health monitors never trip the guard.
+# Paths that skip the guard pipeline entirely. guard matches these with
+# ``url_path.startswith(path)`` — PREFIX matching, not exact — so a bare ``"/"``
+# here would match EVERY path (everything starts with "/") and silently neuter the
+# entire guard layer (no rate limit, no IP ban, nothing). The root landing is
+# therefore intentionally NOT excluded: it is a cheap route and an IP spending its
+# per-minute budget on it is harmless. Kept in sync with the per-key limiter's
+# public-infrastructure surface otherwise (docs / openapi / health are public).
 _GUARD_EXCLUDE_PATHS = [
-    "/",
     "/docs",
     "/redoc",
     "/openapi.json",
