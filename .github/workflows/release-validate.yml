@@ -12,6 +12,7 @@
 #                      validate-harness fix is testable BEFORE it merges to main
 #
 #   resolve         version well-formed · every published manifest resolves + carries linux/amd64
+#                   (and linux/arm64 for matrix images except vexa-bot)
 #   image-identity  every published image CONTAINS what its NAME promises — runs in PARALLEL
 #                   with the validate legs (all consume the same published bytes); it gates
 #                   PROMOTE, not the validate verdict, so it no longer sits serially between
@@ -84,8 +85,9 @@ env:
 jobs:
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Cheap gate (~30s): the version is well-formed and every manifest it claims actually exists
-  # with linux/amd64. Everything downstream fans out from here IN PARALLEL — nothing heavier
-  # stands between "validate requested" and the first validate leg starting.
+  # with linux/amd64 (all images) and linux/arm64 (matrix images except vexa-bot). Everything
+  # downstream fans out from here IN PARALLEL — nothing heavier stands between "validate
+  # requested" and the first validate leg starting.
   resolve:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -110,7 +112,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Every published manifest resolves and carries linux/amd64
+      - name: Every published manifest resolves and carries required platforms
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -121,17 +123,27 @@ jobs:
           # instead; it is authoritative for both manifest shapes.
           for img in $ALL_IMAGES; do
             echo "== $img:$VERSION"
-            docker manifest inspect -v "$img:$VERSION" | python3 -c '
-          import sys, json
+            # NOTE: a `IMG=... cmd | python3` prefix binds the var only to the first
+            # pipeline command — python3 would KeyError. Export it instead.
+            export IMG="$img"
+            docker manifest inspect -v "$img:$VERSION" | python3 -c "
+          import os, sys, json
+          img = os.environ['IMG']
           d = json.load(sys.stdin)
           items = d if isinstance(d, list) else [d]
-          plats = {(m.get("Descriptor", {}).get("platform", {}).get("os"),
-                    m.get("Descriptor", {}).get("platform", {}).get("architecture"))
+          plats = {(m.get('Descriptor', {}).get('platform', {}).get('os'),
+                    m.get('Descriptor', {}).get('platform', {}).get('architecture'))
                    for m in items}
-          sys.exit(0 if ("linux", "amd64") in plats else 1)
-          ' || { echo "::error ::$img:$VERSION has no linux/amd64 manifest — is the set published?"; exit 1; }
+          required = {('linux', 'amd64')}
+          if img != 'vexaai/vexa-bot':
+            required.add(('linux', 'arm64'))
+          missing = required - plats
+          if missing:
+            print(f'missing platforms: {sorted(missing)}', file=sys.stderr)
+            sys.exit(1)
+          " || { echo "::error ::$img:$VERSION missing required platform manifest(s) — is the set published?"; exit 1; }
           done
-          echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present"
+          echo "✓ all $(wc -w <<<"$ALL_IMAGES") manifests present with required platforms"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Image-identity smoke — a dumb, loud assertion that every published image CONTAINS what its
