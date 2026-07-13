@@ -12,9 +12,17 @@ cd "$root" || exit 1
 # junk commits). The library scrubs its own git envs (core/agent/shared/gitenv.py); this unset is
 # the belt-and-braces hook layer.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_ALTERNATE_OBJECT_DIRECTORIES
-echo "▶ pre-push → pnpm gates (full suite)…"
-pnpm gates || {
-  echo "✗ pre-push: gates FAILED — push aborted (fix the gate above, or bypass with: git push --no-verify)."
-  exit 1
-}
-echo "✓ pre-push: gates green — pushing."
+# FAST STATIC SUBSET only (wall-clock law): CI owns the full suite — the local hook exists to
+# catch cheap structural mistakes before they burn a CI round-trip, not to re-prove what CI
+# will prove authoritatively on the same sha. The stack/python/build classes cost 5-10 min per
+# push and once blocked a release tag on a LOCAL stale-docker flake. Full suite on demand:
+# `pnpm gates`. Bypass: `git push --no-verify`.
+FAST_GATES="readme dataflow isolation isolation-py exports graph graph-py schema contract-version config-contract licenses execution-env test-isolation contract-conformance"
+echo "▶ pre-push → static gates ($(echo $FAST_GATES | wc -w | tr -d ' ') fast checks; CI runs the full suite)…"
+for g in $FAST_GATES; do
+  node scripts/gates.mjs "$g" || {
+    echo "✗ pre-push: gate:$g FAILED — push aborted (fix it, or bypass with: git push --no-verify)."
+    exit 1
+  }
+done
+echo "✓ pre-push: static gates green — pushing (full suite runs in CI)."

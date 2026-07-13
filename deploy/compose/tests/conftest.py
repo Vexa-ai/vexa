@@ -91,8 +91,15 @@ requires_docker = pytest.mark.skipif(not docker_available(), reason="docker not 
 _REGISTRY_FLAKE = ("registry-1.docker.io", "Bad Gateway", "Service Unavailable", "TLS handshake timeout")
 
 
+# Optional overlay files (colon-separated paths), e.g. the CI build-cache overlay — appended
+# after the base file so they can only ADD build options, never redefine the stack.
+COMPOSE_EXTRA_FILES = [f for f in os.getenv("COMPOSE_EXTRA_FILES", "").split(":") if f]
+
+
 def _compose(*args: str, env: dict | None = None, check: bool = True, timeout: int = 1200) -> subprocess.CompletedProcess:
     base = ["docker", "compose", "-p", PROJECT, "-f", str(COMPOSE_FILE)]
+    for extra in COMPOSE_EXTRA_FILES:
+        base += ["-f", extra]
     full_env = {**os.environ, **_stack_env(), **(env or {})}
     cmd = base + list(args)
     result = subprocess.run(cmd, capture_output=True, text=True, env=full_env, check=False, timeout=timeout)
