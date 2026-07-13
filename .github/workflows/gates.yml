@@ -6,6 +6,9 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  # merge queue: the queue's temporary merge-group ref must run (and report) `gates`,
+  # or every queued PR waits forever on a check that never fires.
+  merge_group:
 
 # a superseded run's result is worthless — cancel it
 concurrency:
