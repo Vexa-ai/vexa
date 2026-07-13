@@ -657,7 +657,7 @@ rungs, and where the machinery runs them:
 | **L3 — delivers** | the PR's own tree assembles and drives the full product FSM — join lifecycle, failure attribution, transcript-segment emission, concurrent bots, acts — through the **real** backend (mock bot: real orchestrator + real adapters; only join/audio faked) | `pr-value` | every runtime-surface PR, ~10–15 min |
 | **L3.5 — transcribes** *(to build)* | fixture audio → real pipeline → real CPU STT → **golden words** land via the API — no Meet, no human | wav→words leg | PRs touching the transcription path; every release |
 | **L4 — artifact truth** | the *published* images deliver on every deployment shape (compose · mock-FSM · 0.10-compat · bot-spawn · lite · helm) + fresh-VM concurrent-bots | `release-validate` + VM leg | every release, ≤10 min re-runnable |
-| **L5 — witnessed value** | a real Meet, real audio, real admission → words a human saw land | eval lane (`bot/eval/run.sh`: autonomous verdict, ONE human act — admit) | per minor release; per join-surface batch |
+| **L5 — witnessed value** | a real Meet, real audio, real admission → words a human saw land, plus the batch's user-visible values walked once | the release **witness script** over the eval lane (`bot/eval/run.sh`: autonomous verdict; human acts: admit + speak + walk the script, ~10 min) | once per release — the combined pass |
 
 Two laws fall out of the ladder:
 
@@ -718,18 +718,21 @@ honored.**
    it is an unclosed loop.
 6. **The milestone ticks** — the public progress bar is the release ledger.
 
-**The value-witness law.** "All value witnessed" is a *named rung*, never an inference from
+**The value-witness law.** "All value witnessed" is a *named act*, never an inference from
 machinery green (the v0.12.1 incident: promoted and published on L4 alone, witness unsigned):
 
-- **A patch release** ships on L4 green **plus** the highest automated value rung available
-  (today the mock-FSM leg; L3.5 wav→words once built) — and its notes' coverage statement MUST
-  say which rung witnessed the value and that L5 was not re-run.
-- **A minor release, or any batch touching the join surface,** ships only with an **L5
-  witness**: the eval lane run on the release candidate (autonomous verdict; the one human act
-  is admitting the bot), signed by the human who admitted.
+- **PR-level value is machine-witnessed.** A PR's value rows are proven by the harness on its
+  own sha (`pr-value`, path-aware legs); no human eyeballs individual PRs. A PR reaches the
+  human only as *proven value + reviewed diff* — or when it needs a genuine ruling.
+- **Every release carries ONE combined-value witness pass.** The release generates a **witness
+  script** from the batch: a single live session (one real meeting on the release candidate +
+  one product walkthrough) in which every user-visible value shipped in the batch is
+  experienced once. The autonomous legs surround it; the human contributes the irreducible
+  minimum — admit the bot, speak, walk the script (~10 min). Backend-invisible changes are
+  listed under the script with their machine evidence, witnessed by proxy and named as such.
 - **Publish and promote are the same act** for witness purposes: neither happens before the
-  release's declared witness rung is green. A release published below its declared rung is
-  retracted to pre-release until the rung is met.
+  witness pass is signed. A release published unwitnessed is retracted to pre-release until
+  the pass is met.
 
 **The verdict-latency law.** The release loop is only honest if it is also *fast to re-ask*:
 

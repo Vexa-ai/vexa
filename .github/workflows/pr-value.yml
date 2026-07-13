@@ -30,10 +30,21 @@ on:
       - "libs/**"
       - "package.json"
       - "pnpm-lock.yaml"
+  # Backfill mode: validate an ALREADY-OPEN PR (the queue that predates this workflow) without
+  # waiting for the contributor to push. Checks out the PR's MERGE ref (their change on top of
+  # current main — the thing that would actually land). SECURITY: this mode runs untrusted PR
+  # code; the job uses NO secrets (no registry login — anonymous pulls), so there is nothing
+  # to exfiltrate beyond the read-only GITHUB_TOKEN.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Open PR number to validate (checks out refs/pull/<pr>/merge)"
+        required: true
+        type: string
 
 # a superseded run's verdict is worthless — cancel it
 concurrency:
-  group: pr-value-${{ github.ref }}
+  group: pr-value-${{ inputs.pr || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -46,6 +57,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          # pull_request event → default (the PR merge ref). dispatch → the named PR's merge ref.
+          ref: ${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || '' }}
       - uses: jlumbroso/free-disk-space@v1.3.1
       - uses: astral-sh/setup-uv@v5
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
@@ -69,7 +83,7 @@ jobs:
           {
             echo "## pr-value — machine-presented live-leg row (TAKE step 2)"
             echo
-            echo "Stack built from \`${{ github.event.pull_request.head.sha }}\`;"
+            echo "PR: \`${{ inputs.pr || github.event.pull_request.number }}\` · stack built from \`${{ github.event.pull_request.head.sha || 'merge ref (dispatch backfill)' }}\`;"
             echo "scenario suite: \`deploy/compose/tests/mock_scenarios_test.py\`"
             echo "(lifecycle FSM · failure attribution · join-timeout · segment emission ·"
             echo "immediate-stop · max-bots · speak-ack · canaccess-deny) + always-on stack subset."
