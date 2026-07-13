@@ -450,6 +450,62 @@ jobs:
           kubectl -n vexa describe pods | tail -150 || true
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
+  # The guarantee block (delivery.mdx ship bar, owner-approved canon 2026-07-13) — GENERATED
+  # from this run's actual leg results, never hand-written. The release notes paste this
+  # verbatim. Lines this run cannot prove are stated as such, loudly (the honesty valve).
+  guarantees:
+    name: guarantee block
+    needs:
+      - resolve
+      - image-identity
+      - validate-compose
+      - validate-mock-fsm
+      - validate-v010-compat
+      - validate-bot-spawn
+      - validate-lite
+      - validate-helm-k3s
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Generate the guarantee block from leg results
+        env:
+          R_RESOLVE: ${{ needs.resolve.result }}
+          R_IDENTITY: ${{ needs.image-identity.result }}
+          R_COMPOSE: ${{ needs.validate-compose.result }}
+          R_MOCKFSM: ${{ needs.validate-mock-fsm.result }}
+          R_V010: ${{ needs.validate-v010-compat.result }}
+          R_BOTSPAWN: ${{ needs.validate-bot-spawn.result }}
+          R_LITE: ${{ needs.validate-lite.result }}
+          R_HELM: ${{ needs.validate-helm-k3s.result }}
+        run: |
+          set -euo pipefail
+          m() { [ "$1" = "success" ] && echo "✅" || echo "❌ ($1)"; }
+          {
+            echo "## The guarantee — $VERSION ([this run]($RUN_URL))"
+            echo
+            echo "| # | Guarantee | Proof in this run |"
+            echo "|---|---|---|"
+            echo "| 1 | Every artifact users pull is the artifact we proved | $(m "$R_RESOLVE") manifests resolve; every leg pulls published bytes only |"
+            echo "| 2 | Works end-to-end on every documented install path | compose $(m "$R_COMPOSE") · FSM $(m "$R_MOCKFSM") · lite $(m "$R_LITE") · helm $(m "$R_HELM") |"
+            echo "| 3 | Real audio → correct, speaker-attributed words | ⚠️ NOT machine-proven in this run — witness-pass only until the wav→words leg (#560) ships |"
+            echo "| 4 | A fresh machine with nothing on it succeeds | ⚠️ fresh-VM leg runs outside this workflow — attach its evidence to the notes or state unclaimed |"
+            echo "| 5 | Nothing that worked before broke | v010-compat $(m "$R_V010") · bot-spawn $(m "$R_BOTSPAWN") |"
+            echo "| 6 | Every image contains what its name promises | $(m "$R_IDENTITY") image-identity |"
+            echo "| 7 | A human witnessed the assembled value | ⛔ UNSIGNED — the witness pass happens after this run; NOT publishable until this line carries the signature |"
+            echo "| 8 | Every batch change individually proven before entry | recorded at merge time (pr-value + gates per head; see the batch's merge cards) |"
+            echo "| 9 | The notes tell the truth about coverage | this table IS the mechanism — generated from run results, gaps stated above |"
+            echo "| 10 | Pointers moved honestly | promote runs only on all-green + promote:true; constitutional guards in the job |"
+          } | tee guarantees.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guarantees-${{ needs.resolve.outputs.version }}
+          path: guarantees.md
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
   promote:
     name: promote moving tag
     needs:

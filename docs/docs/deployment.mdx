@@ -15,7 +15,7 @@ evaluation — everything runs in containers either way. Published `vexaai/v012-
 `linux/arm64` variants alongside `linux/amd64`, so Docker on Apple Silicon pulls arm64 where
 available — but the arm64 images are published **best-effort**: release CI currently validates
 only the amd64 images (no arm64 execution leg yet), so treat Apple Silicon as experimental.
-`vexaai/vexa-bot` remains amd64-only (built locally via `make bot`). For GPU transcription on
+`vexaai/vexa-bot` remains amd64-only (the install pulls the published image; `make bot` builds a local `vexa/vexa-bot:dev` for development). For GPU transcription on
 Mac, point `TRANSCRIPTION_SERVICE_URL` at any OpenAI-compatible local endpoint
 (see [Configuration](/configuration)).
 

@@ -120,11 +120,12 @@ function ModelsStep({ onNext }: { onNext: (state: StepState) => void }) {
         {!detecting && !detected && (
           <div style={{ marginLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
             <div style={{ fontSize: 11.5, color: "var(--t2)", lineHeight: 1.5 }}>
-              No valid Claude credentials found. Sign in first, then re-check — setup waits here:
+              No Claude credentials detected in the deployment environment. Set up a model
+              provider via <code style={{ fontSize: 11, fontFamily: "var(--mono)", background: "var(--panel2)", padding: "1px 4px", borderRadius: 3 }}>HOST_CLAUDE_CREDENTIALS</code>{" "}
+              in deployment settings or select the "OpenRouter or custom endpoint" option above
+              — see the <a href="https://docs.vexa.ai/configuration" target="_blank" rel="noreferrer" style={{ color: "var(--t2)", textDecoration: "underline" }}>configuration docs</a>{" "}
+              for all setup options.
             </div>
-            <code style={{ fontSize: 11, fontFamily: "var(--mono)", background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 6, padding: "6px 9px", color: "var(--t2)" }}>
-              claude &nbsp;# then run /login and sign in with your Claude account
-            </code>
             {detect && !detect.ok && <TestLine res={detect} err={null} busy={false} />}
             <button style={{ ...quietBtn, alignSelf: "flex-start" }} onClick={(e) => { e.stopPropagation(); recheck(); }}>
               Re-check

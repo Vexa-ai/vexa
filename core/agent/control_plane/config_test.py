@@ -70,7 +70,8 @@ def test_subscription_credentials(creds_path: str = CREDS_PATH, *, now: Optional
     if not os.path.isfile(creds_path):
         # docker turns a MISSING host path into an empty dir — same failure, same message.
         return _result(False, "No subscription credentials mounted "
-                              "(HOST_CLAUDE_CREDENTIALS unset, or the host file is missing).")
+                              "(HOST_CLAUDE_CREDENTIALS unset, or the host file is missing) — "
+                              "all setup options: https://docs.vexa.ai/configuration")
     try:
         with open(creds_path, "r", encoding="utf-8") as f:
             data = json.load(f)

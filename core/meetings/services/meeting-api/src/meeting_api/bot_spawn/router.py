@@ -20,8 +20,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ..config_preflight import CONFIGURED, capability_state, missing_capability_keys
-from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed
+from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
 
@@ -200,25 +199,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 ),
             )
 
-        # CC4 — fail loud (P18): a transcription bot needs STT. The guard is the CANONICAL config.v1
-        # capability gate (ADR-0026): it consults the declared `stt` capability's tri-state — the same
-        # declaration that drives the boot preflight and the /health row — instead of ad-hoc os.getenv
-        # checks (env-level state, pure: no probe I/O on the spawn path). If transcription resolves ON
-        # but stt is not `configured`, refuse the spawn (before any DB write) rather than silently
-        # launch a bot that joins + captures but can NEVER transcribe. A no-transcription bot must opt
-        # out explicitly: spawn transcribe_enabled=false, or set TRANSCRIBE_ENABLED=false on the deploy.
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
-        stt_state = capability_state("stt")
-        if transcribe_enabled and stt_state != CONFIGURED:
-            unset = ", ".join(missing_capability_keys("stt"))
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"transcription requested but the STT service is not configured "
-                    f"(config.v1 capability 'stt' is {stt_state}: {unset} unset) — set them, or spawn "
-                    "with transcribe_enabled=false"
-                ),
-            )
 
         try:
             meeting = await request_bot(
@@ -244,6 +225,8 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 webhook_secret=x_user_webhook_secret,
                 webhook_events=webhook_events,
             )
+        except TranscriptionNotConfigured as e:
+            raise HTTPException(status_code=503, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:
