@@ -22,7 +22,10 @@ services:
     image: vexaai/v012-transcription-cpu:${IMAGE_TAG:-dev}
     environment:
       - WORKER_ID=1
-      - MODEL_SIZE=${MODEL_SIZE:-medium}
+      # Default `small`, not `medium`: on a CPU worker `medium` cannot keep up with real-time meeting
+      # audio and sheds load with 503 "Service busy" (a fresh self-host on a modest VM gets NO
+      # transcript). `small` keeps pace on ~4-6 vCPU (witnessed). Raise to medium/large only with GPU.
+      - MODEL_SIZE=${MODEL_SIZE:-small}
       - DEVICE=cpu
       - COMPUTE_TYPE=int8
       - CPU_THREADS=${CPU_THREADS:-0}
