@@ -123,7 +123,10 @@ jobs:
           # instead; it is authoritative for both manifest shapes.
           for img in $ALL_IMAGES; do
             echo "== $img:$VERSION"
-            IMG="$img" docker manifest inspect -v "$img:$VERSION" | python3 -c "
+            # NOTE: a `IMG=... cmd | python3` prefix binds the var only to the first
+            # pipeline command — python3 would KeyError. Export it instead.
+            export IMG="$img"
+            docker manifest inspect -v "$img:$VERSION" | python3 -c "
           import os, sys, json
           img = os.environ['IMG']
           d = json.load(sys.stdin)
