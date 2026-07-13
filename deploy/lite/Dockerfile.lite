@@ -37,7 +37,7 @@ COPY scripts ./scripts
 RUN --mount=type=cache,id=pnpm-store-lite,target=/pnpm/store \
     pnpm install --frozen-lockfile=false
 # Build the page-side capture bricks first (browser bundles, not bot deps), then @vexa/bot + deps.
-RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" run build
+RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" --filter "@vexa/jitsi-capture" run build
 RUN pnpm --filter "@vexa/bot..." run build
 RUN test -f /build/core/meetings/services/bot/dist/index.js \
  && test -s /build/core/meetings/services/bot/dist/browser-utils.global.js
