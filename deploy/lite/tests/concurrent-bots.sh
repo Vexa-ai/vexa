@@ -114,6 +114,29 @@ dirs=$(X bash -c 'ls -d /tmp/browser-data-* 2>/dev/null | wc -l')
 [ "$dirs" -ge "$N_BOTS" ] || die "expected ≥$N_BOTS per-bot profile dirs, found $dirs"
 echo "per-bot profile dirs: $dirs ✓"
 
+# 4) the live-transcript SSE stream AUTHORIZES for the meeting's OWNER (#585 regression).
+#    agent-api owner-scopes /agent/meeting/stream by calling meeting-api GET /meetings/{id}; on lite
+#    a MISSING VEXA_MEETING_API_URL left agent-api pointing at the compose hostname http://meeting-api
+#    :8080 (no DNS in the single container) → the lookup threw → fail-closed → EVERY live stream 403'd
+#    → the terminal panel stayed blank though transcription worked. Pure authorization, no audio
+#    needed: this leg goes RED on that misconfig (the class no compose leg can see — meeting-api:8080
+#    resolves there) and GREEN once the URL is reachable. Witness-found on v0.12.2, guarded here.
+read -r ROW _NAT <<EOF
+$(printf '%s' "$statuses" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); ms=d.get('meetings',d if isinstance(d,list) else [])
+m=ms[0] if ms else {}
+print(m.get('id',''), m.get('native_meeting_id',''))" 2>/dev/null)
+EOF
+[ -n "$ROW" ] || die "no meeting row available to test the live-transcript stream (#585 guard)"
+stream_out=$(curl -s -N -m 8 "$GATEWAY/agent/meeting/stream?meeting_id=$ROW&session_uid=$ROW" \
+  -H "X-API-Key: $TOKEN" 2>/dev/null | head -c 400)
+case "$stream_out" in
+  *"not authorized"*)
+    die "live-transcript stream DENIED the owner (#585) — agent-api cannot owner-scope the SSE feed; is VEXA_MEETING_API_URL reachable on this deploy? (blank terminal panel class)";;
+esac
+echo "live-transcript stream authorizes for owner ✓ (#585)"
+
 # ── cleanup (best-effort) ──
 for mid in "${ids[@]}"; do
   curl -s -X DELETE "$GATEWAY/bots/google_meet/$mid" -H "X-API-Key: $TOKEN" >/dev/null || true
