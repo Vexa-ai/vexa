@@ -8,11 +8,13 @@ BROWSER_IMAGE ?= mock-bot:dev
 EMAIL ?= self-host@vexa.ai
 SCOPES ?= bot,tx
 COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
-# The meeting bot is built FROM SOURCE (matching this stack's lifecycle.v1), never pulled — see `bot`.
+# Install pulls the published bot (vexaai/vexa-bot:v012 — release-validated since v0.12.1).
+# `make bot` builds from source into the LOCAL namespace (vexa/, like vexa/meet-join-env:dev) so a
+# source build can never shadow the published pointer (#569).
 REPO_ROOT := $(abspath ../..)
-BOT_IMAGE ?= vexaai/vexa-bot:v012
+BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up down build ps logs bot _preflight _bot_check _creds_check _access
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down build ps logs bot _preflight _bot_check _creds_check _access
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -60,17 +62,49 @@ stack-test-mock:
 stack-test-v010:
 	V010_COMPAT=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test compat
 
-## up / down / build — hand-drive the stack (dev only; the proof manages its own lifecycle).
-## `up` is the zero-friction entrypoint: seeds .env from .env.example if absent, brings the stack up,
-## then mints + prints an API key (via the idempotent bin/provision-token) with the URLs.
+## up — the INSTALL entrypoint: PULLS the published, release-validated images (#569 — what users
+## run must be the bytes the release machinery proved; a local build must never shadow a published
+## :v012 pointer). Seeds .env from .env.example if absent, pulls everything (services + the
+## build-only agent-worker profile + the bot), brings the stack up WITHOUT building, then mints +
+## prints an API key. Building from source is `make dev` (images tagged :dev, never v012 names).
 up:
 	@$(MAKE) --no-print-directory _preflight
 	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
-	$(COMPOSE) up -d --build
-	$(COMPOSE) build agent-worker  # profiles:[build-only] keeps it out of `up` — build it explicitly or first chat fails to spawn
+	$(COMPOSE) pull
+	@_tag=$$(grep -E '^IMAGE_TAG=' .env | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-v012}; \
+	 echo "→ pulling spawn-time images (agent-worker is a build-only compose profile pull skips)"; \
+	 docker pull "vexaai/v012-agent-worker:$$_tag"; \
+	 _bi=$$(grep -E '^BROWSER_IMAGE=' .env | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); \
+	 case "$$_bi" in vexaai/*) docker pull "$$_bi";; esac
+	$(COMPOSE) up -d --no-build
 	@$(MAKE) --no-print-directory _bot_check
 	@$(MAKE) --no-print-directory _creds_check
 	@$(MAKE) --no-print-directory _access
+
+## dev — build the whole stack FROM THIS CHECKOUT, tagged :dev (the repo-wide 'dev = locally-built'
+## convention) so a source build can never impersonate a published :v012 image. The running stack's
+## interpolated refs (AGENT_WORKER_IMAGE etc.) follow IMAGE_TAG=dev coherently.
+dev:
+	@$(MAKE) --no-print-directory _preflight
+	@[ -f .env ] || { echo "→ no .env found; seeding from .env.example"; cp .env.example .env; }
+	IMAGE_TAG=dev $(COMPOSE) up -d --build
+	IMAGE_TAG=dev $(COMPOSE) build agent-worker  # profiles:[build-only] keeps it out of `up`
+	@$(MAKE) --no-print-directory _bot_check
+	@$(MAKE) --no-print-directory _creds_check
+	@$(MAKE) --no-print-directory _access
+
+## digest-audit — the #569 negative control: every vexaai/*:$IMAGE_TAG image on this host must
+## carry a RepoDigest (= came from the registry). A locally-built image has NO RepoDigest, so a
+## shadowed pointer fails here loudly. Run after `make up` to prove the install is artifact-true.
+digest-audit:
+	@_tag=$$(grep -E '^IMAGE_TAG=' .env 2>/dev/null | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-v012}; \
+	 fail=0; \
+	 for img in $$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^vexaai/.*:$$_tag$$"); do \
+	   d=$$(docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$$img"); \
+	   if [ -z "$$d" ]; then echo "✗ $$img has NO registry digest — locally built, shadows the published pointer"; fail=1; \
+	   else echo "✓ $$img ⇐ $$d"; fi; \
+	 done; \
+	 [ "$$fail" = 0 ] && echo "✓ digest audit clean — every $$_tag image on this host is the published artifact" || exit 1
 
 ## _preflight — fail fast on a too-old Docker engine: agent workers mount workspaces via the Mounts
 ## API's named-volume Subpath, which needs engine ≥ v26 — an older engine fails every worker create
@@ -91,10 +125,11 @@ _preflight:
 	      fi;; \
 	 esac
 
-## bot — build the meeting bot FROM SOURCE (the v0.12 bot that matches this stack's lifecycle.v1).
-## The published vexaai/vexa-bot:dev on Docker Hub is the OLDER 0.10 line and is NOT compatible — the
-## bot is built here, never pulled. Builds the join-env base first, then the bot, tagged BOT_IMAGE.
-## Point BROWSER_IMAGE (.env) at BOT_IMAGE so the runtime spawns it.
+## bot — build the meeting bot FROM SOURCE for development, tagged into the LOCAL vexa/ namespace
+## (BOT_IMAGE, default vexa/vexa-bot:dev) so it can never shadow the published vexaai/vexa-bot:v012
+## the install pulls. (vexaai/vexa-bot:dev on Docker Hub is the OLDER 0.10 line — neither pulled nor
+## overwritten here.) Builds the join-env base first, then the bot. Point BROWSER_IMAGE (.env) at
+## BOT_IMAGE so the runtime spawns your build.
 bot:
 	@echo "→ [1/2] join-env base: vexa/meet-join-env:dev"
 	docker build -f $(REPO_ROOT)/core/meetings/modules/join/Dockerfile.env -t vexa/meet-join-env:dev $(REPO_ROOT)/core/meetings/modules/join
@@ -118,11 +153,13 @@ _bot_check:
 	 if [ -n "$$_bi" ] && ! docker image inspect "$$_bi" >/dev/null 2>&1; then \
 	   echo ""; \
 	   echo "═══════════════════════════════════════════════════════════"; \
-	   echo "  ⚠️  meeting bot image '$$_bi' is NOT built locally."; \
-	   echo "      The bot is built FROM SOURCE here, never pulled (the published"; \
-	   echo "      vexaai/vexa-bot:dev is the old 0.10 line, incompatible with this stack)."; \
-	   echo "      Bots will FAIL TO JOIN until you build it:"; \
-	   echo "          make -C deploy/compose bot"; \
+	   echo "  ⚠️  meeting bot image '$$_bi' is not present on this host."; \
+	   case "$$_bi" in \
+	     vexaai/*) echo "      It is PUBLISHED — pull it:  docker pull $$_bi";; \
+	     *)        echo "      It looks locally-built (dev path) — build it:"; \
+	               echo "          make -C deploy/compose bot   (tags $(BOT_IMAGE))";; \
+	   esac; \
+	   echo "      Bots will FAIL TO JOIN until the image exists."; \
 	   echo "═══════════════════════════════════════════════════════════"; \
 	   echo ""; \
 	 fi
