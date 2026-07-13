@@ -55,7 +55,9 @@ spec:
               value: {{ .Values.gateway.logLevel | default "info" | quote }}
             # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
             # self-hosted default OFF; hosted/cloud enables via env (code default is ON for
-            # deployments that set no value). GUARD_WS_ENABLED is the optional /ws hook (off).
+            # deployments that set no value). GUARD_WS_ENABLED is the optional /ws hook (off):
+            # in-memory per-process — does NOT share ban/rate-limit state with the Redis-backed
+            # HTTP layer, and under uvicorn --workers N>1 each worker keeps an independent WS ban set.
             - name: GUARD_ENABLED
               value: "false"
             - name: GUARD_WS_ENABLED

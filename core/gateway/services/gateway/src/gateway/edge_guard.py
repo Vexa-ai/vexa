@@ -28,6 +28,7 @@ harness unaffected). Redis state reuses the same ``REDIS_URL`` Vexa already runs
 namespaced under ``vexa:guard:`` to avoid colliding with Vexa's own keys
 (``ratelimit:``, ``gateway:token:``).
 """
+
 from __future__ import annotations
 
 import os
@@ -214,9 +215,18 @@ class _WsGuard:
                 bucket.popleft()
             if len(bucket) >= limit:
                 # Over limit → count toward auto-ban; ban when the threshold is reached.
-                self._ban_counts[client_ip] += 1
-                if self._ban_counts[client_ip] >= int(cfg.auto_ban_threshold):
-                    self._bans[client_ip] = now + float(cfg.auto_ban_duration)
+                # Auto-ban only fires when IP banning is enabled (the config knob is
+                # otherwise ignored, which would let banning slip in via the back door).
+                if cfg.enable_ip_banning:
+                    self._ban_counts[client_ip] += 1
+                    if self._ban_counts[client_ip] >= int(cfg.auto_ban_threshold):
+                        # Reset on set: after the ban window expires the offender starts a
+                        # fresh cycle (clean "auto-ban for a window, then fresh budget"
+                        # semantics) — without this, ban_counts sits at the threshold and the
+                        # first over-limit post-expiry immediately re-bans for a full duration.
+                        self._bans[client_ip] = now + float(cfg.auto_ban_duration)
+                        self._ban_counts[client_ip] = 0
+                        bucket.clear()
                 return False
             bucket.append(now)
         return True
@@ -256,20 +266,31 @@ def ws_guard_check(ws: WebSocket) -> bool:
 
 
 def resolve_ws_client_ip(ws: WebSocket, config: SecurityConfig) -> str:
-    """Resolve the client IP from a WebSocket using the same trusted-proxies XFF
-    logic as guard's HTTP path (``guard_core.utils.extract_client_ip``).
+    """Resolve the client IP from a WebSocket mirroring guard's HTTP path
+    (``guard_core.utils.extract_client_ip``).
 
-    When the TCP peer is a trusted proxy, the first ``X-Forwarded-For`` entry is
-    the real client; otherwise the peer IP itself is used. ``trusted_proxy_depth``
-    is 1 (the default) — the first hop.
+    When the TCP peer is NOT a trusted proxy, the XFF header is ignored and the
+    peer IP is used — so a spoofed XFF from an untrusted source does NOT rotate
+    the rate-limit/ban budget (the A4 spoofed-XFF sub-case).
+
+    When the peer IS a trusted proxy, the client IP is taken from the
+    ``X-Forwarded-For`` chain at depth ``config.trusted_proxy_depth`` counting
+    back from the RIGHTMOST entry (``ips[-trusted_proxy_depth]`` — one hop back
+    from the trusted peer when depth=1, the default). This matches guard_core's
+    ``_extract_from_forwarded_header`` exactly; the LEFTMOST entry is the most
+    attacker-spoofable one and must not be keyed on.
     """
     connecting_ip = ws.client.host if ws.client else "unknown"
     if not config.trusted_proxies:
         return connecting_ip
     if connecting_ip not in config.trusted_proxies:
+        # Untrusted peer: ignore XFF so a spoofed header cannot rotate the budget.
         return connecting_ip
     xff = ws.headers.get("x-forwarded-for")
     if not xff:
         return connecting_ip
-    first = xff.split(",")[0].strip()
-    return first or connecting_ip
+    ips = [entry.strip() for entry in xff.split(",")]
+    depth = max(1, int(getattr(config, "trusted_proxy_depth", 1) or 1))
+    if len(ips) >= depth:
+        return ips[-depth] or connecting_ip
+    return connecting_ip

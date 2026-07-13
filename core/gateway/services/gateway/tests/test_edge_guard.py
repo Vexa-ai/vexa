@@ -12,6 +12,7 @@ Two layers:
 * ``TestWsGuard`` exercises the optional ``GUARD_WS_ENABLED`` hook in ``run_multiplex`` — a
   blacklisted IP is denied at connect; a clean IP passes through to the auth layer.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,10 @@ from httpx import ASGITransport
 from starlette.websockets import WebSocketDisconnect
 
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
+from gateway import edge_guard as _edge_guard
 from gateway.app import run_multiplex
 from gateway.edge_guard import apply_guard, build_guard_config, reset_ws_guard
+from gateway.ratelimit import PerUserRateLimiter
 
 
 def _guard_middleware(app: FastAPI) -> Any:
@@ -195,8 +198,13 @@ class FakeWS:
     reaches the frame loop, and a clean IP test asserts it passes the guard (then hits
     the auth layer, which closes 4401 on a missing key)."""
 
-    def __init__(self, *, client_host: str = "127.0.0.1", xff: Optional[str] = None,
-                 api_key: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        *,
+        client_host: str = "127.0.0.1",
+        xff: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> None:
         self.client = _FakeClient(client_host)
         headers: dict[str, str] = {}
         if xff:
@@ -233,9 +241,13 @@ class TestWsGuard:
     async def test_blacklisted_ip_denied_at_connect(self, monkeypatch) -> None:
         """A WS connect from a blacklisted IP is denied with a 4401 close + ip_blocked error."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
-        reset_ws_guard(_enforcing_config(
-            rate_limit=1000, trusted_proxies=["127.0.0.1"], blacklist=["10.0.0.9"],
-        ))
+        reset_ws_guard(
+            _enforcing_config(
+                rate_limit=1000,
+                trusted_proxies=["127.0.0.1"],
+                blacklist=["10.0.0.9"],
+            )
+        )
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.9", api_key=VALID_KEY)
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
@@ -268,3 +280,163 @@ class TestWsGuard:
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
         assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+
+    @pytest.mark.asyncio
+    async def test_auto_ban_persists_past_window_and_resets_on_set(
+        self, monkeypatch
+    ) -> None:
+        """A2 + P1: an auto-ban PERSISTS past the rate-window reset, and the reset-on-set
+        rule means a fresh threshold (not a single over-limit) is required to re-ban
+        after the ban window expires.
+
+        Uses a fake clock so the in-memory limiter's monotonic time is controllable.
+        ``enable_ip_banning=True`` + ``auto_ban_threshold=2`` so two over-limit events
+        set the ban (the path the hard-coded ``_enforcing_config`` left untested).
+        """
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        cfg = _enforcing_config(
+            rate_limit=2,
+            rate_limit_window=60,
+            enable_ip_banning=True,
+            auto_ban_threshold=2,
+            auto_ban_duration=3600,
+            trusted_proxies=["127.0.0.1"],
+        )
+        reset_ws_guard(cfg)
+        clock = {"t": 0.0}
+        monkeypatch.setattr(_edge_guard.time, "monotonic", lambda: clock["t"])
+
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+
+        # Two connects pass the guard (bucket for 10.0.0.7 has room).
+        for _ in range(2):
+            ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
+            await run_multiplex(ws, auth, redis)
+            assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+        # 3rd: over limit → ban_counts=1 (< threshold 2) → ip_blocked (rate, no ban yet).
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        # 4th: over limit again → ban_counts=2 (>= threshold) → ban SET + reset.
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+
+        # A2: advance PAST the rate window (61s) but within the ban (3600s) → still banned.
+        clock["t"] = 61.0
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.close_code == 4401
+        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+
+        # P1: advance PAST the ban (3601s) → ban expired, fresh budget. A single over-limit
+        # must NOT re-ban (reset-on-set cleared ban_counts at ban-set).
+        clock["t"] = 3601.0
+        for _ in range(2):
+            ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
+            await run_multiplex(ws, auth, redis)
+            assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+        # One over-limit → ip_blocked (rate) but NOT banned (ban_counts=1 < 2).
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        # Advance past the rate window: the next connect PASSES → not re-banned. If
+        # reset-on-set had failed (ban_counts left at the threshold), this over-limit
+        # would have re-banned and this connect would be ip_blocked instead.
+        clock["t"] = 3662.0
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
+        await run_multiplex(ws, auth, redis)
+        assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
+    @pytest.mark.asyncio
+    async def test_untrusted_peer_xff_does_not_rotate_ws_budget(
+        self, monkeypatch
+    ) -> None:
+        """A4 spoofed-XFF (WS): when the peer is NOT a trusted proxy, varying XFF values
+        must NOT rotate the WS rate-limit budget — all connects key on the peer IP.
+        Covers the D1 fix (untrusted peer's XFF is ignored)."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        # 127.0.0.1 is NOT in trusted_proxies → XFF ignored, peer IP keys the bucket.
+        reset_ws_guard(_enforcing_config(rate_limit=2, trusted_proxies=[]))
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        # Two connects pass the guard (peer-IP bucket has room); each carries a DIFFERENT
+        # XFF value to prove the header is not rotating the budget.
+        for i in range(2):
+            ws = FakeWS(client_host="127.0.0.1", xff=f"10.0.0.{i}", api_key=None)
+            await run_multiplex(ws, auth, redis)
+            assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+        # 3rd connect with yet another XFF → still ip_blocked (peer-IP bucket exhausted;
+        # the XFF did not create a fresh bucket).
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.99", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.close_code == 4401
+        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+
+
+# ── A5: both layers in one app ─────────────────────────────────────────────────
+
+
+def _app_with_both_layers(rate_limiter: PerUserRateLimiter) -> FastAPI:
+    """One app with BOTH the per-user rate_limiter and the per-IP guard installed,
+    so the two 429 paths coexist (the A5 no-regression row)."""
+    from gateway import create_app as _create_app
+
+    app = _create_app(
+        FakeAuthorizer(), FakeDownstream(), FakeRedis(), rate_limiter=rate_limiter
+    )
+    apply_guard(
+        app,
+        config=_enforcing_config(rate_limit=4, trusted_proxies=["127.0.0.1"]),
+    )
+    return app
+
+
+class TestBothLayers:
+    """A5: per-user rate_limiter and per-IP guard coexist — distinct 429 paths."""
+
+    @pytest.mark.asyncio
+    async def test_valid_key_429_from_rate_limiter_and_keyless_429_from_guard(
+        self,
+    ) -> None:
+        """A valid-key burst → per-user 429 (rate_limiter, ``Retry-After: 1``); a keyless
+        flood from one IP → per-IP 429 (guard, no ``Retry-After``). Neither shadows the other.
+
+        Uses XFF IPs unique to this test (10.0.0.50/10.0.0.51): guard's
+        ``RateLimitManager`` is a process-wide singleton, so the in-memory
+        ``request_timestamps`` accumulate across tests — distinct IPs avoid
+        cross-test bucket pollution (the existing tests each use their own IPs)."""
+        # Per-user bucket: capacity 2, no refill → 3rd valid-key request 429s.
+        limiter = PerUserRateLimiter(capacity=2, refill_per_sec=0)
+        app = _app_with_both_layers(limiter)
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            # Per-user path: two valid-key requests pass (guard's 10.0.0.50 bucket has
+            # 2 < 4 so guard lets them through), the 3rd hits the per-user 429.
+            for _ in range(2):
+                resp = await ac.get(
+                    "/bots",
+                    headers={"x-api-key": VALID_KEY, "X-Forwarded-For": "10.0.0.50"},
+                )
+                assert resp.status_code == 200
+            resp = await ac.get(
+                "/bots",
+                headers={"x-api-key": VALID_KEY, "X-Forwarded-For": "10.0.0.50"},
+            )
+            assert resp.status_code == 429
+            # Retry-After: 1 is the per-user limiter's signature (app.py:154); guard's 429 has none.
+            assert resp.headers.get("retry-after") == "1"
+
+            # Per-IP path: keyless flood from a distinct IP → guard 429 (no Retry-After).
+            for _ in range(4):
+                resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
+                assert (
+                    resp.status_code == 401
+                )  # guard passes, auth rejects (missing key)
+            resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
+            assert resp.status_code == 429  # guard per-IP 429
+            assert (
+                resp.headers.get("retry-after") is None
+            )  # guard's 429, not the limiter's
