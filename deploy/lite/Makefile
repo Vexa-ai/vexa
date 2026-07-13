@@ -66,7 +66,7 @@ env:
 			echo "Seeding $(ENV_FILE) from deploy/compose/.env"; cp "$(ROOT)/deploy/compose/.env" "$(ENV_FILE)"; \
 		else \
 			echo "Creating minimal $(ENV_FILE) (edit TRANSCRIPTION_SERVICE_* for transcripts)"; \
-			printf 'ADMIN_TOKEN=changeme\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=latest\n' > "$(ENV_FILE)"; \
+			printf 'ADMIN_TOKEN=changeme\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=v012\n' > "$(ENV_FILE)"; \
 		fi; \
 	fi
 
@@ -92,7 +92,7 @@ up: preflight
 	ADMIN_TK=$$(grep -E '^ADMIN_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); ADMIN_TK=$${ADMIN_TK:-changeme}; \
 	TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); \
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); \
-	IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); IMAGE_TAG=$${IMAGE_TAG:-latest}; \
+	IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
