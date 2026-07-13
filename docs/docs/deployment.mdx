@@ -11,7 +11,11 @@ agent state stay on infrastructure you control.
 Prerequisites: a Linux host (Ubuntu 24.04) for production, **Docker engine ≥ v26** (agent workers
 mount each granted workspace as an isolated volume subpath — older engines fail worker creation;
 `make all` checks and refuses), `git`, `curl`. A Mac with Docker Desktop works for a local
-evaluation — everything runs in containers either way.
+evaluation — everything runs in containers either way. Published `vexaai/v012-*` images are
+multi-arch (`linux/amd64`, `linux/arm64`) — Docker on Apple Silicon pulls native arm64
+automatically. `vexaai/vexa-bot` remains amd64-only (built locally via `make bot`). For GPU
+transcription on Mac, point `TRANSCRIPTION_SERVICE_URL` at any OpenAI-compatible local endpoint
+(see [Configuration](/configuration)).
 
 ```bash
 curl -fsSL https://get.docker.com | sh
