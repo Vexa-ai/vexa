@@ -62,6 +62,18 @@ TOKEN=$(X curl -s -X POST "$ADMIN/admin/users/$UID_/tokens?scopes=bot,tx" \
   -H "X-Admin-API-Key: $ADMIN_TOKEN" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 [ -n "$TOKEN" ] || die "could not mint bot token"
 
+# ── wait for the bot route to be READY, not just routed — the v0.12.1 maiden release run
+#    failed here with POST /bots → 502: the gateway was up (front-door probes green) but
+#    meeting-api behind it was still booting. Probe the authenticated read path until it
+#    answers non-5xx so the spawns below measure the product, not startup ordering. ──
+ready=""
+for i in $(seq 1 24); do
+  code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "$GATEWAY/meetings" -H "X-API-Key: $TOKEN" || true)
+  case "$code" in 2*|4*) ready=1; echo "bot route ready (GET /meetings → $code, attempt $i)"; break;; esac
+  echo "…bot route not ready yet (GET /meetings → ${code:-none}, attempt $i/24)"; sleep 5
+done
+[ -n "$ready" ] || die "meeting-api never became ready behind the gateway (GET /meetings 5xx for 120s)"
+
 # ── launch N bots concurrently (distinct synthetic meetings; the #478 failure
 #    mode fires at browser LAUNCH, before any navigation, so no admission needed) ──
 # transcribe_enabled:false — this is a browser-launch/concurrency smoke, and the

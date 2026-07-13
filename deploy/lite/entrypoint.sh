@@ -47,6 +47,12 @@ export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"
 export MINIO_BUCKET="${MINIO_BUCKET:-vexa}"
 export MINIO_SECURE="${MINIO_SECURE:-false}"
 
+# Gateway edge guard (fastapi-guard): ON by default with generous limits (owner ruling).
+# Opt out with -e GUARD_ENABLED=false on the container. Other GUARD_* tuning keys
+# (GUARD_RATE_LIMIT_RPM, GUARD_TRUSTED_PROXIES, …) flow through container env untouched.
+export GUARD_ENABLED="${GUARD_ENABLED:-true}"
+export GUARD_WS_ENABLED="${GUARD_WS_ENABLED:-false}"
+
 # Process-backend launchers — DEFAULTS ONLY: an operator-provided BOT_COMMAND /
 # AGENT_WORKER_COMMAND on the container env wins. supervisord interpolates these into the
 # runtime program via %(ENV_…)s — never hardcode them there (that clobbers operator env).

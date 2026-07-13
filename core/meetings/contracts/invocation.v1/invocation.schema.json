@@ -4,7 +4,7 @@
   "title": "invocation.v1",
   "description": "The meeting-bot's constructor — delivered as one JSON env var VEXA_BOT_CONFIG (ADR-0002), validated at boot. A config contract legitimately carries the secrets the bot needs (marked SECRET below; placeholders in goldens, P14). No tenancy fields (deferred, ADR-0003).",
   "$defs": {
-    "Platform": { "enum": ["google_meet", "zoom", "teams"] },
+    "Platform": { "enum": ["google_meet", "zoom", "teams", "jitsi"] },
     "AutomaticLeave": {
       "type": "object",
       "additionalProperties": false,
@@ -22,6 +22,7 @@
         "platform": { "$ref": "#/$defs/Platform" },
         "meetingUrl": { "type": ["string", "null"], "description": "null only for native-SDK zoom" },
         "botName": { "type": "string" },
+        "passcode": { "type": "string", "description": "meeting passcode (zoom passcode screen / jitsi room password); placeholder in goldens" },
         "nativeMeetingId": { "type": "string" },
         "token": { "type": "string", "description": "SECRET — MeetingToken; placeholder in goldens" },
         "connectionId": { "type": "string" },

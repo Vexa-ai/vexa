@@ -53,6 +53,34 @@ spec:
                   key: INTERNAL_API_SECRET
             - name: LOG_LEVEL
               value: {{ .Values.gateway.logLevel | default "info" | quote }}
+            # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
+            # ON by default with generous limits (owner ruling); opt out with
+            # --set gateway.guard.enabled=false. guard.wsEnabled is the optional /ws hook (off,
+            # opt-in): in-memory per-process — does NOT share ban/rate-limit state with the
+            # Redis-backed HTTP layer, and under uvicorn --workers N>1 each worker keeps an
+            # independent WS ban set.
+            - name: GUARD_ENABLED
+              value: {{ .Values.gateway.guard.enabled | quote }}
+            - name: GUARD_WS_ENABLED
+              value: {{ .Values.gateway.guard.wsEnabled | quote }}
+            - name: GUARD_ENABLE_REDIS
+              value: {{ .Values.gateway.guard.enableRedis | quote }}
+            - name: GUARD_RATE_LIMIT_RPM
+              value: {{ .Values.gateway.guard.rateLimitRpm | quote }}
+            - name: GUARD_RATE_LIMIT_WINDOW
+              value: {{ .Values.gateway.guard.rateLimitWindow | quote }}
+            - name: GUARD_AUTO_BAN_THRESHOLD
+              value: {{ .Values.gateway.guard.autoBanThreshold | quote }}
+            - name: GUARD_AUTO_BAN_DURATION
+              value: {{ .Values.gateway.guard.autoBanDuration | quote }}
+            - name: GUARD_IP_WHITELIST
+              value: {{ .Values.gateway.guard.ipWhitelist | quote }}
+            - name: GUARD_IP_BLACKLIST
+              value: {{ .Values.gateway.guard.ipBlacklist | quote }}
+            - name: GUARD_TRUSTED_PROXIES
+              value: {{ .Values.gateway.guard.trustedProxies | quote }}
+            - name: GUARD_TRUST_X_FORWARDED_PROTO
+              value: {{ .Values.gateway.guard.trustXForwardedProto | quote }}
             {{- with .Values.gateway.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

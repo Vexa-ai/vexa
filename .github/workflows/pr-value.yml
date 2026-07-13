@@ -1,0 +1,99 @@
+# pr-value — the per-PR AUTONOMOUS VALUE LEG (the live row of the TAKE bundle, machine-presented).
+#
+# gates.yml proves the PR is architecturally sound (L1/L2: isolation, contracts, unit green).
+# This workflow proves the PR's tree still DELIVERS: the real compose stack comes up from the
+# PR's own code and a contract-faithful bot drives the full product FSM through the real
+# backend — join lifecycle, failure attribution, transcript-segment emission, concurrent bots,
+# acts round-trip (the MOCK_BOT scenario suite, deploy/compose/tests/mock_scenarios_test.py).
+#
+# Why the mock bot is the right instrument here: it reuses the REAL orchestrator and the REAL
+# lifecycle/transcript/acts adapters — only join + audio capture are faked (mock/README.md).
+# So every backend-visible behavior is prod-identical, no browser/STT/GPU needed, and the leg
+# runs anywhere in ~10-15 min. What it CANNOT see (real Meet admission, real audio → words)
+# stays at the release bar (release-validate + the eval lane), stated honestly in delivery.mdx.
+#
+# TAKE step 2 consumes this run: a green pr-value IS the "live leg" row of the acceptance map
+# for backend-visible behavior — contributors no longer hand-assemble that row. The scenario
+# table lands in the job summary as the machine-presented bundle fragment.
+#
+# Scope guard: runs only when runtime surfaces change (path filter). Docs/governance/workflow
+# -only PRs skip it entirely — gates.yml remains their only required machinery.
+name: pr-value
+
+on:
+  pull_request:
+    paths:
+      - "core/**"
+      - "clients/terminal/**"
+      - "deploy/compose/**"
+      - "deploy/lite/**"
+      - "libs/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  # Backfill mode: validate an ALREADY-OPEN PR (the queue that predates this workflow) without
+  # waiting for the contributor to push. Checks out the PR's MERGE ref (their change on top of
+  # current main — the thing that would actually land). SECURITY: this mode runs untrusted PR
+  # code; the job uses NO secrets (no registry login — anonymous pulls), so there is nothing
+  # to exfiltrate beyond the read-only GITHUB_TOKEN.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Open PR number to validate (checks out refs/pull/<pr>/merge)"
+        required: true
+        type: string
+
+# a superseded run's verdict is worthless — cancel it
+concurrency:
+  group: pr-value-${{ inputs.pr || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The value FSM through the real backend, built from the PR's tree.
+  value-fsm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # pull_request event → default (the PR merge ref). dispatch → the named PR's merge ref.
+          ref: ${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || '' }}
+      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: astral-sh/setup-uv@v5
+      # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
+      - name: Seed compose .env
+        run: cp deploy/compose/.env.example deploy/compose/.env
+      - name: Build the mock bot (local instrument image, never published)
+        run: docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
+      # No COMPOSE_NO_BUILD: the stack builds FROM THIS PR's TREE — that is the point.
+      # The stack fixture's `up -d --build` proves the PR's images assemble and come healthy;
+      # the scenario suite then proves the product FSM end to end on them.
+      - name: Value scenarios on the PR's stack (MOCK_BOT suite + always-on subset)
+        working-directory: deploy/compose
+        env:
+          MOCK_BOT: "1"
+          BROWSER_IMAGE: mock-bot:dev
+          COMPOSE_DYNAMIC_PORTS: "1"
+        run: ./bin/stack-test
+      - name: Present the machine bundle (job summary)
+        if: always()
+        run: |
+          {
+            echo "## pr-value — machine-presented live-leg row (TAKE step 2)"
+            echo
+            echo "PR: \`${{ inputs.pr || github.event.pull_request.number }}\` · stack built from \`${{ github.event.pull_request.head.sha || 'merge ref (dispatch backfill)' }}\`;"
+            echo "scenario suite: \`deploy/compose/tests/mock_scenarios_test.py\`"
+            echo "(lifecycle FSM · failure attribution · join-timeout · segment emission ·"
+            echo "immediate-stop · max-bots · speak-ack · canaccess-deny) + always-on stack subset."
+            echo
+            echo "Verdict: **${{ job.status }}** — a green run is the live-leg evidence row for"
+            echo "backend-visible behavior. Real-Meet admission and audio→words remain release-bar"
+            echo "legs (release-validate + eval lane) and are NOT claimed by this check."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Compose state on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true

@@ -12,8 +12,10 @@ HTTP status the gateway forwards verbatim:
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -55,6 +57,53 @@ def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
         if v in ("false", "0", "no", "off", ""):
             return False
     raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
+
+
+def _validate_meeting_url(url: object) -> str:
+    """SSRF hygiene for the caller-supplied ``meeting_url`` passthrough (zoom AND jitsi — the
+    bot's browser navigates wherever this points, so an authenticated caller must not be able to
+    aim it at internal infrastructure). Entry-point validation, 422 on violation:
+
+      * must parse cleanly and use ``https`` (the bot joins real deployments over TLS only),
+      * host must be non-empty and not ``localhost``/``*.localhost``,
+      * host must not be an IP literal (deployments are hostname-addressed; IP literals are the
+        cheap way to reach loopback/link-local/private ranges — 10.x, 169.254.x, 127.x, …).
+
+    Static checks only — no DNS resolution on the spawn path (a hostname that RESOLVES to a
+    private IP is contained by network policy around the bot runtime, and slow-fails there)."""
+    if not isinstance(url, str) or not url.strip():
+        raise HTTPException(status_code=422, detail="meeting_url must be a non-empty string")
+    raw = url.strip()
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"meeting_url does not parse as a URL: {raw!r}")
+    if parsed.scheme != "https":
+        raise HTTPException(
+            status_code=422,
+            detail="meeting_url must use https:// — the bot only joins TLS deployments",
+        )
+    try:
+        host = parsed.hostname
+    except ValueError:
+        host = None
+    if not host:
+        raise HTTPException(status_code=422, detail="meeting_url must have a valid hostname")
+    if host.lower() == "localhost" or host.lower().endswith(".localhost"):
+        raise HTTPException(
+            status_code=422,
+            detail="meeting_url cannot target localhost",
+        )
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass  # hostname, not an IP literal — OK
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail="meeting_url cannot be an IP literal — use the deployment's hostname",
+        )
+    return raw
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -127,6 +176,10 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         platform = str(body.get("platform", "")).strip()
         native_meeting_id = str(body.get("native_meeting_id", "")).strip()
         meeting_url = body.get("meeting_url")
+        # A caller-supplied meeting_url is an any-URL passthrough to the bot's browser
+        # (zoom/jitsi) — validate at the point of entry (SSRF hygiene, 422 on violation).
+        if meeting_url is not None:
+            meeting_url = _validate_meeting_url(meeting_url)
         if not platform or (not native_meeting_id and not meeting_url):
             raise HTTPException(
                 status_code=422,
@@ -135,13 +188,14 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         # Reject an unsupported platform up front (→ 422), instead of letting the spawn flow fail deep in
         # the invocation builder with an uncaught jsonschema error (→ 500): a meeting URL must be
         # CONSTRUCTIBLE — the platform has a URL template (google_meet/teams), or the caller supplied an
-        # explicit meeting_url (required for zoom + white-label/unknown platforms).
+        # explicit meeting_url (required for zoom AND jitsi — a jitsi room name is deployment-scoped, so
+        # only the full URL says WHICH deployment to join).
         if not meeting_url and construct_meeting_url(platform, native_meeting_id) is None:
             raise HTTPException(
                 status_code=422,
                 detail=(
                     f"unsupported platform '{platform}' without a meeting_url — "
-                    "use google_meet/teams, or provide meeting_url (required for zoom)"
+                    "use google_meet/teams, or provide meeting_url (required for zoom/jitsi)"
                 ),
             )
 
@@ -155,6 +209,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 platform=platform,
                 native_meeting_id=native_meeting_id,
                 bot_name=body.get("bot_name"),
+                passcode=body.get("passcode"),
                 meeting_url=meeting_url,
                 language=body.get("language"),
                 task=body.get("task"),

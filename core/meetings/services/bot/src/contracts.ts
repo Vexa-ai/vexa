@@ -107,7 +107,7 @@ export function parseAct(msg: unknown): Act | null {
 
 // ── transcript.v1 ─────────────────────────────────────────────────────────────────────
 
-export type Source = 'glow-bound' | 'provisional-cluster-id' | 'caption' | 'merged';
+export type Source = 'glow-bound' | 'provisional-cluster-id' | 'caption' | 'merged' | 'chat';
 
 /** One speaker-attributed utterance. Mirrors transcript.v1 `#/$defs/TranscriptSegment`. */
 export interface TranscriptSegment {

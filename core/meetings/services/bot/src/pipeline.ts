@@ -6,7 +6,7 @@
  * LocalAgreement confirmation, glow→channel naming) lives in @vexa/gmeet-pipeline, the mixed
  * lane (pyannote cut + hints naming, no diarizer) in @vexa/mixed-pipeline, and the stt.v1
  * round-trip in @vexa/transcribe-whisper. This adapter only:
- *   1. picks the lane on inv.platform (google_meet → gmeet/per-channel; zoom/teams → mixed),
+ *   1. picks the lane on inv.platform (google_meet → gmeet/per-channel; zoom/teams/jitsi → mixed),
  *   2. injects the stt port (TranscriptionClient.transcribe) + a TranscriptSink, and
  *   3. RECONCILES the lane's TranscriptSink (segment/draft/finalize — owned by the lane's
  *      transcript.v1 contract) onto the bot's injected TranscriptSink.publish(segment) port.
@@ -29,7 +29,7 @@ import {
   type ChunkSegment,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import type { Invocation } from './config.js';
+import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -198,7 +198,7 @@ export function createTranscribe(inv: Invocation): Transcribe {
 
 /**
  * The composition-root factory: pick the lane on platform and wire stt + sink. Google Meet
- * uses the per-channel (overlap-safe, glow-named) lane; Zoom/Teams use the mixed lane.
+ * uses the per-channel (overlap-safe, glow-named) lane; Zoom/Teams/Jitsi use the mixed lane.
  */
 export function createBotPipeline(
   inv: Invocation,
@@ -206,7 +206,7 @@ export function createBotPipeline(
   opts: { transcribe?: Transcribe; config?: SpeakerStreamManagerConfig; onError?: (e: unknown) => void } = {},
 ): BotPipeline {
   const transcribe = opts.transcribe ?? createTranscribe(inv);
-  if (inv.platform === 'zoom' || inv.platform === 'teams') {
+  if (isMixedLanePlatform(inv.platform)) {
     return createMixedBotPipeline(transcribe, sink, inv.language ?? undefined, opts.onError);
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);

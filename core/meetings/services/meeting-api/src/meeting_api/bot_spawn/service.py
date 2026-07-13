@@ -48,6 +48,10 @@ _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "sto
 _TERMINAL_STATUSES = ("completed", "failed")
 
 # Construct-URL templates per platform (the parent's ``Platform.construct_meeting_url``, core set).
+# NO jitsi template: a jitsi room name is scoped to a DEPLOYMENT (meet.jit.si is only the public
+# one), so constructing a URL from the bare id would silently join the public room of that name —
+# the wrong meeting, on someone else's deployment. jitsi callers pass an explicit ``meeting_url``
+# (same passthrough zoom uses); the UI, MCP, and calendar paths all carry it.
 _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
     "teams": "https://teams.microsoft.com/l/meetup-join/{native_meeting_id}",
@@ -125,6 +129,7 @@ async def request_bot(
     platform: str,
     native_meeting_id: str,
     bot_name: Optional[str] = None,
+    passcode: Optional[str] = None,
     meeting_url: Optional[str] = None,
     language: Optional[str] = None,
     task: Optional[str] = None,
@@ -272,6 +277,7 @@ async def request_bot(
         platform=platform,
         meeting_url=constructed_url,
         bot_name=bot_name or f"VexaBot-{uuid.uuid4().hex[:6]}",
+        passcode=passcode,
         token=token,
         native_meeting_id=native_meeting_id,
         connection_id=connection_id,

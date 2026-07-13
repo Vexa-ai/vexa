@@ -36,7 +36,7 @@ import {
 } from '@vexa/remote-browser';
 import { getJoinBrowserArgs } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
-import type { Invocation } from './config.js';
+import { isMixedLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
 import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
@@ -124,9 +124,11 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
 
   // Zoom/Teams expose NO per-participant <audio> in the DOM — install the WebRTC hook so each
   // remote audio track is mirrored into a hidden <audio> element (→ __vexaCapturedRemoteAudioStreams)
-  // the mixed lane combines. MUST run before the page builds its RTCPeerConnections; addInitScript
+  // the mixed lane combines. Jitsi rides the same hook: its remote audio also arrives as WebRTC
+  // tracks, and hooking RTCPeerConnection is version-proof where its DOM <audio> ids are not.
+  // MUST run before the page builds its RTCPeerConnections; addInitScript
   // runs at document-start, after the bundle above has defined window.VexaBrowserUtils. (L4 — Zoom/Teams.)
-  if (inv.platform === 'zoom' || inv.platform === 'teams') {
+  if (isMixedLanePlatform(inv.platform)) {
     await context.addInitScript(
       `try { window.VexaBrowserUtils && window.VexaBrowserUtils.installRemoteAudioHook && window.VexaBrowserUtils.installRemoteAudioHook({}); } catch (e) {}`,
     ).catch(() => { /* non-fatal */ });
@@ -161,8 +163,17 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
  *   // L4 (O6/VM): live-validated against a real meeting.
  *   Ported from services/vexa-bot/core/src/index.ts:1930, 1947–1957, 1598–1605.
  */
-export async function startCaptureBridge(page: Page, inv: Invocation, pipeline: BotPipeline, telemetry?: TelemetrySink): Promise<() => Promise<void>> {
-  const mixed = inv.platform === 'zoom' || inv.platform === 'teams';
+export async function startCaptureBridge(
+  page: Page,
+  inv: Invocation,
+  pipeline: BotPipeline,
+  telemetry?: TelemetrySink,
+  /** In-meeting chat sink (jitsi lane) — each captured chat message crosses here;
+   *  the composition root publishes it as a transcript.v1 `source:'chat'` segment. */
+  onChat?: (sender: string, text: string) => void,
+): Promise<() => Promise<void>> {
+  const mixed = isMixedLanePlatform(inv.platform);
+  const jitsi = inv.platform === 'jitsi';
   const lane: 'gmeet' | 'mixed' = mixed ? 'mixed' : 'gmeet';
 
   // ── O-TEL-1 raw-signal tap (a DUAL-sink) ──────────────────────────────────────────────────
@@ -200,11 +211,15 @@ export async function startCaptureBridge(page: Page, inv: Invocation, pipeline: 
   });
   await page.exposeFunction('__vexaNamedAudioData', onNamedAudio).catch(() => { /* optional */ });
   await page.exposeFunction('__vexaSpeakerHint', onSpeakerHint).catch(() => { /* optional */ });
+  // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
+  await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
+    try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
+  }).catch(() => { /* optional */ });
 
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async (isMixed) => {
+  await page.evaluate(async ({ isMixed, isJitsi, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -238,6 +253,25 @@ export async function startCaptureBridge(page: Page, inv: Invocation, pipeline: 
       };
       setupMix();
       w.__vexaMixRescan = (globalThis as any).setInterval(setupMix, 2000); // pick up late-arriving tracks
+      if (isJitsi) {
+        // Jitsi contributes the WHO + chat signals the mixed audio can't carry:
+        // dominant-speaker changes name the pyannote clusters ('dom-active' hints),
+        // and chat messages cross to the Node side as transcript `chat` segments.
+        if (w.VexaBrowserUtils?.createJitsiSpeakers && !w.__vexaJitsiSpeakers) {
+          w.__vexaJitsiSpeakers = w.VexaBrowserUtils.createJitsiSpeakers({
+            selfName: botName,
+            log: (m: string) => w.logBot?.('[JitsiSpeakers] ' + m),
+            onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
+              w.__vexaSpeakerHint?.(name, tMs, isEnd),
+          });
+        }
+        if (w.VexaBrowserUtils?.createJitsiChat && !w.__vexaJitsiChat) {
+          w.__vexaJitsiChat = w.VexaBrowserUtils.createJitsiChat({
+            log: (m: string) => w.logBot?.('[JitsiChat] ' + m),
+            onMessage: (m: { sender: string; text: string }) => w.__vexaChatMessage?.(m.sender, m.text),
+          });
+        }
+      }
       return;
     }
     // gmeet lane: per-channel capture + glow attribution (the SAME module the extension runs).
@@ -257,7 +291,7 @@ export async function startCaptureBridge(page: Page, inv: Invocation, pipeline: 
       });
       await w.__vexaGmeetCapture.start();
     }
-  }, mixed).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
@@ -266,6 +300,8 @@ export async function startCaptureBridge(page: Page, inv: Invocation, pipeline: 
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
+      try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
       try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }
       try { w.__vexaMixCtx?.close?.(); } catch { /* best-effort */ }
@@ -354,9 +390,10 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
       if (platform === 'teams') click('#microphone-button');
       else if (platform === 'zoom') click('.join-audio-container__btn');
       else {
-        // Google Meet: the mic button is identified by an aria-label containing "microphone".
+        // Google Meet / Jitsi: the mic toggle is identified by its aria-label —
+        // "microphone" on Meet, "Toggle mute audio" on stock jitsi builds.
         const btn = Array.from(doc?.querySelectorAll('[role="button"],button') ?? [])
-          .find((b: any) => /microphone/i.test(b.getAttribute('aria-label') ?? '')) as any;
+          .find((b: any) => /microphone|mute audio/i.test(b.getAttribute('aria-label') ?? '')) as any;
         btn?.click();
       }
       void on; // toggle is a click; on/off intent is logged by the caller

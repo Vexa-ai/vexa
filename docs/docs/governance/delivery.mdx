@@ -567,6 +567,12 @@ value real?) and the **diff** (is it correct and safe?). **A diff with no bundle
 reviewable, whatever it says** — request the bundle, warmly, and stop. Do not review code on
 vibes and do not let a good-looking diff substitute for evidence.
 
+**The machine rows count.** The bundle is assembled from two sources: the harness's runs on the
+PR's head sha (`gates`, `pr-value` — the machine-presented rows) and the contributor's own
+witness (everything above the automation line). Before requesting a bundle, check what the
+harness already presented — asking a contributor to hand-write evidence `pr-value` carries on
+their sha is our process bug, not their gap.
+
 #### Step 2 — Floor mapping, in the issue's own numbering
 
 Rebuild the issue's acceptance table AS DECLARED (A1…An) and map every row to the PR's
@@ -574,10 +580,12 @@ evidence. **Detect renumbering and thinning** — a PR body that re-labels or qu
 rows hides its gaps; the map is always in the issue's numbering, never the PR's. Per row:
 
 - **presented** — red→green pair shown, negative control shown red, anchors present
-  (base+head shas, ids, timestamps);
+  (base+head shas, ids, timestamps); **a green `pr-value`/`gates` run on the head sha is
+  `presented` for every row those legs carry** — link the run, don't re-demand the row;
 - **partial** — claimed but missing its control, its anchor, or its red side;
 - **missing** — including the rows only a live leg can carry. The live row exists precisely
-  because unit greens can lie; never waive it for a plausible diff.
+  because unit greens can lie; never waive it for a plausible diff — but route it to the
+  cheapest rung that carries it (the ladder, §Validation) before routing it to a human.
 
 #### Step 3 — The diff on its own axis
 
@@ -637,9 +645,41 @@ the issue itself was wrong, saying so publicly IS the deliverable (D11).
 
 ## Validation
 
-Before merge, a **non-author** runs the change live and signs what they witnessed — after the
-**author's own witness**: the author runs their change live first and their run is the bundle's
-first row; you never ask another human to witness value you haven't witnessed yourself.
+### The ladder — machine first, human last
+
+Validation is a ladder; each rung runs **as early and as often as it can be automated**, and a
+human is asked only for what no rung below can see (D9: the human is the scarce oracle). The
+rungs, and where the machinery runs them:
+
+| Rung | Proves | Machinery | When |
+|---|---|---|---|
+| **L1/L2 — sound** | isolation, contracts, units, licenses, build | `gates` | every PR push, ~5 min |
+| **L3 — delivers** | the PR's own tree assembles and drives the full product FSM — join lifecycle, failure attribution, transcript-segment emission, concurrent bots, acts — through the **real** backend (mock bot: real orchestrator + real adapters; only join/audio faked) | `pr-value` | every runtime-surface PR, ~10–15 min |
+| **L3.5 — transcribes** *(to build)* | fixture audio → real pipeline → real CPU STT → **golden words** land via the API — no Meet, no human | wav→words leg | PRs touching the transcription path; every release |
+| **L4 — artifact truth** | the *published* images deliver on every deployment shape (compose · mock-FSM · 0.10-compat · bot-spawn · lite · helm) + fresh-VM concurrent-bots | `release-validate` + VM leg | every release, ≤10 min re-runnable |
+| **L5 — witnessed value** | a real Meet, real audio, real admission → words a human saw land, plus the batch's user-visible values walked once | the release **witness script** over the eval lane (`bot/eval/run.sh`: autonomous verdict; human acts: admit + speak + walk the script, ~10 min) | once per release — the combined pass |
+
+Two laws fall out of the ladder:
+
+- **The machine presents what the machine can prove.** A green `pr-value` run on the PR's head
+  sha **is** the live-leg evidence row for backend-visible behavior — TAKE step 2 consumes it
+  directly. Contributors hand-assemble only the rows above the automation line: platform-specific
+  behavior, UX, real external services. Never ask a contributor or a human validator to
+  re-witness a rung the harness already witnessed on their exact sha.
+- **Claim only your rung** (P19/D12 restated for the ladder). `pr-value` green does not claim
+  audio→words; L3.5 green does not claim real-Meet admission. Every rung's report names what it
+  proved AND the rungs it explicitly does not reach — an over-claimed rung is a false green,
+  treated as an incident (the v0.12.1 lesson: a machinery-green release was published as if
+  value-witnessed; the witness was still unsigned).
+
+### The human signature
+
+Before merge, a **non-author** signs what they witnessed **above the automation line** — after
+the **author's own witness**: the author runs their change live first and their run is the
+bundle's first row; you never ask another human to witness value you haven't witnessed yourself.
+Where every acceptance row sits at or below the automation line (behavior `pr-value`/L3.5 proves
+on the PR's sha), the machine rows stand as the live witness and the non-author signs the
+*review of the evidence*, not a re-run.
 
 The attestation is **multichannel** — what the bot did (logs), what the human saw (the meeting,
 the transcript), what the instruments recorded (test output, API responses) — and the channels
@@ -652,9 +692,10 @@ preferred signer (D16); an invalidation is a first-class, credited result (D11).
 ## Integration — the merge bar
 
 Main is **always releasable, never auto-released**. A PR enters it when: the acceptance floor is
-presented (TAKE, step 2) · the diff passes review + the named security checks (D-S) · the value
-is signed (D9) · sealed-contract changes rode `lane:contract` with a human review · the full CI
-gate suite is green — the machine contract between every PR and main
+presented (TAKE, step 2 — machine rows + contributor rows) · the diff passes review + the named
+security checks (D-S) · the value is signed (D9) · sealed-contract changes rode `lane:contract`
+with a human review · the full CI gate suite is green **and `pr-value` is green when the PR
+touches a runtime surface** — the machine contract between every PR and main
 ([the live map](/governance/arch-compliance)). **Merge is the promise to the contributor,
 honored.**
 
@@ -676,6 +717,36 @@ honored.**
    to validate on the shipped artifact (D16). An issue closed without its reporter hearing about
    it is an unclosed loop.
 6. **The milestone ticks** — the public progress bar is the release ledger.
+
+**The value-witness law.** "All value witnessed" is a *named act*, never an inference from
+machinery green (the v0.12.1 incident: promoted and published on L4 alone, witness unsigned):
+
+- **PR-level value is machine-witnessed.** A PR's value rows are proven by the harness on its
+  own sha (`pr-value`, path-aware legs); no human eyeballs individual PRs. A PR reaches the
+  human only as *proven value + reviewed diff* — or when it needs a genuine ruling.
+- **Every release carries ONE combined-value witness pass.** The release generates a **witness
+  script** from the batch: a single live session (one real meeting on the release candidate +
+  one product walkthrough) in which every user-visible value shipped in the batch is
+  experienced once. The autonomous legs surround it; the human contributes the irreducible
+  minimum — admit the bot, speak, walk the script (~10 min). Backend-invisible changes are
+  listed under the script with their machine evidence, witnessed by proxy and named as such.
+- **Publish and promote are the same act** for witness purposes: neither happens before the
+  witness pass is signed. A release published unwitnessed is retracted to pre-release until
+  the pass is met.
+
+**The verdict-latency law.** The release loop is only honest if it is also *fast to re-ask*:
+
+- **Re-verdict in ≤10 minutes, no rebuild.** The release verdict (the validate legs) must be
+  re-obtainable against already-published artifacts without rebuilding anything unchanged.
+  Build+publish and validate+promote are separate machinery; a harness fix re-runs only the
+  second. · *Gate:* `release-validate` is independently dispatchable with a version input.
+- **Harness fixes iterate off-main.** A validation-harness change is testable from its branch
+  against the published set *before* it merges — a smoke-script fix must never cost a
+  PR→merge→full-pipeline round trip per attempt (the v0.12.1 maiden run paid 3 × ~20–50 min
+  for two one-line harness fixes; this law is that bill, paid once).
+- **Silence is an incident signal.** A triggered release run that has produced no first job
+  within 10 minutes is stuck, not slow — check the runner queue instead of waiting (the same
+  maiden run lost 50 minutes to an unwatched queue stall).
 
 Guarantees of every release: all value witnessed · no regression against the previous release
 (the no-regression rows + batch validation) · artifact-pointer truth · the loop closed to every

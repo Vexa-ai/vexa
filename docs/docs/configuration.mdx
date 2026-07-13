@@ -130,3 +130,57 @@ Host ports the compose stack publishes on `127.0.0.1` (override any of them in `
 The gateway (`:18056`) is the one front door; the terminal web workbench is at `:13000`. The other host
 ports above are bound to `127.0.0.1` for local inspection and aren't needed for day-to-day use.
 </Note>
+
+## Gateway edge protection
+
+The gateway carries two independent abuse layers. Both are env-driven; both default sensibly for
+self-hosted and can be left untouched.
+
+### Per-user limiter (post-auth, on by default)
+
+A token-bucket limiter keyed by user id fires *after* the API key is resolved — it catches one token
+driving too much traffic. On for self-hosted by default.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_RATE_LIMIT_DISABLED` | — | `1` / `true` / `yes` / `on` disables the per-user limiter entirely. |
+| `GATEWAY_RATE_LIMIT_BURST` | `120` | Bucket size (max burst). |
+| `GATEWAY_RATE_LIMIT_RPS` | `40` | Refill rate (tokens/sec). High enough for normal use; lower for stricter throttling. |
+
+### Edge guard (pre-auth, off by default for self-hosted)
+
+An optional fastapi-guard edge layer caps requests per **client IP** *before* the API key is validated
+— so an IP flooding invalid keys, or rotating many keys from one IP to defeat the per-user limiter, is
+answered with `429` at the edge and never reaches admin-api. An IP that keeps offending past a threshold
+is **auto-banned for a window**; sustained abuse costs the abuser, not the operator. Hosted runs this
+on; self-hosted defaults OFF. The code default is `GUARD_ENABLED=true`; the deploy surfaces set
+`GUARD_ENABLED=false` for self-hosted, so you opt in by overriding it.
+
+<Note>
+`GUARD_ENABLED=false` is the kill switch — flip it to `true` to turn the whole edge layer on. When
+behind a reverse proxy you must also set `GUARD_TRUSTED_PROXIES`, or every request keys to the proxy
+IP → one global bucket shared by all clients (one abuser throttles everyone). See
+[Deployment → Publishing behind a reverse proxy](/deployment#publishing-behind-a-reverse-proxy).
+</Note>
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GUARD_ENABLED` | `true` (code) / `false` (self-hosted deploy) | Kill switch for the entire edge layer. |
+| `GUARD_ENABLE_REDIS` | `true` | Share rate/ban state across processes via the existing `REDIS_URL` (`false` → in-memory only, per-process). |
+| `GUARD_RATE_LIMIT_RPM` | `600` | Per-IP request cap per minute; `0` disables rate limiting. |
+| `GUARD_RATE_LIMIT_WINDOW` | `60` | Rate-limit window in seconds. |
+| `GUARD_AUTO_BAN_THRESHOLD` | `10` | Over-limit events from one IP before it is auto-banned. |
+| `GUARD_AUTO_BAN_DURATION` | `3600` | Auto-ban window in seconds; after expiry the offender gets a fresh budget. |
+| `GUARD_IP_WHITELIST` | — | CSV of IPs that bypass every guard check. |
+| `GUARD_IP_BLACKLIST` | — | CSV of IPs rejected on the first request (`403`). |
+| `GUARD_BLOCKED_COUNTRIES` | — | CSV of ISO country codes to block (geo, opt-in). |
+| `GUARD_BLOCK_CLOUD_PROVIDERS` | — | CSV of cloud providers to block (e.g. `aws,gcp`), opt-in. |
+| `GUARD_TRUSTED_PROXIES` | — | CSV of trusted proxy IPs whose `X-Forwarded-For` is honored for client-IP resolution. **Set this when behind a reverse proxy.** |
+| `GUARD_TRUST_X_FORWARDED_PROTO` | `false` | Trust `X-Forwarded-Proto` for scheme enforcement. |
+| `GUARD_REDIS_PREFIX` | `vexa:guard:` | Redis key namespace (avoids colliding with Vexa's own keys). |
+| `GUARD_WS_ENABLED` | `false` | Opt-in `/ws` connect guard. In-memory per-process — does **not** share ban/rate state with the Redis-backed HTTP layer, and under `uvicorn --workers N>1` each worker keeps an independent WS ban set. |
+
+The guard fails open (`fail_secure=false`): a guard-check bug or a redis outage returns the request to
+the app rather than taking the gateway down. Request-body WAF scanning is intentionally off — the
+gateway proxies arbitrary user text (chat, meeting `data`, transcript shares), so signature scanning
+would false-positive on legitimate content.

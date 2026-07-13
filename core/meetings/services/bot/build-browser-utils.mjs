@@ -52,6 +52,7 @@ function moduleEntry(pkgDir) {
 const GMEET = moduleEntry('gmeet-capture');       // @vexa/gmeet-capture
 const MIXED = moduleEntry('mixed-capture-core');  // @vexa/mixed-capture-core
 const RECORD = moduleEntry('record-chunker');     // @vexa/record-chunker (MediaRecorder → recording.v1)
+const JITSI = moduleEntry('jitsi-capture');       // @vexa/jitsi-capture (dominant-speaker hints + chat)
 
 // In-memory entry: import the bricks and hang them on window.VexaBrowserUtils with
 // the EXACT names capture-bridge.ts reaches for. esbuild bundles the relative
@@ -72,6 +73,11 @@ import {
 import {
   createRecordingTap,
 } from ${JSON.stringify(RECORD)};
+import {
+  createJitsiSpeakers,
+  createJitsiChat,
+  sendJitsiChatMessage,
+} from ${JSON.stringify(JITSI)};
 
 const VexaBrowserUtils = {
   // ── gmeet lane (per-participant capture + glow attribution) ──
@@ -86,6 +92,10 @@ const VexaBrowserUtils = {
   installRemoteAudioHook,
   // ── recording (all platforms): MediaRecorder → recording.v1 chunks ──
   createRecordingTap,        // capture-bridge.ts: w.VexaBrowserUtils.createRecordingTap
+  // ── jitsi lane (dominant-speaker naming hints + chat over the app's own state) ──
+  createJitsiSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createJitsiSpeakers
+  createJitsiChat,           // capture-bridge.ts: w.VexaBrowserUtils.createJitsiChat
+  sendJitsiChatMessage,
 };
 
 (globalThis).VexaBrowserUtils = VexaBrowserUtils;
@@ -130,4 +140,5 @@ console.log('📦 window.VexaBrowserUtils exposes:');
 console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1 / pickBoundName');
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
 console.log('  - createMixedAudioCapture / installRemoteAudioHook');
+console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
 console.log('  - window.performLeaveAction');
