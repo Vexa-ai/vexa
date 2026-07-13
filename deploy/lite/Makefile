@@ -76,6 +76,16 @@ preflight:
 
 ## up — a bridge network, postgres + minio sidecars (by name), then the all-in-one container with
 ## only the front doors published. Internal services live on the container's own loopback.
+##
+## The recipe is ONE `\`-continued shell command: a bare `#` line inside it (no trailing `\`) ends
+## the continuation, so make runs the rest in a SEPARATE shell where IMG/ADMIN_TK/… are already
+## lost — which once shipped `docker run … $IMG` with an EMPTY image (vexa-lite never created,
+## every front door down). Keep all commentary OUT of the recipe body; annotate here instead.
+##
+## Claude-credential automount (C2/#502): if the host has ~/.claude/.credentials.json, mount it and
+## point HOST_CLAUDE_CREDENTIALS at the IN-CONTAINER path — in LITE the process backend reads the
+## file directly. (Compose is the opposite: there the var is a docker-HOST path the compose file
+## mounts. Don't copy the semantics across.)
 up: preflight
 	@set -e; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
@@ -84,10 +94,6 @@ up: preflight
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); \
 	IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2-); IMAGE_TAG=$${IMAGE_TAG:-latest}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
-	# Autodetect host Claude credentials and wire the mount automatically (C2/#502).
-	# NOTE: in LITE, HOST_CLAUDE_CREDENTIALS must be the IN-CONTAINER path — the process backend
-	# reads the file directly (see deploy/lite/entrypoint.sh). Compose is the opposite: there the
-	# var is a docker-HOST path (deploy/compose/docker-compose.yml mounts it). Don't copy across.
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
 		echo "  Detected Claude subscription credentials — mounting into container"; \
