@@ -31,12 +31,15 @@ namespaced under ``vexa:guard:`` to avoid colliding with Vexa's own keys
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import time
 from collections import defaultdict, deque
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from guard import SecurityConfig, SecurityMiddleware
+
+from .ratelimit import env_truthy
 
 if TYPE_CHECKING:
     from fastapi import FastAPI, WebSocket
@@ -72,11 +75,11 @@ def _guard_csv(env: str) -> list[str]:
 
 
 def _env_bool(env: str, default: bool) -> bool:
-    """Read a boolean env var (``true``/``false``, case-insensitive)."""
+    """Read a boolean env var via the shared truthy set (``1/true/yes/on``, case-insensitive)."""
     raw = os.getenv(env)
     if raw is None:
         return default
-    return raw.strip().lower() == "true"
+    return env_truthy(raw)
 
 
 def _env_int(env: str, default: int) -> int:
@@ -88,6 +91,36 @@ def _env_int(env: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _ip_matches(client_ip: str, entries: Iterable[str]) -> bool:
+    """True iff ``client_ip`` is contained in any CIDR/IP in ``entries``.
+
+    Tracks the HTTP path's CIDR semantics (fastapi-guard accepts CIDR ranges in
+    whitelist/blacklist/trusted_proxies). Each entry is parsed with
+    ``ip_network(entry, strict=False)`` so a bare IP becomes a ``/32`` (v4) / ``/128`` (v6)
+    and still matches itself. Diverges from the HTTP path on malformed entries: the HTTP
+    ``_ip_in_list`` raises on a malformed CIDR-with-``/``, whereas this helper SKIPS a
+    malformed entry so a bad value does not take the WS path down (fail-open, consistent
+    with ``fail_secure=False`` — a typo'd ``GUARD_IP_BLACKLIST`` entry silently does not
+    block, the safe-direction tradeoff). A malformed ``client_ip`` likewise matches
+    nothing (returns False).
+    """
+    try:
+        addr = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            net = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            continue  # skip malformed entry (permissive — do not raise)
+        if addr in net:
+            return True
+    return False
 
 
 def build_guard_config() -> SecurityConfig:
@@ -194,11 +227,11 @@ class _WsGuard:
         now = time.monotonic()
         cfg = self._config
 
-        # Whitelist bypass (explicit allow short-circuits everything).
-        if cfg.whitelist and client_ip in cfg.whitelist:
+        # Whitelist bypass (explicit allow short-circuits everything) — CIDR-aware.
+        if cfg.whitelist and _ip_matches(client_ip, cfg.whitelist):
             return True
-        # Blacklist deny.
-        if client_ip in (cfg.blacklist or []):
+        # Blacklist deny — CIDR-aware.
+        if _ip_matches(client_ip, cfg.blacklist or []):
             return False
         # Active ban?
         unban = self._bans.get(client_ip)
@@ -285,7 +318,7 @@ def resolve_ws_client_ip(ws: WebSocket, config: SecurityConfig) -> str:
     connecting_ip = ws.client.host if ws.client else "unknown"
     if not config.trusted_proxies:
         return connecting_ip
-    if connecting_ip not in config.trusted_proxies:
+    if not _ip_matches(connecting_ip, config.trusted_proxies):
         # Untrusted peer: ignore XFF so a spoofed header cannot rotate the budget.
         return connecting_ip
     xff = ws.headers.get("x-forwarded-for")

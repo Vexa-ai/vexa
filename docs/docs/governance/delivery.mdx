@@ -748,9 +748,60 @@ machinery green (the v0.12.1 incident: promoted and published on L4 alone, witne
   within 10 minutes is stuck, not slow — check the runner queue instead of waiting (the same
   maiden run lost 50 minutes to an unwatched queue stall).
 
-Guarantees of every release: all value witnessed · no regression against the previous release
-(the no-regression rows + batch validation) · artifact-pointer truth · the loop closed to every
-reporter.
+### The guarantee — what every release promises, and what proves each line
+
+Owner-approved canon (2026-07-13). The release notes carry this block **generated from the
+actual run results with links** — never written by hand. A line that cannot link its proof is
+stated as *honestly unclaimed*; a hidden gap is an incident.
+
+1. **Every artifact users pull is the artifact we proved.** All images — services, agents,
+   workers, bot — published, and validation ran against those published bytes, never a local
+   build. · *Proof: release-validate pulls-only; the install digest audit (#569).*
+2. **The product works end-to-end on every documented install path.** Compose, lite,
+   Kubernetes: up from scratch, product FSM green. · *Proof: the deployment-shape matrix.*
+3. **Real audio becomes correct, speaker-attributed words.** Fixture audio → real pipeline →
+   real STT, exact-words oracle, both pipelines. · *Proof: the wav→words leg (#560); until it
+   ships, this line reads "proven at the witness pass only" — and the notes say so.*
+4. **A fresh machine with nothing on it succeeds.** Clean cloud VM, documented install,
+   working bots. · *Proof: the fresh-VM leg, born and destroyed per release.*
+5. **Nothing that worked before broke.** Prior-release behavior holds; 0.10 clients still
+   function; deliberate breaks recorded by name. · *Proof: v010-compat + no-regression rows.*
+6. **Every image contains what its name promises.** · *Proof: image-identity leg.*
+7. **A human witnessed the assembled value.** One live pass on the release candidate — real
+   meeting, real words, every user-visible batch change walked once — signed by the human who
+   did it. **No signature, no release.** · *Proof: the witness pass.*
+8. **Every change in the batch was individually proven before it entered.** Machine-validated
+   on its own tree, diff-reviewed, merged through the card. · *Proof: pr-value + gates green
+   on each merged head.*
+9. **The notes tell the truth about coverage.** Proven-on-what-we-name, per path, per leg;
+   the honestly-unclaimed list explicit; every author and validator credited; the loop closed
+   to every reporter. · *Proof: the guarantee block is machine-generated from run results.*
+10. **Pointers moved honestly.** `:v012` only after all of the above; `:latest` only by
+    explicit ruling; the 0.10 line never touched. · *Proof: promote's constitutional guards.*
+
+## The two choke points
+
+The whole delivery loop routes through exactly **two** engineered human moments — everything
+else is autonomous machinery or agent work. Adding a third human gate anywhere is a process
+regression; making either of these two vague is a process bug.
+
+**Choke point 1 — the merge card, one per PR.** Before any merge, the maintainer receives ONE
+card, plain language, no jargon, no flood:
+
+1. **What you get** — the value in one or two sentences, in user terms.
+2. **Is it real?** — the proof, honestly: which machine legs ran green *on this PR's sha*
+   (linked), what the contributor witnessed themselves, and — never omitted — what is NOT yet
+   proven and which later gate carries it.
+3. **The change** — the diff in plain words: what was touched, how big, where the risk sits,
+   what the review found (fixed or outstanding).
+4. **Your decision** — the exact ask, one sentence, and what changes on each answer.
+
+A card that buries the gap, inflates the proof, or asks two questions is returned to its
+author (us). The maintainer rules on the card in minutes; they never re-derive evidence.
+
+**Choke point 2 — the release witness pass, one per release.** The batch's user-visible value,
+walked once, live, on the release candidate (the witness script; ship bar above). The human
+acts where machines cannot — admission, and seeing the assembled product deliver.
 
 ## Asking the human
 

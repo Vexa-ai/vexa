@@ -120,6 +120,29 @@ class TestGuardWiring:
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
 
+    def test_env_bool_accepts_shared_truthy_set(self, monkeypatch) -> None:
+        """#567: ``_env_bool`` honors the shared truthy set (``1/true/yes/on``, case-
+        insensitive) — not just literal ``true``. Pins ``GUARD_ENABLED=1`` etc. as ON and
+        ``0/false/``/``no`` as OFF, so ``GUARD_ENABLED=1`` no longer silently disables."""
+        from gateway.edge_guard import _env_bool
+
+        truthy = ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"]
+        falsy = ["0", "false", "FALSE", "", "no", "off", "random"]
+        for val in truthy:
+            monkeypatch.setenv("GUARD_ENABLED_TEST", val)
+            assert _env_bool("GUARD_ENABLED_TEST", False) is True, (
+                f"{val!r} should be truthy"
+            )
+        for val in falsy:
+            monkeypatch.setenv("GUARD_ENABLED_TEST", val)
+            assert _env_bool("GUARD_ENABLED_TEST", False) is False, (
+                f"{val!r} should be falsy"
+            )
+        # Missing var → default (both directions).
+        monkeypatch.delenv("GUARD_ENABLED_TEST", raising=False)
+        assert _env_bool("GUARD_ENABLED_TEST", True) is True
+        assert _env_bool("GUARD_ENABLED_TEST", False) is False
+
 
 def create_app_with_guard() -> FastAPI:
     """A real ``create_app`` with fakes + ``apply_guard`` (mirrors build_production_app)."""
@@ -255,9 +278,12 @@ class FakeWS:
         self.query_params: dict[str, str] = {}
         self.sent: list[dict] = []
         self.close_code: Optional[int] = None
+        self.accepted: bool = (
+            False  # True once accept() is called — proves pre-accept rejection
+        )
 
     async def accept(self) -> None:
-        pass
+        self.accepted = True
 
     async def send_text(self, data: str) -> None:
         try:
@@ -279,7 +305,9 @@ class TestWsGuard:
 
     @pytest.mark.asyncio
     async def test_blacklisted_ip_denied_at_connect(self, monkeypatch) -> None:
-        """A WS connect from a blacklisted IP is denied with a 4401 close + ip_blocked error."""
+        """A WS connect from a blacklisted IP is denied BEFORE the upgrade — close 4401
+        pre-accept, so no WebSocket is opened (``accepted`` stays False) and no data frame
+        is sent (Starlette turns a pre-accept ``websocket.close`` into an HTTP 403)."""
         monkeypatch.setenv("GUARD_WS_ENABLED", "true")
         reset_ws_guard(
             _enforcing_config(
@@ -291,7 +319,8 @@ class TestWsGuard:
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.9", api_key=VALID_KEY)
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
-        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        assert ws.accepted is False  # pre-accept rejection — no WebSocket upgrade
+        assert not ws.sent  # no data frame before accept
 
     @pytest.mark.asyncio
     async def test_clean_ip_passes_guard_to_auth(self, monkeypatch) -> None:
@@ -315,11 +344,12 @@ class TestWsGuard:
             ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.5", api_key=None)
             await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # ...the third is denied by the guard (ip_blocked, not missing_api_key).
+        # ...the third is denied by the guard PRE-ACCEPT (4401, no upgrade, no data frame).
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.5", api_key=VALID_KEY)
         await run_multiplex(ws, FakeAuthorizer(valid_key=VALID_KEY), FakeRedis())
         assert ws.close_code == 4401
-        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        assert ws.accepted is False  # pre-accept rejection — no WebSocket upgrade
+        assert not ws.sent
 
     @pytest.mark.asyncio
     async def test_auto_ban_persists_past_window_and_resets_on_set(
@@ -354,21 +384,23 @@ class TestWsGuard:
             ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # 3rd: over limit → ban_counts=1 (< threshold 2) → ip_blocked (rate, no ban yet).
+        # 3rd: over limit → ban_counts=1 (< threshold 2) → denied pre-accept (rate, no ban yet).
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
-        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        assert ws.close_code == 4401
+        assert ws.accepted is False  # pre-accept rejection
         # 4th: over limit again → ban_counts=2 (>= threshold) → ban SET + reset.
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
-        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        assert ws.close_code == 4401
+        assert ws.accepted is False
 
         # A2: advance PAST the rate window (61s) but within the ban (3600s) → still banned.
         clock["t"] = 61.0
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
         assert ws.close_code == 4401
-        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        assert ws.accepted is False  # ban persists — still denied pre-accept
 
         # P1: advance PAST the ban (3601s) → ban expired, fresh budget. A single over-limit
         # must NOT re-ban (reset-on-set cleared ban_counts at ban-set).
@@ -377,10 +409,11 @@ class TestWsGuard:
             ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=None)
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # One over-limit → ip_blocked (rate) but NOT banned (ban_counts=1 < 2).
+        # One over-limit → denied pre-accept (rate) but NOT banned (ban_counts=1 < 2).
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.7", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
-        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        assert ws.close_code == 4401
+        assert ws.accepted is False
         # Advance past the rate window: the next connect PASSES → not re-banned. If
         # reset-on-set had failed (ban_counts left at the threshold), this over-limit
         # would have re-banned and this connect would be ip_blocked instead.
@@ -407,12 +440,66 @@ class TestWsGuard:
             ws = FakeWS(client_host="127.0.0.1", xff=f"10.0.0.{i}", api_key=None)
             await run_multiplex(ws, auth, redis)
             assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
-        # 3rd connect with yet another XFF → still ip_blocked (peer-IP bucket exhausted;
-        # the XFF did not create a fresh bucket).
+        # 3rd connect with yet another XFF → still denied pre-accept (peer-IP bucket
+        # exhausted; the XFF did not create a fresh bucket).
         ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.99", api_key=VALID_KEY)
         await run_multiplex(ws, auth, redis)
         assert ws.close_code == 4401
-        assert ws.sent and ws.sent[0].get("error") == "ip_blocked"
+        assert ws.accepted is False  # pre-accept rejection
+
+    @pytest.mark.asyncio
+    async def test_cidr_ranges_match_on_ws_path(self, monkeypatch) -> None:
+        """#565: WS guard matches GUARD_TRUSTED_PROXIES / whitelist / blacklist entries as
+        CIDR ranges (not exact strings), mirroring the fastapi-guard HTTP path. A ``/8``
+        trusted-proxy CIDR matches a contained peer; a ``/24`` blacklist CIDR matches a
+        contained XFF IP and denies the connect; an out-of-range IP is NOT matched."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        reset_ws_guard(
+            _enforcing_config(
+                rate_limit=1000,
+                # 10.0.0.0/8 trusted-proxy CIDR — 127.0.0.1 is NOT in it, so a peer at
+                # 127.0.0.1 is untrusted and its XFF is ignored. Instead we put a
+                # 127.0.0.0/8 CIDR so 127.0.0.1 IS a trusted proxy and XFF is honored.
+                trusted_proxies=["127.0.0.0/8"],
+                # 10.0.0.0/24 blacklist CIDR — 10.0.0.50 is contained → denied; 10.0.1.5
+                # is out of range → not matched.
+                blacklist=["10.0.0.0/24"],
+            )
+        )
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        # Contained in the /24 blacklist CIDR → denied pre-accept.
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.0.50", api_key=VALID_KEY)
+        await run_multiplex(ws, auth, redis)
+        assert ws.close_code == 4401
+        assert ws.accepted is False
+        # Out of the /24 range (10.0.1.5) → passes the guard, reaches auth (missing_api_key).
+        ws = FakeWS(client_host="127.0.0.1", xff="10.0.1.5", api_key=None)
+        await run_multiplex(ws, auth, redis)
+        assert ws.accepted is True
+        assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
+
+    @pytest.mark.asyncio
+    async def test_whitelist_cidr_bypasses_ws_guard(self, monkeypatch) -> None:
+        """#565: a CIDR in GUARD_IP_WHITELIST bypasses the WS guard even when the IP is
+        over the rate limit. ``10.0.0.0/16`` whitelist → 10.0.5.5 is contained and passes."""
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        reset_ws_guard(
+            _enforcing_config(
+                rate_limit=1,
+                trusted_proxies=["127.0.0.0/8"],
+                whitelist=["10.0.0.0/16"],
+            )
+        )
+        auth = FakeAuthorizer(valid_key=VALID_KEY)
+        redis = FakeRedis()
+        # 10.0.5.5 is whitelisted via the /16 CIDR — passes the guard every time (no
+        # rate limit applied), reaches auth → missing_api_key.
+        for _ in range(3):
+            ws = FakeWS(client_host="127.0.0.1", xff="10.0.5.5", api_key=None)
+            await run_multiplex(ws, auth, redis)
+            assert ws.accepted is True
+            assert ws.sent and ws.sent[0].get("error") == "missing_api_key"
 
 
 # ── A5: both layers in one app ─────────────────────────────────────────────────

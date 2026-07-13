@@ -482,7 +482,8 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     multiplex against its fakes — exposed on the front door (``gateway.run_multiplex``) so the
     harness no longer reaches for a private (the P1-flagged smell).
 
-    accept → authenticate (missing key → error + close 4401) → loop over client frames:
+    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401) →
+      loop over client frames:
       subscribe   → authorize, register a redis fan-in per meeting, ack ``subscribed``;
       unsubscribe → cancel the fan-in task(s), ack ``unsubscribed`` (stops forwarding);
       ping        → ``pong``;
@@ -490,22 +491,29 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     Each subscription fans in ``tc:meeting:{id}:mutable`` / ``bm:meeting:{id}:status`` /
     ``va:meeting:{id}:chat`` and forwards every raw payload to the socket (main.py:2204).
     """
-    await ws.accept()
-
     # --- optional WS guard hook (GUARD_WS_ENABLED, default false) ---
     # HTTP SecurityMiddleware does not intercept /ws (Starlette middleware is HTTP-only).
     # When the toggle is on, resolve the client IP via the same trusted-proxies XFF logic
     # as guard's HTTP path and deny over-limit/banned IPs at connect. Opt-in: the default
     # (false) leaves the WS path unchanged so the conformance harness observes zero change.
-    if os.getenv("GUARD_WS_ENABLED", "").strip().lower() == "true":
+    #
+    # PRE-ACCEPT: the full guard check (whitelist/blacklist/ban/rate-limit) runs BEFORE
+    # ``ws.accept()`` so a banned IP never gets a WebSocket upgrade. On denial, close with
+    # 4401 BEFORE accept — Starlette forwards the pre-accept ``websocket.close`` unchanged
+    # (its state machine accepts ``websocket.close`` while CONNECTING); uvicorn (0.51 here)
+    # turns that into an HTTP 403 to the upgrade request (no upgrade, no frames). A data
+    # frame (send_text) cannot be sent before accept, so the rejection is the close alone —
+    # the client sees the 403, not an ip_blocked JSON frame.
+    from .ratelimit import env_truthy
+
+    if env_truthy(os.getenv("GUARD_WS_ENABLED")):
         from .edge_guard import ws_guard_check
 
         if not ws_guard_check(ws):
-            try:
-                await ws.send_text(json.dumps({"type": "error", "error": "ip_blocked"}))
-            finally:
-                await ws.close(code=4401)  # Unauthorized — IP over-limit or banned
+            await ws.close(code=4401)  # pre-accept reject → HTTP 403 to the upgrade
             return
+
+    await ws.accept()
 
     api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
     if not api_key:
