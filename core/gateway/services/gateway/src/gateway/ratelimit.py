@@ -15,6 +15,16 @@ from __future__ import annotations
 import time
 from typing import Callable, Dict, Optional
 
+# The single source of truth for "truthy" env values (case-insensitive). Shared by
+# ``edge_guard._env_bool`` and ``app.py``'s ``GUARD_WS_ENABLED`` check so the three env-bool
+# readers (guard enable, WS guard enable, rate-limit disable) agree on what "on" means.
+_ENV_TRUTHY = frozenset(("1", "true", "yes", "on"))
+
+
+def env_truthy(raw: str | None) -> bool:
+    """True iff ``raw`` (stripped, lowercased) is one of ``1/true/yes/on``; ``None`` → False."""
+    return raw is not None and raw.strip().lower() in _ENV_TRUTHY
+
 
 class _Bucket:
     __slots__ = ("tokens", "last")
@@ -60,7 +70,7 @@ def from_env(getenv: Callable[[str, str], str] = None) -> Optional["PerUserRateL
     import os as _os
 
     g = getenv or _os.getenv
-    if str(g("GATEWAY_RATE_LIMIT_DISABLED", "")).strip().lower() in ("1", "true", "yes", "on"):
+    if env_truthy(g("GATEWAY_RATE_LIMIT_DISABLED", "")):
         return None
     burst = float(g("GATEWAY_RATE_LIMIT_BURST", "120"))
     rps = float(g("GATEWAY_RATE_LIMIT_RPS", "40"))

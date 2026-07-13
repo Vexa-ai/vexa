@@ -1,6 +1,6 @@
 {
   "name": "vexa",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",

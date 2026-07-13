@@ -180,6 +180,10 @@ IP → one global bucket shared by all clients (one abuser throttles everyone). 
 | `GUARD_REDIS_PREFIX` | `vexa:guard:` | Redis key namespace (avoids colliding with Vexa's own keys). |
 | `GUARD_WS_ENABLED` | `false` | Opt-in `/ws` connect guard. In-memory per-process — does **not** share ban/rate state with the Redis-backed HTTP layer, and under `uvicorn --workers N>1` each worker keeps an independent WS ban set. |
 
+<Note>
+With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the WS per-process ceiling above applies to the WS path independently).
+</Note>
+
 The guard fails open (`fail_secure=false`): a guard-check bug or a redis outage returns the request to
 the app rather than taking the gateway down. Request-body WAF scanning is intentionally off — the
 gateway proxies arbitrary user text (chat, meeting `data`, transcript shares), so signature scanning

@@ -12,9 +12,9 @@ with one command.
 - A Linux host (Ubuntu 24.04 recommended for production), `git`, **`make`**, and **Docker engine ≥ v26**
   (`make all` checks and refuses older engines). A Mac with Docker Desktop works for a local
   evaluation — everything runs in containers either way.
-- **Build machine:** at least **8 vCPUs and 16 GB RAM**. `make all` builds the full Docker Compose
-  stack; `make lite` pulls the pre-built single-container all-in-one image and is much lighter —
-  prefer it on a resource-constrained host.
+- `make all` **pulls the published, release-validated images** — no build, any modest machine works;
+  `make lite` pulls the single-container all-in-one image and is lighter still. Building from
+  source (`make dev`) is for contributors and wants **8 vCPUs / 16 GB RAM**.
 - On Apple Silicon: arm64 images are published best-effort (not yet CI-validated) — see
   [Deployment](/deployment#quick-start-docker-compose) for details.
 - A **transcription (STT) token** — get one free at [`vexa.ai/account`](https://vexa.ai/account), or
@@ -26,8 +26,8 @@ with one command.
 ```bash
 curl -fsSL https://get.docker.com | sh
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all          # full Docker Compose stack — seeds .env, builds, and prints your API key
-make bot          # build the meeting bot from source — needed before a bot can join (§2′)
+make all          # full Docker Compose stack — pulls the published images (bot included), prints your API key
+                  # contributors: `make dev` builds everything from this checkout instead (:dev tags)
 ```
 
 `make all` brings up the whole stack and **prints an API key + your URLs** when it finishes:
