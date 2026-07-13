@@ -76,6 +76,8 @@ jobs:
           MOCK_BOT: "1"
           BROWSER_IMAGE: mock-bot:dev
           COMPOSE_DYNAMIC_PORTS: "1"
+          # registry build-cache overlay: untouched services become cache hits (~7 min → ~2)
+          COMPOSE_EXTRA_FILES: ${{ github.workspace }}/deploy/compose/docker-compose.ci-cache.yml
         run: ./bin/stack-test
       - name: Present the machine bundle (job summary)
         if: always()

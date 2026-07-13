@@ -1,0 +1,25 @@
+# CI build-cache overlay (wall-clock law) — pr-value builds the stack FROM THE PR TREE, which is
+# the point, but without cache every run recompiles all 8 images (~7 of its ~13 min). The release
+# pipeline already maintains registry build caches (vexaai/*:buildcache, mode=max, public — pullable
+# anonymously, so the secretless fork-run design is untouched). This overlay points compose builds
+# at them: a typical PR touches 1-2 services, the other 6-7 become cache hits.
+#
+# Used ONLY by CI (pr-value sets COMPOSE_EXTRA_FILES); local `make dev` is unaffected.
+# A cache miss costs nothing — the build just proceeds cold, exactly as before.
+services:
+  admin-api:
+    build: { cache_from: ["vexaai/v012-admin-api:buildcache"] }
+  runtime:
+    build: { cache_from: ["vexaai/v012-runtime:buildcache"] }
+  agent-worker:
+    build: { cache_from: ["vexaai/v012-agent-worker:buildcache"] }
+  agent-api:
+    build: { cache_from: ["vexaai/v012-agent-api:buildcache"] }
+  meeting-api:
+    build: { cache_from: ["vexaai/v012-meeting-api:buildcache"] }
+  gateway:
+    build: { cache_from: ["vexaai/v012-gateway:buildcache"] }
+  mcp:
+    build: { cache_from: ["vexaai/v012-mcp:buildcache"] }
+  terminal:
+    build: { cache_from: ["vexaai/v012-terminal:buildcache"] }

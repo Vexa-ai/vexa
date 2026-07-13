@@ -1,6 +1,11 @@
 name: gates
 # push+pull_request unrestricted ran the suite TWICE per PR-branch push (both events
 # fire) — pure duplication. Push covers main + release tags; pull_request covers PRs.
+#
+# SPLIT INTO 3 PARALLEL JOBS (wall-clock law): static / python / node run concurrently
+# (~5 min serial → ~2.5 min), joined by the `gates` job — the ONE required-check context
+# branch protection and the merge queue watch. The join fails if ANY leg is not success
+# (if:always() + explicit check, because a skipped required check would read as satisfied).
 on:
   push:
     branches: [main]
@@ -16,20 +21,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  gates:
+  static:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
-      - uses: astral-sh/setup-uv@v5
-      # CI runners have no GPU: skip onnxruntime-node's postinstall CUDA EP download — it is
-      # large, raced across the two resolved onnxruntime versions, and flaked main's first run
-      # (ENOENT in /tmp cleanup). The CPU binaries tests use are bundled in the package itself.
       - run: pnpm install --frozen-lockfile
         env: { ONNXRUNTIME_NODE_INSTALL: skip }
-      # the compliance bar — each gate is its own step so a failure is unambiguous
+      # each gate its own step so a failure is unambiguous
       - run: pnpm gate:readme
       - run: pnpm gate:isolation
       - run: pnpm gate:exports
@@ -39,11 +40,52 @@ jobs:
       - run: pnpm gate:config-contract
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
+      - run: pnpm gate:licenses
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: astral-sh/setup-uv@v5
+      - run: pnpm install --frozen-lockfile
+        env: { ONNXRUNTIME_NODE_INSTALL: skip }
       # the runtime docker-backend lifecycle test creates containers via the docker socket API,
       # which (unlike `docker run`) does NOT implicit-pull — pre-pull its fixture image
       - run: docker pull alpine
       - run: pnpm gate:python
-      - run: pnpm gate:licenses
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      # CI runners have no GPU: skip onnxruntime-node's postinstall CUDA EP download — it is
+      # large, raced across the two resolved onnxruntime versions, and flaked main's first run
+      # (ENOENT in /tmp cleanup). The CPU binaries tests use are bundled in the package itself.
+      - run: pnpm install --frozen-lockfile
+        env: { ONNXRUNTIME_NODE_INSTALL: skip }
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+
+  # THE required check — branch protection + merge queue watch this single context.
+  gates:
+    needs: [static, python, node]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All legs green?
+        env:
+          R_STATIC: ${{ needs.static.result }}
+          R_PYTHON: ${{ needs.python.result }}
+          R_NODE: ${{ needs.node.result }}
+        run: |
+          echo "static=$R_STATIC python=$R_PYTHON node=$R_NODE"
+          [ "$R_STATIC" = "success" ] && [ "$R_PYTHON" = "success" ] && [ "$R_NODE" = "success" ] \
+            || { echo "::error ::a gates leg failed or was cancelled"; exit 1; }
+          echo "✓ all gate legs green"
