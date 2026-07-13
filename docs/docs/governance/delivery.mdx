@@ -752,6 +752,30 @@ Guarantees of every release: all value witnessed · no regression against the pr
 (the no-regression rows + batch validation) · artifact-pointer truth · the loop closed to every
 reporter.
 
+## The two choke points
+
+The whole delivery loop routes through exactly **two** engineered human moments — everything
+else is autonomous machinery or agent work. Adding a third human gate anywhere is a process
+regression; making either of these two vague is a process bug.
+
+**Choke point 1 — the merge card, one per PR.** Before any merge, the maintainer receives ONE
+card, plain language, no jargon, no flood:
+
+1. **What you get** — the value in one or two sentences, in user terms.
+2. **Is it real?** — the proof, honestly: which machine legs ran green *on this PR's sha*
+   (linked), what the contributor witnessed themselves, and — never omitted — what is NOT yet
+   proven and which later gate carries it.
+3. **The change** — the diff in plain words: what was touched, how big, where the risk sits,
+   what the review found (fixed or outstanding).
+4. **Your decision** — the exact ask, one sentence, and what changes on each answer.
+
+A card that buries the gap, inflates the proof, or asks two questions is returned to its
+author (us). The maintainer rules on the card in minutes; they never re-derive evidence.
+
+**Choke point 2 — the release witness pass, one per release.** The batch's user-visible value,
+walked once, live, on the release candidate (the witness script; ship bar above). The human
+acts where machines cannot — admission, and seeing the assembled product deliver.
+
 ## Asking the human
 
 The human is the scarce oracle (D9) — so every ask of them is engineered, not tossed over the
