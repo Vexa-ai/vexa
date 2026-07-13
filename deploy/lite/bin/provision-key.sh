@@ -22,7 +22,7 @@ for _ in $(seq 1 60); do
     sleep 2
 done
 
-TOK=$(ADMIN="$ADMIN" python3 - <<'PY'
+TOKS=$(ADMIN="$ADMIN" python3 - <<'PY'
 import os, sys, json, urllib.request, urllib.error
 admin = os.environ["ADMIN"]; B = "http://localhost:8001"
 H = {"X-Admin-API-Key": admin, "Content-Type": "application/json"}
@@ -42,17 +42,22 @@ if s == 200:
 else:
     s, b = call("POST", "/admin/users", {"email": "self-host@vexa.ai", "name": "self host"})
     uid = json.loads(b)["id"]
+# dashboard key (bot,tx)
 s, b = call("POST", f"/admin/users/{uid}/tokens?scopes=bot,tx")
 d = json.loads(b)
-print(d.get("token") or d.get("api_token") or "")
+sys.stdout.write("VEXA_API_KEY=" + (d.get("token") or d.get("api_token") or "") + "\n")
+# bot api key (bot,tx)
+s, b = call("POST", f"/admin/users/{uid}/tokens?scopes=bot,tx")
+d = json.loads(b)
+sys.stdout.write("VEXA_BOT_API_KEY=" + (d.get("token") or d.get("api_token") or "") + "\n")
 PY
 )
 
-if [ -n "$TOK" ]; then
+if [ -n "$TOKS" ]; then
     mkdir -p /run/vexa
-    printf 'VEXA_API_KEY=%s\n' "$TOK" > /run/vexa/key.env
+    printf '%s\n' "$TOKS" > /run/vexa/key.env
     supervisorctl -c /etc/supervisor/conf.d/vexa.conf restart vexa:dashboard vexa:terminal >/dev/null 2>&1 || true
-    echo "[provision-key] self-host key provisioned; dashboard + terminal restarted (zero-login)"
+    echo "[provision-key] self-host keys provisioned; dashboard + terminal restarted (zero-login)"
 else
-    echo "[provision-key] WARN: could not mint a key — the UIs will require an interactive login"
+    echo "[provision-key] WARN: could not mint keys — the UIs will require an interactive login"
 fi

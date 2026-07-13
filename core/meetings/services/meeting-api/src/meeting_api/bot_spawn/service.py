@@ -36,6 +36,7 @@ from .ports import (
     QuotaExceeded,
     RuntimeClient,
     SpawnFailed,
+    TranscriptionNotConfigured,
 )
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
@@ -161,6 +162,30 @@ async def request_bot(
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
 
+    # 1b. Resolve the transcription backend and gate BEFORE any DB write (C1, reorder not
+    #     duplicate): the old router gate refused pre-insert; resolving here keeps that property —
+    #     a refused spawn must not leave an orphaned `requested` meeting row (whose retry after
+    #     fixing config would then 409 on the dedup guard). STT creds the bot transcribes with —
+    #     the process env is the bottom fallback; a configured backend from Settings (user pref >
+    #     platform setting, resolved by admin-api's bot-context) overrides it per spawn. The
+    #     resolved values flow down unchanged to the invocation build. Note: config.v1's `stt`
+    #     capability tri-state still drives boot preflight + /health; the spawn path trusts THIS
+    #     resolver instead (issue #502 C1) because Settings-configured STT is invisible to the
+    #     env-only capability check.
+    transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
+    transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
+    configured = await _resolve_transcription_backend(user_id)
+    if configured.get("url"):
+        transcription_service_url = configured["url"]
+        # A configured backend's token replaces the env token even when empty — the env token
+        # belongs to the ENV backend, never to a user-supplied endpoint.
+        transcription_service_token = configured.get("token") or None
+    if transcribe_enabled and not transcription_service_url:
+        raise TranscriptionNotConfigured(
+            "no transcription backend configured — set it in Settings or environment variables "
+            "TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN"
+        )
+
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
     #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
     #     stays a plain query — the reused-row path reopens an existing terminal row (no NEW active row
@@ -237,19 +262,10 @@ async def request_bot(
     internal_secret = internal_secret if internal_secret is not None else os.getenv(
         "INTERNAL_API_SECRET"
     )
-    # STT creds the bot transcribes with — the process env (the parent's request_bot did the
-    # same) is the bottom fallback; a configured backend from Settings (user pref > platform
-    # setting, resolved by admin-api's bot-context) overrides it per spawn. Without either the
-    # bot joins + captures but cannot transcribe (the invocation has no STT). None-safe: omitted
-    # from the invocation when unset (transcribe still gated by transcribe_enabled).
-    transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
-    transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
-    configured = await _resolve_transcription_backend(user_id)
-    if configured.get("url"):
-        transcription_service_url = configured["url"]
-        # A configured backend's token replaces the env token even when empty — the env token
-        # belongs to the ENV backend, never to a user-supplied endpoint.
-        transcription_service_token = configured.get("token") or None
+    # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
+    # transcription_service_url/token flow into the invocation below. Without either the bot
+    # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset
+    # (transcribe still gated by transcribe_enabled, which step 1b refuses when unresolvable).
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
     # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
     token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)
