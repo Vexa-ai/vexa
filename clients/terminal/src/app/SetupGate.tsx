@@ -123,7 +123,7 @@ function ModelsStep({ onNext }: { onNext: (state: StepState) => void }) {
               No Claude credentials detected in the deployment environment. Set up a model
               provider via <code style={{ fontSize: 11, fontFamily: "var(--mono)", background: "var(--panel2)", padding: "1px 4px", borderRadius: 3 }}>HOST_CLAUDE_CREDENTIALS</code>{" "}
               in deployment settings or select the "OpenRouter or custom endpoint" option above
-              — see <code style={{ fontSize: 11, fontFamily: "var(--mono)", background: "var(--panel2)", padding: "1px 4px", borderRadius: 3 }}>docs/docs/configuration.mdx</code>{" "}
+              — see the <a href="https://docs.vexa.ai/configuration" target="_blank" rel="noreferrer" style={{ color: "var(--t2)", textDecoration: "underline" }}>configuration docs</a>{" "}
               for all setup options.
             </div>
             {detect && !detect.ok && <TestLine res={detect} err={null} busy={false} />}
