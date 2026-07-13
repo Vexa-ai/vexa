@@ -143,30 +143,41 @@ def test_health_carries_capability_rows_additively(monkeypatch):
     assert "state" in body["capabilities"]["object_storage"]
 
 
-# ── the canonical gate: POST /bots consults the declared capability (incident 1 regression) ──────
+# ── the spawn gate: POST /bots trusts the transcription RESOLVER, not the env tri-state ─────────
+# (#502 C1 / PR #504): the `stt` capability tri-state still drives boot preflight + /health, but
+# the spawn path now gates on what request_bot actually resolves (Settings backend > env) — the
+# env-only capability check could never be satisfied by wizard-written Settings config.
 
 
-def test_spawn_503_names_the_misconfigured_half(monkeypatch):
-    """THE INCIDENT, upgraded: URL set but TOKEN unset used to read as 'not configured (both unset)'.
-    The declaration-driven guard reports the true state (misconfigured) and names EXACTLY the unset
-    key — actionable, and the same row /health shows."""
+def test_spawn_accepts_url_without_token(monkeypatch):
+    """Semantics shift from the old capability gate: a URL with no token is a SPAWNABLE backend
+    (the token belongs to the backend and may legitimately be empty — e.g. an unauthenticated
+    self-hosted STT). /health's `stt` row still reads `misconfigured` for the env pair; the spawn
+    gate no longer refuses on it."""
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test/transcribe")
     monkeypatch.delenv("TRANSCRIPTION_SERVICE_TOKEN", raising=False)
     r = _client().post("/bots", headers=HEADERS,
                        json={"platform": "google_meet", "native_meeting_id": "half-stt"})
-    assert r.status_code == 503
-    detail = r.json()["detail"]
-    # the true tri-state + EXACTLY the unset key — actionable, and the same row /health shows
-    assert "misconfigured: TRANSCRIPTION_SERVICE_TOKEN unset" in detail
-    assert "transcribe_enabled=false" in detail
+    assert r.status_code == 201, f"{r.status_code} {r.text}"
 
 
 def test_spawn_503_when_stt_fully_unset(monkeypatch):
     monkeypatch.delenv("TRANSCRIPTION_SERVICE_URL", raising=False)
     monkeypatch.delenv("TRANSCRIPTION_SERVICE_TOKEN", raising=False)
-    r = _client().post("/bots", headers=HEADERS,
-                       json={"platform": "google_meet", "native_meeting_id": "no-stt"})
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)  # no Settings backend either
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"platform": "google_meet", "native_meeting_id": "no-stt"})
     assert r.status_code == 503
     detail = r.json()["detail"]
-    assert "not_configured" in detail
+    # the typed resolver reason — actionable for BOTH config paths (wizard Settings and env)
+    assert "no transcription backend configured" in detail
+    assert "Settings" in detail
     assert "TRANSCRIPTION_SERVICE_URL" in detail and "TRANSCRIPTION_SERVICE_TOKEN" in detail
+    # #504 review finding 1: the refusal fires BEFORE the meeting-row write — a refused spawn
+    # leaves no orphaned `requested` row, so the post-config retry cannot 409 on the dedup guard.
+    assert repo._meetings == {}, f"refused spawn wrote a meeting row: {repo._meetings}"
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt.test/transcribe")
+    r2 = _client(repo).post("/bots", headers=HEADERS,
+                            json={"platform": "google_meet", "native_meeting_id": "no-stt"})
+    assert r2.status_code == 201, f"retry after configuring must not 409/503: {r2.status_code} {r2.text}"

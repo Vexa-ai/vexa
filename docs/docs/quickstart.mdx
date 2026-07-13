@@ -9,9 +9,14 @@ with one command.
 
 ## Prerequisites
 
-- A Linux host (Ubuntu 24.04 recommended for production), `git`, and **Docker engine ≥ v26**
+- A Linux host (Ubuntu 24.04 recommended for production), `git`, **`make`**, and **Docker engine ≥ v26**
   (`make all` checks and refuses older engines). A Mac with Docker Desktop works for a local
   evaluation — everything runs in containers either way.
+- **Build machine:** at least **8 vCPUs and 16 GB RAM**. `make all` builds the full Docker Compose
+  stack; `make lite` pulls the pre-built single-container all-in-one image and is much lighter —
+  prefer it on a resource-constrained host.
+- On Apple Silicon: arm64 images are published best-effort (not yet CI-validated) — see
+  [Deployment](/deployment#quick-start-docker-compose) for details.
 - A **transcription (STT) token** — get one free at [`vexa.ai/account`](https://vexa.ai/account), or
   [self-host transcription](/deployment#air-gapped) on a GPU. Without it, bots join and record but
   produce no transcript.

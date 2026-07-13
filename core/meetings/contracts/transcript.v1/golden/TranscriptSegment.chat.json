@@ -1,0 +1,13 @@
+{
+  "segment_id": "sess-uid:chat:1783728000000",
+  "speaker": "Alice",
+  "speaker_key": "chat:Alice",
+  "text": "agenda is in the doc",
+  "start": 1783728000,
+  "end": 1783728000,
+  "language": null,
+  "completed": true,
+  "absolute_start_time": "2026-07-11T08:00:00.000Z",
+  "absolute_end_time": "2026-07-11T08:00:00.000Z",
+  "source": "chat"
+}

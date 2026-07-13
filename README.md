@@ -70,10 +70,14 @@ Self-host the whole stack on one host, then explore it in the Terminal or drive 
 Linux (Ubuntu 24.04) is the production target; a Mac with Docker Desktop works fine for a local
 evaluation — everything runs in containers either way.
 
-**Prerequisites** — Docker engine ≥ v26 (`make all` checks), and transcription: a free token at
+**Prerequisites** — `make`, **Docker engine ≥ v26** (`make all` checks), and transcription: a free token at
 [vexa.ai/account](https://vexa.ai/account), or self-host the (GPU) transcription unit for a fully
 air-gapped setup. Without transcription, bots still join and record — they just produce no text
 (`make all` warns when the credentials block in `.env` is empty).
+
+> **Build machine:** The full stack (`make all`) requires at least **8 vCPUs and 16 GB RAM**. A smaller
+> box can run `make lite` (the single-container all-in-one image) but `make all` (Docker Compose) will
+> likely fail or timeout. `make lite` is the lighter path for resource-constrained hosts.
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
@@ -95,7 +99,7 @@ When `make all` finishes it prints your key and URLs:
 already signed in to a self-host account. From the
 workbench you can, with no curl:
 
-- **Send a bot** — paste a Meet / Zoom / Teams URL; a bot joins as a participant.
+- **Send a bot** — paste a Meet / Zoom / Teams / Jitsi URL; a bot joins as a participant.
 - **Watch the transcript** stream in live, speaker-attributed, draft-then-confirmed.
 - **Chat with your workspace** — ask an agent that has every captured meeting as context, and watch it
   commit what you decide.
@@ -119,7 +123,7 @@ curl -N -X POST "$API_BASE/agent/chat" \
   -d '{"prompt":"What did we decide in my last meeting?"}'
 ```
 
-`platform` is `google_meet` · `teams` · `zoom`; `native_meeting_id` is the code from the join URL. The
+`platform` is `google_meet` · `teams` · `zoom` · `jitsi`; `native_meeting_id` is the code from the join URL. The
 agent reply streams as Server-Sent Events — `message-delta` frames carry the text, `commit` frames mark
 anything it recorded into your workspace.
 
@@ -418,7 +422,7 @@ Two APIs behind the gateway, authenticated with `X-API-Key`. Base URL: `http://l
 | `POST` | `/agent/events` | Fire an integration event that dispatches an agent (e.g. email triage) |
 | `GET` | `/agent/workspace/tree` · `/agent/workspace/file` | Browse and read your Markdown workspace |
 
-`platform` ∈ `google_meet` · `teams` · `zoom`. Full reference: **[docs.vexa.ai](https://docs.vexa.ai)**.
+`platform` ∈ `google_meet` · `teams` · `zoom` · `jitsi`. Full reference: **[docs.vexa.ai](https://docs.vexa.ai)**.
 
 > **v0.12 note:** live bot-control — `PUT /bots/{…}/config` (change language/task mid-call) and
 > `POST /bots/{…}/speak` (TTS into the call) — plus the live-meeting copilot (`/agent/meeting/*`) and
@@ -434,6 +438,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 | Capability | State |
 |---|---|
 | Bot joins **Meet / Teams / Zoom** | ✅ Production |
+| Bot joins **Jitsi Meet** (meet.jit.si + self-hosted) | 🆕 Built & offline-proven; live validation pending |
 | Real-time transcription (Whisper) + speaker attribution | ✅ Production |
 | Redis transcript streaming | ✅ Production |
 | Recordings to your own object storage (MinIO) | ✅ Available |

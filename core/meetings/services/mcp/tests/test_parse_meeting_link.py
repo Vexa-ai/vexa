@@ -181,6 +181,63 @@ class TestZoom:
         assert_422("https://events.zoom.us/ev/abc123", "zoom events")
 
 
+class TestJitsi:
+    def test_canonical_room(self):
+        r = parse("https://meet.jit.si/VexaStandup")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "VexaStandup"
+        assert r.passcode is None
+        # The bot always navigates the full URL, so the parser echoes it back.
+        assert r.meeting_url == "https://meet.jit.si/VexaStandup"
+        assert r.warnings == []
+
+    def test_trailing_slash(self):
+        assert parse("https://meet.jit.si/MyRoom/").native_meeting_id == "MyRoom"
+
+    def test_bare_origin_rejected(self):
+        assert_422("https://meet.jit.si/", "jitsi")
+
+    def test_multi_segment_path_rejected(self):
+        assert_422("https://meet.jit.si/a/b", "jitsi")
+
+    def test_self_hosted_jitsi_host_inferred_with_warning(self):
+        r = parse("https://jitsi.example.org/MyRoom")
+        assert r.platform == "jitsi"
+        # Deployment-scoped id (room@host) — same-named rooms on different hosts never collide.
+        assert r.native_meeting_id == "MyRoom@jitsi.example.org"
+        assert r.meeting_url == "https://jitsi.example.org/MyRoom"
+        # Name-based inference is a guess — the caller is told so.
+        assert any("inferred" in w.lower() for w in r.warnings)
+
+    def test_self_hosted_meet_convention_inferred(self):
+        r = parse("https://meet.example.org/TeamSync")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "TeamSync@meet.example.org"
+        assert any("inferred" in w.lower() for w in r.warnings)
+
+    def test_regionalized_meet_label_inferred(self):
+        r = parse("https://eu.meet.example.org/QualifiedRoomName")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "QualifiedRoomName@eu.meet.example.org"
+        assert r.meeting_url == "https://eu.meet.example.org/QualifiedRoomName"
+
+    def test_declared_host_parses_without_warning(self, monkeypatch):
+        # VEXA_JITSI_HOSTS makes a deployment EXPLICIT — same setting meeting-api honours.
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "calls.example.io")
+        r = parse("https://calls.example.io/Standup")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "Standup@calls.example.io"
+        assert r.warnings == []
+
+    def test_whitespace_room_rejected(self):
+        # The id round-trips into path params — whitespace never parses (matches the
+        # meeting-api and terminal twins).
+        assert_422("https://meet.jit.si/My Room", "jitsi")
+
+    def test_meet_substring_label_not_inferred(self):
+        assert_422("https://meetings.example.org/Room", "unknown provider")
+
+
 class TestMisc:
     def test_empty_url_rejected(self):
         assert_422("", "empty")

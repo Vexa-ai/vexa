@@ -275,6 +275,17 @@
       ]
     },
     {
+      "unique-id": "jitsi-capture",
+      "node-type": "module",
+      "name": "jitsi-capture",
+      "description": "jitsi-capture \u2014 atomic module in meetings",
+      "metadata": [
+        {
+          "path": "core/meetings/modules/jitsi-capture"
+        }
+      ]
+    },
+    {
       "unique-id": "join",
       "node-type": "module",
       "name": "join",
@@ -1223,6 +1234,7 @@
             "capture-codec",
             "gmeet-capture",
             "gmeet-pipeline",
+            "jitsi-capture",
             "join",
             "mixed-capture-core",
             "mixed-pipeline",

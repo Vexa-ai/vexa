@@ -12,7 +12,9 @@ transit a vendor's infrastructure. This page collects what a security review ask
 - **Self-hosted, single perimeter.** Every service — capture bots, transcription, storage,
   agents, the web workbench — runs on infrastructure you control ([Deployment](/deployment),
   [Kubernetes](/deployment-kubernetes)). Services bind to loopback; the gateway is the one
-  front door.
+  front door, with an optional pre-auth edge layer — per-IP rate throttle, auto-ban of repeat
+  offenders, and static IP allow/deny — behind a `GUARD_ENABLED` kill switch. Self-hosted default
+  OFF; hosted/cloud runs it on. See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
 - **Air-gapped / zero egress.** Nothing phones home. Pair the stack with the
   [self-hosted GPU transcription unit](/deployment#transcription-the-separate-gpu-unit) and
   your own LLM endpoint and no request leaves your network.

@@ -5,8 +5,8 @@
   "description": "The transcript contract: speaker-attributed segments + the session envelopes carried over the bus (bot[TS] → collector[Py]) and the live mutable bundle (gateway → dashboard).",
   "$defs": {
     "Source": {
-      "description": "How the speaker was attributed.",
-      "enum": ["glow-bound", "provisional-cluster-id", "caption", "merged"]
+      "description": "How the speaker was attributed. chat = an in-meeting chat message captured into the transcript (speaker = the chat sender; text = the message).",
+      "enum": ["glow-bound", "provisional-cluster-id", "caption", "merged", "chat"]
     },
     "Word": {
       "type": "object",

@@ -82,18 +82,21 @@ class RequestMeetingBot(BaseModel):
             "The meeting identifier.\n"
             "- Google Meet: meeting code like 'abc-defg-hij'\n"
             "- Microsoft Teams: numeric meeting ID only (10-15 digits) from teams.live.com/meet/<id>\n"
-            "- Zoom: numeric meeting ID only (10-11 digits)"
+            "- Zoom: numeric meeting ID only (10-11 digits)\n"
+            "- Jitsi: ALWAYS pass meeting_url (the full room URL) — a jitsi room is deployment-scoped,\n"
+            "  so a bare room name is rejected (422); the id is derived from the URL"
         ),
     )
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected")
     bot_name: Optional[str] = Field(None, description="Optional custom name for the bot in the meeting")
-    platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'teams', 'zoom'). Default is 'google_meet'.")
+    platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'teams', 'zoom', 'jitsi'). Default is 'google_meet'.")
     passcode: Optional[str] = Field(
         None,
         description=(
             "Meeting passcode.\n"
             "- Teams: passcode is the value of the `?p=` parameter in your Teams meeting link.\n"
-            "- Zoom: passcode is the value of the `?pwd=` parameter (optional)."
+            "- Zoom: passcode is the value of the `?pwd=` parameter (optional).\n"
+            "- Jitsi: the room password, when the room is protected (optional)."
         ),
     )
 

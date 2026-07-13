@@ -47,7 +47,7 @@ _BRIEF = (
     "You are the live meeting copilot. Watch the meeting transcript as it streams in and surface the "
     "people, companies, products, and projects worth tagging."
 )
-_PLATFORM = {"google_meet": "Google Meet", "teams": "Microsoft Teams", "zoom": "Zoom"}
+_PLATFORM = {"google_meet": "Google Meet", "teams": "Microsoft Teams", "zoom": "Zoom", "jitsi": "Jitsi Meet"}
 _native: dict[str, tuple[str, str]] = {}  # numeric meeting_id → (native_meeting_id, platform), cached
 # Only the meeting_id whose row we actually matched is cached above. A MISS is NOT cached (so it is
 # retried on the next segment — the new meeting's row may not be visible in the gateway list yet),

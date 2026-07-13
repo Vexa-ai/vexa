@@ -135,7 +135,7 @@ def build_production_app(
 
     from .ratelimit import from_env as _rate_limiter_from_env
 
-    return create_app(
+    app = create_app(
         authorizer,
         downstream,
         redis_client,
@@ -144,6 +144,15 @@ def build_production_app(
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
+
+    # --- fastapi-guard: per-IP rate limiting, IP allow/deny + auto-ban (edge_guard.py) ---
+    # Prod-only wiring; create_app stays pure so the conformance harness drives it directly
+    # and observes zero change. Complementary to the per-user limiter above (per-key catches
+    # one-token-many-IPs; guard's per-IP catches many-tokens-from-one-IP + auto-bans).
+    from .edge_guard import apply_guard
+
+    apply_guard(app)
+    return app
 
 
 # ── ASGI entrypoint (P4) ─────────────────────────────────────────────────────────────────────

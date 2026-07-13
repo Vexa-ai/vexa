@@ -36,6 +36,7 @@ from .ports import (
     QuotaExceeded,
     RuntimeClient,
     SpawnFailed,
+    TranscriptionNotConfigured,
 )
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
@@ -47,6 +48,10 @@ _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "sto
 _TERMINAL_STATUSES = ("completed", "failed")
 
 # Construct-URL templates per platform (the parent's ``Platform.construct_meeting_url``, core set).
+# NO jitsi template: a jitsi room name is scoped to a DEPLOYMENT (meet.jit.si is only the public
+# one), so constructing a URL from the bare id would silently join the public room of that name —
+# the wrong meeting, on someone else's deployment. jitsi callers pass an explicit ``meeting_url``
+# (same passthrough zoom uses); the UI, MCP, and calendar paths all carry it.
 _URL_TEMPLATES = {
     "google_meet": "https://meet.google.com/{native_meeting_id}",
     "teams": "https://teams.microsoft.com/l/meetup-join/{native_meeting_id}",
@@ -124,6 +129,7 @@ async def request_bot(
     platform: str,
     native_meeting_id: str,
     bot_name: Optional[str] = None,
+    passcode: Optional[str] = None,
     meeting_url: Optional[str] = None,
     language: Optional[str] = None,
     task: Optional[str] = None,
@@ -155,6 +161,30 @@ async def request_bot(
     """
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
+
+    # 1b. Resolve the transcription backend and gate BEFORE any DB write (C1, reorder not
+    #     duplicate): the old router gate refused pre-insert; resolving here keeps that property —
+    #     a refused spawn must not leave an orphaned `requested` meeting row (whose retry after
+    #     fixing config would then 409 on the dedup guard). STT creds the bot transcribes with —
+    #     the process env is the bottom fallback; a configured backend from Settings (user pref >
+    #     platform setting, resolved by admin-api's bot-context) overrides it per spawn. The
+    #     resolved values flow down unchanged to the invocation build. Note: config.v1's `stt`
+    #     capability tri-state still drives boot preflight + /health; the spawn path trusts THIS
+    #     resolver instead (issue #502 C1) because Settings-configured STT is invisible to the
+    #     env-only capability check.
+    transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
+    transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
+    configured = await _resolve_transcription_backend(user_id)
+    if configured.get("url"):
+        transcription_service_url = configured["url"]
+        # A configured backend's token replaces the env token even when empty — the env token
+        # belongs to the ENV backend, never to a user-supplied endpoint.
+        transcription_service_token = configured.get("token") or None
+    if transcribe_enabled and not transcription_service_url:
+        raise TranscriptionNotConfigured(
+            "no transcription backend configured — set it in Settings or environment variables "
+            "TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN"
+        )
 
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
     #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
@@ -232,19 +262,10 @@ async def request_bot(
     internal_secret = internal_secret if internal_secret is not None else os.getenv(
         "INTERNAL_API_SECRET"
     )
-    # STT creds the bot transcribes with — the process env (the parent's request_bot did the
-    # same) is the bottom fallback; a configured backend from Settings (user pref > platform
-    # setting, resolved by admin-api's bot-context) overrides it per spawn. Without either the
-    # bot joins + captures but cannot transcribe (the invocation has no STT). None-safe: omitted
-    # from the invocation when unset (transcribe still gated by transcribe_enabled).
-    transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
-    transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
-    configured = await _resolve_transcription_backend(user_id)
-    if configured.get("url"):
-        transcription_service_url = configured["url"]
-        # A configured backend's token replaces the env token even when empty — the env token
-        # belongs to the ENV backend, never to a user-supplied endpoint.
-        transcription_service_token = configured.get("token") or None
+    # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
+    # transcription_service_url/token flow into the invocation below. Without either the bot
+    # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset
+    # (transcribe still gated by transcribe_enabled, which step 1b refuses when unresolvable).
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
     # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
     token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)
@@ -256,6 +277,7 @@ async def request_bot(
         platform=platform,
         meeting_url=constructed_url,
         bot_name=bot_name or f"VexaBot-{uuid.uuid4().hex[:6]}",
+        passcode=passcode,
         token=token,
         native_meeting_id=native_meeting_id,
         connection_id=connection_id,

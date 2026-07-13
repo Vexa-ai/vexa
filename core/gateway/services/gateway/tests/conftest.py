@@ -9,7 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Optional
+
+# fastapi-guard: keep it installed (so the integration is exercised) but in-memory and with
+# rate limiting off, so the unit suite never depends on Redis and guard can never throttle/
+# block a unit-test request. GUARD_WS_ENABLED is left unset (default false) so the WS path
+# is unchanged for the existing multiplex suite.
+os.environ.setdefault("GUARD_ENABLED", "true")
+os.environ.setdefault("GUARD_ENABLE_REDIS", "false")
+os.environ.setdefault("GUARD_RATE_LIMIT_RPM", "0")
 
 VALID_KEY = "vxa_test_unit_key"
 VALID_USER = {"user_id": 7, "scopes": ["bot", "tx", "browser"], "max_concurrent": 3, "email": "u@example.com"}

@@ -55,14 +55,16 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
     except (TypeError, ValueError):
         return None
     completed = bool(raw.get("completed", False))
+    source = raw.get("source")
     # Fix inverted timestamps.
     if end < start:
         start, end = end, start
     # Drop ~zero-length COMPLETED segments (garbage finals). A pending DRAFT (completed=False) legitimately
     # has no end yet — `start == end` is its in-progress placeholder — so it MUST pass: it is the live
     # "being spoken" text the dashboard renders as a pending draft (filtering it left transcripts
-    # confirmed-only, with no live in-progress text).
-    if completed and end - start < 1e-3:
+    # confirmed-only, with no live in-progress text). A `chat` segment (transcript.v1 Source) is a
+    # legitimate POINT-IN-TIME event — start == end by contract — so it passes too.
+    if completed and end - start < 1e-3 and source != "chat":
         return None
     segment_id = raw.get("segment_id")
     if not segment_id:
@@ -75,6 +77,7 @@ def _coerce_segment(raw: dict) -> Optional[dict]:
         "language": raw.get("language"),
         "speaker": raw.get("speaker"),
         "completed": completed,
+        "source": source,
         "absolute_start_time": raw.get("absolute_start_time"),
         "absolute_end_time": raw.get("absolute_end_time"),
         "updated_at": _now_iso(),

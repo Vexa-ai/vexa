@@ -8,7 +8,7 @@
       "type": "object",
       "required": ["platform", "native_id"],
       "properties": {
-        "platform": { "type": "string", "enum": ["google_meet", "zoom", "teams", "browser_session"] },
+        "platform": { "type": "string", "enum": ["google_meet", "zoom", "teams", "jitsi", "browser_session"] },
         "native_id": { "type": "string" }
       }
     },

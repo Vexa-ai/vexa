@@ -86,7 +86,9 @@ def test_meeting_token_roundtrips_under_secret():
 
 # ── flow: request_bot eager-creates the session + writes the container back ──────────────────────
 
-async def test_request_bot_eager_creates_session_and_spawns():
+async def test_request_bot_eager_creates_session_and_spawns(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
     meeting = await request_bot(
@@ -103,7 +105,9 @@ async def test_request_bot_eager_creates_session_and_spawns():
     assert repo.sessions[0]["session_uid"] == spawned["connectionId"]
 
 
-async def test_request_bot_dedup_raises():
+async def test_request_bot_dedup_raises(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     from meeting_api.bot_spawn import DuplicateMeeting
 
     repo = InMemoryMeetingRepo()
@@ -115,7 +119,9 @@ async def test_request_bot_dedup_raises():
         await request_bot(repo, runtime, **kw)
 
 
-async def test_request_bot_quota_propagates():
+async def test_request_bot_quota_propagates(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient(quota_exceeded=True)
     with pytest.raises(QuotaExceeded):
@@ -135,6 +141,8 @@ def _client(repo=None, runtime=None):
 
 def test_post_bots_201(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     client = _client()
     r = client.post("/bots", headers=HEADERS,
                     json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
@@ -144,6 +152,8 @@ def test_post_bots_201(monkeypatch):
 
 def test_post_bots_409_on_duplicate(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
     body = {"platform": "google_meet", "native_meeting_id": "dup"}
@@ -153,6 +163,8 @@ def test_post_bots_409_on_duplicate(monkeypatch):
 
 def test_post_bots_429_on_quota(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     client = _client(runtime=FakeRuntimeClient(quota_exceeded=True))
     r = client.post("/bots", headers=HEADERS,
                     json={"platform": "google_meet", "native_meeting_id": "x"})
@@ -161,9 +173,43 @@ def test_post_bots_429_on_quota(monkeypatch):
 
 def test_post_bots_401_without_identity(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
     client = _client()
     r = client.post("/bots", json={"platform": "google_meet", "native_meeting_id": "x"})
     assert r.status_code == 401
+
+
+def test_post_bots_transcribe_without_stt_fails_loud(monkeypatch):
+    """No env TRANSCRIPTION_SERVICE_URL and no Settings backend → 503 when transcribe_enabled."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_URL", raising=False)
+    monkeypatch.delenv("TRANSCRIPTION_SERVICE_TOKEN", raising=False)
+    client = _client()
+    r = client.post("/bots", headers=HEADERS,
+                    json={"platform": "google_meet", "native_meeting_id": "no-stt"})
+    assert r.status_code == 503
+    assert "no transcription backend configured" in r.text
+
+
+def test_post_bots_transcribe_with_settings_stt_passes(monkeypatch):
+    """Settings-configured backend (monkeypatched _resolve_transcription_backend) → spawn proceeds."""
+    from meeting_api.bot_spawn import service as spawn_service
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+
+    async def fake_resolve(user_id):
+        return {"url": "https://stt-settings.example.com"}
+
+    monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
+
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    client = _client(repo, runtime)
+    r = client.post("/bots", headers=HEADERS,
+                    json={"platform": "google_meet", "native_meeting_id": "settings-stt"})
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["transcriptionServiceUrl"] == "https://stt-settings.example.com"
 
 
 # ── Settings → transcription backend: the configured STT (user pref > platform) beats the env ────
@@ -207,3 +253,56 @@ async def test_request_bot_env_transcription_stays_without_settings(monkeypatch)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["transcriptionServiceUrl"] == "https://stt-env.vexa.ai"
     assert inv["transcriptionServiceToken"] == "tok-env"
+
+
+# ── route: meeting_url passthrough is SSRF-validated at entry (jitsi/zoom, TAKE on #543) ─────────
+#
+# platform=jitsi (and zoom) carries an arbitrary caller URL straight to the bot's browser.
+# The route now 422s non-https, IP-literal, and localhost URLs; a real hostname deployment
+# is the negative control that proves the guard discriminates.
+
+def test_post_bots_jitsi_http_url_422(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "jitsi", "native_meeting_id": "Room",
+                             "meeting_url": "http://meet.example.org/Room"})
+    assert r.status_code == 422, r.text
+    assert "https" in r.json()["detail"]
+
+
+def test_post_bots_jitsi_private_ip_url_422(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "jitsi", "native_meeting_id": "Room",
+                             "meeting_url": "https://10.0.0.5/Room"})
+    assert r.status_code == 422, r.text
+    assert "IP literal" in r.json()["detail"]
+
+
+def test_post_bots_jitsi_localhost_and_ipv6_422(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    client = _client()
+    for bad in ("https://localhost/Room", "https://foo.localhost/Room", "https://[::1]/Room",
+                "https://169.254.169.254/Room"):
+        r = client.post("/bots", headers=HEADERS,
+                        json={"platform": "jitsi", "native_meeting_id": "Room",
+                              "meeting_url": bad})
+        assert r.status_code == 422, f"{bad}: {r.status_code} {r.text}"
+
+
+def test_post_bots_jitsi_hostname_url_accepted(monkeypatch):
+    """Negative control: a real https hostname deployment sails through the guard → 201."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "jitsi", "native_meeting_id": "Room",
+                             "meeting_url": "https://meet.example.org/room"})
+    assert r.status_code == 201, r.text
+
+
+def test_post_bots_zoom_shares_meeting_url_guard(monkeypatch):
+    """The zoom passthrough rides the SAME validator (one shared entry-point guard)."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _client().post("/bots", headers=HEADERS,
+                       json={"platform": "zoom", "native_meeting_id": "123456",
+                             "meeting_url": "https://192.168.1.10/j/123456"})
+    assert r.status_code == 422, r.text

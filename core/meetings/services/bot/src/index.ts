@@ -181,9 +181,28 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // the page.evaluate on the BLANK pre-navigation page (no VexaBrowserUtils, no audio), and the
     // subsequent goto to the meeting URL destroyed that context — so capture never attached. (L4.)
     const sess = session, bp = botPipeline, rec = recording;
+    // In-meeting chat (jitsi lane) → a transcript.v1 `chat` segment: the sender is the
+    // speaker, the wall clock is the timing (epoch seconds, like the audio lanes), and
+    // `completed` is immediate — a chat line has no draft phase.
+    let chatSeq = 0;
+    const publishChat = (sender: string, text: string): void => {
+      const nowMs = Date.now();
+      void transcript.publish({
+        segment_id: `${inv.connectionId ?? 'session'}:chat:${nowMs}:${chatSeq++}`,
+        speaker: sender,
+        speaker_key: `chat:${sender}`,
+        text,
+        start: nowMs / 1000,
+        end: nowMs / 1000,
+        completed: true,
+        source: 'chat',
+        absolute_start_time: new Date(nowMs).toISOString(),
+        absolute_end_time: new Date(nowMs).toISOString(),
+      }).catch((e) => console.error(`[bot] chat publish rejected: ${String(e)}`));
+    };
     pipeline = {
       async start() {
-        stopCapture = await startCaptureBridge(sess.page, inv, bp);   // on the live meeting page
+        stopCapture = await startCaptureBridge(sess.page, inv, bp, undefined, publishChat);   // on the live meeting page
         if (rec) stopRecording = await startRecording(sess.page, inv, rec);   // MediaRecorder → recording.v1
         await bp.start();
       },
