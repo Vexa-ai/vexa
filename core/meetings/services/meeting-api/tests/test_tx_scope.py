@@ -30,7 +30,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "meeting_api"
 ALLOWLIST: dict[str, str] = {}
 
 # Param is a live DB session if named one of these OR annotated with a name ending in "Session".
-_SESSION_PARAM_NAMES = {"db", "session"}
+_SESSION_PARAM_NAMES = {"db", "session", "conn", "connection"}
 
 
 def _root_name(node: ast.AST) -> str | None:
@@ -51,17 +51,34 @@ def _root_name(node: ast.AST) -> str | None:
     return n.id if isinstance(n, ast.Name) else None
 
 
+_GATHER_FUNCS = {"gather", "wait", "as_completed"}
+
+
 def _passes_alias(await_node: ast.Await, alias: str) -> bool:
-    """True if the awaited call passes ``alias`` anywhere in its arguments — i.e. delegates the live
-    session to a helper (that helper is separately gated by Rule 2). Also covers ``asyncio.gather``
-    /comprehension shapes where the db work is nested inside the call args."""
+    """True if the awaited call is a genuine DELEGATION of the live session to DB-only work — not a
+    concurrent non-DB coroutine that merely mentions the session.
+
+    * ``asyncio.gather``/``wait``/``as_completed``(...): safe ONLY if EVERY coroutine argument is
+      itself rooted at the session alias (all DB work). If any arg's root is not the alias — e.g.
+      ``gather(self._redis.hgetall(k), db.execute(q))`` — a non-session coroutine runs WHILE the
+      transaction is held, which is exactly FM03; not delegation → the caller flags it. (A ``*tasks``
+      splat is unprovable → not delegation.)
+    * any other call: delegation iff a TOP-LEVEL argument is exactly ``Name(alias)`` — ``helper(db)``
+      or ``helper(session=db)``, where the callee receives the session and is gated by Rule 2. A
+      merely-nested mention (``foo(bar(db))``) is NOT delegation (the outer call is not DB work)."""
     val = await_node.value
     if not isinstance(val, ast.Call):
         return False
+    f = val.func
+    fname = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else "")
+    if fname in _GATHER_FUNCS:
+        coro_args = [a for a in val.args if not isinstance(a, ast.Starred)]
+        if len(coro_args) != len(val.args):  # a *splat is present — cannot prove all are DB work
+            return False
+        return bool(coro_args) and all(_root_name(a) == alias for a in coro_args)
     for arg in list(val.args) + [kw.value for kw in val.keywords]:
-        for sub in ast.walk(arg):
-            if isinstance(sub, ast.Name) and sub.id == alias:
-                return True
+        if isinstance(arg, ast.Name) and arg.id == alias:
+            return True
     return False
 
 
@@ -99,7 +116,9 @@ def _is_session_ctx(item: ast.withitem) -> str | None:
     if isinstance(ctx, ast.Call):
         f = ctx.func
         name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else "")
-        if name.endswith("session_factory") or name == "sessionmaker":
+        # session_factory()/sessionmaker() AND engine.begin()/session.begin() — the ways a session or
+        # transaction context is opened in this package (begin() covers the engine.begin() shape).
+        if name.endswith("session_factory") or name in ("sessionmaker", "begin"):
             if isinstance(item.optional_vars, ast.Name):
                 return item.optional_vars.id
     return None
@@ -185,3 +204,36 @@ def test_gate_detects_a_planted_violation(tmp_path):
     bad_awaits = [aw for aw in _awaits_in(fn)
                   if _root_name(aw) not in {"db"} and not _passes_alias(aw, "db")]
     assert len(bad_awaits) == 1 and bad_awaits[0].lineno == 5
+
+
+def _first_await(src: str) -> ast.Await:
+    return next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Await))
+
+
+def test_gather_mixing_redis_and_db_is_not_delegation():
+    """Closes the gate's asyncio.gather false negative: a gather that runs a NON-session coroutine
+    concurrently with the held transaction is NOT delegation → R1 flags it (root != alias and not a
+    pass-through). This is the FM03 defect hidden inside a gather."""
+    aw = _first_await("import asyncio\nasync def f(self, db):\n await asyncio.gather(self._redis.hgetall('k'), db.execute('q'))\n")
+    assert _root_name(aw) != "db"           # rooted at asyncio, so R1/R2 examine it
+    assert _passes_alias(aw, "db") is False  # NOT treated as delegation → flagged
+
+
+def test_gather_of_only_db_calls_is_allowed():
+    """Control for the above: a gather whose every coroutine is session-rooted IS delegation (safe
+    concurrent DB work) and must NOT be flagged — otherwise the rule would false-positive."""
+    aw = _first_await("import asyncio\nasync def f(self, db):\n await asyncio.gather(db.execute('a'), db.execute('b'))\n")
+    assert _passes_alias(aw, "db") is True
+
+
+def test_conn_named_session_helper_is_scanned_by_r2():
+    """Closes the 'helper receives the session under a non-standard name' false negative: a helper
+    taking `conn` (not `db`/`session`) that awaits redis is now caught by R2."""
+    src = ("class S:\n"
+           "    async def helper(self, conn, meeting):\n"
+           "        await conn.execute('q')\n"
+           "        await self._redis.hgetall('k')\n")
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.AsyncFunctionDef))
+    assert "conn" in _session_params(fn)
+    bad = [aw for aw in _awaits_in(fn) if _root_name(aw) not in {"conn"} and not _passes_alias(aw, "conn")]
+    assert len(bad) == 1 and bad[0].lineno == 4  # the redis await, not conn.execute
