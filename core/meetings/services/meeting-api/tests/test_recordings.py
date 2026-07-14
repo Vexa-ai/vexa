@@ -158,6 +158,41 @@ async def test_retried_chunk_sequence_does_not_inflate_recording_metadata():
     assert media["file_size_bytes"] == len(_wav())
 
 
+async def test_retried_final_chunk_preserves_completion_and_media_creation_times():
+    import asyncio
+
+    repo, storage = _seeded()
+    await upload_chunk(
+        repo,
+        storage,
+        token_meeting_id=MEETING_ID,
+        session_uid=SESSION_UID,
+        data=_wav(),
+        media_format="wav",
+        chunk_seq=0,
+        is_final=True,
+    )
+    original = (await repo.get_recordings(MEETING_ID))[0]
+    original_completed_at = original["completed_at"]
+    original_media_created_at = original["media_files"][0]["created_at"]
+
+    await asyncio.sleep(0.002)
+    await upload_chunk(
+        repo,
+        storage,
+        token_meeting_id=MEETING_ID,
+        session_uid=SESSION_UID,
+        data=_wav(),
+        media_format="wav",
+        chunk_seq=0,
+        is_final=True,
+    )
+
+    retried = (await repo.get_recordings(MEETING_ID))[0]
+    assert retried["completed_at"] == original_completed_at
+    assert retried["media_files"][0]["created_at"] == original_media_created_at
+
+
 async def test_failed_retry_fold_preserves_the_existing_chunk_object():
     class FailingRetryRepo(InMemoryRecordingRepo):
         fail_fold = False

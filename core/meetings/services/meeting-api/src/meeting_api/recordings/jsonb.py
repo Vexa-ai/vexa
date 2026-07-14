@@ -135,7 +135,7 @@ def apply_chunk_to_recording(
             **({"sample_rate": sample_rate} if sample_rate else {}),
             "zaki_chunk_sizes": chunk_sizes,
         },
-        "created_at": _now_iso(),
+        "created_at": (prior_same_type or {}).get("created_at") or _now_iso(),
         "is_final": new_is_final,
         "finalized_at": (prior_same_type or {}).get("finalized_at"),
         "finalized_by": (prior_same_type or {}).get("finalized_by"),
@@ -153,7 +153,8 @@ def apply_chunk_to_recording(
 
     if is_final:
         rec_payload["status"] = _STATUS_COMPLETED
-        rec_payload["completed_at"] = _now_iso()
+        if not was_completed:
+            rec_payload["completed_at"] = rec_payload.get("completed_at") or _now_iso()
         status_transitioned = not was_completed
     elif not was_completed:
         # Terminal state is sticky — never downgrade COMPLETED → IN_PROGRESS on a stray late chunk.
