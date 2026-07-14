@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "id": "transcript_example_01",
+      "kind": "transcript",
+      "user_id": "user_example",
+      "title": "Project planning",
+      "meeting_id": "meeting_example_01",
+      "occurred_at": "2026-07-14T09:00:00Z",
+      "updated_at": "2026-07-14T10:05:00Z",
+      "sensitivity": "sensitive_pii",
+      "capture": {
+        "bot_visible": true,
+        "attested_at": "2026-07-14T08:59:00Z",
+        "policy_version": "capture-v1"
+      },
+      "retention": {
+        "scope": "transcript",
+        "expires_at": "2026-10-12T09:00:00Z"
+      },
+      "agent_read_opt_in": true
+    }
+  ],
+  "next_cursor": "cursor_example_02"
+}

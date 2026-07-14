@@ -64,9 +64,11 @@ boundaries:
 6. Hub provisioning, wallet metering, webhook idempotency, and user-facing state remain hub-owned.
 7. Every feature is default-off until its contract, isolation, erasure, and live-meeting gates pass.
 
-The exact `/api/zaki/read/v1` Minutes profile is not added yet. Four WP-15 decisions—common versus
-spoke-specific envelope fields, expired-item status, provenance sufficiency, and byte-cap scope—must
-be adjudicated before that published contract is sealed.
+The proposed `/api/zaki/read/v1` Minutes profile lives at
+[`core/meetings/contracts/zaki-read.v1`](core/meetings/contracts/zaki-read.v1/README.md). It is
+deliberately unsealed and has no runtime route. Four WP-15 decisions—common versus spoke-specific
+envelope fields, expired-item status, provenance sufficiency, and byte-cap scope—must be adjudicated
+before the contract is sealed or implemented.
 
 ## Downstream discipline
 

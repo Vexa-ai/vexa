@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zaki.ai/contracts/minutes/zaki-read.v1",
+  "title": "zaki-read.v1",
+  "$defs": {
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "CaptureEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bot_visible", "attested_at", "policy_version"],
+      "properties": {
+        "bot_visible": { "const": true },
+        "attested_at": { "type": "string", "format": "date-time" },
+        "policy_version": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "TranscriptRetention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "expires_at"],
+      "properties": {
+        "scope": { "const": "transcript" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "SpeakerTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["speaker", "text", "start_ms", "end_ms"],
+      "properties": {
+        "speaker": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "start_ms": { "type": "integer", "minimum": 0 },
+        "end_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "TranscriptContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "turns"],
+      "properties": {
+        "format": { "const": "speaker_turns" },
+        "turns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/SpeakerTurn" }
+        }
+      }
+    },
+    "TranscriptItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "user_id",
+        "title",
+        "meeting_id",
+        "occurred_at",
+        "updated_at",
+        "sensitivity",
+        "capture",
+        "retention",
+        "agent_read_opt_in",
+        "content"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/Identifier" },
+        "kind": { "const": "transcript" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "occurred_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "sensitivity": { "const": "sensitive_pii" },
+        "capture": { "$ref": "#/$defs/CaptureEvidence" },
+        "retention": { "$ref": "#/$defs/TranscriptRetention" },
+        "agent_read_opt_in": { "const": true },
+        "content": { "$ref": "#/$defs/TranscriptContent" }
+      }
+    },
+    "ItemResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item"],
+      "properties": {
+        "item": { "$ref": "#/$defs/TranscriptItem" }
+      }
+    },
+    "TranscriptMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "user_id",
+        "title",
+        "meeting_id",
+        "occurred_at",
+        "updated_at",
+        "sensitivity",
+        "capture",
+        "retention",
+        "agent_read_opt_in"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/Identifier" },
+        "kind": { "const": "transcript" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "occurred_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "sensitivity": { "const": "sensitive_pii" },
+        "capture": { "$ref": "#/$defs/CaptureEvidence" },
+        "retention": { "$ref": "#/$defs/TranscriptRetention" },
+        "agent_read_opt_in": { "const": true }
+      }
+    },
+    "IndexResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/TranscriptMetadata" }
+        },
+        "next_cursor": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      }
+    }
+  }
+}

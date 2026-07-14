@@ -1,0 +1,26 @@
+{
+  "item": {
+    "id": "transcript_example_02",
+    "kind": "transcript",
+    "user_id": "user_example",
+    "title": "Invalid privacy example",
+    "meeting_id": "meeting_example_02",
+    "occurred_at": "2026-07-14T09:00:00Z",
+    "updated_at": "2026-07-14T10:05:00Z",
+    "sensitivity": "public",
+    "capture": {
+      "bot_visible": false,
+      "attested_at": "2026-07-14T08:59:00Z",
+      "policy_version": "capture-v1"
+    },
+    "retention": {
+      "scope": "transcript",
+      "expires_at": "2026-10-12T09:00:00Z"
+    },
+    "agent_read_opt_in": false,
+    "content": {
+      "format": "speaker_turns",
+      "turns": []
+    }
+  }
+}
