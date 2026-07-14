@@ -8,6 +8,7 @@ is NO separate recordings table).
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from datetime import datetime, timezone
@@ -25,6 +26,20 @@ def _now_iso() -> str:
 def new_recording_numeric_id() -> int:
     """A random 12-digit recording id (parent ``new_recording_numeric_id``)."""
     return int(uuid.uuid4().int % 900000000000 + 100000000000)
+
+
+def recording_numeric_id_for_session(
+    *, user_id: int, meeting_id: int, session_uid: str
+) -> int:
+    """Return one stable 12-digit bot-recording id for a meeting session.
+
+    Concurrent first chunks calculate the same identity before either can publish JSONB. IDs are
+    routing identifiers, not secrets; owner checks remain authoritative at every read boundary.
+    """
+
+    identity = f"{user_id}:{meeting_id}:{session_uid}:bot".encode("utf-8")
+    digest = hashlib.sha256(identity).digest()
+    return int.from_bytes(digest[:8], "big") % 900000000000 + 100000000000
 
 
 def apply_chunk_to_recording(
@@ -72,8 +87,23 @@ def apply_chunk_to_recording(
     prior_bytes = int((prior_same_type or {}).get("file_size_bytes") or 0) if prior_same_type else 0
     prior_chunk_count = int((prior_same_type or {}).get("chunk_count") or (1 if prior_same_type else 0))
     prior_first_chunk_at = (prior_same_type or {}).get("first_chunk_at") if prior_same_type else None
-    cumulative_bytes = (prior_bytes + file_size) if prior_same_type else file_size
-    cumulative_chunk_count = (prior_chunk_count + 1) if prior_same_type else 1
+    prior_metadata = dict((prior_same_type or {}).get("metadata") or {})
+    raw_chunk_sizes = prior_metadata.get("zaki_chunk_sizes")
+    chunk_sizes = {
+        str(sequence): int(size)
+        for sequence, size in (raw_chunk_sizes.items() if isinstance(raw_chunk_sizes, dict) else [])
+        if isinstance(size, int) and not isinstance(size, bool) and size >= 0
+    }
+    if prior_same_type and not chunk_sizes:
+        prior_sequence = (prior_same_type or {}).get("chunk_seq")
+        prior_size = (prior_same_type or {}).get("last_chunk_size_bytes")
+        if isinstance(prior_sequence, int) and isinstance(prior_size, int) and prior_size >= 0:
+            chunk_sizes[str(prior_sequence)] = prior_size
+    sequence_key = str(chunk_seq)
+    replaced_size = chunk_sizes.get(sequence_key)
+    cumulative_bytes = prior_bytes + file_size - (replaced_size or 0)
+    cumulative_chunk_count = prior_chunk_count + (0 if replaced_size is not None else 1)
+    chunk_sizes[sequence_key] = file_size
     first_chunk_at = prior_first_chunk_at or _now_iso()
     media_files = [mf for mf in prior_media_files if mf.get("type") != media_type]
 
@@ -100,7 +130,11 @@ def apply_chunk_to_recording(
         "duration_seconds": duration_seconds,
         "chunk_seq": chunk_seq,
         "first_chunk_at": first_chunk_at,
-        "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+        "metadata": {
+            **prior_metadata,
+            **({"sample_rate": sample_rate} if sample_rate else {}),
+            "zaki_chunk_sizes": chunk_sizes,
+        },
         "created_at": _now_iso(),
         "is_final": new_is_final,
         "finalized_at": (prior_same_type or {}).get("finalized_at"),

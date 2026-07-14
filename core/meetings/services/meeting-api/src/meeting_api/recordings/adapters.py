@@ -63,8 +63,21 @@ class S3Storage:
         await self._run(self._c().delete_object, Bucket=self._bucket, Key=key)
 
     async def list(self, prefix: str) -> list[str]:
-        resp = await self._run(self._c().list_objects_v2, Bucket=self._bucket, Prefix=prefix)
-        return sorted(o["Key"] for o in resp.get("Contents", []))
+        keys: list[str] = []
+        token: Optional[str] = None
+        while True:
+            kwargs = {"Bucket": self._bucket, "Prefix": prefix}
+            if token is not None:
+                kwargs["ContinuationToken"] = token
+            response = await self._run(self._c().list_objects_v2, **kwargs)
+            keys.extend(obj["Key"] for obj in response.get("Contents", []))
+            if not response.get("IsTruncated"):
+                return sorted(keys)
+            token = response.get("NextContinuationToken")
+            if not token:
+                raise RuntimeError(
+                    "recording object listing returned a truncated page without a cursor"
+                )
 
     async def get(self, key: str) -> bytes:
         obj = await self._run(self._c().get_object, Bucket=self._bucket, Key=key)

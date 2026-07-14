@@ -21,7 +21,12 @@ from typing import Any, Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
-from .jsonb import apply_chunk_to_recording, chunk_storage_key, master_storage_key, new_recording_numeric_id
+from .jsonb import (
+    apply_chunk_to_recording,
+    chunk_storage_key,
+    master_storage_key,
+    recording_numeric_id_for_session,
+)
 from .ports import RecordingRepo, RecordingWriteRefused, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
@@ -125,7 +130,11 @@ async def upload_chunk(
             (r for r in recordings if r.get("session_uid") == session_uid and r.get("source") == "bot"),
             None,
         )
-        recording_id = existing_rec["id"] if existing_rec else new_recording_numeric_id()
+        recording_id = existing_rec["id"] if existing_rec else recording_numeric_id_for_session(
+            user_id=owner,
+            meeting_id=meeting_id,
+            session_uid=session_uid,
+        )
 
         # Upload the chunk to object storage (idempotent by key; OUTSIDE the row lock but INSIDE the
         # meeting write lease).

@@ -127,6 +127,37 @@ async def test_final_chunk_completes_recording():
     assert receipt["status"] == "completed"
 
 
+async def test_retried_chunk_sequence_does_not_inflate_recording_metadata():
+    repo, storage = _seeded()
+
+    first = await upload_chunk(
+        repo,
+        storage,
+        token_meeting_id=MEETING_ID,
+        session_uid=SESSION_UID,
+        data=_wav(),
+        media_format="wav",
+        chunk_seq=0,
+        is_final=False,
+    )
+    retry = await upload_chunk(
+        repo,
+        storage,
+        token_meeting_id=MEETING_ID,
+        session_uid=SESSION_UID,
+        data=_wav(),
+        media_format="wav",
+        chunk_seq=0,
+        is_final=False,
+    )
+
+    media = (await repo.get_recordings(MEETING_ID))[0]["media_files"][0]
+    assert retry["storage_path"] == first["storage_path"]
+    assert len(storage.blobs) == 1
+    assert media["chunk_count"] == 1
+    assert media["file_size_bytes"] == len(_wav())
+
+
 async def test_failed_first_chunk_database_fold_removes_the_orphan_object():
     class FailingRepo(InMemoryRecordingRepo):
         async def mutate_recordings(self, meeting_id, mutator):
@@ -380,6 +411,37 @@ def test_master_route_reports_conflict_after_erasure_starts():
 # ── G4: object-storage I/O must not block the event loop ─────────────────────────────────────────
 
 
+async def test_s3_recording_list_reads_every_paginated_chunk_page():
+    from meeting_api.recordings.adapters import S3Storage
+
+    class PaginatedClient:
+        def __init__(self):
+            self.keys = [f"recordings/7/41/session/audio/{index:06d}.wav" for index in range(1002)]
+
+        def list_objects_v2(self, *, Bucket, Prefix, ContinuationToken=None):
+            offset = int(ContinuationToken or 0)
+            page = self.keys[offset : offset + 1000]
+            next_offset = offset + len(page)
+            return {
+                "Contents": [{"Key": key} for key in page],
+                "IsTruncated": next_offset < len(self.keys),
+                **(
+                    {"NextContinuationToken": str(next_offset)}
+                    if next_offset < len(self.keys)
+                    else {}
+                ),
+            }
+
+    storage = S3Storage(bucket="recordings")
+    storage._client = PaginatedClient()
+
+    keys = await storage.list("recordings/7/41/session/audio/")
+
+    assert len(keys) == 1002
+    assert keys[0].endswith("000000.wav")
+    assert keys[-1].endswith("001001.wav")
+
+
 class _BlockingS3Client:
     """A stub boto3 client whose put_object BLOCKS (sync) — stands in for a slow S3 round-trip."""
 
@@ -489,6 +551,43 @@ class _YieldingStorage(InMemoryStorage):
 
         await asyncio.sleep(0)
         await super().upload(key, data, content_type=content_type)
+
+
+async def test_concurrent_first_chunks_share_one_recording_prefix():
+    """The first two requests for a session must not allocate competing object prefixes."""
+    import asyncio
+
+    repo = InMemoryRecordingRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    storage = _YieldingStorage()
+
+    receipts = await asyncio.gather(
+        upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(),
+            media_format="wav",
+            chunk_seq=0,
+            is_final=False,
+        ),
+        upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(),
+            media_format="wav",
+            chunk_seq=1,
+            is_final=False,
+        ),
+    )
+
+    prefixes = {receipt["storage_path"].rsplit("/", 2)[0] for receipt in receipts}
+    assert len(prefixes) == 1
+    assert len(repo._meetings[MEETING_ID]["recording_prefixes"]) == 1
+    assert all(key.startswith(f"{next(iter(prefixes))}/") for key in storage.blobs)
 
 
 async def test_concurrent_chunk_uploads_do_not_lose_updates():
