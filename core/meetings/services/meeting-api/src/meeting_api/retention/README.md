@@ -33,6 +33,17 @@ proof is `tests/test_zaki_retention_adapters.py`. No erasure HTTP route is mount
 `ttl.py` is the scheduler-free S02a policy core. It validates explicit UTC expiry instants for audio,
 transcript and summary independently, prevents an already-stored expiry from moving later, and runs
 an injected-clock batch capped at 500 opaque due scopes. It returns only per-scope counts; candidate
-identity and adapter errors never enter the receipt. Product defaults, authority-layer resolution,
-the PostgreSQL/object-store TTL adapter, scheduling and restoration-horizon evidence are deliberately
-outside S02a.
+identity and adapter errors never enter the receipt.
+
+`ttl_adapters.py` is the S02b production composition. It selects a deterministic bounded batch from
+terminal meetings whose materialized `data.zaki_retention.scope_expiries` are due, excluding erasing
+meetings and scopes already recorded in `expired_scopes`. Every mutation takes the same exclusive
+meeting advisory lock as full erasure, row-locks and revalidates the owner/status/unchanged deadline,
+then deletes the carrier and commits its idempotency marker. Audio object prefixes are validated and
+emptied before recording metadata is cleared; the marker also makes later recording writers fail
+closed. Transcript rows and summary JSON are removed transactionally. A failed carrier remains due
+for retry, and receipts contain counts only.
+
+S02b still owns no scheduler, HTTP route, deployment resource, retention default, authority-layer
+resolution, or restoration-horizon claim. Those product/operations choices must compose the store
+explicitly and supply already-materialized per-scope deadlines.

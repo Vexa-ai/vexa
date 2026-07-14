@@ -397,3 +397,19 @@ async def test_recording_adapter_uses_shared_lock_and_refuses_erasing_meeting():
         async with repo.recording_write(1):
             raise AssertionError("erasing meeting entered the write body")
     assert erasing_session.events == ["lock", "state", "unlock"]
+
+
+async def test_recording_adapter_refuses_audio_expired_meeting():
+    session = FakeGateSession(
+        {"zaki_retention": {"expired_scopes": ["audio"]}}
+    )
+    repo = SqlAlchemyRecordingRepo(
+        lambda: session,
+        statement_factory=lambda sql: sql,
+    )
+
+    with pytest.raises(RecordingWriteRefused, match="not writable"):
+        async with repo.recording_write(1):
+            raise AssertionError("audio-expired meeting entered the write body")
+
+    assert session.events == ["lock", "state", "unlock"]
