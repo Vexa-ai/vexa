@@ -695,6 +695,21 @@ const CONFIG_ADOPTED = [
     scan: ["core/agent/control_plane", "core/agent/shared"],
     compose: "agent-api", helm: ["deployment-agent-api.yaml"], lite: "agent-api",
   },
+  {
+    // #526: the two services carrying today's fail-closed INTERNAL_API_SECRET guard.
+    service: "admin-api",
+    decl: "core/identity/services/admin-api/src/admin_api/config.v1.json",
+    preflight: "core/identity/services/admin-api/src/admin_api/config_preflight.py",
+    scan: ["core/identity/services/admin-api/src"],
+    compose: "admin-api", helm: ["deployment-admin-api.yaml"], lite: "admin-api",
+  },
+  {
+    service: "gateway",
+    decl: "core/gateway/services/gateway/src/gateway/config.v1.json",
+    preflight: "core/gateway/services/gateway/src/gateway/config_preflight.py",
+    scan: ["core/gateway/services/gateway/src"],
+    compose: "gateway", helm: ["deployment-gateway.yaml"], lite: "gateway",
+  },
 ];
 
 // docker-compose.yml is parsed line-wise (no YAML dep): a service block runs from `  name:` to the

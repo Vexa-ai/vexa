@@ -27,8 +27,14 @@ def build_production_app():
     """Configure the DB engine + assemble the app; converge the schema on startup."""
     from .app import db as app_db
     from .app.main import create_app
+    from .config_preflight import preflight
     from .schema.models import Base
     from .schema.sync import ensure_schema
+
+    # #526: refuse to boot a misconfigured deploy — a missing INTERNAL_API_SECRET makes the
+    # fail-closed /internal/validate guard 503 every gateway validation hop, but the process would
+    # otherwise come up green (the 2026-04-23 shape: 23 meetings failed while monitors stayed green).
+    preflight()
 
     app_db.configure(_database_url())
     app = create_app()

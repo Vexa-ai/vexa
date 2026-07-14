@@ -1,0 +1,153 @@
+{
+ "contract": "config.v1",
+ "service": "gateway",
+ "keys": [
+  {
+   "key": "INTERNAL_API_SECRET",
+   "class": "required-explicit",
+   "secret": true,
+   "description": "shared internal secret attached as X-Internal-Secret on the admin-api /internal/validate hop (adapters.py:67-69). Unset, admin-api rejects validation and EVERY API-key check 503s (fail-closed) — so the boot refuses instead of coming up green and 503ing every call (the 2026-04-23 failure shape, #526)."
+  },
+  {
+   "key": "ADMIN_API_URL",
+   "class": "defaulted",
+   "default": "http://admin-api:8001",
+   "description": "admin-api base URL for the /internal/validate token-resolution hop"
+  },
+  {
+   "key": "MEETING_API_URL",
+   "class": "defaulted",
+   "default": "http://meeting-api:8080",
+   "description": "meeting-api base URL — the proxy forward target and the /ws/authorize-subscribe hop"
+  },
+  {
+   "key": "AGENT_API_URL",
+   "class": "defaulted",
+   "default": "http://agent-api:8100",
+   "description": "agent control-plane base URL fronted under /api/*",
+   "targets": ["helm", "lite"]
+  },
+  {
+   "key": "REDIS_URL",
+   "class": "defaulted",
+   "default": "redis://redis:6379/0",
+   "description": "pub/sub bus backing the /ws fan-in"
+  },
+  {
+   "key": "LOG_LEVEL",
+   "class": "defaulted",
+   "default": "info",
+   "description": "log verbosity"
+  },
+  {
+   "key": "HOST",
+   "class": "defaulted",
+   "default": "0.0.0.0",
+   "description": "uvicorn bind host",
+   "targets": ["lite"]
+  },
+  {
+   "key": "PORT",
+   "class": "defaulted",
+   "default": "8056",
+   "description": "uvicorn bind port",
+   "targets": ["lite"]
+  },
+  {
+   "key": "GUARD_ENABLED",
+   "class": "defaulted",
+   "default": "true",
+   "description": "edge protection (fastapi-guard) master switch — ON by default (#555)"
+  },
+  {
+   "key": "GUARD_WS_ENABLED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "extend the edge guard to the /ws upgrade path"
+  },
+  {
+   "key": "GUARD_ENABLE_REDIS",
+   "class": "defaulted",
+   "default": "true",
+   "description": "back the guard's rate-limit/ban buckets with Redis (shared across replicas)",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_RATE_LIMIT_RPM",
+   "class": "defaulted",
+   "default": "600",
+   "description": "per-IP request budget per window",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_RATE_LIMIT_WINDOW",
+   "class": "defaulted",
+   "default": "60",
+   "description": "rate-limit window (seconds)",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_AUTO_BAN_THRESHOLD",
+   "class": "defaulted",
+   "default": "10",
+   "description": "violations before an IP is auto-banned",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_AUTO_BAN_DURATION",
+   "class": "defaulted",
+   "default": "3600",
+   "description": "auto-ban duration (seconds)",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_IP_WHITELIST",
+   "class": "defaulted",
+   "default": "",
+   "description": "comma-separated IPs never rate-limited/banned",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_IP_BLACKLIST",
+   "class": "defaulted",
+   "default": "",
+   "description": "comma-separated IPs always blocked",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_TRUSTED_PROXIES",
+   "class": "defaulted",
+   "default": "",
+   "description": "comma-separated proxy IPs whose X-Forwarded-For is trusted for client-IP resolution",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_TRUST_X_FORWARDED_PROTO",
+   "class": "defaulted",
+   "default": "false",
+   "description": "trust X-Forwarded-Proto from the proxy for scheme resolution",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "GUARD_BLOCKED_COUNTRIES",
+   "class": "defaulted",
+   "default": "",
+   "description": "comma-separated country codes to block (geo-IP)",
+   "targets": ["compose"]
+  },
+  {
+   "key": "GUARD_BLOCK_CLOUD_PROVIDERS",
+   "class": "defaulted",
+   "default": "",
+   "description": "block known cloud/hosting provider ranges",
+   "targets": ["compose"]
+  },
+  {
+   "key": "GUARD_REDIS_PREFIX",
+   "class": "defaulted",
+   "default": "vexa:guard:",
+   "description": "Redis key prefix for the guard's rate-limit/ban buckets",
+   "targets": []
+  }
+ ]
+}
