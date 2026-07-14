@@ -1,6 +1,6 @@
 # ADR-0029 — Base ZAKI Minutes on a pinned Vexa downstream
 
-**Status:** accepted for development; production activation not accepted  
+**Status:** accepted for development; production activation not accepted
 **Date:** 2026-07-13
 
 ## Context
@@ -50,4 +50,3 @@ requires tenant-isolation, retention, erasure, and consented live-meeting proof 
 - Contract changes are human/steward-gated. The WP-15 read profile is not sealed until its four open
   decisions are resolved.
 - The separate hub and GitOps repositories remain the authorities for user policy and deployment.
-

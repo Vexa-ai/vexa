@@ -71,4 +71,3 @@ meeting forget, account erasure, TTL expiry, restore drill, and zero cross-tenan
 Contract adjudication → privacy/read core → webhook/lifecycle adaptation → live meeting evidence →
 hub/chart pilot. UI design and capacity planning may proceed in parallel, but neither can activate the
 spoke before retention, erasure, and isolation are proven.
-

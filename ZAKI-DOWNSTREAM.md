@@ -80,4 +80,3 @@ be adjudicated before that published contract is sealed.
 - Upstream security advisories and dependency/license gates are reviewed before promotion.
 
 Architecture decision: [ADR-0029](docs/adr/0029-zaki-minutes-vexa-downstream.md).
-
