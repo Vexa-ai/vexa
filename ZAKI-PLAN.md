@@ -17,9 +17,11 @@ answers to WP-15's four questions while keeping role 8 review as the seal/merge 
 
 Definition of done:
 
-- Valid transcript item and metadata-only index goldens conform.
-- Privacy-invalid item and content-leaking index goldens are rejected.
+- Valid meeting, transcript and summary items plus a metadata-only mixed index conform.
+- Independent sensitivity, capture, attestation, retention, turn-time and index-content negative
+  controls are rejected.
 - Contract docs define anti-enumerating expiry, provenance, and separate content/transport byte caps.
+- Contract paths and envelopes match the Package 1 `/index`, `/item/{itemId}` and `/search` reference.
 - The architecture inventory includes the published contract and its Minutes-owned data boundary.
 - No runtime route, chart, secret, database, object store, feature flag, or cluster resource is added.
 

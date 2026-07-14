@@ -15,21 +15,22 @@ and `X-Zaki-User-Id`. Every path/header/token/item mismatch fails closed with th
 as an absent item. Redirects are forbidden and responses are non-cacheable.
 
 ```text
-GET /api/zaki/read/v1/{userId}/meetings?limit=&cursor=
-GET /api/zaki/read/v1/{userId}/transcripts?limit=&cursor=
-GET /api/zaki/read/v1/{userId}/summaries?limit=&cursor=
-GET /api/zaki/read/v1/{userId}/{kind}/{itemId}?variant=full|summary
-GET /api/zaki/read/v1/{userId}/search?q=&kind=&limit=&cursor=
+GET /api/zaki/read/v1/{userId}/index?since=&limit=&cursor=
+GET /api/zaki/read/v1/{userId}/item/{itemId}?variant=full|summary
+GET /api/zaki/read/v1/{userId}/search?q=&limit=&cursor=
 ```
 
-Index and search responses contain metadata only. Item responses contain one bounded content
-variant. Cursors are opaque, stable for the underlying snapshot, and continue without overlap.
+The index maps native records to `meeting|transcript|summary`; index and search responses contain
+metadata only. Item responses contain one bounded content variant. Every success uses the common
+`{items|item, truncated, next_cursor?}` envelope. Cursors are opaque, stable for the underlying
+snapshot, and continue without overlap.
 
 ## Proposed WP-15 verdicts
 
-1. `id`, `kind`, `user_id`, `title`, `updated_at`, `sensitivity` and `retention` form the common
-   read envelope. `meeting_id`, `occurred_at` and capture evidence are required Minutes-profile
-   fields; they remain additive v1 fields rather than widening every spoke's common envelope.
+1. `id`, `kind`, `title` and `updated_at` remain the common item metadata. `meeting_id`,
+   `occurred_at`, `sensitivity`, `retention` and `capture_notice` are Minutes-profile fields; they
+   remain additive v1 fields rather than widening every spoke's common envelope. The user identity
+   is authoritative in the token/path/header agreement and is not repeated in response bodies.
 2. Expired, erased, foreign-user and unknown items all return `404`. This avoids confirming that a
    sensitive meeting ever existed.
 3. Brain distillates use `write_origin=meeting_ingest`, `source_spoke=minutes`, `source_item_id` and
@@ -44,8 +45,10 @@ variant. Cursors are opaque, stable for the underlying snapshot, and continue wi
 - `sensitivity` is `sensitive_pii` for every meeting-derived item.
 - Transcript and summary reads require visible-bot evidence, capture attestation time and policy
   version, a non-expired scope-specific retention record, and an explicit tenant agent-read opt-in.
+  The opt-in is evaluated before serving and is not trusted as a response-body boolean.
 - A read never extends retention. Errors, logs, metrics, cursors and receipts contain no transcript
   text, service token, native Vexa identifier or storage key.
 
-Goldens under `golden/` are the executable profile. Files containing `.invalid.` are negative
-controls and must be rejected by `validate.mjs`.
+Goldens under `golden/` are the executable profile. Files containing `.invalid.` are independent
+negative controls and must be rejected by `validate.mjs`; transcript turn ordering and end-before-
+start ranges are semantic checks layered after JSON Schema conformance.

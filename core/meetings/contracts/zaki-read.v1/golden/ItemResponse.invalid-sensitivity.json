@@ -6,7 +6,7 @@
     "meeting_id": "meeting_example_01",
     "occurred_at": "2026-07-14T09:00:00Z",
     "updated_at": "2026-07-14T10:05:00Z",
-    "sensitivity": "sensitive_pii",
+    "sensitivity": "public",
     "capture_notice": {
       "bot_visible": true,
       "tenant_attested_at": "2026-07-14T08:59:00Z",
@@ -18,13 +18,12 @@
     },
     "content": {
       "format": "speaker_turns",
-      "language": "en",
       "turns": [
         {
           "speaker": "Participant A",
           "started_at": "2026-07-14T09:00:01Z",
           "ended_at": "2026-07-14T09:00:04Z",
-          "text": "We decided to ship the signed-in Minutes pilot."
+          "text": "A valid transcript turn."
         }
       ]
     }
