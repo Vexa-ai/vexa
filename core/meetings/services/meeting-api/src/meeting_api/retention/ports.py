@@ -13,17 +13,26 @@ class ErasurePlan:
     meeting_id: str
     transcript_rows: int
     summary_documents: int
-    recording_keys: tuple[str, ...]
+    recording_prefixes: tuple[str, ...]
+    recording_objects: int
 
 
 class RetentionRepo(Protocol):
-    async def plan_erasure(self, user_id: str, meeting_id: str) -> ErasurePlan | None:
-        """Return an owner-checked plan, or None without revealing why it is unavailable."""
+    async def begin_erasure(self, user_id: str, meeting_id: str) -> ErasurePlan | None:
+        """Owner-check, block new writes, drain in-flight writes, then return the stable plan."""
 
     async def commit_erasure(self, plan: ErasurePlan) -> dict[str, int]:
         """Delete meeting-owned database content and return actual non-content row counts."""
 
 
 class RetentionStorage(Protocol):
-    async def delete(self, key: str) -> bool:
-        """Delete one object idempotently; return whether an object existed."""
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every object under one validated prefix; return the number removed."""
+
+
+class MeetingWriteGate(Protocol):
+    async def begin_recording_write(self, meeting_id: str) -> bool:
+        """Acquire one recording-write lease, or refuse after erasure has started."""
+
+    async def end_recording_write(self, meeting_id: str) -> None:
+        """Release a recording-write lease so an erasure waiting for quiescence can continue."""

@@ -1,6 +1,7 @@
 """ZAKI Minutes retention — owner-scoped, cross-carrier meeting erasure."""
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -18,18 +19,25 @@ async def test_owner_erasure_removes_raw_data_and_preserves_other_tenant():
         meeting_id="meeting_a",
         transcript_rows=["private transcript one", "private transcript two"],
         summaries=["private summary"],
-        recording_keys=["recordings/user_a/meeting_a/audio-1", "recordings/user_a/meeting_a/audio-2"],
+        recording_prefixes=["recordings/user_a/recording_a/session_a/"],
+        recording_objects=3,
     )
     repo.seed_meeting(
         user_id="user_b",
         meeting_id="meeting_b",
         transcript_rows=["other tenant transcript"],
         summaries=["other tenant summary"],
-        recording_keys=["recordings/user_b/meeting_b/audio-1"],
+        recording_prefixes=["recordings/user_b/recording_b/session_b/"],
+        recording_objects=1,
     )
-    for key in repo.recording_keys():
+    for key in [
+        "recordings/user_a/recording_a/session_a/audio/000000.wav",
+        "recordings/user_a/recording_a/session_a/audio/000001.wav",
+        "recordings/user_a/recording_a/session_a/audio/master.wav",
+        "recordings/user_b/recording_b/session_b/audio/master.wav",
+    ]:
         storage.seed(key, f"bytes:{key}".encode())
-    other_before = (repo.snapshot("meeting_b"), storage.snapshot("recordings/user_b/meeting_b/"))
+    other_before = (repo.snapshot("meeting_b"), storage.snapshot("recordings/user_b/recording_b/"))
 
     receipt = await erase_meeting(
         repo,
@@ -50,12 +58,12 @@ async def test_owner_erasure_removes_raw_data_and_preserves_other_tenant():
             "meeting_rows": 1,
             "transcript_rows": 2,
             "summary_documents": 1,
-            "recording_objects": 2,
+            "recording_objects": 3,
         },
     }
     assert repo.snapshot("meeting_a") is None
-    assert storage.snapshot("recordings/user_a/meeting_a/") == {}
-    assert (repo.snapshot("meeting_b"), storage.snapshot("recordings/user_b/meeting_b/")) == other_before
+    assert storage.snapshot("recordings/user_a/recording_a/") == {}
+    assert (repo.snapshot("meeting_b"), storage.snapshot("recordings/user_b/recording_b/")) == other_before
     serialized = json.dumps(receipt.as_dict(), sort_keys=True)
     assert "private transcript" not in serialized
     assert "private summary" not in serialized
@@ -70,7 +78,7 @@ async def test_owner_erasure_removes_raw_data_and_preserves_other_tenant():
         policy_version="minutes-retention-v1",
     )
     assert foreign_receipt is None
-    assert (repo.snapshot("meeting_b"), storage.snapshot("recordings/user_b/meeting_b/")) == other_before
+    assert (repo.snapshot("meeting_b"), storage.snapshot("recordings/user_b/recording_b/")) == other_before
 
 
 async def test_storage_failure_keeps_database_authoritative_and_hides_object_key():
@@ -80,12 +88,13 @@ async def test_storage_failure_keeps_database_authoritative_and_hides_object_key
         meeting_id="meeting_a",
         transcript_rows=["private transcript"],
         summaries=[],
-        recording_keys=["recordings/user_a/meeting_a/private-audio"],
+        recording_prefixes=["recordings/user_a/recording_a/session_a/"],
+        recording_objects=1,
     )
 
     class FailingStorage(InMemoryRetentionStorage):
-        async def delete(self, key: str) -> bool:
-            raise RuntimeError(f"storage refused {key}")
+        async def delete_prefix(self, prefix: str) -> int:
+            raise RuntimeError(f"storage refused {prefix}")
 
     with pytest.raises(ErasureFailed, match="meeting erasure failed before database commit") as exc:
         await erase_meeting(
@@ -114,9 +123,10 @@ async def test_database_failure_after_object_delete_returns_safe_retry_signal():
         meeting_id="meeting_a",
         transcript_rows=["private transcript"],
         summaries=[],
-        recording_keys=["recordings/user_a/meeting_a/private-audio"],
+        recording_prefixes=["recordings/user_a/recording_a/session_a/"],
+        recording_objects=1,
     )
-    storage.seed("recordings/user_a/meeting_a/private-audio", b"private audio bytes")
+    storage.seed("recordings/user_a/recording_a/session_a/audio/private-audio", b"private audio bytes")
 
     with pytest.raises(ErasureFailed, match="meeting erasure requires retry") as exc:
         await erase_meeting(
@@ -131,7 +141,7 @@ async def test_database_failure_after_object_delete_returns_safe_retry_signal():
     assert exc.value.__cause__ is None
     assert "private transcript" not in str(exc.value)
     assert repo.snapshot("meeting_a") is not None
-    assert storage.snapshot("recordings/user_a/meeting_a/") == {}
+    assert storage.snapshot("recordings/user_a/recording_a/") == {}
 
 
 async def test_retry_receipt_counts_every_planned_object_when_one_is_already_absent():
@@ -142,9 +152,10 @@ async def test_retry_receipt_counts_every_planned_object_when_one_is_already_abs
         meeting_id="meeting_a",
         transcript_rows=[],
         summaries=[],
-        recording_keys=["recordings/user_a/meeting_a/audio-1", "recordings/user_a/meeting_a/audio-2"],
+        recording_prefixes=["recordings/user_a/recording_a/session_a/"],
+        recording_objects=2,
     )
-    storage.seed("recordings/user_a/meeting_a/audio-2", b"remaining bytes")
+    storage.seed("recordings/user_a/recording_a/session_a/audio/audio-2", b"remaining bytes")
 
     receipt = await erase_meeting(
         repo,
@@ -157,3 +168,98 @@ async def test_retry_receipt_counts_every_planned_object_when_one_is_already_abs
 
     assert receipt is not None
     assert receipt.recording_objects == 2
+
+
+async def test_erasure_quiesces_inflight_upload_and_sweeps_its_late_object():
+    repo = InMemoryRetentionRepo()
+    storage = InMemoryRetentionStorage()
+    prefix = "recordings/user_a/recording_a/session_a/"
+    repo.seed_meeting(
+        user_id="user_a",
+        meeting_id="meeting_a",
+        transcript_rows=["private transcript"],
+        summaries=[],
+        recording_prefixes=[prefix],
+        recording_objects=2,
+    )
+    storage.seed(f"{prefix}audio/000000.wav", b"first chunk")
+
+    assert await repo.begin_recording_write("meeting_a") is True
+    erasure = asyncio.create_task(erase_meeting(
+        repo,
+        storage,
+        user_id="user_a",
+        meeting_id="meeting_a",
+        erased_at=datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),
+        policy_version="minutes-retention-v1",
+    ))
+
+    for _ in range(10):
+        if repo.snapshot("meeting_a")["state"] == "erasing":
+            break
+        await asyncio.sleep(0)
+    assert repo.snapshot("meeting_a")["state"] == "erasing"
+    assert await repo.begin_recording_write("meeting_a") is False
+
+    storage.seed(f"{prefix}audio/000001.wav", b"late in-flight chunk")
+    await repo.end_recording_write("meeting_a")
+    receipt = await erasure
+
+    assert receipt is not None
+    assert receipt.recording_objects == 2
+    assert storage.snapshot(prefix) == {}
+    assert repo.snapshot("meeting_a") is None
+
+
+async def test_erasure_rejects_a_broad_recording_prefix_before_storage_deletion():
+    repo = InMemoryRetentionRepo()
+    storage = InMemoryRetentionStorage()
+    repo.seed_meeting(
+        user_id="user_a",
+        meeting_id="meeting_a",
+        transcript_rows=["private transcript"],
+        summaries=[],
+        recording_prefixes=["recordings/user_a/"],
+        recording_objects=1,
+    )
+    victim_key = "recordings/user_a/another_recording/session/audio/master.wav"
+    storage.seed(victim_key, b"must survive")
+
+    with pytest.raises(ErasureFailed, match="meeting erasure plan is invalid") as exc:
+        await erase_meeting(
+            repo,
+            storage,
+            user_id="user_a",
+            meeting_id="meeting_a",
+            erased_at=datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),
+            policy_version="minutes-retention-v1",
+        )
+
+    assert "recordings/user_a" not in str(exc.value)
+    assert storage.snapshot("recordings/user_a/") == {victim_key: b"must survive"}
+    assert repo.snapshot("meeting_a") is not None
+
+
+async def test_transcript_only_meeting_erases_without_a_recording_prefix():
+    repo = InMemoryRetentionRepo()
+    repo.seed_meeting(
+        user_id="user_a",
+        meeting_id="meeting_a",
+        transcript_rows=["private transcript"],
+        summaries=[],
+        recording_prefixes=[],
+        recording_objects=0,
+    )
+
+    receipt = await erase_meeting(
+        repo,
+        InMemoryRetentionStorage(),
+        user_id="user_a",
+        meeting_id="meeting_a",
+        erased_at=datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),
+        policy_version="minutes-retention-v1",
+    )
+
+    assert receipt is not None
+    assert receipt.recording_objects == 0
+    assert repo.snapshot("meeting_a") is None

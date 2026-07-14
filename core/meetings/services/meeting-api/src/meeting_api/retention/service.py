@@ -3,12 +3,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
 
 from .ports import RetentionRepo, RetentionStorage
 
 
 class ErasureFailed(RuntimeError):
     """The operation did not complete; the message never contains meeting content or storage keys."""
+
+
+_PREFIX_SEGMENT = re.compile(r"^[A-Za-z0-9._:-]+$")
+
+
+def _valid_recording_prefix(prefix: str) -> bool:
+    if not isinstance(prefix, str) or not prefix.endswith("/"):
+        return False
+    parts = prefix.split("/")
+    return (
+        len(parts) >= 5
+        and parts[0] == "recordings"
+        and parts[-1] == ""
+        and all(_PREFIX_SEGMENT.fullmatch(part) and part not in {".", ".."} for part in parts[1:-1])
+    )
 
 
 @dataclass(frozen=True)
@@ -48,15 +64,21 @@ async def erase_meeting(
 ) -> ErasureReceipt | None:
     """Erase one owned meeting without exposing whether an absent meeting belongs to another user."""
 
-    plan = await repo.plan_erasure(user_id, meeting_id)
+    plan = await repo.begin_erasure(user_id, meeting_id)
     if plan is None:
         return None
+    prefixes = plan.recording_prefixes
+    has_recordings = plan.recording_objects > 0
+    if (
+        plan.recording_objects < 0
+        or bool(prefixes) != has_recordings
+        or any(not _valid_recording_prefix(prefix) for prefix in prefixes)
+    ):
+        raise ErasureFailed("meeting erasure plan is invalid")
 
-    recording_objects = 0
     try:
-        for key in plan.recording_keys:
-            await storage.delete(key)
-            recording_objects += 1
+        for prefix in plan.recording_prefixes:
+            await storage.delete_prefix(prefix)
     except Exception:
         raise ErasureFailed("meeting erasure failed before database commit") from None
 
@@ -73,5 +95,5 @@ async def erase_meeting(
         meeting_rows=deleted.get("meeting_rows", 0),
         transcript_rows=deleted.get("transcript_rows", 0),
         summary_documents=deleted.get("summary_documents", 0),
-        recording_objects=recording_objects,
+        recording_objects=plan.recording_objects,
     )
