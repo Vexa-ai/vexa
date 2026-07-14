@@ -22,7 +22,7 @@
  * terminal `failed` (join_failure) rather than crashing the root — same disposability as the
  * lazy redis connect.
  */
-import { loadInvocation, InvocationError, type Invocation } from './config.js';
+import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
 import type { Act, LifecycleEvent } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
@@ -168,11 +168,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let botPipeline: BotPipeline | null = null;
   let acts: ActsSource = liveActs;
   const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
+  const speakerStreamConfig = speakerStreamConfigFromEnv(env);
+  if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
-    botPipeline = createBotPipeline(inv, transcript, { onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`) });
+    botPipeline = createBotPipeline(inv, transcript, { config: speakerStreamConfig, onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`) });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected
     // window.VexaBrowserUtils and the participant <audio> elements exist. Starting it at launch ran

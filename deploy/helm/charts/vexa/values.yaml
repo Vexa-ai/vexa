@@ -186,6 +186,12 @@ runtime:
   agentImage: "vexaai/v012-agent-api:v012"
   agentWorkerImage: "vexaai/v012-agent-worker:v012"
   logLevel: "info"
+  speakerStream:
+    minAudioSec: ""
+    submitIntervalSec: ""
+    confirmThreshold: ""
+    maxBufferSec: ""
+    idleTimeoutSec: ""
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }

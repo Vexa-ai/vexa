@@ -62,6 +62,16 @@ spec:
               value: {{ include "vexa.agentImage" . | quote }}
             - name: AGENT_WORKER_IMAGE
               value: {{ include "vexa.agentWorkerImage" . | quote }}
+            - name: BOT_SPEAKER_MIN_AUDIO_SEC
+              value: {{ .Values.runtime.speakerStream.minAudioSec | default "" | quote }}
+            - name: BOT_SPEAKER_SUBMIT_INTERVAL_SEC
+              value: {{ .Values.runtime.speakerStream.submitIntervalSec | default "" | quote }}
+            - name: BOT_SPEAKER_CONFIRM_THRESHOLD
+              value: {{ .Values.runtime.speakerStream.confirmThreshold | default "" | quote }}
+            - name: BOT_SPEAKER_MAX_BUFFER_SEC
+              value: {{ .Values.runtime.speakerStream.maxBufferSec | default "" | quote }}
+            - name: BOT_SPEAKER_IDLE_TIMEOUT_SEC
+              value: {{ .Values.runtime.speakerStream.idleTimeoutSec | default "" | quote }}
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:
