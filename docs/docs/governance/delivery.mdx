@@ -895,8 +895,10 @@ silence is released, never punished · every decline names its reopen condition 
 | D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
 | D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |
-| D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **TO BUILD** (merge-card bot) / **have** (CI: `release-value-gate`, [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)) |
+| D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
 | D10 acceptance floor | bundle-vs-table check (merge-time) · **release-time:** guarantee line 8 enforced by `value-gate` | **TO BUILD** (bundle checker) / **have** (CI: `release-value-gate`) |
+| Merge bar — value + diff accepted (choke point 1) | `merge-card` required status check: value-fsm green + `state: value-signed` (value) AND a fresh non-author review approval (diff) | **have** (CI: `merge-card-gate`, [ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
+| Contributor onboarding — explain the change | PR template + CONTRIBUTING recommend Discord; `pr-welcome` nudges first-timers (recommended, never a gate) | **have** (templates + CI) |
 | D11 both verdicts credited | release-notes generation from bundles | **TO BUILD** |
 | D12 altitude-scaled validation | stated live bar in every prepared issue | **have** (manual review) |
 | D13 human sole author | commit-trailer check (reject agent co-authors) | **TO BUILD** |

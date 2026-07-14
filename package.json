@@ -22,6 +22,7 @@
     "gate:config-contract": "node scripts/gates.mjs config-contract",
     "gate:db-schema": "node scripts/gates.mjs db-schema",
     "gate:db-budget": "node scripts/gates.mjs db-budget",
+    "gate:merge-card": "node scripts/merge-card-gate.mjs",
     "gate:release-value": "node scripts/release-value-gate.mjs",
     "gate:release-witness": "node scripts/release-witness-gate.mjs",
     "witness:script": "node scripts/release-witness-script.mjs",
