@@ -1010,7 +1010,13 @@ def build_production_app(
 
     engine = create_async_engine(database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    redis_client = aioredis.from_url(redis_url, decode_responses=True)
+    # #528: hardened Redis client (see meeting_api/__main__.py) — bounded timeouts + keepalive +
+    # health checks so a Redis blip self-heals within socket_timeout instead of hanging the consumer.
+    redis_client = aioredis.from_url(
+        redis_url, decode_responses=True,
+        socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
+        health_check_interval=30, retry_on_timeout=True,
+    )
 
     store = SqlAlchemyTranscriptStore(session_factory, redis_client=redis_client)
     bus = RedisStreamBus(redis_client)
