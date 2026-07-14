@@ -11,9 +11,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway import create_app
+from gateway.ports import AuthUnavailable
 from conftest import VALID_KEY, FakeAuthorizer, FakeDownstream, FakeRedis
 
 AUTH = {"x-api-key": VALID_KEY}
+
+
+class UnavailableAuthorizer:
+    """A ``ports.Authorizer`` whose validation hop is DOWN: ``resolve`` raises ``AuthUnavailable``
+    (the #495 shape — admin-api unreachable/slow), so the gateway must answer 503, never 401."""
+
+    async def resolve(self, api_key: str):
+        raise AuthUnavailable("admin-api validate unreachable (test)")
+
+    async def authorize_subscribe(self, api_key, meetings):
+        return {"authorized": [], "errors": ["unavailable"]}
 
 
 def _client(authorizer=None, downstream=None):
@@ -34,6 +46,30 @@ def test_invalid_api_key_is_401():
     r = client.get("/bots/status", headers={"x-api-key": "nope"})
     assert r.status_code == 401
     assert r.json()["detail"] == "Invalid API key"
+
+
+def test_auth_infra_failure_is_503(capsys):
+    """#495 acceptance A2 + A3: when the validation hop is down, a VALID key must not be reported
+    as invalid — the proxy answers 503 + Retry-After, never 401 'Invalid API key' — AND a typed,
+    non-empty auth-infra log line is emitted (FM02: the old silent `except` erased that signal)."""
+    client, downstream = _client(authorizer=UnavailableAuthorizer())
+    r = client.get("/bots/status", headers=AUTH)
+    assert r.status_code == 503
+    assert r.json()["detail"] != "Invalid API key"
+    assert r.headers.get("Retry-After") == "1"
+    # Fail-closed: an unresolved caller is never forwarded downstream.
+    assert downstream.last is None
+    # A3 — the failure is named in a typed, non-empty log line (negative control: the old silent
+    # `except` produced none).
+    assert "auth_infra_unavailable" in capsys.readouterr().out
+
+
+def test_auth_me_unavailable_is_503_not_401():
+    """#495: /auth/me (the dashboard login/session check) maps auth-infra failure to 503 too."""
+    app = create_app(UnavailableAuthorizer(), FakeDownstream(status_code=200, body={}), FakeRedis())
+    r = TestClient(app).get("/auth/me", headers=AUTH)
+    assert r.status_code == 503
+    assert r.json()["detail"] != "Invalid API key"
 
 
 def test_insufficient_scope_is_403():

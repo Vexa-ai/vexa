@@ -22,6 +22,7 @@ import os
 from typing import Optional
 
 from .obs import TRACE_HEADER, get_trace_id
+from .ports import AuthUnavailable
 
 
 class HttpxDownstreamClient:
@@ -62,26 +63,40 @@ class AdminApiAuthorizer:
         self._meeting_api_url = meeting_api_url.rstrip("/")
 
     async def resolve(self, api_key: str) -> Optional[dict]:
+        import httpx
+
+        headers = {TRACE_HEADER: get_trace_id() or ""}
+        internal_secret = os.getenv("INTERNAL_API_SECRET", "")
+        if internal_secret:
+            headers["X-Internal-Secret"] = internal_secret
         try:
-            headers = {TRACE_HEADER: get_trace_id() or ""}
-            internal_secret = os.getenv("INTERNAL_API_SECRET", "")
-            if internal_secret:
-                headers["X-Internal-Secret"] = internal_secret
             resp = await self._client.post(
                 f"{self._admin_api_url}/internal/validate",
                 json={"token": api_key},
                 headers=headers,
                 timeout=5.0,
             )
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            return None
+        except httpx.HTTPError as e:
+            # Transport-layer failure or timeout: we did NOT reach a verdict on the key. Surfacing
+            # this as an invalid key is the #495/#483 bug — raise so the app answers 503 (retry),
+            # never 401. (httpx.HTTPError covers TimeoutException, ConnectError, PoolTimeout, …)
+            raise AuthUnavailable(f"admin-api validate unreachable: {e!r}") from e
+        if resp.status_code == 200:
+            return resp.json()
+        # admin-api answered a fault (5xx) — again no verdict on the key → unavailable, not invalid.
+        if resp.status_code >= 500:
+            raise AuthUnavailable(f"admin-api validate returned {resp.status_code}")
+        # A definitive client-error answer (401/403/404/422 …): the key is genuinely invalid → 401.
         return None
 
     async def authorize_subscribe(self, api_key: str, meetings: list) -> dict:
         auth_headers = {"X-API-Key": api_key, TRACE_HEADER: get_trace_id() or ""}
-        user_data = await self.resolve(api_key)
+        try:
+            user_data = await self.resolve(api_key)
+        except AuthUnavailable as e:
+            # #495: resolve now raises on infra failure (rather than returning None). Keep the WS
+            # subscribe path fail-safe — surface it as an authorization error, not an unhandled 500.
+            return {"authorized": [], "errors": [f"authorization_unavailable:{e}"]}
         if user_data:
             auth_headers["x-user-id"] = str(user_data["user_id"])
             auth_headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
@@ -123,15 +138,28 @@ def build_production_app(
     agent_api_url = os.getenv("AGENT_API_URL", "http://agent-api:8100")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-    http_client = httpx.AsyncClient(timeout=30.0)
+    # #495: TWO clients with SEPARATE connection pools. The single shared pool was the root cause —
+    # long forwards to a slow meeting-api (timeout up to 30s) saturated the pool's 10 connections,
+    # so the ~5ms admin-api validation POST queued, timed out, and mass-401'd valid keys.
+    #   • forward_client — the proxy hop; long-lived, generous timeout, larger pool.
+    #   • auth_client    — the admin-api /internal/validate hop ONLY; short timeout, its own pool,
+    #     so validation latency is decoupled from downstream load and can never be starved by it.
+    forward_client = httpx.AsyncClient(
+        timeout=30.0,
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    )
+    auth_client = httpx.AsyncClient(
+        timeout=5.0,
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+    )
     redis_client = aioredis.from_url(
         redis_url, encoding="utf-8", decode_responses=True,
         socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
         health_check_interval=30, retry_on_timeout=True,
     )
 
-    authorizer = AdminApiAuthorizer(http_client, admin_api_url, meeting_api_url)
-    downstream = HttpxDownstreamClient(http_client)
+    authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url)
+    downstream = HttpxDownstreamClient(forward_client)
 
     from .ratelimit import from_env as _rate_limiter_from_env
 
