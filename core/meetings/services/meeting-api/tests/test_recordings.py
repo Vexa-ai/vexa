@@ -523,6 +523,46 @@ def test_upload_route_accepts_valid_token():
     assert r.json()["status"] == "completed"
 
 
+def test_upload_route_rejects_a_divergent_same_sequence_replay_without_mutation():
+    from copy import deepcopy
+
+    from fastapi import FastAPI
+
+    repo, storage = _seeded()
+    app = FastAPI()
+    app.include_router(build_router(repo, storage, token_secret=SECRET))
+    client = TestClient(app)
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    request = {
+        "headers": {"Authorization": f"Bearer {token}"},
+        "data": {
+            "session_uid": SESSION_UID,
+            "media_format": "wav",
+            "chunk_seq": 0,
+            "is_final": "false",
+        },
+    }
+    first = client.post(
+        "/internal/recordings/upload",
+        **request,
+        files={"file": ("c.wav", _wav(4), "audio/wav")},
+    )
+    assert first.status_code == 200
+    before_recordings = deepcopy(repo._meetings[MEETING_ID]["recordings"])
+    before_blobs = dict(storage.blobs)
+
+    replay = client.post(
+        "/internal/recordings/upload",
+        **request,
+        files={"file": ("c.wav", _wav(8), "audio/wav")},
+    )
+
+    assert replay.status_code == 409
+    assert replay.json() == {"detail": "Recording chunk conflicts with its existing sequence"}
+    assert repo._meetings[MEETING_ID]["recordings"] == before_recordings
+    assert storage.blobs == before_blobs
+
+
 @pytest.mark.parametrize(
     ("header_update", "claim_update"),
     [

@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, Response
 from .ports import RecordingRepo, RecordingWriteRefused, Storage
 from .service import (
     InvalidRecordingMetadata,
+    RecordingChunkConflict,
     SessionNotFound,
     _verify_meeting_token,
     finalize_master,
@@ -189,6 +190,11 @@ def build_router(
             raise HTTPException(status_code=404, detail=str(e))
         except InvalidRecordingMetadata:
             raise HTTPException(status_code=422, detail="Invalid recording metadata") from None
+        except RecordingChunkConflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Recording chunk conflicts with its existing sequence",
+            ) from None
         except RecordingWriteRefused:
             raise HTTPException(status_code=409, detail="Meeting is no longer writable") from None
         return JSONResponse(content=receipt)

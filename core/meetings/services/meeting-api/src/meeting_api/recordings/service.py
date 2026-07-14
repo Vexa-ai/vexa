@@ -16,6 +16,7 @@ golden-locked — this module only orchestrates the IO + the JSONB bookkeeping a
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hmac
 import re
 from typing import Any, Optional
 
@@ -56,6 +57,10 @@ class SessionNotFound(Exception):
 
 class InvalidRecordingMetadata(ValueError):
     """An upload field could produce an unsafe or unsupported object-storage key."""
+
+
+class RecordingChunkConflict(RuntimeError):
+    """A deterministic chunk sequence already exists with different bytes."""
 
 
 def _validate_upload_metadata(
@@ -147,7 +152,13 @@ async def upload_chunk(
         async with repo.chunk_write(key):
             object_already_present = await storage.exists(key)
             try:
-                if not object_already_present:
+                if object_already_present:
+                    stored_data = await storage.get(key)
+                    if not hmac.compare_digest(stored_data, data):
+                        raise RecordingChunkConflict(
+                            "recording chunk conflicts with its existing sequence"
+                        )
+                else:
                     await storage.upload(key, data, content_type=_content_type(media_format))
 
                 # G3 — fold the chunk into the JSONB ATOMICALLY: the mutator reads the LIVE recordings
