@@ -36,7 +36,26 @@ from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
-from .ports import Authorizer, DownstreamClient, RedisBus
+from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
+
+# #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
+# 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
+# emits a TYPED, non-empty auth-infra log line (FM02: the old path swallowed the failure in a
+# silent `except`, erasing the one signal that would have named this incident for what it was).
+def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
+    log_event(
+        "auth_infra_unavailable",
+        audience="system",
+        level="error",
+        span=span,
+        fields={"reason": type(exc).__name__, "detail": str(exc)},
+    )
+    return Response(
+        content=json.dumps({"detail": "Authentication temporarily unavailable, retry"}),
+        status_code=503,
+        media_type="application/json",
+        headers={"Retry-After": "1"},
+    )
 
 # Route-prefix → required scope set. Mirrors main.py ROUTE_SCOPES (main.py:59-65) for the CORE
 # surface the gateway lane carves; multi-scope tokens pass for any of their domains.
@@ -105,7 +124,10 @@ def create_app(
         if not api_key:
             return Response(content=json.dumps({"detail": "Missing API key"}),
                             status_code=401, media_type="application/json")
-        user_data = await authorizer.resolve(api_key)
+        try:
+            user_data = await authorizer.resolve(api_key)
+        except AuthUnavailable as e:
+            return _auth_unavailable_response(e, span="auth")  # #495: infra down → 503, not 401
         if not user_data:
             return Response(content=json.dumps({"detail": "Invalid API key"}),
                             status_code=401, media_type="application/json")
@@ -131,7 +153,12 @@ def create_app(
                 media_type="application/json",
             )
 
-        user_data = await authorizer.resolve(client_key)
+        try:
+            user_data = await authorizer.resolve(client_key)
+        except AuthUnavailable as e:
+            # #495: the validation hop is unreachable/faulted — tell the caller the truth (503,
+            # retry), never 401. A valid key must not be reported as invalid because we are slow.
+            return None, _auth_unavailable_response(e, span="auth")
         if not user_data:
             return None, Response(
                 content=json.dumps({"detail": "Invalid API key"}),
@@ -528,7 +555,21 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     # front (the SAME resolver /auth/me + the proxy use — ports.py resolve / app.py:96-99,119-125)
     # so we can auto-subscribe the socket to its USER-SCOPED channel. Fail-closed like the proxy:
     # a present-but-invalid key → invalid_api_key + close 4401, not a silently half-open socket.
-    user_data = await authorizer.resolve(api_key)
+    try:
+        user_data = await authorizer.resolve(api_key)
+    except AuthUnavailable as e:
+        # #495: resolve() now RAISES when the validation hop is unreachable/faulted. On the REST
+        # surface that becomes a 503; on this already-accepted socket the truthful equivalent is a
+        # typed error frame + a distinct retryable close code (4503 ≈ HTTP 503), NOT 4401 (which
+        # asserts the key is bad) and NOT an uncaught raise (which drops the socket 1006/1011 with
+        # no signal). A valid key must not be told it is invalid because our auth path is down.
+        log_event("auth_infra_unavailable", audience="system", level="error", span="ws",
+                  fields={"reason": type(e).__name__, "detail": str(e)})
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "auth_unavailable"}))
+        finally:
+            await ws.close(code=4503)  # retry later — auth infrastructure unavailable
+        return
     if not user_data:
         try:
             await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))

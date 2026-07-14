@@ -54,6 +54,17 @@ def test_meeting_bot_uses_browser_image_from_env(monkeypatch):
     assert reg.get("meeting-bot").idle_timeout_sec == 0
 
 
+def test_meeting_bot_forwards_speaker_stream_tuning(monkeypatch):
+    monkeypatch.setenv("BOT_SPEAKER_MIN_AUDIO_SEC", "1")
+    monkeypatch.setenv("BOT_SPEAKER_CONFIRM_THRESHOLD", "1")
+    monkeypatch.delenv("BOT_SPEAKER_SUBMIT_INTERVAL_SEC", raising=False)
+    reg = default_registry()
+    assert reg.get("meeting-bot").base_env == {
+        "BOT_SPEAKER_MIN_AUDIO_SEC": "1",
+        "BOT_SPEAKER_CONFIRM_THRESHOLD": "1",
+    }
+
+
 def test_meeting_bot_env_is_a_valid_invocation():
     """The bot's whole config is delivered as VEXA_BOT_CONFIG — a JSON-encoded Invocation. Build the
     env the control plane would hand the profile and prove the payload conforms to invocation.v1."""

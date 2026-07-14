@@ -21,6 +21,7 @@
     "gate:contract-version": "node scripts/gates.mjs contract-version",
     "gate:config-contract": "node scripts/gates.mjs config-contract",
     "gate:db-schema": "node scripts/gates.mjs db-schema",
+    "gate:db-budget": "node scripts/gates.mjs db-budget",
     "gate:dataflow": "node scripts/gates.mjs dataflow",
     "seal:contracts": "node scripts/gates.mjs seal",
     "seal:schema": "node scripts/gates.mjs seal-schema",

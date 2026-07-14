@@ -237,12 +237,23 @@ class SqlAlchemyTranscriptStore:
             self._native_cache[mid] = pair
             return pair
 
-    async def _transcript_doc(self, db, meeting) -> dict:
-        """Build the api.v1 ``TranscriptionResponse`` dict for a resolved ``meeting`` ROW — the shared
-        body used by BOTH ``get_transcript`` (native → newest row) and ``get_transcript_by_id`` (exact
-        row). Reads the row's persisted ``transcriptions`` + merges the live redis in-flight hash, all
-        keyed by ``meeting.id`` (the row id) — so a by-id read returns EXACTLY that row's segments/notes,
-        never a sibling row's (the wrong-row hydration fix)."""
+    # #508: the transcript doc is built in TWO phases so the (possibly slow) Redis merge never
+    # happens while a Postgres backend sits idle-in-transaction. Phase 1 (_transcript_pg_part) runs
+    # INSIDE the session: it does all DB work and snapshots the row fields to plain values. The
+    # caller then EXITS the session block — ending the transaction and returning the connection to
+    # the pool — and only THEN calls phase 2 (_merge_live_segments), which awaits Redis with no DB
+    # session in scope. The response is byte-identical to the old single-pass build; only the
+    # transaction scope changes. (See C2's tx-scope gate, which enforces this shape for good.)
+
+    async def _transcript_pg_part(self, db, meeting) -> "tuple[dict, dict, list]":
+        """DB-ONLY half: SELECT the persisted ``transcriptions`` for this row and SNAPSHOT every
+        meeting-row field the response needs into plain values — all while the session is live.
+        Returns ``(snap, seg_by_id, order)``. Nothing here awaits a non-DB backend, so the caller's
+        transaction stays scoped to Postgres statements only (#508).
+
+        The row fields are copied to a plain dict on purpose: after the session closes, touching an
+        expired ORM attribute raises ``MissingGreenlet`` — the same reason ``bot_spawn/adapters.py``
+        snapshots before returning (``:192-194``)."""
         from sqlalchemy import select
 
         from .models import Transcription
@@ -266,12 +277,32 @@ class SqlAlchemyTranscriptStore:
             if sid not in seg_by_id:
                 order.append(sid)
             seg_by_id[sid] = s
+        # Snapshot every field the response body reads, INSIDE the live session (see docstring).
+        snap = {
+            "id": meeting.id,
+            "platform": meeting.platform,
+            "platform_specific_id": meeting.platform_specific_id,
+            "status": meeting.status,
+            "start_time": meeting.start_time,
+            "end_time": meeting.end_time,
+            "created_at": meeting.created_at,
+            "data": data,
+        }
+        return snap, seg_by_id, order
+
+    async def _merge_live_segments(self, pg: "tuple[dict, dict, list]") -> dict:
+        """POST-SESSION half: merge the LIVE Redis in-flight hash, sort, derive absolute times, and
+        assemble the api.v1 ``TranscriptionResponse`` dict. NO database session is open here — this
+        is where the (possibly slow) Redis await happens, so it can never pin a pooled connection or
+        hold a snapshot/transaction open (the #508 fix). Response is byte-identical to the old build."""
+        snap, seg_by_id, order = pg
+        data = snap["data"]
         # Merge the LIVE Redis hash of in-flight segments (``meeting:{id}:segments``) — the source
         # of truth before/until the db-writer flush. The carve had dropped this merge, so a transcript
         # whose segments are still only in Redis (every short/just-finished meeting) read as EMPTY.
         if self._redis is not None:
             try:
-                raw = await self._redis.hgetall(f"meeting:{meeting.id}:segments")
+                raw = await self._redis.hgetall(f"meeting:{snap['id']}:segments")
                 for v in (raw.values() if isinstance(raw, dict) else []):
                     try:
                         seg = json.loads(v.decode() if isinstance(v, (bytes, bytearray)) else v)
@@ -288,15 +319,15 @@ class SqlAlchemyTranscriptStore:
         # The dashboard's renderer SKIPS any segment without absolute_start_time
         # (use-vexa-websocket.ts: `if (!seg.absolute_start_time) continue`). Derive it when a producer
         # didn't supply it, so the historical transcript renders. See `_fill_absolute_times`.
-        _fill_absolute_times(segments, meeting.start_time or meeting.created_at)
+        _fill_absolute_times(segments, snap["start_time"] or snap["created_at"])
         return {
-            "id": meeting.id,
-            "platform": meeting.platform,
-            "native_meeting_id": meeting.platform_specific_id,
+            "id": snap["id"],
+            "platform": snap["platform"],
+            "native_meeting_id": snap["platform_specific_id"],
             "constructed_meeting_url": (data.get("constructed_meeting_url")),
-            "status": meeting.status,
-            "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
-            "end_time": meeting.end_time.isoformat() if meeting.end_time else None,
+            "status": snap["status"],
+            "start_time": snap["start_time"].isoformat() if snap["start_time"] else None,
+            "end_time": snap["end_time"].isoformat() if snap["end_time"] else None,
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
             "data": data,
@@ -321,7 +352,9 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
-            return await self._transcript_doc(db, meeting)
+            pg = await self._transcript_pg_part(db, meeting)
+        # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
+        return await self._merge_live_segments(pg)
 
     async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
         """Exact-row transcript for ``meeting.id == meeting_id``, authorized by the SAME three-way rule as
@@ -348,7 +381,9 @@ class SqlAlchemyTranscriptStore:
             )
             if not authorized:
                 return None
-            return await self._transcript_doc(db, meeting)
+            pg = await self._transcript_pg_part(db, meeting)
+        # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
+        return await self._merge_live_segments(pg)
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
         from sqlalchemy import cast, func, or_, select
@@ -975,7 +1010,13 @@ def build_production_app(
 
     engine = create_async_engine(database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    redis_client = aioredis.from_url(redis_url, decode_responses=True)
+    # #528: hardened Redis client (see meeting_api/__main__.py) — bounded timeouts + keepalive +
+    # health checks so a Redis blip self-heals within socket_timeout instead of hanging the consumer.
+    redis_client = aioredis.from_url(
+        redis_url, decode_responses=True,
+        socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
+        health_check_interval=30, retry_on_timeout=True,
+    )
 
     store = SqlAlchemyTranscriptStore(session_factory, redis_client=redis_client)
     bus = RedisStreamBus(redis_client)

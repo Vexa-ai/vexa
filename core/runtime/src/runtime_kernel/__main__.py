@@ -59,7 +59,14 @@ def _build_scheduler():
 
     from .scheduler import Scheduler
 
-    client = redis_lib.from_url(redis_url, decode_responses=True)
+    # #528: hardened Redis client (mirrors gateway/meeting-api) — bounded socket + connect timeouts,
+    # keepalive, and periodic health checks so a Redis outage makes the scheduler tick raise (caught
+    # per-tick) and /health go red, instead of the tick thread hanging on a dead socket forever.
+    client = redis_lib.from_url(
+        redis_url, decode_responses=True,
+        socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
+        health_check_interval=30, retry_on_timeout=True,
+    )
     return Scheduler(client, dispatch=_http_dispatch)
 
 
