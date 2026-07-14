@@ -21,6 +21,7 @@ Run: cd core/meetings/services/meeting-api && python -m pytest tests/test_webhoo
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -42,7 +43,11 @@ from meeting_api.webhooks import (
     sign_payload,
     validate_webhook_url,
 )
-from meeting_api.webhooks.retry import DEAD_LETTER_KEY
+from meeting_api.webhooks.retry import (
+    DEAD_LETTER_KEY,
+    DEFAULT_LEASE_SECONDS,
+    PROCESSING_KEY,
+)
 
 SECRET = "whsec_seam_secret"
 URL = "https://hooks.example.com/vexa"
@@ -682,3 +687,125 @@ async def test_at_least_once_redelivered_body_still_verifies(fake_redis):
     assert _independent_verify(redelivered["body"], redelivered["headers"], SECRET), (
         "redelivered envelope must carry a valid HMAC over its fresh ts"
     )
+
+
+# ════════════════════════════════════════════════════════════════════════════════════
+# (h) crash-safety: the reliable-queue processing list (issue #520 — V2)
+#
+# The old drain LPOPped every entry into a process-local list and RPUSHed it back only at
+# the END of the sweep — a crash mid-sweep lost every popped entry. The fix moves each entry
+# atomically into a Redis PROCESSING_KEY list (RPOPLPUSH) while in-flight, so a crash leaves it
+# recoverable; the next tick reclaims processing entries older than the lease. These tests pin
+# that no entry is EVER held only in process memory, and that redelivery is bounded by the lease
+# (so a live delivery is never reclaimed out from under itself).
+# ════════════════════════════════════════════════════════════════════════════════════
+
+
+class CrashTransport:
+    """Simulates a worker crash MID-DELIVERY: raises ``asyncio.CancelledError`` (a BaseException),
+    which ``_deliver_one``'s ``except Exception`` does NOT catch, so it propagates out of the sweep
+    exactly as a killed task would — after the entry is already in the processing list."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, url: str, body: bytes, headers: Dict[str, str]):
+        self.calls += 1
+        raise asyncio.CancelledError()
+
+
+async def test_crash_mid_sweep_entry_survives_in_processing_and_redelivers(fake_redis):
+    """V2 red→green: a crash between claim and ack leaves the entry in the PROCESSING list (not
+    lost, as the base-sha LPOP-hold-RPUSH drain would); it is reclaimed and redelivered after the
+    lease expires. Within the lease it is NOT redelivered (a live delivery isn't reclaimed twice)."""
+    queue = RetryQueue(fake_redis)
+    base = 90_000_000_000.0
+    await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 1}),
+                        webhook_secret=SECRET, now=base)
+    due = base + BACKOFF_SCHEDULE[0]  # base + 60
+
+    # 1. A sweep crashes mid-delivery → CancelledError propagates, entry stranded in processing.
+    crash = CrashTransport()
+    with pytest.raises(asyncio.CancelledError):
+        await drain_retry_queue(fake_redis, crash, now=due + 1)
+    assert crash.calls == 1
+    assert await fake_redis.llen(RETRY_QUEUE_KEY) == 0, "the entry was claimed OUT of the queue"
+    assert await fake_redis.llen(PROCESSING_KEY) == 1, (
+        "the in-flight entry SURVIVES in the processing list (base sha would have lost it)"
+    )
+
+    # 2. A sweep WITHIN the lease must not reclaim/redeliver it (still a live claim).
+    healthy = ScriptedTransport(default_code=200)
+    await drain_retry_queue(fake_redis, healthy, now=due + 1 + DEFAULT_LEASE_SECONDS - 5)
+    assert healthy.calls == 0, "a within-lease in-flight entry is not reclaimed"
+    assert await fake_redis.llen(PROCESSING_KEY) == 1
+
+    # 3. A sweep AFTER the lease reclaims the orphaned entry and redelivers it.
+    await drain_retry_queue(fake_redis, healthy, now=due + 1 + DEFAULT_LEASE_SECONDS + 1)
+    assert healthy.calls == 1, "the orphaned entry is reclaimed + redelivered past the lease"
+    assert await fake_redis.llen(PROCESSING_KEY) == 0, "delivered → removed from processing"
+    assert await fake_redis.llen(RETRY_QUEUE_KEY) == 0, "delivered → not re-queued"
+    # Redelivery is at-least-once; #519's deterministic event_id lets the receiver dedupe it, and
+    # the redelivered body still verifies under a fresh timestamp.
+    redelivered = healthy.received[-1]
+    assert _independent_verify(redelivered["body"], redelivered["headers"], SECRET)
+    orig_event_id = json.loads(redelivered["body"])["event_id"]
+    assert orig_event_id, "the redelivered envelope carries its (deterministic) event_id for dedupe"
+
+
+async def test_reclaim_recovers_unstamped_processing_entry(fake_redis):
+    """A crash in the tiny gap between the RPOPLPUSH claim and the lease stamp leaves a processing
+    entry with NO claim timestamp — it must still be reclaimed (treated as infinitely stale), not
+    stranded forever."""
+    base = 91_000_000_000.0
+    entry = {
+        "url": URL, "payload": build_envelope("meeting.completed", {"m": 2}),
+        "webhook_secret": SECRET, "label": "", "attempt": 0,
+        "next_retry_at": base + BACKOFF_SCHEDULE[0], "created_at": base,
+    }
+    await fake_redis.rpush(PROCESSING_KEY, json.dumps(entry))  # unstamped, as if crashed pre-stamp
+
+    healthy = ScriptedTransport(default_code=200)
+    await drain_retry_queue(fake_redis, healthy, now=base + BACKOFF_SCHEDULE[0] + 1)
+    assert healthy.calls == 1, "an unstamped processing entry is reclaimed and delivered"
+    assert await fake_redis.llen(PROCESSING_KEY) == 0
+    assert await fake_redis.llen(RETRY_QUEUE_KEY) == 0
+
+
+async def test_normal_sweep_never_leaks_into_processing(fake_redis):
+    """Invariant: after a fully-resolved sweep the processing list is EMPTY — a reschedule returns
+    the entry to the queue, a delivery drops it, neither leaves it stranded in processing."""
+    queue = RetryQueue(fake_redis)
+    base = 92_000_000_000.0
+    await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 3}),
+                        webhook_secret=SECRET, now=base)
+
+    # A failing sweep reschedules → processing empty, entry back in the queue.
+    await drain_retry_queue(fake_redis, ScriptedTransport(default_code=500),
+                            now=base + BACKOFF_SCHEDULE[0] + 1)
+    assert await fake_redis.llen(PROCESSING_KEY) == 0, "a resolved reschedule leaves processing empty"
+    assert await fake_redis.llen(RETRY_QUEUE_KEY) == 1, "the rescheduled entry is back in the queue"
+
+    # A succeeding sweep drops it → both lists empty.
+    nxt = json.loads(await fake_redis.lindex(RETRY_QUEUE_KEY, 0))["next_retry_at"]
+    await drain_retry_queue(fake_redis, ScriptedTransport(default_code=200), now=nxt + 1)
+    assert await fake_redis.llen(PROCESSING_KEY) == 0
+    assert await fake_redis.llen(RETRY_QUEUE_KEY) == 0, "delivered → drained, nothing stranded"
+
+
+async def test_dead_letter_leaves_processing_empty(fake_redis):
+    """A schedule-exhausted entry is dead-lettered AND removed from the processing list (not left
+    stranded there once it has reached the DLQ)."""
+    queue = RetryQueue(fake_redis)
+    base = 93_000_000_000.0
+    await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 4}),
+                        webhook_secret=SECRET, now=base, label="meeting:4")
+    t = ScriptedTransport(default_code=500)
+    for _ in range(len(BACKOFF_SCHEDULE) + 2):
+        if await queue.depth() == 0:
+            break
+        cur = await fake_redis.lindex(RETRY_QUEUE_KEY, 0)
+        await drain_retry_queue(fake_redis, t, now=json.loads(cur)["next_retry_at"] + 1)
+    assert await fake_redis.llen(RETRY_QUEUE_KEY) == 0
+    assert await fake_redis.llen(PROCESSING_KEY) == 0, "dead-lettered entry not stranded in processing"
+    assert await fake_redis.llen(DEAD_LETTER_KEY) == 1, "it landed in the dead-letter list"
