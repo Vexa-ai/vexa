@@ -18,8 +18,14 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from .ports import RecordingRepo, Storage
-from .service import SessionNotFound, _verify_meeting_token, finalize_master, upload_chunk
+from .ports import RecordingRepo, RecordingWriteRefused, Storage
+from .service import (
+    InvalidRecordingMetadata,
+    SessionNotFound,
+    _verify_meeting_token,
+    finalize_master,
+    upload_chunk,
+)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
@@ -104,6 +110,13 @@ async def _storage_get_range(storage: Storage, key: str, start: int, end: int) -
     return await getter(key, start, end)
 
 
+async def _finalize_master_or_conflict(repo, storage, **kwargs):
+    try:
+        return await finalize_master(repo, storage, **kwargs)
+    except RecordingWriteRefused:
+        raise HTTPException(status_code=409, detail="Meeting is no longer writable") from None
+
+
 def build_router(
     repo: RecordingRepo,
     storage: Storage,
@@ -140,7 +153,10 @@ def build_router(
             raise HTTPException(status_code=422, detail="session_uid required (flat field or metadata)")
         media_type = media_type or meta.get("media_type") or "audio"
         media_format = media_format or meta.get("media_format") or meta.get("format") or "wav"
-        chunk_seq = chunk_seq if chunk_seq is not None else int(meta.get("chunk_seq", 0) or 0)
+        try:
+            chunk_seq = chunk_seq if chunk_seq is not None else int(meta.get("chunk_seq", 0) or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Invalid recording metadata") from None
         is_final = is_final if is_final is not None else bool(meta.get("is_final", True))
         duration_seconds = duration_seconds if duration_seconds is not None else meta.get("duration_seconds")
         sample_rate = sample_rate if sample_rate is not None else meta.get("sample_rate")
@@ -171,6 +187,10 @@ def build_router(
             )
         except SessionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e))
+        except InvalidRecordingMetadata:
+            raise HTTPException(status_code=422, detail="Invalid recording metadata") from None
+        except RecordingWriteRefused:
+            raise HTTPException(status_code=409, detail="Meeting is no longer writable") from None
         return JSONResponse(content=receipt)
 
     @router.get("/recordings")
@@ -211,7 +231,7 @@ def build_router(
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
         mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), None)
-        master_key = await finalize_master(
+        master_key = await _finalize_master_or_conflict(
             repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id, media_type=type
         )
         if master_key is None:
@@ -256,7 +276,7 @@ def build_router(
         if mf is None:
             raise HTTPException(status_code=404, detail="No such media file")
         if not mf.get("is_final"):
-            await finalize_master(
+            await _finalize_master_or_conflict(
                 repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
                 media_type=mf.get("type", type),
             )

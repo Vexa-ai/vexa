@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 
 from .ports import ErasurePlan
 
@@ -83,6 +84,19 @@ class InMemoryRetentionRepo:
             self._write_condition.notify_all()
             return deleted
 
+    async def record_object_census(
+        self, plan: ErasurePlan, recording_objects: int
+    ) -> ErasurePlan:
+        async with self._write_condition:
+            meeting = self._meetings.get(plan.meeting_id)
+            if meeting is None or meeting["user_id"] != plan.user_id:
+                raise RuntimeError("meeting erasure census lost its owner")
+            current = meeting.get("recording_objects")
+            if current is None:
+                meeting["recording_objects"] = recording_objects
+                current = recording_objects
+            return replace(plan, recording_objects=int(current))
+
 
 class InMemoryRetentionStorage:
     def __init__(self):
@@ -93,6 +107,9 @@ class InMemoryRetentionStorage:
 
     def snapshot(self, prefix: str) -> dict[str, bytes]:
         return {key: value for key, value in self._objects.items() if key.startswith(prefix)}
+
+    async def count_prefix(self, prefix: str) -> int:
+        return sum(1 for key in self._objects if key.startswith(prefix))
 
     async def delete_prefix(self, prefix: str) -> int:
         keys = [key for key in self._objects if key.startswith(prefix)]

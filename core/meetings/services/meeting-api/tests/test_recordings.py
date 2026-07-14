@@ -7,13 +7,21 @@ session-resolution seams behave.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 from fastapi.testclient import TestClient
 
 from meeting_api.bot_spawn import mint_meeting_token
-from meeting_api.recordings import build_router, finalize_master, upload_chunk
+from meeting_api.recordings import (
+    InvalidRecordingMetadata,
+    build_router,
+    finalize_master,
+    upload_chunk,
+)
 from meeting_api.recordings.fakes import InMemoryRecordingRepo, InMemoryStorage
 from meeting_api.recordings.jsonb import chunk_storage_key
+from meeting_api.recordings.ports import RecordingWriteRefused
 
 SECRET = "test-admin-token"
 USER = 7
@@ -35,6 +43,61 @@ def _seeded():
     repo = InMemoryRecordingRepo()
     repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
     return repo, InMemoryStorage()
+
+
+async def test_chunk_upload_cannot_bypass_the_meeting_write_gate():
+    class WriteRefused(RuntimeError):
+        pass
+
+    class RefusingRepo(InMemoryRecordingRepo):
+        def __init__(self):
+            super().__init__()
+            self.gate_calls = 0
+
+        @asynccontextmanager
+        async def recording_write(self, meeting_id):
+            self.gate_calls += 1
+            raise WriteRefused("meeting erasure has started")
+            yield  # pragma: no cover
+
+    repo = RefusingRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    storage = InMemoryStorage()
+
+    with pytest.raises(WriteRefused, match="erasure has started"):
+        await upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(),
+            media_format="wav",
+        )
+
+    assert repo.gate_calls == 1
+    assert storage.blobs == {}
+
+
+async def test_master_finalization_cannot_bypass_the_meeting_write_gate():
+    class WriteRefused(RuntimeError):
+        pass
+
+    class RefusingRepo(InMemoryRecordingRepo):
+        @asynccontextmanager
+        async def recording_write(self, meeting_id):
+            raise WriteRefused("meeting erasure has started")
+            yield  # pragma: no cover
+
+    repo = RefusingRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+
+    with pytest.raises(WriteRefused, match="erasure has started"):
+        await finalize_master(
+            repo,
+            InMemoryStorage(),
+            meeting_id=MEETING_ID,
+            recording_id=123,
+        )
 
 
 # ── flow: upload folds chunks into JSONB; finalize builds the master ─────────────────────────────
@@ -64,6 +127,67 @@ async def test_final_chunk_completes_recording():
     assert receipt["status"] == "completed"
 
 
+async def test_failed_first_chunk_database_fold_removes_the_orphan_object():
+    class FailingRepo(InMemoryRecordingRepo):
+        async def mutate_recordings(self, meeting_id, mutator):
+            raise RuntimeError("database write failed")
+
+    repo = FailingRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    storage = InMemoryStorage()
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        await upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(),
+            media_format="wav",
+            chunk_seq=0,
+            is_final=False,
+        )
+
+    assert storage.blobs == {}
+
+
+async def test_failed_compensation_still_leaves_a_durable_prefix_for_erasure():
+    class FailingRepo(InMemoryRecordingRepo):
+        def __init__(self):
+            super().__init__()
+            self.registered_prefixes: list[str] = []
+
+        async def register_recording_prefix(self, meeting_id, prefix):
+            self.registered_prefixes.append(prefix)
+
+        async def mutate_recordings(self, meeting_id, mutator):
+            raise RuntimeError("database fold failed")
+
+    class CleanupFailStorage(InMemoryStorage):
+        async def delete(self, key):
+            raise RuntimeError("object cleanup failed")
+
+    repo = FailingRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+
+    with pytest.raises(RuntimeError, match="compensation requires retry"):
+        await upload_chunk(
+            repo,
+            CleanupFailStorage(),
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(),
+            media_format="wav",
+            chunk_seq=0,
+            is_final=False,
+        )
+
+    assert len(repo.registered_prefixes) == 1
+    prefix = repo.registered_prefixes[0]
+    assert prefix.startswith(f"recordings/{USER}/")
+    assert prefix.endswith(f"/{SESSION_UID}/")
+
+
 async def test_finalize_master_builds_and_stamps():
     repo, storage = _seeded()
     rid = None
@@ -90,6 +214,61 @@ async def test_upload_before_session_is_pending():
         data=_wav(), media_format="wav", chunk_seq=0, is_final=False,
     )
     assert receipt == {"status": "pending"}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("session_uid", "../session"),
+        ("session_uid", "."),
+        ("media_type", "../audio"),
+        ("media_type", "screen"),
+        ("media_format", "../wav"),
+        ("media_format", "exe"),
+        ("chunk_seq", -1),
+    ],
+)
+async def test_upload_rejects_unsafe_storage_key_metadata_before_mutation(field, value):
+    repo, storage = _seeded()
+    kwargs = {
+        "token_meeting_id": MEETING_ID,
+        "session_uid": SESSION_UID,
+        "data": _wav(),
+        "media_type": "audio",
+        "media_format": "wav",
+        "chunk_seq": 0,
+        field: value,
+    }
+
+    with pytest.raises(InvalidRecordingMetadata):
+        await upload_chunk(repo, storage, **kwargs)
+
+    assert storage.blobs == {}
+    assert repo._meetings[MEETING_ID]["recording_prefixes"] == []
+    assert await repo.get_recordings(MEETING_ID) == []
+
+
+async def test_upload_refuses_a_meeting_without_a_resolved_owner_before_mutation():
+    class OwnerlessRepo(InMemoryRecordingRepo):
+        async def owner_of(self, meeting_id):
+            return None
+
+    repo = OwnerlessRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    storage = InMemoryStorage()
+
+    with pytest.raises(RecordingWriteRefused, match="not writable"):
+        await upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(),
+        )
+
+    assert storage.blobs == {}
+    assert repo._meetings[MEETING_ID]["recording_prefixes"] == []
+    assert await repo.get_recordings(MEETING_ID) == []
 
 
 # ── route: the upload endpoint authenticates the MeetingToken ────────────────────────────────────
@@ -124,6 +303,78 @@ def test_upload_route_accepts_valid_token():
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "completed"
+
+
+def test_upload_route_reports_invalid_storage_metadata_without_echoing_it():
+    client = _client()
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    response = client.post(
+        "/internal/recordings/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        data={
+            "session_uid": SESSION_UID,
+            "media_type": "../private-audio",
+            "media_format": "wav",
+            "chunk_seq": 0,
+            "is_final": "true",
+        },
+        files={"file": ("c.wav", _wav(), "audio/wav")},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Invalid recording metadata"}
+    assert "private-audio" not in response.text
+
+
+def test_upload_route_reports_conflict_after_erasure_starts():
+    from fastapi import FastAPI
+
+    class RefusingRepo(InMemoryRecordingRepo):
+        @asynccontextmanager
+        async def recording_write(self, meeting_id):
+            raise RecordingWriteRefused("private state detail")
+            yield  # pragma: no cover
+
+    repo = RefusingRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    app = FastAPI()
+    app.include_router(build_router(repo, InMemoryStorage(), token_secret=SECRET))
+    client = TestClient(app, raise_server_exceptions=False)
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+
+    response = client.post(
+        "/internal/recordings/upload",
+        data={"session_uid": SESSION_UID, "media_format": "wav", "chunk_seq": 0, "is_final": "true"},
+        files={"file": ("c.wav", _wav(), "audio/wav")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Meeting is no longer writable"}
+    assert "private state detail" not in response.text
+
+
+def test_master_route_reports_conflict_after_erasure_starts():
+    from fastapi import FastAPI
+
+    class RefusingRepo(InMemoryRecordingRepo):
+        @asynccontextmanager
+        async def recording_write(self, meeting_id):
+            raise RecordingWriteRefused("private state detail")
+            yield  # pragma: no cover
+
+        async def list_meeting_recordings(self, user_id):
+            return [{"id": 41, "meeting_id": MEETING_ID, "media_files": []}]
+
+    app = FastAPI()
+    app.include_router(build_router(RefusingRepo(), InMemoryStorage(), token_secret=SECRET))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/recordings/41/master", headers={"x-user-id": str(USER)})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Meeting is no longer writable"}
+    assert "private state detail" not in response.text
 
 
 # ── G4: object-storage I/O must not block the event loop ─────────────────────────────────────────
@@ -183,6 +434,47 @@ async def test_s3_storage_does_not_block_the_event_loop():
         f"event loop appears BLOCKED during the S3 upload (only {ticks['n']} heartbeats in ~0.3s) — "
         "the boto3 call is not being offloaded to a thread"
     )
+
+
+async def test_cancelled_s3_upload_finishes_the_thread_before_releasing_its_caller():
+    """A cancelled asyncio.to_thread waiter must not return while boto3 can still create an object.
+
+    Recording upload holds its database write lease around this call. Delaying cancellation until the
+    sync call finishes guarantees erasure cannot release the lease, sweep, and then receive a ghost
+    object from the still-running worker thread.
+    """
+    import asyncio
+    import threading
+
+    from meeting_api.recordings.adapters import S3Storage
+
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    class BlockingClient:
+        def put_object(self, **kwargs):
+            started.set()
+            release.wait(timeout=2)
+            finished.set()
+            return {}
+
+    storage = S3Storage(bucket="b")
+    storage._client = BlockingClient()
+    upload = asyncio.create_task(
+        storage.upload("key", b"bytes", content_type="audio/wav")
+    )
+    while not started.is_set():
+        await asyncio.sleep(0)
+
+    upload.cancel()
+    await asyncio.sleep(0.01)
+    assert not upload.done()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await upload
+    assert finished.is_set()
 
 
 # ── G3: concurrent chunk folds must not lose updates (atomic read→modify→write) ──────────────────

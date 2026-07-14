@@ -16,15 +16,25 @@ golden-locked — this module only orchestrates the IO + the JSONB bookkeeping a
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
 from .jsonb import apply_chunk_to_recording, chunk_storage_key, master_storage_key, new_recording_numeric_id
-from .ports import RecordingRepo, Storage
+from .ports import RecordingRepo, RecordingWriteRefused, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
-_CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav"}
+_CONTENT_TYPES = {
+    "webm": "video/webm",
+    "wav": "audio/wav",
+    "mp4": "video/mp4",
+    "mkv": "video/x-matroska",
+}
+_MEDIA_TYPES = frozenset({"audio", "video"})
+_MEDIA_FORMATS = frozenset(_CONTENT_TYPES)
+_KEY_SEGMENT = re.compile(r"^[A-Za-z0-9._:-]+$")
+_MAX_CHUNK_SEQ = 2_147_483_647
 
 
 def _content_type(media_format: str) -> str:
@@ -37,6 +47,31 @@ def _now_iso() -> str:
 
 class SessionNotFound(Exception):
     """The upload's ``session_uid`` matches no MeetingSession AND it is the final chunk → 404."""
+
+
+class InvalidRecordingMetadata(ValueError):
+    """An upload field could produce an unsafe or unsupported object-storage key."""
+
+
+def _validate_upload_metadata(
+    *, session_uid: str, media_type: str, media_format: str, chunk_seq: int
+) -> None:
+    if (
+        not isinstance(session_uid, str)
+        or not _KEY_SEGMENT.fullmatch(session_uid)
+        or session_uid in {".", ".."}
+    ):
+        raise InvalidRecordingMetadata("invalid session identity")
+    if media_type not in _MEDIA_TYPES:
+        raise InvalidRecordingMetadata("invalid media type")
+    if media_format not in _MEDIA_FORMATS:
+        raise InvalidRecordingMetadata("invalid media format")
+    if (
+        isinstance(chunk_seq, bool)
+        or not isinstance(chunk_seq, int)
+        or not 0 <= chunk_seq <= _MAX_CHUNK_SEQ
+    ):
+        raise InvalidRecordingMetadata("invalid chunk sequence")
 
 
 async def upload_chunk(
@@ -59,6 +94,12 @@ async def upload_chunk(
     Returns ``{recording_id, media_file_id, storage_path, status, chunk_seq}``. When the session is
     not yet known and the chunk is non-final, returns ``{"status": "pending"}`` (the bot retries).
     """
+    _validate_upload_metadata(
+        session_uid=session_uid,
+        media_type=media_type,
+        media_format=media_format,
+        chunk_seq=chunk_seq,
+    )
     session = await repo.find_session(session_uid)
     if session is None:
         if not is_final:
@@ -71,59 +112,74 @@ async def upload_chunk(
         # (token_meeting_id is None for internal-secret auth, which is already meeting-scoped by session.)
         raise SessionNotFound("MeetingToken meeting_id does not match the session's meeting")
 
-    owner = await repo.owner_of(meeting_id)
+    # The lease spans BOTH object upload and JSONB mutation. Erasure takes the exclusive side of the
+    # same gate, waits for this block to drain, persists the non-writable state, then sweeps objects.
+    async with repo.recording_write(meeting_id):
+        owner = await repo.owner_of(meeting_id)
+        if owner is None:
+            raise RecordingWriteRefused("meeting is not writable")
 
-    # Find / start the bot recording for this session.
-    recordings = await repo.get_recordings(meeting_id)
-    existing_rec = next(
-        (r for r in recordings if r.get("session_uid") == session_uid and r.get("source") == "bot"),
-        None,
-    )
-    recording_id = existing_rec["id"] if existing_rec else new_recording_numeric_id()
-
-    # Upload the chunk to object storage (idempotent by key; OUTSIDE the row lock).
-    key = chunk_storage_key(
-        user_id=owner or 0, recording_id=recording_id, session_uid=session_uid,
-        media_type=media_type, media_format=media_format, chunk_seq=chunk_seq,
-    )
-    await storage.upload(key, data, content_type=_content_type(media_format))
-
-    # G3 — fold the chunk into the JSONB ATOMICALLY: the mutator reads the LIVE recordings under one
-    # row lock and folds cumulatively, so a concurrent chunk/finalize can't clobber it (the old
-    # get_recordings → apply → put_recordings were SEPARATE transactions → lost update). The mutator
-    # re-resolves the recording for this session, so it reuses an id created concurrently.
-    def _fold(recs):
-        ex = next(
-            (r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None
+        # Find / start the bot recording for this session.
+        recordings = await repo.get_recordings(meeting_id)
+        existing_rec = next(
+            (r for r in recordings if r.get("session_uid") == session_uid and r.get("source") == "bot"),
+            None,
         )
-        rid = ex["id"] if ex else recording_id
-        payload, transitioned_ = apply_chunk_to_recording(
-            ex,
-            recording_id=rid, meeting_id=meeting_id, user_id=owner or 0,
-            session_uid=session_uid, media_type=media_type, media_format=media_format,
-            storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
-            duration_seconds=duration_seconds, sample_rate=sample_rate,
-        )
-        others = [r for r in recs if r.get("id") != rid]
-        return others + [payload], (payload, transitioned_)
+        recording_id = existing_rec["id"] if existing_rec else new_recording_numeric_id()
 
-    rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
-    recording_id = rec_payload["id"]
-
-    media_file = next((mf for mf in rec_payload["media_files"] if mf["type"] == media_type), {})
-    if transitioned:
-        log_event(
-            "recording_completed", audience="user", span="recordings.upload",
-            user_id=owner, meeting_id=str(meeting_id),
-            fields={"recording_id": recording_id, "media_type": media_type},
+        # Upload the chunk to object storage (idempotent by key; OUTSIDE the row lock but INSIDE the
+        # meeting write lease).
+        key = chunk_storage_key(
+            user_id=owner, recording_id=recording_id, session_uid=session_uid,
+            media_type=media_type, media_format=media_format, chunk_seq=chunk_seq,
         )
-    return {
-        "recording_id": recording_id,
-        "media_file_id": media_file.get("id"),
-        "storage_path": key,
-        "status": rec_payload["status"],
-        "chunk_seq": chunk_seq,
-    }
+        prefix = key.rsplit("/", 2)[0] + "/"
+        await repo.register_recording_prefix(meeting_id, prefix)
+        try:
+            await storage.upload(key, data, content_type=_content_type(media_format))
+
+            # G3 — fold the chunk into the JSONB ATOMICALLY: the mutator reads the LIVE recordings
+            # under one row lock and folds cumulatively, so concurrent chunks cannot clobber one
+            # another. If this durable fold fails, remove the exact object before releasing the
+            # meeting write lease; otherwise the random first-recording prefix is undiscoverable.
+            def _fold(recs):
+                ex = next(
+                    (r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None
+                )
+                rid = ex["id"] if ex else recording_id
+                payload, transitioned_ = apply_chunk_to_recording(
+                    ex,
+                    recording_id=rid, meeting_id=meeting_id, user_id=owner,
+                    session_uid=session_uid, media_type=media_type, media_format=media_format,
+                    storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
+                    duration_seconds=duration_seconds, sample_rate=sample_rate,
+                )
+                others = [r for r in recs if r.get("id") != rid]
+                return others + [payload], (payload, transitioned_)
+
+            rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+        except BaseException:
+            try:
+                await storage.delete(key)
+            except BaseException:
+                raise RuntimeError("recording upload compensation requires retry") from None
+            raise
+        recording_id = rec_payload["id"]
+
+        media_file = next((mf for mf in rec_payload["media_files"] if mf["type"] == media_type), {})
+        if transitioned:
+            log_event(
+                "recording_completed", audience="user", span="recordings.upload",
+                user_id=owner, meeting_id=str(meeting_id),
+                fields={"recording_id": recording_id, "media_type": media_type},
+            )
+        return {
+            "recording_id": recording_id,
+            "media_file_id": media_file.get("id"),
+            "storage_path": key,
+            "status": rec_payload["status"],
+            "chunk_seq": chunk_seq,
+        }
 
 
 async def finalize_master(
@@ -138,6 +194,26 @@ async def finalize_master(
     master already exists in storage it is reused. Returns the master storage key, or ``None`` when
     there is nothing to finalize.
     """
+    # Finalization reads chunks, writes a master, and stamps JSONB; all three belong to one recording
+    # write and must drain before erasure takes its exclusive barrier.
+    async with repo.recording_write(meeting_id):
+        return await _finalize_master_under_lease(
+            repo,
+            storage,
+            meeting_id=meeting_id,
+            recording_id=recording_id,
+            media_type=media_type,
+        )
+
+
+async def _finalize_master_under_lease(
+    repo: RecordingRepo,
+    storage: Storage,
+    *,
+    meeting_id: int,
+    recording_id: int,
+    media_type: str,
+) -> Optional[str]:
     recordings = await repo.get_recordings(meeting_id)
     rec = next((r for r in recordings if r.get("id") == recording_id), None)
     if rec is None:

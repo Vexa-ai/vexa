@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -111,6 +112,25 @@ async def test_storage_failure_keeps_database_authoritative_and_hides_object_key
     assert repo.snapshot("meeting_a") is not None
 
 
+async def test_planning_failure_hides_database_content_and_requires_retry():
+    class FailingPlanRepo(InMemoryRetentionRepo):
+        async def begin_erasure(self, user_id, meeting_id):
+            raise RuntimeError("database exposed private transcript")
+
+    with pytest.raises(ErasureFailed, match="planning requires retry") as exc:
+        await erase_meeting(
+            FailingPlanRepo(),
+            InMemoryRetentionStorage(),
+            user_id="user_a",
+            meeting_id="meeting_a",
+            erased_at=datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),
+            policy_version="minutes-retention-v1",
+        )
+
+    assert exc.value.__cause__ is None
+    assert "private transcript" not in str(exc.value)
+
+
 async def test_database_failure_after_object_delete_returns_safe_retry_signal():
     class FailingRepo(InMemoryRetentionRepo):
         async def commit_erasure(self, plan):
@@ -168,6 +188,49 @@ async def test_retry_receipt_counts_every_planned_object_when_one_is_already_abs
 
     assert receipt is not None
     assert receipt.recording_objects == 2
+
+
+async def test_uncensused_plan_counts_and_persists_objects_before_deletion():
+    class UncensusedRepo(InMemoryRetentionRepo):
+        def __init__(self):
+            super().__init__()
+            self.census_calls = 0
+
+        async def begin_erasure(self, user_id, meeting_id):
+            plan = await super().begin_erasure(user_id, meeting_id)
+            return replace(plan, recording_objects=None) if plan else None
+
+        async def record_object_census(self, plan, recording_objects):
+            self.census_calls += 1
+            return replace(plan, recording_objects=recording_objects)
+
+    repo = UncensusedRepo()
+    storage = InMemoryRetentionStorage()
+    prefix = "recordings/user_a/recording_a/session_a/"
+    repo.seed_meeting(
+        user_id="user_a",
+        meeting_id="meeting_a",
+        transcript_rows=[],
+        summaries=[],
+        recording_prefixes=[prefix],
+        recording_objects=99,
+    )
+    storage.seed(f"{prefix}audio/000000.wav", b"chunk")
+    storage.seed(f"{prefix}audio/master.wav", b"master")
+
+    receipt = await erase_meeting(
+        repo,
+        storage,
+        user_id="user_a",
+        meeting_id="meeting_a",
+        erased_at=datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),
+        policy_version="minutes-retention-v1",
+    )
+
+    assert receipt is not None
+    assert receipt.recording_objects == 2
+    assert repo.census_calls == 1
+    assert storage.snapshot(prefix) == {}
 
 
 async def test_erasure_quiesces_inflight_upload_and_sweeps_its_late_object():
