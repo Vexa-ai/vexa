@@ -9,10 +9,17 @@ authorities before it touches the meeting repository or runtime:
 3. the user requested this capture; and
 4. quota permits it.
 
-The allowed path always joins as **ZAKI Notetaker**, enables recording and transcription, and stores
-only content-free policy evidence under `meeting.data.zaki_capture`. Callers cannot override the bot
-name or inject arbitrary evidence. Missing, malformed, or disabled authority returns a stable
-`CaptureDenial` before repository/runtime mutation.
+The grant is bound to one tenant, user, platform/native meeting identity, and—when supplied—an exact
+SHA-256 of the validated meeting URL. It is valid for at most five minutes. The allowed path always
+joins as **ZAKI Notetaker**, enables recording and transcription, stores only content-free policy
+evidence under `meeting.data.zaki_capture`, and materializes immutable UTC audio/transcript/summary
+expiries under `meeting.data.zaki_retention`. Callers cannot override the bot name or inject evidence.
+Missing, malformed, expired, mismatched, or disabled authority returns a stable `CaptureDenial`
+before repository/runtime mutation.
+
+The runtime kernel still rechecks owner quota. If that defense-in-depth check rejects after the
+meeting row was reserved, the row is made terminal (`failed`) and its capture evidence becomes the
+named `quota_exhausted` non-capture state; it never remains an active `requested` orphan.
 
 This is the first S03 tracer. Consent withdrawal and its terminal lifecycle state build on this
 front door; public Hub/BFF routing, settings persistence, secrets, charts, and activation belong to

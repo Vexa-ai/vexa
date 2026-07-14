@@ -98,6 +98,12 @@ class MeetingRepo(Protocol):
         """Record the kernel-assigned workload id/name on the meeting and return the updated row."""
         ...
 
+    async def mark_spawn_rejected(
+        self, *, meeting_id: int, reason: str, data: Optional[dict] = None
+    ) -> Optional[dict]:
+        """Make a pre-workload runtime rejection terminal and merge content-free attribution."""
+        ...
+
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
         """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
 

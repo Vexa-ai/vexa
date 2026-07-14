@@ -307,12 +307,34 @@ async def request_bot(
     try:
         result = await runtime.create_workload(spec)
     except QuotaExceeded:
+        try:
+            await repo.mark_spawn_rejected(
+                meeting_id=meeting_id,
+                reason="quota_exhausted",
+            )
+        except Exception as rejection_error:  # noqa: BLE001 — preserve the runtime outcome
+            log_event(
+                "bot_spawn_rejection_persist_failed", audience="system", level="error",
+                span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"reason": "quota_exhausted", "error": str(rejection_error)},
+            )
         log_event(
             "bot_spawn_quota_exceeded", audience="user", level="warning",
             span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
         )
         raise
     except SpawnFailed:
+        try:
+            await repo.mark_spawn_rejected(
+                meeting_id=meeting_id,
+                reason="runtime_spawn_failed",
+            )
+        except Exception as rejection_error:  # noqa: BLE001 — preserve the runtime outcome
+            log_event(
+                "bot_spawn_rejection_persist_failed", audience="system", level="error",
+                span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"reason": "runtime_spawn_failed", "error": str(rejection_error)},
+            )
         log_event(
             "bot_spawn_failed", audience="system", level="error",
             span="bots.create", user_id=user_id, meeting_id=str(meeting_id),

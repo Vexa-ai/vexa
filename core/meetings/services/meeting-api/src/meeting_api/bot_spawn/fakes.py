@@ -192,6 +192,17 @@ class InMemoryMeetingRepo:
         row["bot_container_id"] = bot_container_id
         return dict(row)
 
+    async def mark_spawn_rejected(self, *, meeting_id, reason, data=None) -> Optional[dict]:
+        row = self._meetings.get(meeting_id)
+        if row is None:
+            return None
+        row["status"] = "failed"
+        row["end_time"] = "2026-06-20T09:00:00Z"
+        row["data"]["failure_stage"] = "runtime_spawn"
+        row["data"]["spawn_failure_reason"] = reason
+        row["data"].update(dict(data or {}))
+        return dict(row)
+
     async def get_status_by_session(self, *, session_uid) -> Optional[str]:
         sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
         if sess is None:

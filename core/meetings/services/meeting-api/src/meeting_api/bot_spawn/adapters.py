@@ -493,6 +493,34 @@ class SqlAlchemyMeetingRepo:
             await db.refresh(m)
             return _row_to_dict(m)
 
+    async def mark_spawn_rejected(self, *, meeting_id, reason, data=None) -> Optional[dict]:
+        """Persist a terminal, content-free outcome when runtime rejects before workload creation."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            meeting = (
+                await db.execute(
+                    select(Meeting).where(Meeting.id == meeting_id).with_for_update()
+                )
+            ).scalars().first()
+            if meeting is None:
+                return None
+            meeting.status = "failed"
+            if meeting.end_time is None:
+                meeting.end_time = datetime.now(timezone.utc).replace(tzinfo=None)
+            merged = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            merged["failure_stage"] = "runtime_spawn"
+            merged["spawn_failure_reason"] = reason
+            merged.update(dict(data or {}))
+            meeting.data = merged
+            flag_modified(meeting, "data")
+            await db.commit()
+            await db.refresh(meeting)
+            return _row_to_dict(meeting)
+
 
 class HttpRuntimeClient:
     """``RuntimeClient`` over the runtime.v1 HTTP kernel (``POST /workloads``). 429 → QuotaExceeded;
