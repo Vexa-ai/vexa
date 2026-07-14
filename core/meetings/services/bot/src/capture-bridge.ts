@@ -122,6 +122,34 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     // inline fallback below. Never fatal at launch.
   });
 
+  // #593 A1: a page-context global fault logger, installed at document-start on EVERY frame/nav so
+  // gmeet + teams + zoom all inherit it. Before this, the only error-shaped line on the bot's stdout
+  // for a Teams join was the platform's OWN `Unhandled rejection {isTrusted:true}` — a bare DOM Event
+  // that misdirected #593 (it's Teams' VQE worklet, unrelated to our Node throw). This handler names
+  // the actual reason (message + stack) AND, for a bare Event, its type/target — so the {isTrusted}
+  // line is finally identified rather than mistaken for the cause. Non-fatal at launch (like neighbors).
+  await context.addInitScript(`(() => {
+    var report = function (m) { try { (window.logBot || console.error)('[page-fault] ' + m); } catch (e) {} };
+    window.addEventListener('unhandledrejection', function (ev) {
+      var r = ev && ev.reason;
+      var msg = (r && (r.message || r.name)) ? ((r.name || 'Error') + ': ' + (r.message || '')) : String(r);
+      var stack = (r && r.stack) ? r.stack : '(no stack)';
+      report('unhandledrejection: ' + msg + ' :: ' + stack);
+    });
+    window.addEventListener('error', function (ev) {
+      var msg;
+      if (ev && ev.error && (ev.error.message || ev.error.stack)) {
+        msg = (ev.error.name || 'Error') + ': ' + (ev.error.message || '') + ' :: ' + (ev.error.stack || '(no stack)');
+      } else {
+        var t = ev && ev.target;
+        var tag = t && (t.tagName || t.nodeName);
+        var src = t && (t.src || t.href || t.currentSrc);
+        msg = 'event type=' + (ev && ev.type) + (tag ? ' target=' + tag : '') + (src ? ' src=' + src : '') + ' isTrusted=' + (ev && ev.isTrusted);
+      }
+      report('error: ' + msg);
+    });
+  })();`).catch(() => { /* never fatal at launch */ });
+
   // Zoom/Teams expose NO per-participant <audio> in the DOM — install the WebRTC hook so each
   // remote audio track is mirrored into a hidden <audio> element (→ __vexaCapturedRemoteAudioStreams)
   // the mixed lane combines. Jitsi rides the same hook: its remote audio also arrives as WebRTC
