@@ -38,6 +38,7 @@ jobs:
       - run: pnpm gate:schema
       - run: pnpm gate:contract-version
       - run: pnpm gate:config-contract
+      - run: pnpm gate:db-schema
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
       - run: pnpm gate:licenses
