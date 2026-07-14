@@ -890,7 +890,7 @@ silence is released, never punished · every decline names its reopen condition 
 | D3/D4 business meaning + code grounding | preparation review checklist | **have** (manual) |
 | D5/D6 issue shape | issue template with required sections | **have** (`.github/ISSUE_TEMPLATE/3-prepared-issue.md`) |
 | D5b bundle-by-diff | split/bundle test at preparation review; one acceptance row per stated value | **have** (template note + manual review) / **TO BUILD** (row-per-value in bundle checker) |
-| D6c docs ride the change; docs story human-validated | "docs surface" required before `ready`; PR docs-diff section; attestation covers the docs story | **have** (templates) / **TO BUILD** (bundle checker verifies docs-diff presence) |
+| D6c docs ride the change; docs declare their release; docs story human-validated | `docs-current` (product-surface PR updates docs/ or declares `docs: none`) · `gate:docs-version` (docs stamp == appVersion) · attestation covers the docs story | **have** (CI: `docs-current-gate` + `gate:docs-version`, [ADR-0032](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0032-docs-currency-gates.md)) / **TO BUILD** (content-accuracy stays human) |
 | D12b deployment named + setup provenance | "deployments to validate" required before `ready`; attestation names setup + build provenance | **have** (templates) / **TO BUILD** (bundle checker flags rows with no named deployment) |
 | D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
