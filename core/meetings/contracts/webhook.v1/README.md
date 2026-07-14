@@ -6,8 +6,25 @@ authenticates the delivery. Derived from the parent meeting-api's real envelope
 (billing/analytics) and **per-client** hooks (user-configured `webhook_url` + `webhook_secret`) share
 this shape.
 
-> **UNSEALED** (in development). Sealing is the human `lane:contract` step (`pnpm seal:contracts`).
-> Until then `gate:contract-version` reports it but does not fail.
+> **SEALED** — pinned in `contracts.seal.json`; changes ride the human `lane:contract` review
+> (`pnpm seal:contracts` re-pins the hash).
+
+## Delivery semantics (#519)
+- **At-least-once.** A logical event may be POSTed more than once — the initial send, a
+  retry-queue drain, a restart replay, or a cross-replica race can all re-emit it.
+- **`event_id` is the receiver's idempotency key.** The SAME logical event carries the SAME
+  `event_id` across every (re)delivery — it is derived from what makes the event unique
+  (`connection_id · event_type · new_status`), not minted fresh per send. **Receivers MUST dedupe
+  on `event_id`** and process each logical event once. (This closes the #330 4×-billing class,
+  where a per-emission `uuid4` made redeliveries look like distinct events.)
+- **Do NOT key on the body or the signature.** `created_at` and the `X-Webhook-Timestamp` (hence the
+  HMAC signature) legitimately differ across redeliveries — that is the replay-bounding design, not
+  a new event. Only `event_id` is stable.
+- **Two events per FSM advance.** One advance (e.g. → `active`) emits both `meeting.status_change`
+  and the typed `meeting.started`; these are DISTINCT logical events with DISTINCT `event_id`s
+  (`event_type` is part of the identity).
+- **Retention.** Retain seen `event_id`s ≥ 48h (the retry schedule tops out at 24h, `retry.py`, plus
+  slack) to dedupe a late redelivery.
 
 ## Shapes (`$defs`)
 - **`Envelope`** — `event_id · event_type · api_version · created_at · data`. The body POSTed is
