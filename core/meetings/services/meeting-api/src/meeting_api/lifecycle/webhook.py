@@ -18,11 +18,11 @@ completed → ``meeting.completed`` (the post-meeting ``{meeting}`` envelope), f
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
-from uuid import uuid4
 
 import jsonschema
 from referencing import Registry, Resource
@@ -62,6 +62,26 @@ def _conforms(obj: Dict[str, Any], shape: str) -> None:
     ).validate(obj)
 
 
+def derive_event_id(connection_id: Any, event_type: str, new_status: Any) -> str:
+    """#519: the ``event_id`` is the STABLE identity of a logical event, not a per-emission nonce.
+
+    Delivery is at-least-once (the initial POST, the Redis retry-queue drain which reuses the stored
+    envelope, a restart replay, a cross-replica race, an ambiguous timeout) — every one of these must
+    present the SAME ``event_id`` so a receiver can dedupe on it (the #330 4×-billing class, where a
+    fresh uuid4 per emission made four deliveries look like four distinct events). We derive it from
+    exactly what makes the event unique: ``(connection_id, event_type, new_status)``. Two DIFFERENT
+    logical events of one FSM advance (e.g. ``meeting.status_change`` + ``meeting.completed``) get
+    different ids because ``event_type`` is in the key — correct: they ARE distinct events.
+
+    32 hex chars = 128 bits, matching the sealed ``evt_<hex>`` wire shape (no schema change)."""
+    key = f"{connection_id}|{event_type}|{new_status}"
+    return "evt_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+
+
+def _new_status_value(change: StatusChange) -> Any:
+    return change.new_status.value if change.new_status is not None else None
+
+
 def build_status_change_envelope(
     change: StatusChange,
     *,
@@ -79,7 +99,8 @@ def build_status_change_envelope(
     if meeting is None:
         meeting = _minimal_meeting_projection(change)
     envelope = {
-        "event_id": event_id or f"evt_{uuid4().hex}",
+        "event_id": event_id
+        or derive_event_id(change.record.connection_id, "meeting.status_change", _new_status_value(change)),
         "event_type": "meeting.status_change",
         "api_version": WEBHOOK_API_VERSION,
         "created_at": created_at
@@ -156,7 +177,8 @@ def build_typed_envelope(
             "transition_source": change.transition_source.value,
         }
     envelope = {
-        "event_id": event_id or f"evt_{uuid4().hex}",
+        "event_id": event_id
+        or derive_event_id(change.record.connection_id, event_type, _new_status_value(change)),
         "event_type": event_type,
         "api_version": WEBHOOK_API_VERSION,
         "created_at": ts,
