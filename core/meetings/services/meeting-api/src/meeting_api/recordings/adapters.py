@@ -11,10 +11,15 @@ venv — which is why ``pyproject.toml`` needs no extra pins.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import hashlib
 import os
 from typing import Optional
 
-from .ports import MEETING_WRITE_LOCK_NAMESPACE, RecordingWriteRefused
+from .ports import (
+    MEETING_WRITE_LOCK_NAMESPACE,
+    RECORDING_CHUNK_LOCK_NAMESPACE,
+    RecordingWriteRefused,
+)
 
 
 class S3Storage:
@@ -156,6 +161,32 @@ class SqlAlchemyRecordingRepo:
                 await db.execute(
                     self._statement(
                         "SELECT pg_advisory_unlock_shared(:lock_namespace, :meeting_id)"
+                    ),
+                    params,
+                )
+
+    @asynccontextmanager
+    async def chunk_write(self, key: str):
+        """Hold one cross-process exclusive advisory lock for a deterministic chunk key."""
+
+        lock_id = int.from_bytes(hashlib.sha256(key.encode()).digest()[:4], "big", signed=True)
+        params = {
+            "lock_namespace": RECORDING_CHUNK_LOCK_NAMESPACE,
+            "chunk_lock_id": lock_id,
+        }
+        async with self._session_factory() as db:
+            await db.execute(
+                self._statement(
+                    "SELECT pg_advisory_lock(:lock_namespace, :chunk_lock_id)"
+                ),
+                params,
+            )
+            try:
+                yield
+            finally:
+                await db.execute(
+                    self._statement(
+                        "SELECT pg_advisory_unlock(:lock_namespace, :chunk_lock_id)"
                     ),
                     params,
                 )

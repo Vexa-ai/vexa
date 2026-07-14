@@ -22,6 +22,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 
 MEETING_WRITE_LOCK_NAMESPACE = 23115
+RECORDING_CHUNK_LOCK_NAMESPACE = 23116
 
 
 class RecordingWriteRefused(RuntimeError):
@@ -71,6 +72,10 @@ class RecordingRepo(Protocol):
 
         The context refuses entry after erasure has made the meeting non-writable.
         """
+        ...
+
+    def chunk_write(self, key: str) -> AbstractAsyncContextManager[None]:
+        """Serialize one deterministic chunk key across object write, JSONB fold and compensation."""
         ...
 
     async def register_recording_prefix(self, meeting_id: int, prefix: str) -> None:

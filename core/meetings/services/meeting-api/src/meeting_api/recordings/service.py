@@ -144,38 +144,39 @@ async def upload_chunk(
         )
         prefix = key.rsplit("/", 2)[0] + "/"
         await repo.register_recording_prefix(meeting_id, prefix)
-        object_already_present = await storage.exists(key)
-        try:
-            if not object_already_present:
-                await storage.upload(key, data, content_type=_content_type(media_format))
+        async with repo.chunk_write(key):
+            object_already_present = await storage.exists(key)
+            try:
+                if not object_already_present:
+                    await storage.upload(key, data, content_type=_content_type(media_format))
 
-            # G3 — fold the chunk into the JSONB ATOMICALLY: the mutator reads the LIVE recordings
-            # under one row lock and folds cumulatively, so concurrent chunks cannot clobber one
-            # another. If this durable fold fails, remove the exact object before releasing the
-            # meeting write lease; otherwise the random first-recording prefix is undiscoverable.
-            def _fold(recs):
-                ex = next(
-                    (r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None
-                )
-                rid = ex["id"] if ex else recording_id
-                payload, transitioned_ = apply_chunk_to_recording(
-                    ex,
-                    recording_id=rid, meeting_id=meeting_id, user_id=owner,
-                    session_uid=session_uid, media_type=media_type, media_format=media_format,
-                    storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
-                    duration_seconds=duration_seconds, sample_rate=sample_rate,
-                )
-                others = [r for r in recs if r.get("id") != rid]
-                return others + [payload], (payload, transitioned_)
+                # G3 — fold the chunk into the JSONB ATOMICALLY: the mutator reads the LIVE recordings
+                # under one row lock and folds cumulatively, so concurrent chunks cannot clobber one
+                # another. If this durable fold fails, remove the exact object before releasing the
+                # meeting write lease; otherwise the random first-recording prefix is undiscoverable.
+                def _fold(recs):
+                    ex = next(
+                        (r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None
+                    )
+                    rid = ex["id"] if ex else recording_id
+                    payload, transitioned_ = apply_chunk_to_recording(
+                        ex,
+                        recording_id=rid, meeting_id=meeting_id, user_id=owner,
+                        session_uid=session_uid, media_type=media_type, media_format=media_format,
+                        storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
+                        duration_seconds=duration_seconds, sample_rate=sample_rate,
+                    )
+                    others = [r for r in recs if r.get("id") != rid]
+                    return others + [payload], (payload, transitioned_)
 
-            rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
-        except BaseException:
-            if not object_already_present:
-                try:
-                    await storage.delete(key)
-                except BaseException:
-                    raise RuntimeError("recording upload compensation requires retry") from None
-            raise
+                rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+            except BaseException:
+                if not object_already_present:
+                    try:
+                        await storage.delete(key)
+                    except BaseException:
+                        raise RuntimeError("recording upload compensation requires retry") from None
+                raise
         recording_id = rec_payload["id"]
 
         media_file = next((mf for mf in rec_payload["media_files"] if mf["type"] == media_type), {})

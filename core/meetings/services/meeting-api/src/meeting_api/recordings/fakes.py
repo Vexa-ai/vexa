@@ -11,6 +11,7 @@ in-process.
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -54,6 +55,7 @@ class InMemoryRecordingRepo:
         # meeting_id -> {user_id, recordings: [...]}; session_uid -> meeting_id
         self._meetings: dict[int, dict] = {}
         self._sessions: dict[str, int] = {}
+        self._chunk_locks: dict[str, asyncio.Lock] = {}
 
     def seed(self, *, meeting_id: int, user_id: int, session_uid: str) -> None:
         self._meetings.setdefault(
@@ -67,6 +69,12 @@ class InMemoryRecordingRepo:
         if meeting_id not in self._meetings:
             raise RuntimeError("meeting is not writable")
         yield
+
+    @asynccontextmanager
+    async def chunk_write(self, key: str):
+        lock = self._chunk_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            yield
 
     async def register_recording_prefix(self, meeting_id: int, prefix: str) -> None:
         meeting = self._meetings.get(meeting_id)

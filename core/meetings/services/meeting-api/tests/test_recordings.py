@@ -233,6 +233,96 @@ async def test_failed_retry_fold_preserves_the_existing_chunk_object():
     assert storage.blobs[first["storage_path"]] == original
 
 
+async def test_failed_same_key_race_cannot_delete_a_concurrently_committed_chunk():
+    import asyncio
+    import contextvars
+
+    class SameKeyRepo(InMemoryRecordingRepo):
+        def __init__(self):
+            super().__init__()
+            self._chunk_lock = asyncio.Lock()
+            self.in_chunk_lock = contextvars.ContextVar("in_chunk_lock", default=False)
+            self.success_committed = asyncio.Event()
+
+        @asynccontextmanager
+        async def chunk_write(self, key):
+            async with self._chunk_lock:
+                token = self.in_chunk_lock.set(True)
+                try:
+                    yield
+                finally:
+                    self.in_chunk_lock.reset(token)
+
+        async def mutate_recordings(self, meeting_id, mutator):
+            if asyncio.current_task().get_name() == "failing-upload":
+                await self.success_committed.wait()
+                raise RuntimeError("forced fold failure")
+            result = await super().mutate_recordings(meeting_id, mutator)
+            self.success_committed.set()
+            return result
+
+    class SameKeyStorage(InMemoryStorage):
+        def __init__(self, repo):
+            super().__init__()
+            self.repo = repo
+            self.unlocked_checks = 0
+            self.both_unlocked_checks = asyncio.Event()
+
+        async def exists(self, key):
+            if self.repo.in_chunk_lock.get():
+                return await super().exists(key)
+            self.unlocked_checks += 1
+            if self.unlocked_checks == 2:
+                self.both_unlocked_checks.set()
+            await self.both_unlocked_checks.wait()
+            return False
+
+        async def upload(self, key, data, *, content_type):
+            await asyncio.sleep(0)
+            await super().upload(key, data, content_type=content_type)
+
+    repo = SameKeyRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    storage = SameKeyStorage(repo)
+
+    successful = asyncio.create_task(
+        upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(8),
+            media_format="wav",
+            chunk_seq=0,
+            is_final=False,
+        ),
+        name="successful-upload",
+    )
+    failing = asyncio.create_task(
+        upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(4),
+            media_format="wav",
+            chunk_seq=0,
+            is_final=False,
+        ),
+        name="failing-upload",
+    )
+    success_result, failure_result = await asyncio.gather(
+        successful,
+        failing,
+        return_exceptions=True,
+    )
+
+    assert isinstance(success_result, dict)
+    assert isinstance(failure_result, RuntimeError)
+    media = (await repo.get_recordings(MEETING_ID))[0]["media_files"][0]
+    assert media["storage_path"] in storage.blobs
+
+
 async def test_failed_first_chunk_database_fold_removes_the_orphan_object():
     class FailingRepo(InMemoryRecordingRepo):
         async def mutate_recordings(self, meeting_id, mutator):
