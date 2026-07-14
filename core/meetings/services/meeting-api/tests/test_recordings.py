@@ -158,6 +158,46 @@ async def test_retried_chunk_sequence_does_not_inflate_recording_metadata():
     assert media["file_size_bytes"] == len(_wav())
 
 
+async def test_failed_retry_fold_preserves_the_existing_chunk_object():
+    class FailingRetryRepo(InMemoryRecordingRepo):
+        fail_fold = False
+
+        async def mutate_recordings(self, meeting_id, mutator):
+            if self.fail_fold:
+                raise RuntimeError("database retry fold failed")
+            return await super().mutate_recordings(meeting_id, mutator)
+
+    repo = FailingRetryRepo()
+    repo.seed(meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID)
+    storage = InMemoryStorage()
+    first = await upload_chunk(
+        repo,
+        storage,
+        token_meeting_id=MEETING_ID,
+        session_uid=SESSION_UID,
+        data=_wav(),
+        media_format="wav",
+        chunk_seq=0,
+        is_final=False,
+    )
+    original = storage.blobs[first["storage_path"]]
+    repo.fail_fold = True
+
+    with pytest.raises(RuntimeError, match="database retry fold failed"):
+        await upload_chunk(
+            repo,
+            storage,
+            token_meeting_id=MEETING_ID,
+            session_uid=SESSION_UID,
+            data=_wav(),
+            media_format="wav",
+            chunk_seq=0,
+            is_final=False,
+        )
+
+    assert storage.blobs[first["storage_path"]] == original
+
+
 async def test_failed_first_chunk_database_fold_removes_the_orphan_object():
     class FailingRepo(InMemoryRecordingRepo):
         async def mutate_recordings(self, meeting_id, mutator):
