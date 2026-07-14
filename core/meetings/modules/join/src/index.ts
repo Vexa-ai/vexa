@@ -128,8 +128,8 @@ export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissi
 // AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure). It is THROWN by the
 // admission wait; the JoinDriver adapter catches it and maps the outcome → a JoinOutcome so a host DENIAL
 // is recorded as a permanent `rejected`, not collapsed into a transient (retried) `join_failure` (G1).
-export { AdmissionError } from "./googlemeet/admission";
-export type { AdmissionOutcome } from "./googlemeet/admission";
+export { AdmissionError } from "./shared/admission";
+export type { AdmissionOutcome } from "./shared/admission";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };

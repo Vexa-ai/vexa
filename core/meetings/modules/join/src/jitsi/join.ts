@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { log, callJoiningCallback } from "../_host";
 import { BotConfig } from "../_host";
-import { isAdmitted } from "./admission";
+import { isAdmitted, attachMembersOnlyWatch } from "./admission";
 import { fillPasswordPromptIfPresent } from "./password";
 import {
   jitsiNameInputSelector,
@@ -136,6 +136,10 @@ export async function joinJitsiMeeting(
   botConfig: BotConfig,
 ): Promise<void> {
   if (!page) throw new Error("[Jitsi] Page is required for Jitsi join");
+
+  // Latch the members-only conference-failure from the page console BEFORE navigation, so the
+  // admission wait recognizes the lobby even when the DOM shows no lobby affordances (#592).
+  attachMembersOnlyWatch(page);
 
   const navUrl = buildJitsiMeetingUrl(meetingUrl, { botName });
   log(`[Jitsi] Navigating to: ${navUrl}`);
