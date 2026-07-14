@@ -4,9 +4,10 @@ The published read-only boundary consumed by the ZAKI agent. Minutes owns meetin
 audio, transcripts and spoke summaries; consumers receive only owner-scoped, bounded responses.
 This contract never grants a write path into Minutes or Brain.
 
-> **UNSEALED — ROLE 8 REVIEW REQUIRED.** The schema records the Minutes owner's conservative
-> proposal for the four WP-15 verdicts. `pnpm seal:contracts` and runtime implementation are blocked
-> until the Brain / Contracts Steward approves the profile.
+> **SEALED — ROLE 8 APPROVED 2026-07-14.** The Brain / Contracts Steward approved all four WP-15
+> verdicts at schema head `08cccb78`. The decision record is
+> [zaki-infra #25](https://github.com/ProjectNuggets/zaki-infra/issues/25). Runtime implementations
+> must preserve the three binding conditions below.
 
 ## HTTP profile
 
@@ -25,7 +26,7 @@ metadata only. Item responses contain one bounded content variant. Every success
 `{items|item, truncated, next_cursor?}` envelope. Cursors are opaque, stable for the underlying
 snapshot, and continue without overlap.
 
-## Proposed WP-15 verdicts
+## Sealed WP-15 verdicts
 
 1. `id`, `kind`, `title` and `updated_at` remain the common item metadata. `meeting_id`,
    `occurred_at`, `sensitivity`, `retention` and `capture_notice` are Minutes-profile fields; they
@@ -40,14 +41,28 @@ snapshot, and continue without overlap.
    limited to 270,336 bytes, and the agent retains its 8-call/1-MiB per-turn budget. A full transcript
    over the content cap returns `413`; `variant=summary` remains available within the same bounds.
 
+## Binding conditions
+
+1. `sensitivity` and `retention` are non-nullable on every Minutes item and metadata variant. An
+   unlabeled item is invalid and must never be served.
+2. `/search` preserves the same non-enumeration boundary as item reads: foreign, erased and expired
+   records cannot affect hit totals, result counts or cursor behavior. The expired, erased, foreign
+   and unknown item paths must also avoid obviously distinguishable timing shortcuts.
+3. Before activation, meeting/account erasure must purge Minutes-derived Brain rows selected by the
+   sealed provenance tuple and report their content-free count in the erasure manifest. This is an
+   activation gate, not permission for Minutes or the spoke to write the Brain directly.
+
 ## Privacy invariants
 
 - `sensitivity` is `sensitive_pii` for every meeting-derived item.
+- `sensitivity` and `retention` are always present; missing and `null` labels fail conformance.
 - Transcript and summary reads require visible-bot evidence, capture attestation time and policy
   version, a non-expired scope-specific retention record, and an explicit tenant agent-read opt-in.
   The opt-in is evaluated before serving and is not trusted as a response-body boolean.
 - A read never extends retention. Errors, logs, metrics, cursors and receipts contain no transcript
   text, service token, native Vexa identifier or storage key.
+- Search authorization and retention filtering happen before pagination metadata is calculated, so
+  excluded records cannot influence totals, page sizes or cursors.
 
 Goldens under `golden/` are the executable profile. Files containing `.invalid.` are independent
 negative controls and must be rejected by `validate.mjs`; transcript turn ordering and end-before-
