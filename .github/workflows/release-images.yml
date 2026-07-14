@@ -10,6 +10,8 @@
 #     build (matrix)  the uniform images — buildx, amd64+arm64, registry :buildcache cache
 #     build-bot       vexaai/vexa-bot — special-cased: FROM the locally-built
 #                     vexa/meet-join-env:dev base, so it uses the classic docker driver
+#     sbom            per-release SPDX SBOM from the tagged source (npm + pip + baked model
+#                     weights) — uploaded as an artifact; `validate` gates on it (ADR-0004)
 #     validate        calls release-validate.yml (manifest verify · image-identity ·
 #                     validate legs · promote) with promote: true — the full ship chain
 #
@@ -216,11 +218,50 @@ jobs:
           docker push "vexaai/vexa-bot:$VERSION"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
+  # Per-release SPDX SBOM (ADR-0004: "Emit an SBOM (SPDX) per release so the consumer's OSPO
+  # can audit"). Generated from the TAGGED source that built the images: the npm tree (pnpm's
+  # licence index, same source gate:licenses uses) + the pip inventory (committed uv.locks) +
+  # the baked model weights (onnx-community/pyannote-segmentation-3.0 — the piece gate:licenses
+  # cannot see, since it is not a dependency). `validate` NEEDS this, so no release reaches the
+  # promote chain without an SBOM in the run's artifacts.
+  sbom:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      SBOM_FILE: vexa-sbom-${{ needs.preflight.outputs.version }}.spdx.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
+      # Tolerate minor lockfile drift, exactly as the image builds do (Dockerfiles install with
+      # --frozen-lockfile=false) — the SBOM must reflect the same tree the images were built from.
+      - run: pnpm install --frozen-lockfile=false
+      - name: Generate SPDX SBOM
+        run: node scripts/sbom.mjs --version "$VERSION" --output "$SBOM_FILE"
+      - name: Sanity-check the SBOM (SPDX-2.3, carries the baked model + a populated dep tree)
+        run: |
+          node -e '
+            const d = require("./" + process.env.SBOM_FILE);
+            if (d.spdxVersion !== "SPDX-2.3") throw new Error("not SPDX-2.3: " + d.spdxVersion);
+            if (!d.packages.some(p => p.name.includes("pyannote"))) throw new Error("baked model missing from SBOM");
+            if (d.packages.length < 3) throw new Error("SBOM has too few packages: " + d.packages.length);
+            console.log("✓ SBOM ok:", d.packages.length, "packages");
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vexa-sbom-${{ needs.preflight.outputs.version }}
+          path: ${{ env.SBOM_FILE }}
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
   # The other half (#551): manifest verify → image-identity ∥ validate legs → promote.
   # Re-runnable standalone via release-validate's own workflow_dispatch — from any branch,
   # against this already-published version — when a validate-harness fix needs iterating.
   validate:
-    needs: [preflight, build, build-bot]
+    needs: [preflight, build, build-bot, sbom]
     uses: ./.github/workflows/release-validate.yml
     with:
       version: ${{ needs.preflight.outputs.version }}
