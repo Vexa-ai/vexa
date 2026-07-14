@@ -224,6 +224,24 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     # `failed` with the evidence note, instead of retrying an error + dead DELETE every sweep forever.
     untracked_grace = float(os.getenv("MEETING_UNTRACKED_GRACE_SEC", "600"))
 
+    # #527: per-loop liveness heartbeats. A loop hung inside an await stops stamping, so /health can
+    # SEE a dead consumer that would otherwise look alive (live WS keeps flowing on a SEPARATE path —
+    # the 2026-04-26 silent-hang, found only by a user opening an empty transcript). Stored on
+    # app.state so /health reads them; the raw redis client + stream/group let /health also report
+    # collector-group lag (XINFO) — the diagnostic signal that existed but was exposed nowhere.
+    import time as _time
+
+    from .collector.ingest import CONSUMER_GROUP as _SEG_GROUP
+    from .collector.ingest import STREAM_NAME as _SEG_STREAM
+
+    ticks: dict[str, float] = {}
+    app.state.pipeline_ticks = ticks
+    app.state.pipeline_redis = redis_client
+    app.state.pipeline_stream = _SEG_STREAM
+    app.state.pipeline_group = _SEG_GROUP
+    app.state.pipeline_tick_stale_s = float(os.getenv("PIPELINE_TICK_STALE_S", "120"))
+    app.state.pipeline_lag_alarm = int(os.getenv("PIPELINE_LAG_ALARM", "500"))
+
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
         while True:
@@ -233,6 +251,7 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
                 raise
             except Exception:
                 log.exception("segment consumer tick failed")
+            ticks["segment-consumer"] = _time.monotonic()  # #527: alive this iteration
             await asyncio.sleep(seg_interval)
 
     async def _db_writer_loop() -> None:
@@ -253,6 +272,7 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
                 raise
             except Exception:
                 log.exception("db-writer tick failed")
+            ticks["db-writer"] = _time.monotonic()  # #527: alive this iteration
             await asyncio.sleep(db_writer_interval)
 
     async def _webhook_drain_loop() -> None:

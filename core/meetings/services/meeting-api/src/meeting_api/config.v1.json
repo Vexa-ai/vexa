@@ -338,6 +338,27 @@
    "default": "300",
    "description": "calendar-sync sweep cadence (s) — how often connected ICS feeds are re-fetched and upserted into planned meetings",
    "targets": []
+  },
+  {
+   "key": "PIPELINE_TICK_STALE_S",
+   "class": "defaulted",
+   "default": "120",
+   "description": "#527: a background loop whose last heartbeat is older than this flips /health to degraded+503 (a hung consumer no longer looks alive)",
+   "targets": []
+  },
+  {
+   "key": "PIPELINE_LAG_ALARM",
+   "class": "defaulted",
+   "default": "500",
+   "description": "#527: collector-group lag (unread transcription_segments) over this flips /health to degraded+503",
+   "targets": []
+  },
+  {
+   "key": "STREAM_RETENTION_S",
+   "class": "defaulted",
+   "default": "3600",
+   "description": "#527: acked transcription_segments entries older than this are trimmed; an unread (un-acked) entry is NEVER trimmed regardless of age (the 2026-04-26 data-loss guard)",
+   "targets": []
   }
  ],
  "capabilities": {
