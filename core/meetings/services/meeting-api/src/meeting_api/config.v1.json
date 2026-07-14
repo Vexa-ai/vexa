@@ -116,6 +116,13 @@
    ]
   },
   {
+   "key": "RECORDING_CHUNK_MAX_BYTES",
+   "class": "defaulted",
+   "default": "8388608",
+   "description": "maximum accepted recording-chunk request body in bytes; the route reads at most one byte beyond this bound and rejects oversized input before mutation",
+   "targets": []
+  },
+  {
    "key": "MINIO_ENDPOINT",
    "class": "defaulted",
    "default": "minio:9000",
