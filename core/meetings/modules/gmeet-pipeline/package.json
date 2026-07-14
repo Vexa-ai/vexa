@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc && rm -rf dist/hallucinations && cp -R src/hallucinations dist/hallucinations",
-    "test": "tsx src/hallucination-filter.test.ts && tsx src/pipeline-conformance.test.ts && tsx src/fault-surfacing.test.ts && tsx src/confirm-loop.golden.test.ts && tsx src/count-channelswitch.test.ts && tsx src/pipeline-realstt.live.test.ts",
+    "test": "tsx src/hallucination-filter.test.ts && tsx src/silence-gate.test.ts && tsx src/pipeline-conformance.test.ts && tsx src/fault-surfacing.test.ts && tsx src/confirm-loop.golden.test.ts && tsx src/count-channelswitch.test.ts && tsx src/pipeline-realstt.live.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
