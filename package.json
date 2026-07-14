@@ -24,6 +24,7 @@
     "gate:db-budget": "node scripts/gates.mjs db-budget",
     "gate:release-value": "node scripts/release-value-gate.mjs",
     "gate:release-witness": "node scripts/release-witness-gate.mjs",
+    "witness:script": "node scripts/release-witness-script.mjs",
     "witness:template": "node scripts/release-witness-template.mjs",
     "gate:dataflow": "node scripts/gates.mjs dataflow",
     "seal:contracts": "node scripts/gates.mjs seal",
