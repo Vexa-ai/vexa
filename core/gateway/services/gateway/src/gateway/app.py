@@ -555,7 +555,21 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     # front (the SAME resolver /auth/me + the proxy use — ports.py resolve / app.py:96-99,119-125)
     # so we can auto-subscribe the socket to its USER-SCOPED channel. Fail-closed like the proxy:
     # a present-but-invalid key → invalid_api_key + close 4401, not a silently half-open socket.
-    user_data = await authorizer.resolve(api_key)
+    try:
+        user_data = await authorizer.resolve(api_key)
+    except AuthUnavailable as e:
+        # #495: resolve() now RAISES when the validation hop is unreachable/faulted. On the REST
+        # surface that becomes a 503; on this already-accepted socket the truthful equivalent is a
+        # typed error frame + a distinct retryable close code (4503 ≈ HTTP 503), NOT 4401 (which
+        # asserts the key is bad) and NOT an uncaught raise (which drops the socket 1006/1011 with
+        # no signal). A valid key must not be told it is invalid because our auth path is down.
+        log_event("auth_infra_unavailable", audience="system", level="error", span="ws",
+                  fields={"reason": type(e).__name__, "detail": str(e)})
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "auth_unavailable"}))
+        finally:
+            await ws.close(code=4503)  # retry later — auth infrastructure unavailable
+        return
     if not user_data:
         try:
             await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))

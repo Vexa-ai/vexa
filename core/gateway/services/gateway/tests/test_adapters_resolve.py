@@ -16,10 +16,22 @@ import pytest
 
 httpx = pytest.importorskip("httpx")
 
-from gateway.adapters import AdminApiAuthorizer, HttpxDownstreamClient
+from gateway.adapters import AdminApiAuthorizer, HttpxDownstreamClient, build_auth_and_downstream
 from gateway.ports import AuthUnavailable
 
 ADMIN = "http://admin-api:8001"
+
+
+def test_build_wires_separate_pools():
+    """#495 acceptance A1 — the GENUINE negative control (redis-free). The production wiring uses
+    TWO distinct httpx clients, so forwarding load cannot starve validation. Reverting the fix (one
+    shared client passed to both authorizer and downstream) turns this RED — unlike the await-level
+    isolation test below, this one exercises the real composition seam (build_auth_and_downstream)."""
+    authorizer, downstream = build_auth_and_downstream(ADMIN, "http://meeting-api:8080")
+    assert authorizer._client is not downstream._client, "auth and forward must use separate clients/pools"
+    # And distinct pool sizing / timeouts (the auth pool is its own, shorter-timeout budget).
+    assert authorizer._client is not None and downstream._client is not None
+    assert authorizer._client.timeout != downstream._client.timeout
 
 
 def _authorizer(handler):
@@ -43,6 +55,22 @@ async def test_resolve_client_error_is_invalid_key_none(code):
 async def test_resolve_server_error_raises_unavailable(code):
     """admin-api answered a FAULT (5xx): no verdict on the key → AuthUnavailable → 503, not 401."""
     auth = _authorizer(lambda req: httpx.Response(code, text="boom"))
+    with pytest.raises(AuthUnavailable):
+        await auth.resolve("vxa_bot_ok")
+
+
+@pytest.mark.parametrize("code", [301, 302, 307])
+async def test_resolve_redirect_is_no_verdict_unavailable(code):
+    """A 3xx is NOT a 'key is invalid' verdict — treat it as no-verdict → 503, never 401 (finding 4)."""
+    auth = _authorizer(lambda req: httpx.Response(code, headers={"location": "/elsewhere"}))
+    with pytest.raises(AuthUnavailable):
+        await auth.resolve("vxa_bot_ok")
+
+
+async def test_resolve_unparseable_200_body_raises_unavailable():
+    """A 200 with a non-JSON body is not a verdict either — no-verdict → 503, not an unhandled 500
+    (finding 3: resp.json() used to run outside the guard)."""
+    auth = _authorizer(lambda req: httpx.Response(200, text="<html>not json</html>"))
     with pytest.raises(AuthUnavailable):
         await auth.resolve("vxa_bot_ok")
 

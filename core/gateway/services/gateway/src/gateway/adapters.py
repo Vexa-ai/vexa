@@ -82,12 +82,17 @@ class AdminApiAuthorizer:
             # never 401. (httpx.HTTPError covers TimeoutException, ConnectError, PoolTimeout, …)
             raise AuthUnavailable(f"admin-api validate unreachable: {e!r}") from e
         if resp.status_code == 200:
-            return resp.json()
-        # admin-api answered a fault (5xx) — again no verdict on the key → unavailable, not invalid.
-        if resp.status_code >= 500:
-            raise AuthUnavailable(f"admin-api validate returned {resp.status_code}")
-        # A definitive client-error answer (401/403/404/422 …): the key is genuinely invalid → 401.
-        return None
+            try:
+                return resp.json()
+            except ValueError as e:
+                # A 200 with an unparseable body is not a verdict on the key either — no-verdict → 503.
+                raise AuthUnavailable(f"admin-api validate returned unparseable 200 body: {e!r}") from e
+        # Only a definitive CLIENT-error answer (400–499: 401/403/404/422 …) means the key is
+        # genuinely invalid → None → 401. Everything else — 5xx faults, and non-answers like a 3xx
+        # redirect — is NO verdict on the key → unavailable → 503, never a 401 that blames the key.
+        if 400 <= resp.status_code < 500:
+            return None
+        raise AuthUnavailable(f"admin-api validate returned {resp.status_code}")
 
     async def authorize_subscribe(self, api_key: str, meetings: list) -> dict:
         auth_headers = {"X-API-Key": api_key, TRACE_HEADER: get_trace_id() or ""}
@@ -114,6 +119,35 @@ class AdminApiAuthorizer:
             return {"authorized": [], "errors": [f"authorization_call_failed:{e}"]}
 
 
+def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
+    """#495: build the authorizer + downstream over TWO httpx clients with SEPARATE connection
+    pools, and return ``(authorizer, downstream)``. This is the load-bearing decision the whole fix
+    turns on — extracted here so it is unit-testable WITHOUT redis (build_production_app needs redis;
+    this does not). Reverting to a single shared client (the pre-#495 bug) means editing this one
+    function, which turns ``test_build_wires_separate_pools`` RED — the genuine A1 negative control.
+
+    The single shared pool was the root cause: long forwards to a slow meeting-api (timeout up to
+    30s) saturated the pool's 10 connections, so the ~5ms admin-api validation POST queued, timed
+    out, and mass-401'd valid keys.
+      • forward_client — the proxy hop; long-lived, generous timeout, larger pool.
+      • auth_client    — the admin-api /internal/validate hop ONLY; short timeout, its own pool,
+        so validation latency is decoupled from downstream load and can never be starved by it.
+    """
+    import httpx
+
+    forward_client = httpx.AsyncClient(
+        timeout=30.0,
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    )
+    auth_client = httpx.AsyncClient(
+        timeout=5.0,
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+    )
+    authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url)
+    downstream = HttpxDownstreamClient(forward_client)
+    return authorizer, downstream
+
+
 def build_production_app(
     *,
     admin_api_url: Optional[str] = None,
@@ -128,7 +162,6 @@ def build_production_app(
     v0.12 P2: there is ONE downstream control plane — meeting-api (it hosts the folded-in
     collector). Both the proxy forward and the ``/ws/authorize-subscribe`` hop target it.
     """
-    import httpx
     import redis.asyncio as aioredis
 
     from .app import create_app
@@ -138,28 +171,13 @@ def build_production_app(
     agent_api_url = os.getenv("AGENT_API_URL", "http://agent-api:8100")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-    # #495: TWO clients with SEPARATE connection pools. The single shared pool was the root cause —
-    # long forwards to a slow meeting-api (timeout up to 30s) saturated the pool's 10 connections,
-    # so the ~5ms admin-api validation POST queued, timed out, and mass-401'd valid keys.
-    #   • forward_client — the proxy hop; long-lived, generous timeout, larger pool.
-    #   • auth_client    — the admin-api /internal/validate hop ONLY; short timeout, its own pool,
-    #     so validation latency is decoupled from downstream load and can never be starved by it.
-    forward_client = httpx.AsyncClient(
-        timeout=30.0,
-        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-    )
-    auth_client = httpx.AsyncClient(
-        timeout=5.0,
-        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
-    )
+    # #495: authorizer + downstream over SEPARATE httpx pools (see build_auth_and_downstream).
+    authorizer, downstream = build_auth_and_downstream(admin_api_url, meeting_api_url)
     redis_client = aioredis.from_url(
         redis_url, encoding="utf-8", decode_responses=True,
         socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
         health_check_interval=30, retry_on_timeout=True,
     )
-
-    authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url)
-    downstream = HttpxDownstreamClient(forward_client)
 
     from .ratelimit import from_env as _rate_limiter_from_env
 
