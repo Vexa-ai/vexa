@@ -644,6 +644,32 @@ def test_upload_route_reports_invalid_storage_metadata_without_echoing_it():
     assert "private-audio" not in response.text
 
 
+def test_upload_route_rejects_an_oversized_chunk_before_storage_or_database_mutation(
+    monkeypatch,
+):
+    from fastapi import FastAPI
+
+    monkeypatch.setenv("RECORDING_CHUNK_MAX_BYTES", str(len(_wav(4))))
+    repo, storage = _seeded()
+    app = FastAPI()
+    app.include_router(build_router(repo, storage, token_secret=SECRET))
+    client = TestClient(app)
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+
+    response = client.post(
+        "/internal/recordings/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        data={"session_uid": SESSION_UID, "media_format": "wav", "chunk_seq": 0},
+        files={"file": ("c.wav", _wav(8), "audio/wav")},
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Recording chunk exceeds the upload limit"}
+    assert storage.blobs == {}
+    assert repo._meetings[MEETING_ID]["recording_prefixes"] == []
+    assert repo._meetings[MEETING_ID]["recordings"] == []
+
+
 def test_upload_route_reports_conflict_after_erasure_starts():
     from fastapi import FastAPI
 

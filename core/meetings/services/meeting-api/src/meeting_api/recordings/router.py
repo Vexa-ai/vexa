@@ -28,6 +28,21 @@ from .service import (
     upload_chunk,
 )
 
+DEFAULT_RECORDING_CHUNK_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _recording_chunk_max_bytes() -> int:
+    raw = os.getenv("RECORDING_CHUNK_MAX_BYTES")
+    if raw is None:
+        return DEFAULT_RECORDING_CHUNK_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        raise RuntimeError("RECORDING_CHUNK_MAX_BYTES must be a positive integer") from None
+    if value < 1:
+        raise RuntimeError("RECORDING_CHUNK_MAX_BYTES must be a positive integer")
+    return value
+
 
 def _bearer_token(authorization: Optional[str]) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -126,6 +141,7 @@ def build_router(
 ) -> APIRouter:
     """The recordings routes over the injected ``RecordingRepo`` + ``Storage`` ports."""
     router = APIRouter()
+    recording_chunk_max_bytes = _recording_chunk_max_bytes()
 
     @router.post("/internal/recordings/upload", include_in_schema=False)
     async def internal_upload_recording(
@@ -176,7 +192,12 @@ def build_router(
                 raise HTTPException(status_code=401, detail=f"Invalid recording upload token: {e}")
             token_meeting_id = int(claims["meeting_id"])
 
-        data = await file.read()
+        data = await file.read(recording_chunk_max_bytes + 1)
+        if len(data) > recording_chunk_max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail="Recording chunk exceeds the upload limit",
+            )
         try:
             receipt = await upload_chunk(
                 repo, storage,

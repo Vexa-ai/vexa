@@ -27,6 +27,10 @@ session prefix is durably deduplicated in `data.zaki_recording_prefixes`; this r
 even if the later recording JSONB fold and compensating exact-object delete both fail. Routes map
 write refusal to a content-free `409`.
 
+The upload route reads at most `RECORDING_CHUNK_MAX_BYTES + 1` bytes and returns `413` before any
+carrier mutation when the chunk is larger. The operator setting defaults to 8 MiB; the deployment
+proxy/body limit must use the same value or a slightly larger multipart-envelope allowance.
+
 ## The JSONB shape
 `meeting.data['recordings']` is a list of recording dicts (`id`, `session_uid`, `source="bot"`,
 `status`, `media_files[]`). Each `media_files[]` entry tracks per-type cumulative
