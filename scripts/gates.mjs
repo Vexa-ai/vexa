@@ -811,7 +811,91 @@ function gateConfigContract() {
   return true;
 }
 
-const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+// gate:db-budget (#529) — the connection-budget accounting the 2026-04-21 outage lacked. Every
+// service that constructs a Postgres engine must be in deploy/db-budget.json; Σ(helm replicas ×
+// per-service pool ceiling) + reserved must fit max_connections; and no service's code may set a
+// pool_size/max_overflow HIGHER than its declared ceiling (so the budget can't silently under-count).
+function _dbHoldingServices() {
+  let out;
+  try {
+    out = execSync("grep -rl --include='*.py' create_async_engine core", { cwd: ROOT }).toString();
+  } catch { return new Set(); }  // grep exit 1 = no matches
+  const svcs = new Set();
+  for (const path of out.split("\n")) {
+    if (!path || /(^|\/)tests?\//.test(path) || path.includes("test_")) continue;
+    const m = path.match(/\/services\/([^/]+)\//);
+    if (m) svcs.add(m[1]);
+  }
+  return svcs;
+}
+
+function _explicitPool(service) {
+  // the largest explicit pool_size= / max_overflow= a service's code sets, or {} when it relies on
+  // the framework default (the "silent default" the issue names). Used to reject an under-stated budget.
+  let out = "";
+  try {
+    out = execSync(`grep -rhoE --include='*.py' '(pool_size|max_overflow) *= *[0-9]+' core 2>/dev/null | grep -v test || true`, { cwd: ROOT }).toString();
+  } catch { out = ""; }
+  const found = {};
+  for (const line of out.split("\n")) {
+    const m = line.match(/(pool_size|max_overflow)\s*=\s*(\d+)/);
+    if (m) found[m[1]] = Math.max(found[m[1]] || 0, parseInt(m[2], 10));
+  }
+  return found;  // note: repo-wide (explicit overrides are rare); a match anywhere raises the floor
+}
+
+function _helmReplicas(key) {
+  const vals = join(ROOT, "deploy", "helm", "charts", "vexa", "values.yaml");
+  if (!existsSync(vals)) return null;
+  const lines = readFileSync(vals, "utf8").split("\n");
+  const start = lines.findIndex((l) => l.replace(/\s+$/, "") === `${key}:`);
+  if (start < 0) return null;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^[A-Za-z0-9_]+:/.test(lines[i])) break;               // next top-level key → left the block
+    const m = lines[i].match(/^\s+replicaCount:\s*(\d+)/);
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
+}
+
+function gateDbBudget() {
+  const budgetPath = join(ROOT, "deploy", "db-budget.json");
+  if (!existsSync(budgetPath)) return fail(["gate:db-budget — deploy/db-budget.json missing (the connection-budget accounting, #529)"]);
+  let budget;
+  try { budget = JSON.parse(readFileSync(budgetPath, "utf8")); }
+  catch (e) { return fail([`gate:db-budget — deploy/db-budget.json is not valid JSON — ${e.message}`]); }
+
+  const errs = [];
+  const declared = new Set(Object.keys(budget.services || {}));
+  const actual = _dbHoldingServices();
+  for (const s of actual) if (!declared.has(s)) errs.push(`'${s}' constructs a Postgres engine but is absent from db-budget.json — account for it (replicas × pool)`);
+  for (const s of declared) if (!actual.has(s)) errs.push(`db-budget lists '${s}' but no non-test source constructs a DB engine there — remove it or fix the name`);
+
+  const explicit = _explicitPool();
+  let total = Number(budget.reserved || 0);
+  const rows = [];
+  for (const [svc, cfg] of Object.entries(budget.services || {})) {
+    const replicas = _helmReplicas(cfg.helm_key);
+    if (replicas === null) { errs.push(`${svc}: could not read replicaCount for helm key '${cfg.helm_key}' in values.yaml`); continue; }
+    if (explicit.pool_size && explicit.pool_size > cfg.pool_size)
+      errs.push(`${svc}: code sets pool_size=${explicit.pool_size} but db-budget declares ${cfg.pool_size} (under-count)`);
+    if (explicit.max_overflow && explicit.max_overflow > cfg.max_overflow)
+      errs.push(`${svc}: code sets max_overflow=${explicit.max_overflow} but db-budget declares ${cfg.max_overflow} (under-count)`);
+    const ceiling = Number(cfg.pool_size || 0) + Number(cfg.max_overflow || 0);
+    const conns = replicas * ceiling;
+    total += conns;
+    rows.push(`${svc} ${replicas}×${ceiling}=${conns}`);
+  }
+  const limit = Number(budget.max_connections);
+  if (!errs.length && total > limit)
+    errs.push(`Σ ${total} connections EXCEEDS max_connections ${limit} — [${rows.join(", ")}, reserved ${budget.reserved}]. Reduce replicas/pool, raise the DB limit, or enable pgbouncer.`);
+
+  if (errs.length) return fail(["db-budget (#529, the 2026-04-21 outage shape) — connection-budget violations:", ...errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:db-budget — Σ ${total}/${limit} connections fits [${rows.join(", ")}, reserved ${budget.reserved}]`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

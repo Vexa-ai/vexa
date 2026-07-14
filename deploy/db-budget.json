@@ -1,0 +1,10 @@
+{
+  "note": "#529 — the connection-budget accounting the 2026-04-21 outage lacked. gate:db-budget computes Σ(helm replicas × per-service pool ceiling) + reserved and FAILS if it exceeds max_connections. Ceilings are the SQLAlchemy framework defaults (pool_size 5 + max_overflow 10 = 15) — the code sets no explicit pool, so the gate also refuses a budget that UNDER-states any explicit pool_size/max_overflow it finds in a service's code. This budget is the DIRECT-connection worst case (pgbouncer OFF); with pgbouncer transaction-mode on (deploy/helm values pgbouncer.enabled=true) the server-side slot count is decoupled from these per-pod pools.",
+  "max_connections": 100,
+  "reserved": 10,
+  "reserved_note": "superuser_reserved_connections + migrations/admin/ad-hoc psql headroom",
+  "services": {
+    "admin-api": { "helm_key": "adminApi", "pool_size": 5, "max_overflow": 10 },
+    "meeting-api": { "helm_key": "meetingApi", "pool_size": 5, "max_overflow": 10 }
+  }
+}
