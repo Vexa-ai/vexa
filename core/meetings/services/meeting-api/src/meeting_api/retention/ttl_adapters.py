@@ -6,7 +6,36 @@ import json
 
 from ..recordings.ports import MEETING_WRITE_LOCK_NAMESPACE
 from .adapters import recording_prefixes_for_meeting
-from .ttl import DueScope
+from .ttl import DueScope, TtlBatchReceipt, run_ttl_batch
+
+
+async def run_production_ttl_once(
+    *,
+    enabled: bool,
+    now,
+    limit: int,
+    session_factory,
+    object_storage,
+    statement_factory=None,
+) -> TtlBatchReceipt:
+    """Run one explicitly-enabled production batch; disabled means zero carrier I/O."""
+
+    if not isinstance(enabled, bool):
+        raise ValueError("TTL operator flag must be boolean")
+    if not enabled:
+        return TtlBatchReceipt(
+            attempted=0,
+            audio_expired=0,
+            transcript_expired=0,
+            summary_expired=0,
+            failed=0,
+        )
+    store = SqlAlchemyTtlStore(
+        session_factory,
+        object_storage,
+        statement_factory=statement_factory,
+    )
+    return await run_ttl_batch(store, now=now, limit=limit)
 
 
 class SqlAlchemyTtlStore:

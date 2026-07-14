@@ -46,4 +46,7 @@ for retry, and receipts contain counts only.
 
 S02b still owns no scheduler, HTTP route, deployment resource, retention default, authority-layer
 resolution, or restoration-horizon claim. Those product/operations choices must compose the store
-explicitly and supply already-materialized per-scope deadlines.
+explicitly and supply already-materialized per-scope deadlines. Its public
+`run_production_ttl_once` boundary requires an explicit boolean operator decision and bounded batch
+limit; the disabled path returns an empty content-free receipt without touching PostgreSQL or object
+storage. S08 may schedule that one-shot boundary later, but this module never enables itself.

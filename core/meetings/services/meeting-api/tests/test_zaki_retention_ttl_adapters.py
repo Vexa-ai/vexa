@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from meeting_api.retention import run_production_ttl_once
 from meeting_api.retention.ttl import DueScope
 from meeting_api.retention.ttl_adapters import SqlAlchemyTtlStore
 from meeting_api.retention.fakes import InMemoryRetentionStorage
@@ -74,6 +75,47 @@ async def test_postgres_ttl_store_lists_a_bounded_deterministic_due_scope_batch(
     assert "ORDER BY" in sql
     assert "LIMIT :limit" in sql
     assert params == {"now": NOW, "limit": 2}
+
+
+async def test_production_ttl_entry_point_is_no_io_when_operator_flag_is_off():
+    def forbidden_session_factory():
+        raise AssertionError("disabled TTL worker touched PostgreSQL")
+
+    receipt = await run_production_ttl_once(
+        enabled=False,
+        now=NOW,
+        limit=100,
+        session_factory=forbidden_session_factory,
+        object_storage=None,
+    )
+
+    assert receipt.attempted == 0
+    assert receipt.expired == {"audio": 0, "transcript": 0, "summary": 0}
+    assert receipt.failed == 0
+
+
+@pytest.mark.parametrize(
+    ("enabled", "limit", "message"),
+    [
+        ("true", 100, "operator flag"),
+        (True, 0, "batch limit"),
+        (True, 501, "batch limit"),
+    ],
+)
+async def test_production_ttl_entry_point_rejects_malformed_activation_without_io(
+    enabled, limit, message
+):
+    def forbidden_session_factory():
+        raise AssertionError("invalid TTL configuration touched PostgreSQL")
+
+    with pytest.raises(ValueError, match=message):
+        await run_production_ttl_once(
+            enabled=enabled,
+            now=NOW,
+            limit=limit,
+            session_factory=forbidden_session_factory,
+            object_storage=None,
+        )
 
 
 class MutationResult(FakeResult):

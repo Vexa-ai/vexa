@@ -10,6 +10,7 @@ from .ttl import (
     materialize_scope_expiries,
     run_ttl_batch,
 )
+from .ttl_adapters import run_production_ttl_once
 
 __all__ = [
     "ErasureFailed",
@@ -22,4 +23,5 @@ __all__ = [
     "TtlBatchReceipt",
     "materialize_scope_expiries",
     "run_ttl_batch",
+    "run_production_ttl_once",
 ]
