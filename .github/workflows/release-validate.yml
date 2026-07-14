@@ -527,7 +527,9 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/release-value-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -o pipefail   # the script's non-zero exit must fail the job, not be masked by tee
+          node scripts/release-value-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   witness-gate:
     name: witness gate (guarantee 7)
@@ -545,7 +547,9 @@ jobs:
       - name: A human witnessed the assembled value (receipt present + well-formed + version-matched)
         env:
           RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
-        run: node scripts/release-witness-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -o pipefail
+          node scripts/release-witness-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   promote:
