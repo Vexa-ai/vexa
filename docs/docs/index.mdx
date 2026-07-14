@@ -8,7 +8,7 @@ description: "Sandboxed AI agents that grow corporate knowledge from your meetin
   Sandboxed agents that grow corporate knowledge from your meetings and docs.
 </div>
 
-Real-time transcripts from Google Meet, Zoom, and Teams (Whisper included), fed to agents that build knowledge as code — fully self-hosted.
+Real-time transcripts from Google Meet, Zoom, Teams, and Jitsi (Whisper included), fed to agents that build knowledge as code — fully self-hosted.
 
 <Note>
   **These docs cover Vexa 0.12.** The hosted [vexa.ai](https://vexa.ai) runs the 0.10 line today and will be updated to 0.12 soon — to try 0.12 now, [self-host it](#try-it) below.
@@ -40,7 +40,7 @@ them.
 <CardGroup cols={2}>
   <Card title="Meetings" icon="video" href="/core/meetings">
     Plan, capture, and share meetings — calendar sync, auto-joining bots, real-time transcripts from
-    Google Meet, Zoom, and Teams. Usable standalone as a meeting API.
+    Google Meet, Zoom, Teams, and Jitsi. Usable standalone as a meeting API.
   </Card>
   <Card title="Agents" icon="robot" href="/core/agents">
     Sandboxed, scalable agents over your workspace. Put them to work on any knowledge — with or without
@@ -67,7 +67,7 @@ them.
 
 ## What it does
 
-- **Captures meetings natively** — real-time transcripts from [Google Meet, Zoom, and Teams](/core/meetings), no plugins or recorders. **Whisper included**.
+- **Captures meetings natively** — real-time transcripts from [Google Meet, Zoom, Teams, and Jitsi](/core/meetings), no plugins or recorders. **Whisper included**.
 - **Meets you at your calendar** — [connect a secret ICS address](/how-to/calendar-sync) and upcoming meetings import automatically; the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start. [Plan a meeting](/how-to/plan-a-meeting) ahead and share its prep workspace with the people you're meeting.
 - **Turns knowledge into code** — meetings and emails become a living, Markdown [workspace](/concepts#workspace) that agents treat as their working directory.
 - **Runs agents safely** — every [agent](/core/agents) executes in an isolated, ephemeral [container](/concepts#container): no egress except through brokered tools, thousands in parallel, no lateral movement.
