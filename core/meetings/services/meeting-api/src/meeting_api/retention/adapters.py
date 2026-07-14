@@ -179,7 +179,13 @@ class SqlAlchemyRetentionRepo:
                 await self._persist_retention(db, mid, metadata)
                 await db.commit()
             else:
-                prefixes = tuple(metadata.get("recording_prefixes") or ())
+                prefixes = recording_prefixes_for_meeting(
+                    row["user_id"],
+                    {
+                        "zaki_recording_prefixes": metadata.get("recording_prefixes", []),
+                        "recordings": [],
+                    },
+                )
                 transcript_rows = int(metadata.get("transcript_rows") or 0)
                 summary_documents = int(metadata.get("summary_documents") or 0)
             return ErasurePlan(

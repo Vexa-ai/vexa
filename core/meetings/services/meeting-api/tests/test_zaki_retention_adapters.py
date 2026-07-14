@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -12,6 +13,8 @@ from meeting_api.retention.adapters import (
     SqlAlchemyRetentionRepo,
     recording_prefixes_for_meeting,
 )
+from meeting_api.retention.fakes import InMemoryRetentionStorage
+from meeting_api.retention.service import ErasureFailed, erase_meeting
 
 
 class FakeS3Client:
@@ -307,6 +310,46 @@ async def test_postgres_adapter_persists_erasing_census_then_deletes_owned_rows(
     deleted = await repo.commit_erasure(plan)
     assert deleted == {"meeting_rows": 1, "transcript_rows": 2, "summary_documents": 1}
     assert state["meeting"] is None
+
+
+async def test_persisted_erasure_retry_prefix_cannot_cross_the_meeting_owner():
+    foreign_prefix = "recordings/8/99/session-b/"
+    state = {
+        "meeting": {
+            "id": 1,
+            "user_id": 7,
+            "data": {
+                "zaki_retention": {
+                    "state": "erasing",
+                    "recording_prefixes": [foreign_prefix],
+                    "recording_objects": 1,
+                    "transcript_rows": 0,
+                    "summary_documents": 0,
+                }
+            },
+        },
+        "transcript_rows": 0,
+        "session_rows": 0,
+    }
+    repo = SqlAlchemyRetentionRepo(
+        lambda: FakeDbSession(state), statement_factory=lambda sql: sql
+    )
+    storage = InMemoryRetentionStorage()
+    foreign_key = f"{foreign_prefix}audio/master.wav"
+    storage.seed(foreign_key, b"other tenant")
+
+    with pytest.raises(ErasureFailed, match="planning requires retry"):
+        await erase_meeting(
+            repo,
+            storage,
+            user_id="7",
+            meeting_id="1",
+            erased_at=datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc),
+            policy_version="minutes-retention-v1",
+        )
+
+    assert storage.snapshot(foreign_prefix) == {foreign_key: b"other tenant"}
+    assert state["meeting"] is not None
 
 
 class FakeGateSession:
