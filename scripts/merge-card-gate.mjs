@@ -101,24 +101,46 @@ function card(num) {
   return { num, ok: valueOk && d.ok, valueOk, valueWhy, diffOk: d.ok, diffWhy };
 }
 
+// Render one PR's card as GitHub-flavoured markdown. The leading marker lets the sticky-comment
+// workflow find and update its own comment in place. This same markdown feeds the check summary.
+function renderCard(c) {
+  if (c.skip) return `<!-- merge-card -->\n### 🃏 Merge card — #${c.num}\n\n_Skipped (${c.skip})._`;
+  const row = (label, ok, why) => `| **${label}** | ${ok ? "✅" : "❌"} | ${why} |`;
+  const verdict = c.ok
+    ? `**Ready to merge** — value and diff both accepted.`
+    : `**Not mergeable yet** — value **and** diff must both be accepted before merge (choke point 1). Fill in what's ❌ above, then this clears automatically.`;
+  return [
+    `<!-- merge-card -->`,
+    `### 🃏 Merge card — #${c.num}`,
+    ``,
+    `| check | | what it needs |`,
+    `|---|---|---|`,
+    row("Value", c.valueOk, c.valueWhy),
+    row("Diff", c.diffOk, c.diffWhy),
+    ``,
+    verdict,
+    ``,
+    `<sub>How a PR reaches merge: [the merge bar](https://docs.vexa.ai/governance/delivery#integration-—-the-merge-bar).</sub>`,
+  ].join("\n");
+}
+
 const nums = prNumbers();
 if (!nums.length) { console.error("merge-card-gate: no PR number resolved from PR_NUMBERS / MERGE_GROUP_REF"); process.exit(2); }
 
 let failed = 0;
+const cards = [];
 for (const num of nums) {
   let c;
   try { c = card(num); }
   catch (e) { console.error(`::error ::merge-card #${num} — could not evaluate: ${e.message}`); failed++; continue; }
-  if (c.skip) { console.log(`#${num}: skipped (${c.skip})`); continue; }
-  console.log(`\n── merge card #${num} ──`);
-  console.log(`  value: ${c.valueOk ? "✅" : "❌"} ${c.valueWhy}`);
-  console.log(`  diff:  ${c.diffOk ? "✅" : "❌"} ${c.diffWhy}`);
-  if (!c.ok) { failed++; console.log(`  → NOT mergeable: the card is not satisfied.`); }
-  else console.log(`  → card satisfied.`);
+  cards.push(c);
+  console.log(renderCard(c));
+  console.log("");
+  if (!c.skip && !c.ok) failed++;
 }
 
 if (failed) {
   console.error(`::error ::merge-card — ${failed} PR(s) not mergeable: value AND diff must both be accepted (choke point 1).`);
   process.exit(1);
 }
-console.log(`\n✓ merge-card — value + diff accepted for: ${nums.map((n) => "#" + n).join(", ")}`);
+console.log(`✓ merge-card — value + diff accepted for: ${nums.map((n) => "#" + n).join(", ")}`);
