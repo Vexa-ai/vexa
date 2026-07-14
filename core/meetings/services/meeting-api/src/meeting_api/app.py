@@ -26,6 +26,8 @@ the conformance harness — the conformance assertions therefore drive THIS ship
 """
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -37,6 +39,39 @@ from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
 from .lifecycle.machine import LifecycleSink, MeetingStore
 from .obs import TraceMiddleware
+
+
+async def _pipeline_health(app) -> "tuple[dict, bool]":
+    """#527: derive pipeline liveness from the per-loop heartbeats + collector-group lag, and decide
+    whether to DEGRADE. A loop hung inside an await stops stamping, so its tick_age_s climbs past
+    PIPELINE_TICK_STALE_S even while the process and the live-WS path look healthy — exactly the
+    2026-04-26 silent hang. Returns ``({loops, consumer_lag}, degraded)``.
+
+    The probe MUST NOT itself hang (that would defeat the point): the XINFO call is bounded by a 2s
+    wait_for and any failure degrades to ``consumer_lag: "unavailable"`` rather than blocking."""
+    st = app.state
+    now = time.monotonic()
+    stale_s = getattr(st, "pipeline_tick_stale_s", 120.0)
+    lag_alarm = getattr(st, "pipeline_lag_alarm", 500)
+    loops = {name: round(now - ts, 1) for name, ts in (st.pipeline_ticks or {}).items()}
+    degraded = any(age > stale_s for age in loops.values())
+
+    lag = None
+    redis = getattr(st, "pipeline_redis", None)
+    if redis is not None:
+        try:
+            groups = await asyncio.wait_for(redis.xinfo_groups(st.pipeline_stream), timeout=2.0)
+            for g in groups or []:
+                name = g.get("name") if isinstance(g, dict) else None
+                name = name.decode() if isinstance(name, (bytes, bytearray)) else name
+                if name == st.pipeline_group:
+                    lag = g.get("lag")
+                    break
+        except Exception:
+            lag = "unavailable"  # a dead/absent group is itself a signal, never a hang
+    if isinstance(lag, int) and lag > lag_alarm:
+        degraded = True
+    return {"loops": loops, "consumer_lag": lag}, degraded
 
 
 def create_app(
@@ -85,7 +120,19 @@ def create_app(
     async def health():
         from .config_preflight import capability_health
 
-        return {"status": "ok", "service": "meeting-api", "capabilities": capability_health()}
+        body = {"status": "ok", "service": "meeting-api", "capabilities": capability_health()}
+        # #527: additive `pipeline` section — present ONLY when the background loops are wired
+        # (build_production_app sets app.state.pipeline_ticks). On the bare app-factory path (unit
+        # tests, conformance) the section is omitted and status stays "ok" — existing /health
+        # consumers are unchanged. A stale loop or a lag over threshold flips status→degraded + 503,
+        # so a dead pipeline that keeps the live-WS path flowing no longer looks healthy.
+        if getattr(app.state, "pipeline_ticks", None) is not None:
+            pipeline, degraded = await _pipeline_health(app)
+            body["pipeline"] = pipeline
+            if degraded:
+                body["status"] = "degraded"
+                return JSONResponse(body, status_code=503)
+        return body
 
     # --- bot_spawn ports (resolved FIRST: the meeting_repo is also the lifecycle-persistence target) ---
     if meeting_repo is None:
