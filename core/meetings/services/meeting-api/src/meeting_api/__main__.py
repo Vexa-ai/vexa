@@ -78,7 +78,15 @@ def build_production_app():
 
     engine = create_async_engine(database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    redis_client = aioredis.from_url(redis_url, decode_responses=True)
+    # #528: harden the shared Redis client so a Redis outage surfaces as a bounded exception the
+    # per-tick handlers already catch — not a hung/zombie socket that only a restart heals. Same
+    # kwargs as the gateway (adapters.py): socket_timeout bounds every await, keepalive + health
+    # checks detect a dead peer, connect timeout bounds re-dial, retry_on_timeout re-issues once.
+    redis_client = aioredis.from_url(
+        redis_url, decode_responses=True,
+        socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
+        health_check_interval=30, retry_on_timeout=True,
+    )
 
     # Per-module production adapters (each module's adapters.* builders) injected into create_app.
     transcript_store = SqlAlchemyTranscriptStore(session_factory, redis_client=redis_client)
