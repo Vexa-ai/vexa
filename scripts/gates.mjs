@@ -210,6 +210,7 @@ function gateSchema() {
 const SEAL_FILE = join(ROOT, "contracts.seal.json");
 const ARCH_FILE = join(ROOT, "architecture.calm.json");
 const ARCH_SEAL = join(ROOT, "architecture.seal.json");
+const SCHEMA_SEAL = join(ROOT, "schema.seal.json");  // #db-seal — frozen DB schema (tables+columns)
 // canonical hash of the chart (parsed → re-stringified, so formatting/whitespace doesn't churn the seal)
 const archHash = () => createHash("sha256").update(JSON.stringify(JSON.parse(readFileSync(ARCH_FILE, "utf8")))).digest("hex");
 function gateContractVersion() {
@@ -826,6 +827,44 @@ function gateConfigContract() {
   return true;
 }
 
+// gate:db-schema (#db-seal) — the DB schema is FROZEN in schema.seal.json. Any table/column add,
+// drop, or change (in admin-api's models or meeting-api's mirror) trips this gate and requires a
+// deliberate `pnpm seal:schema` re-seal — a human review step. This is the structural enforcement of
+// "no unreviewed database changes": a stray migration or model edit can no longer land silently.
+function _schemaDigest() {
+  return JSON.parse(execSync("python3 scripts/schema_digest.py", { cwd: ROOT }).toString());
+}
+
+function _flattenSchema(d) {
+  const flat = {};
+  for (const [file, tables] of Object.entries(d)) {
+    const svc = (file.match(/\/services\/([^/]+)\//) || [, file])[1];
+    for (const [t, cols] of Object.entries(tables))
+      for (const [c, def] of Object.entries(cols)) flat[`${svc}::${t}.${c}`] = def;
+  }
+  return flat;
+}
+
+function gateDbSchema() {
+  if (!existsSync(SCHEMA_SEAL)) return fail(["gate:db-schema — schema.seal.json missing (run `pnpm seal:schema` to freeze the current DB schema)"]);
+  let current;
+  try { current = _schemaDigest(); }
+  catch (e) { return fail([`gate:db-schema — could not compute the schema digest (python3 scripts/schema_digest.py):\n${(e.stdout || e.stderr || e).toString().slice(-600)}`]); }
+  const cur = _flattenSchema(current);
+  const old = _flattenSchema(JSON.parse(readFileSync(SCHEMA_SEAL, "utf8")));
+  const errs = [];
+  for (const k of Object.keys(cur)) if (!(k in old)) errs.push(`ADDED    ${k} = ${cur[k]}`);
+  for (const k of Object.keys(old)) if (!(k in cur)) errs.push(`REMOVED  ${k}`);
+  for (const k of Object.keys(cur)) if (k in old && cur[k] !== old[k]) errs.push(`CHANGED  ${k}: ${old[k]}  →  ${cur[k]}`);
+  if (errs.length) return fail([
+    "db-schema — the DB schema drifted from schema.seal.json. A deliberate change needs `pnpm seal:schema` + human review (lane:schema):",
+    ...errs.map((e) => "   " + e),
+  ]);
+  const tables = new Set(Object.keys(cur).map((k) => k.split(".")[0]));
+  console.log(`  ✓ gate:db-schema — ${Object.keys(cur).length} columns across ${tables.size} sealed table(s) match schema.seal.json`);
+  return true;
+}
+
 // gate:db-budget (#529) — the connection-budget accounting the 2026-04-21 outage lacked. Every
 // service that constructs a Postgres engine must be in deploy/db-budget.json; Σ(helm replicas ×
 // per-service pool ceiling) + reserved must fit max_connections; and no service's code may set a
@@ -910,7 +949,7 @@ function gateDbBudget() {
   return true;
 }
 
-const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
@@ -920,6 +959,16 @@ if (which === "seal") {
   for (const d of contractVersionDirs().sort()) seal[rel(d).replace(/\\/g, "/")] = schemaHash(d);
   writeFileSync(SEAL_FILE, JSON.stringify(seal, null, 2) + "\n");
   console.log(`sealed ${Object.keys(seal).length} contract(s) → ${rel(SEAL_FILE)}`);
+  process.exit(0);
+}
+// `seal-schema` (not a gate) — freeze the current DB schema (tables+columns) into schema.seal.json.
+// Run ONLY after a deliberately-reviewed model change (the diff of schema.seal.json IS the review).
+if (which === "seal-schema") {
+  const digest = execSync("python3 scripts/schema_digest.py", { cwd: ROOT }).toString();
+  writeFileSync(SCHEMA_SEAL, digest.endsWith("\n") ? digest : digest + "\n");
+  const flat = _flattenSchema(JSON.parse(digest));
+  const tables = new Set(Object.keys(flat).map((k) => k.split(".")[0]));
+  console.log(`sealed DB schema — ${Object.keys(flat).length} columns across ${tables.size} table(s) → ${rel(SCHEMA_SEAL)}`);
   process.exit(0);
 }
 // `seal-arch` (not a gate) — stamp the chart's canonical hash as the new asserted-true baseline.

@@ -1,0 +1,92 @@
+{
+  "core/identity/services/admin-api/src/admin_api/schema/models.py": {
+    "api_tokens": {
+      "created_at": "Column(DateTime, server_default=func.now())",
+      "expires_at": "Column(DateTime, nullable=True)",
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "last_used_at": "Column(DateTime, nullable=True)",
+      "name": "Column(String(255), nullable=True)",
+      "scopes": "Column(ARRAY(Text), nullable=False, server_default=text(\"'{}'::text[]\"))",
+      "token": "Column(String(255), unique=True, index=True, nullable=False)",
+      "user_id": "Column(Integer, ForeignKey('users.id'), nullable=False, index=True)"
+    },
+    "meeting_sessions": {
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
+      "session_start_time": "Column(DateTime(timezone=True), nullable=False, server_default=func.now())",
+      "session_uid": "Column(String, nullable=False, index=True)"
+    },
+    "meetings": {
+      "bot_container_id": "Column(String(255), nullable=True)",
+      "created_at": "Column(DateTime, server_default=func.now(), index=True)",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "end_time": "Column(DateTime, nullable=True)",
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "platform": "Column(String(100), nullable=False)",
+      "platform_specific_id": "Column(String(255), index=True, nullable=True)",
+      "start_time": "Column(DateTime, nullable=True)",
+      "status": "Column(String(50), nullable=False, default='requested', index=True)",
+      "updated_at": "Column(DateTime, server_default=func.now(), onupdate=func.now())",
+      "user_id": "Column(Integer, nullable=False, index=True)"
+    },
+    "platform_settings": {
+      "key": "Column(String(64), primary_key=True)",
+      "updated_at": "Column(DateTime, server_default=func.now(), onupdate=func.now())",
+      "value": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})"
+    },
+    "transcriptions": {
+      "created_at": "Column(DateTime, default=datetime.utcnow)",
+      "end_time": "Column(Float, nullable=False)",
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "language": "Column(String(10), nullable=True)",
+      "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
+      "segment_id": "Column(String, nullable=True)",
+      "session_uid": "Column(String, nullable=True, index=True)",
+      "speaker": "Column(String(255), nullable=True)",
+      "start_time": "Column(Float, nullable=False)",
+      "text": "Column(Text, nullable=False)"
+    },
+    "users": {
+      "created_at": "Column(DateTime, server_default=func.now(), default=func.now())",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "email": "Column(String(255), unique=True, index=True, nullable=False)",
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "image_url": "Column(Text)",
+      "max_concurrent_bots": "Column(Integer, nullable=False, server_default='3', default=3)",
+      "name": "Column(String(100))"
+    }
+  },
+  "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py": {
+    "meeting_sessions": {
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
+      "session_start_time": "Column(DateTime(timezone=True), nullable=False, server_default=func.now())",
+      "session_uid": "Column(String, nullable=False, index=True)"
+    },
+    "meetings": {
+      "bot_container_id": "Column(String(255), nullable=True)",
+      "created_at": "Column(DateTime, server_default=func.now(), index=True)",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "end_time": "Column(DateTime, nullable=True)",
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "platform": "Column(String(100), nullable=False)",
+      "platform_specific_id": "Column(String(255), index=True, nullable=True)",
+      "start_time": "Column(DateTime, nullable=True)",
+      "status": "Column(String(50), nullable=False, default='requested', index=True)",
+      "updated_at": "Column(DateTime, server_default=func.now(), onupdate=func.now())",
+      "user_id": "Column(Integer, nullable=False, index=True)"
+    },
+    "transcriptions": {
+      "created_at": "Column(DateTime, default=datetime.utcnow)",
+      "end_time": "Column(Float, nullable=False)",
+      "id": "Column(Integer, primary_key=True, index=True)",
+      "language": "Column(String(10), nullable=True)",
+      "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
+      "segment_id": "Column(String, nullable=True)",
+      "session_uid": "Column(String, nullable=True, index=True)",
+      "speaker": "Column(String(255), nullable=True)",
+      "start_time": "Column(Float, nullable=False)",
+      "text": "Column(Text, nullable=False)"
+    }
+  }
+}
