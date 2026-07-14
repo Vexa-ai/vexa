@@ -96,6 +96,17 @@ def default_registry() -> ProfileRegistry:
     # agent-api image). The Docker backend ensures it is present at startup, pulling it when absent
     # (build_production_app → DockerBackend.ensure_worker_image).
     agent_worker_image = worker_image_for(agent_image)
+    speaker_stream_env = {
+        key: os.environ[key]
+        for key in (
+            "BOT_SPEAKER_MIN_AUDIO_SEC",
+            "BOT_SPEAKER_SUBMIT_INTERVAL_SEC",
+            "BOT_SPEAKER_CONFIRM_THRESHOLD",
+            "BOT_SPEAKER_MAX_BUFFER_SEC",
+            "BOT_SPEAKER_IDLE_TIMEOUT_SEC",
+        )
+        if os.environ.get(key, "").strip()
+    }
     return ProfileRegistry(
         {
             # Meeting bot — Playwright browser; lifetime managed by meeting-api, so no idle timeout.
@@ -107,7 +118,7 @@ def default_registry() -> ProfileRegistry:
                     command=["/app/vexa-bot/entrypoint.sh"],
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
-                base_env={},
+                base_env=speaker_stream_env,
             ),
             # Claude Code agent — the in-container worker harness (worker): consumes the
             # dispatch from env, runs the governed turn over the mounted workspace, XADDs UnitEvents to
