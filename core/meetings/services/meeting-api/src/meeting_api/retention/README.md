@@ -29,3 +29,10 @@ owner/recording/session identity; broad or mismatched entries fail before object
 Public surface: `erase_meeting`, `ErasureReceipt`, `ErasureFailed`. Ports live in `ports.py`; offline
 fakes in `fakes.py`; focused two-tenant proof is `tests/test_zaki_retention.py`; production-boundary
 proof is `tests/test_zaki_retention_adapters.py`. No erasure HTTP route is mounted in this slice.
+
+`ttl.py` is the scheduler-free S02a policy core. It validates explicit UTC expiry instants for audio,
+transcript and summary independently, prevents an already-stored expiry from moving later, and runs
+an injected-clock batch capped at 500 opaque due scopes. It returns only per-scope counts; candidate
+identity and adapter errors never enter the receipt. Product defaults, authority-layer resolution,
+the PostgreSQL/object-store TTL adapter, scheduling and restoration-horizon evidence are deliberately
+outside S02a.
