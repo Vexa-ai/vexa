@@ -478,7 +478,7 @@ def _client():
     return TestClient(app)
 
 
-def _resign_meeting_token(*, header_update=None, claim_update=None):
+def _resign_meeting_token(*, header_update=None, claim_update=None, claim_remove=()):
     import base64
     import hashlib
     import hmac
@@ -490,6 +490,8 @@ def _resign_meeting_token(*, header_update=None, claim_update=None):
     claims = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
     header.update(header_update or {})
     claims.update(claim_update or {})
+    for claim in claim_remove:
+        claims.pop(claim, None)
 
     def encode(value):
         raw = json.dumps(value, separators=(",", ":")).encode()
@@ -581,6 +583,34 @@ def test_upload_route_rejects_tokens_outside_the_recording_write_profile(
     token = _resign_meeting_token(
         header_update=header_update,
         claim_update=claim_update,
+    )
+
+    response = client.post(
+        "/internal/recordings/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        data={"session_uid": SESSION_UID, "media_format": "wav", "chunk_seq": 0},
+        files={"file": ("c.wav", _wav(), "audio/wav")},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("claim_update", "claim_remove"),
+    [
+        (None, ("meeting_id",)),
+        ({"meeting_id": "not-an-integer"}, ()),
+        ({"meeting_id": 0}, ()),
+    ],
+)
+def test_upload_route_rejects_tokens_without_a_valid_meeting_identity(
+    claim_update,
+    claim_remove,
+):
+    client = _client()
+    token = _resign_meeting_token(
+        claim_update=claim_update,
+        claim_remove=claim_remove,
     )
 
     response = client.post(

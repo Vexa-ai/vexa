@@ -320,6 +320,9 @@ def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[s
         or claims.get("scope") != "transcribe:write"
     ):
         raise ValueError("MeetingToken purpose mismatch")
+    meeting_id = claims.get("meeting_id")
+    if isinstance(meeting_id, bool) or not isinstance(meeting_id, int) or meeting_id <= 0:
+        raise ValueError("MeetingToken meeting identity missing or invalid")
     exp = claims.get("exp")
     try:
         expires_at = int(exp)
