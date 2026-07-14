@@ -517,7 +517,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Pin to main: the gate must run TRUSTED code (and read main's receipt), never the
+      # dispatched ref — a promote dispatch from a branch cannot substitute its own gate script.
       - uses: actions/checkout@v4
+        with: { ref: main }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - name: Every batch change was individually accepted (pr-value / value-signed)
@@ -533,7 +536,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Pin to main: the receipt lives on main (committed after the tag), and the gate script
+      # itself must be the trusted one, not the dispatched ref's.
       - uses: actions/checkout@v4
+        with: { ref: main }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - name: A human witnessed the assembled value (receipt present + well-formed + version-matched)

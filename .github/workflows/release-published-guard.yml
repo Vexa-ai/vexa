@@ -20,30 +20,47 @@ permissions:
 
 jobs:
   verify:
-    # stable v0.12.* releases only — prereleases (rc) are exempt by design
-    if: ${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v0.12.') }}
+    # stable releases only (any vX.Y.Z with no prerelease suffix) — rc/prereleases are exempt.
+    # Generic pattern, not a pinned minor, so a v0.13/v1.0 release can never silently skip the guard.
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       RELEASE_VERSION: ${{ github.event.release.tag_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Only stable vX.Y.Z tags are guarded
+        id: scope
+        run: |
+          if [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "guard=yes" >> "$GITHUB_OUTPUT"
+          else echo "guard=no ($RELEASE_VERSION is not a stable vX.Y.Z tag) — skipping" >> "$GITHUB_STEP_SUMMARY"; echo "guard=no" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
-        with:
-          ref: main   # the witness receipt is committed to main after the tag
+        if: steps.scope.outputs.guard == 'yes'
+        with: { ref: main }   # the witness receipt is committed to main after the tag
       - uses: actions/setup-node@v4
+        if: steps.scope.outputs.guard == 'yes'
         with: { node-version: 22 }
+      # Distinguish a DEFINITIVE breach (exit 1 → retract) from "could not evaluate" (exit 3 or any
+      # other non-zero → alert, do NOT retract — a transient API error must never draft a good
+      # release). Exit codes captured without a pipe so correctness does not depend on pipefail.
       - name: Witness + value gates for the published tag
         id: gates
+        if: steps.scope.outputs.guard == 'yes'
         run: |
-          set +e
-          node scripts/release-witness-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"; w=$?
-          node scripts/release-value-gate.mjs  | tee -a "$GITHUB_STEP_SUMMARY"; v=$?
-          echo "witness=$w value=$v" >> "$GITHUB_STEP_SUMMARY"
-          [ "$w" = "0" ] && [ "$v" = "0" ]
-      - name: Retract to draft if unwitnessed / unaccepted
-        if: failure()
+          node scripts/release-witness-gate.mjs >> "$GITHUB_STEP_SUMMARY" 2>&1; w=$?
+          node scripts/release-value-gate.mjs  >> "$GITHUB_STEP_SUMMARY" 2>&1; v=$?
+          echo "witness_exit=$w" >> "$GITHUB_OUTPUT"; echo "value_exit=$v" >> "$GITHUB_OUTPUT"
+          echo "witness_exit=$w value_exit=$v" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retract to draft ONLY on a definitive breach (exit 1)
+        if: steps.scope.outputs.guard == 'yes' && (steps.gates.outputs.witness_exit == '1' || steps.gates.outputs.value_exit == '1')
         run: |
-          echo "::error ::$RELEASE_VERSION was PUBLISHED without a signed witness pass and/or with unaccepted batch value — retracting to draft (delivery constitution, ship bar)."
+          echo "::error ::$RELEASE_VERSION was PUBLISHED unwitnessed/unaccepted (witness=${{ steps.gates.outputs.witness_exit }} value=${{ steps.gates.outputs.value_exit }}) — retracting to draft (ship bar)."
           gh release edit "$RELEASE_VERSION" --draft --repo "$GITHUB_REPOSITORY"
-          echo "· $RELEASE_VERSION flipped to draft. Complete the witness pass (releases/$RELEASE_VERSION/witness.json) and re-publish." >> "$GITHUB_STEP_SUMMARY"
+          echo "· $RELEASE_VERSION flipped to draft. Complete the witness pass (releases/$RELEASE_VERSION/witness.json) + accept the batch, then re-publish." >> "$GITHUB_STEP_SUMMARY"
+      - name: Alert (could not evaluate) — do NOT retract
+        if: ${{ steps.scope.outputs.guard == 'yes' && ((steps.gates.outputs.witness_exit != '0' && steps.gates.outputs.witness_exit != '1') || (steps.gates.outputs.value_exit != '0' && steps.gates.outputs.value_exit != '1')) }}
+        run: |
+          echo "::warning ::release-published-guard could not conclusively evaluate $RELEASE_VERSION (witness=${{ steps.gates.outputs.witness_exit }} value=${{ steps.gates.outputs.value_exit }}) — NOT retracting; investigate (transient API error or unaccounted commits)."
+      - name: Fail the check if not fully green
+        if: steps.scope.outputs.guard == 'yes' && (steps.gates.outputs.witness_exit != '0' || steps.gates.outputs.value_exit != '0')
+        run: exit 1
