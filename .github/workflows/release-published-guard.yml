@@ -1,0 +1,49 @@
+# release-published-guard — closes the manual-release bypass (guarantee lines 7 + 8).
+#
+# promote is gated (witness-gate + value-gate + the release-promote Environment), but a GitHub
+# *Release* is created by a human with `gh release create` and could be cut without the pass. The
+# delivery constitution's rule is explicit: "A release published unwitnessed is retracted to
+# pre-release until the pass is met." This workflow enforces exactly that — on every published,
+# non-prerelease v0.12.* release it re-checks the witness receipt and the batch value acceptance,
+# and if either is absent it **flips the release back to draft** and fails loudly (an incident).
+#
+# The receipt lives on main (committed after the witness pass, after the tag), so this checks out
+# main — not the tag's tree (which predates the witness).
+name: release-published-guard
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # flip an unwitnessed release back to draft
+
+jobs:
+  verify:
+    # stable v0.12.* releases only — prereleases (rc) are exempt by design
+    if: ${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v0.12.') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RELEASE_VERSION: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main   # the witness receipt is committed to main after the tag
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Witness + value gates for the published tag
+        id: gates
+        run: |
+          set +e
+          node scripts/release-witness-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"; w=$?
+          node scripts/release-value-gate.mjs  | tee -a "$GITHUB_STEP_SUMMARY"; v=$?
+          echo "witness=$w value=$v" >> "$GITHUB_STEP_SUMMARY"
+          [ "$w" = "0" ] && [ "$v" = "0" ]
+      - name: Retract to draft if unwitnessed / unaccepted
+        if: failure()
+        run: |
+          echo "::error ::$RELEASE_VERSION was PUBLISHED without a signed witness pass and/or with unaccepted batch value — retracting to draft (delivery constitution, ship bar)."
+          gh release edit "$RELEASE_VERSION" --draft --repo "$GITHUB_REPOSITORY"
+          echo "· $RELEASE_VERSION flipped to draft. Complete the witness pass (releases/$RELEASE_VERSION/witness.json) and re-publish." >> "$GITHUB_STEP_SUMMARY"

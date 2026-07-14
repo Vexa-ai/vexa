@@ -495,8 +495,8 @@ jobs:
             echo "| 4 | A fresh machine with nothing on it succeeds | ⚠️ fresh-VM leg runs outside this workflow — attach its evidence to the notes or state unclaimed |"
             echo "| 5 | Nothing that worked before broke | v010-compat $(m "$R_V010") · bot-spawn $(m "$R_BOTSPAWN") |"
             echo "| 6 | Every image contains what its name promises | $(m "$R_IDENTITY") image-identity |"
-            echo "| 7 | A human witnessed the assembled value | ⛔ UNSIGNED — the witness pass happens after this run; NOT publishable until this line carries the signature |"
-            echo "| 8 | Every batch change individually proven before entry | recorded at merge time (pr-value + gates per head; see the batch's merge cards) |"
+            echo "| 7 | A human witnessed the assembled value | ⛔ ENFORCED — witness-gate requires releases/$VERSION/witness.json AND the release-promote Environment requires the owner's approval; promote cannot run without both |"
+            echo "| 8 | Every batch change individually proven before entry | ⛔ ENFORCED — value-gate blocks promote unless every batch PR is pr-value-green on its head or state: value-signed |"
             echo "| 9 | The notes tell the truth about coverage | this table IS the mechanism — generated from run results, gaps stated above |"
             echo "| 10 | Pointers moved honestly | promote runs only on all-green + promote:true; constitutional guards in the job |"
           } | tee guarantees.md >> "$GITHUB_STEP_SUMMARY"
@@ -504,6 +504,42 @@ jobs:
         with:
           name: guarantees-${{ needs.resolve.outputs.version }}
           path: guarantees.md
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
+  # The two enforced release gates (D9/D10/D15 — flipped from TO BUILD). They run ONLY on a
+  # promote request (the tag-push validate run passes promote:false, so they skip and promote
+  # skips with them). On a promote dispatch they are hard `needs` of promote: either reds → the
+  # moving tag does not move. Guarantee lines 8 (value) and 7 (witness), respectively.
+  value-gate:
+    name: value gate (guarantee 8)
+    needs: resolve
+    if: ${{ inputs.promote }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Every batch change was individually accepted (pr-value / value-signed)
+        env:
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-value-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  witness-gate:
+    name: witness gate (guarantee 7)
+    needs: resolve
+    if: ${{ inputs.promote }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: A human witnessed the assembled value (receipt present + well-formed + version-matched)
+        env:
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+        run: node scripts/release-witness-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   promote:
@@ -517,9 +553,16 @@ jobs:
       - validate-bot-spawn
       - validate-lite
       - validate-helm-k3s
+      - witness-gate      # guarantee line 7 — no signature, no release
+      - value-gate        # guarantee line 8 — every batch change accepted
     # Stable releases only, and only when the caller asked — an rc rehearsal or a standalone
-    # harness-iteration run must never move what users pull.
+    # harness-iteration run must never move what users pull. The two human/value gates above are
+    # hard `needs` (not display): if either reds or is skipped, promote does not run.
     if: needs.resolve.outputs.prerelease == 'false' && inputs.promote
+    # The hard human gate: the `release-promote` Environment requires the owner's manual approval
+    # in the Actions UI (a CI file cannot forge it). The owner approves ONLY after the witness
+    # pass. This is choke point 2 of the delivery constitution, now enforced by the machinery.
+    environment: release-promote
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

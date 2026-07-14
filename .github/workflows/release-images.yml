@@ -216,16 +216,24 @@ jobs:
           docker push "vexaai/vexa-bot:$VERSION"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
-  # The other half (#551): manifest verify → image-identity ∥ validate legs → promote.
+  # The other half (#551): manifest verify → image-identity ∥ validate legs. NO promote here.
   # Re-runnable standalone via release-validate's own workflow_dispatch — from any branch,
   # against this already-published version — when a validate-harness fix needs iterating.
+  #
+  # promote is DELIBERATELY not requested on the tag-push path (guarantee lines 7 + 8, the
+  # delivery constitution's ship bar: "publish and promote… neither happens before the witness
+  # pass is signed"). This job builds + publishes the versioned :vX.Y.Z images and proves them
+  # (L4), so the release candidate EXISTS to be witnessed — but it never moves :v012. Promotion
+  # is a separate, human-gated act: after the witness pass is signed (releases/<version>/
+  # witness.json) and every batch change is accepted (release-value-gate), a maintainer dispatches
+  # release-validate with promote:true, which then clears the witness-gate + value-gate and pauses
+  # on the `release-promote` Environment for the owner's approval before :v012 moves.
   validate:
     needs: [preflight, build, build-bot]
     uses: ./.github/workflows/release-validate.yml
     with:
       version: ${{ needs.preflight.outputs.version }}
-      promote: true
-      promote_latest: ${{ inputs.promote_latest == true }}
+      promote: false
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
