@@ -895,13 +895,13 @@ silence is released, never punished · every decline names its reopen condition 
 | D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
 | D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |
-| D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency | **TO BUILD** (value-gate bot) |
-| D10 acceptance floor | bundle-vs-table check | **TO BUILD** (bundle checker) |
+| D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **TO BUILD** (merge-card bot) / **have** (CI: `release-value-gate`, [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)) |
+| D10 acceptance floor | bundle-vs-table check (merge-time) · **release-time:** guarantee line 8 enforced by `value-gate` | **TO BUILD** (bundle checker) / **have** (CI: `release-value-gate`) |
 | D11 both verdicts credited | release-notes generation from bundles | **TO BUILD** |
 | D12 altitude-scaled validation | stated live bar in every prepared issue | **have** (manual review) |
 | D13 human sole author | commit-trailer check (reject agent co-authors) | **TO BUILD** |
 | D14/D14b state machine + lease | label bot + lease bot | **TO BUILD** |
-| D15 release machinery | release-set gate · `release/vm-validated` | **in flight** (PR #494) |
+| D15 release machinery | release-set gate · `release/vm-validated` · **witness + value gates on promote** (publish/promote split; `witness-gate` + `value-gate` + the `release-promote` Environment; `release-published-guard` retracts an unwitnessed release) | **have** (CI: [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)) |
 | D16 close-back to reporter | ship-closes-report step | **TO BUILD** |
 | D17 declined-with-reason | closed-without-merge requires one `declined:` label | **have** (manual) / **TO BUILD** (stale proposer) |
 
