@@ -75,6 +75,28 @@ function gateReadme() {
   return true;
 }
 
+// gate:docs-version (D6c) — the docs DECLARE which release they reflect, and it must equal the
+// released control-plane. The `docs-reflects:` marker in docs/docs/changelog.mdx is asserted equal
+// to Chart.yaml appVersion, so a release version-bump that forgets to advance the docs stamp reds
+// CI — the docs cannot silently lag the release.
+function gateDocsVersion() {
+  const chart = join(ROOT, "deploy", "helm", "charts", "vexa", "Chart.yaml");
+  const changelog = join(ROOT, "docs", "docs", "changelog.mdx");
+  if (!existsSync(chart)) return fail(["gate:docs-version — Chart.yaml not found"]);
+  if (!existsSync(changelog)) return fail(["gate:docs-version — docs/docs/changelog.mdx not found"]);
+  const appV = (readFileSync(chart, "utf8").match(/^appVersion:\s*"?([^"\s]+)"?/m) || [])[1];
+  const docsV = (readFileSync(changelog, "utf8").match(/docs-reflects:\s*([0-9A-Za-z.\-]+)/) || [])[1];
+  if (!appV) return fail(["gate:docs-version — could not read appVersion from Chart.yaml"]);
+  if (!docsV) return fail(["gate:docs-version — no `docs-reflects: <version>` marker in docs/docs/changelog.mdx"]);
+  if (docsV !== appV) return fail([
+    `gate:docs-version — docs reflect ${docsV} but the released appVersion is ${appV}.`,
+    "   Update the `docs-reflects:` marker (+ the visible line) in docs/docs/changelog.mdx to match,",
+    "   as part of the release version-bump — the docs must not lag the release.",
+  ]);
+  console.log(`  ✓ gate:docs-version — docs reflect v${docsV}, matching Chart.yaml appVersion`);
+  return true;
+}
+
 // gate:exports (P6) — every LIBRARY package locks its front door with "exports".
 // "private": true packages are not published libraries (CLI tools, harnesses, apps) → exempt.
 function gateExports() {
@@ -949,7 +971,7 @@ function gateDbBudget() {
   return true;
 }
 
-const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+const GATES = { readme: gateReadme, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
