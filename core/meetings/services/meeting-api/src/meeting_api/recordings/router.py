@@ -255,7 +255,14 @@ def build_router(
         )
         if mf is None:
             raise HTTPException(status_code=404, detail="No such media file")
-        if not mf.get("is_final"):
+        # Finalize-on-read: serve the ASSEMBLED master, never a raw part or the empty final-signal
+        # chunk. #491 — the old guard (`if not mf.is_final`) trusted the media-file's is_final flag as
+        # "storage_path is playable"; but after an empty-final fold storage_path names the zero-byte
+        # signal chunk (0 bytes served) or, with the jsonb fix, the LAST data part (#412: last-part-
+        # only). is_final must stop doubling as "playable" — the ONLY playable object is master.<fmt>,
+        # so finalize (idempotent) unless storage_path already IS the master key, then re-read.
+        storage_path = mf.get("storage_path") or ""
+        if not storage_path.rsplit("/", 1)[-1].startswith("master."):
             await finalize_master(
                 repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
                 media_type=mf.get("type", type),

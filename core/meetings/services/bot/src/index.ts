@@ -12,7 +12,7 @@
  * ├─ INCREMENT 2b wires the browser join + capture + recording (THIS file):
  * │    • JoinDriver     → @vexa/join.joinMeeting over a @vexa/remote-browser page               ✅ WIRED (L4)
  * │    • Pipeline       → capture bridge → @vexa/{gmeet,mixed}-pipeline → @vexa/transcribe-whisper ✅ WIRED (L4 capture · L2/L3 lane)
- * │    • RecordingSink  → @vexa/recording assembler → upload to inv.recordingUploadUrl          ✅ WIRED (L4 upload · L2/L3 assembler)
+ * │    • RecordingSink  → per-chunk upload to inv.recordingUploadUrl (master assembled server-side) ✅ WIRED (L4 upload · L3 sink)
  * │    • Speak          → acts.v1 `speak`/`speak_stop` → meeting-UI mic + VM TTS chain          ✅ WIRED (L4)
  * └─ The browser/capture/recording-upload/speak legs are BROWSER- or VM-resident → L4-gated
  *    (proven by the O6 VM run, not unit tests). The lane + assembler cores are L2/L3-proven.
