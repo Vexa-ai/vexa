@@ -353,6 +353,28 @@ def _client():
     return TestClient(app)
 
 
+def _resign_meeting_token(*, header_update=None, claim_update=None):
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    header_b64, payload_b64, _ = token.split(".")
+    header = json.loads(base64.urlsafe_b64decode(header_b64 + "=" * (-len(header_b64) % 4)))
+    claims = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
+    header.update(header_update or {})
+    claims.update(claim_update or {})
+
+    def encode(value):
+        raw = json.dumps(value, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    signing_input = f"{encode(header)}.{encode(claims)}"
+    signature = hmac.new(SECRET.encode(), signing_input.encode(), hashlib.sha256).digest()
+    return f"{signing_input}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+
+
 def test_upload_route_requires_token():
     client = _client()
     r = client.post(
@@ -374,6 +396,36 @@ def test_upload_route_accepts_valid_token():
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("header_update", "claim_update"),
+    [
+        ({"alg": "HS512"}, None),
+        ({"typ": "JWE"}, None),
+        (None, {"iss": "another-service"}),
+        (None, {"aud": "another-audience"}),
+        (None, {"scope": "transcribe:read"}),
+    ],
+)
+def test_upload_route_rejects_tokens_outside_the_recording_write_profile(
+    header_update,
+    claim_update,
+):
+    client = _client()
+    token = _resign_meeting_token(
+        header_update=header_update,
+        claim_update=claim_update,
+    )
+
+    response = client.post(
+        "/internal/recordings/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        data={"session_uid": SESSION_UID, "media_format": "wav", "chunk_seq": 0},
+        files={"file": ("c.wav", _wav(), "audio/wav")},
+    )
+
+    assert response.status_code == 401
 
 
 def test_upload_route_reports_invalid_storage_metadata_without_echoing_it():

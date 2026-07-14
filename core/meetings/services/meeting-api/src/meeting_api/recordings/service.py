@@ -273,9 +273,13 @@ async def _finalize_master_under_lease(
 
 
 def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:
-    """Verify a MeetingToken (HS256, ``ADMIN_TOKEN``-signed) and return its claims. Raises
-    ``ValueError`` on a bad signature / expiry (the parent ``verify_meeting_token``)."""
+    """Verify an upload-purpose MeetingToken and return its claims.
+
+    The signature alone is not authorization: the JOSE profile, issuer, audience, and scope must
+    all match the recording collector's one intended use.
+    """
     import base64
+    import binascii
     import hmac
     import json
     import os
@@ -285,15 +289,30 @@ def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[s
         raise ValueError("ADMIN_TOKEN not configured; cannot verify MeetingToken")
     try:
         header_b64, payload_b64, sig_b64 = token.split(".")
-    except ValueError:
+        header = json.loads(base64.urlsafe_b64decode(header_b64 + "=" * (-len(header_b64) % 4)))
+        claims = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
+        got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+        raise ValueError("malformed MeetingToken") from None
+    if not isinstance(header, dict) or not isinstance(claims, dict):
         raise ValueError("malformed MeetingToken")
+    if header.get("alg") != "HS256" or header.get("typ") != "JWT":
+        raise ValueError("MeetingToken JOSE profile mismatch")
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
     expected = hmac.new(secret.encode(), signing_input, digestmod="sha256").digest()
-    got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
     if not hmac.compare_digest(expected, got):
         raise ValueError("MeetingToken signature mismatch")
-    claims = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
+    if (
+        claims.get("iss") != "meeting-api"
+        or claims.get("aud") != "transcription-collector"
+        or claims.get("scope") != "transcribe:write"
+    ):
+        raise ValueError("MeetingToken purpose mismatch")
     exp = claims.get("exp")
-    if exp is not None and int(datetime.now(timezone.utc).timestamp()) > int(exp):
+    try:
+        expires_at = int(exp)
+    except (TypeError, ValueError):
+        raise ValueError("MeetingToken expiry missing or invalid") from None
+    if int(datetime.now(timezone.utc).timestamp()) >= expires_at:
         raise ValueError("MeetingToken expired")
     return claims
