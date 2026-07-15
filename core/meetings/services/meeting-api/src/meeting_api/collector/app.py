@@ -189,9 +189,9 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
-        meetings = await store.list_meetings(
+        meetings, _has_more = await store.list_meetings(
             user_id, status=status, platform=platform, limit=limit, offset=offset,
-            member_workspaces=member_workspaces,
+            member_workspaces=member_workspaces, list_view=True,
         )
         log_event(
             "meetings_listed",
@@ -214,14 +214,15 @@ def build_router(
         platform: Optional[str] = Query(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        meetings = await store.list_meetings(
-            user_id, status=status, platform=platform, limit=limit, offset=offset
+        meetings, has_more = await store.list_meetings(
+            user_id, status=status, platform=platform, limit=limit, offset=offset,
+            list_view=True,
         )
         log_event(
             "bots_listed", audience="user", span="bots.list",
             user_id=user_id, fields={"count": len(meetings)},
         )
-        return JSONResponse(content={"meetings": meetings, "has_more": False})
+        return JSONResponse(content={"meetings": meetings, "has_more": has_more})
 
     # --- GET /bots/status → the caller's currently-running bots (api/meetings.mdx "Running bots").
     # Running == any non-terminal FSM status (requested·joining·awaiting_admission·active·stopping);

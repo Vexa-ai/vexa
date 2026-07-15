@@ -237,6 +237,17 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
 ```
 
+### List rows are slim; detail is full
+
+The two list endpoints — `GET /bots` and `GET /meetings` — return **lightweight rows**. Each row keeps
+its light metadata (id, status, times, `title`, connected docs) but **omits the heavy `data` detail
+keys**: `speaker_events`, `bot_logs`, `recordings`, `status_transition`, `chat_messages`,
+`error_details`, and `last_error`. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the
+detail endpoint is unaffected and still returns every key.
+
+The list is also **paged**: with no `limit`, a default page size of `50` applies (pass `limit`/`offset`
+to page explicitly). `GET /bots` returns `has_more: true` when more rows remain past the current page.
+
 ## Speaker-attributed transcripts
 
 Each segment is **diarized** — attributed to a speaker (a bound display name, or a provisional label
