@@ -18,7 +18,9 @@ Parent semantics, kept exactly:
     UPDATE, never a duplicate.
   * **trim policy** — flushed (and empty-text) hash fields are HDEL'd **only after** the sink
     confirms the durable write; a failed write leaves the hash intact for the next tick. When a
-    hash drains empty its meeting id leaves the ``active_meetings`` set.
+    hash drains empty its meeting id leaves the ``active_meetings`` set. A permanent withdrawal
+    refusal is different from a transient sink failure: it purges the live hash and queue entry so
+    revoked transcript PII is neither persisted nor retained for retry.
   * **discovery** — the ``active_meetings`` set (maintained by ``append_segment``), UNIONed with a
     ``meeting:*:segments`` key scan so hashes written before the set existed (mid-upgrade) or after
     a set/hash divergence are still drained — self-healing, unlike the parent's set-only sweep.
@@ -57,6 +59,8 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from .ports import TranscriptWriteRefused
 
 log = logging.getLogger("meeting_api.collector.db_writer")
 
@@ -157,6 +161,10 @@ async def flush_meeting_segments(
         # (#53 review, vector 2).
         try:
             await sink.upsert_segments(meeting_id, batch)
+        except TranscriptWriteRefused:
+            await redis_c.delete(hash_key)
+            await redis_c.srem(ACTIVE_MEETINGS_KEY, str(meeting_id))
+            return 0
         except Exception:
             import os as _os
             try:

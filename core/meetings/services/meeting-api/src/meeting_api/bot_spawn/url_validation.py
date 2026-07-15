@@ -9,8 +9,48 @@ class UnsafeMeetingUrl(ValueError):
     """A caller-supplied meeting URL is not safe to pass to the bot runtime."""
 
 
+def _browser_ipv4(host: str) -> ipaddress.IPv4Address | None:
+    """Parse the legacy numeric IPv4 forms accepted by the WHATWG URL algorithm."""
+
+    pieces = host.split(".")
+    if pieces[-1] == "":
+        pieces.pop()
+    if not pieces or len(pieces) > 4:
+        return None
+
+    numbers: list[int] = []
+    for piece in pieces:
+        if not piece:
+            return None
+        base = 10
+        digits = piece
+        if piece.lower().startswith("0x"):
+            base = 16
+            digits = piece[2:]
+        elif len(piece) > 1 and piece.startswith("0"):
+            base = 8
+            digits = piece[1:]
+        if not digits:
+            digits = "0"
+        try:
+            numbers.append(int(digits, base))
+        except ValueError:
+            return None
+
+    if any(number > 255 for number in numbers[:-1]):
+        raise UnsafeMeetingUrl("meeting_url contains an invalid numeric IP host")
+    remaining_bytes = 5 - len(numbers)
+    if numbers[-1] >= 256**remaining_bytes:
+        raise UnsafeMeetingUrl("meeting_url contains an invalid numeric IP host")
+
+    value = numbers[-1]
+    for index, number in enumerate(numbers[:-1]):
+        value += number * 256 ** (3 - index)
+    return ipaddress.IPv4Address(value)
+
+
 def validate_meeting_url(url: object) -> str:
-    """Require an HTTPS hostname and reject localhost or IP-literal targets."""
+    """Require an HTTPS hostname and reject every browser-normalized IP target."""
     if not isinstance(url, str) or not url.strip():
         raise UnsafeMeetingUrl("meeting_url must be a non-empty string")
     raw = url.strip()
@@ -26,8 +66,20 @@ def validate_meeting_url(url: object) -> str:
         host = None
     if not host:
         raise UnsafeMeetingUrl("meeting_url must have a valid hostname")
+    if "%" in host:
+        raise UnsafeMeetingUrl("meeting_url hostname cannot use percent encoding")
+    try:
+        host.encode("ascii")
+    except UnicodeEncodeError:
+        raise UnsafeMeetingUrl(
+            "meeting_url hostname must use its ASCII IDNA form"
+        ) from None
     if host.lower() == "localhost" or host.lower().endswith(".localhost"):
         raise UnsafeMeetingUrl("meeting_url cannot target localhost")
+    if _browser_ipv4(host) is not None:
+        raise UnsafeMeetingUrl(
+            "meeting_url cannot be a browser-normalized IP literal — use the deployment's hostname"
+        )
     try:
         ipaddress.ip_address(host)
     except ValueError:

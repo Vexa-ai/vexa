@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -143,3 +145,49 @@ async def test_postgres_transcript_writer_refuses_after_withdrawal_under_shared_
         await store.append_segment(41, {"segment_id": "late"})
 
     assert session.events == ["lock", "state", "unlock"]
+
+
+class _DurableTranscriptSession:
+    def __init__(self, data):
+        self.data = data
+        self.events: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def commit(self):
+        self.events.append("commit")
+
+    async def execute(self, statement, params=None):
+        sql = " ".join(str(statement).split())
+        if "pg_advisory_xact_lock_shared" in sql:
+            self.events.append("lock")
+            return _Result()
+        if sql.startswith("SELECT data FROM meetings"):
+            self.events.append("state")
+            return _Result({"data": self.data})
+        if sql.startswith("INSERT INTO transcriptions"):
+            self.events.append("write")
+            return _Result()
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+
+async def test_postgres_durable_transcript_flush_refuses_after_withdrawal(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sqlalchemy", SimpleNamespace(text=lambda sql: sql))
+    session = _DurableTranscriptSession({"zaki_capture": {"state": "withdrawn"}})
+    store = SqlAlchemyTranscriptStore(
+        lambda: session,
+        None,
+        statement_factory=lambda sql: sql,
+    )
+
+    with pytest.raises(TranscriptWriteRefused, match="not writable"):
+        await store.upsert_segments(
+            41,
+            [{"segment_id": "late", "start": 0, "end": 1, "text": "sensitive"}],
+        )
+
+    assert session.events == ["lock", "state"]

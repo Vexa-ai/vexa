@@ -10,6 +10,7 @@ import json
 from typing import Any, Optional, Protocol
 
 from ..bot_spawn import (
+    CaptureGrantConsumed,
     MaxBotsExceeded,
     MeetingRepo,
     QuotaExceeded,
@@ -41,6 +42,7 @@ class CaptureDenial(str, Enum):
     QUOTA_POLICY_INVALID = "quota_policy_invalid"
     AUTHORITY_SCOPE_MISMATCH = "authority_scope_mismatch"
     AUTHORITY_EXPIRED = "authority_expired"
+    AUTHORITY_REPLAYED = "authority_replayed"
     RETENTION_POLICY_INVALID = "retention_policy_invalid"
     MEETING_URL_INVALID = "meeting_url_invalid"
 
@@ -82,6 +84,7 @@ class CaptureAuthority:
     authorized_at: Optional[datetime]
     valid_until: Optional[datetime]
     scope_expiries: Optional[ScopeExpiries]
+    grant_id: Optional[str] = None
     meeting_url_sha256: Optional[str] = None
 
 
@@ -141,6 +144,16 @@ def _capture_evidence(
         or not timedelta(0) < authority.valid_until - authority.authorized_at <= MAX_AUTHORITY_LIFETIME
     ):
         raise CaptureDenied(CaptureDenial.AUTHORITY_EXPIRED)
+    grant_id = authority.grant_id
+    if (
+        not isinstance(grant_id, str)
+        or not grant_id.strip()
+        or len(grant_id) > 128
+        or any(ord(character) < 32 for character in grant_id)
+    ):
+        raise CaptureDenied(CaptureDenial.AUTHORITY_SCOPE_MISMATCH)
+    grant_id = grant_id.strip()
+    grant_id_sha256 = hashlib.sha256(grant_id.encode()).hexdigest()
     operator_enabled = _require_strict_bool(
         authority.operator_enabled, CaptureDenial.OPERATOR_POLICY_INVALID
     )
@@ -201,6 +214,7 @@ def _capture_evidence(
             "user_requested": True,
             "authorized_at": authority.authorized_at.isoformat(),
             "authority_valid_until": authority.valid_until.isoformat(),
+            "grant_id_sha256": grant_id_sha256,
         }
     }
     try:
@@ -340,6 +354,8 @@ async def request_capture(
             internal_secret=internal_secret,
             token_secret=token_secret,
         )
+    except CaptureGrantConsumed as error:
+        raise CaptureDenied(CaptureDenial.AUTHORITY_REPLAYED) from error
     except (MaxBotsExceeded, QuotaExceeded) as error:
         raise CaptureDenied(CaptureDenial.QUOTA_EXHAUSTED) from error
 

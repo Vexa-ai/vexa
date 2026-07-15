@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from ..meeting_writes import capture_is_withdrawn
 from .ports import (
+    CaptureGrantConsumed,
     DuplicateMeeting,
     MaxBotsExceeded,
     QuotaExceeded,
@@ -94,6 +95,19 @@ class InMemoryMeetingRepo:
         #    only ``None`` (no cap provided) skips the gate. Mirrors the real adapter.
         if max_concurrent is not None and max_concurrent <= 0:
             raise MaxBotsExceeded(user_id, max_concurrent)
+        capture = data.get("zaki_capture") if isinstance(data, dict) else None
+        grant_id_sha256 = (
+            capture.get("grant_id_sha256") if isinstance(capture, dict) else None
+        )
+        if isinstance(grant_id_sha256, str):
+            for meeting in self._meetings.values():
+                prior_capture = meeting["data"].get("zaki_capture")
+                if (
+                    meeting["user_id"] == user_id
+                    and isinstance(prior_capture, dict)
+                    and prior_capture.get("grant_id_sha256") == grant_id_sha256
+                ):
+                    raise CaptureGrantConsumed("capture authority has already been consumed")
         # 1. dedup — an ACTIVE row for (user, platform, native) blocks the spawn (409).
         for m in self._meetings.values():
             if (
@@ -201,7 +215,10 @@ class InMemoryMeetingRepo:
         row["end_time"] = "2026-06-20T09:00:00Z"
         row["data"]["failure_stage"] = "runtime_spawn"
         row["data"]["spawn_failure_reason"] = reason
-        row["data"].update(dict(data or {}))
+        patch = dict(data or {})
+        if capture_is_withdrawn(row["data"]):
+            patch.pop("zaki_capture", None)
+        row["data"].update(patch)
         return dict(row)
 
     async def withdraw_capture(

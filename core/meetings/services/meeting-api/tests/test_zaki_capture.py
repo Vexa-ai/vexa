@@ -1,6 +1,7 @@
 """ZAKI capture profile — authority intersection and visible consent evidence."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from meeting_api import create_app
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+from meeting_api.bot_spawn import QuotaExceeded
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 from meeting_api.capture import (
     CaptureAuthority,
@@ -52,6 +54,7 @@ def _allowed(native_meeting_id: str = "abc-defg-hij") -> CaptureAuthority:
         authorized_at=AUTHORIZED_AT,
         valid_until=VALID_UNTIL,
         scope_expiries=RETENTION_EXPIRIES,
+        grant_id=f"grant-{native_meeting_id}",
     )
 
 
@@ -89,6 +92,7 @@ async def test_authorized_capture_forces_visible_bot_and_persists_content_free_e
         "user_requested": True,
         "authorized_at": "2026-07-15T08:31:00+00:00",
         "authority_valid_until": "2026-07-15T08:36:00+00:00",
+        "grant_id_sha256": hashlib.sha256(b"grant-abc-defg-hij").hexdigest(),
     }
     assert "transcript" not in json.dumps(meeting["data"]["zaki_capture"]).lower()
 
@@ -265,6 +269,17 @@ async def test_late_active_callback_is_not_emitted_after_withdrawal(monkeypatch,
     stored = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
     assert stored["status"] == "completed"
     assert stored["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert [
+        (entry["from"], entry["to"])
+        for entry in stored["data"]["status_transition"]
+    ] == [(None, "joining"), ("joining", "completed")]
+    assert [
+        (
+            envelope["data"]["status_change"]["old_status"],
+            envelope["data"]["status_change"]["new_status"],
+        )
+        for envelope in app.state.status_change_webhooks
+    ] == [(None, "joining"), ("joining", "completed")]
     assert [envelope["event_type"] for envelope in app.state.typed_webhooks] == [
         "meeting.completed"
     ]
@@ -308,6 +323,54 @@ async def test_withdrawal_is_idempotent_and_preserves_first_timestamp(monkeypatc
     assert first["changed"] is True
     assert second == {**first, "changed": False}
     assert len(publisher.published) == 2
+
+
+async def test_withdrawn_capture_rejects_replay_of_the_same_consent_grant(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    authority = replace(
+        _allowed(), grant_id="grant-20260715-0831-tenant-a-user-7"
+    )
+    first = await request_capture(
+        repo,
+        runtime,
+        authority=authority,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        runtime=runtime,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=AUTHORIZED_AT + timedelta(minutes=1),
+    )
+
+    with pytest.raises(CaptureDenied, match="authority_replayed"):
+        await request_capture(
+            repo,
+            runtime,
+            authority=authority,
+            tenant_id="tenant-a",
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id="abc-defg-hij",
+            token_secret=SECRET,
+            evaluated_at=AUTHORIZED_AT + timedelta(minutes=2),
+        )
+
+    latest = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert latest["id"] == first["id"]
+    assert latest["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert len(runtime.specs) == 1
 
 
 async def test_withdrawal_is_tenant_scoped_and_mutation_free_on_mismatch(monkeypatch):
@@ -723,3 +786,55 @@ async def test_runtime_quota_rejection_is_a_named_terminal_non_capture(monkeypat
     assert meeting["data"]["zaki_capture"]["state"] == "denied"
     assert meeting["data"]["zaki_capture"]["denial"] == "quota_exhausted"
     assert repo.sessions == []
+
+
+async def test_runtime_rejection_cannot_overwrite_concurrent_withdrawal(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+
+    class DelayedQuotaRuntime(FakeRuntimeClient):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def create_workload(self, spec):
+            self.specs.append(spec)
+            self.started.set()
+            await self.release.wait()
+            raise QuotaExceeded("owner quota exceeded")
+
+    runtime = DelayedQuotaRuntime()
+    capture = asyncio.create_task(
+        request_capture(
+            repo,
+            runtime,
+            authority=_allowed("runtime-race"),
+            tenant_id="tenant-a",
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id="runtime-race",
+            evaluated_at=AUTHORIZED_AT,
+            token_secret=SECRET,
+        )
+    )
+    await runtime.started.wait()
+    await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        runtime=runtime,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="runtime-race",
+        withdrawn_at=WITHDRAWN_AT,
+    )
+    runtime.release.set()
+
+    with pytest.raises(CaptureDenied) as exc:
+        await capture
+
+    meeting = await repo.find_latest(USER, "google_meet", "runtime-race")
+    assert exc.value.code is CaptureDenial.QUOTA_EXHAUSTED
+    assert meeting["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert meeting["data"]["zaki_capture"]["withdrawn_at"] == WITHDRAWN_AT.isoformat()

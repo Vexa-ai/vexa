@@ -48,8 +48,11 @@ the gateway's `X-User-Limits` header (resolved upstream from `/internal/validate
 The runtime kernel's own `owner_quota` → `QuotaExceeded` (→ 429) is the defense-in-depth BACKSTOP.
 When that backstop or another runtime spawn failure fires after row reservation but before workload
 creation, `mark_spawn_rejected(...)` makes the row terminal with content-free failure attribution;
-it cannot remain an active `requested` orphan. Join-retry re-spawns and `continue_meeting` sessions
-count against the same cap.
+it cannot remain an active `requested` orphan, and it never overwrites a concurrently committed
+capture withdrawal. Caller-supplied meeting URLs are parsed before repository/runtime I/O and reject
+HTTPS localhost, IP literals, and legacy/encoded numeric hosts that browser URL parsing would
+normalize into an IP target. Join-retry re-spawns and `continue_meeting` sessions count against the
+same cap.
 
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.

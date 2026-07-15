@@ -18,6 +18,7 @@ from typing import Optional
 from ..meeting_writes import MEETING_WRITE_LOCK_NAMESPACE, capture_is_withdrawn
 from ..sessions import new_session
 from .ports import (
+    CaptureGrantConsumed,
     DuplicateMeeting,
     MaxBotsExceeded,
     QuotaExceeded,
@@ -358,6 +359,24 @@ class SqlAlchemyMeetingRepo:
             await db.execute(
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
+            capture = data.get("zaki_capture") if isinstance(data, dict) else None
+            grant_id_sha256 = (
+                capture.get("grant_id_sha256") if isinstance(capture, dict) else None
+            )
+            if isinstance(grant_id_sha256, str):
+                consumed = (
+                    await db.execute(
+                        select(Meeting.id)
+                        .where(
+                            Meeting.user_id == user_id,
+                            Meeting.data["zaki_capture"]["grant_id_sha256"].astext
+                            == grant_id_sha256,
+                        )
+                        .limit(1)
+                    )
+                ).scalar()
+                if consumed is not None:
+                    raise CaptureGrantConsumed("capture authority has already been consumed")
             # 1. dedup — under the lock, an active row for (user, platform, native) blocks the spawn.
             dup = (
                 await db.execute(
@@ -531,7 +550,10 @@ class SqlAlchemyMeetingRepo:
             merged = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             merged["failure_stage"] = "runtime_spawn"
             merged["spawn_failure_reason"] = reason
-            merged.update(dict(data or {}))
+            patch = dict(data or {})
+            if capture_is_withdrawn(merged):
+                patch.pop("zaki_capture", None)
+            merged.update(patch)
             meeting.data = merged
             flag_modified(meeting, "data")
             await db.commit()

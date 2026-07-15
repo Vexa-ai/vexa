@@ -237,3 +237,7 @@ class DuplicateMeeting(Exception):
     Raised by ``MeetingRepo.create_meeting_guarded`` (the atomic dedup) — either because the in-txn
     dedup query found an active row, or because the unique partial index on active rows rejected the
     concurrent insert (the DB-level backstop). Re-exported from ``service`` for the router's mapping."""
+
+
+class CaptureGrantConsumed(DuplicateMeeting):
+    """A single-use ZAKI capture authority has already reserved a meeting row."""

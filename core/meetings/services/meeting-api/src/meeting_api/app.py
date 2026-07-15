@@ -158,6 +158,8 @@ def _mount_lifecycle(
     callback reconciles against the durable status. After a persisted advance it PUBLISHES a ws.v1
     ``BotStatus`` frame to ``bm:meeting:{id}:status`` for the gateway ``/ws`` to forward to clients.
     """
+    from copy import deepcopy
+
     import jsonschema
 
     from .lifecycle.machine import IllegalTransition, TransitionSource
@@ -243,11 +245,15 @@ def _mount_lifecycle(
                               span="lifecycle.callback", fields={"error": str(e)})
                 if persisted:
                     sink.store.rehydrate(connection_id, persisted)
+        accepted_record = deepcopy(sink.store.get(connection_id)) if connection_id else None
         try:
             change = sink.apply_change(
                 body,
                 transition_source=transition_source,
                 force_terminal_on_destroy=force_terminal_on_destroy,
+                force_terminal_after_stop=bool(
+                    accepted_record is not None and accepted_record.stop_requested
+                ),
             )
         except IllegalTransition as e:
             return (
@@ -297,6 +303,9 @@ def _mount_lifecycle(
             and capture_is_withdrawn(meeting_data)
             and meeting_row.get("status") != rec.status.value
         )
+        if suppressed_withdrawn_advance and accepted_record is not None:
+            accepted_record.stop_requested = True
+            sink.store.replace(accepted_record)
         visible_change = not change.no_op and not suppressed_withdrawn_advance
         if visible_change:
             envelope = build_status_change_envelope(change)

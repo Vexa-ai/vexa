@@ -25,6 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meeting_api.collector import consume_segments
+from meeting_api.collector.ports import TranscriptWriteRefused
 from meeting_api.collector.db_writer import (
     ACTIVE_MEETINGS_KEY,
     PROC_PENDING_KEY,
@@ -199,6 +200,22 @@ async def test_redis_is_trimmed_only_after_a_confirmed_durable_write(store, bus,
     # The next (healthy) tick drains it.
     assert await db_writer_tick(redis_c, store, now=LATER) == 1
     assert _durable_texts(store) == ["keep me"]
+
+
+async def test_withdrawal_refusal_purges_buffer_instead_of_retrying_pii(store, bus, redis_c):
+    await bus.xadd(
+        "transcription_segments",
+        json.loads(_message(1, [_seg("s1", 1.0, "do not retain")])["payload"]),
+    )
+    await consume_segments(store, bus)
+
+    class _WithdrawnSink:
+        async def upsert_segments(self, meeting_id, segments):
+            raise TranscriptWriteRefused("meeting is not writable")
+
+    assert await flush_meeting_segments(redis_c, _WithdrawnSink(), 1, now=LATER) == 0
+    assert await redis_c.hlen(segments_hash_key(1)) == 0
+    assert await redis_c.smembers(ACTIVE_MEETINGS_KEY) == set()
 
 
 # ── (c) completion finalizes — terminal lifecycle advance ⇒ immediate durable flush ─────────────

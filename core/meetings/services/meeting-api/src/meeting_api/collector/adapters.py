@@ -572,8 +572,6 @@ class SqlAlchemyTranscriptStore:
         UPDATE, never a duplicate row."""
         from datetime import datetime as _dt
 
-        from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
-
         rows = []
         for seg in segments:
             sid = seg.get("segment_id")
@@ -595,9 +593,27 @@ class SqlAlchemyTranscriptStore:
         if not rows:
             return
         async with self._session_factory() as db:
+            lock_params = {
+                "lock_namespace": MEETING_WRITE_LOCK_NAMESPACE,
+                "meeting_id": int(meeting_id),
+            }
+            await db.execute(
+                self._statement(
+                    "SELECT pg_advisory_xact_lock_shared(:lock_namespace, :meeting_id)"
+                ),
+                lock_params,
+            )
+            result = await db.execute(
+                self._statement("SELECT data FROM meetings WHERE id = :meeting_id"),
+                {"meeting_id": int(meeting_id)},
+            )
+            meeting = result.mappings().first()
+            data = meeting["data"] if meeting and isinstance(meeting["data"], dict) else {}
+            if meeting is None or capture_is_withdrawn(data):
+                raise TranscriptWriteRefused("meeting is not writable")
             for row in rows:
                 await db.execute(
-                    sql_text("""
+                    self._statement("""
                         INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
                         VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
                         ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL

@@ -290,6 +290,28 @@ def test_post_bots_jitsi_localhost_and_ipv6_422(monkeypatch):
         assert r.status_code == 422, f"{bad}: {r.status_code} {r.text}"
 
 
+@pytest.mark.parametrize(
+    "bad",
+    (
+        "https://2130706433/Room",
+        "https://127.1/Room",
+        "https://0177.0.0.1/Room",
+        "https://0x7f000001/Room",
+        "https://%31%32%37.0.0.1/Room",
+    ),
+)
+def test_post_bots_rejects_browser_normalized_loopback_hosts(monkeypatch, bad):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+
+    response = _client().post(
+        "/bots",
+        headers=HEADERS,
+        json={"platform": "jitsi", "native_meeting_id": "Room", "meeting_url": bad},
+    )
+
+    assert response.status_code == 422, f"{bad}: {response.status_code} {response.text}"
+
+
 def test_post_bots_jitsi_hostname_url_accepted(monkeypatch):
     """Negative control: a real https hostname deployment sails through the guard → 201."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
