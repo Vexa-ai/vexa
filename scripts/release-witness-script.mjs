@@ -15,14 +15,27 @@
 // witnessed_by/at/deployment, and sets signed_off:true. release-witness-gate.mjs enforces that every
 // user-visible entry is witnessed and every backend entry names evidence (full-coverage gate).
 //
+// The batch is bounded by the last release that ACTUALLY SHIPPED — not the last tag that exists.
+// A tag is not a release: a candidate can be tagged, published, fail its witness, and be abandoned
+// (v0.12.5 was). Keying the baseline off tag existence lets an abandoned candidate's whole batch
+// fall through a hole — v0.12.4's receipt ends before it, v0.12.6's begins after it — so those PRs
+// reach users in the next promote with no entry in any manifest. `releases/<tag>/witness.json` is
+// the record of a release (releases/README.md: "the receipt is the record"), so the baseline is the
+// greatest lower tag that HAS one. An abandoned tag has no receipt and can never become a baseline.
+//
 // Usage: RELEASE_VERSION=vX.Y.Z GITHUB_REPOSITORY=owner/repo node scripts/release-witness-script.mjs
 //        [> releases/vX.Y.Z/witness.json]   (writes to stdout)
+//        RELEASE_PREV_TAG=vA.B.C  — override the baseline explicitly (escape hatch; logged loudly)
 
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const VERSION = process.env.RELEASE_VERSION;
 if (!REPO || !VERSION) { console.error("release-witness-script: RELEASE_VERSION + GITHUB_REPOSITORY required"); process.exit(2); }
+
+const ROOT = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+const hasReceipt = (tag) => existsSync(`${ROOT}/releases/${tag}/witness.json`);
 
 function ghRaw(p) { let e; for (let i = 0; i < 3; i++) { try { return execSync(`gh api "${p}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch (x) { e = x; } } throw e; }
 const ghj = (p) => JSON.parse(ghRaw(p));
@@ -30,9 +43,27 @@ const ghj = (p) => JSON.parse(ghRaw(p));
 function parseVer(t) { const m = String(t).match(/^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/); return m ? { core: [+m[1], +m[2], +m[3]], pre: m[4] || null, raw: t } : null; }
 function cmpVer(a, b) { for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === b.pre) return 0; if (!a.pre) return 1; if (!b.pre) return -1; return a.pre < b.pre ? -1 : 1; }
 function prevTag() {
+  if (process.env.RELEASE_PREV_TAG) {
+    console.error(`release-witness-script: baseline OVERRIDDEN by RELEASE_PREV_TAG=${process.env.RELEASE_PREV_TAG}`);
+    return process.env.RELEASE_PREV_TAG;
+  }
   const cur = parseVer(VERSION), tags = [];
   for (let pg = 1; pg <= 10; pg++) { const b = ghj(`repos/${REPO}/tags?per_page=100&page=${pg}`); for (const t of b) { const p = parseVer(t.name); if (p && !p.pre) tags.push(p); } if (b.length < 100) break; }
-  const lower = tags.filter((t) => cmpVer(t, cur) < 0).sort(cmpVer); return lower.length ? lower[lower.length - 1].raw : null;
+  const lower = tags.filter((t) => cmpVer(t, cur) < 0).sort(cmpVer);
+  if (!lower.length) return null;
+  // Walk down from the nearest tag to the last one that SHIPPED (carries a receipt). Skipped tags
+  // are abandoned candidates: their PRs never reached users, so they belong in THIS batch — the
+  // batch is what the promote actually hands users, which is (last shipped) → (this version).
+  for (let i = lower.length - 1; i >= 0; i--) {
+    if (hasReceipt(lower[i].raw)) {
+      const skipped = lower.slice(i + 1).map((t) => t.raw);
+      if (skipped.length) console.error(`release-witness-script: baseline ${lower[i].raw} (last SHIPPED) — skipping abandoned candidate(s) ${skipped.join(", ")}: tagged but no releases/<tag>/witness.json, so their PRs ship with ${VERSION} and are batched here`);
+      return lower[i].raw;
+    }
+  }
+  // Bootstrap: no receipts exist yet (pre-ADR-0029 history). Fall back to the nearest tag.
+  console.error(`release-witness-script: no prior receipt under ${VERSION}; falling back to nearest tag ${lower[lower.length - 1].raw}`);
+  return lower[lower.length - 1].raw;
 }
 function batchPRs(prev) {
   const nums = new Set();
