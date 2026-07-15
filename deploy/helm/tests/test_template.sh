@@ -39,6 +39,7 @@ need 1 'serviceAccountName: vexa-vexa-runtime' "runtime SA bound"
 # must stay green, the env ref is optional:true).
 need 1 'key: CLAUDE_CODE_OAUTH_TOKEN' "agent-api CLAUDE_CODE_OAUTH_TOKEN secret ref"
 need 2 'key: ANTHROPIC_AUTH_TOKEN'    "ANTHROPIC_AUTH_TOKEN secret refs (agent-api + runtime)"
+need 2 'name: MEETING_API_URL' "MEETING_API_URL set on gateway AND meeting-api"
 
 # auth unset (values-test) → the chart Secret must NOT carry the key; auth set → it must.
 if printf '%s\n' "$RENDER" | grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN:'; then

@@ -77,7 +77,7 @@
    "key": "MEETING_API_URL",
    "class": "defaulted",
    "default": "http://meeting-api:8080",
-   "description": "this service's own base URL as the spawned bot must reach it (lifecycle.v1 callback + transcript socket); compose/helm rely on the default service DNS name, lite overrides to localhost",
+   "description": "this service's own base URL as the spawned bot must reach it (lifecycle.v1 callback + transcript socket); compose relies on the default service DNS name, helm sets it explicitly to the release-qualified Service DNS, lite overrides to localhost",
    "targets": [
     "lite"
    ]

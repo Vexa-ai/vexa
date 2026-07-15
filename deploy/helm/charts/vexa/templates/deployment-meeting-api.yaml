@@ -59,6 +59,8 @@ spec:
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: RUNTIME_API_URL
               value: "http://{{ include "vexa.componentName" (list . "runtime") }}:{{ .Values.runtime.service.port }}"
+            - name: MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:
