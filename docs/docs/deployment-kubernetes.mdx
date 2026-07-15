@@ -55,6 +55,15 @@ count) alongside `pipeline.consumer_lag`, and degrades to `503` once it exceeds
 `PIPELINE_PENDING_ALARM` (default `100`) — a stuck batch is a reportable state, not a silent
 stall.
 
+## In-cluster self-addressing
+
+Under Helm the meeting-api Service is release-qualified (`<release>-vexa-meeting-api`),
+not the bare `meeting-api` that the Compose stack uses. So the chart sets `MEETING_API_URL`
+explicitly on the meeting-api deployment to `http://<release>-vexa-meeting-api:8080` — the
+address a spawned bot calls back on for its lifecycle callback and recording upload. Left
+unset it would fall back to the compose-only default `http://meeting-api:8080`, which does
+not resolve in-cluster.
+
 ## Honest status
 
 The k8s backend **lifecycle and the workspace mount are implemented** (the workspace store
