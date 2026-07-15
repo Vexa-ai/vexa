@@ -55,6 +55,13 @@ routes call admin-api with the server's `VEXA_ADMIN_API_KEY` (admin tier, like t
 scope every operation to the user resolved from the httpOnly auth cookies — a `user_id` from the
 client is never accepted. The minted token value is returned once, at creation.
 
+Separately, every OAuth **or** email **login** mints its own API token named `terminal-login`
+(distinct from the self-serve tokens above). These login tokens are **capped per user** — after each
+sign-in the terminal prunes a user's oldest `terminal-login` tokens beyond `VEXA_TERMINAL_LOGIN_TOKEN_CAP`
+(default `3`), so repeated sign-ins (including an OAuth redirect loop) leave a bounded set of live
+tokens rather than one new token per sign-in. The prune only ever touches `terminal-login`-named
+tokens; **self-serve tokens you created above are never pruned by login.**
+
 ## Isolated evaluation
 
 No test suite yet (`tests/` absent). Standalone build + typecheck:
