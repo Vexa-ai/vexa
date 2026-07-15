@@ -41,6 +41,20 @@ destroyed`) and delegates only the substrate question — *how do I start, obser
 workload?* — to the backend. On `k8s`, a workload is a bare Pod; the same dispatch, contracts,
 and worker run identically to the Docker backend. See [Execution](/architecture/execution).
 
+## Scaling meeting-api
+
+`meetingApi.replicaCount` defaults to `2`, and that is safe for the segment consumer.
+Each replica now joins the `transcription_segments` consumer group under a **per-pod
+identity** (`collector-<hostname>`, overridable with `COLLECTOR_CONSUMER_NAME`), and a
+surviving replica periodically `XAUTOCLAIM`s a crashed replica's un-acked segment batch and
+drains it through the normal persist path — so no transcript segments are orphaned when a
+pod dies mid-batch. The reclaim only fires once a batch has idled past
+`COLLECTOR_RECLAIM_MIN_IDLE_MS` (default `60000`), so a live peer's in-flight batch is never
+stolen. `/health` exposes `pipeline.pending_depth` (the group's delivered-but-un-acked
+count) alongside `pipeline.consumer_lag`, and degrades to `503` once it exceeds
+`PIPELINE_PENDING_ALARM` (default `100`) — a stuck batch is a reportable state, not a silent
+stall.
+
 ## Honest status
 
 The k8s backend **lifecycle and the workspace mount are implemented** (the workspace store
