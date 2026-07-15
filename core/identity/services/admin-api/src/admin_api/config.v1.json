@@ -55,6 +55,20 @@
    "targets": []
   },
   {
+   "key": "DB_POOL_SIZE",
+   "class": "defaulted",
+   "default": "5",
+   "description": "SQLAlchemy async-engine pool_size (persistent connections per pod). Pure runtime override — reconcile with deploy/db-budget.json (Σ replicas × (pool_size + max_overflow) + reserved ≤ max_connections) on managed Postgres. #635.",
+   "targets": []
+  },
+  {
+   "key": "DB_MAX_OVERFLOW",
+   "class": "defaulted",
+   "default": "10",
+   "description": "SQLAlchemy async-engine max_overflow (burst connections above pool_size per pod). Pure runtime override — reconcile with deploy/db-budget.json. #635.",
+   "targets": []
+  },
+  {
    "key": "DEV_MODE",
    "class": "defaulted",
    "default": "false",

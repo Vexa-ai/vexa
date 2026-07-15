@@ -61,9 +61,10 @@ def build_production_app():
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
 
     import redis.asyncio as aioredis
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from . import create_app
+    from .db import build_engine
     from .bot_spawn.adapters import HttpRuntimeClient, SqlAlchemyMeetingRepo
     from .collector.adapters import RedisStreamBus, SqlAlchemyTranscriptStore
     from .recordings.adapters import S3Storage, SqlAlchemyRecordingRepo
@@ -76,7 +77,7 @@ def build_production_app():
     # validation only — a different concern.) None → the recordings verifier falls back to ADMIN_TOKEN.
     token_secret = os.getenv("ADMIN_TOKEN") or None
 
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = build_engine(database_url)  # #635: env-steered pool (pool_pre_ping preserved in the helper)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     # #528: harden the shared Redis client so a Redis outage surfaces as a bounded exception the
     # per-tick handlers already catch — not a hung/zombie socket that only a restart heals. Same
