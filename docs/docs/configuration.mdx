@@ -45,6 +45,15 @@ stays GPU-free and reaches it over the network via the two variables above.
 |---|---|---|
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `vexa` / `postgres` / `postgres` | Postgres credentials (metadata). |
 | `POSTGRES_HOST_PORT` | `5458` | Host port mapped to Postgres. |
+| `DB_POOL_SIZE` | `5` | SQLAlchemy async-engine `pool_size` — persistent connections **per pod** — read by admin-api and meeting-api and applied to each service's engine. |
+| `DB_MAX_OVERFLOW` | `10` | SQLAlchemy async-engine `max_overflow` — burst connections above `pool_size`, per pod. Ceiling per pod is `pool_size + max_overflow` (default `15`). |
+
+<Note>
+`DB_POOL_SIZE` / `DB_MAX_OVERFLOW` are pure runtime overrides. On managed Postgres with a hard
+`max_connections`, reconcile them with the per-service connection budget in `deploy/db-budget.json`,
+whose accounting is `Σ (replicas × (pool_size + max_overflow)) + reserved ≤ max_connections`.
+The defaults (`5` / `10`) match that budget.
+</Note>
 | `MINIO_ENDPOINT` | `minio:9000` | Object storage endpoint (recordings + workspaces). |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | MinIO credentials. |
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `vexa-access-key` / `vexa-secret-key` | MinIO root credentials. |
