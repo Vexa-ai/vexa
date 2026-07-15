@@ -238,6 +238,57 @@ async function provisionUserWorkspace(token: string): Promise<void> {
   }
 }
 
+/** The stable marker on login-minted tokens — this is the ONLY set the login cap prunes.
+ *  Self-serve tokens (minted via /api/tokens with a user-chosen name) carry a different name
+ *  and are NEVER touched by the prune below. */
+export const TERMINAL_LOGIN_TOKEN_NAME = "terminal-login";
+
+/** How many `terminal-login` tokens a single user may keep. A cap, not a purge: a user's few
+ *  genuine devices survive while a sign-in loop cannot exceed N. Configurable, default 3. */
+export function terminalLoginTokenCap(): number {
+  const raw = parseInt(process.env.VEXA_TERMINAL_LOGIN_TOKEN_CAP || "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 3;
+}
+
+/** BEST-EFFORT: after a login mint, bound the user's `terminal-login` tokens to the newest N.
+ *  Lists the user's tokens, keeps only those named `terminal-login`, sorts oldest→newest, and
+ *  revokes everything beyond the newest cap. NEVER touches differently-named (self-serve) tokens.
+ *  Every failure (list error, a 404 on a concurrently-deleted token) is logged and swallowed — a
+ *  prune problem must never turn a successful sign-in into a failure (mirrors bootstrapAdminClaim /
+ *  provisionUserWorkspace above). */
+async function pruneLoginTokens(userId: string | number): Promise<void> {
+  try {
+    const listed = await listUserTokens(userId);
+    if (!listed.ok || !listed.data) {
+      console.warn(`[terminal-auth] login-token prune skipped (list failed): ${listed.error}`);
+      return;
+    }
+    const cap = terminalLoginTokenCap();
+    const loginTokens = listed.data
+      .filter((t) => t.name === TERMINAL_LOGIN_TOKEN_NAME)
+      // oldest first: prefer created_at, fall back to numeric id
+      .sort((a, b) => {
+        const ta = a.created_at ? Date.parse(a.created_at) : NaN;
+        const tb = b.created_at ? Date.parse(b.created_at) : NaN;
+        if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+        return Number(a.id) - Number(b.id);
+      });
+
+    const overflow = loginTokens.slice(0, Math.max(0, loginTokens.length - cap));
+    for (const tok of overflow) {
+      const revoked = await revokeToken(tok.id);
+      if (!revoked.ok) {
+        console.warn(`[terminal-auth] login-token prune: revoke of token ${tok.id} failed (swallowed): ${revoked.error}`);
+      }
+    }
+    if (overflow.length) {
+      console.info(`[terminal-auth] login-token prune: user ${userId} over cap ${cap}, revoked ${overflow.length} oldest login token(s)`);
+    }
+  } catch (err) {
+    console.warn("[terminal-auth] login-token prune failed (sign-in continues):", (err as Error).message);
+  }
+}
+
 /** Find the user by email, creating them if they don't exist, then mint an APIToken.
  *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface. */
 export async function findOrCreateUserToken(
@@ -260,10 +311,15 @@ export async function findOrCreateUserToken(
     return { ok: false, status: found.status || 503, error: found.error || "Failed to look up user" };
   }
 
-  const minted = await createUserToken(user.id);
+  // Mint the login token with a stable `terminal-login` name so it is distinguishable from
+  // user-created self-serve tokens and can be bounded (find-or-create used to mint unconditionally
+  // with no name and no cap → one live token per sign-in, forever).
+  const minted = await mintUserToken(user.id, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME });
   if (!minted.ok || !minted.data?.token) {
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
   }
+  // Bound the user's login tokens to the newest N (best-effort; never blocks sign-in).
+  await pruneLoginTokens(user.id);
   // First-run bootstrap: on a fresh instance the FIRST successful sign-in claims the admin role
   // (no-op everywhere else — admin exists, or an allowlist runs the instance). Covers both the
   // direct email login and the OAuth signIn callback, which both land here.
