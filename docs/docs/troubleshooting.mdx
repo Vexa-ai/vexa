@@ -133,6 +133,18 @@ write is rejected, check that the dispatch's trigger is `message`/`scheduled` (w
 - Wipe and restart from clean: `make down` (or `docker compose -p vexa-v012 down -v` to drop the
   postgres + minio volumes too), then `make all`.
 
+## Scaling meeting-api to more than one replica
+
+Running `meetingApi.replicaCount > 1` (the Helm chart default is `2`) is **safe**. Every replica
+starts the same background sweeps, but each sweep's real work is **single-flighted** by a Postgres
+session-level advisory lock (one per loop): the replica that acquires the lock runs the tick, the
+others skip it that interval. So a sweep's real work — notably the `calendar-sync` external ICS
+fetch — runs **once per interval across the cluster, not once per replica**. Sweep intervals
+(`CALENDAR_SYNC_INTERVAL_S`, etc.) are therefore per-cluster, not per-replica. A replica that dies
+mid-tick drops its lock on disconnect, so the next interval is picked up by another replica — no
+leader-election setup required. On a single replica the lock is always free, so behaviour is
+unchanged. Note that `scheduler-tick` is not a production loop and is no longer started.
+
 ## Still stuck?
 
 Open an issue or ask on the [GitHub repo](https://github.com/Vexa-ai/vexa). Include the failing request,
