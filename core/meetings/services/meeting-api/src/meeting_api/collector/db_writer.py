@@ -226,11 +226,18 @@ async def flush_meeting_processed(redis_c, sink, meeting_id: int) -> int:
         if isinstance(note, dict):
             notes.append(note)
     if notes or last_id != cursor:
-        await merge(
-            meeting_id,
-            view_id=PROC_VIEW_ID, kind=PROC_VIEW_KIND,
-            notes=notes, source_cursor=last_id, params=params,
-        )
+        try:
+            await merge(
+                meeting_id,
+                view_id=PROC_VIEW_ID, kind=PROC_VIEW_KIND,
+                notes=notes, source_cursor=last_id, params=params,
+            )
+        except TranscriptWriteRefused:
+            # Withdrawal is permanent, not a retryable sink failure. Remove transcript-derived
+            # content from both the live stream and the completion re-drain queue.
+            await redis_c.delete(proc_stream_key(meeting_id))
+            await redis_c.zrem(PROC_PENDING_KEY, str(meeting_id))
+            return 0
     return len(notes)
 
 

@@ -19,11 +19,19 @@ Protocols structurally — no inheritance required.
 """
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
+from typing import Any, AsyncContextManager, AsyncIterator, Optional, Protocol, runtime_checkable
 
 
 class TranscriptWriteRefused(RuntimeError):
     """The meeting disappeared or capture was withdrawn before segment persistence."""
+
+
+class TranscriptBatchWriter(Protocol):
+    """A writer valid only while its store's shared meeting-write lease is held."""
+
+    async def append_segments(self, segments: list[dict]) -> None:
+        """Persist one decoded message's valid segments in a single store batch."""
+        ...
 
 
 @runtime_checkable
@@ -105,6 +113,12 @@ class TranscriptStore(Protocol):
         """Persist one ingested transcript segment for ``meeting_id`` (keyed by its
         ``segment_id`` — stable identity, last-write-wins, exactly the collector's Redis-hash
         persistence)."""
+        ...
+
+    def transcript_write_lease(
+        self, meeting_id: int
+    ) -> AsyncContextManager[TranscriptBatchWriter]:
+        """Guard persistence and all resulting live publication as one consent-checked unit."""
         ...
 
     async def connect_doc(

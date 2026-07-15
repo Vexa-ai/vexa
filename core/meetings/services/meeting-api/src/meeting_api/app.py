@@ -234,16 +234,19 @@ def _mount_lifecycle(
         # first makes active/stopping → completed a legal transition again. Best-effort: a DB hiccup
         # must never fail the callback (we fall back to the in-process record as-is).
         connection_id = body.get("connection_id")
+        persisted = None
         if connection_id:
             existing = sink.store.get(connection_id)
-            if existing is None or existing.status is None:
+            needs_rehydrate = existing is None or existing.status is None
+            needs_stop_reconcile = body.get("status") in ("completed", "failed")
+            if needs_rehydrate or needs_stop_reconcile:
                 try:
                     persisted = await meeting_repo.get_status_by_session(session_uid=connection_id)
                 except Exception as e:  # noqa: BLE001 — rehydration is best-effort
                     persisted = None
                     log_event("lifecycle_rehydrate_failed", audience="system", level="warning",
                               span="lifecycle.callback", fields={"error": str(e)})
-                if persisted:
+                if needs_rehydrate and persisted:
                     sink.store.rehydrate(connection_id, persisted)
         accepted_record = deepcopy(sink.store.get(connection_id)) if connection_id else None
         try:
@@ -252,7 +255,8 @@ def _mount_lifecycle(
                 transition_source=transition_source,
                 force_terminal_on_destroy=force_terminal_on_destroy,
                 force_terminal_after_stop=bool(
-                    accepted_record is not None and accepted_record.stop_requested
+                    (accepted_record is not None and accepted_record.stop_requested)
+                    or persisted == "stopping"
                 ),
             )
         except IllegalTransition as e:

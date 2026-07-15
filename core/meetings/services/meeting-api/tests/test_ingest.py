@@ -12,6 +12,7 @@ Asserts:
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 
 import fakeredis.aioredis
@@ -81,6 +82,40 @@ async def test_ingest_refuses_transcript_after_capture_withdrawal(bus):
     assert persisted == 0
     assert doc["segments"] == []
     assert bus.published == []
+
+
+async def test_ingest_does_not_publish_when_withdrawal_wins_between_segments(bus):
+    """The complete message is one consent-guarded unit: a refusal must prevent every live write."""
+
+    class WithdrawBetweenSegmentsStore:
+        def __init__(self):
+            self.appended = 0
+
+        async def append_segment(self, meeting_id, segment):
+            # Models the old per-segment lease: the first segment drains, then withdrawal commits
+            # before the second lease starts.
+            self.appended += 1
+            if self.appended == 2:
+                from meeting_api.collector import TranscriptWriteRefused
+
+                raise TranscriptWriteRefused("withdrawn between segments")
+
+        @asynccontextmanager
+        async def transcript_write_lease(self, meeting_id):
+            # A batch lease cannot begin after withdrawal has won the exclusive barrier.
+            from meeting_api.collector import TranscriptWriteRefused
+
+            raise TranscriptWriteRefused("meeting is not writable")
+            yield  # pragma: no cover - required to make this an async context manager
+
+    persisted = await ingest(WithdrawBetweenSegmentsStore(), bus, _message(1, [
+        {"segment_id": "before", "start": 1.0, "end": 2.0, "text": "private", "completed": True},
+        {"segment_id": "after", "start": 2.0, "end": 3.0, "text": "revoked", "completed": True},
+    ]))
+
+    assert persisted == 0
+    assert bus.published == []
+    assert await bus._client.xlen("tc:meeting:1") == 0
 
 
 async def test_ingest_publishes_mutable_on_gateway_channel(store, bus):

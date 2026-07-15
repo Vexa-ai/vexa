@@ -190,10 +190,6 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         seg = _coerce_segment(raw)
         if seg is None:
             continue
-        try:
-            await store.append_segment(meeting_id, seg)
-        except TranscriptWriteRefused:
-            break
         persisted.append(seg)
 
     if persisted:
@@ -214,37 +210,46 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         if not native_id:
             pair = await _resolve_native(store, meeting_id)
             native_id, platform_native = pair if pair else (None, None)
-        # FAULT-ISOLATED (P18): the segments are already persisted (durable). A transient redis blip on
-        # the live publish must NOT propagate out of ingest() — that would abort the batch BEFORE
-        # consume_segments acks it. Surface it and return the persisted count.
         try:
-            await redis.publish(
-                _mutable_channel(meeting_id),
-                json.dumps({
-                    "type": "transcript",
-                    "meeting": {"id": meeting_id, "native_id": native_id, "platform": platform_native},
-                    "speaker": speaker,
-                    "confirmed": confirmed,
-                    "pending": pending,
-                    "ts": _now_iso(),
-                }),
-            )
-        except Exception as e:  # noqa: BLE001 — publish is best-effort; persistence already succeeded
-            _log_publish_failure(meeting_id, e)
-        # P23/P0: the collector is the SINGLE writer of the transcript feed tc:meeting:{meeting_id}
-        # (the numeric ROW id — cross-tenant safe; the native id collided across users/rows). Append each
-        # persisted segment (confirmed + pending, in order) for the copilot worker + terminal SSE. Written
-        # unconditionally now (no longer gated on native resolution — the row id is always in scope). The
-        # native id still rides in the wire payload for DISPLAY. Empty-text segments are skipped.
-        stream = _transcript_stream(meeting_id)
-        wire_uid = native_id or str(meeting_id)
-        for seg in persisted:
-            if not (seg.get("text") or "").strip():
-                continue
-            try:
-                await redis.xadd(stream, _to_native_wire(wire_uid, seg))
-            except Exception as e:  # noqa: BLE001 — best-effort; persistence already succeeded
-                _log_publish_failure(meeting_id, e)
+            # One shared lease spans the complete message: the consent state is checked once, all
+            # segments land in one Redis transaction, and every resulting live write happens before
+            # withdrawal can acquire the exclusive barrier. A refused lease publishes nothing.
+            async with store.transcript_write_lease(meeting_id) as writer:
+                await writer.append_segments(persisted)
+
+                # FAULT-ISOLATED (P18): the segments are already persisted. A transient live-publish
+                # blip must not abort the source batch before it is acknowledged.
+                try:
+                    await redis.publish(
+                        _mutable_channel(meeting_id),
+                        json.dumps({
+                            "type": "transcript",
+                            "meeting": {
+                                "id": meeting_id,
+                                "native_id": native_id,
+                                "platform": platform_native,
+                            },
+                            "speaker": speaker,
+                            "confirmed": confirmed,
+                            "pending": pending,
+                            "ts": _now_iso(),
+                        }),
+                    )
+                except Exception as e:  # noqa: BLE001 — persistence already succeeded
+                    _log_publish_failure(meeting_id, e)
+
+                # P23/P0: the collector is the SINGLE writer of the numeric-row transcript feed.
+                stream = _transcript_stream(meeting_id)
+                wire_uid = native_id or str(meeting_id)
+                for seg in persisted:
+                    if not (seg.get("text") or "").strip():
+                        continue
+                    try:
+                        await redis.xadd(stream, _to_native_wire(wire_uid, seg))
+                    except Exception as e:  # noqa: BLE001 — persistence already succeeded
+                        _log_publish_failure(meeting_id, e)
+        except TranscriptWriteRefused:
+            return 0
 
     return len(persisted)
 

@@ -304,6 +304,22 @@ async def test_processed_doc_persists_into_meeting_data_as_versioned_view(store,
     assert view["params"] == params        # a params-less drain never erases provenance
 
 
+async def test_withdrawal_refuses_processed_notes_and_purges_pending_pii(store, redis_c):
+    store._meetings[1]["data"]["zaki_capture"] = {"state": "withdrawn"}
+    await redis_c.xadd(
+        proc_stream_key(1),
+        {"note": json.dumps(_note("s1", "participant private detail"))},
+    )
+    await redis_c.zadd(PROC_PENDING_KEY, {"1": 9_999_999_999})
+
+    merged = await flush_meeting_processed(redis_c, store, 1)
+
+    assert merged == 0
+    assert "processed" not in store._meetings[1]["data"]
+    assert await redis_c.xlen(proc_stream_key(1)) == 0
+    assert await redis_c.zscore(PROC_PENDING_KEY, "1") is None
+
+
 async def test_processed_views_are_multi_consumer_other_views_preserved(store, redis_c):
     """The views LIST is the multi-consumer seam: a future per-workspace/other processing's view
     must survive the copilot view's upsert untouched."""

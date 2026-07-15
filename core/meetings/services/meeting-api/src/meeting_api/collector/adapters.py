@@ -17,6 +17,7 @@ redis installed in the test venv — which is why ``pyproject.toml`` needs NO ``
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import hashlib
 import json
 import os
@@ -61,6 +62,28 @@ def validate_transcript_grant(grant: dict, user_email: Optional[str]) -> Optiona
         if not user_email or user_email.lower() not in allowed:
             return "not_allowed"
     return None
+
+
+class _RedisTranscriptBatchWriter:
+    """Persist one decoded transcript message with one Redis transaction."""
+
+    def __init__(self, redis_client, meeting_id: int):
+        self._redis = redis_client
+        self._meeting_id = meeting_id
+
+    async def append_segments(self, segments: list[dict]) -> None:
+        if self._redis is None or not segments:
+            return
+        from .db_writer import ACTIVE_MEETINGS_KEY, segments_hash_key
+
+        hash_key = segments_hash_key(self._meeting_id)
+        ttl = int(os.environ.get("REDIS_SEGMENT_TTL", "3600"))
+        async with self._redis.pipeline(transaction=True) as pipe:
+            pipe.sadd(ACTIVE_MEETINGS_KEY, str(self._meeting_id))
+            for segment in segments:
+                pipe.hset(hash_key, segment["segment_id"], json.dumps(segment))
+            pipe.expire(hash_key, ttl)
+            await pipe.execute()
 
 
 def _doc_ref(doc: dict) -> dict:
@@ -519,18 +542,9 @@ class SqlAlchemyTranscriptStore:
             await db.commit()
             return {"meeting_id": mid, "ok": True}
 
-    async def append_segment(self, meeting_id, segment) -> None:
-        # Live segments land in the Redis hash (``meeting:{id}:segments``), flushed to Postgres by
-        # the background db-writer (``collector/db_writer.py``) — exactly the parent's
-        # persistence-only path (0.10 ``processors.py``): the same pipeline SADDs the meeting into
-        # ``active_meetings`` (the db-writer's sweep set) and re-arms the hash TTL, so an abandoned
-        # hash cannot linger forever once its segments were flushed.
-        if self._redis is None:
-            return
-        from .db_writer import ACTIVE_MEETINGS_KEY, segments_hash_key
-
-        hash_key = segments_hash_key(meeting_id)
-        ttl = int(os.environ.get("REDIS_SEGMENT_TTL", "3600"))
+    @asynccontextmanager
+    async def transcript_write_lease(self, meeting_id):
+        """Hold the shared consent barrier across batch persistence and its live publications."""
         lock_params = {
             "lock_namespace": MEETING_WRITE_LOCK_NAMESPACE,
             "meeting_id": int(meeting_id),
@@ -551,11 +565,7 @@ class SqlAlchemyTranscriptStore:
                 data = row["data"] if row and isinstance(row["data"], dict) else {}
                 if row is None or capture_is_withdrawn(data):
                     raise TranscriptWriteRefused("meeting is not writable")
-                async with self._redis.pipeline(transaction=True) as pipe:
-                    pipe.sadd(ACTIVE_MEETINGS_KEY, str(meeting_id))
-                    pipe.hset(hash_key, segment["segment_id"], json.dumps(segment))
-                    pipe.expire(hash_key, ttl)
-                    await pipe.execute()
+                yield _RedisTranscriptBatchWriter(self._redis, int(meeting_id))
             finally:
                 await db.execute(
                     self._statement(
@@ -563,6 +573,13 @@ class SqlAlchemyTranscriptStore:
                     ),
                     lock_params,
                 )
+
+    async def append_segment(self, meeting_id, segment) -> None:
+        # Compatibility seam for callers that produce a single segment. Ingest uses one lease for
+        # the complete decoded message so consent cannot be withdrawn between segment writes and
+        # their live publication.
+        async with self.transcript_write_lease(meeting_id) as writer:
+            await writer.append_segments([segment])
 
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink — UPSERT a batch of flushed segments into ``transcriptions``
@@ -647,23 +664,41 @@ class SqlAlchemyTranscriptStore:
         schema change), in the ADDRESSABLE, VERSIONED multi-consumer shape (release DoD):
         the view keyed ``view_id`` is upserted (other views preserved), its ``doc['notes']`` merged
         by note id, ``params`` = the processing metadata APPLIED, ``source_cursor`` = the stream
-        position the view reflects. ONE ``SELECT … FOR UPDATE`` row lock."""
-        from sqlalchemy import select
-        from sqlalchemy.orm.attributes import flag_modified
-
-        from .models import Meeting
-
+        position the view reflects. The shared meeting-write barrier is acquired before the row
+        lock, matching transcript and recording writers, so durable withdrawal wins against every
+        transcript-derived PostgreSQL mutation."""
         async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.id == int(meeting_id)).with_for_update()
-            meeting = (await db.execute(stmt)).scalars().first()
-            if not meeting:
-                return
-            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
-            meeting.data = _upsert_processed_view(
+            lock_params = {
+                "lock_namespace": MEETING_WRITE_LOCK_NAMESPACE,
+                "meeting_id": int(meeting_id),
+            }
+            await db.execute(
+                self._statement(
+                    "SELECT pg_advisory_xact_lock_shared(:lock_namespace, :meeting_id)"
+                ),
+                lock_params,
+            )
+            result = await db.execute(
+                self._statement("SELECT data FROM meetings WHERE id = :meeting_id FOR UPDATE"),
+                {"meeting_id": int(meeting_id)},
+            )
+            row = result.mappings().first()
+            data = row["data"] if row and isinstance(row["data"], dict) else {}
+            if row is None or capture_is_withdrawn(data):
+                raise TranscriptWriteRefused("meeting is not writable")
+            updated = _upsert_processed_view(
                 data, view_id=view_id, kind=kind, notes=notes,
                 source_cursor=source_cursor, params=params,
             )
-            flag_modified(meeting, "data")
+            await db.execute(
+                self._statement(
+                    "UPDATE meetings SET data = CAST(:data AS jsonb) WHERE id = :meeting_id"
+                ),
+                {
+                    "meeting_id": int(meeting_id),
+                    "data": json.dumps(updated, sort_keys=True),
+                },
+            )
             await db.commit()
 
     async def _mutate_docs(self, user_id, platform, native_meeting_id, mutator):

@@ -285,6 +285,60 @@ async def test_late_active_callback_is_not_emitted_after_withdrawal(monkeypatch,
     ]
 
 
+async def test_direct_terminal_callback_is_accepted_after_withdrawal_while_joining(monkeypatch, goldens):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    connection_id = repo.sessions[-1]["session_uid"]
+    app = create_app(meeting_repo=repo, runtime=runtime)
+    client = TestClient(app)
+    joining = {**goldens["joining"], "connection_id": connection_id}
+    completed = {**goldens["completed-stopped"], "connection_id": connection_id}
+    assert client.post("/bots/internal/callback/lifecycle", json=joining).status_code == 200
+    await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=WITHDRAWN_AT,
+    )
+
+    response = client.post("/bots/internal/callback/lifecycle", json=completed)
+
+    assert response.status_code == 200
+    assert response.json()["meeting_status"] == "completed"
+    stored = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert stored["status"] == "completed"
+    assert stored["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert [
+        (entry["from"], entry["to"])
+        for entry in stored["data"]["status_transition"]
+    ] == [(None, "joining"), ("joining", "completed")]
+    assert [
+        (
+            envelope["data"]["status_change"]["old_status"],
+            envelope["data"]["status_change"]["new_status"],
+        )
+        for envelope in app.state.status_change_webhooks
+    ] == [(None, "joining"), ("joining", "completed")]
+    assert [envelope["event_type"] for envelope in app.state.typed_webhooks] == [
+        "meeting.completed"
+    ]
+
+
 async def test_withdrawal_is_idempotent_and_preserves_first_timestamp(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
     repo = InMemoryMeetingRepo()

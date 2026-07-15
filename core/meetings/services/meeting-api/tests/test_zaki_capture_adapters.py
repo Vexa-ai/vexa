@@ -254,3 +254,48 @@ async def test_postgres_durable_transcript_flush_refuses_after_withdrawal(monkey
         )
 
     assert session.events == ["lock", "state"]
+
+
+class _ProcessedViewSession:
+    def __init__(self):
+        self.data = {"zaki_capture": {"state": "withdrawn"}}
+        self.events: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def commit(self):
+        self.events.append("commit")
+
+    async def execute(self, statement, params=None):
+        sql = " ".join(statement.split())
+        if "pg_advisory_xact_lock_shared" in sql:
+            self.events.append("lock")
+            return _Result()
+        if sql.startswith("SELECT data FROM meetings"):
+            self.events.append("row")
+            return _Result({"data": self.data})
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+
+async def test_postgres_processed_view_refuses_after_withdrawal_under_shared_barrier():
+    session = _ProcessedViewSession()
+    store = SqlAlchemyTranscriptStore(
+        lambda: session,
+        None,
+        statement_factory=lambda sql: sql,
+    )
+
+    with pytest.raises(TranscriptWriteRefused, match="not writable"):
+        await store.merge_processed_view(
+            41,
+            view_id="meeting-copilot:cleaned-transcript:v1",
+            kind="cleaned_transcript",
+            notes=[{"id": "s1", "text": "sensitive"}],
+            source_cursor="1-0",
+        )
+
+    assert session.events == ["lock", "row"]
