@@ -4,7 +4,9 @@
 //   • VALUE accepted  — the observation bundle is real. Runtime PRs: `value-fsm` (pr-value L3)
 //     GREEN on the head sha AND `state: value-signed` (the D9 human sign-off). Non-runtime PRs
 //     (no pr-value leg): `state: value-signed` alone.
-//   • DIFF accepted   — the code was reviewed. A GitHub review APPROVAL from a NON-AUTHOR whose
+//   • DIFF accepted   — the code was reviewed. Either the PR author is a MAINTAINER (holds the
+//     commit bit — a maintainer reviewing their own work is allowed; the mandatory-review rule is
+//     the quality gate for CONTRIBUTOR PRs), OR a GitHub review APPROVAL from a NON-AUTHOR whose
 //     commit_id == the PR head sha (a new push dismisses a stale approval — re-review required).
 //
 // This is a required status check on `main` (added to branch protection alongside `gates`). It
@@ -62,10 +64,24 @@ function valueFsmVerdict(sha) {
   return runs[0].conclusion === "success" ? "success" : "failure";
 }
 
-// A fresh, non-author APPROVED review: the reviewer's latest review is APPROVED and was submitted
-// against the current head sha (a later push moves the head and invalidates the approval).
+// Is the PR author a MAINTAINER — i.e. holds the commit bit (push access to this repo)? A
+// maintainer's own PR does not require a separate non-author review: the mandatory-review rule is
+// the quality gate for CONTRIBUTOR PRs, not for a maintainer reviewing their own work (D-R0 — a
+// maintainer's exclusive authorities are the ready-stamp and the merge).
+function authorIsMaintainer(login) {
+  if (!login) return false;
+  try {
+    const p = ghj(`repos/${REPO}/collaborators/${login}/permission`);
+    return p.permission === "admin" || p.permission === "write"; // admin/maintain/write = has the commit bit
+  } catch { return false; }
+}
+
+// DIFF accepted when EITHER the author is a maintainer (self-review, above) OR a fresh, non-author
+// APPROVED review exists: the reviewer's latest review is APPROVED and was submitted against the
+// current head sha (a later push moves the head and invalidates the approval).
 function diffAccepted(pr) {
   const author = pr.user?.login;
+  if (authorIsMaintainer(author)) return { ok: true, maintainer: true };
   const head = pr.head?.sha;
   const reviews = ghj(`repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`);
   const latestByUser = new Map();
@@ -96,7 +112,11 @@ function card(num) {
 
   // DIFF
   const d = diffAccepted(pr);
-  const diffWhy = d.ok ? `approved by @${d.by} on head` : "no non-author approval on the current head sha (a new push dismisses a stale approval)";
+  const diffWhy = d.ok
+    ? (d.maintainer
+        ? `maintainer self-review — @${pr.user?.login} holds the commit bit (no separate non-author review required)`
+        : `approved by @${d.by} on head`)
+    : "no non-author approval on the current head sha (a new push dismisses a stale approval)";
 
   return { num, ok: valueOk && d.ok, valueOk, valueWhy, diffOk: d.ok, diffWhy };
 }
