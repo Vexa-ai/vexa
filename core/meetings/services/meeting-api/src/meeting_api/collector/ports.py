@@ -221,6 +221,16 @@ class RedisBus(Protocol):
     ) -> list[tuple[str, dict]]:
         ...
 
+    async def reclaim_orphans(
+        self, *, group: str, stream: str, consumer: str, min_idle_ms: int, count: int = 10
+    ) -> list[tuple[str, dict]]:
+        """#636: reclaim DELIVERED-but-un-acked entries idle longer than ``min_idle_ms`` from ANY
+        consumer's PEL into ``consumer`` (XAUTOCLAIM) → ``[(message_id, fields), ...]``. A crashed
+        replica's orphaned batch is otherwise never re-delivered; this is the seam a surviving
+        replica uses to pick it up. One bounded call per tick (XAUTOCLAIM returns a continuation
+        cursor; the next tick continues) — never loops-to-exhaustion inside one call."""
+        ...
+
     async def ack(self, *, group: str, stream: str, message_ids: list[str]) -> None: ...
 
     async def publish(self, channel: str, data: str) -> Any: ...

@@ -21,6 +21,8 @@ The ``:mutable`` payload mirrors the bot's live publisher
 from __future__ import annotations
 
 import json
+import os
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,7 +31,16 @@ from .ports import RedisBus, TranscriptStore
 # Stream / consumer-group defaults (parent ``collector/config.py``).
 STREAM_NAME = "transcription_segments"
 CONSUMER_GROUP = "collector_group"
-CONSUMER_NAME = "collector-main"
+# #636: the consumer name must be UNIQUE per replica, else every meeting-api pod joins the group
+# under one identity and a crashed pod's delivered-but-un-acked batch is orphaned forever (no peer
+# can distinguish — or reclaim — it). Derive it from pod identity: in k8s the pod name IS the
+# hostname, so ``collector-<hostname>`` is distinct per replica; keep ``COLLECTOR_CONSUMER_NAME`` as
+# an explicit override (and to pin a deterministic name in single-process tests).
+CONSUMER_NAME = os.environ.get("COLLECTOR_CONSUMER_NAME") or f"collector-{socket.gethostname()}"
+# #636: how long a delivered-but-un-acked entry must sit idle before another replica may reclaim it.
+# The gate is what keeps reclaim from STEALING a live peer's in-flight batch (which is pending only
+# for the sub-second between XREADGROUP and XACK) — only a genuinely orphaned batch idles past this.
+RECLAIM_MIN_IDLE_MS = int(os.environ.get("COLLECTOR_RECLAIM_MIN_IDLE_MS", "60000"))
 
 
 def _mutable_channel(meeting_id: int) -> str:
@@ -261,6 +272,40 @@ async def consume_segments(
     total = 0
     acked: list[str] = []
     for message_id, fields in batch:
+        total += await ingest(store, redis, fields)
+        acked.append(message_id)
+    if acked:
+        await redis.ack(group=group, stream=stream, message_ids=acked)
+    return total
+
+
+async def reclaim_segments(
+    store: TranscriptStore,
+    redis: RedisBus,
+    *,
+    stream: str = STREAM_NAME,
+    group: str = CONSUMER_GROUP,
+    consumer: str = CONSUMER_NAME,
+    min_idle_ms: int = RECLAIM_MIN_IDLE_MS,
+    count: int = 10,
+) -> int:
+    """#636: reclaim ORPHANED entries — a crashed replica's delivered-but-un-acked batch that sits
+    in its PEL with no surviving owner — and drain them through the SAME ``ingest`` → ``ack`` path
+    ``consume_segments`` uses, so at-least-once delivery holds across replicas.
+
+    One bounded ``XAUTOCLAIM`` per call (``min_idle_ms`` gated). The gate is load-bearing: an entry
+    that a LIVE peer merely holds in-flight (pending for the sub-second between its XREADGROUP and
+    XACK) idles far less than ``min_idle_ms`` and is therefore NEVER stolen — only a genuinely
+    orphaned batch (idle past the threshold) is reclaimed. A single call with a bounded ``count`` is
+    sufficient: XAUTOCLAIM returns a continuation cursor and the NEXT tick continues from it, so this
+    never loops-to-exhaustion inside one tick (which would reintroduce a hang surface). Returns the
+    total segments persisted from the reclaimed batch."""
+    reclaimed = await redis.reclaim_orphans(
+        group=group, stream=stream, consumer=consumer, min_idle_ms=min_idle_ms, count=count
+    )
+    total = 0
+    acked: list[str] = []
+    for message_id, fields in reclaimed:
         total += await ingest(store, redis, fields)
         acked.append(message_id)
     if acked:

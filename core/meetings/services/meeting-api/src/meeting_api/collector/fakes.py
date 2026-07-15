@@ -542,6 +542,20 @@ class FakeRedisBus:
                 out.append((mid, decoded))
         return out
 
+    async def reclaim_orphans(self, *, group, stream, consumer, min_idle_ms, count=10):
+        """#636: mirror of ``RedisStreamBus.reclaim_orphans`` over ``fakeredis.aioredis`` (which
+        supports XAUTOCLAIM ≥ 2.21). Reclaims idle delivered-but-un-acked entries into ``consumer``."""
+        from .adapters import _decode_claimed
+        try:
+            await self._client.xgroup_create(name=stream, groupname=group, id="0", mkstream=True)
+        except Exception:
+            pass
+        resp = await self._client.xautoclaim(
+            name=stream, groupname=group, consumername=consumer,
+            min_idle_time=min_idle_ms, start_id="0-0", count=count,
+        )
+        return _decode_claimed(resp)
+
     async def ack(self, *, group, stream, message_ids):
         if message_ids:
             await self._client.xack(stream, group, *message_ids)

@@ -359,6 +359,34 @@
    "default": "3600",
    "description": "#527: acked transcription_segments entries older than this are trimmed; an unread (un-acked) entry is NEVER trimmed regardless of age (the 2026-04-26 data-loss guard)",
    "targets": []
+  },
+  {
+   "key": "COLLECTOR_CONSUMER_NAME",
+   "class": "defaulted",
+   "default": "",
+   "description": "#636: per-replica Redis consumer name for the segment group; empty → derived as collector-<hostname> (pod identity) so a crashed replica's pending batch is attributable + reclaimable",
+   "targets": []
+  },
+  {
+   "key": "COLLECTOR_RECLAIM_MIN_IDLE_MS",
+   "class": "defaulted",
+   "default": "60000",
+   "description": "#636: min idle (ms) before a replica reclaims another replica's un-acked segment batch via XAUTOCLAIM, so a live peer's in-flight batch is never stolen",
+   "targets": []
+  },
+  {
+   "key": "SEGMENT_RECLAIM_EVERY_N_TICKS",
+   "class": "defaulted",
+   "default": "120",
+   "description": "#636: run the orphan-reclaim scan every N segment-consumer ticks",
+   "targets": []
+  },
+  {
+   "key": "PIPELINE_PENDING_ALARM",
+   "class": "defaulted",
+   "default": "100",
+   "description": "#636: /health degrades to 503 when the segment group's pending-entry (PEL) depth exceeds this — a stuck/orphaned batch is a reportable state (P18)",
+   "targets": []
   }
  ],
  "capabilities": {
