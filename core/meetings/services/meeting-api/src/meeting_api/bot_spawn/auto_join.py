@@ -70,10 +70,16 @@ def due_rows(rows: list[dict], *, now: datetime,
 
 def _production_transcribe_gate() -> Optional[str]:
     """Mirror POST /bots' CC4 fail-loud STT gate: when transcription resolves ON (env default) but
-    the ``stt`` capability is not configured, refuse the auto-spawn with the reason string."""
-    from ..config_preflight import CONFIGURED, capability_state, missing_capability_keys
+    the ``stt`` capability is not configured, refuse the auto-spawn with the reason string.
 
-    if os.getenv("TRANSCRIBE_ENABLED", "true").lower() != "true":
+    Read through ``env_flag`` for the same reason as router.py: with a bare ``os.getenv`` a
+    set-but-empty ``TRANSCRIBE_ENABLED=`` made ``"" != "true"`` true, so this gate returned None and
+    refused nothing — the empty value both disabled transcription AND disarmed the alarm meant to
+    catch it. That double failure is why the v0.12.5 witness saw silence with no error."""
+    from ..config_preflight import CONFIGURED, capability_state, missing_capability_keys
+    from .env_flags import env_flag
+
+    if not env_flag("TRANSCRIBE_ENABLED", True):
         return None
     state = capability_state("stt")
     if state != CONFIGURED:
