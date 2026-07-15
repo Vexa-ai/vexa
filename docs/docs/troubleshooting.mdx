@@ -70,8 +70,17 @@ usual causes:
 
 ## Bot joins but there's no transcript
 
-The bot is capturing audio, but transcription isn't configured.
+The bot is capturing audio, but transcription isn't configured — or the bot was spawned
+**capture-only**, which looks identical from the outside.
 
+- **First, check whether the bot was spawned capture-only.** `GET /bots` (or `GET /meetings/{id}`)
+  reports the resolved flag: `data.transcribe_enabled: false` means the bot was never asked to
+  transcribe, so no STT request was ever made and no error will appear anywhere. If it is `false`
+  and you did not intend that, an explicit `{"transcribe_enabled": true}` on `POST /bots` overrides
+  the deployment default and confirms the diagnosis in one call.
+- Confirm `TRANSCRIBE_ENABLED` is not set to a false value in your `.env`. An **empty**
+  `TRANSCRIBE_ENABLED=` means `true` (the default) — but a trailing comment on that line does not:
+  `docker run --env-file` keeps the comment as part of the value. Keep comments on their own line.
 - Confirm `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` are set (see
   [Configuration](/configuration#transcription-stt)). Unset → audio is recorded, no text is produced.
 - Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
