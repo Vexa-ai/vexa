@@ -267,7 +267,9 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"
 ```
 
 The master metadata returns a `raw_url` pointing at the byte stream
-`GET /recordings/{recording_id}/media/{media_file_id}/raw`, which the player loads.
+`GET /recordings/{recording_id}/media/{media_file_id}/raw`, which the player loads. The `/raw` endpoint
+honours a `Range` header and returns `206 Partial Content` with `Content-Range` and `Accept-Ranges` —
+these are preserved **through the gateway**, not only on a direct hit, so browser playback and seeking work.
 
 ---
 

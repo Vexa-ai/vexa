@@ -89,6 +89,30 @@ def test_authed_request_passes_body_and_status_verbatim():
     assert r.json() == {"id": 99, "platform": "google_meet"}
 
 
+def test_range_response_preserves_content_range_headers():
+    """A 206 from a recording /raw byte stream must keep its Content-Range/Accept-Ranges on the way
+    out. Without them the response is a malformed 206 and browsers abort <audio>/<video> playback
+    (the 0.12 recording-playback "Preparing audio…" hang). Regression guard for the buffered proxy
+    dropping end-to-end response headers."""
+    downstream = FakeDownstream(
+        status_code=206,
+        content_type="audio/webm",
+        extra_headers={
+            "content-range": "bytes 500-999/722448",
+            "accept-ranges": "bytes",
+        },
+    )
+    client, _ = _client(downstream=downstream)
+    r = client.get(
+        "/recordings/369743266808/media/827161823280/raw?type=audio",
+        headers={**AUTH, "range": "bytes=500-999"},
+    )
+    assert r.status_code == 206
+    assert r.headers["content-range"] == "bytes 500-999/722448"
+    assert r.headers["accept-ranges"] == "bytes"
+    assert r.headers["content-type"].startswith("audio/webm")
+
+
 def test_rate_limit_returns_429_past_the_per_user_cap():
     """WS-6: with a per-user limiter injected, requests up to the bucket pass (verbatim), the next is
     throttled with 429 + Retry-After — closing the unlimited-requests-on-a-valid-key DoS gap."""

@@ -286,7 +286,22 @@ def create_app(
             media_type = resp_headers.get("content-type", "application/json")
         except Exception:
             pass
-        return Response(content=resp.content, status_code=resp.status_code, media_type=media_type)
+        # Preserve the END-TO-END headers a media/range response needs. The buffered proxy
+        # otherwise returns a 206 with no Content-Range, which browsers treat as a protocol
+        # violation and abort — breaking recording playback (<audio>/<video> Range streaming).
+        # Length/encoding headers are intentionally NOT copied: Starlette recomputes
+        # Content-Length from the (already httpx-decoded) body; a stale one would corrupt it.
+        passthrough = {
+            k: resp_headers[k]
+            for k in ("content-range", "accept-ranges", "content-disposition")
+            if k in resp_headers
+        }
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type=media_type,
+            headers=passthrough,
+        )
 
     def _meeting(path: str) -> str:
         return f"{meeting_api_url}{path}"
