@@ -140,3 +140,56 @@ async def test_consumer_name_is_pod_derived():
     finally:
         del _os.environ["COLLECTOR_CONSUMER_NAME"]
         importlib.reload(ingest_mod)  # restore the default for other tests
+
+
+# ── #636 witness regression: reclaim degrades (never crashes the consumer) on a Redis without XAUTOCLAIM ──
+
+async def test_reclaim_orphans_degrades_when_xautoclaim_unsupported():
+    """On Redis < 6.2 the server has no ``XAUTOCLAIM`` and replies ``unknown command`` — the v0.12.5
+    Lite box bundled Redis 6.0.16, so ``reclaim_segments`` threw every segment-consumer tick and
+    transcription died. ``reclaim_orphans`` must now degrade to a **no-op** (return ``[]``), leaving
+    the normal ``XREADGROUP`` consume path untouched. This offline test uses fakeredis (which DOES
+    have XAUTOCLAIM), so it drives the adapter directly with a client that raises like Redis 6.0."""
+    from redis.exceptions import ResponseError
+
+    from meeting_api.collector.adapters import RedisStreamBus
+
+    class _Redis60:
+        async def xgroup_create(self, **kw):
+            return None
+
+        async def xautoclaim(self, **kw):
+            raise ResponseError("unknown command 'XAUTOCLAIM', with args beginning with: ...")
+
+    bus = RedisStreamBus(_Redis60())
+    out = await bus.reclaim_orphans(
+        group=CONSUMER_GROUP, stream=STREAM_NAME, consumer="collector-x", min_idle_ms=60000
+    )
+    assert out == [], "unsupported XAUTOCLAIM must degrade to no reclaimed entries, not raise"
+    assert bus._reclaim_unsupported is True, "the log-once latch must be set"
+    # a subsequent call keeps degrading (and, per the latch, does not re-log)
+    assert await bus.reclaim_orphans(
+        group=CONSUMER_GROUP, stream=STREAM_NAME, consumer="collector-x", min_idle_ms=1
+    ) == []
+
+
+async def test_reclaim_orphans_reraises_unrelated_response_error():
+    """Only 'unknown command' / XAUTOCLAIM ResponseErrors degrade — any OTHER ResponseError must
+    propagate (we don't want a real Redis fault silently swallowed as 'no orphans')."""
+    from redis.exceptions import ResponseError
+
+    from meeting_api.collector.adapters import RedisStreamBus
+
+    class _RedisBadReply:
+        async def xgroup_create(self, **kw):
+            return None
+
+        async def xautoclaim(self, **kw):
+            raise ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
+
+    bus = RedisStreamBus(_RedisBadReply())
+    with pytest.raises(ResponseError):
+        await bus.reclaim_orphans(
+            group=CONSUMER_GROUP, stream=STREAM_NAME, consumer="c", min_idle_ms=1
+        )
+    assert bus._reclaim_unsupported is False, "an unrelated error must NOT flip the unsupported latch"

@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
 from .ports import RedisBus, TranscriptStore
+
+log = logging.getLogger("meeting_api.collector.adapters")
 
 
 def _decode_claimed(resp) -> "list[tuple[str, dict]]":
@@ -998,6 +1001,7 @@ class RedisStreamBus:
 
     def __init__(self, client):
         self._client = client
+        self._reclaim_unsupported = False  # #636: log-once latch when the Redis lacks XAUTOCLAIM
 
     async def read_segments(self, *, group, consumer, stream, count=10):
         try:
@@ -1021,15 +1025,35 @@ class RedisStreamBus:
 
     async def reclaim_orphans(self, *, group, stream, consumer, min_idle_ms, count=10):
         """#636: XAUTOCLAIM idle (crashed-replica) entries from the group's PEL into ``consumer``.
-        Bounded (single call, ``count`` cap) — the returned cursor lets the next tick continue."""
+        Bounded (single call, ``count`` cap) — the returned cursor lets the next tick continue.
+
+        XAUTOCLAIM needs **Redis >= 6.2**. On an older server (e.g. Redis 6.0, which the Lite image
+        bundled — the #636 regression the v0.12.5 witness caught) the command is unknown; rather than
+        crash the segment-consumer loop every tick, degrade to a **no-op** (return no reclaimed
+        entries). The normal consume path (XREADGROUP) is unaffected; only cross-replica orphan
+        recovery is unavailable until Redis is upgraded. Logged once."""
+        from redis.exceptions import ResponseError
+
         try:
             await self._client.xgroup_create(name=stream, groupname=group, id="0", mkstream=True)
         except Exception:
             pass  # BUSYGROUP — group already exists
-        resp = await self._client.xautoclaim(
-            name=stream, groupname=group, consumername=consumer,
-            min_idle_time=min_idle_ms, start_id="0-0", count=count,
-        )
+        try:
+            resp = await self._client.xautoclaim(
+                name=stream, groupname=group, consumername=consumer,
+                min_idle_time=min_idle_ms, start_id="0-0", count=count,
+            )
+        except ResponseError as e:
+            msg = str(e).lower()
+            if "unknown command" in msg or "xautoclaim" in msg:
+                if not self._reclaim_unsupported:
+                    self._reclaim_unsupported = True
+                    log.warning(
+                        "XAUTOCLAIM unsupported on this Redis (needs >= 6.2) — #636 orphan reclaim "
+                        "disabled; normal segment consumption is unaffected. Upgrade Redis to re-enable."
+                    )
+                return []
+            raise
         return _decode_claimed(resp)
 
     async def ack(self, *, group, stream, message_ids):
