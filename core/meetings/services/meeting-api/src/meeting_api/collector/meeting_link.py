@@ -61,13 +61,13 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
     parsed = urlparse(value)
     host = (parsed.hostname or "").lower()
     if host:
-        if "meet.google.com" in host:
+        if host == "meet.google.com":
             code = next((p for p in reversed(parsed.path.split("/")) if p), "").lower()
             return ("google_meet", code) if _GMEET_ID.match(code) else None
-        if "zoom" in host:
+        if host == "zoom.us" or host.endswith(".zoom.us"):
             m = _ZOOM_ID.search(parsed.path) or _ZOOM_ID.search(parsed.query)
             return ("zoom", m.group(0)) if m else None
-        if "teams.microsoft.com" in host or "teams.live.com" in host:
+        if host in ("teams.microsoft.com", "teams.live.com"):
             # Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
             thread = _TEAMS_THREAD.search(unquote(value))
             if thread:
@@ -76,6 +76,13 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
             short = _TEAMS_SHORT.search(parsed.path)
             if short:
                 return ("teams", short.group(1))
+            return None
+        # Do not let a vendor name embedded in an attacker-controlled hostname fall through to
+        # the deliberately permissive pasted-link Jitsi heuristic below.
+        if any(
+            vendor in host
+            for vendor in ("meet.google.com", "zoom.us", "teams.microsoft.com", "teams.live.com")
+        ):
             return None
         # Jitsi: the canonical public deployment, plus (for a deliberately pasted link) the common
         # self-hosted conventions — a host containing "jitsi", or a bare ``meet.*`` host (jitsi's

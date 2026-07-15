@@ -51,6 +51,8 @@ class _Session:
             self.events.append("user_lock")
             return _Result()
         if sql.startswith("SELECT id FROM meetings"):
+            assert "data->'zaki_capture'->>'tenant_id' = :tenant_id" in sql
+            assert params["tenant_id"] == "tenant-a"
             self.events.append("lookup")
             return _Result({"id": self.meeting["id"]})
         if "pg_advisory_xact_lock" in sql:
@@ -128,6 +130,9 @@ class _GuardedSpawnSession:
         if self.calls == 1:
             return _Result()
         if self.calls == 2:
+            sql = " ".join(statement.split())
+            assert "data->'zaki_capture'->>'tenant_id' = :tenant_id" in sql
+            assert params["tenant_id"] == "tenant-a"
             return _Result(
                 MappingProxyType({
                     "zaki_capture": {
@@ -152,6 +157,7 @@ async def test_postgres_spawn_rejects_authority_that_predates_scope_withdrawal()
             native_meeting_id="abc-defg-hij",
             data={
                 "zaki_capture": {
+                    "tenant_id": "tenant-a",
                     "state": "authorized",
                     "authorized_at": "2026-07-15T08:31:00+00:00",
                     "grant_id_sha256": "a" * 64,

@@ -12,9 +12,11 @@ authorities before it touches the meeting repository or runtime:
 The grant is bound to one tenant, user, platform/native meeting identity, and—when supplied—an exact
 SHA-256 of the validated meeting URL. It is valid for at most five minutes and single-use: the
 meeting row stores only a SHA-256 of its opaque grant id, and the atomic spawn transaction rejects
-any replay even after withdrawal moves the first row out of the active set. Spawn and withdrawal use
-the same per-user transaction lock; the latest scope withdrawal is a monotonic tombstone that also
-rejects a different grant unless its authorization is strictly newer than the withdrawal. The allowed
+replay within that tenant even after withdrawal moves the first row out of the active set. Spawn and
+withdrawal use the same per-user transaction lock; the latest tenant/user/meeting scope withdrawal
+is a monotonic tombstone that also rejects a different grant unless its authorization is strictly
+newer than the withdrawal. A different tenant neither consumes the grant identity nor inherits the
+tombstone, even when user and meeting identifiers coincide. The allowed
 path always joins as **ZAKI Notetaker**, enables recording and transcription, stores only content-free
 policy evidence under `meeting.data.zaki_capture`, and materializes immutable UTC
 audio/transcript/summary expiries under `meeting.data.zaki_retention`. Explicit meeting URLs must use

@@ -38,6 +38,7 @@ from .ports import (
     SpawnFailed,
     TranscriptionNotConfigured,
 )
+from .url_validation import validate_meeting_url
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
 # already do ``from .service import DuplicateMeeting`` (the router) keep working.
@@ -161,6 +162,11 @@ async def request_bot(
     """
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(platform, native_meeting_id)
+    if constructed_url is not None:
+        # Authoritative browser-navigation sink.  HTTP, capture, MCP, and scheduled auto-join
+        # callers do not all pass through the public router, so entry-point validation alone is
+        # insufficient.  Keep this before backend resolution and every repository/runtime write.
+        constructed_url = validate_meeting_url(constructed_url, platform=platform)
 
     # 1b. Resolve the transcription backend and gate BEFORE any DB write (C1, reorder not
     #     duplicate): the old router gate refused pre-insert; resolving here keeps that property —

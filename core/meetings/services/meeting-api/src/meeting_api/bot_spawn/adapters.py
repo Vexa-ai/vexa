@@ -359,6 +359,7 @@ class SqlAlchemyMeetingRepo:
                 {"uid": user_id},
             )
             capture = data.get("zaki_capture") if isinstance(data, dict) else None
+            tenant_id = capture.get("tenant_id") if isinstance(capture, dict) else None
             grant_id_sha256 = (
                 capture.get("grant_id_sha256") if isinstance(capture, dict) else None
             )
@@ -369,6 +370,7 @@ class SqlAlchemyMeetingRepo:
                             "SELECT data->'zaki_capture' AS zaki_capture FROM meetings "
                             "WHERE user_id = :user_id AND platform = :platform "
                             "AND platform_specific_id = :native_meeting_id "
+                            "AND data->'zaki_capture'->>'tenant_id' = :tenant_id "
                             "AND data->'zaki_capture'->>'state' = 'withdrawn' "
                             "ORDER BY created_at DESC, id DESC LIMIT 1"
                         ),
@@ -376,6 +378,7 @@ class SqlAlchemyMeetingRepo:
                             "user_id": user_id,
                             "platform": platform,
                             "native_meeting_id": native_meeting_id,
+                            "tenant_id": tenant_id,
                         },
                     )
                 ).mappings().first()
@@ -396,6 +399,7 @@ class SqlAlchemyMeetingRepo:
                         select(Meeting.id)
                         .where(
                             Meeting.user_id == user_id,
+                            Meeting.data["zaki_capture"]["tenant_id"].astext == tenant_id,
                             Meeting.data["zaki_capture"]["grant_id_sha256"].astext
                             == grant_id_sha256,
                         )
@@ -606,12 +610,15 @@ class SqlAlchemyMeetingRepo:
                     "SELECT id FROM meetings "
                     "WHERE user_id = :user_id AND platform = :platform "
                     "AND platform_specific_id = :native_meeting_id "
+                    "AND data->'zaki_capture'->>'tenant_id' = :tenant_id "
+                    "AND data->'zaki_capture'->>'state' IN ('authorized', 'withdrawn') "
                     "ORDER BY created_at DESC, id DESC LIMIT 1"
                 ),
                 {
                     "user_id": user_id,
                     "platform": platform,
                     "native_meeting_id": native_meeting_id,
+                    "tenant_id": tenant_id,
                 },
             )
             found = candidate.mappings().first()

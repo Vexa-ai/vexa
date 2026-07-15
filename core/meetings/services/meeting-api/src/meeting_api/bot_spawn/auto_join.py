@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable, Optional
 from ..obs import log_event
 from .ports import MaxBotsExceeded, QuotaExceeded, SpawnFailed
 from .service import DuplicateMeeting, request_bot
+from .url_validation import UnsafeMeetingUrl
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
 DEFAULT_LEAD_S = 60          # AUTO_JOIN_LEAD_S — join this many seconds BEFORE scheduled_at
@@ -174,7 +175,7 @@ async def auto_join_tick(
         except (MaxBotsExceeded, QuotaExceeded) as e:
             await _stamp_error(row, str(e) or "bot concurrency limit reached")
             continue
-        except SpawnFailed as e:
+        except (SpawnFailed, UnsafeMeetingUrl) as e:
             await _stamp_error(row, str(e) or "bot workload failed to start")
             continue
         counters["spawned"] += 1

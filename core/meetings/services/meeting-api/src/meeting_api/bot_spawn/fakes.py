@@ -96,6 +96,7 @@ class InMemoryMeetingRepo:
         if max_concurrent is not None and max_concurrent <= 0:
             raise MaxBotsExceeded(user_id, max_concurrent)
         capture = data.get("zaki_capture") if isinstance(data, dict) else None
+        tenant_id = capture.get("tenant_id") if isinstance(capture, dict) else None
         grant_id_sha256 = (
             capture.get("grant_id_sha256") if isinstance(capture, dict) else None
         )
@@ -105,6 +106,7 @@ class InMemoryMeetingRepo:
                 if (
                     meeting["user_id"] == user_id
                     and isinstance(prior_capture, dict)
+                    and prior_capture.get("tenant_id") == tenant_id
                     and prior_capture.get("grant_id_sha256") == grant_id_sha256
                 ):
                     raise CaptureGrantConsumed("capture authority has already been consumed")
@@ -114,6 +116,8 @@ class InMemoryMeetingRepo:
             if meeting["user_id"] == user_id
             and meeting["platform"] == platform
             and meeting["native_meeting_id"] == native_meeting_id
+            and isinstance(meeting["data"].get("zaki_capture"), dict)
+            and meeting["data"]["zaki_capture"].get("tenant_id") == tenant_id
             and capture_is_withdrawn(meeting["data"])
         ]
         if prior_withdrawals and capture_authority_is_stale(
@@ -242,6 +246,9 @@ class InMemoryMeetingRepo:
             if row["user_id"] == user_id
             and row["platform"] == platform
             and row["native_meeting_id"] == native_meeting_id
+            and isinstance(row["data"].get("zaki_capture"), dict)
+            and row["data"]["zaki_capture"].get("tenant_id") == tenant_id
+            and row["data"]["zaki_capture"].get("state") in ("authorized", "withdrawn")
         ]
         if not rows:
             return None

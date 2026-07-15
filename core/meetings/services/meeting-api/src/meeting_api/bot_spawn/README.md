@@ -49,11 +49,14 @@ The runtime kernel's own `owner_quota` → `QuotaExceeded` (→ 429) is the defe
 When that backstop or another runtime spawn failure fires after row reservation but before workload
 creation, `mark_spawn_rejected(...)` makes the row terminal with content-free failure attribution;
 it cannot remain an active `requested` orphan, and it never overwrites a concurrently committed
-capture withdrawal. Caller-supplied meeting URLs are parsed before repository/runtime I/O and reject
-HTTPS localhost, IP literals, and legacy/encoded numeric hosts that browser URL parsing would
-normalize into an IP target. Browser navigation is also platform-host-bound: Google Meet, Teams, and
-Zoom use their vendor domains; Jitsi uses `meet.jit.si` plus exact operator-configured
-`VEXA_JITSI_HOSTS`. Join-retry re-spawns and `continue_meeting` sessions count against the same cap.
+capture withdrawal. Every meeting URL is validated at the `request_bot` navigation sink before
+configuration lookup, repository I/O, or runtime I/O; route validation is only an earlier friendly
+error. The guard rejects HTTPS localhost, IP literals, credentials, controls, backslashes, and
+legacy/encoded numeric hosts that browser URL parsing would normalize differently. Browser
+navigation is also platform-host-bound: Google Meet, Teams, and Zoom use their vendor domains;
+Jitsi uses `meet.jit.si` plus exact operator-configured `VEXA_JITSI_HOSTS`. Auto-join stamps unsafe
+legacy planned URLs as row errors without aborting its sweep. Join-retry re-spawns and
+`continue_meeting` sessions count against the same cap.
 
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.

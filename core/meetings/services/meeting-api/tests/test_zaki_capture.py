@@ -419,6 +419,52 @@ async def test_withdrawn_capture_rejects_a_different_grant_authorized_before_wit
     assert len(runtime.specs) == 1
 
 
+async def test_withdrawal_tombstone_does_not_deny_another_tenant(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    await request_capture(
+        repo,
+        runtime,
+        authority=replace(_allowed(), grant_id="grant-a"),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        runtime=runtime,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=AUTHORIZED_AT + timedelta(minutes=1),
+    )
+    tenant_b_authority = replace(
+        _allowed(), tenant_id="tenant-b", grant_id="grant-a"
+    )
+
+    meeting = await request_capture(
+        repo,
+        runtime,
+        authority=tenant_b_authority,
+        tenant_id="tenant-b",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT + timedelta(minutes=2),
+    )
+
+    assert meeting["data"]["zaki_capture"]["tenant_id"] == "tenant-b"
+    assert meeting["data"]["zaki_capture"]["state"] == "authorized"
+    assert len(runtime.specs) == 2
+
+
 async def test_withdrawal_is_tenant_scoped_and_mutation_free_on_mismatch(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
     repo = InMemoryMeetingRepo()
@@ -453,6 +499,48 @@ async def test_withdrawal_is_tenant_scoped_and_mutation_free_on_mismatch(monkeyp
     assert stored["data"]["zaki_capture"]["state"] == "authorized"
     assert publisher.published == []
     assert runtime.deleted == []
+
+
+async def test_newer_other_tenant_row_does_not_shadow_withdrawal(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    tenant_a = await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    other = dict(repo._meetings[tenant_a["id"]])
+    other["id"] = 50
+    other["status"] = "completed"
+    other["data"] = {
+        **other["data"],
+        "zaki_capture": {
+            **other["data"]["zaki_capture"],
+            "tenant_id": "tenant-b",
+        },
+    }
+    repo._meetings[50] = other
+
+    receipt = await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=WITHDRAWN_AT,
+    )
+
+    assert receipt["meeting_id"] == tenant_a["id"]
+    assert repo._meetings[tenant_a["id"]]["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert repo._meetings[50]["data"]["zaki_capture"]["state"] == "authorized"
 
 
 async def test_withdrawal_rejects_malformed_timestamp_without_io():

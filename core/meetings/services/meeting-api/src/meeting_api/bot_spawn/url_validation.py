@@ -74,12 +74,19 @@ def validate_meeting_url(url: object, *, platform: object) -> str:
     if not isinstance(url, str) or not url.strip():
         raise UnsafeMeetingUrl("meeting_url must be a non-empty string")
     raw = url.strip()
+    # Chromium applies the WHATWG URL parser, where a backslash in an HTTPS authority is a
+    # path separator.  ``urllib.parse`` does not, so accepting it here can validate one host and
+    # navigate to another.  Controls have similar parser-dependent normalization behaviour.
+    if "\\" in raw or any(ord(character) < 32 or ord(character) == 127 for character in raw):
+        raise UnsafeMeetingUrl("meeting_url contains a browser-normalized delimiter")
     try:
         parsed = urlparse(raw)
     except ValueError:
         raise UnsafeMeetingUrl("meeting_url does not parse as a URL") from None
     if parsed.scheme != "https":
         raise UnsafeMeetingUrl("meeting_url must use https:// — the bot only joins TLS deployments")
+    if parsed.username is not None or parsed.password is not None:
+        raise UnsafeMeetingUrl("meeting_url cannot contain credentials")
     try:
         host = parsed.hostname
     except ValueError:
