@@ -315,10 +315,29 @@ def test_post_bots_rejects_browser_normalized_loopback_hosts(monkeypatch, bad):
 def test_post_bots_jitsi_hostname_url_accepted(monkeypatch):
     """Negative control: a real https hostname deployment sails through the guard → 201."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("VEXA_JITSI_HOSTS", "meet.example.org")
     r = _client().post("/bots", headers=HEADERS,
                        json={"platform": "jitsi", "native_meeting_id": "Room",
                              "meeting_url": "https://meet.example.org/room"})
     assert r.status_code == 201, r.text
+
+
+def test_post_bots_rejects_unconfigured_hostname(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.delenv("VEXA_JITSI_HOSTS", raising=False)
+
+    response = _client().post(
+        "/bots",
+        headers=HEADERS,
+        json={
+            "platform": "jitsi",
+            "native_meeting_id": "Room",
+            "meeting_url": "https://attacker-controlled.example/Room",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "approved for platform" in response.json()["detail"]
 
 
 def test_post_bots_zoom_shares_meeting_url_guard(monkeypatch):

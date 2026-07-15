@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import sys
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
 from meeting_api.bot_spawn.adapters import SqlAlchemyMeetingRepo
+from meeting_api.bot_spawn.ports import CaptureGrantConsumed
 from meeting_api.collector.adapters import SqlAlchemyTranscriptStore
 from meeting_api.collector.ports import TranscriptWriteRefused
 
@@ -21,6 +22,12 @@ class _Result:
 
     def first(self):
         return self._row
+
+    def scalar(self):
+        return self._row
+
+    def scalars(self):
+        return self
 
 
 class _Session:
@@ -40,6 +47,9 @@ class _Session:
     async def execute(self, statement, params=None):
         sql = " ".join(statement.split())
         params = params or {}
+        if "pg_advisory_xact_lock(:uid)" in sql:
+            self.events.append("user_lock")
+            return _Result()
         if sql.startswith("SELECT id FROM meetings"):
             self.events.append("lookup")
             return _Result({"id": self.meeting["id"]})
@@ -57,7 +67,7 @@ class _Session:
         raise AssertionError(f"unexpected SQL: {sql}")
 
 
-async def test_postgres_withdrawal_takes_exclusive_barrier_before_state_mutation():
+async def test_postgres_withdrawal_serializes_with_spawn_before_selecting_the_capture():
     meeting = {
         "id": 41,
         "user_id": 7,
@@ -90,7 +100,7 @@ async def test_postgres_withdrawal_takes_exclusive_barrier_before_state_mutation
         withdrawn_at="2026-07-15T08:41:00+00:00",
     )
 
-    assert session.events == ["lookup", "lock", "row", "update", "commit"]
+    assert session.events == ["user_lock", "lookup", "lock", "row", "update", "commit"]
     assert result["changed"] is True
     assert result["should_stop"] is True
     assert meeting["status"] == "stopping"
@@ -101,6 +111,53 @@ async def test_postgres_withdrawal_takes_exclusive_barrier_before_state_mutation
         "withdrawn_at": "2026-07-15T08:41:00+00:00",
     }
     assert meeting["data"]["stop_requested"] is True
+
+
+class _GuardedSpawnSession:
+    def __init__(self):
+        self.calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, statement, params=None):
+        self.calls += 1
+        if self.calls == 1:
+            return _Result()
+        if self.calls == 2:
+            return _Result(
+                MappingProxyType({
+                    "zaki_capture": {
+                        "state": "withdrawn",
+                        "withdrawn_at": "2026-07-15T08:32:00+00:00",
+                    }
+                })
+            )
+        raise AssertionError(f"unexpected guarded-spawn query: {statement}")
+
+
+async def test_postgres_spawn_rejects_authority_that_predates_scope_withdrawal():
+    repo = SqlAlchemyMeetingRepo(
+        lambda: _GuardedSpawnSession(),
+        statement_factory=lambda sql: sql,
+    )
+
+    with pytest.raises(CaptureGrantConsumed, match="predates"):
+        await repo.create_meeting_guarded(
+            user_id=7,
+            platform="google_meet",
+            native_meeting_id="abc-defg-hij",
+            data={
+                "zaki_capture": {
+                    "state": "authorized",
+                    "authorized_at": "2026-07-15T08:31:00+00:00",
+                    "grant_id_sha256": "a" * 64,
+                }
+            },
+        )
 
 
 class _TranscriptSession:

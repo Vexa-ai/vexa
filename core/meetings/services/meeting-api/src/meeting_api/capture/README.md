@@ -12,12 +12,15 @@ authorities before it touches the meeting repository or runtime:
 The grant is bound to one tenant, user, platform/native meeting identity, and—when supplied—an exact
 SHA-256 of the validated meeting URL. It is valid for at most five minutes and single-use: the
 meeting row stores only a SHA-256 of its opaque grant id, and the atomic spawn transaction rejects
-any replay even after withdrawal moves the first row out of the active set. The allowed path always
-joins as **ZAKI Notetaker**, enables recording and transcription, stores only content-free policy
-evidence under `meeting.data.zaki_capture`, and materializes immutable UTC audio/transcript/summary
-expiries under `meeting.data.zaki_retention`. Callers cannot override the bot name or inject evidence.
-Missing, malformed, expired, mismatched, or disabled authority returns a stable `CaptureDenial`
-before repository/runtime mutation.
+any replay even after withdrawal moves the first row out of the active set. Spawn and withdrawal use
+the same per-user transaction lock; the latest scope withdrawal is a monotonic tombstone that also
+rejects a different grant unless its authorization is strictly newer than the withdrawal. The allowed
+path always joins as **ZAKI Notetaker**, enables recording and transcription, stores only content-free
+policy evidence under `meeting.data.zaki_capture`, and materializes immutable UTC
+audio/transcript/summary expiries under `meeting.data.zaki_retention`. Explicit meeting URLs must use
+the approved host for their declared platform. Callers cannot override the bot name or inject
+evidence. Missing, malformed, expired, mismatched, or disabled authority returns a stable
+`CaptureDenial` before repository/runtime mutation.
 
 The runtime kernel still rechecks owner quota. If that defense-in-depth check rejects after the
 meeting row was reserved, the row is made terminal (`failed`) and its capture evidence becomes the

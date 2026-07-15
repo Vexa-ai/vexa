@@ -311,7 +311,7 @@ async def request_capture(
     evaluated_at = evaluated_at or datetime.now(timezone.utc)
     if meeting_url is not None:
         try:
-            meeting_url = validate_meeting_url(meeting_url)
+            meeting_url = validate_meeting_url(meeting_url, platform=platform)
         except UnsafeMeetingUrl:
             raise CaptureDenied(CaptureDenial.MEETING_URL_INVALID) from None
         expected_url_hash = authority.meeting_url_sha256

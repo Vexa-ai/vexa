@@ -373,6 +373,52 @@ async def test_withdrawn_capture_rejects_replay_of_the_same_consent_grant(monkey
     assert len(runtime.specs) == 1
 
 
+async def test_withdrawn_capture_rejects_a_different_grant_authorized_before_withdrawal(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    first_authority = replace(_allowed(), grant_id="grant-a")
+    stale_authority = replace(_allowed(), grant_id="grant-b")
+    await request_capture(
+        repo,
+        runtime,
+        authority=first_authority,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        runtime=runtime,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=AUTHORIZED_AT + timedelta(minutes=1),
+    )
+
+    with pytest.raises(CaptureDenied, match="authority_replayed"):
+        await request_capture(
+            repo,
+            runtime,
+            authority=stale_authority,
+            tenant_id="tenant-a",
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id="abc-defg-hij",
+            token_secret=SECRET,
+            evaluated_at=AUTHORIZED_AT + timedelta(minutes=2),
+        )
+
+    latest = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert latest["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert len(runtime.specs) == 1
+
+
 async def test_withdrawal_is_tenant_scoped_and_mutation_free_on_mismatch(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
     repo = InMemoryMeetingRepo()
@@ -737,7 +783,7 @@ async def test_capture_authority_is_bound_to_exact_explicit_meeting_url(monkeypa
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
-    allowed_url = "https://meet.example.org/allowed-room"
+    allowed_url = "https://meet.google.com/abc-defg-hij"
     authority = replace(
         _allowed(),
         meeting_url_sha256=hashlib.sha256(allowed_url.encode()).hexdigest(),
@@ -752,7 +798,7 @@ async def test_capture_authority_is_bound_to_exact_explicit_meeting_url(monkeypa
             user_id=USER,
             platform="google_meet",
             native_meeting_id="abc-defg-hij",
-            meeting_url="https://meet.example.org/different-room",
+            meeting_url="https://meet.google.com/xyz-abcd-efg",
             evaluated_at=AUTHORIZED_AT,
             token_secret=SECRET,
         )

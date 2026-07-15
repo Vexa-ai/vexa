@@ -51,8 +51,9 @@ creation, `mark_spawn_rejected(...)` makes the row terminal with content-free fa
 it cannot remain an active `requested` orphan, and it never overwrites a concurrently committed
 capture withdrawal. Caller-supplied meeting URLs are parsed before repository/runtime I/O and reject
 HTTPS localhost, IP literals, and legacy/encoded numeric hosts that browser URL parsing would
-normalize into an IP target. Join-retry re-spawns and `continue_meeting` sessions count against the
-same cap.
+normalize into an IP target. Browser navigation is also platform-host-bound: Google Meet, Teams, and
+Zoom use their vendor domains; Jitsi uses `meet.jit.si` plus exact operator-configured
+`VEXA_JITSI_HOSTS`. Join-retry re-spawns and `continue_meeting` sessions count against the same cap.
 
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.

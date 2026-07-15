@@ -101,7 +101,7 @@
    "key": "VEXA_JITSI_HOSTS",
    "class": "defaulted",
    "default": "",
-   "description": "Comma-separated additional Jitsi deployment hostnames (a self-hosted instance whose name carries neither 'jitsi' nor a 'meet' label, e.g. calls.example.org) recognized when parsing pasted meeting links AND calendar (ICS) links; meet.jit.si, *jitsi* hosts, and (for pasted links) meet-labelled hosts are always recognized — unset ⇒ no extra hosts",
+   "description": "Comma-separated exact Jitsi deployment hostnames approved for bot browser navigation and recognized when parsing pasted meeting links and calendar links. meet.jit.si is always approved; pasted-link naming heuristics may recognize other Jitsi-looking hosts, but spawning them requires an entry here. Unset means no additional approved hosts.",
    "targets": [
     "compose"
    ]

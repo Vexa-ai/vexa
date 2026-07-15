@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ..meeting_writes import capture_is_withdrawn
+from ..meeting_writes import capture_authority_is_stale, capture_is_withdrawn
 from .ports import (
     CaptureGrantConsumed,
     DuplicateMeeting,
@@ -108,6 +108,18 @@ class InMemoryMeetingRepo:
                     and prior_capture.get("grant_id_sha256") == grant_id_sha256
                 ):
                     raise CaptureGrantConsumed("capture authority has already been consumed")
+        prior_withdrawals = [
+            meeting
+            for meeting in self._meetings.values()
+            if meeting["user_id"] == user_id
+            and meeting["platform"] == platform
+            and meeting["native_meeting_id"] == native_meeting_id
+            and capture_is_withdrawn(meeting["data"])
+        ]
+        if prior_withdrawals and capture_authority_is_stale(
+            data, max(prior_withdrawals, key=lambda meeting: meeting["id"])["data"]
+        ):
+            raise CaptureGrantConsumed("capture authority predates the latest withdrawal")
         # 1. dedup — an ACTIVE row for (user, platform, native) blocks the spawn (409).
         for m in self._meetings.values():
             if (

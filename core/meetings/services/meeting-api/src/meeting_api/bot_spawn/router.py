@@ -58,7 +58,7 @@ def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
     raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
 
 
-def _validate_meeting_url(url: object) -> str:
+def _validate_meeting_url(url: object, *, platform: str) -> str:
     """SSRF hygiene for the caller-supplied ``meeting_url`` passthrough (zoom AND jitsi — the
     bot's browser navigates wherever this points, so an authenticated caller must not be able to
     aim it at internal infrastructure). Entry-point validation, 422 on violation:
@@ -68,10 +68,10 @@ def _validate_meeting_url(url: object) -> str:
       * host must not be an IP literal (deployments are hostname-addressed; IP literals are the
         cheap way to reach loopback/link-local/private ranges — 10.x, 169.254.x, 127.x, …).
 
-    Static checks only — no DNS resolution on the spawn path (a hostname that RESOLVES to a
-    private IP is contained by network policy around the bot runtime, and slow-fails there)."""
+    Host approval is platform-bound: vendor platforms use their fixed domains, while self-hosted
+    Jitsi requires an exact operator entry in ``VEXA_JITSI_HOSTS``."""
     try:
-        return validate_meeting_url(url)
+        return validate_meeting_url(url, platform=platform)
     except UnsafeMeetingUrl as error:
         raise HTTPException(status_code=422, detail=str(error)) from None
 
@@ -149,7 +149,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         # A caller-supplied meeting_url is an any-URL passthrough to the bot's browser
         # (zoom/jitsi) — validate at the point of entry (SSRF hygiene, 422 on violation).
         if meeting_url is not None:
-            meeting_url = _validate_meeting_url(meeting_url)
+            meeting_url = _validate_meeting_url(meeting_url, platform=platform)
         if not platform or (not native_meeting_id and not meeting_url):
             raise HTTPException(
                 status_code=422,

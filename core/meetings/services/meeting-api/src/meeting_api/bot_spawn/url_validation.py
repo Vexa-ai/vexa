@@ -2,11 +2,31 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from urllib.parse import urlparse
 
 
 class UnsafeMeetingUrl(ValueError):
     """A caller-supplied meeting URL is not safe to pass to the bot runtime."""
+
+
+_PLATFORM_HOSTS = {
+    "google_meet": {"meet.google.com"},
+    "teams": {"teams.microsoft.com", "teams.live.com"},
+}
+
+
+def _host_is_approved(host: str, platform: object) -> bool:
+    if platform == "zoom":
+        return host == "zoom.us" or host.endswith(".zoom.us")
+    if platform == "jitsi":
+        configured = {
+            value.strip().lower().rstrip(".")
+            for value in os.getenv("VEXA_JITSI_HOSTS", "").split(",")
+            if value.strip()
+        }
+        return host == "meet.jit.si" or host in configured
+    return host in _PLATFORM_HOSTS.get(platform, set())
 
 
 def _browser_ipv4(host: str) -> ipaddress.IPv4Address | None:
@@ -49,8 +69,8 @@ def _browser_ipv4(host: str) -> ipaddress.IPv4Address | None:
     return ipaddress.IPv4Address(value)
 
 
-def validate_meeting_url(url: object) -> str:
-    """Require an HTTPS hostname and reject every browser-normalized IP target."""
+def validate_meeting_url(url: object, *, platform: object) -> str:
+    """Require HTTPS and bind browser navigation to an approved host for the platform."""
     if not isinstance(url, str) or not url.strip():
         raise UnsafeMeetingUrl("meeting_url must be a non-empty string")
     raw = url.strip()
@@ -74,18 +94,23 @@ def validate_meeting_url(url: object) -> str:
         raise UnsafeMeetingUrl(
             "meeting_url hostname must use its ASCII IDNA form"
         ) from None
-    if host.lower() == "localhost" or host.lower().endswith(".localhost"):
+    canonical_host = host.lower().rstrip(".")
+    if canonical_host == "localhost" or canonical_host.endswith(".localhost"):
         raise UnsafeMeetingUrl("meeting_url cannot target localhost")
-    if _browser_ipv4(host) is not None:
+    if _browser_ipv4(canonical_host) is not None:
         raise UnsafeMeetingUrl(
             "meeting_url cannot be a browser-normalized IP literal — use the deployment's hostname"
         )
     try:
-        ipaddress.ip_address(host)
+        ipaddress.ip_address(canonical_host)
     except ValueError:
         pass
     else:
         raise UnsafeMeetingUrl(
             "meeting_url cannot be an IP literal — use the deployment's hostname"
+        )
+    if not _host_is_approved(canonical_host, platform):
+        raise UnsafeMeetingUrl(
+            f"meeting_url hostname is not approved for platform {platform!r}"
         )
     return raw

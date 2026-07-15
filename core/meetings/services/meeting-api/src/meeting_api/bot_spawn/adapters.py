@@ -15,7 +15,11 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from ..meeting_writes import MEETING_WRITE_LOCK_NAMESPACE, capture_is_withdrawn
+from ..meeting_writes import (
+    MEETING_WRITE_LOCK_NAMESPACE,
+    capture_authority_is_stale,
+    capture_is_withdrawn,
+)
 from ..sessions import new_session
 from .ports import (
     CaptureGrantConsumed,
@@ -342,11 +346,6 @@ class SqlAlchemyMeetingRepo:
             meeting-api process not covered by THIS advisory lock) inserted a duplicate active row, the
             INSERT's commit raises ``IntegrityError`` → mapped to ``DuplicateMeeting``.
         """
-        from sqlalchemy import bindparam, func, select, text
-        from sqlalchemy.exc import IntegrityError
-
-        from ..sessions.models import Meeting
-
         # 0. depleted — a cap <= 0 means NO bots allowed (0 is "depleted", never "unlimited");
         #    reject before touching the DB. Only ``None`` (no cap provided) skips the gate.
         if max_concurrent is not None and max_concurrent <= 0:
@@ -354,15 +353,43 @@ class SqlAlchemyMeetingRepo:
 
         active = ["requested", "joining", "awaiting_admission", "active"]
         async with self._session_factory() as db:
-            # Per-user serialization: hold the advisory lock for the whole transaction. asyncpg needs a
-            # bound int param (not a literal-format string), so bind it explicitly.
+            # Per-user serialization: hold the advisory lock for the whole transaction.
             await db.execute(
-                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+                self._statement("SELECT pg_advisory_xact_lock(:uid)"),
+                {"uid": user_id},
             )
             capture = data.get("zaki_capture") if isinstance(data, dict) else None
             grant_id_sha256 = (
                 capture.get("grant_id_sha256") if isinstance(capture, dict) else None
             )
+            if isinstance(grant_id_sha256, str):
+                prior_withdrawal = (
+                    await db.execute(
+                        self._statement(
+                            "SELECT data->'zaki_capture' AS zaki_capture FROM meetings "
+                            "WHERE user_id = :user_id AND platform = :platform "
+                            "AND platform_specific_id = :native_meeting_id "
+                            "AND data->'zaki_capture'->>'state' = 'withdrawn' "
+                            "ORDER BY created_at DESC, id DESC LIMIT 1"
+                        ),
+                        {
+                            "user_id": user_id,
+                            "platform": platform,
+                            "native_meeting_id": native_meeting_id,
+                        },
+                    )
+                ).mappings().first()
+                if prior_withdrawal is not None and capture_authority_is_stale(
+                    data, prior_withdrawal
+                ):
+                    raise CaptureGrantConsumed(
+                        "capture authority predates the latest withdrawal"
+                    )
+            from sqlalchemy import func, select
+            from sqlalchemy.exc import IntegrityError
+
+            from ..sessions.models import Meeting
+
             if isinstance(grant_id_sha256, str):
                 consumed = (
                     await db.execute(
@@ -565,10 +592,15 @@ class SqlAlchemyMeetingRepo:
     ) -> Optional[dict]:
         """Persist capture withdrawal under the exclusive meeting-write barrier.
 
-        The id lookup is owner/platform scoped but unlocked. The advisory lock is acquired before
-        the row lock, matching recording/transcript writers and avoiding lock-order inversion.
+        The per-user spawn lock is acquired before choosing the latest row, so capture creation and
+        withdrawal have one serial order. The meeting-write lock then drains transcript/recording
+        writers before the withdrawal mutation.
         """
         async with self._session_factory() as db:
+            await db.execute(
+                self._statement("SELECT pg_advisory_xact_lock(:uid)"),
+                {"uid": user_id},
+            )
             candidate = await db.execute(
                 self._statement(
                     "SELECT id FROM meetings "
