@@ -55,6 +55,18 @@ count) alongside `pipeline.consumer_lag`, and degrades to `503` once it exceeds
 `PIPELINE_PENDING_ALARM` (default `100`) — a stuck batch is a reportable state, not a silent
 stall.
 
+<Warning>
+**Orphan reclaim requires Redis 6.2 or newer** — `XAUTOCLAIM` does not exist before it. On an
+older Redis the reclaim disables itself and logs once at startup; everything else (normal
+`XREADGROUP` consumption, per-pod identity, `pending_depth`) is unaffected. The cost is narrow but
+real: if a replica dies mid-batch, that batch stays pending instead of being drained by a peer, so
+run a single replica on Redis < 6.2 or upgrade Redis. Check yours with `redis-server --version`.
+
+This bites Vexa Lite in particular: its bundled Redis is **6.0.16**, so a Lite box never reclaims.
+Lite runs one meeting-api, so nothing is lost — but do not read the paragraph above as a guarantee
+that holds on every backing store.
+</Warning>
+
 ## In-cluster self-addressing
 
 Under Helm the meeting-api Service is release-qualified (`<release>-vexa-meeting-api`),
