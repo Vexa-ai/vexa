@@ -12,11 +12,15 @@ control-plane background loops alongside the HTTP app via the FastAPI lifespan:
     write) and drains the copilot's ``proc:meeting:{id}`` notes into ``meeting.data`` JSONB.
   * **webhook retry-drain** — one ``drain_retry_queue`` sweep per interval over the redis retry
     queue (failed ``meeting.status_change`` deliveries are retried with backoff).
-  * **scheduler tick** — fires due ``schedule.v1`` jobs (this also drives the join-retry re-spawns
-    that ``JoinRetryController`` schedules) on the tick interval.
 
 Each loop is a single-tick function the eval drives explicitly; here the entrypoint wraps it in the
 ``while True: tick; sleep`` poll the deployment uses. uvicorn-target: ``uvicorn meeting_api.__main__:app``.
+
+#637 — at ``meetingApi.replicaCount>1`` every replica starts these same loops, so each live tick body
+is wrapped in a per-loop Postgres advisory lock (``sweeps.single_flight``): the real work runs once per
+interval, not once per replica. ``segment-consumer`` is intentionally left unguarded (Redis competing
+consumer). The former ``scheduler-tick`` loop was dead code (``app.state.scheduler`` was never wired —
+the ``Scheduler`` in ``scheduling/`` is an eval-only engine) and has been removed.
 """
 from __future__ import annotations
 
@@ -182,7 +186,10 @@ def build_production_app():
         calendar_sync_status=_calendar_sync_status,
     )
 
-    _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client)
+    _attach_background_loops(
+        app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
+        session_factory=session_factory,
+    )
     return app
 
 
@@ -195,9 +202,29 @@ def _minio_endpoint_url() -> str:
     return f"{scheme}://{endpoint}"
 
 
-def _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None) -> None:
-    """Register the FastAPI lifespan that starts/stops the control-plane poll loops."""
+def _attach_background_loops(
+    app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
+    session_factory=None,
+) -> None:
+    """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
+
+    #637 — single-flight sweeps: at ``replicaCount>1`` every replica runs these same loops, so each
+    live tick body is wrapped in a per-loop Postgres advisory lock (``_guarded``) — the real work runs
+    once per interval, not once per replica. With no ``session_factory`` (Lite / a store without PG)
+    the guard degrades to run-the-tick, so single-replica behavior is unchanged. ``segment-consumer``
+    is DELIBERATELY left unguarded — it is a Redis competing consumer (``XREADGROUP … ">"``) whose
+    single-delivery is already exact, and guarding it would needlessly serialize the replicas' reads.
+    """
     from .collector.ingest import RECLAIM_MIN_IDLE_MS, consume_segments, reclaim_segments
+    from .sweeps.single_flight import PgAdvisoryLock, run_single_flight, sweep_lock_key
+
+    # One shared advisory-lock backend across the guarded loops (each keyed by its own loop name).
+    # None when there is no Postgres session factory → the guard runs every tick (Lite single-replica).
+    sweep_lock = PgAdvisoryLock(session_factory) if session_factory is not None else None
+
+    async def _guarded(loop_name: str, body):
+        """Run ``body`` (a zero-arg coroutine fn) at most once per interval across replicas."""
+        return await run_single_flight(sweep_lock, sweep_lock_key(loop_name), body)
 
     seg_interval = float(os.getenv("SEGMENT_CONSUMER_INTERVAL", "0.5"))
     # #636: orphan-reclaim cadence — fold a bounded XAUTOCLAIM into the consumer loop every N ticks
@@ -206,7 +233,6 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     # (RECLAIM_MIN_IDLE_MS) ensures a live peer's in-flight batch is never stolen.
     seg_reclaim_every = max(1, int(os.getenv("SEGMENT_RECLAIM_EVERY_N_TICKS", "120")))
     webhook_interval = float(os.getenv("WEBHOOK_DRAIN_INTERVAL", "5"))
-    scheduler_interval = float(os.getenv("SCHEDULER_TICK_INTERVAL", "1"))
     # The db-writer cadence — the parent's BACKGROUND_TASK_INTERVAL (10s); either env name works.
     db_writer_interval = float(
         os.getenv("DB_WRITER_INTERVAL_S", os.getenv("BACKGROUND_TASK_INTERVAL", "10"))
@@ -284,9 +310,13 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
 
         if not hasattr(transcript_store, "upsert_segments"):
             return  # a store without a durable sink (bare fake) — nothing to flush into
+
+        async def _tick():
+            await db_writer_tick(redis_client, transcript_store)
+
         while True:
             try:
-                await db_writer_tick(redis_client, transcript_store)
+                await _guarded("db-writer", _tick)  # #637: one flush per interval across replicas
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -308,29 +338,17 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
                 return await client.post(url, content=body, headers=headers)
 
+        async def _tick():
+            await drain_retry_queue(redis_client, _transport)
+
         while True:
             try:
-                await drain_retry_queue(redis_client, _transport)
+                await _guarded("webhook-drain", _tick)  # #637: one drain sweep per interval
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("webhook retry-drain tick failed")
             await asyncio.sleep(webhook_interval)
-
-    async def _scheduler_tick_loop() -> None:
-        # The scheduler fires due schedule.v1 jobs — including the join-retry re-spawns that
-        # JoinRetryController enqueues. The Scheduler instance lives on app.state when wired.
-        scheduler = getattr(app.state, "scheduler", None)
-        if scheduler is None:
-            return
-        while True:
-            try:
-                scheduler.tick()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("scheduler tick failed")
-            await asyncio.sleep(scheduler_interval)
 
     async def _stop_reconcile_loop() -> None:
         # Complete meetings stuck in `stopping` past the grace window AND kill any orphan workload (CC6 /
@@ -364,17 +382,21 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
         # The general sweep (any stale non-terminal status whose bot is gone) subsumes the stale-
         # stopping sweep, but we keep the latter as the guaranteed orphan-kill backstop for `stopping`.
         has_general = hasattr(meeting_repo, "list_stale_nonterminal")
+
+        async def _tick():
+            if has_general:
+                await reconcile_stale_nonterminal_sweep(
+                    meeting_repo, runtime, _post_lifecycle,
+                    stop_grace=stop_grace, active_grace=active_grace, log=log,
+                    untracked_grace=untracked_grace,
+                )
+            await reconcile_stale_stopping_sweep(
+                meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
+            )
+
         while True:
             try:
-                if has_general:
-                    await reconcile_stale_nonterminal_sweep(
-                        meeting_repo, runtime, _post_lifecycle,
-                        stop_grace=stop_grace, active_grace=active_grace, log=log,
-                        untracked_grace=untracked_grace,
-                    )
-                await reconcile_stale_stopping_sweep(
-                    meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
-                )
+                await _guarded("stop-reconcile", _tick)  # #637: one reconcile pass per interval
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -427,17 +449,22 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             except Exception:
                 pass  # best-effort, like the collector's publish
 
+        async def _tick():
+            await auto_join_tick(
+                meeting_repo, runtime,
+                fetch_bot_context=fetch_bot_context,
+                publish_status=publish_status,
+                lead_s=auto_join_lead, grace_s=auto_join_grace,
+                retry_backoff_s=auto_join_backoff,
+                token_secret=os.getenv("ADMIN_TOKEN") or None,
+                redis_url=os.getenv("REDIS_URL"),
+            )
+
         while True:
             try:
-                await auto_join_tick(
-                    meeting_repo, runtime,
-                    fetch_bot_context=fetch_bot_context,
-                    publish_status=publish_status,
-                    lead_s=auto_join_lead, grace_s=auto_join_grace,
-                    retry_backoff_s=auto_join_backoff,
-                    token_secret=os.getenv("ADMIN_TOKEN") or None,
-                    redis_url=os.getenv("REDIS_URL"),
-                )
+                # #637: one sweep per interval — the per-user spawn stays single-flighted by its own
+                # xact lock, but this also single-flights the doubled admin-api bot-context fetch.
+                await _guarded("auto-join", _tick)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -467,16 +494,22 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             return
         from .calendar_sync import fetch_configs, run_user_sync, store_stamp
 
+        async def _tick():
+            configs = await fetch_configs(admin_api_url, internal_secret)
+            for cfg in configs or []:
+                try:  # one bad feed never stalls the sweep
+                    stamp = await run_user_sync(transcript_store, cfg, publish=_cal_publish)
+                except Exception:
+                    log.exception("calendar sync failed for user %s", cfg.get("user_id"))
+                    continue
+                await store_stamp(redis_client, cfg["user_id"], stamp)
+
         while True:
             try:
-                configs = await fetch_configs(admin_api_url, internal_secret)
-                for cfg in configs or []:
-                    try:  # one bad feed never stalls the sweep
-                        stamp = await run_user_sync(transcript_store, cfg, publish=_cal_publish)
-                    except Exception:
-                        log.exception("calendar sync failed for user %s", cfg.get("user_id"))
-                        continue
-                    await store_stamp(redis_client, cfg["user_id"], stamp)
+                # #637 (load-bearing): the external ICS/Google fetch has no other dedup, so at
+                # replicaCount>1 it doubled outbound provider requests every interval. Single-flight
+                # it — the replica that loses the advisory lock skips the whole fetch this tick.
+                await _guarded("calendar-sync", _tick)
             except Exception:
                 log.exception("calendar sync tick failed")
             await asyncio.sleep(calendar_interval)
@@ -487,7 +520,6 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
             asyncio.create_task(_segment_consumer_loop(), name="segment-consumer"),
             asyncio.create_task(_db_writer_loop(), name="db-writer"),
             asyncio.create_task(_webhook_drain_loop(), name="webhook-drain"),
-            asyncio.create_task(_scheduler_tick_loop(), name="scheduler-tick"),
             asyncio.create_task(_stop_reconcile_loop(), name="stop-reconcile"),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
