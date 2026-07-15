@@ -196,9 +196,14 @@ def _minio_endpoint_url() -> str:
 
 def _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops."""
-    from .collector.ingest import consume_segments
+    from .collector.ingest import RECLAIM_MIN_IDLE_MS, consume_segments, reclaim_segments
 
     seg_interval = float(os.getenv("SEGMENT_CONSUMER_INTERVAL", "0.5"))
+    # #636: orphan-reclaim cadence — fold a bounded XAUTOCLAIM into the consumer loop every N ticks
+    # (default 120 ⇒ ~60s at the 0.5s tick), so a crashed replica's un-acked batch is picked up by a
+    # survivor without a dedicated loop (no second /health heartbeat to maintain). The min-idle gate
+    # (RECLAIM_MIN_IDLE_MS) ensures a live peer's in-flight batch is never stolen.
+    seg_reclaim_every = max(1, int(os.getenv("SEGMENT_RECLAIM_EVERY_N_TICKS", "120")))
     webhook_interval = float(os.getenv("WEBHOOK_DRAIN_INTERVAL", "5"))
     scheduler_interval = float(os.getenv("SCHEDULER_TICK_INTERVAL", "1"))
     # The db-writer cadence — the parent's BACKGROUND_TASK_INTERVAL (10s); either env name works.
@@ -241,12 +246,25 @@ def _attach_background_loops(app, transcript_store, segment_bus, redis_client, m
     app.state.pipeline_group = _SEG_GROUP
     app.state.pipeline_tick_stale_s = float(os.getenv("PIPELINE_TICK_STALE_S", "120"))
     app.state.pipeline_lag_alarm = int(os.getenv("PIPELINE_LAG_ALARM", "500"))
+    # #636: group PEL depth (delivered-but-un-acked) alarm. Steady state acks within a tick, so a
+    # SUSTAINED total above this threshold is an orphaned batch (a crashed replica's un-reclaimed
+    # PEL) → /health degrades + 503. Default headroom over one in-flight batch (count=10 default).
+    app.state.pipeline_pending_alarm = int(os.getenv("PIPELINE_PENDING_ALARM", "100"))
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
+        tick_n = 0
         while True:
             try:
                 await consume_segments(transcript_store, segment_bus)
+                # #636: every N ticks, reclaim any ORPHANED (crashed-replica) un-acked batch idle
+                # past RECLAIM_MIN_IDLE_MS and drain it through the same ingest→ack path. Bounded to
+                # one XAUTOCLAIM per pass (its cursor continues next time) — never a hang surface.
+                tick_n += 1
+                if tick_n % seg_reclaim_every == 0:
+                    await reclaim_segments(
+                        transcript_store, segment_bus, min_idle_ms=RECLAIM_MIN_IDLE_MS
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:

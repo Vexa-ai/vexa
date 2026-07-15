@@ -27,6 +27,27 @@ from typing import Optional
 from .ports import RedisBus, TranscriptStore
 
 
+def _decode_claimed(resp) -> "list[tuple[str, dict]]":
+    """Normalize an XAUTOCLAIM response to ``[(message_id, fields), ...]`` (#636).
+
+    redis-py returns ``[cursor, claimed]`` (older) or ``[cursor, claimed, deleted]`` (Redis 7+),
+    where ``claimed`` is ``[(id, {field: value}), ...]``. Ids/keys/values are decoded from bytes so
+    the drained fields match ``read_segments``' shape (``ingest`` reads ``fields['payload']``)."""
+    if not resp or len(resp) < 2:
+        return []
+    claimed = resp[1] or []
+    out: list[tuple[str, dict]] = []
+    for message_id, fields in claimed:
+        mid = message_id.decode() if isinstance(message_id, bytes) else message_id
+        decoded = {
+            (k.decode() if isinstance(k, bytes) else k):
+            (v.decode() if isinstance(v, bytes) else v)
+            for k, v in (fields or {}).items()
+        }
+        out.append((mid, decoded))
+    return out
+
+
 def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 
@@ -974,6 +995,19 @@ class RedisStreamBus:
                 }
                 out.append((mid, decoded))
         return out
+
+    async def reclaim_orphans(self, *, group, stream, consumer, min_idle_ms, count=10):
+        """#636: XAUTOCLAIM idle (crashed-replica) entries from the group's PEL into ``consumer``.
+        Bounded (single call, ``count`` cap) — the returned cursor lets the next tick continue."""
+        try:
+            await self._client.xgroup_create(name=stream, groupname=group, id="0", mkstream=True)
+        except Exception:
+            pass  # BUSYGROUP — group already exists
+        resp = await self._client.xautoclaim(
+            name=stream, groupname=group, consumername=consumer,
+            min_idle_time=min_idle_ms, start_id="0-0", count=count,
+        )
+        return _decode_claimed(resp)
 
     async def ack(self, *, group, stream, message_ids):
         if message_ids:
