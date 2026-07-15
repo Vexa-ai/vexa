@@ -172,7 +172,8 @@ class InMemoryTranscriptStore:
         )
         return await self._transcript_doc(mid) if authorized else None
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
+        from .projection import DEFAULT_LIST_LIMIT, project_list_data
         mws = member_workspaces or set()
 
         def accessible(m):
@@ -190,10 +191,18 @@ class InMemoryTranscriptStore:
         rows.sort(key=lambda kv: (kv[1]["created_at"], kv[0]), reverse=True)
         if offset:
             rows = rows[offset:]
-        if limit:
-            rows = rows[:limit]
-        return [
-            {
+        if list_view:
+            # #584: mirror the real store — default page size + over-fetch-by-1 for honest has_more.
+            effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
+            has_more = len(rows) > effective_limit
+            rows = rows[:effective_limit]
+        else:
+            if limit:
+                rows = rows[:limit]
+            has_more = False
+
+        def _row(mid, m):
+            row = {
                 "id": mid,
                 "user_id": m["user_id"],
                 "platform": m["platform"],
@@ -203,13 +212,16 @@ class InMemoryTranscriptStore:
                 "bot_container_id": m.get("bot_container_id"),
                 "start_time": m["start_time"],
                 "end_time": m["end_time"],
-                "data": m["data"],
                 "shared": m["user_id"] != user_id,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],
+                # #584: LIST drops heavy detail keys, keeps light metadata; internal callers get full data.
+                "data": project_list_data(m["data"]) if list_view else m["data"],
             }
-            for mid, m in rows
-        ]
+            return row
+
+        result = [_row(mid, m) for mid, m in rows]
+        return (result, has_more) if list_view else result
 
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         mid = self._find(user_id, platform, native_meeting_id)

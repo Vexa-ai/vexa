@@ -385,11 +385,12 @@ class SqlAlchemyTranscriptStore:
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         return await self._merge_live_segments(pg)
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
         from sqlalchemy import cast, func, or_, select
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
+        from .projection import DEFAULT_LIST_LIMIT, project_list_data
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -406,13 +407,29 @@ class SqlAlchemyTranscriptStore:
             if platform:
                 stmt = stmt.where(Meeting.platform == platform)
             stmt = stmt.order_by(Meeting.created_at.desc())
-            if limit:
-                stmt = stmt.limit(limit)
-            if offset:
-                stmt = stmt.offset(offset)
-            rows = (await db.execute(stmt)).scalars().all()
-            return [
-                {
+            if list_view:
+                # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
+                # with a default page size (an explicit `limit` still wins) and over-fetch one row past
+                # the page to compute `has_more` without a second COUNT query.
+                effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
+                if offset:
+                    stmt = stmt.offset(offset)
+                stmt = stmt.limit(effective_limit + 1)
+                rows = (await db.execute(stmt)).scalars().all()
+                has_more = len(rows) > effective_limit
+                rows = rows[:effective_limit]
+            else:
+                # Internal enumeration (get-by-id filter, /bots/status, calendar sync): unchanged —
+                # explicit `limit` only, NO default cap, full `data` retained below.
+                if limit:
+                    stmt = stmt.limit(limit)
+                if offset:
+                    stmt = stmt.offset(offset)
+                rows = (await db.execute(stmt)).scalars().all()
+                has_more = False
+
+            def _row(m):
+                row = {
                     "id": m.id,
                     "user_id": m.user_id,
                     "platform": m.platform,
@@ -423,13 +440,19 @@ class SqlAlchemyTranscriptStore:
                     "bot_container_id": m.bot_container_id,
                     "start_time": m.start_time.isoformat() if m.start_time else None,
                     "end_time": m.end_time.isoformat() if m.end_time else None,
-                    "data": m.data if isinstance(m.data, dict) else {},
                     "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                     "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                    # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
+                    # the 4.6 MB / event-loop-wedge cause) but keeps the light metadata it renders
+                    # (title/docs/flags). Internal callers (get-by-id, /bots/status, calendar sync) get
+                    # full `data`, so the detail view and reconciliation are unchanged.
+                    "data": project_list_data(m.data) if list_view else (m.data if isinstance(m.data, dict) else {}),
                 }
-                for m in rows
-            ]
+                return row
+
+            result = [_row(m) for m in rows]
+            return (result, has_more) if list_view else result
 
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         """Authorize a live-transcript subscribe → the meeting ROW id, or None. TWO branches:
