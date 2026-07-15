@@ -28,3 +28,15 @@ def test_preflight_refuses_boot_without_internal_api_secret():
 def test_preflight_passes_when_required_set():
     # defaulted keys (DB_*, ADMIN_API_TOKEN, LOG_LEVEL, …) never block; only the required one matters.
     cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+
+
+def test_db_pool_keys_declared_defaulted():
+    # #635: DB_POOL_SIZE / DB_MAX_OVERFLOW are read in __main__ (an env read scanned by
+    # gate:config-contract), so they must be declared — class defaulted, defaults 5/10 matching
+    # deploy/db-budget.json. (Contract leg of the config triangle for the values db-budget audits.)
+    decl = cp.load_declaration()
+    by_key = {k["key"]: k for k in decl["keys"]}
+    for key, default in (("DB_POOL_SIZE", "5"), ("DB_MAX_OVERFLOW", "10")):
+        assert key in by_key, f"{key} must be declared (it is read in __main__)"
+        assert by_key[key]["class"] == "defaulted"
+        assert by_key[key]["default"] == default

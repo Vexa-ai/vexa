@@ -36,7 +36,13 @@ def build_production_app():
     # otherwise come up green (the 2026-04-23 shape: 23 meetings failed while monitors stayed green).
     preflight()
 
-    app_db.configure(_database_url())
+    # #635: per-pod pool ceiling from env so an operator can fit managed Postgres' max_connections
+    # (the mitigation the 2026-04-21 outage required). Defaults 5/10 match deploy/db-budget.json:7.
+    app_db.configure(
+        _database_url(),
+        pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
+    )
     app = create_app()
 
     @app.on_event("startup")

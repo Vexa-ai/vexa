@@ -52,6 +52,18 @@ def test_declaration_loads_and_is_internally_consistent():
     assert required == {"ADMIN_TOKEN"}
 
 
+def test_db_pool_keys_declared_defaulted():
+    # #635: DB_POOL_SIZE / DB_MAX_OVERFLOW are read in meeting_api.db.engine_pool_kwargs (an env read
+    # scanned by gate:config-contract), so they must be declared — class defaulted, defaults 5/10
+    # matching deploy/db-budget.json (the contract leg of the triangle for the db-budget values).
+    decl = cp.load_declaration()
+    by_key = {k["key"]: k for k in decl["keys"]}
+    for key, default in (("DB_POOL_SIZE", "5"), ("DB_MAX_OVERFLOW", "10")):
+        assert key in by_key, f"{key} must be declared (it is read in meeting_api.db)"
+        assert by_key[key]["class"] == "defaulted"
+        assert by_key[key]["default"] == default
+
+
 # ── boot preflight (A4, now declaration-driven) ──────────────────────────────────────────────────
 
 

@@ -999,8 +999,9 @@ def build_production_app(
     without those runtime deps installed in the gate venv.
     """
     import redis.asyncio as aioredis
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ..db import build_engine
     from .app import create_app
 
     database_url = database_url or os.getenv(
@@ -1008,7 +1009,7 @@ def build_production_app(
     )
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     # #528: hardened Redis client (see meeting_api/__main__.py) — bounded timeouts + keepalive +
     # health checks so a Redis blip self-heals within socket_timeout instead of hanging the consumer.

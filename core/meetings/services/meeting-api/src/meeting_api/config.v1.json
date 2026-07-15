@@ -48,6 +48,20 @@
    "targets": []
   },
   {
+   "key": "DB_POOL_SIZE",
+   "class": "defaulted",
+   "default": "5",
+   "description": "SQLAlchemy async-engine pool_size (persistent connections per pod) applied at every engine site via meeting_api.db.build_engine. Pure runtime override — reconcile with deploy/db-budget.json (Σ replicas × (pool_size + max_overflow) + reserved ≤ max_connections) on managed Postgres. #635.",
+   "targets": []
+  },
+  {
+   "key": "DB_MAX_OVERFLOW",
+   "class": "defaulted",
+   "default": "10",
+   "description": "SQLAlchemy async-engine max_overflow (burst connections above pool_size per pod). Pure runtime override — reconcile with deploy/db-budget.json. #635.",
+   "targets": []
+  },
+  {
    "key": "REDIS_URL",
    "class": "defaulted",
    "default": "redis://redis:6379/0",
