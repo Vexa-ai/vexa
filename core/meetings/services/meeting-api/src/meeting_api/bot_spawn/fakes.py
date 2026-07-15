@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from ..meeting_writes import capture_is_withdrawn
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
@@ -203,6 +204,49 @@ class InMemoryMeetingRepo:
         row["data"].update(dict(data or {}))
         return dict(row)
 
+    async def withdraw_capture(
+        self, *, tenant_id, user_id, platform, native_meeting_id, withdrawn_at
+    ) -> Optional[dict]:
+        rows = [
+            row
+            for row in self._meetings.values()
+            if row["user_id"] == user_id
+            and row["platform"] == platform
+            and row["native_meeting_id"] == native_meeting_id
+        ]
+        if not rows:
+            return None
+        row = max(rows, key=lambda item: item["id"])
+        capture = row["data"].get("zaki_capture")
+        if (
+            not isinstance(capture, dict)
+            or capture.get("tenant_id") != tenant_id
+            or capture.get("state") not in ("authorized", "withdrawn")
+        ):
+            return None
+        prior_status = row["status"]
+        changed = capture.get("state") != "withdrawn"
+        if changed:
+            capture = dict(capture)
+            capture.update(
+                {
+                    "state": "withdrawn",
+                    "withdrawal_reason": "consent_withdrawn",
+                    "withdrawn_at": withdrawn_at,
+                }
+            )
+            row["data"]["zaki_capture"] = capture
+        row["data"]["stop_requested"] = True
+        should_stop = prior_status not in _TERMINAL_STATUSES
+        if should_stop:
+            row["status"] = "stopping"
+        return {
+            "meeting": dict(row),
+            "changed": changed,
+            "should_stop": should_stop,
+            "prior_status": prior_status,
+        }
+
     async def get_status_by_session(self, *, session_uid) -> Optional[str]:
         sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
         if sess is None:
@@ -230,13 +274,20 @@ class InMemoryMeetingRepo:
         row = self._meetings.get(sess["meeting_id"])
         if row is None:
             return
+        suppressed_nonterminal = (
+            capture_is_withdrawn(row["data"])
+            and status not in _TERMINAL_STATUSES
+        )
+        if suppressed_nonterminal:
+            status = row["status"] if row["status"] in _TERMINAL_STATUSES else "stopping"
         row["status"] = status
-        if completion_reason is not None:
+        if completion_reason is not None and not suppressed_nonterminal:
             row["data"]["completion_reason"] = completion_reason
-        if failure_stage is not None:
+        if failure_stage is not None and not suppressed_nonterminal:
             row["data"]["failure_stage"] = failure_stage
-        for k, v in (data or {}).items():
-            row["data"][k] = v
+        if not suppressed_nonterminal:
+            for k, v in (data or {}).items():
+                row["data"][k] = v
         return dict(row)
 
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:

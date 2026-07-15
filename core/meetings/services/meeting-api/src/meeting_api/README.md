@@ -11,7 +11,8 @@ an isolated brick behind a port-seam.
 | `app.py` | `create_app(...)` — composes the modules onto ONE app; the shared `/health`. | `GET /health` |
 | `lifecycle/` | **O-MTG-1** — the lifecycle.v1 receiver + meeting-state FSM. | `POST /bots/internal/callback/lifecycle` |
 | `bot_spawn/` | `POST /bots` — build the invocation.v1 invocation + mint the MeetingToken + spawn the meeting-bot over runtime.v1, eager-creating the MeetingSession. | `POST /bots` |
-| `capture/` | fail-closed ZAKI capture profile: operator ∧ tenant attestation ∧ user request ∧ quota, forced visible bot identity, content-free consent evidence. | — |
+| `capture/` | fail-closed ZAKI capture profile: operator ∧ tenant attestation ∧ user request ∧ quota, forced visible bot identity, content-free consent evidence, durable consent withdrawal. | — |
+| `meeting_writes.py` | shared per-meeting write barrier: withdrawal waits for in-flight transcript/recording writes, then later writes fail closed. | — |
 | `collector/` | the **folded-in** transcript backend (was the standalone transcription-collector): api.v1 reads + the `/ws` authorizer + the segments consumer. | `GET /transcripts/…`, `GET /meetings`, `POST /ws/authorize-subscribe` |
 | `recordings/` | chunk upload + finalize → master in `meeting.data` JSONB (recording.v1). | `POST /internal/recordings/upload`, `GET /recordings`, `GET /recordings/{id}/master` |
 | `sessions/` | the `MeetingSession` model + the shared SQLAlchemy mirror (Meeting/Transcription/MeetingSession) every module binds. | — |

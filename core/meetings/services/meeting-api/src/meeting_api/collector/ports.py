@@ -22,6 +22,10 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 
+class TranscriptWriteRefused(RuntimeError):
+    """The meeting disappeared or capture was withdrawn before segment persistence."""
+
+
 @runtime_checkable
 class TranscriptStore(Protocol):
     """Read a meeting's transcript; list a user's meetings; append a segment; authorize a

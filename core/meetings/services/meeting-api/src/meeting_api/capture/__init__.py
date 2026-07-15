@@ -5,6 +5,7 @@ from .service import (
     CaptureDenied,
     ZAKI_NOTETAKER_NAME,
     request_capture,
+    withdraw_capture,
 )
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "CaptureDenied",
     "ZAKI_NOTETAKER_NAME",
     "request_capture",
+    "withdraw_capture",
 ]

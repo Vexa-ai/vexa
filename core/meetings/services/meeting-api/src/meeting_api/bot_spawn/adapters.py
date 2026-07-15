@@ -10,10 +10,12 @@ gate venv — which is why ``pyproject.toml`` needs no ``greenlet`` pin.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from typing import Optional
 
+from ..meeting_writes import MEETING_WRITE_LOCK_NAMESPACE, capture_is_withdrawn
 from ..sessions import new_session
 from .ports import (
     DuplicateMeeting,
@@ -45,8 +47,16 @@ class SqlAlchemyMeetingRepo:
     """``MeetingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions`` tables). Carve of the parent ``meetings.request_bot`` DB ops."""
 
-    def __init__(self, session_factory):
+    def __init__(self, session_factory, *, statement_factory=None):
         self._session_factory = session_factory
+        self._statement_factory = statement_factory
+
+    def _statement(self, sql: str):
+        if self._statement_factory is not None:
+            return self._statement_factory(sql)
+        from sqlalchemy import text
+
+        return text(sql)
 
     async def find_active(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select
@@ -172,14 +182,21 @@ class SqlAlchemyMeetingRepo:
             ).scalars().first()
             if m is None:
                 return
-            m.status = status
             merged = dict(m.data) if isinstance(m.data, dict) else {}
-            if completion_reason is not None:
+            suppressed_nonterminal = (
+                capture_is_withdrawn(merged)
+                and status not in ("completed", "failed")
+            )
+            if suppressed_nonterminal:
+                status = m.status if m.status in ("completed", "failed") else "stopping"
+            m.status = status
+            if completion_reason is not None and not suppressed_nonterminal:
                 merged["completion_reason"] = completion_reason
-            if failure_stage is not None:
+            if failure_stage is not None and not suppressed_nonterminal:
                 merged["failure_stage"] = failure_stage
-            for k, v in (data or {}).items():
-                merged[k] = v
+            if not suppressed_nonterminal:
+                for k, v in (data or {}).items():
+                    merged[k] = v
             m.data = merged
             flag_modified(m, "data")
             # Naive UTC into the naive time columns (tz-aware → asyncpg DataError, per set_bot_container).
@@ -520,6 +537,108 @@ class SqlAlchemyMeetingRepo:
             await db.commit()
             await db.refresh(meeting)
             return _row_to_dict(meeting)
+
+    async def withdraw_capture(
+        self, *, tenant_id, user_id, platform, native_meeting_id, withdrawn_at
+    ) -> Optional[dict]:
+        """Persist capture withdrawal under the exclusive meeting-write barrier.
+
+        The id lookup is owner/platform scoped but unlocked. The advisory lock is acquired before
+        the row lock, matching recording/transcript writers and avoiding lock-order inversion.
+        """
+        async with self._session_factory() as db:
+            candidate = await db.execute(
+                self._statement(
+                    "SELECT id FROM meetings "
+                    "WHERE user_id = :user_id AND platform = :platform "
+                    "AND platform_specific_id = :native_meeting_id "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1"
+                ),
+                {
+                    "user_id": user_id,
+                    "platform": platform,
+                    "native_meeting_id": native_meeting_id,
+                },
+            )
+            found = candidate.mappings().first()
+            if found is None:
+                return None
+            meeting_id = int(found["id"])
+            await db.execute(
+                self._statement(
+                    "SELECT pg_advisory_xact_lock(:lock_namespace, :meeting_id)"
+                ),
+                {
+                    "lock_namespace": MEETING_WRITE_LOCK_NAMESPACE,
+                    "meeting_id": meeting_id,
+                },
+            )
+            selected = await db.execute(
+                self._statement(
+                    "SELECT id, user_id, platform, platform_specific_id, status, "
+                    "bot_container_id, start_time, end_time, data, created_at, updated_at "
+                    "FROM meetings WHERE id = :meeting_id FOR UPDATE"
+                ),
+                {"meeting_id": meeting_id},
+            )
+            row = selected.mappings().first()
+            if row is None or int(row["user_id"]) != user_id:
+                return None
+            data = dict(row["data"]) if isinstance(row["data"], dict) else {}
+            capture = data.get("zaki_capture")
+            if (
+                not isinstance(capture, dict)
+                or capture.get("tenant_id") != tenant_id
+                or capture.get("state") not in ("authorized", "withdrawn")
+            ):
+                return None
+            prior_status = row["status"]
+            changed = capture.get("state") != "withdrawn"
+            if changed:
+                capture = dict(capture)
+                capture.update(
+                    {
+                        "state": "withdrawn",
+                        "withdrawal_reason": "consent_withdrawn",
+                        "withdrawn_at": withdrawn_at,
+                    }
+                )
+                data["zaki_capture"] = capture
+            data["stop_requested"] = True
+            should_stop = prior_status not in ("completed", "failed")
+            status = "stopping" if should_stop else prior_status
+            await db.execute(
+                self._statement(
+                    "UPDATE meetings SET status = :status, data = CAST(:data AS jsonb) "
+                    "WHERE id = :meeting_id"
+                ),
+                {
+                    "status": status,
+                    "data": json.dumps(data, sort_keys=True),
+                    "meeting_id": meeting_id,
+                },
+            )
+            await db.commit()
+            meeting = {
+                "id": meeting_id,
+                "user_id": row["user_id"],
+                "platform": row["platform"],
+                "native_meeting_id": row["platform_specific_id"],
+                "platform_specific_id": row["platform_specific_id"],
+                "status": status,
+                "bot_container_id": row["bot_container_id"],
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "data": data,
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            return {
+                "meeting": meeting,
+                "changed": changed,
+                "should_stop": should_stop,
+                "prior_status": prior_status,
+            }
 
 
 class HttpRuntimeClient:

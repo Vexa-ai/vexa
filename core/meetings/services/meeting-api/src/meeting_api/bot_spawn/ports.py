@@ -104,6 +104,22 @@ class MeetingRepo(Protocol):
         """Make a pre-workload runtime rejection terminal and merge content-free attribution."""
         ...
 
+    async def withdraw_capture(
+        self,
+        *,
+        tenant_id: str,
+        user_id: int,
+        platform: str,
+        native_meeting_id: str,
+        withdrawn_at: str,
+    ) -> Optional[dict]:
+        """Durably withdraw one owner/tenant-bound ZAKI capture under the meeting write barrier.
+
+        Returns ``{meeting, changed, should_stop, prior_status}``, or ``None`` without revealing
+        whether a differently scoped meeting exists.
+        """
+        ...
+
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
         """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
 

@@ -15,6 +15,7 @@ import hashlib
 import os
 from typing import Optional
 
+from ..meeting_writes import capture_is_withdrawn
 from .ports import (
     MEETING_WRITE_LOCK_NAMESPACE,
     RECORDING_CHUNK_LOCK_NAMESPACE,
@@ -157,7 +158,7 @@ class SqlAlchemyRecordingRepo:
                     if isinstance(retention, dict)
                     else []
                 )
-                if row is None or (
+                if row is None or capture_is_withdrawn(data) or (
                     isinstance(retention, dict)
                     and (
                         retention.get("state") == "erasing"
@@ -209,6 +210,8 @@ class SqlAlchemyRecordingRepo:
             if meeting is None:
                 raise RecordingWriteRefused("meeting is not writable")
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            if capture_is_withdrawn(data):
+                raise RecordingWriteRefused("meeting is not writable")
             retention = data.get("zaki_retention")
             if isinstance(retention, dict):
                 expired_scopes = retention.get("expired_scopes", [])

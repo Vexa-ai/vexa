@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from .app import create_app
 from .ingest import consume_segments, ingest
-from .ports import PubSub, RedisBus, TranscriptStore
+from .ports import PubSub, RedisBus, TranscriptStore, TranscriptWriteRefused
 
 __all__ = [
     "create_app",
@@ -40,4 +40,5 @@ __all__ = [
     "TranscriptStore",
     "RedisBus",
     "PubSub",
+    "TranscriptWriteRefused",
 ]

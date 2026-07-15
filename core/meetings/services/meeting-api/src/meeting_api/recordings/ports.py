@@ -20,8 +20,8 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import Optional, Protocol, runtime_checkable
 
+from ..meeting_writes import MEETING_WRITE_LOCK_NAMESPACE
 
-MEETING_WRITE_LOCK_NAMESPACE = 23115
 RECORDING_CHUNK_LOCK_NAMESPACE = 23116
 
 

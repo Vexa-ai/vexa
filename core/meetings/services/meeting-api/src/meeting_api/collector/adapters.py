@@ -24,7 +24,8 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from .ports import RedisBus, TranscriptStore
+from ..meeting_writes import MEETING_WRITE_LOCK_NAMESPACE, capture_is_withdrawn
+from .ports import RedisBus, TranscriptStore, TranscriptWriteRefused
 
 
 def _sha(s: str) -> str:
@@ -171,14 +172,22 @@ class SqlAlchemyTranscriptStore:
     ``transcriptions`` tables; recordings/notes live in ``meeting.data`` JSONB — NO separate
     table). Carve of ``collector/endpoints.py`` SELECT/merge logic."""
 
-    def __init__(self, session_factory, redis_client=None):
+    def __init__(self, session_factory, redis_client=None, *, statement_factory=None):
         self._session_factory = session_factory
+        self._statement_factory = statement_factory
         # The live Redis hash of in-flight segments (``meeting:{id}:segments``) is merged on read
         # in prod; the merge helper is kept here when a client is provided.
         self._redis = redis_client
         # numeric meeting_id → (native_meeting_id, platform). The id→native map is immutable for a
         # meeting row, so cache it forever once resolved (bounded by the live meeting set).
         self._native_cache: dict[int, tuple[str, str]] = {}
+
+    def _statement(self, sql: str):
+        if self._statement_factory is not None:
+            return self._statement_factory(sql)
+        from sqlalchemy import text
+
+        return text(sql)
 
     async def native_for(self, meeting_id) -> "Optional[tuple[str, str]]":
         """Resolve a NUMERIC meeting_id → (native_meeting_id, platform) from the meetings table.
@@ -522,11 +531,38 @@ class SqlAlchemyTranscriptStore:
 
         hash_key = segments_hash_key(meeting_id)
         ttl = int(os.environ.get("REDIS_SEGMENT_TTL", "3600"))
-        async with self._redis.pipeline(transaction=True) as pipe:
-            pipe.sadd(ACTIVE_MEETINGS_KEY, str(meeting_id))
-            pipe.hset(hash_key, segment["segment_id"], json.dumps(segment))
-            pipe.expire(hash_key, ttl)
-            await pipe.execute()
+        lock_params = {
+            "lock_namespace": MEETING_WRITE_LOCK_NAMESPACE,
+            "meeting_id": int(meeting_id),
+        }
+        async with self._session_factory() as db:
+            await db.execute(
+                self._statement(
+                    "SELECT pg_advisory_lock_shared(:lock_namespace, :meeting_id)"
+                ),
+                lock_params,
+            )
+            try:
+                result = await db.execute(
+                    self._statement("SELECT data FROM meetings WHERE id = :meeting_id"),
+                    {"meeting_id": int(meeting_id)},
+                )
+                row = result.mappings().first()
+                data = row["data"] if row and isinstance(row["data"], dict) else {}
+                if row is None or capture_is_withdrawn(data):
+                    raise TranscriptWriteRefused("meeting is not writable")
+                async with self._redis.pipeline(transaction=True) as pipe:
+                    pipe.sadd(ACTIVE_MEETINGS_KEY, str(meeting_id))
+                    pipe.hset(hash_key, segment["segment_id"], json.dumps(segment))
+                    pipe.expire(hash_key, ttl)
+                    await pipe.execute()
+            finally:
+                await db.execute(
+                    self._statement(
+                        "SELECT pg_advisory_unlock_shared(:lock_namespace, :meeting_id)"
+                    ),
+                    lock_params,
+                )
 
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink — UPSERT a batch of flushed segments into ``transcriptions``

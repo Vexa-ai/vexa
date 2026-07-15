@@ -58,6 +58,31 @@ async def test_ingest_persists_and_is_readable(store, bus):
     assert [s["text"] for s in doc["segments"]] == ["Hello", "world"]
 
 
+async def test_ingest_refuses_transcript_after_capture_withdrawal(bus):
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=7,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        data={"zaki_capture": {"state": "withdrawn"}},
+    )
+
+    persisted = await ingest(store, bus, _message(1, [
+        {
+            "segment_id": "after-withdrawal",
+            "start": 1.0,
+            "end": 2.0,
+            "text": "must not persist",
+            "completed": True,
+        },
+    ]))
+
+    doc = await store.get_transcript(7, "google_meet", "abc-defg-hij")
+    assert persisted == 0
+    assert doc["segments"] == []
+    assert bus.published == []
+
+
 async def test_ingest_publishes_mutable_on_gateway_channel(store, bus):
     await ingest(store, bus, _message(1, [
         {"segment_id": "ch-0:1:a", "start": 1.0, "end": 2.5, "text": "Hello", "language": "en",

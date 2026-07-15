@@ -7,14 +7,18 @@ import hashlib
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
+from meeting_api import create_app
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 from meeting_api.capture import (
     CaptureAuthority,
     CaptureDenial,
     CaptureDenied,
     ZAKI_NOTETAKER_NAME,
     request_capture,
+    withdraw_capture,
 )
 from meeting_api.retention import ScopeExpiries
 
@@ -29,6 +33,7 @@ RETENTION_EXPIRIES = ScopeExpiries(
     transcript=AUTHORIZED_AT + timedelta(days=7),
     summary=AUTHORIZED_AT + timedelta(days=30),
 )
+WITHDRAWN_AT = AUTHORIZED_AT + timedelta(minutes=10)
 
 
 def _allowed(native_meeting_id: str = "abc-defg-hij") -> CaptureAuthority:
@@ -86,6 +91,278 @@ async def test_authorized_capture_forces_visible_bot_and_persists_content_free_e
         "authority_valid_until": "2026-07-15T08:36:00+00:00",
     }
     assert "transcript" not in json.dumps(meeting["data"]["zaki_capture"]).lower()
+
+
+async def test_withdrawal_persists_before_stopping_and_returns_content_free_receipt(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    publisher = InMemoryCommandPublisher()
+    meeting = await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+
+    receipt = await withdraw_capture(
+        repo,
+        publisher,
+        runtime=runtime,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=WITHDRAWN_AT,
+    )
+
+    stored = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert receipt == {
+        "meeting_id": meeting["id"],
+        "state": "withdrawn",
+        "changed": True,
+        "withdrawn_at": "2026-07-15T08:41:00+00:00",
+    }
+    assert stored["status"] == "stopping"
+    assert stored["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert stored["data"]["zaki_capture"]["withdrawal_reason"] == "consent_withdrawn"
+    assert stored["data"]["stop_requested"] is True
+    assert publisher.published == [
+        (
+            f"bot_commands:meeting:{meeting['id']}",
+            json.dumps({"action": "leave", "meeting_id": meeting["id"]}),
+        )
+    ]
+    assert runtime.deleted == [meeting["bot_container_id"]]
+    assert "transcript" not in json.dumps(receipt).lower()
+
+
+async def test_withdrawal_still_tears_down_booting_workload_when_leave_publish_fails(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+
+    class FailingPublisher:
+        async def publish(self, channel: str, message: str) -> None:
+            raise RuntimeError("redis unavailable")
+
+    meeting = await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+
+    with pytest.raises(RuntimeError, match="redis unavailable"):
+        await withdraw_capture(
+            repo,
+            FailingPublisher(),
+            runtime=runtime,
+            tenant_id="tenant-a",
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id="abc-defg-hij",
+            withdrawn_at=WITHDRAWN_AT,
+        )
+
+    stored = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert stored["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert runtime.deleted == [meeting["bot_container_id"]]
+
+
+async def test_late_nonterminal_callback_cannot_resurrect_withdrawn_capture(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    meeting = await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=WITHDRAWN_AT,
+    )
+
+    await repo.update_meeting_status(
+        session_uid=repo.sessions[-1]["session_uid"],
+        status="active",
+    )
+
+    stored = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert stored["id"] == meeting["id"]
+    assert stored["status"] == "stopping"
+    assert stored["data"]["zaki_capture"]["state"] == "withdrawn"
+
+
+async def test_late_active_callback_is_not_emitted_after_withdrawal(monkeypatch, goldens):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    connection_id = repo.sessions[-1]["session_uid"]
+    app = create_app(meeting_repo=repo, runtime=runtime)
+    client = TestClient(app)
+    joining = {**goldens["joining"], "connection_id": connection_id}
+    active = {**goldens["active"], "connection_id": connection_id}
+    assert client.post("/bots/internal/callback/lifecycle", json=joining).status_code == 200
+    await withdraw_capture(
+        repo,
+        InMemoryCommandPublisher(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=WITHDRAWN_AT,
+    )
+
+    response = client.post("/bots/internal/callback/lifecycle", json=active)
+
+    assert response.status_code == 200
+    assert response.json()["meeting_status"] == "stopping"
+    assert [
+        envelope["data"]["status_change"]["new_status"]
+        for envelope in app.state.status_change_webhooks
+    ] == ["joining"]
+    assert app.state.typed_webhooks == []
+
+    completed = {**goldens["completed-stopped"], "connection_id": connection_id}
+    completed_response = client.post("/bots/internal/callback/lifecycle", json=completed)
+
+    assert completed_response.status_code == 200
+    assert completed_response.json()["meeting_status"] == "completed"
+    stored = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert stored["status"] == "completed"
+    assert stored["data"]["zaki_capture"]["state"] == "withdrawn"
+    assert [envelope["event_type"] for envelope in app.state.typed_webhooks] == [
+        "meeting.completed"
+    ]
+
+
+async def test_withdrawal_is_idempotent_and_preserves_first_timestamp(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    publisher = InMemoryCommandPublisher()
+    await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+    first = await withdraw_capture(
+        repo,
+        publisher,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=WITHDRAWN_AT,
+    )
+    second = await withdraw_capture(
+        repo,
+        publisher,
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        withdrawn_at=WITHDRAWN_AT + timedelta(minutes=5),
+    )
+
+    assert first["changed"] is True
+    assert second == {**first, "changed": False}
+    assert len(publisher.published) == 2
+
+
+async def test_withdrawal_is_tenant_scoped_and_mutation_free_on_mismatch(monkeypatch):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+    publisher = InMemoryCommandPublisher()
+    await request_capture(
+        repo,
+        runtime,
+        authority=_allowed(),
+        tenant_id="tenant-a",
+        user_id=USER,
+        platform="google_meet",
+        native_meeting_id="abc-defg-hij",
+        token_secret=SECRET,
+        evaluated_at=AUTHORIZED_AT,
+    )
+
+    with pytest.raises(CaptureDenied) as exc:
+        await withdraw_capture(
+            repo,
+            publisher,
+            tenant_id="tenant-b",
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id="abc-defg-hij",
+            withdrawn_at=WITHDRAWN_AT,
+        )
+
+    stored = await repo.find_latest(USER, "google_meet", "abc-defg-hij")
+    assert exc.value.code is CaptureDenial.AUTHORITY_SCOPE_MISMATCH
+    assert stored["status"] == "requested"
+    assert stored["data"]["zaki_capture"]["state"] == "authorized"
+    assert publisher.published == []
+    assert runtime.deleted == []
+
+
+async def test_withdrawal_rejects_malformed_timestamp_without_io():
+    repo = InMemoryMeetingRepo()
+    publisher = InMemoryCommandPublisher()
+
+    with pytest.raises(CaptureDenied) as exc:
+        await withdraw_capture(
+            repo,
+            publisher,
+            tenant_id="tenant-a",
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id="abc-defg-hij",
+            withdrawn_at="2026-07-15T08:41:00Z",
+        )
+
+    assert exc.value.code is CaptureDenial.USER_REQUEST_INVALID
+    assert publisher.published == []
 
 
 @pytest.mark.parametrize(

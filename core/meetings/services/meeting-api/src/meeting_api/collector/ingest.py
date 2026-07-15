@@ -24,7 +24,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
-from .ports import RedisBus, TranscriptStore
+from .ports import RedisBus, TranscriptStore, TranscriptWriteRefused
 
 # Stream / consumer-group defaults (parent ``collector/config.py``).
 STREAM_NAME = "transcription_segments"
@@ -190,7 +190,10 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         seg = _coerce_segment(raw)
         if seg is None:
             continue
-        await store.append_segment(meeting_id, seg)
+        try:
+            await store.append_segment(meeting_id, seg)
+        except TranscriptWriteRefused:
+            break
         persisted.append(seg)
 
     if persisted:

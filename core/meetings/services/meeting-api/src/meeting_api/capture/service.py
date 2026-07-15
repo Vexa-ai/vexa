@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 import hmac
-from typing import Optional
+import json
+from typing import Any, Optional, Protocol
 
 from ..bot_spawn import (
     MaxBotsExceeded,
@@ -18,6 +19,8 @@ from ..bot_spawn import (
     validate_meeting_url,
 )
 from ..retention import ScopeExpiries, materialize_scope_expiries
+from ..lifecycle.stop import leave_command_channel, leave_command_payload
+from ..obs import log_event
 
 
 ZAKI_NOTETAKER_NAME = "ZAKI Notetaker"
@@ -48,6 +51,13 @@ class CaptureDenied(Exception):
     def __init__(self, code: CaptureDenial):
         self.code = code
         super().__init__(code.value)
+
+
+class CaptureStopPublisher(Protocol):
+    """The internal leave-command publisher used after withdrawal is durable."""
+
+    async def publish(self, channel: str, message: str) -> Any:
+        ...
 
 
 @dataclass(frozen=True)
@@ -332,3 +342,88 @@ async def request_capture(
         )
     except (MaxBotsExceeded, QuotaExceeded) as error:
         raise CaptureDenied(CaptureDenial.QUOTA_EXHAUSTED) from error
+
+
+async def withdraw_capture(
+    repo: MeetingRepo,
+    publisher: CaptureStopPublisher,
+    *,
+    tenant_id: str,
+    user_id: int,
+    platform: str,
+    native_meeting_id: str,
+    runtime: Optional[RuntimeClient] = None,
+    withdrawn_at: Optional[datetime] = None,
+) -> dict:
+    """Durably withdraw capture, then ask the bot to leave.
+
+    The repository takes the exclusive side of the meeting write barrier before storing the
+    withdrawal. In-flight transcript/recording writes drain first; writers starting later observe
+    ``zaki_capture.state=withdrawn`` and refuse. The returned receipt is content-free.
+    """
+    withdrawn_at = withdrawn_at if withdrawn_at is not None else datetime.now(timezone.utc)
+    if (
+        not isinstance(withdrawn_at, datetime)
+        or withdrawn_at.tzinfo is None
+        or withdrawn_at.utcoffset() is None
+    ):
+        raise CaptureDenied(CaptureDenial.USER_REQUEST_INVALID)
+    if (
+        isinstance(user_id, bool)
+        or not isinstance(user_id, int)
+        or user_id <= 0
+        or not isinstance(tenant_id, str)
+        or not tenant_id.strip()
+        or len(tenant_id) > 128
+        or any(ord(character) < 32 for character in tenant_id)
+        or not isinstance(platform, str)
+        or not platform
+        or not isinstance(native_meeting_id, str)
+        or not native_meeting_id
+    ):
+        raise CaptureDenied(CaptureDenial.AUTHORITY_SCOPE_MISMATCH)
+    result = await repo.withdraw_capture(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        platform=platform,
+        native_meeting_id=native_meeting_id,
+        withdrawn_at=withdrawn_at.isoformat(),
+    )
+    if result is None:
+        raise CaptureDenied(CaptureDenial.AUTHORITY_SCOPE_MISMATCH)
+    meeting = result["meeting"]
+    if result["should_stop"]:
+        meeting_id = meeting["id"]
+        try:
+            await publisher.publish(
+                leave_command_channel(meeting_id),
+                json.dumps(leave_command_payload(meeting_id)),
+            )
+        finally:
+            # A booting workload may not yet be subscribed to the leave channel. Attempt the
+            # direct teardown even when Redis publication fails; the durable withdrawal already
+            # makes all later transcript and recording writes fail closed.
+            if (
+                runtime is not None
+                and result["prior_status"] in {"requested", "joining", "awaiting_admission"}
+                and meeting.get("bot_container_id")
+            ):
+                try:
+                    await runtime.delete_workload(meeting["bot_container_id"])
+                except Exception as error:  # noqa: BLE001 — durable refusal already protects privacy
+                    log_event(
+                        "capture_withdraw_teardown_failed",
+                        audience="system",
+                        level="warning",
+                        span="capture.withdraw",
+                        user_id=user_id,
+                        meeting_id=str(meeting_id),
+                        fields={"error": str(error)},
+                    )
+    capture = meeting["data"]["zaki_capture"]
+    return {
+        "meeting_id": meeting["id"],
+        "state": "withdrawn",
+        "changed": result["changed"],
+        "withdrawn_at": capture["withdrawn_at"],
+    }

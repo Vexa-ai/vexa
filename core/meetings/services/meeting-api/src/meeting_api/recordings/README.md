@@ -20,8 +20,9 @@ and stamps the JSONB media-file.
 `upload_chunk` and `finalize_master` hold `RecordingRepo.recording_write(meeting_id)` for their
 entire object-storage + JSONB mutation. The SQLAlchemy adapter implements that lease with a shared
 session-level PostgreSQL advisory lock and refuses meetings whose durable
-`data.zaki_retention.state` is `erasing`; the retention adapter uses the exclusive side of the same
-lock. A cancelled boto3 offload is awaited before the lease exits, preventing a worker thread from
+`data.zaki_retention.state` is `erasing`, whose audio scope has expired, or whose ZAKI capture has
+been withdrawn. Retention erasure and capture withdrawal use the exclusive side of the same lock.
+A cancelled boto3 offload is awaited before the lease exits, preventing a worker thread from
 creating a ghost object after erasure sweeps the prefix. Before the first object write, the narrow
 session prefix is durably deduplicated in `data.zaki_recording_prefixes`; this remains discoverable
 even if the later recording JSONB fold and compensating exact-object delete both fail. Routes map

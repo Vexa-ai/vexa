@@ -463,6 +463,13 @@ class InMemoryTranscriptStore:
         return m
 
     async def append_segment(self, meeting_id, segment) -> None:
+        from ..meeting_writes import capture_is_withdrawn
+
+        meeting = self._meetings.get(meeting_id)
+        if meeting and capture_is_withdrawn(meeting.get("data")):
+            from .ports import TranscriptWriteRefused
+
+            raise TranscriptWriteRefused("meeting is not writable")
         if self._redis is not None:
             # Prod-topology mode: live segments land in the redis HASH (+ the db-writer's
             # active_meetings sweep set), exactly like SqlAlchemyTranscriptStore.append_segment;

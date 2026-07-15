@@ -163,6 +163,7 @@ def _mount_lifecycle(
     from .lifecycle.machine import IllegalTransition, TransitionSource
     from .lifecycle.receiver import conforms
     from .lifecycle.webhook import build_status_change_envelope, build_typed_envelope
+    from .meeting_writes import capture_is_withdrawn
     from .obs import log_event
     from .webhooks import clean_meeting_data
 
@@ -259,15 +260,11 @@ def _mount_lifecycle(
                 },
             )
         rec = change.record
-        # Build + record the status_change envelope only on a REAL advance — an idempotent replay
-        # (change.no_op, e.g. the bot's 3x terminal retry) must NOT double-count it. The persist, the
-        # webhook deliver, and the ws publish below are already no_op-gated (they hang off meeting_row,
-        # set only on a real persist), so end-user delivery is exactly-once; this keeps the in-process
-        # envelope log honest too.
+        # Build + record the status_change envelope only after persistence confirms that the advance
+        # is user-visible. Besides idempotent replays, a late non-terminal callback after durable
+        # consent withdrawal is suppressed: it must not resurrect an active state in HTTP, WS, or
+        # webhook projections.
         envelope = None
-        if not change.no_op:
-            envelope = build_status_change_envelope(change)
-            app.state.status_change_webhooks.append(envelope)
         # Persist the FSM advance to the DB meeting row → durable + queryable (GET /meetings reflects
         # it, survives a restart), not only the in-process MeetingStore. Best-effort: a DB hiccup must
         # never fail the bot's lifecycle callback (the in-process FSM + webhook already advanced).
@@ -287,6 +284,23 @@ def _mount_lifecycle(
             except Exception as e:  # noqa: BLE001 — persistence is best-effort
                 log_event("lifecycle_persist_failed", audience="system", level="warning",
                           span="lifecycle.callback", fields={"error": str(e)})
+        meeting_data = (
+            meeting_row.get("data")
+            if isinstance(meeting_row, dict) and isinstance(meeting_row.get("data"), dict)
+            else {}
+        )
+        suppressed_withdrawn_advance = (
+            not change.no_op
+            and rec.status is not None
+            and rec.status.value not in ("completed", "failed")
+            and isinstance(meeting_row, dict)
+            and capture_is_withdrawn(meeting_data)
+            and meeting_row.get("status") != rec.status.value
+        )
+        visible_change = not change.no_op and not suppressed_withdrawn_advance
+        if visible_change:
+            envelope = build_status_change_envelope(change)
+            app.state.status_change_webhooks.append(envelope)
         # COMPLETION FINALIZATION — the moment the FSM lands on a terminal status, flush the
         # meeting's remaining live redis segments to the durable store (threshold 0: the mutable
         # tail included, no more updates are coming) and persist the processed doc into
@@ -314,7 +328,7 @@ def _mount_lifecycle(
         # persist so the meeting block is the durable row projection (the parent's
         # _build_meeting_event_data shape) when the row is known; the FSM-record fallback otherwise.
         typed_envelope = None
-        if not change.no_op:
+        if visible_change:
             typed_envelope = build_typed_envelope(
                 change,
                 meeting=_meeting_projection_from_row(meeting_row)
@@ -349,7 +363,7 @@ def _mount_lifecycle(
         # `status` is the raw BotStatus value (e.g. 'needs_help'); clients translate to their own
         # vocabulary on THEIR side (the core emits the contract, never a client's naming). Skipped on
         # a no-op advance (idempotent replay) / unknown session. Best-effort: never fail the callback.
-        if redis is not None and not change.no_op and isinstance(meeting_row, dict) and rec.status is not None:
+        if redis is not None and visible_change and isinstance(meeting_row, dict) and rec.status is not None:
             meeting_id = meeting_row.get("id")
             if meeting_id is not None:
                 import json as _json
@@ -433,22 +447,33 @@ def _mount_lifecycle(
                     log_event("meeting_copilot_reap_failed", audience="system", level="warning",
                               span="lifecycle.callback",
                               fields={"meeting_row_id": meeting_row_id, "error": str(e)})
+        reported_status = (
+            meeting_row.get("status")
+            if suppressed_withdrawn_advance and isinstance(meeting_row, dict)
+            else (rec.status.value if rec.status else None)
+        )
+        reported_data = meeting_data if suppressed_withdrawn_advance else rec.data
+        reported_transitions = (
+            meeting_data.get("status_transition", [])
+            if suppressed_withdrawn_advance
+            else rec.status_transition
+        )
         log_event(
             "meeting_lifecycle_advanced", audience="user", span="lifecycle.callback",
             meeting_id=rec.connection_id,
-            fields={"meeting_status": rec.status.value if rec.status else None},
+            fields={"meeting_status": reported_status},
         )
         return (
             200,
             {
                 "status": "accepted",
                 "connection_id": rec.connection_id,
-                "meeting_status": rec.status.value if rec.status else None,
+                "meeting_status": reported_status,
                 "completion_reason": rec.completion_reason.value if rec.completion_reason else None,
                 "failure_stage": rec.failure_stage.value if rec.failure_stage else None,
                 "transition_source": change.transition_source.value,
-                "status_transition": rec.status_transition,
-                "data": rec.data,
+                "status_transition": reported_transitions,
+                "data": reported_data,
             },
         )
 

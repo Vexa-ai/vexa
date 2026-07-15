@@ -21,6 +21,18 @@ The runtime kernel still rechecks owner quota. If that defense-in-depth check re
 meeting row was reserved, the row is made terminal (`failed`) and its capture evidence becomes the
 named `quota_exhausted` non-capture state; it never remains an active `requested` orphan.
 
-This is the first S03 tracer. Consent withdrawal and its terminal lifecycle state build on this
-front door; public Hub/BFF routing, settings persistence, secrets, charts, and activation belong to
-later slices.
+`withdraw_capture(...)` is the second S03 tracer. It is tenant/user/meeting scoped and takes the
+exclusive meeting-write barrier before storing `zaki_capture.state=withdrawn`, the original UTC
+withdrawal instant, `withdrawal_reason=consent_withdrawn`, and `stop_requested=true`. Only after that
+commit does it publish the bot leave command. A booting workload is also torn down directly because
+it may not yet be listening for Redis commands. Repeated withdrawal preserves the first timestamp
+and safely retries the leave command.
+
+Recording and transcript writers take the shared side of the same cross-process barrier and refuse
+entry once withdrawal is durable. A write already holding the lease drains; a later write cannot
+touch Redis, object storage, or recording JSONB. Late non-terminal bot callbacks cannot move the
+meeting back from `stopping` to `active`; a genuine terminal callback is still accepted and retains
+the capture attribution.
+
+No public withdrawal route is introduced here. Hub/BFF routing, settings persistence, secrets,
+charts, and activation belong to later slices.
