@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from runtime_kernel.mounts import MountBind, k8s_volume_mounts, mount_set, workspace_binds
 from runtime_kernel.docker_backend import DockerBackend  # for the docker bind-string shape
 from runtime_kernel.k8s_backend import pod_overrides
@@ -163,6 +165,90 @@ def test_k8s_pod_overrides_carry_the_per_mount_spec():
 
 def test_k8s_pod_overrides_none_when_no_store_configured():
     assert pod_overrides({}, container_name="x") is None
+
+
+# ── k8s: scheduling constraints merged into the spawn override (#673) ──────────
+# A spawned Pod is a bare `kubectl run` Pod — NOT a Deployment child — so it inherits none of the
+# runtime Deployment's nodeSelector/tolerations. Without these it strands Pending forever on an
+# all-tainted pool and the meeting silently fails. RUNTIME_K8S_TOLERATIONS / RUNTIME_K8S_NODE_SELECTOR
+# (JSON, from the chart's global.*) let the override carry the runtime's own constraints.
+
+_TOL = [{"key": "vexa.ai/pool", "operator": "Equal", "value": "main", "effect": "NoSchedule"}]
+_SEL = {"vexa.ai/pool": "main"}
+
+
+def _sched_env(*, tolerations=None, node_selector=None, **kw):
+    e = _env(**kw) if kw else {}
+    if tolerations is not None:
+        e["RUNTIME_K8S_TOLERATIONS"] = json.dumps(tolerations)
+    if node_selector is not None:
+        e["RUNTIME_K8S_NODE_SELECTOR"] = json.dumps(node_selector)
+    return e
+
+
+def test_k8s_pod_overrides_tolerations_only_no_pvc_builds_a_valid_spec():
+    """The load-bearing case: a plain meeting bot has NO workspace PVC, yet its spawn override MUST
+    still carry tolerations — a volumes-only early return would silently drop them and re-create #673.
+    Negative control: the pre-#673 pod_overrides returned None here (no store ⇒ no override at all)."""
+    ov = pod_overrides(_sched_env(tolerations=_TOL, node_selector=_SEL), container_name="vexa-mtg-6")
+    assert ov is not None                                  # NOT None — the pre-#673 bug returned None
+    spec = ov["spec"]
+    assert spec["tolerations"] == _TOL
+    assert spec["nodeSelector"] == _SEL
+    assert "volumes" not in spec                           # no PVC ⇒ no volumes, but scheduling stands
+    assert spec["containers"] == [{"name": "vexa-mtg-6"}]  # no volumeMounts when no store
+
+
+def test_k8s_pod_overrides_merges_pvc_and_scheduling():
+    """An agent worker with a workspace PVC: the override carries BOTH the per-mount volumeMounts AND
+    the scheduling constraints — the two seams coexist."""
+    ov = pod_overrides(
+        _sched_env(tolerations=_TOL, node_selector=_SEL, source="vexa-agent-workspaces"),
+        container_name="vexa-worker-u1",
+    )
+    spec = ov["spec"]
+    assert spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "vexa-agent-workspaces"
+    assert spec["containers"][0]["volumeMounts"] == [
+        {"name": "workspace-store", "mountPath": "/workspaces/u1", "subPath": "u1", "readOnly": False}
+    ]
+    assert spec["tolerations"] == _TOL
+    assert spec["nodeSelector"] == _SEL
+
+
+def test_k8s_pod_overrides_empty_scheduling_is_unchanged_from_today():
+    """The chart's DEFAULT deployment serializes global.tolerations=[] / global.nodeSelector={} to the
+    strings "[]" / "{}". These are treated as unset — no scheduling appears, and a no-store spawn still
+    returns None — so an untainted cluster sees exactly today's behaviour (no regression)."""
+    assert pod_overrides({"RUNTIME_K8S_TOLERATIONS": "[]", "RUNTIME_K8S_NODE_SELECTOR": "{}"},
+                         container_name="x") is None
+    ov = pod_overrides(_sched_env(tolerations=[], node_selector={}, source="vexa-agent-workspaces"),
+                       container_name="vexa-worker-u1")
+    assert "tolerations" not in ov["spec"] and "nodeSelector" not in ov["spec"]
+    assert ov["spec"]["volumes"]                           # volumes-only spec, exactly as before #673
+
+
+def test_k8s_pod_overrides_malformed_scheduling_json_fails_loud():
+    """Malformed scheduling JSON is FATAL (raise), not fail-open like the workspace mount set: a
+    silently dropped toleration is precisely the stranded-Pod / silent-meeting-failure bug."""
+    with pytest.raises(ValueError, match="RUNTIME_K8S_TOLERATIONS"):
+        pod_overrides({"RUNTIME_K8S_TOLERATIONS": "{not json"}, container_name="x")
+    # wrong shape (object where an array is required) is caught too
+    with pytest.raises(ValueError, match="RUNTIME_K8S_NODE_SELECTOR"):
+        pod_overrides({"RUNTIME_K8S_NODE_SELECTOR": "[1,2]"}, container_name="x")
+
+
+def test_k8s_start_overlays_runtime_process_scheduling_env(monkeypatch):
+    """start() overlays the runtime's OWN process env (RUNTIME_K8S_* set by the chart on the runtime
+    Deployment) onto the spawn override — spec.env, built per-workload by meeting-api/agent-api, cannot
+    carry these. Proven via _runtime_scheduling_env without a cluster."""
+    from runtime_kernel.k8s_backend import _runtime_scheduling_env
+    monkeypatch.setenv("RUNTIME_K8S_TOLERATIONS", json.dumps(_TOL))
+    monkeypatch.setenv("RUNTIME_K8S_NODE_SELECTOR", json.dumps(_SEL))
+    overlay = _runtime_scheduling_env()
+    # the workload's own spec.env has no scheduling; the overlay supplies it → the override carries it
+    ov = pod_overrides({**_env(source="vexa-agent-workspaces"), **overlay}, container_name="w")
+    assert ov["spec"]["tolerations"] == _TOL
+    assert ov["spec"]["nodeSelector"] == _SEL
 
 
 # ── process: shares the host FS — no binds, but N-mount aware (parity) ────────

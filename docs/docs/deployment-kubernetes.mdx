@@ -41,6 +41,42 @@ destroyed`) and delegates only the substrate question — *how do I start, obser
 workload?* — to the backend. On `k8s`, a workload is a bare Pod; the same dispatch, contracts,
 and worker run identically to the Docker backend. See [Execution](/architecture/execution).
 
+### Scheduling spawned Pods on a tainted / dedicated pool
+
+A spawned bot or agent Pod is created with `kubectl run` — it is **not** a child of the runtime
+Deployment, so it does **not** inherit `global.nodeSelector` / `global.tolerations`. On a cluster
+whose nodes are all tainted (the standard pool-segregation pattern — dedicated, spot/temp, or GPU
+node pools), a spawned Pod with no tolerations sits `Pending` forever (`untolerated taint(s)`) and
+the meeting silently fails while the runtime itself — a Deployment that *does* apply those
+constraints — looks healthy.
+
+The chart closes this by handing the runtime its **own** scheduling constraints as env, which the
+spawn backend stamps onto every Pod it creates:
+
+| Env on the runtime | Chart source | Applied to |
+|---|---|---|
+| `RUNTIME_K8S_TOLERATIONS` | `runtime.tolerations` ⟶ defaults to `global.tolerations` | every spawned Pod's `spec.tolerations` |
+| `RUNTIME_K8S_NODE_SELECTOR` | `runtime.nodeSelector` ⟶ defaults to `global.nodeSelector` | every spawned Pod's `spec.nodeSelector` |
+
+By default a spawned Pod schedules **wherever the runtime itself can** — set `global.tolerations`
+/ `global.nodeSelector` for your pool and both the runtime and everything it spawns land there, with
+no extra action:
+
+```yaml
+global:
+  tolerations:
+    - key: vexa.ai/pool
+      operator: Equal
+      value: main
+      effect: NoSchedule
+  nodeSelector:
+    vexa.ai/pool: main
+```
+
+Set `runtime.tolerations` / `runtime.nodeSelector` only to send spawned workloads to a **different**
+pool than the kernel (e.g. GPU bots). Both values are serialized to JSON; malformed JSON fails the
+spawn loudly rather than dropping the constraint (a dropped constraint is the stranded-Pod bug).
+
 ## Scaling meeting-api
 
 `meetingApi.replicaCount` defaults to `2`, and that is safe for the segment consumer.
@@ -91,6 +127,13 @@ explicitly on the meeting-api deployment to `http://<release>-vexa-meeting-api:8
 address a spawned bot calls back on for its lifecycle callback and recording upload. Left
 unset it would fall back to the compose-only default `http://meeting-api:8080`, which does
 not resolve in-cluster.
+
+The chart sets the same address as `VEXA_MEETING_API_URL` on the **agent-api** deployment.
+Before opening a live-transcript SSE stream (`GET /api/meeting/stream`), agent-api verifies the
+caller owns the meeting by calling `GET /meetings/{id}` on meeting-api, and **fails closed** — an
+unreachable meeting-api returns `403 "not authorized for this meeting"` for the meeting's own
+owner. Left unset it would fall back to the compose-only `http://meeting-api:8080`, so the owner
+sees a permanent "Reconnecting to live stream…" instead of streaming words.
 
 The chart likewise sets `ADMIN_API_URL` on the meeting-api deployment to
 `http://<release>-vexa-admin-api:8001` (mirroring Compose's `ADMIN_API_URL=http://admin-api:8001`).
