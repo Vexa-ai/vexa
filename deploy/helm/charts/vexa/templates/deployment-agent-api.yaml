@@ -44,6 +44,12 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             - name: VEXA_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            # Owner-scopes the live SSE feed (GET /api/meeting/stream): agent-api hits GET /meetings/{id}
+            # on meeting-api to verify the caller owns the row before opening the redis transcript stream
+            # (P0 cross-tenant guard, fail-closed). The compose-only default http://meeting-api:8080 does
+            # not resolve in-cluster, so set the release-qualified Service DNS (#677, sibling of #634).
+            - name: VEXA_MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             - name: VEXA_AGENT_PROFILE
               value: "agent"
             - name: VEXA_WORKSPACES_DIR

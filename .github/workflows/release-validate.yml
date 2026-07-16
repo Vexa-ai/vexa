@@ -206,6 +206,55 @@ jobs:
           done
           echo "✓ all $(wc -w <<<"$ALL_IMAGES") published images match their names"
 
+      # ── image↔profile conformance gate (#675) ──────────────────────────────────────────────────
+      # The runtime spawns each profile's Runnable.command as argv[0] of the workload. Under k8s
+      # (`kubectl run --command`) that REPLACES the image entrypoint, so a command path absent from
+      # the image StartErrors EVERY spawn (v0.12.7: meeting-bot carried /app/vexa-bot/entrypoint.sh,
+      # which the bot image does not have; docker's Cmd-append hid it, k8s detonated it). This gate
+      # reads the REAL profile registry out of the published runtime image and, for every profile,
+      # asserts the resolved command is either empty (⇒ the image ENTRYPOINT boots the workload) or an
+      # in-image executable (`test -x`), against the SAME published images the release ships.
+      - name: Profile commands resolve inside their target images (#675)
+        run: |
+          set -euo pipefail
+          RUNTIME_REF="vexaai/v012-runtime:$VERSION"
+          BOT_REF="vexaai/vexa-bot:$VERSION"
+          WORKER_REF="vexaai/v012-agent-worker:$VERSION"
+          docker pull -q "$RUNTIME_REF"
+          # Emit {profile: command-argv-or-null} from the deployment-shaped registry (post BOT_COMMAND
+          # / AGENT_WORKER_COMMAND override — container backends set neither, so these are the defaults).
+          PROFILES_JSON="$(docker run --rm --entrypoint "" \
+            -e BROWSER_IMAGE="$BOT_REF" -e AGENT_IMAGE="vexaai/v012-agent-api:$VERSION" \
+            "$RUNTIME_REF" python -c 'import json; from runtime_kernel import default_registry; from runtime_kernel.profiles import apply_command_overrides; reg = apply_command_overrides(default_registry()); print(json.dumps({n: reg.resolve(n).command for n in reg.names()}))')"
+          echo "profiles: $PROFILES_JSON"
+          # Profile → the published image its command must resolve inside. Every profile MUST be mapped
+          # here (need-style: a new, unmapped profile fails the gate rather than shipping unchecked).
+          image_for() {
+            case "$1" in
+              meeting-bot) echo "$BOT_REF" ;;
+              agent)       echo "$WORKER_REF" ;;
+              *) echo "::error title=profile-conformance::profile '$1' has no image mapping in this gate — add one (#675)"; exit 1 ;;
+            esac
+          }
+          docker pull -q "$BOT_REF"; docker pull -q "$WORKER_REF"
+          for name in $(echo "$PROFILES_JSON" | jq -r 'keys[]'); do
+            ref="$(image_for "$name")"
+            len="$(echo "$PROFILES_JSON" | jq -r --arg n "$name" '.[$n] | if . == null then 0 else length end')"
+            if [ "$len" = "0" ]; then
+              echo "   ✓ $name: no command → image ENTRYPOINT of $ref is authoritative"
+              continue
+            fi
+            argv0="$(echo "$PROFILES_JSON" | jq -r --arg n "$name" '.[$n][0]')"
+            case "$argv0" in
+              /*) test_cmd="test -x '$argv0'" ;;        # absolute path → must be an in-image executable
+              *)  test_cmd="command -v '$argv0'" ;;     # bare name → must be on PATH in the image
+            esac
+            docker run --rm --entrypoint "" "$ref" sh -c "$test_cmd" >/dev/null \
+              || { echo "::error title=profile-conformance::profile '$name' command argv[0] '$argv0' is not runnable inside $ref — under k8s this StartErrors every spawn (#675)"; exit 1; }
+            echo "   ✓ $name: '$argv0' is runnable inside $ref"
+          done
+          echo "✓ every profile command resolves inside its target image"
+
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Validation legs — every one pulls the PUBLISHED :$VERSION images (COMPOSE_NO_BUILD=1 /
   # helm --set global.imageTag / lite IMAGE_TAG). Green here means the artifacts work, not
