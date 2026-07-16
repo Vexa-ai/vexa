@@ -427,14 +427,22 @@ function gateAccess() {
   return true;
 }
 
-// gate:contract-conformance (P8) — the SHIPPED meeting-api conforms to the sealed api.v1. gate:schema
-// proves goldens≡schema and gate:contract-version freezes the seal, but neither proves the RUNNING
-// service implements the contract it serves — and it drifted (api.v1 declares routes meeting-api never
-// implemented; the conformance harness drove a FAKE that masked it). This is the OFFLINE STRUCTURAL half:
-// a pytest imports the real create_app(), enumerates app.routes, and asserts every implemented api.v1
-// route matches a declared (path, method) AND every declared route is implemented OR on an explicit,
-// reasoned waiver list (known drift bounded + documented; NEW unwaived drift → RED). Discovers the proof
-// by filename (mirrors gate:access). RED if the proof is absent — an ungated contract is the gap this closes.
+// gate:contract-conformance (P8) — the SHIPPED impl conforms to the sealed api.v1, BOTH directions.
+// gate:schema proves goldens≡schema and gate:contract-version freezes the seal, but neither proves the
+// RUNNING service implements the contract it serves — and it drifted BOTH ways (api.v1 declares routes
+// meeting-api never implemented; the conformance harness drove a FAKE that masked it). This is the
+// OFFLINE STRUCTURAL check, discovered by filename (mirrors gate:access), asserting per service:
+//   • forward (impl ⊆ contract): every api.v1 route the real create_app() registers matches a declared
+//     (path, method) — a route that drifts from the contract's spelling is a bug; and
+//   • REVERSE (contract ⊆ impl, #591): for EVERY (path, method) the sealed api.v1 declares, the UNION of
+//     the gateway edge + meeting-api it forwards to registers it, OR the route is audited in
+//     core/gateway/contracts/api.v1/KNOWN_GAPS.json (owned-elsewhere prefix / reasoned known-gap, each
+//     reported LOUDLY). A sealed route that is renamed/dropped and NOT audited → RED, listed by name.
+//   • golden RESPONSE-SHAPE: the frozen golden examples drive the REAL response so a field RENAME
+//     (running_bots → running) fails, not just a path removal.
+// The KNOWN_GAPS.json ledger is the audited exception path: adding a row is a deliberate, diff-visible
+// change in the sealed contracts dir (it is NOT a *.schema.json, so it does not move the api.v1 seal hash).
+// RED if the proof is absent — an ungated contract is the gap this closes.
 // L4 extension (bbb): live input-fuzzing (schemathesis vs the running OpenAPI) is the dynamic half.
 function gateContractConformance() {
   const pkgs = pyPackages().filter((d) => existsSync(join(d, "tests", "test_contract_conformance.py")));
@@ -443,7 +451,7 @@ function gateContractConformance() {
     try { execSync("uv run pytest -q tests/test_contract_conformance.py", { cwd: d, stdio: "pipe" }); }
     catch (e) { return fail([`contract-conformance ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
   }
-  console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (routes ≡ contract; drift waived + documented)`);
+  console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (impl⊆contract + contract⊆impl + golden shapes; gaps audited in KNOWN_GAPS.json)`);
   return true;
 }
 

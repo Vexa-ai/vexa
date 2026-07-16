@@ -120,6 +120,18 @@ native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
 | `POST /bots/{platform}/{native_meeting_id}/chat` | **Not implemented** — no bot-command (send) backend in the 0.12 core. |
 | `POST /meetings/{meeting_id}/transcribe` | **Not implemented** — no on-demand re-transcribe backend in the 0.12 core. |
 
+<Note>
+**What the seal enforces now.** Because the file hash pins the *document* and not the *running
+implementation*, CI now also runs a **reverse** conformance check (`gate:contract-conformance`): for
+every `(path, method)` `api.v1` declares, the shipped gateway + meeting-api must serve it — otherwise
+the route must be recorded in the audited `core/gateway/contracts/api.v1/KNOWN_GAPS.json` ledger (with
+a reason + issue link), which the gate prints loudly on every run. A sealed endpoint renamed or dropped
+without a ledger entry fails CI. The frozen golden examples are also driven against the real responses,
+so a renamed response field (e.g. `running_bots` → `running`) fails too. The two **Not implemented**
+rows above and the share **response-shape** divergence are the current recorded gaps — a client can rely
+on the seal meaning "served, or explicitly listed as a gap", not merely "the schema file didn't change".
+</Note>
+
 ## Auto-join
 
 A `scheduled` meeting **with a link** is joined automatically: a background sweep sends the bot
