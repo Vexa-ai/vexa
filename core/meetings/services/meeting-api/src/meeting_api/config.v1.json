@@ -314,9 +314,9 @@
   {
    "key": "ADMIN_API_URL",
    "class": "defaulted",
-   "default": "(unset — auto-join spawn-context + calendar-sync discovery are then disabled: auto-join spawns uncapped, calendar sync no-ops)",
-   "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs)",
-   "targets": []
+   "default": "(unset — calendar sync no-ops and the auto-join sweep cannot resolve the per-user cap, so it fails closed and refuses to spawn unless AUTO_JOIN_ALLOW_UNCAPPED=1)",
+   "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs). Required on every deploy surface so calendar sync runs and auto-join spawns stay capped (#656).",
+   "targets": ["compose", "helm", "lite"]
   },
   {
    "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
@@ -344,6 +344,13 @@
    "class": "defaulted",
    "default": "300",
    "description": "backoff (s) before an auto-join that failed loudly (cap/quota/spawn) is retried",
+   "targets": []
+  },
+  {
+   "key": "AUTO_JOIN_ALLOW_UNCAPPED",
+   "class": "defaulted",
+   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the sweep fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
+   "description": "opt-in escape hatch (#656): allow the auto-join sweep to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
    "targets": []
   },
   {

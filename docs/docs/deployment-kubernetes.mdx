@@ -76,6 +76,15 @@ address a spawned bot calls back on for its lifecycle callback and recording upl
 unset it would fall back to the compose-only default `http://meeting-api:8080`, which does
 not resolve in-cluster.
 
+The chart likewise sets `ADMIN_API_URL` on the meeting-api deployment to
+`http://<release>-vexa-admin-api:8001` (mirroring Compose's `ADMIN_API_URL=http://admin-api:8001`).
+This is **required** for two background loops: calendar sync (discovering each user's connected
+ICS feed through admin-api's internal edge) and capped auto-join (fetching the per-user max-bots
+cap for every scheduled-meeting spawn). With `ADMIN_API_URL` unset, calendar sync no-ops and the
+auto-join sweep cannot resolve the per-user cap. The meeting-api then **fails closed and refuses to
+spawn** rather than spawn uncapped; set `AUTO_JOIN_ALLOW_UNCAPPED=1` only if you deliberately want
+uncapped auto-join spawns on a self-host.
+
 ## Honest status
 
 The k8s backend **lifecycle and the workspace mount are implemented** (the workspace store
