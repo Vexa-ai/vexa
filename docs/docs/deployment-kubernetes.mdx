@@ -55,6 +55,21 @@ count) alongside `pipeline.consumer_lag`, and degrades to `503` once it exceeds
 `PIPELINE_PENDING_ALARM` (default `100`) — a stuck batch is a reportable state, not a silent
 stall.
 
+A pod's hostname changes on **every recreate** (a rolling deploy, a pod restart, a compose
+`--force-recreate`), so each new container joins `collector_group` under a **new**
+`collector-<hostname>` and the old name is left behind. Those abandoned consumers hold no pending
+entries (they read their last message and acked it), so they are harmless to correctness — but left
+unchecked the group fills with dead names that inflate operator `XINFO CONSUMERS` reads and muddy
+`/health`. The same reclaim sweep now **prunes** them: any consumer with `pending == 0` that has
+idled past `COLLECTOR_CONSUMER_TTL_MS` (default `1800000`, 30 min — well above the reclaim idle gate,
+so a briefly-quiet live replica is never touched) is removed with `XGROUP DELCONSUMER`. A consumer
+holding an in-flight batch (`pending > 0`) is **never** pruned, and the running replica never prunes
+itself; a live consumer re-registers on its next `XREADGROUP`, so the prune is idempotent and
+self-healing. Reading `XINFO CONSUMERS collector_group` should therefore list only the replicas that
+actually exist — dead `collector-<oldhash>` names are expected to disappear within a sweep of the
+TTL. For k8s you can eliminate the churn at the source by pinning a stable per-replica identity via
+`COLLECTOR_CONSUMER_NAME` (e.g. a StatefulSet ordinal) so a restart re-uses the same consumer.
+
 <Warning>
 **Orphan reclaim requires Redis 6.2 or newer** — `XAUTOCLAIM` does not exist before it. On an
 older Redis the reclaim disables itself and logs once at startup; everything else (normal
@@ -64,7 +79,8 @@ run a single replica on Redis < 6.2 or upgrade Redis. Check yours with `redis-se
 
 This bites Vexa Lite in particular: its bundled Redis is **6.0.16**, so a Lite box never reclaims.
 Lite runs one meeting-api, so nothing is lost — but do not read the paragraph above as a guarantee
-that holds on every backing store.
+that holds on every backing store. Ghost-consumer pruning degrades the same way: if the backing
+Redis rejects `XINFO CONSUMERS`, the prune logs once and no-ops, leaving the consume path untouched.
 </Warning>
 
 ## In-cluster self-addressing

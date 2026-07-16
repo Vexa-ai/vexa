@@ -1002,6 +1002,7 @@ class RedisStreamBus:
     def __init__(self, client):
         self._client = client
         self._reclaim_unsupported = False  # #636: log-once latch when the Redis lacks XAUTOCLAIM
+        self._prune_unsupported = False  # #660: log-once latch when the Redis lacks XINFO CONSUMERS
 
     async def read_segments(self, *, group, consumer, stream, count=10):
         try:
@@ -1055,6 +1056,49 @@ class RedisStreamBus:
                 return []
             raise
         return _decode_claimed(resp)
+
+    async def list_consumers(self, *, group, stream):
+        """#660: XINFO CONSUMERS → ``[{"name", "pending", "idle"}, ...]`` (idle in ms), the seam the
+        reclaim sweep uses to find abandoned per-recreate ghost consumers.
+
+        Degrades to ``[]`` on a Redis that rejects the command (NOGROUP before the group exists, or an
+        ``unknown command`` on a server without XINFO CONSUMERS) — the SAME no-op-on-unsupported
+        contract ``reclaim_orphans`` uses for XAUTOCLAIM, so consumer-pruning being unavailable never
+        breaks the normal XREADGROUP consume path. Logged once."""
+        from redis.exceptions import ResponseError
+
+        try:
+            resp = await self._client.xinfo_consumers(stream, group)
+        except ResponseError as e:
+            msg = str(e).lower()
+            if "unknown command" in msg or "xinfo" in msg:
+                if not self._prune_unsupported:
+                    self._prune_unsupported = True
+                    log.warning(
+                        "XINFO CONSUMERS unsupported on this Redis — #660 ghost-consumer prune "
+                        "disabled; normal segment consumption is unaffected. Upgrade Redis to re-enable."
+                    )
+                return []
+            if "nogroup" in msg:
+                return []  # group not created yet — nothing to prune
+            raise
+        out: list[dict] = []
+        for entry in resp or []:
+            info = {
+                (k.decode() if isinstance(k, bytes) else k): v
+                for k, v in entry.items()
+            }
+            name = info.get("name")
+            out.append({
+                "name": name.decode() if isinstance(name, bytes) else name,
+                "pending": int(info.get("pending") or 0),
+                "idle": int(info.get("idle") or 0),
+            })
+        return out
+
+    async def delete_consumer(self, *, group, stream, consumer):
+        """#660: XGROUP DELCONSUMER — returns the pending count the consumer held (0 for a ghost)."""
+        return await self._client.xgroup_delconsumer(stream, group, consumer)
 
     async def ack(self, *, group, stream, message_ids):
         if message_ids:
