@@ -92,6 +92,13 @@ address a spawned bot calls back on for its lifecycle callback and recording upl
 unset it would fall back to the compose-only default `http://meeting-api:8080`, which does
 not resolve in-cluster.
 
+The chart sets the same address as `VEXA_MEETING_API_URL` on the **agent-api** deployment.
+Before opening a live-transcript SSE stream (`GET /api/meeting/stream`), agent-api verifies the
+caller owns the meeting by calling `GET /meetings/{id}` on meeting-api, and **fails closed** — an
+unreachable meeting-api returns `403 "not authorized for this meeting"` for the meeting's own
+owner. Left unset it would fall back to the compose-only `http://meeting-api:8080`, so the owner
+sees a permanent "Reconnecting to live stream…" instead of streaming words.
+
 The chart likewise sets `ADMIN_API_URL` on the meeting-api deployment to
 `http://<release>-vexa-admin-api:8001` (mirroring Compose's `ADMIN_API_URL=http://admin-api:8001`).
 This is **required** for two background loops: calendar sync (discovering each user's connected

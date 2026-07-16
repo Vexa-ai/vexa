@@ -40,6 +40,10 @@ need 1 'serviceAccountName: vexa-vexa-runtime' "runtime SA bound"
 need 1 'key: CLAUDE_CODE_OAUTH_TOKEN' "agent-api CLAUDE_CODE_OAUTH_TOKEN secret ref"
 need 2 'key: ANTHROPIC_AUTH_TOKEN'    "ANTHROPIC_AUTH_TOKEN secret refs (agent-api + runtime)"
 need 2 'name: MEETING_API_URL' "MEETING_API_URL set on gateway AND meeting-api"
+# #677: agent-api MUST get VEXA_MEETING_API_URL or its live-SSE owner-lookup calls the compose-only
+# http://meeting-api:8080 (unresolvable in-cluster) → fail-closed 403 for the meeting's own owner.
+# Only agent-api carries the VEXA_-prefixed spelling, so assert exactly 1.
+need 1 'name: VEXA_MEETING_API_URL' "agent-api meeting-api URL (owner-scope)"
 # #656: meeting-api MUST get ADMIN_API_URL or calendar sync no-ops and auto-join spawns uncapped.
 # It rides the gateway env too; assert >=2 (gateway + meeting-api).
 need 2 'name: ADMIN_API_URL'   "ADMIN_API_URL set on gateway AND meeting-api"
