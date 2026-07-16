@@ -43,6 +43,10 @@ need 2 'name: MEETING_API_URL' "MEETING_API_URL set on gateway AND meeting-api"
 # #656: meeting-api MUST get ADMIN_API_URL or calendar sync no-ops and auto-join spawns uncapped.
 # It rides the gateway env too; assert >=2 (gateway + meeting-api).
 need 2 'name: ADMIN_API_URL'   "ADMIN_API_URL set on gateway AND meeting-api"
+# #676: terminal MUST get VEXA_INTERNAL_API_SECRET or the admin internal edge is dead
+# (bootstrap-admin claim + per-session key mint fail closed). Terminal is the lone consumer of
+# this env-var spelling (other services read the same secret key as INTERNAL_API_SECRET), so >=1.
+need 1 'name: VEXA_INTERNAL_API_SECRET' "terminal internal-edge secret"
 
 # auth unset (values-test) → the chart Secret must NOT carry the key; auth set → it must.
 if printf '%s\n' "$RENDER" | grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN:'; then
