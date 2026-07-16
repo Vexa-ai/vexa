@@ -144,6 +144,12 @@ probe), not inferred from planning docs.
 - **`discord` ingest and `GET …/participants`**: **planned back in the 0.12.x line** with the
   next `api.v1` contract revision.
 
+## 0.12.x maintenance fixes
+
+- **Compose: `BROWSER_IMAGE` pinned to the release tag (#659).** `deploy/compose` now pins
+  `BROWSER_IMAGE` to the immutable release tag instead of a moving `:v012` tag, so `make all`
+  deploys are reproducible. See [Deployment](/deployment).
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
