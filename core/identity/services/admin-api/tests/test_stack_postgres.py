@@ -191,6 +191,47 @@ def test_meeting_active_unique_partial_index(engine):
         s.commit()   # no collision — all prior rows are terminal
 
 
+def test_backfill_grandfathers_empty_token_scopes(engine):
+    """MIGRATION-0004 (issue #578) — a 0.10-era token row with scopes='{}' (what the additive
+    ADD COLUMN leaves behind on upgrade) is grandfathered to the full valid-scope set by
+    ensure_schema, so it keeps authorizing core routes; an already-scoped row is left untouched.
+
+    RED before the backfill: the empty-scope row would stay '{}' and 403 on every core route.
+    """
+    from admin_api.schema.sync import ensure_schema_sync
+
+    with Session(engine) as s:
+        u = User(email="legacy@vexa.ai", name="Legacy", max_concurrent_bots=3)
+        s.add(u)
+        s.flush()
+        uid = u.id
+        # A 0.10-era token: unscoped → empty array after the additive column add.
+        empty = APIToken(token="vxa_legacy_0_10", user_id=uid, scopes=[])
+        # A token minted under 0.12 with a deliberate narrow scope — must NOT be widened.
+        scoped = APIToken(token="vxa_tx_scoped", user_id=uid, scopes=["tx"])
+        s.add_all([empty, scoped])
+        s.commit()
+
+    # Sanity: the empty row really is empty before the backfill re-runs.
+    with Session(engine) as s:
+        assert s.query(APIToken).filter_by(token="vxa_legacy_0_10").one().scopes == []
+
+    # Re-converge — the backfill runs as part of ensure_schema.
+    ensure_schema_sync(engine, Base)
+
+    with Session(engine) as s:
+        empty_after = s.query(APIToken).filter_by(token="vxa_legacy_0_10").one()
+        scoped_after = s.query(APIToken).filter_by(token="vxa_tx_scoped").one()
+        assert set(empty_after.scopes) == {"bot", "tx", "browser"}, "empty-scope token not grandfathered"
+        assert set(scoped_after.scopes) == {"tx"}, "already-scoped token must not be widened"
+
+    # Idempotent: a further run changes nothing.
+    ensure_schema_sync(engine, Base)
+    with Session(engine) as s:
+        assert set(s.query(APIToken).filter_by(token="vxa_legacy_0_10").one().scopes) == {"bot", "tx", "browser"}
+        assert set(s.query(APIToken).filter_by(token="vxa_tx_scoped").one().scopes) == {"tx"}
+
+
 def test_recordings_live_in_meeting_data_jsonb(engine):
     """The REAL recording target: meetings.data['recordings'][] (mirrors
     `recordings.internal_upload_recording`). Assert a recording payload round-trips through
