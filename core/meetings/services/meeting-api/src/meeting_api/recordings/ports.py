@@ -17,7 +17,16 @@ fakes (an in-memory blob store + an in-memory meeting store).
 """
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import Optional, Protocol, runtime_checkable
+
+
+MEETING_WRITE_LOCK_NAMESPACE = 23115
+RECORDING_CHUNK_LOCK_NAMESPACE = 23116
+
+
+class RecordingWriteRefused(RuntimeError):
+    """The meeting disappeared or entered the durable erasing state before a write lease."""
 
 
 @runtime_checkable
@@ -25,6 +34,10 @@ class Storage(Protocol):
     """Object storage for recording chunks + masters (MinIO/S3 in prod)."""
 
     async def upload(self, key: str, data: bytes, *, content_type: str) -> None: ...
+
+    async def delete(self, key: str) -> None:
+        """Idempotently remove one exact object after an upload/database compensation failure."""
+        ...
 
     async def list(self, prefix: str) -> list[str]:
         """Object keys under ``prefix`` (sorted) — used by finalize to gather a recording's chunks."""
@@ -52,6 +65,21 @@ class RecordingRepo(Protocol):
     async def find_session(self, session_uid: str) -> Optional[dict]:
         """The ``MeetingSession`` for ``session_uid`` → ``{meeting_id, session_uid}`` (the bot's
         ``connectionId``), or ``None`` when no session exists yet (upload before spawn)."""
+        ...
+
+    def recording_write(self, meeting_id: int) -> AbstractAsyncContextManager[None]:
+        """Hold the shared meeting-write lease across object and database mutation.
+
+        The context refuses entry after erasure has made the meeting non-writable.
+        """
+        ...
+
+    def chunk_write(self, key: str) -> AbstractAsyncContextManager[None]:
+        """Serialize one deterministic chunk key across object write, JSONB fold and compensation."""
+        ...
+
+    async def register_recording_prefix(self, meeting_id: int, prefix: str) -> None:
+        """Durably register a narrow prefix before its first object write."""
         ...
 
     async def get_recordings(self, meeting_id: int) -> list[dict]:

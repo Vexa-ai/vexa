@@ -17,6 +17,20 @@ and stamps the JSONB media-file.
 - `adapters.build_production_router(...)` — wire with real MinIO/S3 + SQLAlchemy.
 - `fakes` — `InMemoryStorage` / `InMemoryRecordingRepo` (offline drivers).
 
+`upload_chunk` and `finalize_master` hold `RecordingRepo.recording_write(meeting_id)` for their
+entire object-storage + JSONB mutation. The SQLAlchemy adapter implements that lease with a shared
+session-level PostgreSQL advisory lock and refuses meetings whose durable
+`data.zaki_retention.state` is `erasing`; the retention adapter uses the exclusive side of the same
+lock. A cancelled boto3 offload is awaited before the lease exits, preventing a worker thread from
+creating a ghost object after erasure sweeps the prefix. Before the first object write, the narrow
+session prefix is durably deduplicated in `data.zaki_recording_prefixes`; this remains discoverable
+even if the later recording JSONB fold and compensating exact-object delete both fail. Routes map
+write refusal to a content-free `409`.
+
+The upload route reads at most `RECORDING_CHUNK_MAX_BYTES + 1` bytes and returns `413` before any
+carrier mutation when the chunk is larger. The operator setting defaults to 8 MiB; the deployment
+proxy/body limit must use the same value or a slightly larger multipart-envelope allowance.
+
 ## The JSONB shape
 `meeting.data['recordings']` is a list of recording dicts (`id`, `session_uid`, `source="bot"`,
 `status`, `media_files[]`). Each `media_files[]` entry tracks per-type cumulative

@@ -64,21 +64,37 @@ async def erase_meeting(
 ) -> ErasureReceipt | None:
     """Erase one owned meeting without exposing whether an absent meeting belongs to another user."""
 
-    plan = await repo.begin_erasure(user_id, meeting_id)
+    try:
+        plan = await repo.begin_erasure(user_id, meeting_id)
+    except Exception:
+        raise ErasureFailed("meeting erasure planning requires retry") from None
     if plan is None:
         return None
     prefixes = plan.recording_prefixes
-    has_recordings = plan.recording_objects > 0
+    if any(not _valid_recording_prefix(prefix) for prefix in prefixes):
+        raise ErasureFailed("meeting erasure plan is invalid")
+
+    if plan.recording_objects is None:
+        try:
+            recording_objects = sum(
+                [await storage.count_prefix(prefix) for prefix in prefixes]
+            )
+            plan = await repo.record_object_census(plan, recording_objects)
+        except Exception:
+            raise ErasureFailed("meeting erasure census requires retry") from None
+
     if (
-        plan.recording_objects < 0
-        or bool(prefixes) != has_recordings
-        or any(not _valid_recording_prefix(prefix) for prefix in prefixes)
+        plan.recording_objects is None
+        or plan.recording_objects < 0
+        or (not prefixes and plan.recording_objects != 0)
     ):
         raise ErasureFailed("meeting erasure plan is invalid")
 
     try:
         for prefix in plan.recording_prefixes:
             await storage.delete_prefix(prefix)
+        if any([await storage.count_prefix(prefix) for prefix in plan.recording_prefixes]):
+            raise RuntimeError("recording prefix remains non-empty")
     except Exception:
         raise ErasureFailed("meeting erasure failed before database commit") from None
 

@@ -32,7 +32,13 @@ from .jsonb import (
 )
 from .ports import RecordingRepo, Storage
 from .router import build_router
-from .service import SessionNotFound, finalize_master, upload_chunk
+from .service import (
+    InvalidRecordingMetadata,
+    RecordingChunkConflict,
+    SessionNotFound,
+    finalize_master,
+    upload_chunk,
+)
 
 __all__ = [
     "build_router",
@@ -45,4 +51,6 @@ __all__ = [
     "RecordingRepo",
     "Storage",
     "SessionNotFound",
+    "InvalidRecordingMetadata",
+    "RecordingChunkConflict",
 ]

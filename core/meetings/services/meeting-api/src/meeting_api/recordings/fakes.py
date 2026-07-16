@@ -11,6 +11,8 @@ in-process.
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from typing import Optional
 
 
@@ -24,6 +26,10 @@ class InMemoryStorage:
     async def upload(self, key: str, data: bytes, *, content_type: str) -> None:
         self.blobs[key] = data
         self.content_types[key] = content_type
+
+    async def delete(self, key: str) -> None:
+        self.blobs.pop(key, None)
+        self.content_types.pop(key, None)
 
     async def list(self, prefix: str) -> list[str]:
         return sorted(k for k in self.blobs if k.startswith(prefix))
@@ -49,10 +55,33 @@ class InMemoryRecordingRepo:
         # meeting_id -> {user_id, recordings: [...]}; session_uid -> meeting_id
         self._meetings: dict[int, dict] = {}
         self._sessions: dict[str, int] = {}
+        self._chunk_locks: dict[str, asyncio.Lock] = {}
 
     def seed(self, *, meeting_id: int, user_id: int, session_uid: str) -> None:
-        self._meetings.setdefault(meeting_id, {"user_id": user_id, "recordings": []})
+        self._meetings.setdefault(
+            meeting_id,
+            {"user_id": user_id, "recordings": [], "recording_prefixes": []},
+        )
         self._sessions[session_uid] = meeting_id
+
+    @asynccontextmanager
+    async def recording_write(self, meeting_id: int):
+        if meeting_id not in self._meetings:
+            raise RuntimeError("meeting is not writable")
+        yield
+
+    @asynccontextmanager
+    async def chunk_write(self, key: str):
+        lock = self._chunk_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            yield
+
+    async def register_recording_prefix(self, meeting_id: int, prefix: str) -> None:
+        meeting = self._meetings.get(meeting_id)
+        if meeting is None:
+            raise RuntimeError("meeting is not writable")
+        if prefix not in meeting["recording_prefixes"]:
+            meeting["recording_prefixes"].append(prefix)
 
     async def find_session(self, session_uid: str) -> Optional[dict]:
         mid = self._sessions.get(session_uid)
@@ -62,13 +91,19 @@ class InMemoryRecordingRepo:
         return list(self._meetings.get(meeting_id, {}).get("recordings", []))
 
     async def put_recordings(self, meeting_id: int, recordings: list[dict]) -> None:
-        self._meetings.setdefault(meeting_id, {"user_id": None, "recordings": []})
+        self._meetings.setdefault(
+            meeting_id,
+            {"user_id": None, "recordings": [], "recording_prefixes": []},
+        )
         self._meetings[meeting_id]["recordings"] = list(recordings)
 
     async def mutate_recordings(self, meeting_id: int, mutator):
         # Read the LIVE list, apply, write back — synchronously (no await), so it is atomic within the
         # event loop (mirrors the SQL adapter's row-locked read→modify→write; G3).
-        self._meetings.setdefault(meeting_id, {"user_id": None, "recordings": []})
+        self._meetings.setdefault(
+            meeting_id,
+            {"user_id": None, "recordings": [], "recording_prefixes": []},
+        )
         recordings = list(self._meetings[meeting_id].get("recordings", []))
         new_recordings, result = mutator(recordings)
         self._meetings[meeting_id]["recordings"] = list(new_recordings)
