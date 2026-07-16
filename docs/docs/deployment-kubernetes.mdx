@@ -41,6 +41,19 @@ destroyed`) and delegates only the substrate question — *how do I start, obser
 workload?* — to the backend. On `k8s`, a workload is a bare Pod; the same dispatch, contracts,
 and worker run identically to the Docker backend. See [Execution](/architecture/execution).
 
+<Warning>
+**Spawned-workload commands must exist in the target image under k8s (entrypoint-replace)
+semantics.** A runtime profile may carry a `command`; the k8s backend passes it as
+`kubectl run --command -- …`, which **replaces** the image `ENTRYPOINT` (it becomes the Pod's
+`argv[0]`). So a command path that is not present in the image `StartError`s **every** spawn on
+k8s — even though the Docker backend, which *appends* the command to the entrypoint as arguments,
+silently ignores the same bad path. The meeting-bot profile therefore carries **no** command: the
+bot image's own `ENTRYPOINT` (`/app/entrypoint.sh`) boots it on every backend. At release time an
+image↔profile conformance gate (`image-identity`) asserts each profile command is either empty or
+an in-image executable against the published images, so a profile that diverges from its image
+fails the release rather than a customer's install.
+</Warning>
+
 ## Scaling meeting-api
 
 `meetingApi.replicaCount` defaults to `2`, and that is safe for the segment consumer.
