@@ -144,6 +144,12 @@ probe), not inferred from planning docs.
 - **`discord` ingest and `GET …/participants`**: **planned back in the 0.12.x line** with the
   next `api.v1` contract revision.
 
+## 0.12.x maintenance fixes
+
+- **Admin-API: empty token scopes backfilled on upgrade (#578).** Upgrading a 0.10 stack to 0.12
+  backfills `api_token` rows that had empty `scopes`, so pre-existing tokens keep working under the
+  scoped gateway. No action required — the backfill runs during schema sync.
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
