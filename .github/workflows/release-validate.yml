@@ -225,12 +225,7 @@ jobs:
           # / AGENT_WORKER_COMMAND override — container backends set neither, so these are the defaults).
           PROFILES_JSON="$(docker run --rm --entrypoint "" \
             -e BROWSER_IMAGE="$BOT_REF" -e AGENT_IMAGE="vexaai/v012-agent-api:$VERSION" \
-            "$RUNTIME_REF" python -c '
-import json
-from runtime_kernel import default_registry
-from runtime_kernel.profiles import apply_command_overrides
-reg = apply_command_overrides(default_registry())
-print(json.dumps({n: reg.resolve(n).command for n in reg.names()}))')"
+            "$RUNTIME_REF" python -c 'import json; from runtime_kernel import default_registry; from runtime_kernel.profiles import apply_command_overrides; reg = apply_command_overrides(default_registry()); print(json.dumps({n: reg.resolve(n).command for n in reg.names()}))')"
           echo "profiles: $PROFILES_JSON"
           # Profile → the published image its command must resolve inside. Every profile MUST be mapped
           # here (need-style: a new, unmapped profile fails the gate rather than shipping unchecked).
