@@ -104,7 +104,7 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 
 | Variable | Default | Description |
 |---|---|---|
-| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key. Unset → bots capture, no transcript |
+| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key, shared by the bot transcript pipeline and the terminal composer mic (dictation `/api/stt`). Unset → bots capture, no transcript; composer mic returns 503 "not configured" |
 | `ADMIN_TOKEN` | `changeme` | admin API token (the stack's shared admin secret) |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
 

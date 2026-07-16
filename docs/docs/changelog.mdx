@@ -144,6 +144,12 @@ probe), not inferred from planning docs.
 - **`discord` ingest and `GET …/participants`**: **planned back in the 0.12.x line** with the
   next `api.v1` contract revision.
 
+## 0.12.x maintenance fixes
+
+- **Lite: terminal transcription env wired (#628).** In `deploy/lite`, the `[program:terminal]`
+  worker now receives the STT and internal-secret environment it needs, so speech-to-text works in
+  the single-container lite deploy. See [Deployment](/deployment).
+
 ## Versioning
 
 Vexa follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
