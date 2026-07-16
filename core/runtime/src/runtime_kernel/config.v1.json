@@ -90,6 +90,24 @@
    "targets": []
   },
   {
+   "key": "RUNTIME_K8S_TOLERATIONS",
+   "class": "defaulted",
+   "default": "(chart's global.tolerations, JSON — the runtime's own tolerations)",
+   "description": "k8s backend: JSON array of toleration objects stamped onto every SPAWNED Pod's spec so a bare `kubectl run` bot/agent Pod (not a Deployment child) tolerates the same taints the runtime does — else it strands Pending forever on an all-tainted pool (#673). Empty [] ⇒ no tolerations; malformed JSON is fatal at spawn (a silently dropped constraint is the bug)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_K8S_NODE_SELECTOR",
+   "class": "defaulted",
+   "default": "(chart's global.nodeSelector, JSON — the runtime's own nodeSelector)",
+   "description": "k8s backend: JSON object of node-label selectors stamped onto every SPAWNED Pod's spec so a bare `kubectl run` bot/agent Pod schedules onto the same pool the runtime does. Empty {} ⇒ no selector; malformed JSON is fatal at spawn (#673)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
    "key": "BROWSER_IMAGE",
    "class": "capability",
    "capability": "bot_spawn",
