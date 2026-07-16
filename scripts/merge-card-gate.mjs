@@ -3,7 +3,11 @@
 //
 //   • VALUE accepted  — the observation bundle is real. Runtime PRs: `value-fsm` (pr-value L3)
 //     GREEN on the head sha AND `state: value-signed` (the D9 human sign-off). Non-runtime PRs
-//     (no pr-value leg): `state: value-signed` alone.
+//     (no pr-value leg): `state: value-signed` alone. Because `labeled` also re-triggers value-fsm,
+//     its newest run on head is often still non-terminal when the card fires: the card WAITS for a
+//     terminal verdict (success/failure) rather than reading an in-flight run as failure (#655). A
+//     value-fsm that never settles within the wait budget stays not-mergeable — a label can never
+//     waive value-fsm; success must be positively observed.
 //   • DIFF accepted   — the code was reviewed. Either the PR author is a MAINTAINER (holds the
 //     commit bit — a maintainer reviewing their own work is allowed; the mandatory-review rule is
 //     the quality gate for CONTRIBUTOR PRs), OR a GitHub review APPROVAL from a NON-AUTHOR whose
@@ -18,9 +22,11 @@
 // Exit 0 = every named PR's card is satisfied; 1 = one or more not; 2 = usage/nothing to check.
 
 import { execSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const REPO = process.env.GITHUB_REPOSITORY;
-if (!REPO) { console.error("merge-card-gate: GITHUB_REPOSITORY required"); process.exit(2); }
+const IS_MAIN = import.meta.url === pathToFileURL(process.argv[1] || "").href;
+if (IS_MAIN && !REPO) { console.error("merge-card-gate: GITHUB_REPOSITORY required"); process.exit(2); }
 
 const RUNTIME_PREFIXES = ["core/", "clients/terminal/", "deploy/compose/", "deploy/lite/", "libs/"];
 const RUNTIME_FILES = ["package.json", "pnpm-lock.yaml"];
@@ -56,12 +62,55 @@ function touchesRuntime(num) {
   return false;
 }
 
-function valueFsmVerdict(sha) {
-  const runs = (ghj(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`).check_runs || [])
-    .filter((r) => r.name === "value-fsm");
-  if (!runs.length) return "absent";
-  runs.sort((a, b) => new Date(b.started_at || 0) - new Date(a.started_at || 0));
-  return runs[0].conclusion === "success" ? "success" : "failure";
+// value-fsm is a live sibling check: `labeled` (which triggers merge-card) also re-triggers
+// value-fsm, so the head sha's newest value-fsm run is frequently still `queued`/`in_progress`
+// when merge-card evaluates. A non-terminal run has `conclusion === null` — it is NOT a failure,
+// it simply has no verdict yet. Collapsing it into "failure" (the old bug) red-cards a PR whose
+// value-fsm is on its way to green. The verdict is therefore FOUR-state:
+//
+//   "absent"   — no value-fsm run on this sha at all
+//   "pending"  — newest run exists but is non-terminal (queued|in_progress; conclusion === null)
+//   "success"  — newest run completed with conclusion "success"
+//   "failure"  — newest run completed with any other conclusion (failure|cancelled|timed_out|…)
+//
+// Pure over a raw check-runs array so it is unit-testable against fixtures.
+export function verdictFromRuns(runs) {
+  const vf = (runs || []).filter((r) => r.name === "value-fsm");
+  if (!vf.length) return "absent";
+  vf.sort((a, b) => new Date(b.started_at || 0) - new Date(a.started_at || 0));
+  const top = vf[0];
+  if (top.status && top.status !== "completed") return "pending"; // queued | in_progress
+  if (top.conclusion == null) return "pending";                   // completed-but-verdictless: treat as not-yet-terminal
+  return top.conclusion === "success" ? "success" : "failure";
+}
+
+function readValueFsmRuns(sha) {
+  return ghj(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`).check_runs || [];
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Wait for value-fsm to reach a TERMINAL verdict on `sha` instead of sampling it once mid-run.
+// Polls the newest run's verdict; on "pending" it backs off and re-reads, up to `attempts` reads
+// within the job budget. Removes the race entirely: a value-fsm still running when the card fires
+// is waited out to its real success/failure. If it never settles within the budget the verdict
+// stays "pending" (or "absent") and the caller red-cards it LOUDLY — a non-terminal check is never
+// silently accepted, so the invariant holds: success must be positively observed, a label cannot
+// waive it. Injected read/sleep make it unit-testable without the network or real clock.
+export async function waitForTerminalValueFsm(
+  sha,
+  { read = readValueFsmRuns, wait = sleep, attempts = 20, delayMs = 15000 } = {},
+) {
+  let verdict = "absent";
+  for (let i = 0; i < attempts; i++) {
+    verdict = verdictFromRuns(read(sha));
+    // "absent" and "pending" are both non-terminal: `labeled` also re-triggers value-fsm, so on a
+    // runtime PR the run may not have registered (absent) or may still be running (pending) when
+    // the card fires. Only success/failure are settled reads.
+    if (verdict === "success" || verdict === "failure") return verdict;
+    if (i < attempts - 1) await wait(delayMs);
+  }
+  return verdict; // still absent/pending after the budget — caller treats non-success as not-mergeable
 }
 
 // Is the PR author a MAINTAINER — i.e. holds the commit bit (push access to this repo)? A
@@ -95,20 +144,25 @@ function diffAccepted(pr) {
   return { ok: false };
 }
 
-function card(num) {
+async function card(num) {
   const pr = ghj(`repos/${REPO}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
   const labels = (pr.labels || []).map((l) => l.name);
   const signed = labels.includes("state: value-signed");
   const head = pr.head?.sha;
   const runtime = touchesRuntime(num);
-  const vf = head ? valueFsmVerdict(head) : "absent";
+  // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
+  // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
+  const vf = runtime && head ? await waitForTerminalValueFsm(head) : "absent";
 
   // VALUE
   let valueOk = false, valueWhy;
   if (!signed) valueWhy = "missing `state: value-signed` (the value sign-off)";
-  else if (runtime && vf !== "success") valueWhy = `value-signed but value-fsm is ${vf} on head — value-fsm must be green (a label cannot waive it)`;
-  else { valueOk = true; valueWhy = runtime ? "value-fsm green + value-signed" : "non-runtime + value-signed"; }
+  else if (runtime && vf === "success") { valueOk = true; valueWhy = "value-fsm green + value-signed"; }
+  else if (runtime && (vf === "pending" || vf === "absent"))
+    valueWhy = `value-signed but value-fsm did not reach a terminal verdict on head within the wait budget (still ${vf}) — value-fsm must be green (a label cannot waive it)`;
+  else if (runtime) valueWhy = `value-signed but value-fsm is ${vf} on head — value-fsm must be green (a label cannot waive it)`;
+  else { valueOk = true; valueWhy = "non-runtime + value-signed"; }
 
   // DIFF
   const d = diffAccepted(pr);
@@ -144,23 +198,25 @@ function renderCard(c) {
   ].join("\n");
 }
 
-const nums = prNumbers();
-if (!nums.length) { console.error("merge-card-gate: no PR number resolved from PR_NUMBERS / MERGE_GROUP_REF"); process.exit(2); }
+async function main() {
+  const nums = prNumbers();
+  if (!nums.length) { console.error("merge-card-gate: no PR number resolved from PR_NUMBERS / MERGE_GROUP_REF"); process.exit(2); }
 
-let failed = 0;
-const cards = [];
-for (const num of nums) {
-  let c;
-  try { c = card(num); }
-  catch (e) { console.error(`::error ::merge-card #${num} — could not evaluate: ${e.message}`); failed++; continue; }
-  cards.push(c);
-  console.log(renderCard(c));
-  console.log("");
-  if (!c.skip && !c.ok) failed++;
+  let failed = 0;
+  for (const num of nums) {
+    let c;
+    try { c = await card(num); }
+    catch (e) { console.error(`::error ::merge-card #${num} — could not evaluate: ${e.message}`); failed++; continue; }
+    console.log(renderCard(c));
+    console.log("");
+    if (!c.skip && !c.ok) failed++;
+  }
+
+  if (failed) {
+    console.error(`::error ::merge-card — ${failed} PR(s) not mergeable: value AND diff must both be accepted (choke point 1).`);
+    process.exit(1);
+  }
+  console.log(`✓ merge-card — value + diff accepted for: ${nums.map((n) => "#" + n).join(", ")}`);
 }
 
-if (failed) {
-  console.error(`::error ::merge-card — ${failed} PR(s) not mergeable: value AND diff must both be accepted (choke point 1).`);
-  process.exit(1);
-}
-console.log(`✓ merge-card — value + diff accepted for: ${nums.map((n) => "#" + n).join(", ")}`);
+if (IS_MAIN) main();

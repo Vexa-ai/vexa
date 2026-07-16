@@ -126,6 +126,21 @@ The [runtime](/core/runtime) spawns bot and agent containers via the Docker sock
   the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by
   `make all` — confirm it resolves and `IMAGE_TAG` matches what you built.
 
+## Leftover chrome/node processes after a bot ends (Lite)
+
+On **Lite** every bot and agent runs as a child process inside one shared container (the
+[process backend](/core/runtime)). If a meeting ends and you still see stray `chrome`/`node`
+processes, check inside the container:
+
+```bash
+ps -eo pid,ppid,etime,comm   # PPID 1 = orphaned (reparented to init)
+```
+
+As of this release the backend reaps each workload's whole process group when it exits or is
+stopped, so no strays should remain — a descendant that detached into its own process group
+(the debug-view x11vnc/websockify) is the one declared exception. On older Lite images the
+workaround is a container restart.
+
 ## Agent write was rejected
 
 A streamed turn can end with a `rejected` frame carrying `violations`. This is governance, not a bug:
