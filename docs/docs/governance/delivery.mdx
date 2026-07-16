@@ -454,6 +454,19 @@ failure state we refuse. · *Source:* explicit disposition; stop starting, start
 · *Gate:* every closed-without-merge issue carries a `declined:` reason; intake/stale bots propose
 declines rather than letting items age. **[TO BUILD: stale proposer]**
 
+**D18 — Every release session ends in a retrospective; abandonment doubly so.** A release session
+— whether it promoted or abandoned its candidate — closes with a retro stage covering three axes:
+**loop efficiency** (where wall-time went; which hypotheses ran the packaging loop instead of the
+hot loop — D-L0), **delivery hardening** (what shipped-or-nearly-shipped that the machine missed,
+and which gate would have caught it), and **architecture quality** (what class of gap the batch
+exposed — not the instances, the class). Findings leave the chat as *prepared issues* before the
+session closes; a reflection that stays in the transcript is a reflection lost. An **abandoned
+candidate is not an embarrassment to skip past — it is the highest-yield retro input we have**
+(v0.12.5–v0.12.8 each carried a lesson no green run could teach). · *Source:* the v0.12.9
+retrospective — six shipped bugs, two release-infra bugs, and the D-L cluster itself all came out
+of one retro stage. · *Gate:* the CTO handover template carries the three retro axes; a release
+event in the planning log links its retro issues. **[TO BUILD: handover template section]**
+
 ---
 
 ## 11. How this document changes

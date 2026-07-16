@@ -91,7 +91,9 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
   external semantics (live exec · overlay · spawn probe, seconds–minutes) *before* you package it
   through the release pipeline; never cut a build to find out whether the code works, never rerun a
   deterministic red as a "flake", and rehearse the demo path end-to-end before the human walks it.
-  See [the two loops](https://docs.vexa.ai/governance/delivery#the-two-loops).
+  See [the two loops](docs/docs/governance/delivery.mdx) (§7 in this tree — the law at YOUR
+  checkout's revision; the published copy is at
+  [docs.vexa.ai/governance/delivery#the-two-loops](https://docs.vexa.ai/governance/delivery#the-two-loops)).
 - **Gates green before push:** `node scripts/gates.mjs all` (also runs on pre-push). Green is
   necessary, never sufficient — prove user-facing behavior at the altitude of the claim (P19):
   a live leg for live behavior, not just unit green.
