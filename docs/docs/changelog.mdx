@@ -146,6 +146,9 @@ probe), not inferred from planning docs.
 
 ## 0.12.x maintenance fixes
 
+- **Compose: `BROWSER_IMAGE` pinned to the release tag (#659).** `deploy/compose` now pins
+  `BROWSER_IMAGE` to the immutable release tag instead of a moving `:v012` tag, so `make all`
+  deploys are reproducible. See [Deployment](/deployment).
 - **Admin-API: empty token scopes backfilled on upgrade (#578).** Upgrading a 0.10 stack to 0.12
   backfills `api_token` rows that had empty `scopes`, so pre-existing tokens keep working under the
   scoped gateway. No action required — the backfill runs during schema sync.
