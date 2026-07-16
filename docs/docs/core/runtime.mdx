@@ -42,7 +42,11 @@ workload?) to a pluggable **Backend** with a five-method port: `start` · `exit_
 `kill` · `cleanup`. The same control plane and the same `unit.v1` dispatch drive every backend; only
 the implementation behind that port differs:
 
-- **Process** — agents and bots are spawned as **child processes**, no Docker socket required.
+- **Process** — agents and bots are spawned as **child processes**, no Docker socket required. Each
+  workload leads its own process group, and the backend owns that group: an observed exit or a stop
+  reaps every descendant, so a self-exiting or stopped bot never strands its child tree (e.g.
+  Chromium) on the shared host. Declared limitation — descendants that detach into their own process
+  group (the debug-view x11vnc/websockify) are out of the group signal's reach.
 - **Docker** — each workload is its own container via the Docker socket. This is what the open core
   ships, brought up with **Docker Compose** (`make all`).
 - **Kubernetes** — the same workload model scheduled as a **Pod** across a cluster.
