@@ -344,6 +344,16 @@ def create_app(
     async def accept_transcript_share(request: Request):
         return await _forward("POST", _meeting("/transcripts/share/accept"), request)
 
+    # native-keyed share MINT alias (#579 C3): the 0.10 api.v1 share path. The mint MOVED to
+    # POST /meetings/{platform}/{native}/share in 0.12; alias the old transcripts path to it so a
+    # 0.10 client no longer 404s. NOTE (signed): the 0.12 mint returns the capability-token share
+    # shape ({id, token, mode, expires_at}), NOT the sealed TranscriptShareResponse public-URL shape
+    # ({share_id, url, expires_at, expires_in_seconds}) — the public-URL-share backend is gone; only
+    # the capability-token share exists. See the PR's "signed gaps" section.
+    @app.post("/transcripts/{platform}/{native_meeting_id}/share")
+    async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
         return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)
@@ -365,6 +375,15 @@ def create_app(
     # The master byte stream the recording player loads (the master metadata's raw_url points here).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/raw")
     async def get_recording_media_raw(recording_id: int, media_file_id: int, request: Request):
+        return await _forward(
+            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
+        )
+
+    # native download alias (#579 C3): the sealed api.v1 media-download path a 0.10 client calls.
+    # 0.12 renamed the media byte route to .../raw (finalize-on-read master stream); alias .../download
+    # to it so recording playback no longer 404s. Forwarded verbatim (Range headers preserved).
+    @app.get("/recordings/{recording_id}/media/{media_file_id}/download")
+    async def get_recording_media_download(recording_id: int, media_file_id: int, request: Request):
         return await _forward(
             "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
         )
@@ -409,6 +428,26 @@ def create_app(
         return await _forward(
             "PUT", _meeting(f"/meetings/{platform}/{native_meeting_id}/intent"), request
         )
+
+    # native-keyed mutate (#579 C1): the sealed api.v1 PATCH/DELETE a 0.10 client (incl. the shipped
+    # dashboard) calls by (platform, native_meeting_id). Thin passthrough — meeting-api resolves
+    # (platform, native) → the caller's newest OWNED row and forwards to the same row-id handler
+    # (unknown/unowned native → 404, FSM-owned row → 409). Additive: the by-ROW-id int routes above
+    # are unchanged; these 2-segment paths never shadow them (FastAPI matches on segment count).
+    @app.patch("/meetings/{platform}/{native_meeting_id}")
+    async def patch_native_meeting(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("PATCH", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+
+    @app.delete("/meetings/{platform}/{native_meeting_id}")
+    async def delete_native_meeting(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("DELETE", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+
+    # native-keyed chat READ (#579 C3): the sealed api.v1 GET the 0.10 dashboard's chat panel calls.
+    # Thin passthrough to meeting-api's honest empty-list restore (0.12 does not persist in-meeting
+    # chat server-side). The POST (send) half is a SIGNED GAP — no bot-command backend in 0.12.
+    @app.get("/bots/{platform}/{native_meeting_id}/chat")
+    async def read_meeting_chat(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("GET", _meeting(f"/bots/{platform}/{native_meeting_id}/chat"), request)
 
     # ---- user self-serve webhook config (main.py:1080 set_user_webhook_proxy) ----
     # Identity OWNS the config (user.data JSONB via admin-api); the gateway is the public edge for
