@@ -132,7 +132,7 @@ services:
       - path: .env
         required: false
     environment:
-      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:v012}
+      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:${IMAGE_TAG:-dev}}
       # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
