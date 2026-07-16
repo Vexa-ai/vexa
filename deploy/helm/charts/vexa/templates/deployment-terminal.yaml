@@ -71,6 +71,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: NEXTAUTH_SECRET
+            # Admin internal edge: internalRequest()/validateAuthToken() need this to claim the
+            # admin role + mint per-session keys on sign-in; without it the edge returns 503 and
+            # bootstrap-admin fails closed. Same secret+key every other service reads.
+            - name: VEXA_INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: INTERNAL_API_SECRET
             {{- if .Values.terminal.publicUrl }}
             # External origin (set when ingress/LB fronts the terminal) — cookie security + OAuth callbacks.
             - name: NEXTAUTH_URL

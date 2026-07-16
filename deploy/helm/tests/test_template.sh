@@ -47,6 +47,10 @@ need 1 'name: VEXA_MEETING_API_URL' "agent-api meeting-api URL (owner-scope)"
 # #656: meeting-api MUST get ADMIN_API_URL or calendar sync no-ops and auto-join spawns uncapped.
 # It rides the gateway env too; assert >=2 (gateway + meeting-api).
 need 2 'name: ADMIN_API_URL'   "ADMIN_API_URL set on gateway AND meeting-api"
+# #676: terminal MUST get VEXA_INTERNAL_API_SECRET or the admin internal edge is dead
+# (bootstrap-admin claim + per-session key mint fail closed). Terminal is the lone consumer of
+# this env-var spelling (other services read the same secret key as INTERNAL_API_SECRET), so >=1.
+need 1 'name: VEXA_INTERNAL_API_SECRET' "terminal internal-edge secret"
 # #673: the runtime (backend=k8s) MUST carry its own scheduling constraints as env, or every SPAWNED
 # bot/agent Pod (a bare `kubectl run` Pod, not a Deployment child) strands Pending on an all-tainted
 # pool and the meeting silently fails. Durable seam-guard so a refactor can't drop it again.
