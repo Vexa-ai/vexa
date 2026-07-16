@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from meeting_api.bot_spawn import (
     QuotaExceeded,
     SpawnFailed,
+    UnsafeMeetingUrl,
     build_invocation,
     build_router,
     build_workload_spec,
@@ -127,6 +128,27 @@ async def test_request_bot_quota_propagates(monkeypatch):
     with pytest.raises(QuotaExceeded):
         await request_bot(repo, runtime, user_id=USER, platform="google_meet",
                           native_meeting_id="x", redis_url="r", token_secret=SECRET)
+
+
+async def test_request_bot_rejects_unsafe_explicit_url_before_any_side_effect(monkeypatch):
+    """Every caller, including auto-join, crosses the navigation guard at the spawn sink."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
+
+    with pytest.raises(UnsafeMeetingUrl):
+        await request_bot(
+            repo,
+            runtime,
+            user_id=USER,
+            platform="google_meet",
+            native_meeting_id="abc-defg-hij",
+            meeting_url="https://meet.google.com.attacker.example/abc-defg-hij",
+            token_secret=SECRET,
+        )
+
+    assert runtime.specs == []
+    assert await repo.find_latest(USER, "google_meet", "abc-defg-hij") is None
 
 
 # ── route: POST /bots maps outcomes onto HTTP status ─────────────────────────────────────────────
@@ -290,13 +312,71 @@ def test_post_bots_jitsi_localhost_and_ipv6_422(monkeypatch):
         assert r.status_code == 422, f"{bad}: {r.status_code} {r.text}"
 
 
+@pytest.mark.parametrize(
+    "bad",
+    (
+        "https://2130706433/Room",
+        "https://127.1/Room",
+        "https://0177.0.0.1/Room",
+        "https://0x7f000001/Room",
+        "https://%31%32%37.0.0.1/Room",
+    ),
+)
+def test_post_bots_rejects_browser_normalized_loopback_hosts(monkeypatch, bad):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+
+    response = _client().post(
+        "/bots",
+        headers=HEADERS,
+        json={"platform": "jitsi", "native_meeting_id": "Room", "meeting_url": bad},
+    )
+
+    assert response.status_code == 422, f"{bad}: {response.status_code} {response.text}"
+
+
+def test_post_bots_rejects_browser_parser_backslash_confusion(monkeypatch):
+    """Python and Chromium disagree about ``\\`` in a special-scheme URL authority."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+
+    response = _client().post(
+        "/bots",
+        headers=HEADERS,
+        json={
+            "platform": "google_meet",
+            "native_meeting_id": "Room",
+            "meeting_url": "https://attacker-controlled.example\\@meet.google.com/Room",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+
+
 def test_post_bots_jitsi_hostname_url_accepted(monkeypatch):
     """Negative control: a real https hostname deployment sails through the guard → 201."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("VEXA_JITSI_HOSTS", "meet.example.org")
     r = _client().post("/bots", headers=HEADERS,
                        json={"platform": "jitsi", "native_meeting_id": "Room",
                              "meeting_url": "https://meet.example.org/room"})
     assert r.status_code == 201, r.text
+
+
+def test_post_bots_rejects_unconfigured_hostname(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.delenv("VEXA_JITSI_HOSTS", raising=False)
+
+    response = _client().post(
+        "/bots",
+        headers=HEADERS,
+        json={
+            "platform": "jitsi",
+            "native_meeting_id": "Room",
+            "meeting_url": "https://attacker-controlled.example/Room",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "approved for platform" in response.json()["detail"]
 
 
 def test_post_bots_zoom_shares_meeting_url_guard(monkeypatch):

@@ -264,6 +264,11 @@ class MeetingStore:
             self._records[connection_id] = rec
         return rec
 
+    def replace(self, record: MeetingRecord) -> MeetingRecord:
+        """Replace one in-memory record with a previously accepted state snapshot."""
+        self._records[record.connection_id] = record
+        return record
+
     def rehydrate(self, connection_id: str, persisted_status: Optional[str]) -> MeetingRecord:
         """Seed (or reconcile) the in-memory record from the DB's CURRENT meeting status.
 
@@ -349,6 +354,7 @@ class LifecycleSink:
         *,
         transition_source: TransitionSource = TransitionSource.BOT_CALLBACK,
         force_terminal_on_destroy: bool = False,
+        force_terminal_after_stop: bool = False,
     ) -> StatusChange:
         """Advance the FSM for `event`, returning the resulting `StatusChange`.
 
@@ -395,8 +401,8 @@ class LifecycleSink:
         # synthetic `completed`/`failed` the runtime-callback drives is rejected 409, the meeting stays
         # `stopping`, and the stop-reconcile sweep re-DELETEs (now 404) every ~15s FOREVER (the reaper
         # loop). Guarded: ONLY a terminal target, ONLY this source — never loosens bot-driven edges.
-        if force_terminal_on_destroy and to in _TERMINAL:
-            pass  # legal by teardown evidence; fall through to the advance
+        if (force_terminal_on_destroy or force_terminal_after_stop) and to in _TERMINAL:
+            pass  # legal after a confirmed stop; fall through to the terminal advance
         elif not can_transition(rec.status, to):
             raise IllegalTransition(connection_id, rec.status, to)
 

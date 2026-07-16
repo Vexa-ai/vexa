@@ -63,6 +63,15 @@ class TestParseExistingPlatformsUnchanged:
     def test_teams_short(self):
         assert parse_meeting_url("https://teams.live.com/meet/9361792952021?p=abc") == ("teams", "9361792952021")
 
+    def test_vendor_names_inside_attacker_host_are_rejected(self):
+        impostors = (
+            "https://meet.google.com.attacker.example/abc-defg-hij",
+            "https://zoom.us.attacker.example/j/84335626851",
+            "https://teams.microsoft.com.attacker.example/meet/9361792952021",
+        )
+        for url in impostors:
+            assert parse_meeting_url(url) is None, url
+
 
 class TestFindMeetingLinkJitsi:
     def test_found_in_free_text(self):

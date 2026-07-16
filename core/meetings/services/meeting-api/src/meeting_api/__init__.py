@@ -29,7 +29,7 @@ each module an isolated brick behind a port-seam.
 **Recording master codec** (recording.v1) — ``build_recording_master(chunks, media_format)``: the
 golden-locked Python twin of ``@vexa/recording``'s ``buildRecordingMaster``.
 """
-from . import bot_spawn, collector, lifecycle, recordings, sessions
+from . import bot_spawn, capture, collector, lifecycle, recordings, sessions
 from .app import create_app
 from .recording_codec import build_recording_master
 
@@ -53,6 +53,7 @@ __all__ = [
     "build_recording_master",
     "lifecycle",
     "bot_spawn",
+    "capture",
     "collector",
     "recordings",
     "sessions",

@@ -16,7 +16,11 @@ conformance.
   Identity arrives as the gateway-injected `x-user-id` header (missing → 401).
 - **`ingest` / `consume_segments`** — `ingest.py`. `transcription_segments` stream → `store` →
   publish `tc:meeting:{id}:mutable`. No background loop — the caller drives it (eval `tick`). The
-  always-on consumer loop is a P3 seam.
+  production store takes one shared meeting-write lease around the complete decoded message: one
+  Redis persistence transaction plus its mutable and transcript-stream publications. Once ZAKI
+  capture withdrawal is durable, a later message is dropped without persistence or live
+  publication; buffered transcript and processed-note PII is purged rather than retried. Each
+  PostgreSQL flush takes the same shared barrier. The always-on consumer loop is a P3 seam.
 - **`ports.py`** — `TranscriptStore`, `RedisBus`, `PubSub` (Protocols; real adapters + fakes both
   satisfy them structurally).
 - **`adapters.py`** — the real SQLAlchemy-async + redis wiring (lazy imports).

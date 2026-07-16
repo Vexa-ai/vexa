@@ -12,16 +12,15 @@ HTTP status the gateway forwards verbatim:
 """
 from __future__ import annotations
 
-import ipaddress
 import os
 from typing import Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
+from .url_validation import UnsafeMeetingUrl, validate_meeting_url
 
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
@@ -59,7 +58,7 @@ def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
     raise HTTPException(status_code=422, detail="transcribe_enabled must be a boolean")
 
 
-def _validate_meeting_url(url: object) -> str:
+def _validate_meeting_url(url: object, *, platform: str) -> str:
     """SSRF hygiene for the caller-supplied ``meeting_url`` passthrough (zoom AND jitsi — the
     bot's browser navigates wherever this points, so an authenticated caller must not be able to
     aim it at internal infrastructure). Entry-point validation, 422 on violation:
@@ -69,41 +68,12 @@ def _validate_meeting_url(url: object) -> str:
       * host must not be an IP literal (deployments are hostname-addressed; IP literals are the
         cheap way to reach loopback/link-local/private ranges — 10.x, 169.254.x, 127.x, …).
 
-    Static checks only — no DNS resolution on the spawn path (a hostname that RESOLVES to a
-    private IP is contained by network policy around the bot runtime, and slow-fails there)."""
-    if not isinstance(url, str) or not url.strip():
-        raise HTTPException(status_code=422, detail="meeting_url must be a non-empty string")
-    raw = url.strip()
+    Host approval is platform-bound: vendor platforms use their fixed domains, while self-hosted
+    Jitsi requires an exact operator entry in ``VEXA_JITSI_HOSTS``."""
     try:
-        parsed = urlparse(raw)
-    except ValueError:
-        raise HTTPException(status_code=422, detail=f"meeting_url does not parse as a URL: {raw!r}")
-    if parsed.scheme != "https":
-        raise HTTPException(
-            status_code=422,
-            detail="meeting_url must use https:// — the bot only joins TLS deployments",
-        )
-    try:
-        host = parsed.hostname
-    except ValueError:
-        host = None
-    if not host:
-        raise HTTPException(status_code=422, detail="meeting_url must have a valid hostname")
-    if host.lower() == "localhost" or host.lower().endswith(".localhost"):
-        raise HTTPException(
-            status_code=422,
-            detail="meeting_url cannot target localhost",
-        )
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        pass  # hostname, not an IP literal — OK
-    else:
-        raise HTTPException(
-            status_code=422,
-            detail="meeting_url cannot be an IP literal — use the deployment's hostname",
-        )
-    return raw
+        return validate_meeting_url(url, platform=platform)
+    except UnsafeMeetingUrl as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -179,7 +149,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         # A caller-supplied meeting_url is an any-URL passthrough to the bot's browser
         # (zoom/jitsi) — validate at the point of entry (SSRF hygiene, 422 on violation).
         if meeting_url is not None:
-            meeting_url = _validate_meeting_url(meeting_url)
+            meeting_url = _validate_meeting_url(meeting_url, platform=platform)
         if not platform or (not native_meeting_id and not meeting_url):
             raise HTTPException(
                 status_code=422,

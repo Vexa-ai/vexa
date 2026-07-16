@@ -15,6 +15,7 @@ run OFFLINE (no docker), exactly like the gateway lane's port-fakes.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 from typing import Optional
 
@@ -31,6 +32,15 @@ def _segment_to_api(seg: dict) -> dict:
         if seg.get(k) is not None:
             out[k] = seg[k]
     return out
+
+
+class _InMemoryTranscriptBatchWriter:
+    def __init__(self, store, meeting_id: int):
+        self._store = store
+        self._meeting_id = meeting_id
+
+    async def append_segments(self, segments: list[dict]) -> None:
+        await self._store._append_segments_unchecked(self._meeting_id, segments)
 
 
 class InMemoryTranscriptStore:
@@ -462,19 +472,38 @@ class InMemoryTranscriptStore:
             })
         return m
 
-    async def append_segment(self, meeting_id, segment) -> None:
+    @asynccontextmanager
+    async def transcript_write_lease(self, meeting_id):
+        from ..meeting_writes import capture_is_withdrawn
+        from .ports import TranscriptWriteRefused
+
+        meeting = self._meetings.get(meeting_id)
+        if meeting and capture_is_withdrawn(meeting.get("data")):
+            raise TranscriptWriteRefused("meeting is not writable")
+        yield _InMemoryTranscriptBatchWriter(self, meeting_id)
+
+    async def _append_segments_unchecked(self, meeting_id, segments) -> None:
         if self._redis is not None:
             # Prod-topology mode: live segments land in the redis HASH (+ the db-writer's
             # active_meetings sweep set), exactly like SqlAlchemyTranscriptStore.append_segment;
             # only the db-writer tick moves them into the durable dict.
             from .db_writer import ACTIVE_MEETINGS_KEY, segments_hash_key
 
-            await self._redis.sadd(ACTIVE_MEETINGS_KEY, str(meeting_id))
-            await self._redis.hset(
-                segments_hash_key(meeting_id), segment["segment_id"], json.dumps(segment)
-            )
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.sadd(ACTIVE_MEETINGS_KEY, str(meeting_id))
+                for segment in segments:
+                    pipe.hset(
+                        segments_hash_key(meeting_id), segment["segment_id"], json.dumps(segment)
+                    )
+                await pipe.execute()
             return
-        self._row_or_placeholder(meeting_id)["segments"][segment["segment_id"]] = segment
+        stored = self._row_or_placeholder(meeting_id)["segments"]
+        for segment in segments:
+            stored[segment["segment_id"]] = segment
+
+    async def append_segment(self, meeting_id, segment) -> None:
+        async with self.transcript_write_lease(meeting_id) as writer:
+            await writer.append_segments([segment])
 
     async def upsert_segments(self, meeting_id, segments) -> None:
         """The db-writer's durable sink (the dict stands in for the ``transcriptions`` table):
@@ -499,9 +528,13 @@ class InMemoryTranscriptStore:
     ) -> None:
         """Persist drained copilot notes into ``data['processed']['views']`` — the SAME pure
         upsert the SqlAlchemy store commits (the versioned multi-view shape, merged by note id)."""
+        from ..meeting_writes import capture_is_withdrawn
         from .adapters import _upsert_processed_view
+        from .ports import TranscriptWriteRefused
 
         m = self._row_or_placeholder(meeting_id)
+        if capture_is_withdrawn(m.get("data")):
+            raise TranscriptWriteRefused("meeting is not writable")
         m["data"] = _upsert_processed_view(
             m["data"], view_id=view_id, kind=kind, notes=notes,
             source_cursor=source_cursor, params=params,
