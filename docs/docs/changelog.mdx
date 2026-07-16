@@ -149,6 +149,9 @@ probe), not inferred from planning docs.
 - **Admin-API: empty token scopes backfilled on upgrade (#578).** Upgrading a 0.10 stack to 0.12
   backfills `api_token` rows that had empty `scopes`, so pre-existing tokens keep working under the
   scoped gateway. No action required — the backfill runs during schema sync.
+- **Lite: terminal transcription env wired (#628).** In `deploy/lite`, the `[program:terminal]`
+  worker now receives the STT and internal-secret environment it needs, so speech-to-text works in
+  the single-container lite deploy. See [Deployment](/deployment).
 
 ## Versioning
 

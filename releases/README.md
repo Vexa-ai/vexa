@@ -34,6 +34,18 @@ Release happens before the witness pass is signed.
    downgrade an over-marked user-visible entry to `by-proxy` (with its evidence) or walk it — either
    is a conscious decision, which is the point: **no value is silently skipped.**
 
+   **"Since the last release" means the last one that SHIPPED, not the last tag.** A tag is not a
+   release: a candidate can be tagged, published, fail its witness, and be abandoned. The baseline
+   is therefore the greatest lower tag carrying a `releases/<tag>/witness.json` — an abandoned
+   candidate has no receipt, so its PRs stay in the batch and are witnessed by the release that
+   actually delivers them. The generator logs the baseline it picked and any candidate it skipped.
+   (v0.12.5 was tagged, published, witness-failed, abandoned; v0.12.6's batch is therefore
+   `v0.12.4...v0.12.6` — the 15 PRs a `:v012` user actually receives — not the 2 since the tag.)
+   `RELEASE_PREV_TAG=vA.B.C` overrides the baseline; it is an escape hatch and is logged loudly.
+
+   The rule to hold onto: **the batch is what the promote hands users** — `(last shipped) → (this
+   version)`. If those diverge, the receipt is describing a release that isn't the one shipping.
+
 3. **Promote** — dispatch `release-validate` with `promote: true`. Two gates run first:
    - **`value-gate`** (guarantee 8) — every batch PR is `pr-value`-green on its head or `state: value-signed`.
    - **`witness-gate`** (guarantee 7) — `releases/vX.Y.Z/witness.json` is present, well-formed, version-matched.

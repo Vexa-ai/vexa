@@ -203,6 +203,60 @@ def test_planned_meeting_routes_forward_to_meeting_api():
     assert downstream.last["url"].endswith("/meetings/42")
 
 
+def test_native_meeting_mutate_forwards_to_meeting_api():
+    """#579 C1: native-keyed PATCH/DELETE /meetings/{platform}/{native} forward verbatim to
+    meeting-api (which resolves native → owned row). Negative control: on v0.12.2 there was no
+    2-segment route → 404 at the gateway. The 1-segment row-id routes are unchanged (above)."""
+    client, downstream = _client()
+    r = client.patch("/meetings/google_meet/abc-defg-hij", headers=AUTH, json={"title": "renamed"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "PATCH"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij")
+    assert "meeting-api" in downstream.last["url"]
+
+    client.delete("/meetings/google_meet/abc-defg-hij", headers=AUTH)
+    assert downstream.last["method"] == "DELETE"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij")
+
+
+def test_native_meeting_mutate_passes_downstream_404_verbatim():
+    """An unknown/unowned native id → meeting-api 404; the gateway returns it verbatim (not a
+    gateway-minted 404 for a missing route)."""
+    downstream = FakeDownstream(status_code=404, body={"detail": "Meeting not found"})
+    client, _ = _client(downstream=downstream)
+    r = client.patch("/meetings/google_meet/nope", headers=AUTH, json={"title": "x"})
+    assert r.status_code == 404
+
+
+def test_native_share_alias_forwards_to_meetings_share_mint():
+    """#579 C3: the 0.10 POST /transcripts/{platform}/{native}/share aliases to the moved mint at
+    POST /meetings/{platform}/{native}/share."""
+    client, downstream = _client()
+    r = client.post("/transcripts/google_meet/abc-defg-hij/share", headers=AUTH, json={})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"].endswith("/meetings/google_meet/abc-defg-hij/share")
+    assert "meeting-api" in downstream.last["url"]
+
+
+def test_native_chat_read_forwards_to_meeting_api():
+    """#579 C3: GET /bots/{platform}/{native}/chat forwards to meeting-api's honest chat-read."""
+    client, downstream = _client()
+    r = client.get("/bots/google_meet/abc-defg-hij/chat", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
+
+
+def test_recording_download_alias_forwards_to_raw():
+    """#579 C3: GET /recordings/{id}/media/{mid}/download aliases to the .../raw byte route."""
+    client, downstream = _client()
+    r = client.get("/recordings/5/media/9/download", headers=AUTH)
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith("/recordings/5/media/9/raw")
+
+
 def test_planned_meeting_routes_require_api_key():
     client, downstream = _client()
     assert client.post("/meetings", json={"title": "x"}).status_code == 401

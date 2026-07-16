@@ -242,7 +242,12 @@ def build_router(
             "bots_status", audience="user", span="bots.status",
             user_id=user_id, fields={"running": len(running)},
         )
-        return JSONResponse(content={"running": running, "count": len(running)})
+        # `running_bots` is the sealed api.v1 field (golden BotStatusResponse.example.json) a 0.10
+        # client reads for the bot-running badge; `running`/`count` are the 0.12 names. All three are
+        # emitted (additive back-compat, #579 C2) — the same list under both keys.
+        return JSONResponse(content={
+            "running": running, "running_bots": running, "count": len(running),
+        })
 
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
     # Reuses list_meetings + filters by id (owner-scoped, so a non-owner can't read another's meeting). ---
@@ -356,17 +361,22 @@ def build_router(
     # workspace / auto_join). Owner-scoped; refused (409) once the row advanced into the bot FSM —
     # the FSM is never fought. `scheduled_at: null` clears the time (status flips to `idle`);
     # `meeting_url: null` detaches the link (row becomes link-less). ---
-    @router.patch("/meetings/{meeting_id}")
-    async def patch_planned_meeting(
-        meeting_id: int,
-        request: Request,
-        x_user_id: Optional[str] = Header(default=None),
-    ):
-        user_id = _resolve_user_id(x_user_id)
-        try:
-            payload = await request.json()
-        except Exception:
-            raise HTTPException(status_code=422, detail="invalid JSON body")
+    # --- native-id → owned ROW resolver (#579 C1). Resolve (platform, native) to the caller's
+    # NEWEST OWNED row, exactly the rule the native transcript/authorize paths use (list_meetings is
+    # created_at-desc). OWNER-scoped: `shared` rows (a workspace/transcript-share grant) are excluded
+    # so a viewer can never mutate/delete someone else's meeting via the native path. None → 404. ---
+    async def _resolve_owned_native(user_id: int, platform: str, native_meeting_id: str):
+        meetings = await store.list_meetings(user_id, platform=platform)
+        for m in meetings:  # newest-first
+            if (not m.get("shared")
+                    and m.get("platform") == platform
+                    and m.get("native_meeting_id") == native_meeting_id):
+                return m.get("id")
+        return None
+
+    # --- the ROW-id PATCH/DELETE bodies, factored out so the native-keyed aliases (#579 C1) forward
+    # to the SAME owner-scoped, FSM-refusing logic once they have resolved (platform, native) → row. ---
+    async def _apply_meeting_patch(user_id: int, meeting_id: int, payload) -> dict:
         if not isinstance(payload, dict):
             raise HTTPException(status_code=422, detail="body must be an object")
 
@@ -427,16 +437,9 @@ def build_router(
             native_id=row.get("native_meeting_id"), status=row.get("status"),
             when=(row.get("data") or {}).get("scheduled_at"), log_event=log_event,
         )
-        return JSONResponse(content=row)
+        return row
 
-    # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
-    # never deletable from here). Owner-scoped, ROW-id addressed. ---
-    @router.delete("/meetings/{meeting_id}", status_code=204)
-    async def delete_planned_meeting(
-        meeting_id: int,
-        x_user_id: Optional[str] = Header(default=None),
-    ):
-        user_id = _resolve_user_id(x_user_id)
+    async def _apply_meeting_delete(user_id: int, meeting_id: int) -> None:
         result = await store.delete_planned_meeting(user_id, meeting_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
@@ -452,7 +455,99 @@ def build_router(
             redis, user_id=user_id, meeting_id=meeting_id, native_id=None,
             status="deleted", when=None, log_event=log_event,
         )
+
+    @router.patch("/meetings/{meeting_id}")
+    async def patch_planned_meeting(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        row = await _apply_meeting_patch(user_id, meeting_id, payload)
+        return JSONResponse(content=row)
+
+    # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
+    # never deletable from here). Owner-scoped, ROW-id addressed. ---
+    @router.delete("/meetings/{meeting_id}", status_code=204)
+    async def delete_planned_meeting(
+        meeting_id: int,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        await _apply_meeting_delete(user_id, meeting_id)
         return Response(status_code=204)
+
+    # --- native-keyed PATCH/DELETE /meetings/{platform}/{native_meeting_id} (#579 C1) — the sealed
+    # api.v1 mutate routes a 0.10 client (incl. the shipped dashboard) calls. Resolve (platform,
+    # native) → the caller's newest OWNED row, then forward to the SAME row-id logic above (which
+    # refuses an FSM-owned row with 409). Unknown/unowned native → 404. Additive: the int routes are
+    # unchanged. DELETE returns 200 + a small body (the sealed native-delete response), NOT the 204
+    # the row-id route returns. ---
+    @router.patch("/meetings/{platform}/{native_meeting_id}")
+    async def patch_native_meeting(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        if meeting_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        row = await _apply_meeting_patch(user_id, meeting_id, payload)
+        return JSONResponse(content=row)
+
+    @router.delete("/meetings/{platform}/{native_meeting_id}")
+    async def delete_native_meeting(
+        platform: str,
+        native_meeting_id: str,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        if meeting_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        await _apply_meeting_delete(user_id, meeting_id)
+        return JSONResponse(content={
+            "status": "deleted", "id": meeting_id,
+            "platform": platform, "native_meeting_id": native_meeting_id,
+        })
+
+    # --- GET /bots/{platform}/{native_meeting_id}/chat (#579 C3, sealed api.v1 ChatMessagesResponse).
+    # Thin HONEST restore: the route + owner boundary are real (unowned/unknown native → 404), but
+    # 0.12 does not PERSIST in-meeting chat server-side (chat frames flow live over the va:…:chat WS
+    # channel and are not stored), so the captured-message list is always empty until a chat-capture
+    # backend lands. The response conforms to the sealed shape; the empty list is the truthful state,
+    # not a fabricated one. The POST (send) half is a SIGNED GAP — see the PR (no bot-command backend
+    # in the 0.12 core). ---
+    @router.get("/bots/{platform}/{native_meeting_id}/chat")
+    async def read_meeting_chat(
+        platform: str,
+        native_meeting_id: str,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        meeting_id = await _resolve_owned_native(user_id, platform, native_meeting_id)
+        if meeting_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
+            )
+        return JSONResponse(content={"messages": []})
 
     # --- POST /meetings/{platform}/{native_meeting_id}/workspace → BIND the meeting to a shared workspace
     # (meetings.data.workspace_id). Owner-scoped. Members of that workspace can then subscribe to this
