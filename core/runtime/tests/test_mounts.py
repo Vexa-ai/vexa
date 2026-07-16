@@ -196,7 +196,11 @@ def test_k8s_pod_overrides_tolerations_only_no_pvc_builds_a_valid_spec():
     assert spec["tolerations"] == _TOL
     assert spec["nodeSelector"] == _SEL
     assert "volumes" not in spec                           # no PVC ⇒ no volumes, but scheduling stands
-    assert spec["containers"] == [{"name": "vexa-mtg-6"}]  # no volumeMounts when no store
+    # LOAD-BEARING (witnessed live, v0.12.8 staging): `kubectl run --overrides` merges the containers
+    # LIST by replacement, so ANY containers entry here wipes the generated container's image/env/command
+    # and the API server rejects the Pod (`spec.containers[0].image: Required value`) — the spawn dies in
+    # <1s. Scheduling-only overrides must NOT touch the containers list.
+    assert "containers" not in spec
 
 
 def test_k8s_pod_overrides_merges_pvc_and_scheduling():
