@@ -1,0 +1,20 @@
+{
+  "item": {
+    "id": "summary_example_01",
+    "kind": "summary",
+    "title": "Project planning summary",
+    "meeting_id": "meeting_example_01",
+    "occurred_at": "2026-07-14T09:00:00Z",
+    "updated_at": "2026-07-14T10:06:00Z",
+    "sensitivity": null,
+    "retention": {
+      "scope": "minutes.summary",
+      "expires_at": "2026-10-12T09:00:00Z"
+    },
+    "content": {
+      "format": "summary",
+      "text": "The team approved the signed-in Minutes pilot."
+    }
+  },
+  "truncated": false
+}

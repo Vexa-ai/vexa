@@ -625,6 +625,18 @@
       ]
     },
     {
+      "unique-id": "zaki-read.v1",
+      "node-type": "contract",
+      "name": "zaki-read.v1",
+      "description": "zaki-read.v1 — unsealed bounded read-only Minutes profile",
+      "metadata": [
+        {
+          "path": "core/meetings/contracts/zaki-read.v1",
+          "domain": "meetings"
+        }
+      ]
+    },
+    {
       "unique-id": "runtime.v1",
       "node-type": "contract",
       "name": "runtime.v1",
@@ -1251,6 +1263,7 @@
             "lifecycle.v1",
             "transcript.v1",
             "webhook.v1",
+            "zaki-read.v1",
             "transcription",
             "segments-stream",
             "tc-stream",

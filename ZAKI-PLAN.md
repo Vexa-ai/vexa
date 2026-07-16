@@ -9,19 +9,24 @@ meeting data without leaving transcript residue in the brain.
 Production activation is a separate owner go/no-go. The plan keeps all runtime flags off until the
 privacy and live-evidence gates are green.
 
-## Current objective — fork foundation
+## Current objective — proposed read-contract profile
 
-Expected result: a ProjectNuggets fork exists at a pinned upstream tag, keeps both remotes and full
-Apache-2.0 provenance, documents its product boundary and upgrade path, and passes the upstream gate
-suite without any ZAKI runtime or contract change.
+Expected result: the Minutes-owned read boundary is represented by an unsealed `zaki-read.v1`
+published schema with positive and negative golden vectors. It expresses the conservative proposed
+answers to WP-15's four questions while keeping role 8 review as the seal/merge gate.
 
 Definition of done:
 
-- GitHub fork and local checkout exist with `origin` and `upstream` remotes.
-- Baseline tag and SHA are recorded.
-- The Vexa-versus-alternatives decision is source-cited and captured in an ADR.
-- The full upstream gate command is run and its exact result recorded in the coordination handoff.
-- No chart, secret, database, object store, feature flag, or cluster resource is added.
+- Valid meeting, transcript and summary items plus a metadata-only mixed index conform.
+- Independent sensitivity, capture, attestation, retention, turn-time and index-content negative
+  controls are rejected.
+- Contract docs define anti-enumerating expiry, provenance, and separate content/transport byte caps.
+- Contract paths and envelopes match the Package 1 `/index`, `/item/{itemId}` and `/search` reference.
+- The architecture inventory includes the published contract and its Minutes-owned data boundary.
+- No runtime route, chart, secret, database, object store, feature flag, or cluster resource is added.
+
+Cross-user, expiry and byte-cap enforcement are runtime-service negative controls for the next
+objective after role 8 seals the profile; this schema slice does not claim them.
 
 ## Staged path
 

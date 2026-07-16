@@ -1,0 +1,32 @@
+{
+  "item": {
+    "id": "transcript_example_01",
+    "kind": "transcript",
+    "title": "Project planning transcript",
+    "meeting_id": "meeting_example_01",
+    "occurred_at": "2026-07-14T09:00:00Z",
+    "updated_at": "2026-07-14T10:05:00Z",
+    "sensitivity": "public",
+    "capture_notice": {
+      "bot_visible": true,
+      "tenant_attested_at": "2026-07-14T08:59:00Z",
+      "policy_version": "minutes-capture.v1"
+    },
+    "retention": {
+      "scope": "minutes.transcript",
+      "expires_at": "2026-10-12T09:00:00Z"
+    },
+    "content": {
+      "format": "speaker_turns",
+      "turns": [
+        {
+          "speaker": "Participant A",
+          "started_at": "2026-07-14T09:00:01Z",
+          "ended_at": "2026-07-14T09:00:04Z",
+          "text": "A valid transcript turn."
+        }
+      ]
+    }
+  },
+  "truncated": false
+}

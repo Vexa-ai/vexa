@@ -1,0 +1,26 @@
+{
+  "item": {
+    "id": "meeting_example_01",
+    "kind": "meeting",
+    "title": "Project planning",
+    "occurred_at": "2026-07-14T09:00:00Z",
+    "updated_at": "2026-07-14T10:05:00Z",
+    "sensitivity": "sensitive_pii",
+    "capture_notice": {
+      "bot_visible": true,
+      "tenant_attested_at": "2026-07-14T08:59:00Z",
+      "policy_version": "minutes-capture.v1"
+    },
+    "retention": {
+      "scope": "minutes.transcript",
+      "expires_at": "2026-10-12T09:00:00Z"
+    },
+    "content": {
+      "platform": "google_meet",
+      "started_at": "2026-07-14T09:00:00Z",
+      "ended_at": "2026-07-14T10:00:00Z",
+      "attendees": ["Participant A", "Participant B"]
+    }
+  },
+  "truncated": false
+}
