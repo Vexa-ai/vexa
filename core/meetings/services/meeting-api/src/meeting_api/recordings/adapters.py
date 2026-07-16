@@ -152,8 +152,18 @@ class SqlAlchemyRecordingRepo:
                 row = result.mappings().first()
                 data = row["data"] if row and isinstance(row["data"], dict) else {}
                 retention = data.get("zaki_retention") if row else None
+                expired_scopes = (
+                    retention.get("expired_scopes", [])
+                    if isinstance(retention, dict)
+                    else []
+                )
                 if row is None or (
-                    isinstance(retention, dict) and retention.get("state") == "erasing"
+                    isinstance(retention, dict)
+                    and (
+                        retention.get("state") == "erasing"
+                        or not isinstance(expired_scopes, list)
+                        or "audio" in expired_scopes
+                    )
                 ):
                     raise RecordingWriteRefused("meeting is not writable")
                 yield
@@ -200,8 +210,14 @@ class SqlAlchemyRecordingRepo:
                 raise RecordingWriteRefused("meeting is not writable")
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             retention = data.get("zaki_retention")
-            if isinstance(retention, dict) and retention.get("state") == "erasing":
-                raise RecordingWriteRefused("meeting is not writable")
+            if isinstance(retention, dict):
+                expired_scopes = retention.get("expired_scopes", [])
+                if (
+                    retention.get("state") == "erasing"
+                    or not isinstance(expired_scopes, list)
+                    or "audio" in expired_scopes
+                ):
+                    raise RecordingWriteRefused("meeting is not writable")
             prefixes = list(data.get("zaki_recording_prefixes") or [])
             if prefix in prefixes:
                 return
