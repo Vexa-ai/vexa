@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+> This repository is **ProjectNuggets/zaki-minutes-engine**, the ZAKI Minutes downstream of
+> Vexa. The fork is pinned to upstream `v0.12.2` (`034ad78b`) and is **not activated in any ZAKI
+> environment**. ZAKI-specific boundaries, provenance, and the staged delivery plan live in
+> [ZAKI-DOWNSTREAM.md](ZAKI-DOWNSTREAM.md) and [ZAKI-PLAN.md](ZAKI-PLAN.md).
+
 <div align="center">
 
 <img src="assets/logodark.svg" alt="Vexa logo" width="72"/>
