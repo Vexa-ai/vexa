@@ -407,14 +407,20 @@ def _attach_background_loops(
     # whose data.scheduled_at arrived (lead window) and whose auto_join toggle is on, through the
     # SAME request_bot flow POST /bots runs — the claim/upgrade branch makes it idempotent. The
     # per-user spawn context (max-bots cap + webhook config the gateway would inject as headers)
-    # is fetched from admin-api's internal edge; unset ADMIN_API_URL/INTERNAL_API_SECRET degrades
-    # to uncapped spawns (the self-host default), an UNREACHABLE identity skips the tick (fail-closed).
+    # is fetched from admin-api's internal edge. Fail-closed: unset ADMIN_API_URL/INTERNAL_API_SECRET
+    # makes the cap unresolvable, so the sweep REFUSES to spawn (AUTO_JOIN_ALLOW_UNCAPPED=1 is the
+    # explicit self-host opt-in); an UNREACHABLE identity likewise skips the tick.
     auto_join_interval = float(os.getenv("AUTO_JOIN_SWEEP_INTERVAL_S", "30"))
     auto_join_lead = float(os.getenv("AUTO_JOIN_LEAD_S", "60"))
     auto_join_grace = float(os.getenv("AUTO_JOIN_GRACE_S", "600"))
     auto_join_backoff = float(os.getenv("AUTO_JOIN_RETRY_BACKOFF_S", "300"))
     admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
     internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
+    # Fail-closed default: with no admin edge configured the per-user cap is unresolvable, so the
+    # sweep refuses to spawn rather than spawn uncapped. AUTO_JOIN_ALLOW_UNCAPPED=1 is the explicit
+    # self-host opt-in that chooses the uncapped mode (never defaulted).
+    from .bot_spawn.env_flags import env_flag
+    auto_join_allow_uncapped = env_flag("AUTO_JOIN_ALLOW_UNCAPPED", default=False)
 
     async def _auto_join_loop() -> None:
         if meeting_repo is None or runtime is None or not hasattr(meeting_repo, "list_scheduled_meetings"):
@@ -458,6 +464,7 @@ def _attach_background_loops(
                 retry_backoff_s=auto_join_backoff,
                 token_secret=os.getenv("ADMIN_TOKEN") or None,
                 redis_url=os.getenv("REDIS_URL"),
+                allow_uncapped=auto_join_allow_uncapped,
             )
 
         while True:
