@@ -58,14 +58,14 @@ need 1 'name: RUNTIME_K8S_TOLERATIONS'   "runtime carries spawn-Pod tolerations 
 need 1 'name: RUNTIME_K8S_NODE_SELECTOR' "runtime carries spawn-Pod nodeSelector env"
 
 # auth unset (values-test) → the chart Secret must NOT carry the key; auth set → it must.
-if printf '%s\n' "$RENDER" | grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN:'; then
+if grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN:' <<< "$RENDER"; then
   echo "  FAIL: CLAUDE_CODE_OAUTH_TOKEN rendered into the Secret with auth UNSET"; fail=1
 else
   echo "  OK: Secret omits CLAUDE_CODE_OAUTH_TOKEN when unset"
 fi
 RENDER_AUTH="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
   --set secrets.claudeCodeOauthToken=sk-test-oauth)"
-if printf '%s\n' "$RENDER_AUTH" | grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth"'; then
+if grep -qE '^  CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth"' <<< "$RENDER_AUTH"; then
   echo "  OK: CLAUDE_CODE_OAUTH_TOKEN lands in the Secret when set"
 else
   echo "  FAIL: CLAUDE_CODE_OAUTH_TOKEN missing from the Secret when set"; fail=1
@@ -78,14 +78,14 @@ RENDER_SCHED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml"
   --set-json 'global.nodeSelector={"vexa.ai/pool":"main"}')"
 # toJson sorts keys, so the toleration serializes as effect,key,operator,value — assert the
 # distinctive tokens are present on the value line (order-independent), not the empty "[]".
-tol_line="$(printf '%s\n' "$RENDER_SCHED" | grep -A1 'name: RUNTIME_K8S_TOLERATIONS' | grep 'value:')"
-if printf '%s\n' "$tol_line" | grep -q 'NoSchedule' && printf '%s\n' "$tol_line" | grep -q 'vexa.ai/pool'; then
+tol_line="$(grep -A1 'name: RUNTIME_K8S_TOLERATIONS' <<< "$RENDER_SCHED" | grep 'value:')"
+if grep -q 'NoSchedule' <<< "$tol_line" && grep -q 'vexa.ai/pool' <<< "$tol_line"; then
   echo "  OK: runtime RUNTIME_K8S_TOLERATIONS carries global.tolerations JSON"
 else
   echo "  FAIL: runtime RUNTIME_K8S_TOLERATIONS missing the global.tolerations JSON"; fail=1
 fi
-sel_line="$(printf '%s\n' "$RENDER_SCHED" | grep -A1 'name: RUNTIME_K8S_NODE_SELECTOR' | grep 'value:')"
-if printf '%s\n' "$sel_line" | grep -q 'vexa.ai/pool' && printf '%s\n' "$sel_line" | grep -q 'main'; then
+sel_line="$(grep -A1 'name: RUNTIME_K8S_NODE_SELECTOR' <<< "$RENDER_SCHED" | grep 'value:')"
+if grep -q 'vexa.ai/pool' <<< "$sel_line" && grep -q 'main' <<< "$sel_line"; then
   echo "  OK: runtime RUNTIME_K8S_NODE_SELECTOR carries global.nodeSelector JSON"
 else
   echo "  FAIL: runtime RUNTIME_K8S_NODE_SELECTOR missing the global.nodeSelector JSON"; fail=1
