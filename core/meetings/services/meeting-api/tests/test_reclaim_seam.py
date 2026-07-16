@@ -23,6 +23,7 @@ from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore  #
 from meeting_api.collector.ingest import (  # noqa: E402
     CONSUMER_GROUP,
     STREAM_NAME,
+    prune_idle_consumers,
     reclaim_segments,
 )
 
@@ -171,6 +172,141 @@ async def test_reclaim_orphans_degrades_when_xautoclaim_unsupported():
     assert await bus.reclaim_orphans(
         group=CONSUMER_GROUP, stream=STREAM_NAME, consumer="collector-x", min_idle_ms=1
     ) == []
+
+
+# ── #660 · C1 — abandoned per-recreate ghost consumers are pruned from the group ──────────────────
+
+
+async def _consumer_with_acked_read(client, bus, store, name, n=1):
+    """Register consumer ``name`` and leave it with ``pending == 0``: it XREADGROUPs ``n`` messages and
+    ACKs them all — the exact state a per-recreate ghost is left in (read its last message, acked it,
+    then the container was replaced and this name never reads again)."""
+    for i in range(n):
+        await bus.xadd(STREAM_NAME, {
+            "type": "transcript", "meeting_id": 1,
+            "segments": [{
+                "segment_id": f"{name}-{i}", "start": float(i), "end": float(i) + 1.0,
+                "text": "t", "completed": True,
+            }],
+        })
+    read = await bus.read_segments(group=CONSUMER_GROUP, consumer=name, stream=STREAM_NAME, count=n)
+    await bus.ack(group=CONSUMER_GROUP, stream=STREAM_NAME, message_ids=[m[0] for m in read])
+
+
+async def _consumer_names(client):
+    info = await client.xinfo_consumers(STREAM_NAME, CONSUMER_GROUP)
+    return sorted(
+        (c["name"].decode() if isinstance(c["name"], bytes) else c["name"]) for c in info
+    )
+
+
+async def test_ghost_consumer_pruned_after_ttl():
+    """A1. A ghost consumer (``pending == 0``) idle past the TTL is DELCONSUMER'd from the group after
+    a sweep; a live consumer (this replica, ``collector-live``) survives.
+
+    Negative control (inline, RED): the pre-fix sweep never enumerated consumers, so the ghost would
+    persist forever — asserted here by running the prune with a TTL the ghost has NOT yet outlived
+    (nothing removed), then advancing past it (removed). fakeredis advances XINFO ``idle`` with
+    wall-clock, so a small TTL + short sleep drives the real command honestly."""
+    import asyncio
+
+    client = fake_aioredis.FakeRedis(decode_responses=True)
+    bus = FakeRedisBus(client)
+    store = InMemoryTranscriptStore()
+
+    await _consumer_with_acked_read(client, bus, store, "collector-ghost")
+    # register the live replica too (it is the ``consumer`` arg — must never be pruned even when idle)
+    await _consumer_with_acked_read(client, bus, store, "collector-live")
+
+    assert await _consumer_names(client) == ["collector-ghost", "collector-live"]
+
+    # TTL not yet exceeded → nothing pruned (the guard that protects a briefly-quiet live replica).
+    pruned = await prune_idle_consumers(
+        bus, consumer="collector-live", ttl_ms=10_000
+    )
+    assert pruned == 0, "a consumer idle less than the TTL must not be pruned"
+    assert await _consumer_names(client) == ["collector-ghost", "collector-live"]
+
+    # advance idle past a small TTL, then sweep: the ghost goes, the live replica (self) stays.
+    await asyncio.sleep(0.06)
+    pruned = await prune_idle_consumers(
+        bus, consumer="collector-live", ttl_ms=40
+    )
+    assert pruned == 1, "the ghost idle past the TTL must be pruned"
+    assert await _consumer_names(client) == ["collector-live"], "self is never pruned"
+    await client.aclose()
+
+
+async def test_pending_consumer_never_pruned():
+    """A2 (safety, negative control). A consumer holding a delivered-but-un-acked batch
+    (``pending > 0``) is NEVER pruned — even when idle far past the TTL — because DELCONSUMER would
+    abandon a real in-flight batch (manufacturing exactly the orphan #636 reclaim exists to recover).
+    A prune that ignored ``pending`` would delete it; this asserts it stays."""
+    import asyncio
+
+    client, bus, store, seg_ids = await _crashed_consumer_pel(3)  # collector-dead holds 3, un-acked
+
+    await asyncio.sleep(0.06)  # idle well past the tiny TTL below
+    pruned = await prune_idle_consumers(bus, consumer="collector-live", ttl_ms=40)
+    assert pruned == 0, "a consumer with pending > 0 must never be pruned regardless of idle"
+    assert "collector-dead" in await _consumer_names(client), "the pending consumer survives"
+    # and the batch is still reclaimable — pruning did not strand it
+    reclaimed = await reclaim_segments(store, bus, consumer="collector-live", min_idle_ms=0)
+    assert reclaimed == 3, "the un-acked batch is still there to reclaim"
+    await client.aclose()
+
+
+async def test_prune_via_reclaim_segments_sweep():
+    """A1 (integration). The prune rides the SAME ``reclaim_segments`` sweep the consumer loop calls
+    every N ticks — no separate loop. A ghost idle past ``ttl_ms`` is gone after one sweep."""
+    import asyncio
+
+    client = fake_aioredis.FakeRedis(decode_responses=True)
+    bus = FakeRedisBus(client)
+    store = InMemoryTranscriptStore()
+    await _consumer_with_acked_read(client, bus, store, "collector-ghost")
+    await asyncio.sleep(0.06)
+    await reclaim_segments(store, bus, consumer="collector-live", min_idle_ms=0, ttl_ms=40)
+    assert "collector-ghost" not in await _consumer_names(client)
+    await client.aclose()
+
+
+async def test_list_consumers_degrades_when_xinfo_unsupported():
+    """A4. On a Redis without XINFO CONSUMERS the adapter degrades to ``[]`` (log-once latch) exactly
+    as ``reclaim_orphans`` does for XAUTOCLAIM — so ghost-pruning being unavailable never breaks the
+    consume path. ``prune_idle_consumers`` over such a bus is then a clean no-op."""
+    from redis.exceptions import ResponseError
+
+    from meeting_api.collector.adapters import RedisStreamBus
+
+    class _RedisNoXinfo:
+        async def xinfo_consumers(self, *a, **k):
+            raise ResponseError("ERR unknown command 'XINFO', with args beginning with: ...")
+
+    bus = RedisStreamBus(_RedisNoXinfo())
+    assert await bus.list_consumers(group=CONSUMER_GROUP, stream=STREAM_NAME) == []
+    assert bus._prune_unsupported is True, "the log-once latch must be set"
+    # a second call keeps degrading (and, per the latch, does not re-log)
+    assert await bus.list_consumers(group=CONSUMER_GROUP, stream=STREAM_NAME) == []
+    # the prune sweep over a degrading bus is a no-op (no delete attempted)
+    assert await prune_idle_consumers(bus, consumer="collector-live", ttl_ms=0) == 0
+
+
+async def test_list_consumers_reraises_unrelated_response_error():
+    """Only 'unknown command' / NOGROUP degrade — any OTHER ResponseError must propagate, so a real
+    Redis fault is not silently swallowed as 'no consumers to prune'."""
+    from redis.exceptions import ResponseError
+
+    from meeting_api.collector.adapters import RedisStreamBus
+
+    class _RedisBadReply:
+        async def xinfo_consumers(self, *a, **k):
+            raise ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
+
+    bus = RedisStreamBus(_RedisBadReply())
+    with pytest.raises(ResponseError):
+        await bus.list_consumers(group=CONSUMER_GROUP, stream=STREAM_NAME)
+    assert bus._prune_unsupported is False, "an unrelated error must NOT flip the unsupported latch"
 
 
 async def test_reclaim_orphans_reraises_unrelated_response_error():
