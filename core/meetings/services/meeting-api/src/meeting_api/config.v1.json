@@ -314,9 +314,9 @@
   {
    "key": "ADMIN_API_URL",
    "class": "defaulted",
-   "default": "(unset — auto-join spawn-context + calendar-sync discovery are then disabled: auto-join spawns uncapped, calendar sync no-ops)",
-   "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs)",
-   "targets": []
+   "default": "(unset — calendar sync no-ops and the auto-join sweep cannot resolve the per-user cap, so it fails closed and refuses to spawn unless AUTO_JOIN_ALLOW_UNCAPPED=1)",
+   "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs). Required on every deploy surface so calendar sync runs and auto-join spawns stay capped (#656).",
+   "targets": ["compose", "helm", "lite"]
   },
   {
    "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
@@ -344,6 +344,13 @@
    "class": "defaulted",
    "default": "300",
    "description": "backoff (s) before an auto-join that failed loudly (cap/quota/spawn) is retried",
+   "targets": []
+  },
+  {
+   "key": "AUTO_JOIN_ALLOW_UNCAPPED",
+   "class": "defaulted",
+   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the sweep fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
+   "description": "opt-in escape hatch (#656): allow the auto-join sweep to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
    "targets": []
   },
   {
@@ -379,6 +386,13 @@
    "class": "defaulted",
    "default": "",
    "description": "#636: per-replica Redis consumer name for the segment group; empty → derived as collector-<hostname> (pod identity) so a crashed replica's pending batch is attributable + reclaimable",
+   "targets": []
+  },
+  {
+   "key": "COLLECTOR_CONSUMER_TTL_MS",
+   "class": "defaulted",
+   "default": "1800000",
+   "description": "#660: idle (ms) after which an abandoned per-recreate consumer (pending==0) is pruned from collector_group by the reclaim sweep (XGROUP DELCONSUMER); default 30 min, well above COLLECTOR_RECLAIM_MIN_IDLE_MS so a briefly-quiet live replica is never removed",
    "targets": []
   },
   {

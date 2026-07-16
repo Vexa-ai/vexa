@@ -568,6 +568,31 @@ class FakeRedisBus:
         )
         return _decode_claimed(resp)
 
+    async def list_consumers(self, *, group, stream):
+        """#660: mirror of ``RedisStreamBus.list_consumers`` over ``fakeredis.aioredis`` (which
+        supports XINFO CONSUMERS and advances ``idle`` with wall-clock). Degrades to ``[]`` when the
+        group does not exist yet (NOGROUP), like the real adapter."""
+        from redis.exceptions import ResponseError
+
+        try:
+            resp = await self._client.xinfo_consumers(stream, group)
+        except ResponseError as e:
+            if "nogroup" in str(e).lower():
+                return []
+            raise
+        out: list[dict] = []
+        for entry in resp or []:
+            name = entry.get("name")
+            out.append({
+                "name": name.decode() if isinstance(name, bytes) else name,
+                "pending": int(entry.get("pending") or 0),
+                "idle": int(entry.get("idle") or 0),
+            })
+        return out
+
+    async def delete_consumer(self, *, group, stream, consumer):
+        return await self._client.xgroup_delconsumer(stream, group, consumer)
+
     async def ack(self, *, group, stream, message_ids):
         if message_ids:
             await self._client.xack(stream, group, *message_ids)
