@@ -1,0 +1,264 @@
+{
+  "version": "v0.12.9",
+  "candidate": "v0.12.9",
+  "generated_from": "v0.12.4...v0.12.9",
+  "witnessed_by": "Dmitriy Grankin (owner) + CTO agent — three-surface pass",
+  "witnessed_at": "2026-07-16",
+  "deployment": "lite + compose (2×meeting-api) + helm/LKE (2×meeting-api, vexa-v012-staging)",
+  "notes": "Evidence ran on PUBLISHED bytes. Helm final pass on v0.12.9 STOCK images; lite/compose full pass on v0.12.7 bytes plus a healthy re-verified boot on v0.12.9 where the only inter-version delta is k8s-backend/helm/CI files (carry-over stated per entry). The owner participated live in every meeting (the human witness). KNOWN ISSUES (honesty): (1) #674 — stale Stop-bot control: the terminal Stop-bot control did not reliably terminate an active bot; filed, prepared, and reproduced by the owner during this witness. (2) #625 (open) — CPU whisper quality on tiny/small is the floor; transcripts are usable but not the ceiling. (3) Operational — Google Meet rate-limits bot admission after many rapid joins from a single IP.",
+  "values": [
+    {
+      "pr": "624",
+      "title": "merge: enforce the merge card (value + diff) + Discord onboarding (ADR-0030)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/merge-card.yml + .github/workflows/merge-card-comment.yml + .github/workflows/pr-welcome.yml (CI legs) + scripts/merge-card-gate.test.mjs + docs/adr/0030-merge-card-value-and-diff-gate.md; by-proxy on the gate's own CI behavior"
+    },
+    {
+      "pr": "626",
+      "title": "lite: LOCAL_STT=1 — bundled CPU tiny whisper for transcripts with no token/GPU",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "lite bot admitted to a real Meet and produced real-word transcripts with NO transcription token and NO GPU, using the bundled tiny whisper",
+      "observation": "lite core run: bot admitted to a real Google Meet, 16+ segments of real words attributed to the correct speaker 'Dmitry Grankin', bundled Systran tiny.en CPU whisper, no token / no GPU — the LOCAL_STT=1 documented path (deploy/lite/Makefile + README.md)"
+    },
+    {
+      "pr": "629",
+      "title": "release: witness script generated from the batch — every PR's value accounted for (ADR-0031)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "scripts/release-witness-script.mjs (the generator) + docs/adr/0031-witness-script-generated-from-the-batch.md; by-proxy — THIS receipt is the generator's own output (34 batch entries, one per PR, none silently skipped)"
+    },
+    {
+      "pr": "631",
+      "title": "docs: currency gates — docs declare their release + can't silently drift (ADR-0032)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/docs-current.yml (CI leg) + .github/workflows/gates.yml (CI leg) + scripts/gates.mjs (gate) + docs/adr/0032-docs-currency-gates.md"
+    },
+    {
+      "pr": "632",
+      "title": "docs: Jitsi joins the platform lineup — README + docs site 🎉",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "docs-only change; by-proxy on its own currency gate — .github/workflows/docs-current.yml + scripts/gates.mjs keep the Jitsi README/docs-site copy pinned to its release and unable to silently drift"
+    },
+    {
+      "pr": "640",
+      "title": "fix(meeting-api): slim the meetings list — drop heavy data keys + default page size (#584)",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "GET /meetings list rows are slim — no heavy per-meeting data keys, bounded default page size",
+      "observation": "observed on compose: GET /meetings returned slim rows carrying only summary fields, none of the heavy data keys; test coverage core/meetings/services/meeting-api/tests/test_slim_meetings_list.py"
+    },
+    {
+      "pr": "641",
+      "title": "fix(helm): set MEETING_API_URL on meeting-api deployment (#634)",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "MEETING_API_URL present in the live meeting-api pod env on helm",
+      "observation": "helm/LKE 2-replica: MEETING_API_URL was present in BOTH live meeting-api replica pod envs (chart-rendered), so self-referential lookups resolve"
+    },
+    {
+      "pr": "642",
+      "title": "fix(gateway): preserve Content-Range/Accept-Ranges on proxied 206 (#633)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "a ranged recording read through the gateway returns 206 with Content-Range + Accept-Ranges preserved",
+      "observation": "real recording fetched via the gateway: HTTP 206 Partial Content, content-range 'bytes 100-999/24284851', accept-ranges 'bytes' — the range headers survived the proxy hop; test coverage core/gateway/services/gateway/tests/test_proxy.py (+ conftest.py)"
+    },
+    {
+      "pr": "643",
+      "title": "fix(terminal): cap and prune login-minted API tokens (#638)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "clients/terminal/src/app/api/auth/__tests__/findOrCreateUserToken.test.ts (VEXA_TERMINAL_LOGIN_TOKEN_CAP enforced — appends on login, prunes oldest past the cap) + clients/terminal/src/app/api/__tests__/tokens.test.ts (owned-token DELETE, non-owned 404); by-proxy on the cap+prune tests"
+    },
+    {
+      "pr": "644",
+      "title": "fix(db-pool): wire DB_POOL_SIZE/DB_MAX_OVERFLOW on admin-api + meeting-api (#635)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/identity/services/admin-api/tests/test_db_pool.py + core/meetings/services/meeting-api/tests/test_db_pool.py (pool knobs wired at the engine sites) + core/{identity,meetings}/.../test_config_contract.py (config-contract green) + deploy/db-budget.json (db-budget gate green: Σ replicas×ceiling fits max_connections); by-proxy — the knobs are wired at all four engine sites"
+    },
+    {
+      "pr": "645",
+      "title": "fix(meeting-api): single-flight background sweeps across replicas (#637)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "across 2 replicas the background sweep is single-flight — advisory lock/unlock pairs, no double-run, no errors",
+      "observation": "helm 2-replica, pg log_statement window: 78 advisory lock/unlock pairs in 90s across both replicas' pools, 0 errors — the sweep single-flights via the advisory lock; test coverage core/meetings/services/meeting-api/tests/test_single_flight.py + test_app.py"
+    },
+    {
+      "pr": "646",
+      "title": "fix(meeting-api): reclaim a crashed replica's orphaned segment batch (#636)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_reclaim_seam.py (fakeredis seam-test: an orphaned PEL batch from a dead consumer is reclaimed). LIMITATION: the reclaim itself is NOT witnessable by hand — its trigger window is sub-second (the consumer must die mid-batch), so per the v0.12.6 handover it is by-proxy. SUPPORTING live observation (helm 2-replica): transcription_segments stream had a collector_group with exactly 2 per-pod consumers (collector-<pod-name>), both live and idle ~100-300ms, pending 0, lag 0 — the healthy steady state the reclaim protects"
+    },
+    {
+      "pr": "647",
+      "title": "fix(merge-card): maintainers self-review their own PRs (waive non-author review for committers)",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/merge-card.yml (committer self-review waiver) + scripts/merge-card-gate.test.mjs; by-proxy on the gate's own CI behavior"
+    },
+    {
+      "pr": "649",
+      "title": "fix(meeting-api): reclaim degrades on Redis<6.2 (#636) + advisory-lock signature (#637) — v0.12.5 witness regressions",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_reclaim_seam.py (Redis<6.2 degrade path) + test_single_flight.py (advisory-lock signature); by-proxy on the seam/regression tests. The two seams these regressions touch were both exercised live on helm this pass (78 advisory lock/unlock pairs, 0 errors; healthy 2-consumer collector_group)"
+    },
+    {
+      "pr": "652",
+      "title": "fix(lite): an empty env flag must not silently disable transcription (#650) + unbreak `make up` (#651) — v0.12.5 witness regressions",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "fail-loud STT: an unconfigured STT refuses spawn with 503 rather than silently transcribing nothing; `make up` brings the box up",
+      "observation": "compose: the fail-loud STT 503 was witnessed FIRING — bot spawn was refused until STT was configured (no silent empty transcripts). `make up` worked — it was the box bring-up used for this witness. The empty-env-flag → transcribe_enabled:true fix was witnessed at the v0.12.6 witness (carry note); tests core/meetings/services/meeting-api/tests/test_env_flags.py + deploy/lite/tests/test_env_file_hygiene.py"
+    },
+    {
+      "pr": "658",
+      "title": "fix(release): the witness batch is bounded by the last release that SHIPPED, not the last tag",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "scripts/release-witness-script.mjs (baseline walk-down: greatest lower tag carrying releases/<tag>/witness.json; skipped candidates logged loudly). Live witness = THIS receipt's own baseline: generated_from v0.12.4...v0.12.9, the generator's baseline log skipped the abandoned candidates (v0.12.5/.6/.7/.8 tagged without a shipped receipt in the baseline chain) so their PRs are batched here — exactly what a :v012 user receives"
+    },
+    {
+      "pr": "661",
+      "title": "fix(runtime): process backend reaps the whole process group on teardown (Closes #546)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/runtime/tests/test_process_backend.py::test_self_exit_reaps_whole_group + ::test_stop_path_reaps_whole_group + ::test_childless_workload_reap_is_silent (group-scoped teardown, red→green orphan fixture) — part of the 155-pass runtime suite. Live Lite ps-check for stray children was NOT run this pass (stated honestly); by-proxy on the group-reap tests"
+    },
+    {
+      "pr": "662",
+      "title": "fix(lite): pass STT + internal-secret env to [program:terminal] (#628)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/lite/supervisord.conf [program:terminal] carries TRANSCRIPTION_SERVICE_URL/TRANSCRIPTION_SERVICE_TOKEN + VEXA_INTERNAL_API_SECRET (the passthrough). Supporting: the lite terminal panel was healthy in the core run. Composer-mic was NOT explicitly driven this pass — by-proxy on the config + supervisord assertion, stated"
+    },
+    {
+      "pr": "663",
+      "title": "fix(release-validate): honesty valve renders per-leg scope, never a claim it can't measure",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/release-validate.yml (CI leg) — the honesty valve renders per-leg scope; v0.12.9's release notes render the per-leg scope. By-proxy on the workflow's own CI behavior"
+    },
+    {
+      "pr": "664",
+      "title": "fix(admin-api): grandfather empty api_token scopes on 0.10→0.12 upgrade (#578)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "a 0.10-era token seeded with scopes='{}' is grandfathered to the full scope set after admin-api restart, and the gateway accepts it (200 not 403)",
+      "observation": "seeded a 0.10-era token with scopes='{}'; after admin-api restart the token carried scopes={bot,tx,browser}; a gateway call with it returned 200 not 403 — witnessed on compose AND helm; test coverage core/identity/services/admin-api/tests/test_stack_postgres.py"
+    },
+    {
+      "pr": "665",
+      "title": "fix(merge-card): non-terminal value-fsm is pending, not failure — wait for a verdict (Closes #655)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/merge-card.yml (non-terminal value-fsm → pending, not failure) + scripts/merge-card-gate.test.mjs. Live witness: the v0.12.8 and v0.12.9 merge trains needed NO manual merge-card reruns this cycle — the fsm waited for a verdict instead of failing spuriously"
+    },
+    {
+      "pr": "666",
+      "title": "fix(api.v1): restore native-id-keyed routes for 0.10 client continuity (#579)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "PATCH + DELETE /meetings/{platform}/{native} return 200 for a known meeting, 404 for an unknown native id; /bots/status carries running_bots AND running+count",
+      "observation": "PATCH + DELETE /meetings/{platform}/{native} returned 200; an unknown native id returned 404; /bots/status carried both running_bots and running+count — witnessed on all 3 surfaces (every bot stop in this witness used the native-id DELETE route). Tests core/gateway/services/gateway/tests/test_proxy.py + core/meetings/services/meeting-api/tests/test_native_id_api_v1.py"
+    },
+    {
+      "pr": "667",
+      "title": "fix(compose): pin BROWSER_IMAGE to the release tag, not moving :v012 (Closes #659)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/compose/.env.example + deploy/compose/docker-compose.yml resolve BROWSER_IMAGE to the pinned release tag (not the moving :v012). `docker compose config` was verified at the v0.12.7 witness and the witness boxes ran the pinned bot image; by-proxy on the compose config resolution"
+    },
+    {
+      "pr": "668",
+      "title": "fix: helm meeting-api ADMIN_API_URL + fail-closed auto-join cap (#656)",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "live meeting-api pod has chart-rendered ADMIN_API_URL, calendar-sync polls /internal/calendar-configs 200 (no early return), and AUTO_JOIN_ALLOW_UNCAPPED is absent (fail-closed cap default)",
+      "observation": "helm live pod env ADMIN_API_URL=http://vexa-vexa-admin-api:8001 (chart-rendered); the calendar-sync loop was polling /internal/calendar-configs and getting 200 (no early return); AUTO_JOIN_ALLOW_UNCAPPED was absent, so the auto-join cap defaults fail-closed"
+    },
+    {
+      "pr": "669",
+      "title": "fix(meeting-api): prune abandoned ghost consumers in the reclaim sweep (#660)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_reclaim_seam.py (ghost-consumer prune path). Live: the prune config was present with its defaults and the consumers stayed healthy, but the prune FIRING was NOT observed live (no ghost consumer arose during the window) — by-proxy on its tests, stated honestly"
+    },
+    {
+      "pr": "670",
+      "title": "fix(api.v1): reverse (contract ⊆ impl) conformance gate + golden shapes (#591)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/gateway/services/conformance/tests/test_contract_conformance.py + scripts/gates.mjs (gate). Live in CI: contract-conformance ran green for 2 services in the v0.12.9 release run, and the KNOWN_GAPS ledger is committed"
+    },
+    {
+      "pr": "672",
+      "title": "test(compat): drop stale strict-xfail — #579 restored the 0.10 bots/status envelope",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/compose/tests/compat/v010_rest_compat_test.py (the stale strict-xfail removed now that #579 restored the 0.10 bots/status envelope — the same envelope witnessed live under #666); by-proxy on the compat test"
+    },
+    {
+      "pr": "678",
+      "title": "fix(runtime): spawned k8s Pods inherit the runtime's scheduling constraints (#673)",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "an unassisted bot spawn schedules and boots onto an all-tainted node pool (tolerations flow chart→env→pod overrides); a dead meeting URL reaches an honest terminal state",
+      "observation": "helm v0.12.9 STOCK: unassisted spawn scheduled and booted onto the ALL-TAINTED pool in 33s (pod Running 33s) — tolerations flowed chart→env→pod overrides. Dead-URL probe: spawn→schedule→boot→join_failure reached an honest terminal state (not a silent hang); tests core/runtime/tests/test_mounts.py + test_k8s_command_wiring.py"
+    },
+    {
+      "pr": "679",
+      "title": "fix(helm): wire VEXA_INTERNAL_API_SECRET into terminal Deployment (Closes #676)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "terminal auth bootstrap is clean on stock v0.12.9 (no 'bootstrap-admin claim failed'); sign-in and bot ops work from the terminal UI",
+      "observation": "helm v0.12.9 STOCK: terminal auth bootstrap was clean — no 'bootstrap-admin claim failed' in the logs; owner signed in and drove bot ops from the terminal UI successfully (the VEXA_INTERNAL_API_SECRET was wired into the terminal Deployment); template coverage deploy/helm/tests/test_template.sh"
+    },
+    {
+      "pr": "680",
+      "title": "fix(helm): agent-api VEXA_MEETING_API_URL so live-SSE owner-lookup resolves (Closes #677)",
+      "visibility": "user-visible",
+      "witnessed": true,
+      "pass": "live-SSE owner-lookup resolves; the owner's spoken words stream to a raw SSE client AND the terminal panel",
+      "observation": "helm: live SSE streamed the owner's words to a raw SSE client AND to the terminal panel post-fix (agent-api VEXA_MEETING_API_URL let the owner-lookup resolve) — witnessed on the v0.12.8 hot-verify and re-confirmed on the v0.12.9 stock spawn run"
+    },
+    {
+      "pr": "681",
+      "title": "fix(runtime): meeting-bot profile carries no command so k8s spawns the real bot ENTRYPOINT (#675)",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "a k8s-spawned bot boots via the image ENTRYPOINT (not a StartError) and joins the meeting",
+      "observation": "helm v0.12.9 STOCK spawn run: the container booted via the image ENTRYPOINT and joined (pre-fix, every k8s spawn StartError'd because the profile carried a command); the mock divergence was killed and the release-time profile-conformance gate ran green in the v0.12.9 release-images run. Tests core/runtime/tests/test_k8s_command_wiring.py + test_profile_image_conformance.py + test_profiles.py"
+    },
+    {
+      "pr": "683",
+      "title": "fix(release-validate): un-break YAML — #675 conformance snippet as one-liner",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/release-validate.yml (CI leg) — the #675 profile-conformance python snippet reduced to a valid one-liner. Live witness: the v0.12.9 release-images / release-validate run itself ran green"
+    },
+    {
+      "pr": "684",
+      "title": "fix(runtime): scheduling-only pod overrides must not replace the containers list",
+      "visibility": "backend",
+      "witnessed": true,
+      "pass": "a scheduling-only pod override (tolerations/affinity) is merged without dropping the real containers list — the bot still boots and joins",
+      "observation": "helm v0.12.9 STOCK spawn run: the scheduling-only pod override applied tolerations WITHOUT replacing the containers list — the bot container survived and booted (this is the fix that made #678's overrides survivable); hot-verified with a server dry-run plus the live spawn. Test coverage core/runtime/tests/test_mounts.py"
+    },
+    {
+      "pr": "686",
+      "title": "fix(helm-gate): here-strings kill the pipefail/SIGPIPE race that failed v0.12.9 preflight twice",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/helm/tests/test_template.sh (grep under pipefail replaced with here-strings, killing the SIGPIPE race). Live witness: the v0.12.9 helm preflight ran green after this fix (it had failed twice before)"
+    }
+  ],
+  "signed_off": true
+}
