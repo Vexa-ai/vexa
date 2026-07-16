@@ -93,10 +93,14 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
     if not volumes and not tolerations and not node_selector:
         return None
-    container: dict = {"name": container_name}
+    # ``kubectl run --overrides`` merges the containers LIST by replacement (json-merge, not
+    # strategic), so a containers entry here wipes the generated container — image, env, command —
+    # and the API server rejects the Pod (`spec.containers[0].image: Required value`), killing the
+    # spawn instantly. Emit ``containers`` ONLY when volumeMounts force it (the workspace-store
+    # seam); pod-level fields (tolerations/nodeSelector) merge fine without touching the list.
+    spec: dict = {}
     if volume_mounts:
-        container["volumeMounts"] = volume_mounts
-    spec: dict = {"containers": [container]}
+        spec["containers"] = [{"name": container_name, "volumeMounts": volume_mounts}]
     if volumes:
         spec["volumes"] = volumes
     if tolerations:
