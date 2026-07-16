@@ -25,6 +25,13 @@ value and the diff are accepted:**
 - **Value accepted** — for a runtime PR (pr-value's path filter), `value-fsm` is GREEN on the head
   sha **and** the PR carries `state: value-signed` (the D9 sign-off). A red value-fsm is never
   waived by the label. Non-runtime PRs (no pr-value leg): `state: value-signed` alone.
+  - **Non-terminal value-fsm ⇒ pending, not failure.** The `labeled` event that fires the card
+    also re-triggers `value-fsm`, so its newest run on head is frequently still `queued`/
+    `in_progress` (`conclusion === null`) when the card evaluates. The card treats that as
+    **pending** and **waits** for a terminal verdict (bounded poll) rather than reading an
+    in-flight run as failure — the #655 race, which red-carded correctly-approved PRs and forced a
+    manual rerun. A value-fsm that never reaches terminal `success` within the wait budget stays
+    not-mergeable (the label cannot waive it; success must be positively observed).
 - **Diff accepted** — a GitHub review **approval from a non-author** whose `commit_id` is the
   current head sha (a new push dismisses a stale approval — re-review required).
 
