@@ -484,13 +484,23 @@ jobs:
         run: |
           set -euo pipefail
           m() { [ "$1" = "success" ] && echo "✅" || echo "❌ ($1)"; }
+          # Scoped renderer (the honesty valve's neutral rendering): a leg renders ONLY its own
+          # measured scope, never a stronger sentence.  success → "<scope> ✓";  a leg that did not
+          # run at all (skipped/empty) → "— not exercised", never ✓;  any other result → "❌ (state)".
+          s() {
+            case "$1" in
+              success)    printf '%s ✓' "$2" ;;
+              skipped|"") printf '— not exercised' ;;
+              *)          printf '❌ (%s)' "$1" ;;
+            esac
+          }
           {
             echo "## The guarantee — $VERSION ([this run]($RUN_URL))"
             echo
             echo "| # | Guarantee | Proof in this run |"
             echo "|---|---|---|"
             echo "| 1 | Every artifact users pull is the artifact we proved | $(m "$R_RESOLVE") manifests resolve; every leg pulls published bytes only |"
-            echo "| 2 | Works end-to-end on every documented install path | compose $(m "$R_COMPOSE") · FSM $(m "$R_MOCKFSM") · lite $(m "$R_LITE") · helm $(m "$R_HELM") |"
+            echo "| 2 | Every documented install path stands up and is exercised to its leg's scope (NOT full end-to-end — real audio→words is row 3) | compose $(s "$R_COMPOSE" "installs + API/data-plane wiring, synthetic transcript; real bot in row 5") · FSM $(s "$R_MOCKFSM" "meeting-lifecycle FSM via mock bot, no real browser/STT") · lite $(s "$R_LITE" "front doors + ≥2 concurrent real-bot spawn, no meeting/STT assertion") · helm $(s "$R_HELM" "installs + healthy, bot/meeting/STT not exercised") |"
             echo "| 3 | Real audio → correct, speaker-attributed words | ⚠️ NOT machine-proven in this run — witness-pass only until the wav→words leg (#560) ships |"
             echo "| 4 | A fresh machine with nothing on it succeeds | ⚠️ fresh-VM leg runs outside this workflow — attach its evidence to the notes or state unclaimed |"
             echo "| 5 | Nothing that worked before broke | v010-compat $(m "$R_V010") · bot-spawn $(m "$R_BOTSPAWN") |"
