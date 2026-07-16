@@ -382,6 +382,13 @@
    "targets": []
   },
   {
+   "key": "COLLECTOR_CONSUMER_TTL_MS",
+   "class": "defaulted",
+   "default": "1800000",
+   "description": "#660: idle (ms) after which an abandoned per-recreate consumer (pending==0) is pruned from collector_group by the reclaim sweep (XGROUP DELCONSUMER); default 30 min, well above COLLECTOR_RECLAIM_MIN_IDLE_MS so a briefly-quiet live replica is never removed",
+   "targets": []
+  },
+  {
    "key": "COLLECTOR_RECLAIM_MIN_IDLE_MS",
    "class": "defaulted",
    "default": "60000",
