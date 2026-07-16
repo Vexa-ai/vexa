@@ -195,6 +195,16 @@ runtime:
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }
+  # Scheduling for the Pods the runtime SPAWNS (backend=k8s). A `kubectl run` bot/agent Pod is NOT a
+  # child of the runtime Deployment, so it does NOT inherit global.nodeSelector/global.tolerations —
+  # on an all-tainted pool (dedicated / spot / GPU node pools) every spawn strands Pending and the
+  # meeting silently fails (#673). By DEFAULT (leave these unset) spawned Pods inherit the runtime's
+  # own constraints — global.tolerations / global.nodeSelector — so they schedule wherever the runtime
+  # itself can, with zero operator action. Set these ONLY to send spawned workloads to a DIFFERENT
+  # pool than the kernel (e.g. GPU bots): they are passed to the backend as RUNTIME_K8S_TOLERATIONS /
+  # RUNTIME_K8S_NODE_SELECTOR (JSON) and stamped onto every spawned Pod's spec.
+  # tolerations: []            # override global.tolerations for spawned Pods (list of toleration objects)
+  # nodeSelector: {}           # override global.nodeSelector for spawned Pods (node-label map)
   extraEnv: []
 
 # Agent control plane — /invocations dispatch + /api/chat SSE (compose: agent-api → :8100).
