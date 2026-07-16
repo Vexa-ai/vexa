@@ -111,9 +111,40 @@ def _sync_indexes(conn: Connection, base):
                 logger.log(level, "index %s not created: %s", index.name, e)
 
 
+# MIGRATION-0004-backfill-token-scopes — grandfather pre-scope (0.10-era) API tokens.
+#
+# 0.10's api_tokens had no `scopes` column; keys were unscoped = allow-all. 0.12 adds
+# `scopes ARRAY(Text) NOT NULL server_default '{}'`, so the additive `ADD COLUMN` above fills
+# every pre-existing row with an empty array — which the gateway/validate path reads as
+# no-access and 403s on every core route. This one-shot, idempotent backfill converges those
+# empty/NULL rows to the full valid-scope set, mirroring 0.10's allow-all behavior. It only
+# touches empties, so newly-minted (already-scoped) tokens are never widened, and re-running
+# ensure_schema is a no-op once there are no empty rows left.
+#
+# See MIGRATION-0004-backfill-token-scopes.md. Kept in step with app.main.VALID_SCOPES.
+# Bound as a Python list (not a '{...}' literal): asyncpg maps a list → text[], and rejects the
+# literal string ("a sized iterable container expected"); psycopg accepts either. A list is the
+# one form both drivers take.
+_FULL_TOKEN_SCOPES = ["bot", "tx", "browser"]
+
+
+def _backfill_token_scopes(conn: Connection):
+    inspector = inspect(conn)
+    if "api_tokens" not in set(inspector.get_table_names()):
+        return
+    result = conn.execute(text(
+        "UPDATE api_tokens SET scopes = :full "
+        "WHERE scopes = '{}'::text[] OR scopes IS NULL"
+    ), {"full": _FULL_TOKEN_SCOPES})
+    if result.rowcount:
+        logger.info("schema-sync backfill token scopes (MIGRATION-0004): %d row(s) grandfathered "
+                    "to %s", result.rowcount, _FULL_TOKEN_SCOPES)
+
+
 def _ensure_schema_sync(conn: Connection, base):
     base.metadata.create_all(conn, checkfirst=True)   # missing tables, FK order
     _sync_columns(conn, base)                          # additive columns
+    _backfill_token_scopes(conn)                       # MIGRATION-0004 data backfill
     _sync_indexes(conn, base)                          # additive indexes
 
 
