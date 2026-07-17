@@ -37,6 +37,7 @@ from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
 from .lifecycle.machine import LifecycleSink, MeetingStore
 from .obs import TraceMiddleware
+from .zaki_read import build_router as _build_zaki_read_router
 
 
 def create_app(
@@ -65,6 +66,9 @@ def create_app(
     # calendar-sync user edges (async callables from the composition root; None → routes 503)
     calendar_sync_now: Optional["object"] = None,
     calendar_sync_status: Optional["object"] = None,
+    # Internal ZAKI Minutes read plane. No token means default-off/fail-closed.
+    zaki_read_token: Optional[str] = None,
+    zaki_read_now: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -121,6 +125,11 @@ def create_app(
     app.include_router(_build_collector_router(transcript_store, redis,
                                             calendar_sync_now=calendar_sync_now,
                                             calendar_sync_status=calendar_sync_status))
+    app.include_router(_build_zaki_read_router(
+        transcript_store,
+        token=zaki_read_token,
+        **({"now": zaki_read_now} if zaki_read_now is not None else {}),
+    ))
 
     # --- recordings: chunk upload + finalize → meeting.data JSONB (recording.v1) ---
     if recording_repo is None:

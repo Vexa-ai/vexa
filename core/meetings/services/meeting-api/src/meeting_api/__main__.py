@@ -40,6 +40,11 @@ def _database_url() -> str:
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
 
 
+def _zaki_read_token() -> str | None:
+    """Return the optional internal Minutes read credential; unset keeps the route off."""
+    return os.getenv("ZAKI_READ_TOKEN_MINUTES") or None
+
+
 def _require_config(env: "os._Environ | dict | None" = None) -> None:
     """Fail-fast on missing required config (A4), driven by the config.v1 declaration (ADR-0026).
 
@@ -171,6 +176,7 @@ def build_production_app():
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
+        zaki_read_token=_zaki_read_token(),
     )
 
     _attach_background_loops(app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client)
