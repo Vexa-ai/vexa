@@ -38,6 +38,7 @@
         "transcriptionTier": { "enum": ["realtime", "deferred"] },
         "transcriptionServiceUrl": { "type": "string", "description": "stt endpoint" },
         "transcriptionServiceToken": { "type": "string", "description": "SECRET; placeholder in goldens" },
+        "transcriptionModel": { "type": ["string", "null"], "description": "stt model id sent as the OpenAI-compatible `model` form part; unset → whisper-1" },
         "recordingEnabled": { "type": "boolean" },
         "captureModes": { "type": "array", "items": { "type": "string" } },
         "recordingUploadUrl": { "type": "string", "format": "uri", "description": "recording sink" },

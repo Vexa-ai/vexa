@@ -41,6 +41,11 @@ attribution, scaling.
 | Architecture built for AI-assisted maintenance ([one-concern modules, sealed contracts, golden fixtures](/architecture/modules)) | ✅ | 🟡 conventional | n/a | ❌ | — |
 | License | Apache-2.0 | Apache-2.0 | proprietary | varies | — |
 
+*Bring your own models* covers both halves of the STT contract: the endpoint
+(`TRANSCRIPTION_SERVICE_URL`) **and** the model id (`TRANSCRIPTION_MODEL`) — so backends that
+validate the id (Groq, vLLM, OpenAI-compatible gateways) work end-to-end, not just backends that
+ignore it. See [Configuration](/configuration#transcription-stt).
+
 ## When to choose what — honestly
 
 - **Choose Attendee** if you want *only* a capture API with the most conventional stack possible,

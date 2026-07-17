@@ -196,6 +196,7 @@ export function createTranscribe(inv: Invocation): Transcribe {
   const client = new TranscriptionClient({
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
+    model: inv.transcriptionModel ?? undefined,
   });
   const language = inv.language ?? undefined;
   return (pcm, prompt) => client.transcribe(pcm, language, prompt);

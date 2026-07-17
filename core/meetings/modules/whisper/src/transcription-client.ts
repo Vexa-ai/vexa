@@ -43,6 +43,10 @@ export interface TranscriptionClientConfig {
   /** Minimum silence duration (ms) for VAD to split segments. Lower = more splits at natural pauses.
    *  Default: server default (160ms). Use ~100ms for more granular segments. */
   minSilenceDurationMs?: number;
+  /** STT model id sent as the OpenAI-compatible `model` form part. Backends that validate it
+   *  (Groq, vLLM, gateways) need their served name; the bundled unit ignores it (its model is
+   *  the unit's own MODEL_SIZE). Default: "whisper-1". */
+  model?: string;
 }
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
@@ -94,6 +98,7 @@ export class TranscriptionClient {
   private sampleRate: number;
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
+  private model: string;
   constructor(config: TranscriptionClientConfig) {
     // Ensure serviceUrl ends with the transcriptions endpoint
     this.serviceUrl = config.serviceUrl.replace(/\/+$/, '');
@@ -106,6 +111,7 @@ export class TranscriptionClient {
     this.sampleRate = config.sampleRate ?? 16000;
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
+    this.model = config.model ?? 'whisper-1';
   }
 
   /**
@@ -163,11 +169,11 @@ export class TranscriptionClient {
     parts.push(wavBuffer);
     parts.push(Buffer.from('\r\n'));
 
-    // Model part (required by OpenAI-compatible API)
+    // Model part (required by OpenAI-compatible API; validating backends reject unknown ids)
     parts.push(Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="model"\r\n\r\n` +
-      `whisper-1\r\n`
+      `${this.model}\r\n`
     ));
 
     // Response format part

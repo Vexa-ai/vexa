@@ -67,6 +67,7 @@ export interface Invocation {
   transcriptionTier?: TranscriptionTier;
   transcriptionServiceUrl?: string;
   transcriptionServiceToken?: string;
+  transcriptionModel?: string | null;
   // ── recording ──
   recordingEnabled?: boolean;
   captureModes?: string[];
