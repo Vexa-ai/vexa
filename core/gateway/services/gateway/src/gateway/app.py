@@ -109,6 +109,21 @@ def create_app(
     # The edge: mint/read X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
 
+    # CORS for browser clients (the hosted dashboard runs on its own origin) — 0.10 parity:
+    # CORS_ORIGINS is a comma-separated allowlist; unset ⇒ no CORS headers (server-to-server
+    # callers are unaffected either way). x-api-key must be an allowed request header.
+    cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+    if cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
     # --- liveness probe (gate:health): the edge is up. No auth (mirrors a real LB health
     # check), no downstream call. 200 + {status:"ok", service:"gateway"} = process is up.
     @app.get("/health")
@@ -379,13 +394,18 @@ def create_app(
             "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
         )
 
-    # native download alias (#579 C3): the sealed api.v1 media-download path a 0.10 client calls.
-    # 0.12 renamed the media byte route to .../raw (finalize-on-read master stream); alias .../download
-    # to it so recording playback no longer 404s. Forwarded verbatim (Range headers preserved).
+    # media-download path a 0.10 client calls (sealed api.v1). hc8/C3: forward `/download`
+    # VERBATIM to meeting-api instead of the upstream #579 rewrite to `/raw`. Upstream aliased
+    # `/download`→`/raw` (BYTES) so a 0.10 client no longer 404s; but the kept 0.10 dashboard's
+    # player does response.json() on the reply and reads {url|download_url}, so bytes hang it at
+    # "Preparing audio…". meeting-api's hosted-compat `/download` returns the JSON {url:/raw}
+    # envelope (see recordings/router.py); forwarding verbatim is what makes that handler reach-
+    # able. No OSS client consumes `/download`-as-bytes (0.12 clients use /master → raw_url → /raw),
+    # so the behavior change is confined to the compat path.
     @app.get("/recordings/{recording_id}/media/{media_file_id}/download")
     async def get_recording_media_download(recording_id: int, media_file_id: int, request: Request):
         return await _forward(
-            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
+            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/download"), request
         )
 
     @app.get("/meetings")

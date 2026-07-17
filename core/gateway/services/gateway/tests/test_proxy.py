@@ -248,13 +248,20 @@ def test_native_chat_read_forwards_to_meeting_api():
     assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
 
 
-def test_recording_download_alias_forwards_to_raw():
-    """#579 C3: GET /recordings/{id}/media/{mid}/download aliases to the .../raw byte route."""
+def test_recording_download_forwards_verbatim_not_raw():
+    """hc8/C3: GET /recordings/{id}/media/{mid}/download forwards VERBATIM to meeting-api's
+    `/download` (the hosted-compat JSON {url:/raw} handler), NOT the upstream #579 rewrite to
+    `/raw`. The kept 0.10 dashboard player does response.json() on this reply — a byte stream
+    (what the /raw rewrite yielded) hangs it at "Preparing audio…".
+
+    Negative control (the pre-C3 contract, now removed): this asserted `.endswith('/raw')`.
+    """
     client, downstream = _client()
     r = client.get("/recordings/5/media/9/download", headers=AUTH)
     assert r.status_code == 200
     assert downstream.last["method"] == "GET"
-    assert downstream.last["url"].endswith("/recordings/5/media/9/raw")
+    assert downstream.last["url"].endswith("/recordings/5/media/9/download")
+    assert not downstream.last["url"].endswith("/raw")
 
 
 def test_planned_meeting_routes_require_api_key():
