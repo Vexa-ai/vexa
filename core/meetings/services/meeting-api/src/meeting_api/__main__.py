@@ -116,7 +116,7 @@ def build_production_app():
     # WH2: the transport is IP-PINNED — it re-resolves + re-validates the host at connect time and
     # dials the validated IP (preserving Host + TLS SNI), closing the DNS-rebinding TOCTOU window
     # between submit-time validate_webhook_url and the actual socket connect.
-    from .webhooks import RetryQueue, WebhookSink
+    from .webhooks import SYSTEM_RETRY_QUEUE_KEY, RetryQueue, WebhookSink
     from .webhooks.ssrf import build_pinned_transport
 
     async def _webhook_transport(url: str, body: bytes, headers: dict):
@@ -124,6 +124,23 @@ def build_production_app():
             return await client.post(url, content=body, headers=headers)
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
+
+    # SYSTEM post-meeting hooks (parent's POST_MEETING_HOOKS): comma-separated operator URLs that
+    # get the typed meeting.completed envelope, signed with INTERNAL_API_SECRET. These targets are
+    # deployment config (typically cluster-internal, e.g. the hosted billing hook), so their sink
+    # uses a PLAIN httpx transport (no IP-pinning — pinning exists for user-supplied URLs) and its
+    # failures land on a SEPARATE retry queue drained with the same plain transport.
+    system_hooks = [u.strip() for u in (os.getenv("POST_MEETING_HOOKS") or "").split(",") if u.strip()]
+    system_hook_secret = os.getenv("INTERNAL_API_SECRET") or None
+    system_webhook_sink = None
+    if system_hooks:
+        async def _system_transport(url: str, body: bytes, headers: dict):
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                return await client.post(url, content=body, headers=headers)
+
+        system_webhook_sink = WebhookSink(
+            _system_transport, queue=RetryQueue(redis_client, key=SYSTEM_RETRY_QUEUE_KEY)
+        )
 
     # Completion finalization: when the lifecycle FSM lands on a terminal status the callback runs
     # this — flush the meeting's remaining redis segments to Postgres (threshold 0) + persist the
@@ -181,6 +198,9 @@ def build_production_app():
         # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
         command_publisher=redis_client,
         webhook_sink=webhook_sink,
+        system_hooks=system_hooks,
+        system_hook_secret=system_hook_secret,
+        system_webhook_sink=system_webhook_sink,
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
@@ -327,7 +347,7 @@ def _attach_background_loops(
     async def _webhook_drain_loop() -> None:
         import httpx
 
-        from .webhooks.retry import drain_retry_queue
+        from .webhooks.retry import SYSTEM_RETRY_QUEUE_KEY, drain_retry_queue
         from .webhooks.ssrf import build_pinned_transport
 
         # The injected Transport: POST the signed envelope; return the response (its .status_code
@@ -341,6 +361,12 @@ def _attach_background_loops(
         async def _tick():
             await drain_retry_queue(redis_client, _transport)
 
+        # System-hook retries drain their own queue with a PLAIN transport — their targets are
+        # operator config (cluster-internal allowed), so the pinned transport would block them.
+        async def _plain_transport(url: str, body: bytes, headers: dict):
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                return await client.post(url, content=body, headers=headers)
+
         while True:
             try:
                 await _guarded("webhook-drain", _tick)  # #637: one drain sweep per interval
@@ -348,6 +374,12 @@ def _attach_background_loops(
                 raise
             except Exception:
                 log.exception("webhook retry-drain tick failed")
+            try:
+                await drain_retry_queue(redis_client, _plain_transport, key=SYSTEM_RETRY_QUEUE_KEY)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("system-hook retry-drain tick failed")
             await asyncio.sleep(webhook_interval)
 
     async def _stop_reconcile_loop() -> None:
