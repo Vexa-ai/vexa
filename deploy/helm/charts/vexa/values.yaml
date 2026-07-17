@@ -224,6 +224,8 @@ runtime:
     confirmThreshold: ""
     maxBufferSec: ""
     idleTimeoutSec: ""
+  # Active-phase remote-audio silence window. Empty uses the bot's 10-minute default.
+  aloneSilenceWindowMs: ""
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }

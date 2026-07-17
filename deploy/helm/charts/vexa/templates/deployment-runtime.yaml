@@ -62,6 +62,8 @@ spec:
               value: {{ include "vexa.agentImage" . | quote }}
             - name: AGENT_WORKER_IMAGE
               value: {{ include "vexa.agentWorkerImage" . | quote }}
+            - name: BOT_ALONE_SILENCE_WINDOW_MS
+              value: {{ .Values.runtime.aloneSilenceWindowMs | default "" | quote }}
             - name: BOT_SPEAKER_MIN_AUDIO_SEC
               value: {{ .Values.runtime.speakerStream.minAudioSec | default "" | quote }}
             - name: BOT_SPEAKER_SUBMIT_INTERVAL_SEC
