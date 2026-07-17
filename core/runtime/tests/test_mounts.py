@@ -13,7 +13,7 @@ import pytest
 
 from runtime_kernel.mounts import MountBind, k8s_volume_mounts, mount_set, workspace_binds
 from runtime_kernel.docker_backend import DockerBackend  # for the docker bind-string shape
-from runtime_kernel.k8s_backend import pod_overrides
+from runtime_kernel.k8s_backend import pod_overrides, SHM_SIZE_ENV, RESOURCES_ENV
 from runtime_kernel.profiles import Runnable
 
 
@@ -253,6 +253,89 @@ def test_k8s_start_overlays_runtime_process_scheduling_env(monkeypatch):
     ov = pod_overrides({**_env(source="vexa-agent-workspaces"), **overlay}, container_name="w")
     assert ov["spec"]["tolerations"] == _TOL
     assert ov["spec"]["nodeSelector"] == _SEL
+
+
+# ── k8s: container-shaping remainder — /dev/shm + resources (hosted-compat #35 C2) ──────────
+# Upstream #684 landed only the SCHEDULING half of the spawn override. The container-level half — a
+# real /dev/shm (Chromium crashes at the default 64Mi) and resource requests/limits — never landed:
+# RUNTIME_K8S_SHM_SIZE / RUNTIME_K8S_RESOURCES (runtime process env) re-cut it. Because both live ON the
+# container, they force a `containers` entry — which kubectl's --overrides list-REPLACEMENT would wipe of
+# image/env — so the entry MUST re-carry image + the workload env (fork 557f8240/9aeb4ff6, narrowed).
+
+_RES = {"requests": {"cpu": "500m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "2Gi"}}
+
+
+def _shm_env(*, shm=None, resources=None, image_env=True):
+    """A meeting-bot spawn env (no workspace PVC) + the container-shaping knobs."""
+    e = {"VEXA_BOT_CONFIG": "{...}", "REDIS_URL": "redis://r:6379"} if image_env else {}
+    if shm is not None:
+        e[SHM_SIZE_ENV] = shm
+    if resources is not None:
+        e[RESOURCES_ENV] = json.dumps(resources)
+    return e
+
+
+def test_k8s_pod_overrides_shm_and_resources_carry_image_and_env():
+    """The C2 core: shm + resources force a containers entry, and that entry re-carries the image and
+    the workload env (the wipe trap) — a Memory-medium /dev/shm emptyDir is mounted, resources are set."""
+    ov = pod_overrides(_shm_env(shm="2Gi", resources=_RES), container_name="vexa-mtg-9",
+                       image="vexaai/vexa-bot:v0.12.9")
+    spec = ov["spec"]
+    c = spec["containers"][0]
+    assert c["name"] == "vexa-mtg-9"
+    assert c["image"] == "vexaai/vexa-bot:v0.12.9"        # image re-carried → Pod is NOT rejected
+    assert c["resources"] == _RES
+    assert {"name": "VEXA_BOT_CONFIG", "value": "{...}"} in c["env"]  # workload env re-carried
+    assert {"name": "dshm", "mountPath": "/dev/shm"} in c["volumeMounts"]
+    assert {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "2Gi"}} in spec["volumes"]
+    # the control knobs never leak into the bot's own env
+    assert not any(kv["name"] in {"RUNTIME_K8S_SHM_SIZE", "RUNTIME_K8S_RESOURCES"} for kv in c["env"])
+
+
+def test_k8s_pod_overrides_container_without_image_is_the_rejected_control():
+    """Negative control (the wipe): a forced containers entry WITHOUT an image has no `image` key — this
+    is exactly the spec `kubectl run --overrides` yields when the image is dropped, which the API server
+    rejects (`spec.containers[0].image: Required value`). start() always passes image, so the real path
+    carries it; proven above."""
+    ov = pod_overrides(_shm_env(shm="2Gi"), container_name="x", image=None)
+    assert "image" not in ov["spec"]["containers"][0]     # RED path: the Pod would be rejected
+
+
+def test_k8s_pod_overrides_resources_malformed_json_fails_loud():
+    """resources is JSON → malformed is FATAL, same discipline as the scheduling knobs."""
+    with pytest.raises(ValueError, match="RUNTIME_K8S_RESOURCES"):
+        pod_overrides({RESOURCES_ENV: "{not json"}, container_name="x")
+    with pytest.raises(ValueError, match="RUNTIME_K8S_RESOURCES"):
+        pod_overrides({RESOURCES_ENV: "[1,2]"}, container_name="x")   # wrong shape (list, want object)
+
+
+def test_k8s_pod_overrides_shm_only_no_pvc_no_resources_still_mounts_dev_shm():
+    """A plain meeting bot (no workspace PVC, no explicit resources) still gets its /dev/shm — the
+    shm mount alone forces the container entry, carrying image + env."""
+    ov = pod_overrides(_shm_env(shm="2Gi"), container_name="vexa-mtg-1", image="img:tag")
+    spec = ov["spec"]
+    assert spec["containers"][0]["image"] == "img:tag"
+    assert spec["containers"][0]["volumeMounts"] == [{"name": "dshm", "mountPath": "/dev/shm"}]
+    assert spec["volumes"] == [{"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "2Gi"}}]
+    assert "resources" not in spec["containers"][0]
+
+
+def test_k8s_pod_overrides_no_container_knobs_returns_none():
+    """No mounts, no scheduling, no shm/resources ⇒ None (today's behaviour, unchanged)."""
+    assert pod_overrides(_shm_env(image_env=True), container_name="x") is None
+
+
+def test_k8s_start_overlays_shm_and_resources_from_process_env(monkeypatch):
+    """start() overlays RUNTIME_K8S_SHM_SIZE / RUNTIME_K8S_RESOURCES from the runtime PROCESS env (chart-
+    set on the runtime Deployment) onto the spawn override — like the scheduling knobs."""
+    from runtime_kernel.k8s_backend import _runtime_scheduling_env
+    monkeypatch.setenv("RUNTIME_K8S_SHM_SIZE", "2Gi")
+    monkeypatch.setenv("RUNTIME_K8S_RESOURCES", json.dumps(_RES))
+    overlay = _runtime_scheduling_env()
+    ov = pod_overrides({"VEXA_BOT_CONFIG": "{...}", **overlay}, container_name="w", image="img:tag")
+    c = ov["spec"]["containers"][0]
+    assert c["resources"] == _RES
+    assert {"name": "dshm", "mountPath": "/dev/shm"} in c["volumeMounts"]
 
 
 # ── process: shares the host FS — no binds, but N-mount aware (parity) ────────
