@@ -4,7 +4,7 @@
   "generated_from": "v0.12.9...v0.12.10",
   "witnessed_by": "",
   "witnessed_at": "",
-  "deployment": "",
+  "deployment": "lite (throwaway Linode VM, LOCAL_STT=1, image digest sha256:a3128453…)",
   "values": [
     {
       "pr": "614",
@@ -41,28 +41,28 @@
       "title": "release: v0.12.9 witness receipt (signed)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "NAME THE PROOF (test / validate leg / gate) — none auto-detected"
+      "evidence": "releases/v0.12.9/witness.json committed on main — the receipt IS the artifact; gates green at head"
     },
     {
       "pr": "692",
       "title": "docs(governance): the two loops — debugging discipline, flake discipline, human placement (Closes #688)",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "NAME THE PROOF (test / validate leg / gate) — none auto-detected"
+      "evidence": "docs/docs/governance/delivery.mdx §the-two-loops published; docs-current + gates green at head"
     },
     {
       "pr": "700",
       "title": "docs(governance): value definition leads the prepared-issue body",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "NAME THE PROOF (test / validate leg / gate) — none auto-detected"
+      "evidence": "governance rule published; the 2026-07-17 prepared-issue batch is written value-definition-first (observable on #694-#699)"
     },
     {
       "pr": "701",
       "title": "docs/tests: kill the merge-train tax (fragments + merge=union + fan-out) + edge-guard safe-config caveat",
       "visibility": "backend",
       "witnessed": "by-proxy",
-      "evidence": "NAME THE PROOF (test / validate leg / gate) — none auto-detected"
+      "evidence": "mechanism proven by use: this release assembled its changelog from docs/changelog.d fragments (collector run in #707) with zero merge conflicts"
     },
     {
       "pr": "703",
@@ -86,5 +86,17 @@
       "evidence": "release-images preflight passes on the v0.12.10 tag (three stamps aligned) — the failed first tag run is the negative control"
     }
   ],
-  "signed_off": false
+  "signed_off": false,
+  "witness_deployment": {
+    "url": "http://172.234.244.41:3001",
+    "provisioned_by": "agent (throwaway Linode 100898379 us-sea, vexaai/vexa-lite:v0.12.10, make -C deploy/lite all)",
+    "prevalidated": [
+      "gateway /health 200 from public internet",
+      "terminal UI 200 (Next.js serves)",
+      "debug login 200 for test-substring email + 403 negative control for non-test email",
+      "X-API-Key authenticated GET /meetings 200 + no-key 401 negative control",
+      "STT: whisper /health 200 + stt-smoke synthesized speech transcribed correctly",
+      "13 supervised services RUNNING, RestartCount=0, sidecars (postgres, minio, whisper) up"
+    ]
+  }
 }
