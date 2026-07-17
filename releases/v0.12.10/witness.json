@@ -2,8 +2,8 @@
   "version": "v0.12.10",
   "candidate": "v0.12.10",
   "generated_from": "v0.12.9...v0.12.10",
-  "witnessed_by": "",
-  "witnessed_at": "",
+  "witnessed_by": "Dmitriy Grankin (@DmitriyG228)",
+  "witnessed_at": "2026-07-17",
   "deployment": "lite (throwaway Linode VM, LOCAL_STT=1, image digest sha256:a3128453…)",
   "values": [
     {
@@ -24,10 +24,11 @@
       "pr": "619",
       "title": "gmeet: stop silence hallucinations — ja/tr phrase lists + near-silent submit gate (#617)",
       "visibility": "user-visible",
-      "witnessed": false,
-      "evidence": "core/meetings/modules/gmeet-pipeline/src/silence-gate.test.ts + hallucination-filter.test.ts (L2); live walk required",
+      "witnessed": true,
+      "evidence": "core/meetings/modules/gmeet-pipeline/src/silence-gate.test.ts + hallucination-filter.test.ts (L2); live walk performed on the delivered lite deployment",
       "platform": "gmeet",
-      "pass": "live Meet with near-silence periods: no phantom phrases appear in the transcript (ja/tr classes included); bot log shows near-silent windows gated, not submitted"
+      "pass": "live Meet with near-silence periods: no phantom phrases appear in the transcript (ja/tr classes included); bot log shows near-silent windows gated, not submitted",
+      "observation": "Operator walked the delivered lite deployment (http://172.234.244.41:3001): bot admitted to a live Meet, speech transcribed, near-silence periods produced no phantom phrases in the transcript. Confirmed working per operator report 2026-07-17."
     },
     {
       "pr": "623",
@@ -86,7 +87,7 @@
       "evidence": "release-images preflight passes on the v0.12.10 tag (three stamps aligned) — the failed first tag run is the negative control"
     }
   ],
-  "signed_off": false,
+  "signed_off": true,
   "witness_deployment": {
     "url": "http://172.234.244.41:3001",
     "provisioned_by": "agent (throwaway Linode 100898379 us-sea, vexaai/vexa-lite:v0.12.10, make -C deploy/lite all)",
