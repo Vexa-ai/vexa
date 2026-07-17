@@ -418,6 +418,22 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # CI Gap 3 (the #593 analysis): the lite HF-cache bake is BEST-EFFORT —
+      # deploy/lite/Dockerfile.lite warms /opt/hf-cache with `… || echo "skipped"`, so an
+      # HF rate-limit at build time ships a lite image with an EMPTY cache that would stall
+      # on first Zoom/Teams diarization. The image-identity probe checks supervisor conf +
+      # entrypoint, NOT that the model baked. Prove it here: load the model OFFLINE from the
+      # published image (--network none, VEXA_HF_OFFLINE=1 → allowRemoteModels=false) and go
+      # red if it is missing. warm-hf-cache.mjs + its @huggingface/transformers dep both ship
+      # in the lite image at /app (Dockerfile.lite copies /build/core + /build/node_modules).
+      - name: Offline pyannote bake VERIFY (the baked HF cache must be non-empty)
+        run: |
+          docker pull "vexaai/vexa-lite:$VERSION"
+          docker run --rm --network none --entrypoint "" \
+            -e VEXA_HF_OFFLINE=1 -e VEXA_HF_CACHE=/opt/hf-cache \
+            "vexaai/vexa-lite:$VERSION" \
+            node /app/core/meetings/services/bot/warm-hf-cache.mjs \
+          || { echo "::error title=offline-bake::vexaai/vexa-lite:$VERSION shipped with an EMPTY or broken /opt/hf-cache — the pyannote-segmentation-3.0 model did not bake (the lite warm degrades gracefully on HF rate-limit). This image would stall on the first Zoom/Teams diarization. Re-run the lite build with HuggingFace reachable."; exit 1; }
       - name: Point lite at the published image
         run: |
           printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env

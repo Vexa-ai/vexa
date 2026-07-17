@@ -135,6 +135,11 @@ COPY --from=builder /build/core/meetings/services/bot/dist/browser-utils.global.
 # so the Zoom/Teams diarizer loads the model from disk with NO network at runtime.
 COPY --from=builder /opt/hf-cache /opt/hf-cache
 ENV VEXA_HF_CACHE=/opt/hf-cache
+# License hygiene: the baked weights are onnx-community/pyannote-segmentation-3.0
+# (MIT). MIT requires the copyright + permission notice travel with the software,
+# so ship it next to the cache. Recorded in repo THIRD_PARTY_LICENSES.md + the
+# per-release SPDX SBOM (scripts/sbom.mjs); model weights sit outside gate:licenses.
+COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache/LICENSE.pyannote-segmentation-3.0
 
 # Entrypoint: bring up Xvfb + PulseAudio (the env the browser/capture/speak path
 # expects), then run the worker. Boot → validate config → launch browser → join.
