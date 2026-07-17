@@ -24,6 +24,9 @@ const receipt = (o) => ({
   witnessed_by: "Test Witness", witnessed_at: "2026-07-17",
   deployment: `lite (image index sha256:${FULL_A} (linux/amd64 image sha256:${FULL_B}))`,
   values: [{ pr: "1", title: "backend value", visibility: "backend", witnessed: "by-proxy", evidence: "scripts/x.test.mjs" }],
+  // D-L4 (#709): the witness walks a DELIVERED deployment — the record is required, so the
+  // all-green fixture carries one; the D-L4 tests below mutate it away.
+  witness_deployment: { url: "http://test:3001", provisioned_by: "agent (test VM)", prevalidated: ["gateway /health 200"] },
   signed_off: true,
   ...o,
 });
@@ -72,6 +75,25 @@ test("GREEN: full 64-hex digests (index + platform image) pass clean", () => {
 test("GREEN: a receipt with no sha256: anywhere (the v0.12.4/v0.12.9 shape) passes untouched", () => {
   const { errs } = validateReceipt(receipt({ deployment: "lite (throwaway Linode VM, LOCAL_STT=1)" }), V);
   assert.deepEqual(errs, []);
+});
+
+// ── D-L4 (#709): the witness walks a DELIVERED deployment — RED without the record ──────────────
+
+const dl4Errs = (r) => validateReceipt(r, V).errs.filter((e) => /witness_deployment/.test(e) && !/truncated/.test(e));
+
+test("RED (D-L4): no witness_deployment at all — the human was handed homework, not a URL", () => {
+  const errs = dl4Errs(receipt({ witness_deployment: undefined }));
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /witness_deployment is missing/);
+  assert.match(errs[0], /never a setup recipe/);
+});
+
+test("RED (D-L4): empty url / provisioned_by / prevalidated each flag by name", () => {
+  const errs = dl4Errs(receipt({ witness_deployment: { url: "", provisioned_by: "", prevalidated: [] } }));
+  assert.equal(errs.length, 3);
+  assert.match(errs[0], /witness_deployment\.url is empty/);
+  assert.match(errs[1], /witness_deployment\.provisioned_by is empty/);
+  assert.match(errs[2], /witness_deployment\.prevalidated is empty/);
 });
 
 // ── CLI: exit codes against the COMMITTED v0.12.10 receipt (temp-dir spawn, no network) ─────────
