@@ -308,9 +308,12 @@ asked to admit a bot and handed a dead tunnel, a stale session, or a cold-start 
 oracle spent on the agent's un-run homework. · *Source:* the human is the scarce oracle (D9); the
 [two choke points](#the-two-choke-points) already name the two moments — D-L4 adds the rehearsal
 obligation. · *Evidence:* ~8 owner round-trips in v0.12.9 on dead tunnels, stale browser sessions,
-and a cold whisper model — a demo path the agent had not rehearsed. · *Gate:* #690 (the
-agent-runnable probe *is* the rehearsal) + [choke point 2](#the-two-choke-points).
-**have** (choke point 2 named) / **[TO BUILD: #690 rehearsal probe]**
+and a cold whisper model — a demo path the agent had not rehearsed. · *Gate:* the witness receipt
+structurally requires the **delivered deployment record** (`witness_deployment: {url,
+provisioned_by, prevalidated[]}` — `release-witness-gate` refuses a receipt without it: the human
+receives a running URL, never a setup recipe) + #690 (the agent-runnable probe *is* the rehearsal)
++ [choke point 2](#the-two-choke-points).
+**have** (receipt-level delivered-deployment gate; choke point 2 named) / **[TO BUILD: #690 rehearsal probe]**
 
 ## 8. Proof — PRs and validation
 

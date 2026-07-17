@@ -52,6 +52,19 @@ export function validateReceipt(r, version) {
   checkDigestFields("deployment", r.deployment, errs);
   checkDigestFields("witness_deployment", r.witness_deployment, errs);
 
+  // D-L4, enforced at the receipt: the human walks a DELIVERED deployment — provisioned,
+  // pre-validated, and instrumented by the agent — never a setup recipe. A receipt with no
+  // delivered-deployment record means the human was handed homework, not a URL.
+  const wd = r.witness_deployment;
+  if (!wd || typeof wd !== "object") {
+    errs.push("witness_deployment is missing — the witness walks a DELIVERED deployment: record {url, provisioned_by, prevalidated[]} (D-L4: the human receives a URL, never a setup recipe)");
+  } else {
+    if (!nonEmpty(wd.url)) errs.push("witness_deployment.url is empty — the UI URL the human actually walked");
+    if (!nonEmpty(wd.provisioned_by)) errs.push("witness_deployment.provisioned_by is empty — who/what stood the deployment up");
+    if (!Array.isArray(wd.prevalidated) || wd.prevalidated.length === 0 || !wd.prevalidated.every(nonEmpty))
+      errs.push("witness_deployment.prevalidated is empty — name the autonomous checks that passed before handover (health, UI, auth, STT)");
+  }
+
   let coverage = null;
   if (!Array.isArray(r.values) || r.values.length === 0) {
     errs.push("values is empty — the receipt must account for every batch PR (regenerate with release-witness-script.mjs)");

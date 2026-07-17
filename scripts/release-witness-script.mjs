@@ -148,6 +148,9 @@ const receipt = {
   // deployment field pins WHICH BYTES were witnessed (#713). The hint below ships in the emitted
   // skeleton so the operator is asked for the full values at fill time.
   deployment: "<compose|lite|helm> (…, image index sha256:<64-hex> (linux/<arch> image sha256:<64-hex>))",
+  // D-L4: the witness walks a DELIVERED deployment — the agent provisions, pre-validates,
+  // and records it here. The gate refuses a receipt without it.
+  witness_deployment: { url: "", provisioned_by: "", prevalidated: [] },
   values,
   signed_off: false,
 };

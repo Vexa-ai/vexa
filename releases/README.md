@@ -31,10 +31,14 @@ Release happens before the witness pass is signed.
    `:vX.Y.Z` images and runs `release-validate` with **`promote: false`** — the L4 legs prove the
    published bytes, but `:v012` does **not** move. The release candidate now exists to be witnessed.
 
-2. **Witness** — on a fresh self-host of the **published** `:vX.Y.Z` images, admit a bot to a real
-   meeting, walk every user-visible batch value once, and record what you saw. **Generate the
-   witness script FROM THE BATCH** — it lists every PR so no value is missed — then resolve each
-   entry and commit to `main`:
+2. **Witness** — the human walks a **DELIVERED deployment** (D-L4): the agent provisions a fresh
+   self-host of the **published** `:vX.Y.Z` images, pre-validates it autonomously (health, UI,
+   auth path, STT readiness), and hands the human a **running UI URL — never a setup recipe**.
+   The delivered deployment is recorded in the receipt (`witness_deployment: {url,
+   provisioned_by, prevalidated[]}`) and the witness gate refuses a receipt without it. The human
+   then admits a bot to a real meeting, walks every user-visible batch value once, and records
+   what they saw. **Generate the witness script FROM THE BATCH** — it lists every PR so no value
+   is missed — then resolve each entry and commit to `main`:
 
    ```bash
    mkdir -p releases/vX.Y.Z
@@ -91,6 +95,8 @@ Release happens before the witness pass is signed.
   "witnessed_by": "who ran the pass",
   "witnessed_at": "YYYY-MM-DD",
   "deployment": "compose | lite | helm",
+  "witness_deployment": { "url": "http://<host>:3000", "provisioned_by": "agent (throwaway VM <id>)",
+    "prevalidated": ["gateway /health 200", "terminal UI 200", "debug login ok", "STT ready"] },
   "values": [
     { "pr": "599", "title": "MS Teams self-evict fix", "visibility": "user-visible",
       "platform": "ms-teams", "witnessed": true,
