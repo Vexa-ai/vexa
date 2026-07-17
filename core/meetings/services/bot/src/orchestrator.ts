@@ -28,6 +28,7 @@ import type {
   Pipeline,
   LifecycleSink,
   ActsSource,
+  AlonenessSource,
   RecordingSink,
   ControlPlaneProbe,
 } from './ports.js';
@@ -37,6 +38,7 @@ export interface OrchestratorDeps {
   join: JoinDriver;
   pipeline: Pipeline;
   acts: ActsSource;
+  aloneness: AlonenessSource;
   /** Optional — recording is gated by invocation.recordingEnabled; the core only closes it. */
   recording?: RecordingSink;
   /** Optional (#530) — the SECONDARY control-plane channel probe (redis), consulted only when
@@ -225,6 +227,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
     const stopRemoval = deps.join.onRemoval(() => signalEnd?.('evicted'));
+    const stopAloneness = deps.aloneness.onAlone(() => signalEnd?.('left_alone'));
     const unsubscribe = deps.acts.subscribe(handle);
     const cap = opts.maxActiveMs && opts.maxActiveMs > 0
       ? setTimeout(() => signalEnd?.('max_bot_time_exceeded'), opts.maxActiveMs)
@@ -235,6 +238,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // ── graceful teardown (best-effort; never masks the completion reason) ──
     if (cap) clearTimeout(cap);
     unsubscribe();
+    stopAloneness();
     stopRemoval();
     await deps.pipeline.stop().catch(() => { /* best-effort */ });
     deps.recording?.close(recordingKey);

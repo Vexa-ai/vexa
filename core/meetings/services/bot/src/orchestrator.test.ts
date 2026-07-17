@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
 import { canTransition, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
-import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, TranscriptSink, PrimaryReachability } from './ports.js';
+import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, AlonenessSource, TranscriptSink, PrimaryReachability } from './ports.js';
 import type { Invocation } from './config.js';
 
 let failed = 0;
@@ -56,6 +56,10 @@ const noopPipeline = (): Pipeline & { started: boolean } => {
 const noopActs = (ref?: (fire: (a: { action: 'leave' }) => void) => void): ActsSource => ({
   subscribe(handler) { ref?.((a) => void handler(a)); return () => { /* */ }; },
 });
+const noopAloneness = (): AlonenessSource => ({ onAlone() { return () => { /* */ }; } });
+const controlledAloneness = (ref: (fire: () => void) => void, onStop?: () => void): AlonenessSource => ({
+  onAlone(callback) { ref(callback); return () => onStop?.(); },
+});
 const mockJoin = (outcome: JoinOutcome, onRemovalRef?: (fire: () => void) => void): JoinDriver => ({
   async join(report) { await report('awaiting_admission'); if (outcome === 'admitted') await report('active'); return outcome; },
   onRemoval(cb) { onRemovalRef?.(cb); return () => { /* */ }; },
@@ -88,7 +92,7 @@ async function main(): Promise<void> {
     const lc = recordingSink();
     const pipe = noopPipeline();
     let fireLeave: (a: { action: 'leave' }) => void = () => {};
-    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: pipe, acts: noopActs((f) => { fireLeave = f; }) });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: pipe, acts: noopActs((f) => { fireLeave = f; }), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => fireLeave({ action: 'leave' }), 5);
     const res = await runP;
@@ -106,7 +110,7 @@ async function main(): Promise<void> {
   // ── leave via the orchestrator.handle entrypoint (the acts adapter / test surface) ──
   {
     const lc = recordingSink();
-    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs() });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => { void o.handle({ action: 'leave' }); }, 5);
     const res = await runP;
@@ -117,7 +121,7 @@ async function main(): Promise<void> {
   {
     const lc = recordingSink();
     const join: JoinDriver = { async join() { throw new Error('navigation failed'); }, onRemoval() { return () => {}; }, async leave() {}, async withdraw() {} };
-    const res = await createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs() }).run();
+    const res = await createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
     check('join-error: failed / exit 1', res.status === 'failed' && res.exitCode === 1);
     check('join-error: failure_stage=joining', last(lc.events).failure_stage === 'joining');
     check('join-error: completion_reason=join_failure', last(lc.events).completion_reason === 'join_failure');
@@ -128,7 +132,7 @@ async function main(): Promise<void> {
   // ── admission rejected → failed(awaiting_admission/awaiting_admission_rejected) ──
   {
     const lc = recordingSink();
-    const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('rejected'), pipeline: noopPipeline(), acts: noopActs() }).run();
+    const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('rejected'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
     check('rejected: failed', res.status === 'failed');
     check('rejected: failure_stage=awaiting_admission', last(lc.events).failure_stage === 'awaiting_admission');
     check('rejected: completion_reason=awaiting_admission_rejected', last(lc.events).completion_reason === 'awaiting_admission_rejected');
@@ -139,7 +143,7 @@ async function main(): Promise<void> {
   // ── admission timeout → failed(awaiting_admission_timeout) ──
   {
     const lc = recordingSink();
-    const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('timeout'), pipeline: noopPipeline(), acts: noopActs() }).run();
+    const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('timeout'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
     check('timeout: completion_reason=awaiting_admission_timeout', last(lc.events).completion_reason === 'awaiting_admission_timeout');
   }
 
@@ -147,7 +151,7 @@ async function main(): Promise<void> {
   {
     const lc = recordingSink();
     const pipe: Pipeline = { async start() { throw new Error('capture init failed'); }, async stop() {} };
-    const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: pipe, acts: noopActs() }).run();
+    const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: pipe, acts: noopActs(), aloneness: noopAloneness() }).run();
     check('pipeline-fail: failed', res.status === 'failed' && res.exitCode === 1);
     check('pipeline-fail: failure_stage=active', last(lc.events).failure_stage === 'active');
     check('pipeline-fail: reached active first', seq(lc.events).includes('active'));
@@ -159,7 +163,7 @@ async function main(): Promise<void> {
     const lc = recordingSink();
     let fireRemoval: () => void = () => {};
     const join = mockJoin('admitted', (fire) => { fireRemoval = fire; });
-    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs() });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => fireRemoval(), 5);
     const res = await runP;
@@ -170,9 +174,31 @@ async function main(): Promise<void> {
   // ── hard time cap → completed(max_bot_time_exceeded) ──
   {
     const lc = recordingSink();
-    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs() });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
     const res = await o.run({ maxActiveMs: 5 });
     check('time-cap: completed(max_bot_time_exceeded)', res.status === 'completed' && last(lc.events).completion_reason === 'max_bot_time_exceeded');
+  }
+
+  // ── silence verdict while active → one schema-valid completed(left_alone) ──
+  {
+    const lc = recordingSink();
+    let fireAlone: () => void = () => {};
+    let stopped = 0;
+    let fireRemoval: () => void = () => {};
+    const join = mockJoin('admitted', (fire) => { fireRemoval = fire; });
+    const aloneness = controlledAloneness((fire) => { fireAlone = fire; }, () => stopped++);
+    const o = createOrchestrator(inv(), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness,
+    });
+    const runP = o.run();
+    setTimeout(() => { fireAlone(); fireAlone(); fireRemoval(); }, 5);
+    const res = await runP;
+    const terminals = lc.events.filter((event) => event.status === 'completed' || event.status === 'failed');
+    check('aloneness: completed(left_alone)',
+      res.status === 'completed' && res.completionReason === 'left_alone' && last(lc.events).completion_reason === 'left_alone');
+    check('aloneness: every lifecycle event conforms', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+    check('aloneness: double verdict and removal race emit one terminal', terminals.length === 1, JSON.stringify(terminals));
+    check('aloneness: teardown stops the source', stopped === 1, `stops=${stopped}`);
   }
 
   // ── a fake transcript.v1 segment routes through the pipeline → TranscriptSink ──
@@ -186,7 +212,7 @@ async function main(): Promise<void> {
     const pipe: Pipeline = { async start() { await sink.publish(seg); }, async stop() {} };
     const lc = recordingSink();
     let fireLeave: (a: { action: 'leave' }) => void = () => {};
-    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: pipe, acts: noopActs((f) => { fireLeave = f; }) });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: pipe, acts: noopActs((f) => { fireLeave = f; }), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => fireLeave({ action: 'leave' }), 5);
     await runP;
@@ -211,7 +237,7 @@ async function main(): Promise<void> {
       onRemoval() { return () => {}; }, async leave() { left++; }, async withdraw() {},
     };
     const pipe: Pipeline = { async start() { throw new Error('capture init failed'); }, async stop() {} };
-    const res = await createOrchestrator(inv(), { lifecycle: lc, join, pipeline: pipe, acts: noopActs() }).run();
+    const res = await createOrchestrator(inv(), { lifecycle: lc, join, pipeline: pipe, acts: noopActs(), aloneness: noopAloneness() }).run();
     check('pipeline-fail: bot LEFT the meeting (no ghost participant)', left === 1);
     check('pipeline-fail: still failed / exit 1', res.status === 'failed' && res.exitCode === 1);
   }
@@ -219,7 +245,7 @@ async function main(): Promise<void> {
   // ── REGRESSION: stop() (the SIGTERM seam) ends the active phase → completed(stopped) ──
   {
     const lc = recordingSink();
-    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs() });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => o.stop(), 5);
     const res = await runP;
@@ -238,7 +264,7 @@ async function main(): Promise<void> {
       async join(report) { void report('awaiting_admission'); void report('active'); return 'admitted'; },
       onRemoval() { return () => {}; }, async leave() {}, async withdraw() {},
     };
-    const o = createOrchestrator(inv(), { lifecycle: slowLc, join, pipeline: noopPipeline(), acts: noopActs() });
+    const o = createOrchestrator(inv(), { lifecycle: slowLc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => o.stop(), 30);
     await runP;
@@ -254,7 +280,7 @@ async function main(): Promise<void> {
   {
     const lc = recordingSink();
     const { driver, calls } = lobbyBlockingJoin();
-    const o = createOrchestrator(inv(), { lifecycle: lc, join: driver, pipeline: noopPipeline(), acts: noopActs() });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: driver, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => o.stop(), 5);   // stop WHILE blocked in the waiting room
     const res = await runP;
@@ -275,7 +301,7 @@ async function main(): Promise<void> {
       async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
       onRemoval() { return () => {}; }, async leave() {}, async withdraw() { withdrew++; },
     };
-    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs() });
+    const o = createOrchestrator(inv(), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => o.stop(), 5);
     const res = await runP;
@@ -309,7 +335,7 @@ async function main(): Promise<void> {
       onFault: (stage) => faults.push(stage),
       retry: { attempts: 1, delayMs: 0 },
     });
-    const o = createOrchestrator(inv({ platform: 'teams' }), { lifecycle: lc, join, pipeline, acts: noopActs((f) => { fireLeave = f; }) });
+    const o = createOrchestrator(inv({ platform: 'teams' }), { lifecycle: lc, join, pipeline, acts: noopActs((f) => { fireLeave = f; }), aloneness: noopAloneness() });
     const runP = o.run();
     setTimeout(() => fireLeave({ action: 'leave' }), 10);
     const res = await runP;

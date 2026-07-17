@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodeAudioFrame, decodeAudioFrame } from '@vexa/capture-codec';
-import { makeTelemetryTap, pcmToBase64, rmsOf } from './capture-bridge.js';
+import { makeRemoteAudioEnergyTap, makeTelemetryTap, pcmToBase64, rmsOf } from './capture-bridge.js';
 import type { CapturedFrame, TelemetrySink } from './ports.js';
 
 let failed = 0;
@@ -121,6 +121,22 @@ function main(): void {
     unset(0, pcm(8, 9), 1, 'Alice');
     check('set sink fires; unset sink never reaches captureFrame',
       calledWhenSet === 1 && calledWhenUnset === 0, `set=${calledWhenSet} unset=${calledWhenUnset}`);
+  }
+
+  // ── 4) the same REMOTE capture callbacks feed RMS energy to aloneness ──
+  {
+    const energies: number[] = [];
+    const tap = makeRemoteAudioEnergyTap({
+      ready() { /* readiness is driven by page capture start */ },
+      observeRemoteEnergy(energy) { energies.push(energy); },
+      unavailable() { /* teardown is driven by the capture bridge */ },
+      snapshot() { return { available: true, lastRemoteAudioAt: 0 }; },
+    });
+    const frame = pcm(8, 7);
+    tap(frame);
+    check('remote-audio activity tap receives the captured frame RMS',
+      energies.length === 1 && Math.abs(energies[0] - rmsOf(frame)) < 1e-9,
+      JSON.stringify(energies));
   }
 
   if (failed) { console.error(`\n❌ telemetry (O-TEL-1): ${failed} check(s) FAILED.`); process.exit(1); }
