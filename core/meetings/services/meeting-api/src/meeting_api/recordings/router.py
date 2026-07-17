@@ -234,6 +234,36 @@ def build_router(
             "duration_seconds": (mf or {}).get("duration_seconds"),
         })
 
+    # 0.10 api.v1 compat: the shipped 0.10 dashboard's player GETs `.../media/{id}/download`
+    # expecting a JSON {url, download_url, filename} and sets <audio src> to it (it handles a
+    # RELATIVE url by proxying it via /api/vexa). 0.12 re-keyed playback to byte-streaming at
+    # /raw and has no S3 presign, so return the relative /raw path here — the dashboard proxies
+    # it and streams the bytes (Range-capable). Without this the player does response.json() on
+    # raw bytes, gets an empty src, and hangs at "Preparing audio…".
+    # NOTE (hc8/C3): reachable only because the gateway forwards `/download` VERBATIM to
+    # meeting-api (not rewritten to `/raw`); see the paired gateway change in this rebase.
+    @router.get("/recordings/{recording_id}/media/{media_file_id}/download")
+    async def get_recording_media_download(
+        recording_id: int,
+        media_file_id: int,
+        type: str = "audio",
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        recs = await repo.list_meeting_recordings(user_id)
+        rec = next((r for r in recs if r.get("id") == recording_id), None)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        mf = next(
+            (m for m in rec.get("media_files", []) if str(m.get("id")) == str(media_file_id)),
+            None,
+        )
+        if mf is None:
+            raise HTTPException(status_code=404, detail="No such media file")
+        fmt = mf.get("format", "webm")
+        raw = f"/recordings/{recording_id}/media/{media_file_id}/raw?type={type}"
+        return {"url": raw, "download_url": raw, "filename": f"master.{fmt}"}
+
     @router.get("/recordings/{recording_id}/media/{media_file_id}/raw")
     async def get_recording_media_raw(
         recording_id: int,
