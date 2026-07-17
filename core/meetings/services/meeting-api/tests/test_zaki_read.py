@@ -297,7 +297,7 @@ def test_meeting_item_hides_platforms_outside_the_sealed_contract():
         headers=HEADERS,
     )
 
-    assert unsupported.status_code == 404
+    assert unsupported.status_code == unknown.status_code == 404
     assert unsupported.json() == unknown.json()
 
 

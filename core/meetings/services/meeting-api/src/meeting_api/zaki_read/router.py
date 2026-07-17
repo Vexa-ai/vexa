@@ -312,6 +312,7 @@ async def _item_from_store(
         platform = meeting.get("platform")
         if (
             retention is None
+            or not isinstance(platform, str)
             or platform not in SEALED_MEETING_PLATFORMS
             or _parse_time(ended_at) is None
             or not isinstance(attendees, list)
