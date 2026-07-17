@@ -1,0 +1,1 @@
+- **Webhooks: crash-safe retry drain (#520).** The retry drain now uses a Redis reliable-queue, so failed webhook deliveries survive a storage outage and are still delivered after recovery instead of being lost.
