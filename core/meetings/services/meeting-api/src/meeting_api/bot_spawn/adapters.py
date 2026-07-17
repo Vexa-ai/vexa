@@ -545,8 +545,9 @@ class HttpRuntimeClient:
 def build_production_router(*, database_url: Optional[str] = None, runtime_api_url: Optional[str] = None):
     """Construct the bot-spawn router with real SQLAlchemy + httpx runtime adapters from env."""
     import httpx
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ..db import build_engine
     from .router import build_router
 
     database_url = database_url or os.getenv(
@@ -554,7 +555,7 @@ def build_production_router(*, database_url: Optional[str] = None, runtime_api_u
     )
     runtime_api_url = runtime_api_url or os.getenv("RUNTIME_API_URL", "http://runtime:8090")
 
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     http = httpx.AsyncClient(timeout=30.0)
     return build_router(SqlAlchemyMeetingRepo(session_factory), HttpRuntimeClient(http, runtime_api_url))

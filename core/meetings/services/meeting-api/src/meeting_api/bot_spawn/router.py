@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .env_flags import env_flag
 from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
@@ -28,9 +29,12 @@ def _resolve_recording_enabled(value: Optional[object]) -> bool:
     """Recording default: an explicit request value wins; else the ``RECORDING_ENABLED`` env
     (default ``true``), so a dashboard bot records by default. The request value is type-validated —
     a bool is honored, a string is parsed (``"true"``/``"false"`` etc.), and any other type is a 422
-    (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``)."""
+    (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``).
+
+    The env is read through ``env_flag``, so a set-but-empty ``RECORDING_ENABLED=`` keeps the
+    default instead of resolving False (see env_flags — the v0.12.5 witness bug)."""
     if value is None:
-        return os.getenv("RECORDING_ENABLED", "true").lower() == "true"
+        return env_flag("RECORDING_ENABLED", True)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -45,9 +49,12 @@ def _resolve_recording_enabled(value: Optional[object]) -> bool:
 def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
     """Transcription default: an explicit request value wins; else the ``TRANSCRIBE_ENABLED`` env
     (default ``true``). Type-validated like ``recording_enabled`` (CC3) — a bare ``bool(...)`` turned the
-    JSON string ``"false"`` into ``True``, silently ENABLING transcription a caller asked to disable."""
+    JSON string ``"false"`` into ``True``, silently ENABLING transcription a caller asked to disable.
+
+    The env is read through ``env_flag``: a set-but-empty ``TRANSCRIBE_ENABLED=`` kept the default
+    OFF and shipped capture-only bots to every Lite self-host (the v0.12.5 witness bug)."""
     if value is None:
-        return os.getenv("TRANSCRIBE_ENABLED", "true").lower() == "true"
+        return env_flag("TRANSCRIBE_ENABLED", True)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):

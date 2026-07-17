@@ -70,8 +70,17 @@ usual causes:
 
 ## Bot joins but there's no transcript
 
-The bot is capturing audio, but transcription isn't configured.
+The bot is capturing audio, but transcription isn't configured — or the bot was spawned
+**capture-only**, which looks identical from the outside.
 
+- **First, check whether the bot was spawned capture-only.** `GET /bots` (or `GET /meetings/{id}`)
+  reports the resolved flag: `data.transcribe_enabled: false` means the bot was never asked to
+  transcribe, so no STT request was ever made and no error will appear anywhere. If it is `false`
+  and you did not intend that, an explicit `{"transcribe_enabled": true}` on `POST /bots` overrides
+  the deployment default and confirms the diagnosis in one call.
+- Confirm `TRANSCRIBE_ENABLED` is not set to a false value in your `.env`. An **empty**
+  `TRANSCRIBE_ENABLED=` means `true` (the default) — but a trailing comment on that line does not:
+  `docker run --env-file` keeps the comment as part of the value. Keep comments on their own line.
 - Confirm `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` are set (see
   [Configuration](/configuration#transcription-stt)). Unset → audio is recorded, no text is produced.
 - Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
@@ -117,6 +126,21 @@ The [runtime](/core/runtime) spawns bot and agent containers via the Docker sock
   the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by
   `make all` — confirm it resolves and `IMAGE_TAG` matches what you built.
 
+## Leftover chrome/node processes after a bot ends (Lite)
+
+On **Lite** every bot and agent runs as a child process inside one shared container (the
+[process backend](/core/runtime)). If a meeting ends and you still see stray `chrome`/`node`
+processes, check inside the container:
+
+```bash
+ps -eo pid,ppid,etime,comm   # PPID 1 = orphaned (reparented to init)
+```
+
+As of this release the backend reaps each workload's whole process group when it exits or is
+stopped, so no strays should remain — a descendant that detached into its own process group
+(the debug-view x11vnc/websockify) is the one declared exception. On older Lite images the
+workaround is a container restart.
+
 ## Agent write was rejected
 
 A streamed turn can end with a `rejected` frame carrying `violations`. This is governance, not a bug:
@@ -132,6 +156,18 @@ write is rejected, check that the dispatch's trigger is `message`/`scheduled` (w
 - Port already in use → override the host port (e.g. `API_GATEWAY_HOST_PORT`) in `deploy/compose/.env`.
 - Wipe and restart from clean: `make down` (or `docker compose -p vexa-v012 down -v` to drop the
   postgres + minio volumes too), then `make all`.
+
+## Scaling meeting-api to more than one replica
+
+Running `meetingApi.replicaCount > 1` (the Helm chart default is `2`) is **safe**. Every replica
+starts the same background sweeps, but each sweep's real work is **single-flighted** by a Postgres
+session-level advisory lock (one per loop): the replica that acquires the lock runs the tick, the
+others skip it that interval. So a sweep's real work — notably the `calendar-sync` external ICS
+fetch — runs **once per interval across the cluster, not once per replica**. Sweep intervals
+(`CALENDAR_SYNC_INTERVAL_S`, etc.) are therefore per-cluster, not per-replica. A replica that dies
+mid-tick drops its lock on disconnect, so the next interval is picked up by another replica — no
+leader-election setup required. On a single replica the lock is always free, so behaviour is
+unchanged. Note that `scheduler-tick` is not a production loop and is no longer started.
 
 ## Still stuck?
 

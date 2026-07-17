@@ -188,19 +188,20 @@ def test_04_bot_request_v010_flow(stack):
     print(f"\n[compat/bots] POST /bots (plain 0.10 body) → 201 · meeting {body['id']} live ({m['status']})")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "V010-BREAK: the GET /bots/status response envelope changed — 0.10 returned BotStatusResponse "
-    "{'running_bots': [BotStatus, ...]} (container_id/container_name/normalized_status entries); "
-    "0.12 returns {'running': [meeting rows], 'count': N}."))
 def test_05_bots_status_v010_envelope(stack):
-    """0.10 `GET /bots/status` → `BotStatusResponse = {"running_bots": [...]}` (schemas.py:1238),
-    each entry carrying container/platform/native_meeting_id fields."""
+    """0.10 `GET /bots/status` → `BotStatusResponse = {"running_bots": [...]}` (schemas.py:1238).
+    RESTORED in 0.12.7 (#579): `running_bots` is served again as a back-compat alias alongside
+    the 0.12 `running`/`count` fields, so a 0.10 client reads its field and a 0.12 client keeps
+    its own — both envelopes on one response."""
     code, body = http("GET", f"{stack.gateway}/bots/status", headers={"x-api-key": S["api_key"]})
     assert code == 200, f"GET /bots/status → {code} {body}"
     assert isinstance(body, dict) and "running_bots" in body, (
-        f"V010-BREAK: bots/status response envelope changed — 0.10 clients read "
-        f"body['running_bots'] (BotStatusResponse); 0.12 returns {sorted(body)} "
-        f"(running+count). got: {body}"
+        f"REGRESSION of #579: bots/status lost the restored 0.10 'running_bots' alias — "
+        f"got keys {sorted(body) if isinstance(body, dict) else body}"
+    )
+    # the 0.12 envelope must ride along untouched (the alias is additive)
+    assert "running" in body and "count" in body, (
+        f"the 0.12 'running'/'count' fields must coexist with the alias; got {sorted(body)}"
     )
 
 

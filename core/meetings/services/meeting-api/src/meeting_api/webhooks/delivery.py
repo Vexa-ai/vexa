@@ -44,6 +44,12 @@ def build_envelope(event_type: str, data: Dict[str, Any], event_id: Optional[str
 
     `{event_id, event_type, api_version, created_at, data}` — the only shape delivered,
     system or per-client.
+
+    #519: ``event_id`` is the STABLE identity of a logical event (the receiver's idempotency key),
+    NOT a per-emission nonce. Callers MUST pass a deterministic ``event_id`` derived from what makes
+    the event unique (see ``lifecycle/webhook.derive_event_id``) so redeliveries dedupe. The
+    ``uuid4`` fallback here is a last resort for a caller that has no stable identity to offer; there
+    is no such production caller in-tree today.
     """
     return {
         "event_id": event_id or f"evt_{uuid4().hex}",

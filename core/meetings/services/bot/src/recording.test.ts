@@ -1,20 +1,25 @@
 /**
- * L3 — recording sink (recording.v1 accumulate → assemble master). OFFLINE, NO disk/HTTP.
+ * L3 — recording sink (recording.v1 PER-CHUNK durable upload). OFFLINE, NO disk (HTTP only to a
+ * localhost capture server for the wire arm).
  *
- * Drives the REAL @vexa/recording assembler through the bot's `createBotRecordingSink` with an
- * injected `onMaster` (so we assert the assembled master WITHOUT a meeting-api receiver), and
- * asserts:
- *   • chunks accumulate per key; the empty is_final chunk assembles + emits the master;
- *   • close(key) is the ROBUST trigger — it assembles even when the trailing is_final chunk
- *     never arrives (the live Stop race that loses the last MediaRecorder chunk);
- *   • the assembled master is the byte-concat / RIFF-merge the recording.v1 codec defines
- *     (webm byte-concat; wav header-stripped PCM merge), with the right key/format/chunk count;
- *   • out-of-order seqs are sorted at assembly.
+ * #491/#412: the 0.12 bot accumulated the whole recording in Node memory and uploaded ONE master at
+ * graceful close — a SIGKILL lost everything. This sink uploads EACH timeslice immediately. This
+ * test is the P22/#224-class regression pin that absence lacked. It asserts:
+ *   • each chunk() uploads IMMEDIATELY (before any close), in seq order, with bytes forwarded;
+ *   • a simulated mid-meeting kill (close never called, no final) leaves every finished part
+ *     ALREADY durable — no all-or-nothing loss (V2/#412);
+ *   • the empty is_final chunk is FORWARDED (the COMPLETED signal), never dropped;
+ *   • close() with no prior final sends EXACTLY ONE empty is_final fallback (the live Stop race),
+ *     and fires at most once; a never-fed session's close is a no-op;
+ *   • over the real RecordingService HTTP wire, session_uid == inv.connectionId on every chunk,
+ *     seq monotone, only the last is_final (the split/404-guard contract).
  * Run: npx tsx src/recording.test.ts
  */
-import { createBotRecordingSink } from './recording.js';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { createBotRecordingSink, type ChunkUploader } from './recording.js';
 import type { Invocation } from './config.js';
-import type { RecordingMaster } from '@vexa/recording';
+import type { RecordingMasterFormat } from '@vexa/recording';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -24,82 +29,144 @@ const check = (name: string, cond: boolean, detail = '') => {
 
 const inv = (over: Partial<Invocation> = {}): Invocation => ({
   platform: 'google_meet', meetingUrl: 'https://meet.google.com/abc-defg-hij', botName: 'Vexa',
-  redisUrl: 'redis://localhost:6379', recordingEnabled: true, ...over,
+  redisUrl: 'redis://localhost:6379', recordingEnabled: true, connectionId: 'conn-xyz', ...over,
 });
 
-/** Build a canonical 44-byte-header WAV chunk wrapping `data` (mirrors the recording codec's
- *  expected per-chunk RIFF shape — fmt: PCM, mono, 16kHz, 16bps). */
-const FMT = Buffer.from([0x01, 0x00, 0x01, 0x00, 0x80, 0x3e, 0x00, 0x00, 0x00, 0x7d, 0x00, 0x00, 0x02, 0x00, 0x10, 0x00]);
-function wavChunk(data: Buffer): Buffer {
-  const h = Buffer.alloc(44);
-  h.write('RIFF', 0, 'ascii'); h.writeUInt32LE(36 + data.length, 4); h.write('WAVE', 8, 'ascii');
-  h.write('fmt ', 12, 'ascii'); h.writeUInt32LE(16, 16); FMT.copy(h, 20);
-  h.write('data', 36, 'ascii'); h.writeUInt32LE(data.length, 40);
-  return Buffer.concat([h, data]);
+/** A record of one delivered chunk (what the injected uploader saw). */
+interface Seen { seq: number; isFinal: boolean; format: string; len: number }
+function fakeUploader(): { seen: Seen[]; upload: ChunkUploader } {
+  const seen: Seen[] = [];
+  const upload: ChunkUploader = (seq, isFinal, format, bytes) => {
+    seen.push({ seq, isFinal, format, len: bytes.length });
+  };
+  return { seen, upload };
 }
+/** Drain the sink's internal upload queue (microtasks) — a macrotask tick runs after all of them. */
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 async function main(): Promise<void> {
-  // ── 1) webm: accumulate chunks, empty is_final assembles the master (byte-concat) ──
+  // ── 1) each timeslice uploads IMMEDIATELY, in seq order, bytes forwarded ─────────────────────
   {
-    const masters: RecordingMaster[] = [];
-    const sink = createBotRecordingSink({ inv: inv(), onMaster: (m) => masters.push(m) });
-    const c0 = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]); // self-describing chunk 0
-    const c1 = Buffer.from([0xa3, 0x01, 0x02]);       // cluster-only
-    sink.chunk('google_meet/m1', 0, false, 'webm', c0);
-    sink.chunk('google_meet/m1', 1, false, 'webm', c1);
-    sink.chunk('google_meet/m1', 2, true, 'webm', new Uint8Array(0)); // empty final = COMPLETED signal
-
-    check('is_final: exactly one master emitted', masters.length === 1, String(masters.length));
-    check('is_final: master keyed by the session key', masters[0]?.key === 'google_meet/m1', masters[0]?.key);
-    check('is_final: master format = webm', masters[0]?.format === 'webm', masters[0]?.format);
-    check('is_final: chunk count = 2 non-empty', masters[0]?.chunks === 2, String(masters[0]?.chunks));
-    check('is_final: webm master == byte-concat(c0,c1)', !!masters[0] && Buffer.from(masters[0].bytes).equals(Buffer.concat([c0, c1])),
-      masters[0] ? Buffer.from(masters[0].bytes).toString('hex') : 'no master');
+    const { seen, upload } = fakeUploader();
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
+    sink.chunk('google_meet/m1', 0, false, 'webm', new Uint8Array([1, 2, 3]));
+    sink.chunk('google_meet/m1', 1, false, 'webm', new Uint8Array([4, 5]));
+    sink.chunk('google_meet/m1', 2, false, 'webm', new Uint8Array([6]));
+    await flush();
+    check('per-chunk: 3 chunks → 3 immediate uploads BEFORE any close', seen.length === 3, String(seen.length));
+    check('per-chunk: none accumulated as a whole-recording master', seen.every((s) => s.len <= 3), JSON.stringify(seen));
+    check('per-chunk: all non-final', seen.every((s) => !s.isFinal), JSON.stringify(seen));
+    check('per-chunk: seq order 0,1,2', seen.map((s) => s.seq).join(',') === '0,1,2', seen.map((s) => s.seq).join(','));
+    check('per-chunk: bytes forwarded verbatim (3,2,1)', seen.map((s) => s.len).join(',') === '3,2,1', seen.map((s) => s.len).join(','));
   }
 
-  // ── 2) close(key) assembles even without an is_final chunk (the robust trigger) ──
+  // ── 2) kill-before-close: no close, no final → the N finished parts are ALREADY durable (#412) ──
   {
-    const masters: RecordingMaster[] = [];
-    const sink = createBotRecordingSink({ inv: inv(), onMaster: (m) => masters.push(m) });
-    const a = Buffer.from([0x11, 0x22, 0x33, 0x44]);
-    const b = Buffer.from([0x55, 0x66]);
-    sink.chunk('google_meet/m2', 0, false, 'wav', wavChunk(a));
-    sink.chunk('google_meet/m2', 1, false, 'wav', wavChunk(b));
-    check('close: nothing assembled before close', masters.length === 0, String(masters.length));
-    sink.close('google_meet/m2');   // host-side close (the WS dropped) — robust assembly trigger
-    check('close: master assembled on close (no is_final needed)', masters.length === 1, String(masters.length));
-    check('close: wav master payload == concat of stripped PCM (a,b)',
-      !!masters[0] && Buffer.from(masters[0].bytes).subarray(44).equals(Buffer.concat([a, b])),
-      masters[0] ? Buffer.from(masters[0].bytes).subarray(44).toString('hex') : 'no master');
-    check('close: wav master chunk count = 2', masters[0]?.chunks === 2, String(masters[0]?.chunks));
+    const { seen, upload } = fakeUploader();
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
+    for (let i = 0; i < 4; i++) sink.chunk('google_meet/m2', i, false, 'webm', new Uint8Array([i]));
+    await flush();
+    // simulate SIGKILL: close() is NEVER called — nothing was buffered waiting for it.
+    check('crash: N=4 parts durable before any close (no all-or-nothing loss)', seen.length === 4, String(seen.length));
+    check('crash: no final signal sent (recording stays in_progress; finalize-on-read still serves it)',
+      seen.every((s) => !s.isFinal), JSON.stringify(seen));
   }
 
-  // ── 3) out-of-order seqs are sorted at assembly ──
+  // ── 3) the empty is_final chunk is FORWARDED (COMPLETED signal), not dropped ─────────────────
   {
-    const masters: RecordingMaster[] = [];
-    const sink = createBotRecordingSink({ inv: inv(), onMaster: (m) => masters.push(m) });
-    const c0 = Buffer.from([0xaa]);
-    const c1 = Buffer.from([0xbb]);
-    const c2 = Buffer.from([0xcc]);
-    sink.chunk('google_meet/m3', 2, false, 'webm', c2);   // arrive out of order
-    sink.chunk('google_meet/m3', 0, false, 'webm', c0);
-    sink.chunk('google_meet/m3', 1, false, 'webm', c1);
-    sink.close('google_meet/m3');
-    check('order: webm master == byte-concat in SEQ order (c0,c1,c2)',
-      !!masters[0] && Buffer.from(masters[0].bytes).equals(Buffer.concat([c0, c1, c2])),
-      masters[0] ? Buffer.from(masters[0].bytes).toString('hex') : 'no master');
+    const { seen, upload } = fakeUploader();
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
+    sink.chunk('google_meet/m3', 0, false, 'webm', new Uint8Array([9, 9]));
+    sink.chunk('google_meet/m3', 1, true, 'webm', new Uint8Array(0)); // empty final = COMPLETED signal
+    await flush();
+    check('final: empty is_final forwarded (not dropped)', seen.length === 2, String(seen.length));
+    const fin = seen[seen.length - 1];
+    check('final: last upload is isFinal=true, 0 bytes', !!fin && fin.isFinal && fin.len === 0, JSON.stringify(fin));
   }
 
-  // ── 4) close on an empty/never-fed session is a no-op (no spurious master) ──
+  // ── 4) close() with no prior final → EXACTLY ONE empty is_final fallback (live Stop race) ────
   {
-    const masters: RecordingMaster[] = [];
-    const sink = createBotRecordingSink({ inv: inv(), onMaster: (m) => masters.push(m) });
+    const { seen, upload } = fakeUploader();
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
+    sink.chunk('google_meet/m4', 0, false, 'webm', new Uint8Array([1]));
+    sink.chunk('google_meet/m4', 1, false, 'webm', new Uint8Array([2]));
+    sink.close('google_meet/m4');   // host-side close (the WS dropped) — synthesize the final signal
+    await flush();
+    check('fallback: 2 data uploads + 1 synthesized final', seen.length === 3, String(seen.length));
+    const fin = seen[2];
+    check('fallback: final is isFinal=true, 0 bytes, seq after the last part (2)',
+      !!fin && fin.isFinal && fin.len === 0 && fin.seq === 2, JSON.stringify(fin));
+    sink.close('google_meet/m4');   // idempotent
+    await flush();
+    check('fallback: fires at most once (second close is a no-op)',
+      seen.filter((s) => s.isFinal).length === 1, String(seen.filter((s) => s.isFinal).length));
+  }
+
+  // ── 5) close() AFTER a real final → no extra fallback (no double final) ──────────────────────
+  {
+    const { seen, upload } = fakeUploader();
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
+    sink.chunk('google_meet/m5', 0, false, 'webm', new Uint8Array([1]));
+    sink.chunk('google_meet/m5', 1, true, 'webm', new Uint8Array(0));
+    sink.close('google_meet/m5');
+    await flush();
+    check('no-double-final: a real final was sent → close adds nothing',
+      seen.filter((s) => s.isFinal).length === 1 && seen.length === 2, JSON.stringify(seen));
+  }
+
+  // ── 6) close() on a never-fed session is a no-op (no phantom recording) ──────────────────────
+  {
+    const { seen, upload } = fakeUploader();
+    const sink = createBotRecordingSink({ inv: inv(), uploadChunk: upload });
     sink.close('google_meet/never');
-    check('empty session: close is a no-op (no master)', masters.length === 0, String(masters.length));
+    await flush();
+    check('empty session: close is a no-op (no upload)', seen.length === 0, String(seen.length));
+  }
+
+  // ── 7) the DEFAULT uploader on the real RecordingService HTTP wire: session_uid == connectionId ──
+  {
+    interface Wire { session_uid?: string; chunk_seq?: number; is_final?: boolean; format?: string; size?: number }
+    const wire: Wire[] = [];
+    const server = http.createServer((req, res) => {
+      const parts: Buffer[] = [];
+      req.on('data', (d: Buffer) => parts.push(d));
+      req.on('end', () => {
+        const text = Buffer.concat(parts).toString('latin1');
+        const m = text.match(/name="metadata"[\s\S]*?\r\n\r\n(\{[\s\S]*?\})\r\n/);
+        let meta: Record<string, unknown> = {};
+        if (m) { try { meta = JSON.parse(m[1]); } catch { /* ignore */ } }
+        wire.push({
+          session_uid: meta.session_uid as string, chunk_seq: meta.chunk_seq as number,
+          is_final: meta.is_final as boolean, format: meta.format as string,
+          size: meta.file_size_bytes as number,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/internal/recordings/upload`;
+
+    const sink = createBotRecordingSink({
+      inv: inv({ connectionId: 'conn-xyz', meeting_id: 42, recordingUploadUrl: url, internalSecret: 's' }),
+    });
+    sink.chunk('google_meet/w', 0, false, 'webm', new Uint8Array([1, 2, 3, 4]));
+    sink.chunk('google_meet/w', 1, false, 'webm', new Uint8Array([5, 6]));
+    sink.chunk('google_meet/w', 2, true, 'webm', new Uint8Array(0));
+    for (let i = 0; i < 100 && wire.length < 3; i++) await new Promise((r) => setTimeout(r, 10));
+    await new Promise<void>((r) => server.close(() => r()));
+
+    check('wire: 3 chunks POSTed to meeting-api', wire.length === 3, String(wire.length));
+    check('wire: session_uid == inv.connectionId on EVERY chunk (never nativeMeetingId/master key)',
+      wire.length === 3 && wire.every((w) => w.session_uid === 'conn-xyz'),
+      JSON.stringify(wire.map((w) => w.session_uid)));
+    check('wire: seq order 0,1,2', wire.map((w) => w.chunk_seq).join(',') === '0,1,2', wire.map((w) => w.chunk_seq).join(','));
+    check('wire: only the LAST chunk is_final', wire.map((w) => w.is_final).join(',') === 'false,false,true',
+      wire.map((w) => w.is_final).join(','));
   }
 
   if (failed) { console.error(`\n❌ recording (L3): ${failed} check(s) FAILED.`); process.exit(1); }
-  console.log('\n✅ recording (L3): recording.v1 chunks accumulate → buildRecordingMaster on is_final OR close; webm byte-concat + wav RIFF-merge, seq-ordered (real assembler · injected onMaster · no disk/HTTP).');
+  console.log('\n✅ recording (L3): each recording.v1 timeslice uploads immediately (seq-ordered, session_uid==connectionId); a mid-meeting kill leaves every finished part durable; the empty is_final signal is forwarded; close() synthesizes the final signal at most once (injected uploader + real RecordingService HTTP wire · no whole-recording buffering).');
 }
 
 void main();

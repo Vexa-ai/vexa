@@ -14,6 +14,7 @@ import json
 from typing import Optional
 
 from gateway.app import _run_multiplex
+from gateway.ports import AuthUnavailable
 from conftest import FakeAuthorizer, FakeRedis
 
 API_KEY = "vxa_test_unit_key"
@@ -93,6 +94,26 @@ async def test_missing_api_key_closes_4401():
     await _run_multiplex(ws, auth, redis)
     assert ws.sent and ws.sent[0]["error"] == "missing_api_key"
     assert ws.close_code == 4401
+
+
+class _UnavailableAuthorizer:
+    """resolve() raises AuthUnavailable — the auth-infra-down shape on the WS connect hop (#495)."""
+    async def resolve(self, api_key):
+        raise AuthUnavailable("admin-api validate unreachable (test)")
+    async def authorize_subscribe(self, api_key, meetings):
+        return {"authorized": [], "errors": ["unavailable"]}
+
+
+async def test_auth_infra_unavailable_closes_4503_not_4401():
+    """#495 regression guard: when the validation hop is DOWN at WS connect, a VALID key must not
+    crash the socket (uncaught raise → 1006/1011) NOR be told it's invalid (4401). It gets a typed
+    auth_unavailable frame + a distinct retryable close code (4503)."""
+    ws = _WS(inbound=[], api_key=API_KEY)
+    redis = FakeRedis()
+    await _run_multiplex(ws, _UnavailableAuthorizer(), redis)
+    assert ws.sent and ws.sent[0]["error"] == "auth_unavailable"
+    assert ws.close_code == 4503
+    assert ws.sent[0]["error"] != "invalid_api_key"
 
 
 async def test_ping_pong():

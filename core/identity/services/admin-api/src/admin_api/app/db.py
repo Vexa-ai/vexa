@@ -13,10 +13,28 @@ _engine = None
 _session_factory: Optional[async_sessionmaker] = None
 
 
-def configure(database_url: str) -> None:
-    """Bind the app to a Postgres (async URL: postgresql+asyncpg://...)."""
+def configure(
+    database_url: str,
+    *,
+    pool_size: Optional[int] = None,
+    max_overflow: Optional[int] = None,
+) -> None:
+    """Bind the app to a Postgres (async URL: postgresql+asyncpg://...).
+
+    ``pool_size`` / ``max_overflow`` steer the async engine's connection pool so an operator can fit
+    a managed-Postgres ``max_connections`` ceiling (the mitigation the 2026-04-21 pool-exhaustion
+    outage required; the ceiling ``deploy/db-budget.json`` audits). ``None`` for either → omit the
+    kwarg and fall back to SQLAlchemy's framework default (pool_size 5 + max_overflow 10 = 15),
+    exactly the pre-#635 behavior. The ``connect_args`` (asyncpg/pgbouncer statement-cache compat)
+    is preserved unconditionally.
+    """
     global _engine, _session_factory
-    _engine = create_async_engine(database_url, connect_args={"statement_cache_size": 0})
+    kwargs = {"connect_args": {"statement_cache_size": 0}}
+    if pool_size is not None:
+        kwargs["pool_size"] = pool_size
+    if max_overflow is not None:
+        kwargs["max_overflow"] = max_overflow
+    _engine = create_async_engine(database_url, **kwargs)
     _session_factory = async_sessionmaker(bind=_engine, class_=AsyncSession, expire_on_commit=False)
 
 

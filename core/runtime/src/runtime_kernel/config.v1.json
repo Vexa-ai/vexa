@@ -90,10 +90,63 @@
    "targets": []
   },
   {
+   "key": "RUNTIME_K8S_TOLERATIONS",
+   "class": "defaulted",
+   "default": "(chart's global.tolerations, JSON — the runtime's own tolerations)",
+   "description": "k8s backend: JSON array of toleration objects stamped onto every SPAWNED Pod's spec so a bare `kubectl run` bot/agent Pod (not a Deployment child) tolerates the same taints the runtime does — else it strands Pending forever on an all-tainted pool (#673). Empty [] ⇒ no tolerations; malformed JSON is fatal at spawn (a silently dropped constraint is the bug)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "RUNTIME_K8S_NODE_SELECTOR",
+   "class": "defaulted",
+   "default": "(chart's global.nodeSelector, JSON — the runtime's own nodeSelector)",
+   "description": "k8s backend: JSON object of node-label selectors stamped onto every SPAWNED Pod's spec so a bare `kubectl run` bot/agent Pod schedules onto the same pool the runtime does. Empty {} ⇒ no selector; malformed JSON is fatal at spawn (#673)",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
    "key": "BROWSER_IMAGE",
    "class": "capability",
    "capability": "bot_spawn",
    "description": "the meeting-bot image the `meeting-bot` profile spawns (vexaai/vexa-bot:v012)"
+  },
+  {
+   "key": "BOT_SPEAKER_MIN_AUDIO_SEC",
+   "class": "defaulted",
+   "default": "(unset — bot default)",
+   "description": "minimum Google Meet speaker audio window before transcription submission; forwarded to spawned bots",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "BOT_SPEAKER_SUBMIT_INTERVAL_SEC",
+   "class": "defaulted",
+   "default": "(unset — bot default)",
+   "description": "Google Meet speaker-stream submission interval; forwarded to spawned bots",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "BOT_SPEAKER_CONFIRM_THRESHOLD",
+   "class": "defaulted",
+   "default": "(unset — bot default)",
+   "description": "consecutive transcription matches required to confirm a Google Meet segment; forwarded to spawned bots",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "BOT_SPEAKER_MAX_BUFFER_SEC",
+   "class": "defaulted",
+   "default": "(unset — bot default)",
+   "description": "maximum Google Meet speaker audio buffer before force flush; forwarded to spawned bots",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "BOT_SPEAKER_IDLE_TIMEOUT_SEC",
+   "class": "defaulted",
+   "default": "(unset — bot default)",
+   "description": "Google Meet speaker idle flush timeout; forwarded to spawned bots",
+   "targets": ["compose", "helm", "lite"]
   },
   {
    "key": "AGENT_IMAGE",

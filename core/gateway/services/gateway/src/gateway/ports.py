@@ -19,6 +19,18 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 
+class AuthUnavailable(Exception):
+    """The authentication infrastructure could not be reached or answered a fault (#495).
+
+    ``resolve`` raises this — as distinct from returning ``None`` — when it CANNOT DETERMINE
+    whether the key is valid: the admin-api validation hop timed out, failed at the transport
+    layer, or answered 5xx. ``None`` means the opposite: admin-api answered and the key is
+    genuinely invalid. The app maps this exception to ``503`` (retry), NEVER to
+    ``401 Invalid API key`` — telling a caller with a valid key that their key is bad, because
+    OUR auth path is slow or down, is the #483/#495 failure this seam exists to prevent.
+    """
+
+
 @runtime_checkable
 class Authorizer(Protocol):
     """Resolve identity + subscribe-authorization for the caller's ``x-api-key``.
@@ -28,7 +40,9 @@ class Authorizer(Protocol):
       * ``resolve(api_key)`` — mirrors ``main._resolve_token`` (admin-api ``/internal/validate``):
         a non-None result is a dict carrying at least ``user_id`` and ``scopes`` (and optionally
         ``max_concurrent``, ``email``, webhook config). A ``None`` return is the fail-closed
-        signal — the REST app rejects with 401.
+        signal for a GENUINELY INVALID key — the REST app rejects with 401. When the validation
+        hop itself is unreachable/faulted, ``resolve`` raises ``AuthUnavailable`` instead (→ 503),
+        so an infra failure is never reported to the caller as a bad key (#495).
 
       * ``authorize_subscribe(api_key, meetings)`` — mirrors the ``/ws`` subscribe hop to
         transcription-collector's ``/ws/authorize-subscribe`` (main.py:2257-2271): returns
