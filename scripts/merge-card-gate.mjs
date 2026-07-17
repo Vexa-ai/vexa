@@ -12,6 +12,13 @@
 //     commit bit — a maintainer reviewing their own work is allowed; the mandatory-review rule is
 //     the quality gate for CONTRIBUTOR PRs), OR a GitHub review APPROVAL from a NON-AUTHOR whose
 //     commit_id == the PR head sha (a new push dismisses a stale approval — re-review required).
+//   • ACCEPTANCE honest — `Closes` asserts the full acceptance table is delivered (#712). Every
+//     issue the PR would auto-close (GraphQL closingIssuesReferences — the exact linkage GitHub
+//     acts on at merge) must have NO undelivered legs in its Acceptance section; otherwise the
+//     card grows a third ❌ row and blocks until the legs ship, are marked delivered with
+//     evidence, or the link is re-filed as `Part of #N` (a plain reference closes nothing, so
+//     the row disappears). Born of the #622/#623 incident: a merge keyword silently dropped a
+//     live acceptance leg written as a plain bullet, not a checkbox — both shapes are parsed.
 //
 // This is a required status check on `main` (added to branch protection alongside `gates`). It
 // runs on pull_request + pull_request_review (PR-entry) and on merge_group (the queue re-check,
@@ -144,7 +151,86 @@ function diffAccepted(pr) {
   return { ok: false };
 }
 
-async function card(num) {
+// The Acceptance SECTION of an issue body: from the first heading matching /acceptance/i to the
+// next heading of the same or higher level (the D10 house shape). Everything outside it — plan
+// checklists, design bullets — is ignored, so an unchecked box elsewhere never trips the row.
+function acceptanceSection(body) {
+  const lines = (body || "").split(/\r?\n/);
+  let start = -1, level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(#{1,6})\s+(.*)/);
+    if (m && /acceptance/i.test(m[2])) { start = i + 1; level = m[1].length; break; }
+  }
+  if (start < 0) return "";
+  let end = lines.length;
+  for (let i = start; i < lines.length; i++) {
+    const m = lines[i].match(/^(#{1,6})\s/);
+    if (m && m[1].length <= level) { end = i; break; }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+// Count the UNDELIVERED legs in an issue body's Acceptance section — both house shapes (#712):
+//
+//   • checkbox shape — the section contains task-list items: every `- [ ]` is an open leg.
+//   • legacy bullet shape (the real #622) — NO task-list items: every top-level list item
+//     WITHOUT a delivered marker (trailing ✅ or `[x]`) is an open leg. A naive `- [ ]` count
+//     scores this shape "0 unchecked" and lets the close through — exactly the #623 incident.
+//
+// Pure over the raw body string so it is unit-testable against fixtures.
+export function openAcceptanceLegs(body) {
+  const section = acceptanceSection(body);
+  if (!section) return 0;
+  if (/^\s*[-*+] \[[ xX]\]/m.test(section)) return (section.match(/^\s*[-*+] \[ \]/gm) || []).length;
+  // Bullet shape: fold indented continuation lines into their item so a wrapped bullet's
+  // trailing marker still counts; prose paragraphs between/after items are not legs.
+  let open = 0, item = null;
+  const close = () => { if (item != null && !/(?:✅|\[x\])\s*$/i.test(item.trim())) open++; item = null; };
+  for (const line of section.split("\n")) {
+    if (/^[-*+]\s+/.test(line)) { close(); item = line; }
+    else if (item != null && /^\s+\S/.test(line)) item += " " + line.trim();
+    else close();
+  }
+  close();
+  return open;
+}
+
+// The ACCEPTANCE row, pure over the PR's closing issues [{number, body}]. Returns null when the
+// PR closes nothing (a `Part of #N` reference is not a closing keyword — the row is absent), else
+// the row: ✅ only when EVERY closing issue's acceptance legs are all delivered.
+export function acceptanceFromIssues(issues) {
+  if (!issues || !issues.length) return null;
+  const red = [];
+  for (const it of issues) {
+    const open = openAcceptanceLegs(it.body);
+    if (open > 0)
+      red.push(`issue #${it.number} has ${open} undelivered acceptance leg(s) — deliver them, mark them delivered with evidence on the issue, or re-link as Part of #${it.number}`);
+  }
+  if (red.length) return { ok: false, why: red.join("; ") };
+  return { ok: true, why: `every acceptance leg delivered on ${issues.map((i) => "#" + i.number).join(", ")}` };
+}
+
+// The PR's closing issues via GraphQL closingIssuesReferences — the same linkage GitHub acts on
+// at merge, so the row inspects exactly what the keyword will do. Injected into card() so the
+// verdict path stays offline-testable (the verdictFromRuns pattern).
+function readClosingIssues(num) {
+  const [owner, name] = REPO.split("/");
+  const query =
+    "query($owner:String!,$name:String!,$num:Int!){repository(owner:$owner,name:$name){pullRequest(number:$num){closingIssuesReferences(first:50){nodes{number body}}}}}";
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const out = execSync(
+        `gh api graphql -f query='${query}' -F owner="${owner}" -F name="${name}" -F num=${num}`,
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+      return JSON.parse(out).data.repository.pullRequest.closingIssuesReferences.nodes || [];
+    } catch (e) { last = e; }
+  }
+  throw last;
+}
+
+async function card(num, { readClosing = readClosingIssues } = {}) {
   const pr = ghj(`repos/${REPO}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
   const labels = (pr.labels || []).map((l) => l.name);
@@ -172,7 +258,10 @@ async function card(num) {
         : `approved by @${d.by} on head`)
     : "no non-author approval on the current head sha (a new push dismisses a stale approval)";
 
-  return { num, ok: valueOk && d.ok, valueOk, valueWhy, diffOk: d.ok, diffWhy };
+  // ACCEPTANCE — what would this merge auto-close, and is every closed issue fully delivered?
+  const acceptance = acceptanceFromIssues(readClosing(num));
+
+  return { num, ok: valueOk && d.ok && (!acceptance || acceptance.ok), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance };
 }
 
 // Render one PR's card as GitHub-flavoured markdown. The leading marker lets the sticky-comment
@@ -181,8 +270,8 @@ function renderCard(c) {
   if (c.skip) return `<!-- merge-card -->\n### 🃏 Merge card — #${c.num}\n\n_Skipped (${c.skip})._`;
   const row = (label, ok, why) => `| **${label}** | ${ok ? "✅" : "❌"} | ${why} |`;
   const verdict = c.ok
-    ? `**Ready to merge** — value and diff both accepted.`
-    : `**Not mergeable yet** — value **and** diff must both be accepted before merge (choke point 1). Fill in what's ❌ above, then this clears automatically.`;
+    ? `**Ready to merge** — every row above is accepted.`
+    : `**Not mergeable yet** — every row above must be accepted before merge (choke point 1). Fill in what's ❌ above, then this clears automatically.`;
   return [
     `<!-- merge-card -->`,
     `### 🃏 Merge card — #${c.num}`,
@@ -191,6 +280,8 @@ function renderCard(c) {
     `|---|---|---|`,
     row("Value", c.valueOk, c.valueWhy),
     row("Diff", c.diffOk, c.diffWhy),
+    // The row exists only when the PR carries a closing reference — `Part of #N` closes nothing.
+    ...(c.acceptance ? [row("Acceptance", c.acceptance.ok, c.acceptance.why)] : []),
     ``,
     verdict,
     ``,
@@ -213,10 +304,10 @@ async function main() {
   }
 
   if (failed) {
-    console.error(`::error ::merge-card — ${failed} PR(s) not mergeable: value AND diff must both be accepted (choke point 1).`);
+    console.error(`::error ::merge-card — ${failed} PR(s) not mergeable: every card row must be accepted (choke point 1).`);
     process.exit(1);
   }
-  console.log(`✓ merge-card — value + diff accepted for: ${nums.map((n) => "#" + n).join(", ")}`);
+  console.log(`✓ merge-card — card accepted for: ${nums.map((n) => "#" + n).join(", ")}`);
 }
 
 if (IS_MAIN) main();
