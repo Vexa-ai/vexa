@@ -49,7 +49,8 @@ one arc, and each arc has a gate.
                     │  4. CLAIM     (D14b)          │  heartbeat lease: 4h, renew or release
                     └───────────────┬───────────────┘
                     ┌───────────────▼───────────────┐
-                    │  5. DELIVER (D-A · D6b · D-A2)│  human + agent in the harnessed loop
+                    │  5. DELIVER (D-A · D6b · D-A2 │  human + agent: debug the hot loop,
+                    │     · D-L the two loops)      │  package only the proven diff
                     └───────────────┬───────────────┘
                                     │  a PR: value bundle + diff
                     ┌───────────────▼───────────────┐
@@ -243,7 +244,75 @@ is a constitution finding that feeds back into `ARCHITECTURE.md`. · *Source:* f
 systemic cause (Toyota); the two books talk to each other. · *Gate:* "Principle check" section on
 fix-requests.
 
-## 7. Proof — PRs and validation
+<a id="the-two-loops"></a>
+
+## 7. The two loops — debug before you package
+
+The DELIVER arc (Loop box 5) runs **two** loops, not one, and confusing them is the most expensive
+mistake we make. v0.12.9 proved the bill: ~6 of ~12 wall-clock hours went to driving fixes through
+the release pipeline to discover whether the *next* layer worked — the pipeline used as a debugger.
+This cluster (`D-L`) makes the split law, gives debugging an exit criterion and a parallel-inventory
+discipline, earns the word "flake", and fixes the human to two moments. Its enforcement arms are
+issues #689, #690, #691; this section is the law they enforce.
+
+**D-L0 — Two loops: debug ≠ deliver.** The release pipeline (PR → gates → tag → build, ~40 min/iter)
+is a *packaging* loop; it must never be used to answer *"does this code work?"*. A hypothesis drops
+to the **hottest loop that carries the real external semantics** — live staging exec, a ConfigMap
+overlay of the runtime env, a spawn probe against a dead URL — where an iteration costs seconds to
+minutes, not a build; ceremony packages *proven* diffs only. · *Source:* the fast inner loop vs. the
+slow outer loop (Humble–Farley); a build is a packaging step, not an experiment. · *Evidence:*
+v0.12.8 was cut after four serially-found helm fixes with no assembled-system probe, and the 5th bug
+was in the new code — PR #684 emitted `containers: [{name}]` in every `kubectl run --overrides`,
+which merges the containers list *by replacement* and wiped the generated image/env/command, so the
+API server rejected every Pod (`spec.containers[0].image: Required value`) and every spawn died in
+~0.3 s, forcing a full re-cut to v0.12.9; the eventual hot loop (ConfigMap overlay + dead-URL spawn
+probe) proved the whole chain in ~10 minutes. · *Gate:* #690 (`make probe` — the standing hot loop)
++ #689 (the pre-tag real-spawn leg, so the packaging loop never *has* to be the debugger).
+**[TO BUILD: #689, #690]**
+
+**D-L1 — Debug exit criterion: a green end-to-end probe of the assembled system on the target
+surface.** You leave debug when the **assembled chain** runs green on the surface that carries the
+bug — never on "N green unit fixes". The last component compiling is not the exit; the whole journey
+running on the real surface is. A unit green claims only its unit (P19/D12): four green helm fixes
+never touched the spawn path that was actually broken. · *Source:* prove at the altitude of the
+claim (P19) applied to the debug loop's exit. · *Gate:* #690 / #689 — the assembled-system probe
+*is* the exit criterion, machine-run. **[TO BUILD: #689, #690]**
+
+**D-L2 — Parallel failure inventory before fixing.** On a suspect surface, run the **full-journey
+probe matrix** (spawn · schedule · boot · join · transcribe · live-view · stop) and sweep **all**
+component logs **once, before touching a fix** — inventory the whole failure set at once, never peel
+one bug at a time. Serial onion-peeling pays the outer-loop tax per layer. · *Source:* see the whole
+line, not one station (Toyota jidoka); log-sweep-before-fix. · *Evidence:* the v0.12.9 helm chain was
+peeled one bug at a time (#656 → #675/#681 → #677/#680 → #676/#679 → #684), ~3h a single 20-min
+full-journey probe + one all-component log sweep would have inventoried at once. · *Gate:* #690 —
+the probe matrix as standing infrastructure. **[TO BUILD: #690]**
+
+**D-L3 — Flake discipline: "flake" is a claim of nondeterminism, and must be earned.** Calling a
+failure a *flake* asserts the code is correct and the run was noise — a claim, not a shrug. One
+unexplained failure buys **exactly one** rerun; an **identical second failure forbids further reruns
+and demands reading the code**. Tool answers (gh CLI state, cached reads, a green that "usually
+passes") are cross-checked against a second source before you act on them. · *Source:* Heisenbug
+discipline; a flaky-test claim is a hypothesis to reproduce or refute, never assume. · *Evidence:*
+the `gate:helm` `printf | grep -q` under `set -euo pipefail` SIGPIPE-raced to exit 141 *exactly on a
+match* — **deterministic** on ubuntu runners once `$RENDER_AUTH` outgrew the pipe buffer; it "failed
+the v0.12.9 preflight twice" and was rerun as a flake, two full builds burned, before the code was
+read (#686). · *Gate:* a durable regression test on the fixed gate (here-strings not pipes,
+`deploy/helm/tests/test_template.sh`, #686) + this rule in the [TAKE protocol](#take-protocol).
+**have** (#686) / **[TO BUILD: rerun-discipline check]**
+
+**D-L4 — Human placement: the human appears exactly twice.** The final **witness pass** and the
+**sign / approve** gates — and nothing else. Everything before is **agent-self-served** — the agent
+drives its own browser session, raw-protocol clients, synthetic and dead-URL meetings, in-bot
+screenshots — and **rehearses the demo path end-to-end minutes before the human walks it**. A human
+asked to admit a bot and handed a dead tunnel, a stale session, or a cold-start model is a scarce
+oracle spent on the agent's un-run homework. · *Source:* the human is the scarce oracle (D9); the
+[two choke points](#the-two-choke-points) already name the two moments — D-L4 adds the rehearsal
+obligation. · *Evidence:* ~8 owner round-trips in v0.12.9 on dead tunnels, stale browser sessions,
+and a cold whisper model — a demo path the agent had not rehearsed. · *Gate:* #690 (the
+agent-runnable probe *is* the rehearsal) + [choke point 2](#the-two-choke-points).
+**have** (choke point 2 named) / **[TO BUILD: #690 rehearsal probe]**
+
+## 8. Proof — PRs and validation
 
 **D8 — Issue = PR, one to one; a PR carries two artifacts — the value bundle and the diff.** The
 bundle answers *"is the value real?"* (D9/D10); the diff answers *"is it correct and safe?"*
@@ -313,7 +382,7 @@ evidence. · *Gate:* prepared-issue template requires the deployments-to-validat
 the attestation names its setup + build provenance; the bundle checker flags rows with no named
 deployment.
 
-## 8. People
+## 9. People
 
 **D13 — Humans author; tools assist. Disclosure welcome, co-authorship never.** What ships carries
 a human name and a human's full responsibility — the sole author is the human, and responsibility
@@ -341,7 +410,7 @@ of the PR's observation bundle, the loop's narration written as it happens. · *
 `claimed` + expiry, watches heartbeats, auto-releases on a miss — all on the issue timeline.
 **[TO BUILD: lease bot]**
 
-### 8b. The tags — the state machine's alphabet
+### 9b. The tags — the state machine's alphabet
 
 Five orthogonal dimensions; a tag is a claim, and the bots keep every claim true. **Exactly one
 `state:`, exactly one `kind:` on prepared work, any number of `area:`, `P0` only when
@@ -360,7 +429,7 @@ maintainer-only on a passing template check; `claimed` only with a live lease; a
 its issue is `value-signed` + security green; `incoming` >3 days alarms; `needs-info` quiet 14
 days → proposed `declined: stale`; every closed-without-merge issue carries one `declined:` reason.
 
-## 9. Release and closure
+## 10. Release and closure
 
 **D15 — Release closes the loop, fast.** A maintainer batches a few value-signed PRs, runs the
 release machinery (image set, gates, VM-validated) and the closing security bundle, ships, and the
@@ -385,9 +454,22 @@ failure state we refuse. · *Source:* explicit disposition; stop starting, start
 · *Gate:* every closed-without-merge issue carries a `declined:` reason; intake/stale bots propose
 declines rather than letting items age. **[TO BUILD: stale proposer]**
 
+**D18 — Every release session ends in a retrospective; abandonment doubly so.** A release session
+— whether it promoted or abandoned its candidate — closes with a retro stage covering three axes:
+**loop efficiency** (where wall-time went; which hypotheses ran the packaging loop instead of the
+hot loop — D-L0), **delivery hardening** (what shipped-or-nearly-shipped that the machine missed,
+and which gate would have caught it), and **architecture quality** (what class of gap the batch
+exposed — not the instances, the class). Findings leave the chat as *prepared issues* before the
+session closes; a reflection that stays in the transcript is a reflection lost. An **abandoned
+candidate is not an embarrassment to skip past — it is the highest-yield retro input we have**
+(v0.12.5–v0.12.8 each carried a lesson no green run could teach). · *Source:* the v0.12.9
+retrospective — six shipped bugs, two release-infra bugs, and the D-L cluster itself all came out
+of one retro stage. · *Gate:* the CTO handover template carries the three retro axes; a release
+event in the planning log links its retro issues. **[TO BUILD: handover template section]**
+
 ---
 
-## 10. How this document changes
+## 11. How this document changes
 
 Like the architecture book: propose the change, record the decision as an ADR under
 [`docs/adr/`](https://github.com/Vexa-ai/vexa/tree/main/docs/adr) (process decisions live beside build decisions), and update the [enforcement map](#enforcement-map). A
@@ -640,8 +722,50 @@ hearing about it is an unclosed loop.
 The floor is a floor: never move it mid-review, never demand past it. Every finding carries
 `file:line` and a concrete failure scenario. A human-red is never bounced back as "try
 again" — fully elaborate the failure on instruments first, then request the next human
-attempt. An invalidation ("row A3 is red") is a first-class, credited result. If TAKE reveals
+attempt. **A red is not a flake until earned** (D-L3): one unexplained failure buys exactly one
+rerun, an identical second demands reading the code — never rerun a deterministic red into green.
+An invalidation ("row A3 is red") is a first-class, credited result. If TAKE reveals
 the issue itself was wrong, saying so publicly IS the deliverable (D11).
+
+## Debugging — the hot loop
+
+[Validation](#validation) is machine-first *proof*; this module is how a provable diff is
+*produced*. It operates the `D-L` cluster ([§7](#the-two-loops)): the packaging pipeline is never the
+debugger, and a hypothesis is tested on the hottest loop that carries the real external semantics.
+
+**Pick the hottest loop that carries the real semantics (`D-L0`).** Rank the loops by iteration cost
+and by how much external truth each carries; drop the hypothesis to the *hottest one that still
+exercises the real failure*:
+
+| Loop | Iter cost | Carries | Use it to |
+|---|---|---|---|
+| unit / golden | seconds | one seam, mocked edges | localize a seam bug you can already name |
+| **assembled hot loop** — live exec · ConfigMap overlay · spawn probe | seconds–minutes | the real chain on the real surface | **answer "does this work?"** — this is the debug loop |
+| release pipeline — PR → gates → tag → build | ~40 min | the packaged artifact | package a *proven* diff — never to discover one |
+
+If you find yourself cutting a build to learn whether the next layer works, you are debugging in the
+wrong loop — stop and build the overlay / probe that carries the same semantics in minutes.
+
+**Inventory in parallel, before the first fix (`D-L2`).** On a suspect surface, run the full-journey
+probe matrix — spawn · schedule · boot · join · transcribe · live-view · stop — and sweep **every**
+component's logs **once**, before touching a fix. Write the whole failure set down, then fix. Serial
+onion-peeling pays the outer-loop tax per layer (v0.12.9's helm chain: ~3h of one-bug-at-a-time a
+single 20-min sweep would have inventoried).
+
+**Leave debug only on the assembled-system green (`D-L1`).** The exit is a green end-to-end probe of
+the *assembled* system on the surface that has the bug — not the last component compiling. A unit
+green claims only its unit (P19/D12).
+
+**Earn the word "flake" (`D-L3`).** A failure is not a flake until you have earned the claim. One
+unexplained failure → **exactly one** rerun; an identical second failure → **stop rerunning, read the
+code**. Cross-check tool answers (CLI state, cached reads) against a second source before acting. A
+deterministic failure rerun as a flake burns builds and hides the bug (v0.12.9's SIGPIPE gate, #686).
+
+**Rehearse before the human (`D-L4`).** The human appears exactly twice — the witness pass and the
+sign/approve gates. Everything else the agent self-serves (own browser session, raw-protocol clients,
+synthetic and dead-URL meetings, in-bot screenshots), and the agent **runs the demo path end-to-end
+minutes before the human walks it** (`make probe` is the rehearsal, #690). A human handed a dead
+tunnel or a cold model is a wasted oracle.
 
 ## Validation
 
@@ -801,7 +925,9 @@ author (us). The maintainer rules on the card in minutes; they never re-derive e
 
 **Choke point 2 — the release witness pass, one per release.** The batch's user-visible value,
 walked once, live, on the release candidate (the witness script; ship bar above). The human
-acts where machines cannot — admission, and seeing the assembled product deliver.
+acts where machines cannot — admission, and seeing the assembled product deliver. The agent
+**rehearses the whole path end-to-end minutes before** — every tunnel, session, and model warm — so
+the human meets a working demo, not the agent's un-run homework (D-L4).
 
 ## Asking the human
 
@@ -893,6 +1019,10 @@ silence is released, never punished · every decline names its reopen condition 
 | D6c docs ride the change; docs declare their release; docs story human-validated | `docs-current` (product-surface PR updates docs/ or declares `docs: none`) · `gate:docs-version` (docs stamp == appVersion) · attestation covers the docs story | **have** (CI: `docs-current-gate` + `gate:docs-version`, [ADR-0032](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0032-docs-currency-gates.md)) / **TO BUILD** (content-accuracy stays human) |
 | D12b deployment named + setup provenance | "deployments to validate" required before `ready`; attestation names setup + build provenance | **have** (templates) / **TO BUILD** (bundle checker flags rows with no named deployment) |
 | D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
+| D-L0/D-L1 debug ≠ deliver + assembled-probe exit criterion | the standing hot loop (`make probe`) + a pre-tag real-spawn leg, so the packaging pipeline is never the debugger | **TO BUILD** (#689 real-spawn leg · #690 `make probe`; [ADR-0033](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0033-the-two-loops-debug-flake-human.md)) |
+| D-L2 parallel failure inventory before fixing | full-journey probe matrix + one all-component log sweep, as standing infrastructure | **TO BUILD** (#690 probe matrix) |
+| D-L3 "flake" is earned | durable regression test on the fixed gate + the one-rerun rule in TAKE | **have** (#686 `deploy/helm/tests/test_template.sh`) / **TO BUILD** (rerun-discipline in the checks bot) |
+| D-L4 human placement — exactly twice + rehearsal | agent-rehearsable probe is the rehearsal; choke point 2 names the witness moment | **have** (choke point 2 named) / **TO BUILD** (#690 agent-rehearsable probe) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
 | D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |
 | D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
