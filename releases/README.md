@@ -10,10 +10,11 @@ required-reviewer approval — a committed file cannot forge a human approval, s
 Publish and promote are **separate acts**; neither the moving tag `:v012` nor a published GitHub
 Release happens before the witness pass is signed.
 
-0. **Version-bump (before you tag)** — advance `appVersion` in
-   `deploy/helm/charts/vexa/Chart.yaml`, advance the matching `docs-reflects:` stamp (and the visible
-   line) in `docs/docs/changelog.mdx` so `gate:docs-version` stays green, and **assemble the changelog
-   fragments** that PRs dropped since the last release (the towncrier pattern —
+0. **Version-bump (before you tag)** — advance **all three version stamps** `release-images`
+   preflight cross-checks: `version` in the root `package.json`, `appVersion` in
+   `deploy/helm/charts/vexa/Chart.yaml`, and the matching `docs-reflects:` stamp (and the visible
+   line) in `docs/docs/changelog.mdx` so `gate:docs-version` stays green. Then **assemble the
+   changelog fragments** that PRs dropped since the last release (the towncrier pattern —
    [`docs/changelog.d/`](../docs/changelog.d/README.md)):
 
    ```bash
