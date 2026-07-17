@@ -260,3 +260,54 @@ def test_membership_index_rejects_bad_internal_secret(client):
     # wrong secret → 403
     bad = client.get(f"/internal/users/{uid}/memberships", headers={"X-Internal-Secret": "nope"})
     assert bad.status_code == 403
+
+
+def test_hosted_billing_user_crud(client):
+    """The hosted billing layer's admin-tier contract (parent api.v1): list users, read a user
+    with tokens (`api_tokens` incl. values), PATCH entitlements with SHALLOW-MERGED `data`."""
+    r = client.post("/admin/users", headers=_admin(),
+                    json={"email": "billing@vexa.ai", "name": "Bill",
+                          "image_url": "https://img.example/x.png"})
+    assert r.status_code == 201, r.text
+    u = r.json()
+    uid = u["id"]
+    assert u["image_url"] == "https://img.example/x.png"
+    assert u["data"] == {}
+
+    # POST /admin/users on an existing email returns the user WITH data (billing's upsert-as-read).
+    client.patch(f"/admin/users/{uid}", headers=_admin(),
+                 json={"data": {"stripe_customer_id": "cus_123"}})
+    r = client.post("/admin/users", headers=_admin(), json={"email": "billing@vexa.ai"})
+    assert r.status_code == 200
+    assert r.json()["data"]["stripe_customer_id"] == "cus_123"
+
+    # PATCH with a partial data blob shallow-merges — existing keys survive.
+    r = client.patch(f"/admin/users/{uid}", headers=_admin(),
+                     json={"max_concurrent_bots": 5,
+                           "data": {"subscription_status": "active"}})
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["max_concurrent_bots"] == 5
+    assert got["data"]["stripe_customer_id"] == "cus_123"      # survived the merge
+    assert got["data"]["subscription_status"] == "active"
+
+    # GET /admin/users/{id} → user + api_tokens (values included on the admin tier).
+    tok = client.post(f"/admin/users/{uid}/tokens?scopes=bot,tx,browser",
+                      headers=_admin()).json()
+    r = client.get(f"/admin/users/{uid}", headers=_admin())
+    assert r.status_code == 200, r.text
+    detail = r.json()
+    assert detail["data"]["subscription_status"] == "active"
+    assert [t["token"] for t in detail["api_tokens"]] == [tok["token"]]
+
+    # GET /admin/users list — paged sweep the billing admin runs.
+    r = client.get("/admin/users?limit=10000", headers=_admin())
+    assert r.status_code == 200
+    assert any(x["email"] == "billing@vexa.ai" for x in r.json())
+
+    # Health-probe contract: unknown id (incl. -1) is EXACTLY a 404.
+    assert client.get("/admin/users/-1", headers=_admin()).status_code == 404
+    # Admin tier enforced on every new route.
+    assert client.get("/admin/users", headers={"X-Admin-API-Key": "wrong"}).status_code == 403
+    assert client.patch(f"/admin/users/{uid}", headers={"X-Admin-API-Key": "wrong"},
+                        json={}).status_code == 403

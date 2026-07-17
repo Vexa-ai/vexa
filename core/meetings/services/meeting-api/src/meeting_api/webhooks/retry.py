@@ -46,6 +46,11 @@ PROCESSING_KEY = "webhook:retry_processing"
 # margin, so a slow-but-live delivery is never reclaimed and double-sent out from under itself.
 DEFAULT_LEASE_SECONDS = 60.0
 
+# SYSTEM post-meeting hooks retry their own queue: their targets are operator-configured
+# (often cluster-internal) and their drain uses a plain (non-IP-pinned) transport — the
+# per-client queue's pinned drain would block them at connect. Same entry shape + schedule.
+SYSTEM_RETRY_QUEUE_KEY = "webhook:system_retry_queue"
+
 # A dead-letter list for envelopes that exhaust the schedule or age out — so a
 # permanently-failed delivery (e.g. a meeting.completed) is observable, not silently dropped.
 DEAD_LETTER_KEY = "webhook:dead_letter"

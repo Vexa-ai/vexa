@@ -75,6 +75,7 @@ async def get_current_user(api_key: str = Security(USER_KEY_HEADER),
 class UserCreate(BaseModel):
     email: str
     name: Optional[str] = None
+    image_url: Optional[str] = None
     max_concurrent_bots: int = 3
 
 
@@ -82,9 +83,24 @@ class UserResponse(BaseModel):
     id: int
     email: str
     name: Optional[str] = None
+    image_url: Optional[str] = None
     max_concurrent_bots: int
+    # Free-form JSONB the billing layer rides on (stripe_customer_id, subscription_*,
+    # webhook_url/secret/events). Exposed on admin-tier responses only — parent api.v1 shape.
+    data: Dict = {}
 
     model_config = {"from_attributes": True}
+
+
+class UserUpdate(BaseModel):
+    """PATCH /admin/users/{id} body — every field optional; `data` SHALLOW-MERGES into the
+    stored JSONB (parent api.v1 semantics). Billing writers send partial data
+    (e.g. {"data": {"stripe_customer_id": ...}}) and rely on existing keys surviving."""
+    email: Optional[str] = None
+    name: Optional[str] = None
+    image_url: Optional[str] = None
+    max_concurrent_bots: Optional[int] = None
+    data: Optional[Dict] = None
 
 
 class TokenResponse(BaseModel):
@@ -107,6 +123,19 @@ class TokenInfo(BaseModel):
     expires_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class TokenDetail(TokenInfo):
+    """A token WITH its secret value — only ever returned on the admin tier
+    (GET /admin/users/{id}), where the hosted billing webapp renders the user's own keys.
+    The user tier keeps the metadata-only TokenInfo."""
+    token: str
+
+
+class UserDetailResponse(UserResponse):
+    """GET /admin/users/{id} — the user plus their tokens (parent api.v1 shape the hosted
+    account page consumes as `api_tokens`)."""
+    api_tokens: List[TokenDetail] = []
 
 
 class WebhookUpdate(BaseModel):
@@ -231,13 +260,65 @@ def create_app() -> FastAPI:
         if existing:
             response.status_code = status.HTTP_200_OK
             return UserResponse.model_validate(existing)
-        u = User(email=user_in.email, name=user_in.name,
+        u = User(email=user_in.email, name=user_in.name, image_url=user_in.image_url,
                  max_concurrent_bots=user_in.max_concurrent_bots)
         db.add(u)
         await db.commit()
         await db.refresh(u)
         response.status_code = status.HTTP_201_CREATED
         return UserResponse.model_validate(u)
+
+    # --- GET /admin/users → paged user listing (api.v1; the hosted billing admin sweeps it). ---
+    @app.get("/admin/users", response_model=List[UserResponse],
+             dependencies=[Depends(verify_admin_token)])
+    async def list_users(skip: int = 0, limit: int = 100,
+                         db: AsyncSession = Depends(get_db)):
+        rows = (await db.execute(
+            select(User).order_by(User.id).offset(max(0, skip)).limit(max(1, min(limit, 10000)))
+        )).scalars().all()
+        return [UserResponse.model_validate(u) for u in rows]
+
+    # --- GET /admin/users/{user_id} → the user + their tokens (api.v1). The hosted account page
+    # renders `api_tokens` from this; token values ARE included here (admin tier only — the webapp
+    # calls server-side and shows the user their own keys). 404 on unknown id (the webapp's
+    # admin-api health probe fetches /admin/users/-1 and expects exactly a 404).
+    @app.get("/admin/users/{user_id}", response_model=UserDetailResponse,
+             dependencies=[Depends(verify_admin_token)])
+    async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
+        user = await db.get(User, user_id)
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        tokens = (await db.execute(
+            select(APIToken).where(APIToken.user_id == user_id).order_by(APIToken.id)
+        )).scalars().all()
+        # Built field-by-field: model_validate(user) would touch the ORM's lazy `api_tokens`
+        # relationship (async lazy-load → MissingGreenlet); the explicit query above is the load.
+        return UserDetailResponse(
+            **UserResponse.model_validate(user).model_dump(),
+            api_tokens=[TokenDetail.model_validate(t) for t in tokens],
+        )
+
+    # --- PATCH /admin/users/{user_id} → the billing layer's entitlement write (api.v1).
+    # `data` SHALLOW-MERGES into the stored JSONB: writers send partials
+    # ({"data": {"stripe_customer_id": ...}}) and existing keys (subscription_*, webhook_*)
+    # must survive. Scalar fields overwrite only when present in the body.
+    @app.patch("/admin/users/{user_id}", response_model=UserResponse,
+               dependencies=[Depends(verify_admin_token)])
+    async def update_user(user_id: int, patch: UserUpdate,
+                          db: AsyncSession = Depends(get_db)):
+        user = await db.get(User, user_id)
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        fields = patch.model_dump(exclude_unset=True)
+        if "data" in fields and fields["data"] is not None:
+            user.data = {**(user.data or {}), **fields.pop("data")}
+        else:
+            fields.pop("data", None)
+        for key, value in fields.items():
+            setattr(user, key, value)
+        await db.commit()
+        await db.refresh(user)
+        return UserResponse.model_validate(user)
 
     # --- GET /admin/users/email/{email} → resolve an existing user by email (api.v1). The dashboard
     # login (send-magic-link → findUserByEmail) calls this to find an existing account before minting a
