@@ -204,7 +204,9 @@ IP → one global bucket shared by all clients (one abuser throttles everyone). 
 | `GUARD_WS_ENABLED` | `false` | Opt-in `/ws` connect guard. In-memory per-process — does **not** share ban/rate state with the Redis-backed HTTP layer, and under `uvicorn --workers N>1` each worker keeps an independent WS ban set. |
 
 <Note>
-With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the WS per-process ceiling above applies to the WS path independently).
+With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the WS per-process ceiling above applies to the WS path independently). The same applies across multiple gateway **replicas** without Redis — each is its own process.
+
+**Safe configurations:** the shipped gateway runs a **single** uvicorn worker, so the default (`GUARD_ENABLE_REDIS=true`, one worker) enforces the limit globally. If you scale to multiple workers **or** replicas, keep `GUARD_ENABLE_REDIS=true` — Redis-backed state is what shares the buckets and bans across processes. `GUARD_ENABLE_REDIS=false` is only safe with a single worker **and** a single replica; if you must run without Redis at higher concurrency, divide `GUARD_RATE_LIMIT_RPM` by the process count to hold the aggregate cap (note this still will not propagate bans).
 </Note>
 
 The guard fails open (`fail_secure=false`): a guard-check bug or a redis outage returns the request to

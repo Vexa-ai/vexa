@@ -77,6 +77,20 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
   didn't happen. The issue is the source of truth; Discord is the speed.
 - **One worktree per session** (`git worktree add ../vexa-<slug> -b <your-branch>`). Never two
   sessions on one tree; never adopt another session's uncommitted files — surface them.
+- **Never fan two parallel agents onto the same hot file — write your own file, or sequence.**
+  Parallel PRs that all append to one file's tail collide on the same last line even when the
+  additions don't interact — the v0.12.9 batch paid 5 manual conflict-resolution cycles to exactly
+  this. The three hot files and their remedy:
+  - **`docs/docs/changelog.mdx`** — do **not** edit it for a per-PR line. Drop a fragment at
+    `docs/changelog.d/<pr>-<slug>.md` (one file per PR → zero collisions; the release collector
+    folds them in, `docs-reflects` stamp intact). See
+    [`docs/changelog.d/README.md`](docs/changelog.d/README.md). That fragment is your `docs-current` touch.
+  - **`deploy/helm/tests/test_template.sh`** and **`docs/docs/deployment-kubernetes.mdx`** — no
+    fragment mechanism, and **not** `merge=union`-safe (the helm test's `need <count>` assertions are
+    *edited* when a resource count changes, not appended; the k8s page is prose). If two claimed
+    issues both touch one of these, **flag it on the issues and sequence the PRs** (land one, rebase
+    the other) rather than racing them into a conflict. This is the same "anything decided lands back
+    on the issue" rule applied before the collision.
 - **Read the chart first.** [`docs/views/architecture.dsl`](docs/views/architecture.dsl)
   (~1.4k tokens) is the generated whole-graph index: every node, edge, carrier, owner. For a
   slice: `pnpm arch:viz cluster:<domain>`. If your change adds/moves a module or alters a
