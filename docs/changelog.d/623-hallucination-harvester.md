@@ -1,0 +1,1 @@
+- **Google Meet: empirical hallucination harvester (#617 follow-up).** A single script that harvests hallucination phrase-lists empirically across every Whisper language — groundwork for the broader silence-hallucination work (#622).
