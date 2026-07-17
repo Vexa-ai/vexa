@@ -176,10 +176,14 @@ class WebhookSink:
             return DeliveryResult(status="suppressed")
 
         # 2. SSRF guard — reject private/internal targets before any HTTP.
-        try:
-            validate_webhook_url(url, resolver=self._resolver)
-        except SSRFError as e:
-            return DeliveryResult(status="blocked", error=str(e))
+        # System-scope targets are OPERATOR config (env, e.g. the hosted platform's in-cluster
+        # billing hook), not user input — cluster-internal URLs are the point there, so the
+        # guard (which stops user-supplied webhook_url reaching internal networks) is skipped.
+        if scope != "system":
+            try:
+                validate_webhook_url(url, resolver=self._resolver)
+            except SSRFError as e:
+                return DeliveryResult(status="blocked", error=str(e))
 
         payload_bytes = json.dumps(envelope).encode()
         ts = str(int(time.time()))

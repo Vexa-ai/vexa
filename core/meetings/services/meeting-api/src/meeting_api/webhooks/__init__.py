@@ -31,6 +31,7 @@ from .retry import (
     BACKOFF_SCHEDULE,
     MAX_AGE_SECONDS,
     RETRY_QUEUE_KEY,
+    SYSTEM_RETRY_QUEUE_KEY,
     RetryQueue,
     drain_retry_queue,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "BACKOFF_SCHEDULE",
     "MAX_AGE_SECONDS",
     "RETRY_QUEUE_KEY",
+    "SYSTEM_RETRY_QUEUE_KEY",
     "RetryQueue",
     "drain_retry_queue",
     "SSRFError",
