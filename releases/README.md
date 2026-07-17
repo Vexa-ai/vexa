@@ -68,8 +68,18 @@ Release happens before the witness pass is signed.
    - **`witness-gate`** (guarantee 7) — `releases/vX.Y.Z/witness.json` is present, well-formed, version-matched.
 
    Then the `promote` job pauses on the **`release-promote` Environment** for the owner's approval.
-   On approval, `:v012` moves. `release-published-guard` re-checks both gates on the published
-   GitHub Release and **retracts it to draft** if either is unmet.
+   On approval, `:v012` moves.
+
+4. **Publish the Release** — after `:v012` moves, a human cuts the GitHub Release:
+
+   ```bash
+   gh release create vX.Y.Z --verify-tag --latest --notes-file <notes>
+   ```
+
+   The notes are assembled from the batch's value list and the witness receipt (v0.12.10's Release
+   notes are the shape reference). `release-published-guard` re-checks both gates on the published
+   GitHub Release and **retracts it to draft** if either is unmet. (This documents the current
+   *manual* flow that #582 will mechanize — whichever lands second reconciles this text.)
 
 ## Receipt schema (`witness.json`)
 
