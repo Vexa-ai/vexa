@@ -824,6 +824,12 @@ touches a runtime surface** — the machine contract between every PR and main
 ([the live map](/governance/arch-compliance)). **Merge is the promise to the contributor,
 honored.**
 
+**`Closes` asserts the full acceptance table is delivered; a partial delivery links
+`Part of #N` (a plain reference, not a closing keyword). The merge card enforces it** —
+a `Closes`-target issue with undelivered acceptance legs is a ❌ row on the card
+(choke point 1), so a dropped leg is a decision on record, never a GitHub-keyword
+side-effect.
+
 ## Release — the ship bar
 
 **A release is the promise to users** — a batch event, distinct from merge:
