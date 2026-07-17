@@ -78,6 +78,18 @@ export interface SpeakerStreamManagerConfig {
   idleTimeoutSec?: number;
   /** Sample rate. Default: 16000 */
   sampleRate?: number;
+  /** #617: don't submit a window whose RMS energy is below this to Whisper — near-silent audio
+   *  yields "YouTube-outro" hallucinations. Conservative default (well under speech) so it only
+   *  drops true silence; the phrase-list filter is the language-agnostic backstop. Default: 0.0025 */
+  silenceRmsThreshold?: number;
+}
+
+/** Root-mean-square energy of a PCM window in [-1,1]; the near-silent oracle (#617). */
+export function rms(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
 }
 
 export class SpeakerStreamManager {
@@ -89,6 +101,7 @@ export class SpeakerStreamManager {
   private maxBufferDuration: number;
   private idleTimeoutSec: number;
   private sampleRate: number;
+  private silenceRmsThreshold: number;
   /** Audio carried forward from a flushed short segment — prepended to the next feedAudio call */
   private carryForward: Float32Array[] = [];
   /** Generation at time of last submission — used to detect stale responses after fullReset */
@@ -113,6 +126,7 @@ export class SpeakerStreamManager {
     this.maxBufferDuration = config?.maxBufferDuration ?? 30;
     this.idleTimeoutSec = config?.idleTimeoutSec ?? 15;
     this.sampleRate = config?.sampleRate ?? 16000;
+    this.silenceRmsThreshold = config?.silenceRmsThreshold ?? 0.0025;
   }
 
   addSpeaker(speakerId: string, speakerName: string): void {
@@ -587,7 +601,8 @@ export class SpeakerStreamManager {
   /**
    * Submit only the UNCONFIRMED portion of the buffer to Whisper.
    * Audio before confirmedSamples has already been transcribed and emitted.
-   * If VAD is enabled, checks for speech first — skips Whisper if silence.
+   * Near-silent windows (RMS < silenceRmsThreshold) are NOT submitted (#617) — silence yields
+   * hallucinated boilerplate, so it never reaches Whisper.
    */
   private async submitBuffer(buffer: SpeakerBuffer): Promise<void> {
     const unconfirmed = this.unconfirmedSamples(buffer);
@@ -608,6 +623,18 @@ export class SpeakerStreamManager {
       const toCopy = chunk.length - start;
       combined.set(chunk.subarray(start), dstOffset);
       dstOffset += toCopy;
+    }
+
+    // #617: near-silent guard. faster-whisper emits "YouTube-outro" boilerplate on silence
+    // (ご視聴… / Abone… / "thanks for watching"), which then rides a phantom speaker with
+    // out-of-order timestamps. This method's docstring long PROMISED "skips Whisper if silence" —
+    // it was never implemented. Skip the submission (never set inFlight): the buffer stays, so a
+    // later louder window submits normally, and the idle path (trySubmit) still emits any earlier
+    // lastTranscript and resets. The phrase-list filter remains the language-agnostic backstop.
+    if (rms(combined) < this.silenceRmsThreshold) {
+      log(`[SpeakerStreams] [SILENT-SKIP] "${buffer.speakerName}" ${(unconfirmed / this.sampleRate).toFixed(1)}s window ` +
+          `below RMS ${this.silenceRmsThreshold} — not submitting (no hallucination surface)`);
+      return;
     }
 
     buffer.inFlight = true;

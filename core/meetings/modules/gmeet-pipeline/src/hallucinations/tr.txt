@@ -1,0 +1,10 @@
+# Turkish hallucination phrases — faster-whisper "YouTube-outro" boilerplate emitted on silence.
+# Reported in #613 (Google Meet, hosted transcription) attributed to a phantom "Speaker".
+# One phrase per line; '#' comments ignored; matched case-insensitively after trim (see hallucination-filter.ts).
+Abone olmayı unutmayın
+Abone olmayı unutmayınız
+Beni takip etmeyi unutmayın
+İzlediğiniz için teşekkür ederim
+İzlediğiniz için teşekkürler
+Bir sonraki videoda görüşmek üzere
+Kanalıma abone olmayı unutmayın
