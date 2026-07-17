@@ -76,6 +76,14 @@
    "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback)"
   },
   {
+   "key": "ZAKI_READ_TOKEN_MINUTES",
+   "class": "defaulted",
+   "default": "(unset — the internal Minutes read route rejects every request)",
+   "secret": true,
+   "description": "optional 32–512 character printable service credential for GET /api/zaki/read/v1; leaving it unset keeps WP-M1 activation off",
+   "targets": []
+  },
+  {
    "key": "TRANSCRIPTION_SERVICE_URL",
    "class": "capability",
    "capability": "stt",
