@@ -1,0 +1,1 @@
+- **Google Meet: stop silence hallucinations (#617).** Added ja/tr phrase lists plus a near-silent submit gate, so near-silent audio windows are no longer sent to Whisper — killing the phantom phrases Whisper emits for near-silence.

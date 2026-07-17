@@ -29,5 +29,15 @@ const enPhrases = readFileSync(resolve(here, "hallucinations", "en.txt"), "utf-8
 check(`en.txt loaded (${enPhrases.length} phrases)`, enPhrases.length > 0);
 check(`a known list phrase is filtered ("${enPhrases[0]}")`, isHallucination(enPhrases[0]) === true);
 
+// #617 — the exact ja/tr "YouTube-outro" hallucinations the reporter saw leak through (the lists were
+// en/es/pt/ru only). Each is > 10 chars so no structural rule catches it — only the phrase list does.
+// RED at base (returns false → leaks), GREEN at head.
+check('ja: "ご視聴ありがとうございました" filtered', isHallucination("ご視聴ありがとうございました") === true);
+check('ja: "次の動画でお会いしましょう" filtered', isHallucination("次の動画でお会いしましょう") === true);
+check('tr: "Abone olmayı unutmayın" filtered', isHallucination("Abone olmayı unutmayın") === true);
+check('tr: case/punctuation-insensitive ("abone olmayı unutmayın.")', isHallucination("abone olmayı unutmayın.") === true);
+check("real Spanish speech still kept (no over-filter)",
+  isHallucination("empecemos con el bounded context de facturacion") === false);
+
 if (failed) { console.error(`\n❌ hallucination-filter: ${failed} checks FAILED.`); process.exit(1); }
 console.log(`\n✅ hallucination-filter: all checks pass — phrase-list + short/repetition junk dropped, real speech kept.`);

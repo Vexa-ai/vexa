@@ -899,10 +899,14 @@ function gateDbSchema() {
 // service that constructs a Postgres engine must be in deploy/db-budget.json; Σ(helm replicas ×
 // per-service pool ceiling) + reserved must fit max_connections; and no service's code may set a
 // pool_size/max_overflow HIGHER than its declared ceiling (so the budget can't silently under-count).
+// Both scans below read the COMMITTED tree via `git grep --untracked` — tracked files plus new
+// not-yet-added ones, never gitignored paths. The .venv/site-packages trees gate:python materializes
+// under core/ match both patterns (numpy fixtures set pool_size=; sqlalchemy defines
+// create_async_engine) and must not enter the budget. --untracked keeps a brand-new .py in scope.
 function _dbHoldingServices() {
   let out;
   try {
-    out = execSync("grep -rl --include='*.py' create_async_engine core", { cwd: ROOT }).toString();
+    out = execSync("git grep --untracked -l create_async_engine -- 'core/*.py'", { cwd: ROOT }).toString();
   } catch { return new Set(); }  // grep exit 1 = no matches
   const svcs = new Set();
   for (const path of out.split("\n")) {
@@ -918,7 +922,7 @@ function _explicitPool(service) {
   // the framework default (the "silent default" the issue names). Used to reject an under-stated budget.
   let out = "";
   try {
-    out = execSync(`grep -rhoE --include='*.py' '(pool_size|max_overflow) *= *[0-9]+' core 2>/dev/null | grep -v test || true`, { cwd: ROOT }).toString();
+    out = execSync(`git grep --untracked -hoE '(pool_size|max_overflow) *= *[0-9]+' -- 'core/*.py' 2>/dev/null | grep -v test || true`, { cwd: ROOT }).toString();
   } catch { out = ""; }
   const found = {};
   for (const line of out.split("\n")) {
