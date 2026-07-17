@@ -20,6 +20,7 @@ DEFAULT_INDEX_LIMIT = 50
 ITEM_CONTENT_CAP_BYTES = 256 * 1024
 RESPONSE_CAP_BYTES = 270_336
 ZAKI_NOTETAKER_NAME = "ZAKI Notetaker"
+SEALED_MEETING_PLATFORMS = frozenset({"google_meet", "teams", "zoom", "jitsi"})
 
 
 def _valid_read_token(token: str | None) -> bool:
@@ -308,8 +309,10 @@ async def _item_from_store(
         retention = _retention(data, "transcript", now)
         ended_at = meeting.get("end_time")
         attendees = data.get("attendees", [])
+        platform = meeting.get("platform")
         if (
             retention is None
+            or platform not in SEALED_MEETING_PLATFORMS
             or _parse_time(ended_at) is None
             or not isinstance(attendees, list)
             or len(attendees) > 1000
@@ -317,7 +320,7 @@ async def _item_from_store(
         ):
             return None
         content = {
-            "platform": meeting.get("platform"),
+            "platform": platform,
             "started_at": occurred_at,
             "ended_at": ended_at,
             "attendees": [attendee.strip()[:500] for attendee in attendees],

@@ -86,12 +86,12 @@ def _segments() -> list[dict]:
     ]
 
 
-def _store() -> InMemoryTranscriptStore:
+def _store(*, platform: str = "google_meet") -> InMemoryTranscriptStore:
     store = InMemoryTranscriptStore()
     store.seed_meeting(
         meeting_id=41,
         user_id=USER_ID,
-        platform="google_meet",
+        platform=platform,
         native_meeting_id="private-native-id",
         status="completed",
         start_time="2026-07-16T09:00:00+00:00",
@@ -285,6 +285,22 @@ def test_item_projects_meeting_transcript_and_summary_contract_variants():
     assert "capture_notice" not in summary_item
 
 
+def test_meeting_item_hides_platforms_outside_the_sealed_contract():
+    client = _client(_store(platform="browser_session"))
+
+    unsupported = client.get(
+        f"/api/zaki/read/v1/{USER_ID}/item/meeting:41",
+        headers=HEADERS,
+    )
+    unknown = client.get(
+        f"/api/zaki/read/v1/{USER_ID}/item/meeting:999",
+        headers=HEADERS,
+    )
+
+    assert unsupported.status_code == 404
+    assert unsupported.json() == unknown.json()
+
+
 def test_runtime_responses_validate_against_the_sealed_contract_schema():
     client = _client()
     index = client.get(
@@ -413,6 +429,7 @@ def test_search_filters_before_pagination_and_returns_metadata_only():
 
     assert response.status_code == 200
     body = response.json()
+    _contract_validator("IndexResponse").validate(body)
     assert [item["id"] for item in body["items"]] == ["summary:41"]
     assert body["truncated"] is False
     assert all("content" not in item for item in body["items"])
