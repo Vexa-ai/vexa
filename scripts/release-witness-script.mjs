@@ -144,7 +144,10 @@ const receipt = {
   generated_from: `${prev}...${VERSION}`,
   witnessed_by: "",
   witnessed_at: "",
-  deployment: "",
+  // Digest shape is enforced by the gate: FULL 64-hex sha256 values, no prefixes/ellipses — the
+  // deployment field pins WHICH BYTES were witnessed (#713). The hint below ships in the emitted
+  // skeleton so the operator is asked for the full values at fill time.
+  deployment: "<compose|lite|helm> (…, image index sha256:<64-hex> (linux/<arch> image sha256:<64-hex>))",
   values,
   signed_off: false,
 };

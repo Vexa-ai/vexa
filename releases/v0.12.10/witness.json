@@ -4,7 +4,7 @@
   "generated_from": "v0.12.9...v0.12.10",
   "witnessed_by": "Dmitriy Grankin (@DmitriyG228)",
   "witnessed_at": "2026-07-17",
-  "deployment": "lite (throwaway Linode VM, LOCAL_STT=1, image digest sha256:a3128453…)",
+  "deployment": "lite (throwaway Linode VM, LOCAL_STT=1, image index sha256:a3128453130806eb2a49e6f579124c2d8b999968cdd23893b3918bb72b5889e7 (linux/amd64 image sha256:43c9e3200f75c37681d363eb3d8b2742e32640a76b299bf6820b07ede133057c))",
   "values": [
     {
       "pr": "614",
