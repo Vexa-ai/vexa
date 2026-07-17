@@ -1,0 +1,120 @@
+{
+  "version": "v0.12.4",
+  "candidate": "v0.12.4",
+  "generated_from": "v0.12.3...v0.12.4",
+  "witnessed_by": "Dmitriy Grankin (owner) + CTO-driven demos where noted",
+  "witnessed_at": "2026-07-14",
+  "deployment": "lite (witness box 172.238.52.94, vexaai/vexa-lite:v0.12.4, local CPU whisper)",
+  "values": [
+    {
+      "pr": "594",
+      "title": "lite: default IMAGE_TAG to v012 (stop depending on :latest, which is being deleted)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy default-tag change; the v0.12.4 witness box itself exercises the published-tag install path (make up IMAGE_TAG=v0.12.4 pulled + healthy)"
+    },
+    {
+      "pr": "597",
+      "title": "fix(jitsi): recognize members-only lobby authoritatively + typed admission timeout (#592)",
+      "visibility": "user-visible",
+      "platform": "jitsi",
+      "pass": "no-mod: typed awaiting_admission_timeout not join_failure; mod: enters + transcribes",
+      "witnessed": true,
+      "observation": "owner confirmed: jitsi members-only lobby recognized; with moderator the bot entered and transcribed"
+    },
+    {
+      "pr": "599",
+      "title": "fix(bot): MS Teams bot self-evicts ~120ms after a successful join (#593)",
+      "visibility": "user-visible",
+      "pass": "bot admitted, stays active >2min, never self-evicts with join_failure/pipeline_start_failed",
+      "witnessed": true,
+      "observation": "owner confirmed: bot joined a real Teams meeting, admitted, stayed active >2min, no self-evict"
+    },
+    {
+      "pr": "601",
+      "title": "gateway: isolate auth pool + 503-not-401 on auth-infra failure (#495)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "gateway tests: test_adapters_resolve.py::test_build_wires_separate_pools (distinct pools) + test_proxy.py::test_auth_infra_failure_is_503 (503 not 401); green in gateway+conformance lanes"
+    },
+    {
+      "pr": "602",
+      "title": "meeting-api: transcript reads release the DB before the Redis merge (#508)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "meeting-api test_tx_scope.py::test_no_session_held_across_non_db_await (ast gate, RED@base GREEN@head) + test_transcript_merge.py; meeting-api lane green"
+    },
+    {
+      "pr": "603",
+      "title": "meeting-api + runtime: harden bare Redis clients + standing gate (#528)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "test_no_bare_redis_clients (ast gate) in meeting-api + runtime tests, RED@base(3 findings) GREEN@head, planted-violation controls; chaos self-heal is COMPOSE_CHAOS gated"
+    },
+    {
+      "pr": "604",
+      "title": "webhooks: event_id stable per logical event, not per emission (#519)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "meeting-api test_webhook_identity.py (deterministic id, 4 cases incl uuid4-revert negative control) + re-seal gate:schema/gate:contract-version green"
+    },
+    {
+      "pr": "605",
+      "title": "config-contract: bring admin-api + gateway under gate:config-contract (#526)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "CTO-driven live demo on vexaai/v012-admin-api:v0.12.4: boot WITHOUT INTERNAL_API_SECRET -> ConfigError naming the key, exit 1 (fail-closed); negative control WITH the secret passed preflight and proceeded to DB. Per-service test_config_contract.py + gate:config-contract."
+    },
+    {
+      "pr": "606",
+      "title": "meeting-api: pipeline liveness observable + bounded stream retention (#527)",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "meeting-api test_pipeline_health.py + test_stream_retention.py green (642 passed)"
+    },
+    {
+      "pr": "608",
+      "title": "fix(gmeet): prevent X11 input commands from hanging",
+      "visibility": "user-visible",
+      "platform": "google-meet",
+      "witnessed": "by-proxy",
+      "evidence": "join module googlemeet/humanized humanized.test.ts (X11 timeout) green in node/join lane"
+    },
+    {
+      "pr": "609",
+      "title": "feat(bot): expose Google Meet speaker stream tuning",
+      "visibility": "user-visible",
+      "witnessed": "by-proxy",
+      "evidence": "runtime test_profiles.py::test_meeting_bot_forwards_speaker_stream_tuning + join config test; gate:config-contract"
+    },
+    {
+      "pr": "610",
+      "title": "db-budget: CI gate auditing Σ(replicas × pool ceiling) vs max_connections (#529)",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": "gate:db-budget (pnpm gate:db-budget green: Σ/100 fits) + deploy/db-budget.json"
+    },
+    {
+      "pr": "611",
+      "title": "fix(recordings): per-chunk durable upload + finalize-on-read — confirmed uploads retrievable (#509, #491, #412)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "test_recordings.py (byte-exact single/multi-chunk, crash-no-final serves uploaded parts, #491 empty-final guard) green on #611 head in the meeting-api python lane; validate-lite green on v0.12.4. LIVE kill-mid-meeting (A5) deferred — needs real meeting audio; a fresh image re-run here was blocked only by missing pytest-asyncio in the runtime image (infra, not a code failure)."
+    },
+    {
+      "pr": "612",
+      "title": "seal the DB schema: gate:db-schema freezes tables+columns",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": "gate:db-schema (68 cols/9 tables sealed, schema.seal.json) green in static lane"
+    },
+    {
+      "pr": "620",
+      "title": "release: enforce witness + batch-value acceptance gates (ADR-0029)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "release governance machinery (witness+value gates); CI green; not a runtime value"
+    }
+  ],
+  "signed_off": true
+}

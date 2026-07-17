@@ -95,6 +95,11 @@ console.log("\nTest 4: X11Input command emission (dryRun)");
   assert(argvs.some((a) => a === "xdotool mouseup 1"), "button up via xdotool mouseup");
   assert(argvs.some((a) => a === "xdotool type --clearmodifiers --delay 55 -- VexaBot"), "text entry uses XTEST xdotool type (not the hang-prone clipboard path)");
 
+  // The real runner applies a bounded timeout to every external X11 command.
+  // This is not observable in dryRun, so pin the public option/default seam.
+  const bounded = new X11Input({ dryRun: true, commandTimeoutMs: 750 });
+  assert((bounded as any).commandTimeoutMs === 750, "X11 commands accept an explicit timeout");
+
   // ── 5. End-to-end replay against a fake Page (dryRun) ──────
   console.log("\nTest 5: navigateAndClick replay (fake page, dryRun)");
   const fakePage = makeFakePage({ left: 800, top: 420, width: 120, height: 44, dpr: 1, screenX: 0, screenY: 0 });

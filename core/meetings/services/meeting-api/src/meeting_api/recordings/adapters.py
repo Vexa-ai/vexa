@@ -165,14 +165,15 @@ class SqlAlchemyRecordingRepo:
 
 def build_production_router(*, database_url: Optional[str] = None):
     """Construct the recordings router with real MinIO/S3 + SQLAlchemy adapters from env."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ..db import build_engine
     from .router import build_router
 
     database_url = database_url or os.getenv(
         "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@postgres:5432/vexa"
     )
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     storage = S3Storage(
         bucket=os.getenv("RECORDING_BUCKET", "recordings"),

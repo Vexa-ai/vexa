@@ -78,6 +78,20 @@ curl -X DELETE "$ADMIN/admin/tokens/7" -H "X-Admin-API-Key: $ADMIN_TOKEN"   # �
 
 Set an expiry at mint time with `expires_in=<seconds>`; expired keys are rejected automatically.
 
+### Login-minted tokens (`terminal-login`)
+
+When a user signs in through the terminal (OAuth or email login), the terminal mints an API token
+named **`terminal-login`** to populate the auth cookie. These are **bounded per user**: after each
+sign-in the terminal keeps only the newest `VEXA_TERMINAL_LOGIN_TOKEN_CAP` (default `3`) and revokes
+the older ones. So when you audit a user's tokens —
+
+```bash
+curl "$ADMIN/admin/users/1/tokens" -H "X-Admin-API-Key: $ADMIN_TOKEN"
+```
+
+— the `terminal-login`-named entries are login sessions (capped, not unbounded), while any
+differently-named entries are self-serve keys the user minted and are never pruned by login.
+
 ## What can go wrong
 
 | Status | `detail` | Meaning |

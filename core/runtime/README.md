@@ -41,6 +41,10 @@ uv run pytest -q
   named-volume stores; `:ro` roles enforced); k8s = per-mount `subPath`+`readOnly` volumeMounts; process
   (lite) = per-subject uid + per-shared-workspace gids, 0700 tiers, default-deny sweep. A worker's
   filesystem contains ONLY its dispatch's mounts; no opt-out.
+- ✅ delivered — group-scoped teardown on the process backend: each workload leads its own process
+  group (`start_new_session=True`), and every ending path (observed self-exit, kill, cleanup, stop)
+  signals the whole group — a self-exiting or stopped bot never strands its child tree. Declared
+  limitation: descendants that detach into their own process group are out of the group signal's reach.
 - ✅ delivered — durable `RuntimeEvent` callback delivery (enqueue + retry-until-ack)
 - ✅ delivered — store port (InMemory / Redis) so workloads survive a process restart
 - ✅ delivered — `schedule.v1` Scheduler: `scheduler:jobs` sorted set, `tick()` every 5s, HTTP dispatch, exponential-backoff retry, cron re-arm, idempotency, orphan recovery

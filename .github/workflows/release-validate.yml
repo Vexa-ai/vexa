@@ -206,6 +206,55 @@ jobs:
           done
           echo "✓ all $(wc -w <<<"$ALL_IMAGES") published images match their names"
 
+      # ── image↔profile conformance gate (#675) ──────────────────────────────────────────────────
+      # The runtime spawns each profile's Runnable.command as argv[0] of the workload. Under k8s
+      # (`kubectl run --command`) that REPLACES the image entrypoint, so a command path absent from
+      # the image StartErrors EVERY spawn (v0.12.7: meeting-bot carried /app/vexa-bot/entrypoint.sh,
+      # which the bot image does not have; docker's Cmd-append hid it, k8s detonated it). This gate
+      # reads the REAL profile registry out of the published runtime image and, for every profile,
+      # asserts the resolved command is either empty (⇒ the image ENTRYPOINT boots the workload) or an
+      # in-image executable (`test -x`), against the SAME published images the release ships.
+      - name: Profile commands resolve inside their target images (#675)
+        run: |
+          set -euo pipefail
+          RUNTIME_REF="vexaai/v012-runtime:$VERSION"
+          BOT_REF="vexaai/vexa-bot:$VERSION"
+          WORKER_REF="vexaai/v012-agent-worker:$VERSION"
+          docker pull -q "$RUNTIME_REF"
+          # Emit {profile: command-argv-or-null} from the deployment-shaped registry (post BOT_COMMAND
+          # / AGENT_WORKER_COMMAND override — container backends set neither, so these are the defaults).
+          PROFILES_JSON="$(docker run --rm --entrypoint "" \
+            -e BROWSER_IMAGE="$BOT_REF" -e AGENT_IMAGE="vexaai/v012-agent-api:$VERSION" \
+            "$RUNTIME_REF" python -c 'import json; from runtime_kernel import default_registry; from runtime_kernel.profiles import apply_command_overrides; reg = apply_command_overrides(default_registry()); print(json.dumps({n: reg.resolve(n).command for n in reg.names()}))')"
+          echo "profiles: $PROFILES_JSON"
+          # Profile → the published image its command must resolve inside. Every profile MUST be mapped
+          # here (need-style: a new, unmapped profile fails the gate rather than shipping unchecked).
+          image_for() {
+            case "$1" in
+              meeting-bot) echo "$BOT_REF" ;;
+              agent)       echo "$WORKER_REF" ;;
+              *) echo "::error title=profile-conformance::profile '$1' has no image mapping in this gate — add one (#675)"; exit 1 ;;
+            esac
+          }
+          docker pull -q "$BOT_REF"; docker pull -q "$WORKER_REF"
+          for name in $(echo "$PROFILES_JSON" | jq -r 'keys[]'); do
+            ref="$(image_for "$name")"
+            len="$(echo "$PROFILES_JSON" | jq -r --arg n "$name" '.[$n] | if . == null then 0 else length end')"
+            if [ "$len" = "0" ]; then
+              echo "   ✓ $name: no command → image ENTRYPOINT of $ref is authoritative"
+              continue
+            fi
+            argv0="$(echo "$PROFILES_JSON" | jq -r --arg n "$name" '.[$n][0]')"
+            case "$argv0" in
+              /*) test_cmd="test -x '$argv0'" ;;        # absolute path → must be an in-image executable
+              *)  test_cmd="command -v '$argv0'" ;;     # bare name → must be on PATH in the image
+            esac
+            docker run --rm --entrypoint "" "$ref" sh -c "$test_cmd" >/dev/null \
+              || { echo "::error title=profile-conformance::profile '$name' command argv[0] '$argv0' is not runnable inside $ref — under k8s this StartErrors every spawn (#675)"; exit 1; }
+            echo "   ✓ $name: '$argv0' is runnable inside $ref"
+          done
+          echo "✓ every profile command resolves inside its target image"
+
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # Validation legs — every one pulls the PUBLISHED :$VERSION images (COMPOSE_NO_BUILD=1 /
   # helm --set global.imageTag / lite IMAGE_TAG). Green here means the artifacts work, not
@@ -484,19 +533,29 @@ jobs:
         run: |
           set -euo pipefail
           m() { [ "$1" = "success" ] && echo "✅" || echo "❌ ($1)"; }
+          # Scoped renderer (the honesty valve's neutral rendering): a leg renders ONLY its own
+          # measured scope, never a stronger sentence.  success → "<scope> ✓";  a leg that did not
+          # run at all (skipped/empty) → "— not exercised", never ✓;  any other result → "❌ (state)".
+          s() {
+            case "$1" in
+              success)    printf '%s ✓' "$2" ;;
+              skipped|"") printf '— not exercised' ;;
+              *)          printf '❌ (%s)' "$1" ;;
+            esac
+          }
           {
             echo "## The guarantee — $VERSION ([this run]($RUN_URL))"
             echo
             echo "| # | Guarantee | Proof in this run |"
             echo "|---|---|---|"
             echo "| 1 | Every artifact users pull is the artifact we proved | $(m "$R_RESOLVE") manifests resolve; every leg pulls published bytes only |"
-            echo "| 2 | Works end-to-end on every documented install path | compose $(m "$R_COMPOSE") · FSM $(m "$R_MOCKFSM") · lite $(m "$R_LITE") · helm $(m "$R_HELM") |"
+            echo "| 2 | Every documented install path stands up and is exercised to its leg's scope (NOT full end-to-end — real audio→words is row 3) | compose $(s "$R_COMPOSE" "installs + API/data-plane wiring, synthetic transcript; real bot in row 5") · FSM $(s "$R_MOCKFSM" "meeting-lifecycle FSM via mock bot, no real browser/STT") · lite $(s "$R_LITE" "front doors + ≥2 concurrent real-bot spawn, no meeting/STT assertion") · helm $(s "$R_HELM" "installs + healthy, bot/meeting/STT not exercised") |"
             echo "| 3 | Real audio → correct, speaker-attributed words | ⚠️ NOT machine-proven in this run — witness-pass only until the wav→words leg (#560) ships |"
             echo "| 4 | A fresh machine with nothing on it succeeds | ⚠️ fresh-VM leg runs outside this workflow — attach its evidence to the notes or state unclaimed |"
             echo "| 5 | Nothing that worked before broke | v010-compat $(m "$R_V010") · bot-spawn $(m "$R_BOTSPAWN") |"
             echo "| 6 | Every image contains what its name promises | $(m "$R_IDENTITY") image-identity |"
-            echo "| 7 | A human witnessed the assembled value | ⛔ UNSIGNED — the witness pass happens after this run; NOT publishable until this line carries the signature |"
-            echo "| 8 | Every batch change individually proven before entry | recorded at merge time (pr-value + gates per head; see the batch's merge cards) |"
+            echo "| 7 | A human witnessed the assembled value | ⛔ ENFORCED — witness-gate requires releases/$VERSION/witness.json AND the release-promote Environment requires the owner's approval; promote cannot run without both |"
+            echo "| 8 | Every batch change individually proven before entry | ⛔ ENFORCED — value-gate blocks promote unless every batch PR is pr-value-green on its head or state: value-signed |"
             echo "| 9 | The notes tell the truth about coverage | this table IS the mechanism — generated from run results, gaps stated above |"
             echo "| 10 | Pointers moved honestly | promote runs only on all-green + promote:true; constitutional guards in the job |"
           } | tee guarantees.md >> "$GITHUB_STEP_SUMMARY"
@@ -504,6 +563,52 @@ jobs:
         with:
           name: guarantees-${{ needs.resolve.outputs.version }}
           path: guarantees.md
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
+  # The two enforced release gates (D9/D10/D15 — flipped from TO BUILD). They run ONLY on a
+  # promote request (the tag-push validate run passes promote:false, so they skip and promote
+  # skips with them). On a promote dispatch they are hard `needs` of promote: either reds → the
+  # moving tag does not move. Guarantee lines 8 (value) and 7 (witness), respectively.
+  value-gate:
+    name: value gate (guarantee 8)
+    needs: resolve
+    if: ${{ inputs.promote }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Pin to main: the gate must run TRUSTED code (and read main's receipt), never the
+      # dispatched ref — a promote dispatch from a branch cannot substitute its own gate script.
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Every batch change was individually accepted (pr-value / value-signed)
+        env:
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail   # the script's non-zero exit must fail the job, not be masked by tee
+          node scripts/release-value-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  witness-gate:
+    name: witness gate (guarantee 7)
+    needs: resolve
+    if: ${{ inputs.promote }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Pin to main: the receipt lives on main (committed after the tag), and the gate script
+      # itself must be the trusted one, not the dispatched ref's.
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: A human witnessed the assembled value (receipt present + well-formed + version-matched)
+        env:
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -o pipefail
+          node scripts/release-witness-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   promote:
@@ -517,9 +622,16 @@ jobs:
       - validate-bot-spawn
       - validate-lite
       - validate-helm-k3s
+      - witness-gate      # guarantee line 7 — no signature, no release
+      - value-gate        # guarantee line 8 — every batch change accepted
     # Stable releases only, and only when the caller asked — an rc rehearsal or a standalone
-    # harness-iteration run must never move what users pull.
+    # harness-iteration run must never move what users pull. The two human/value gates above are
+    # hard `needs` (not display): if either reds or is skipped, promote does not run.
     if: needs.resolve.outputs.prerelease == 'false' && inputs.promote
+    # The hard human gate: the `release-promote` Environment requires the owner's manual approval
+    # in the Actions UI (a CI file cannot forge it). The owner approves ONLY after the witness
+    # pass. This is choke point 2 of the delivery constitution, now enforced by the machinery.
+    environment: release-promote
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

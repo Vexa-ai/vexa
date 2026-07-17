@@ -19,12 +19,36 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
 from .ports import RedisBus, TranscriptStore
+
+log = logging.getLogger("meeting_api.collector.adapters")
+
+
+def _decode_claimed(resp) -> "list[tuple[str, dict]]":
+    """Normalize an XAUTOCLAIM response to ``[(message_id, fields), ...]`` (#636).
+
+    redis-py returns ``[cursor, claimed]`` (older) or ``[cursor, claimed, deleted]`` (Redis 7+),
+    where ``claimed`` is ``[(id, {field: value}), ...]``. Ids/keys/values are decoded from bytes so
+    the drained fields match ``read_segments``' shape (``ingest`` reads ``fields['payload']``)."""
+    if not resp or len(resp) < 2:
+        return []
+    claimed = resp[1] or []
+    out: list[tuple[str, dict]] = []
+    for message_id, fields in claimed:
+        mid = message_id.decode() if isinstance(message_id, bytes) else message_id
+        decoded = {
+            (k.decode() if isinstance(k, bytes) else k):
+            (v.decode() if isinstance(v, bytes) else v)
+            for k, v in (fields or {}).items()
+        }
+        out.append((mid, decoded))
+    return out
 
 
 def _sha(s: str) -> str:
@@ -237,12 +261,23 @@ class SqlAlchemyTranscriptStore:
             self._native_cache[mid] = pair
             return pair
 
-    async def _transcript_doc(self, db, meeting) -> dict:
-        """Build the api.v1 ``TranscriptionResponse`` dict for a resolved ``meeting`` ROW — the shared
-        body used by BOTH ``get_transcript`` (native → newest row) and ``get_transcript_by_id`` (exact
-        row). Reads the row's persisted ``transcriptions`` + merges the live redis in-flight hash, all
-        keyed by ``meeting.id`` (the row id) — so a by-id read returns EXACTLY that row's segments/notes,
-        never a sibling row's (the wrong-row hydration fix)."""
+    # #508: the transcript doc is built in TWO phases so the (possibly slow) Redis merge never
+    # happens while a Postgres backend sits idle-in-transaction. Phase 1 (_transcript_pg_part) runs
+    # INSIDE the session: it does all DB work and snapshots the row fields to plain values. The
+    # caller then EXITS the session block — ending the transaction and returning the connection to
+    # the pool — and only THEN calls phase 2 (_merge_live_segments), which awaits Redis with no DB
+    # session in scope. The response is byte-identical to the old single-pass build; only the
+    # transaction scope changes. (See C2's tx-scope gate, which enforces this shape for good.)
+
+    async def _transcript_pg_part(self, db, meeting) -> "tuple[dict, dict, list]":
+        """DB-ONLY half: SELECT the persisted ``transcriptions`` for this row and SNAPSHOT every
+        meeting-row field the response needs into plain values — all while the session is live.
+        Returns ``(snap, seg_by_id, order)``. Nothing here awaits a non-DB backend, so the caller's
+        transaction stays scoped to Postgres statements only (#508).
+
+        The row fields are copied to a plain dict on purpose: after the session closes, touching an
+        expired ORM attribute raises ``MissingGreenlet`` — the same reason ``bot_spawn/adapters.py``
+        snapshots before returning (``:192-194``)."""
         from sqlalchemy import select
 
         from .models import Transcription
@@ -266,12 +301,32 @@ class SqlAlchemyTranscriptStore:
             if sid not in seg_by_id:
                 order.append(sid)
             seg_by_id[sid] = s
+        # Snapshot every field the response body reads, INSIDE the live session (see docstring).
+        snap = {
+            "id": meeting.id,
+            "platform": meeting.platform,
+            "platform_specific_id": meeting.platform_specific_id,
+            "status": meeting.status,
+            "start_time": meeting.start_time,
+            "end_time": meeting.end_time,
+            "created_at": meeting.created_at,
+            "data": data,
+        }
+        return snap, seg_by_id, order
+
+    async def _merge_live_segments(self, pg: "tuple[dict, dict, list]") -> dict:
+        """POST-SESSION half: merge the LIVE Redis in-flight hash, sort, derive absolute times, and
+        assemble the api.v1 ``TranscriptionResponse`` dict. NO database session is open here — this
+        is where the (possibly slow) Redis await happens, so it can never pin a pooled connection or
+        hold a snapshot/transaction open (the #508 fix). Response is byte-identical to the old build."""
+        snap, seg_by_id, order = pg
+        data = snap["data"]
         # Merge the LIVE Redis hash of in-flight segments (``meeting:{id}:segments``) — the source
         # of truth before/until the db-writer flush. The carve had dropped this merge, so a transcript
         # whose segments are still only in Redis (every short/just-finished meeting) read as EMPTY.
         if self._redis is not None:
             try:
-                raw = await self._redis.hgetall(f"meeting:{meeting.id}:segments")
+                raw = await self._redis.hgetall(f"meeting:{snap['id']}:segments")
                 for v in (raw.values() if isinstance(raw, dict) else []):
                     try:
                         seg = json.loads(v.decode() if isinstance(v, (bytes, bytearray)) else v)
@@ -288,15 +343,15 @@ class SqlAlchemyTranscriptStore:
         # The dashboard's renderer SKIPS any segment without absolute_start_time
         # (use-vexa-websocket.ts: `if (!seg.absolute_start_time) continue`). Derive it when a producer
         # didn't supply it, so the historical transcript renders. See `_fill_absolute_times`.
-        _fill_absolute_times(segments, meeting.start_time or meeting.created_at)
+        _fill_absolute_times(segments, snap["start_time"] or snap["created_at"])
         return {
-            "id": meeting.id,
-            "platform": meeting.platform,
-            "native_meeting_id": meeting.platform_specific_id,
+            "id": snap["id"],
+            "platform": snap["platform"],
+            "native_meeting_id": snap["platform_specific_id"],
             "constructed_meeting_url": (data.get("constructed_meeting_url")),
-            "status": meeting.status,
-            "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
-            "end_time": meeting.end_time.isoformat() if meeting.end_time else None,
+            "status": snap["status"],
+            "start_time": snap["start_time"].isoformat() if snap["start_time"] else None,
+            "end_time": snap["end_time"].isoformat() if snap["end_time"] else None,
             "recordings": data.get("recordings", []),
             "notes": data.get("notes"),
             "data": data,
@@ -321,7 +376,9 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
-            return await self._transcript_doc(db, meeting)
+            pg = await self._transcript_pg_part(db, meeting)
+        # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
+        return await self._merge_live_segments(pg)
 
     async def get_transcript_by_id(self, user_id, meeting_id, member_workspaces=None) -> Optional[dict]:
         """Exact-row transcript for ``meeting.id == meeting_id``, authorized by the SAME three-way rule as
@@ -348,13 +405,16 @@ class SqlAlchemyTranscriptStore:
             )
             if not authorized:
                 return None
-            return await self._transcript_doc(db, meeting)
+            pg = await self._transcript_pg_part(db, meeting)
+        # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
+        return await self._merge_live_segments(pg)
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
         from sqlalchemy import cast, func, or_, select
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
+        from .projection import DEFAULT_LIST_LIMIT, project_list_data
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -371,13 +431,29 @@ class SqlAlchemyTranscriptStore:
             if platform:
                 stmt = stmt.where(Meeting.platform == platform)
             stmt = stmt.order_by(Meeting.created_at.desc())
-            if limit:
-                stmt = stmt.limit(limit)
-            if offset:
-                stmt = stmt.offset(offset)
-            rows = (await db.execute(stmt)).scalars().all()
-            return [
-                {
+            if list_view:
+                # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
+                # with a default page size (an explicit `limit` still wins) and over-fetch one row past
+                # the page to compute `has_more` without a second COUNT query.
+                effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
+                if offset:
+                    stmt = stmt.offset(offset)
+                stmt = stmt.limit(effective_limit + 1)
+                rows = (await db.execute(stmt)).scalars().all()
+                has_more = len(rows) > effective_limit
+                rows = rows[:effective_limit]
+            else:
+                # Internal enumeration (get-by-id filter, /bots/status, calendar sync): unchanged —
+                # explicit `limit` only, NO default cap, full `data` retained below.
+                if limit:
+                    stmt = stmt.limit(limit)
+                if offset:
+                    stmt = stmt.offset(offset)
+                rows = (await db.execute(stmt)).scalars().all()
+                has_more = False
+
+            def _row(m):
+                row = {
                     "id": m.id,
                     "user_id": m.user_id,
                     "platform": m.platform,
@@ -388,13 +464,19 @@ class SqlAlchemyTranscriptStore:
                     "bot_container_id": m.bot_container_id,
                     "start_time": m.start_time.isoformat() if m.start_time else None,
                     "end_time": m.end_time.isoformat() if m.end_time else None,
-                    "data": m.data if isinstance(m.data, dict) else {},
                     "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                     "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                    # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
+                    # the 4.6 MB / event-loop-wedge cause) but keeps the light metadata it renders
+                    # (title/docs/flags). Internal callers (get-by-id, /bots/status, calendar sync) get
+                    # full `data`, so the detail view and reconciliation are unchanged.
+                    "data": project_list_data(m.data) if list_view else (m.data if isinstance(m.data, dict) else {}),
                 }
-                for m in rows
-            ]
+                return row
+
+            result = [_row(m) for m in rows]
+            return (result, has_more) if list_view else result
 
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         """Authorize a live-transcript subscribe → the meeting ROW id, or None. TWO branches:
@@ -919,6 +1001,8 @@ class RedisStreamBus:
 
     def __init__(self, client):
         self._client = client
+        self._reclaim_unsupported = False  # #636: log-once latch when the Redis lacks XAUTOCLAIM
+        self._prune_unsupported = False  # #660: log-once latch when the Redis lacks XINFO CONSUMERS
 
     async def read_segments(self, *, group, consumer, stream, count=10):
         try:
@@ -939,6 +1023,82 @@ class RedisStreamBus:
                 }
                 out.append((mid, decoded))
         return out
+
+    async def reclaim_orphans(self, *, group, stream, consumer, min_idle_ms, count=10):
+        """#636: XAUTOCLAIM idle (crashed-replica) entries from the group's PEL into ``consumer``.
+        Bounded (single call, ``count`` cap) — the returned cursor lets the next tick continue.
+
+        XAUTOCLAIM needs **Redis >= 6.2**. On an older server (e.g. Redis 6.0, which the Lite image
+        bundled — the #636 regression the v0.12.5 witness caught) the command is unknown; rather than
+        crash the segment-consumer loop every tick, degrade to a **no-op** (return no reclaimed
+        entries). The normal consume path (XREADGROUP) is unaffected; only cross-replica orphan
+        recovery is unavailable until Redis is upgraded. Logged once."""
+        from redis.exceptions import ResponseError
+
+        try:
+            await self._client.xgroup_create(name=stream, groupname=group, id="0", mkstream=True)
+        except Exception:
+            pass  # BUSYGROUP — group already exists
+        try:
+            resp = await self._client.xautoclaim(
+                name=stream, groupname=group, consumername=consumer,
+                min_idle_time=min_idle_ms, start_id="0-0", count=count,
+            )
+        except ResponseError as e:
+            msg = str(e).lower()
+            if "unknown command" in msg or "xautoclaim" in msg:
+                if not self._reclaim_unsupported:
+                    self._reclaim_unsupported = True
+                    log.warning(
+                        "XAUTOCLAIM unsupported on this Redis (needs >= 6.2) — #636 orphan reclaim "
+                        "disabled; normal segment consumption is unaffected. Upgrade Redis to re-enable."
+                    )
+                return []
+            raise
+        return _decode_claimed(resp)
+
+    async def list_consumers(self, *, group, stream):
+        """#660: XINFO CONSUMERS → ``[{"name", "pending", "idle"}, ...]`` (idle in ms), the seam the
+        reclaim sweep uses to find abandoned per-recreate ghost consumers.
+
+        Degrades to ``[]`` on a Redis that rejects the command (NOGROUP before the group exists, or an
+        ``unknown command`` on a server without XINFO CONSUMERS) — the SAME no-op-on-unsupported
+        contract ``reclaim_orphans`` uses for XAUTOCLAIM, so consumer-pruning being unavailable never
+        breaks the normal XREADGROUP consume path. Logged once."""
+        from redis.exceptions import ResponseError
+
+        try:
+            resp = await self._client.xinfo_consumers(stream, group)
+        except ResponseError as e:
+            msg = str(e).lower()
+            if "unknown command" in msg or "xinfo" in msg:
+                if not self._prune_unsupported:
+                    self._prune_unsupported = True
+                    log.warning(
+                        "XINFO CONSUMERS unsupported on this Redis — #660 ghost-consumer prune "
+                        "disabled; normal segment consumption is unaffected. Upgrade Redis to re-enable."
+                    )
+                return []
+            if "nogroup" in msg:
+                return []  # group not created yet — nothing to prune
+            raise
+        out: list[dict] = []
+        for entry in resp or []:
+            info = {
+                (k.decode() if isinstance(k, bytes) else k): v
+                for k, v in entry.items()
+            }
+            name = info.get("name")
+            out.append({
+                "name": name.decode() if isinstance(name, bytes) else name,
+                "pending": int(info.get("pending") or 0),
+                "idle": int(info.get("idle") or 0),
+            })
+        return out
+
+    async def delete_consumer(self, *, group, stream, consumer):
+        """#660: XGROUP DELCONSUMER — returns the pending count the consumer held (0 for a ghost)."""
+        return await self._client.xgroup_delconsumer(stream, group, consumer)
 
     async def ack(self, *, group, stream, message_ids):
         if message_ids:
@@ -964,8 +1124,9 @@ def build_production_app(
     without those runtime deps installed in the gate venv.
     """
     import redis.asyncio as aioredis
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ..db import build_engine
     from .app import create_app
 
     database_url = database_url or os.getenv(
@@ -973,9 +1134,15 @@ def build_production_app(
     )
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    redis_client = aioredis.from_url(redis_url, decode_responses=True)
+    # #528: hardened Redis client (see meeting_api/__main__.py) — bounded timeouts + keepalive +
+    # health checks so a Redis blip self-heals within socket_timeout instead of hanging the consumer.
+    redis_client = aioredis.from_url(
+        redis_url, decode_responses=True,
+        socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
+        health_check_interval=30, retry_on_timeout=True,
+    )
 
     store = SqlAlchemyTranscriptStore(session_factory, redis_client=redis_client)
     bus = RedisStreamBus(redis_client)

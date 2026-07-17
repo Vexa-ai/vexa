@@ -167,7 +167,12 @@ function createMixedBotPipeline(
         rename: (_oldSpeaker, newSpeaker, segments) => publish(newSpeaker, segments, true),
         language,
         onError,
-      }).then((t) => { transcriber = t; return t; });
+      }).then((t) => { transcriber = t; return t; })
+        // #593: DON'T cache a rejected create promise. The mixed lane's create() loads the pyannote
+        // model (from_pretrained) — if that rejects (empty HF cache, no egress), leaving `creating`
+        // as a stuck rejected promise makes every later start() reject too, so the non-fatal retry
+        // in createLivePipeline could never succeed. Clear it on failure so a retry re-attempts the load.
+        .catch((e) => { creating = null; throw e; });
     }
     return creating;
   };
@@ -210,4 +215,98 @@ export function createBotPipeline(
     return createMixedBotPipeline(transcribe, sink, inv.language ?? undefined, opts.onError);
   }
   return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);
+}
+
+/** The post-admission subsystem stages createLivePipeline sequences (used in fault labels). */
+export type LiveStage = 'capture-start' | 'recording-start' | 'engine-start';
+
+/**
+ * Serialize a thrown value for a LOG LINE (#593 A1). Prefer the stack (names the throwing frame),
+ * else `name: message`, else a safe JSON — NEVER `String(e)` (a DOM Event → "[object Event]", the
+ * exact fidelity loss that hid the real #593 throw) and never bare `JSON.stringify` (throws on cycles).
+ */
+export function serr(e: unknown): string {
+  const x = e as { message?: string; stack?: string; name?: string } | null | undefined;
+  if (x?.stack) return x.stack;
+  if (x?.message) return `${x.name ?? 'Error'}: ${x.message}`;
+  try { return `non-error throw: ${JSON.stringify(e)}`; }
+  catch { return `non-error throw: ${String(e)}`; }
+}
+
+export interface LivePipelineDeps {
+  /** Attach the page-side capture; returns its teardown. Best-effort — a throw DEGRADES, never evicts. */
+  startCapture: () => Promise<() => Promise<void>>;
+  /** Attach the page-side recording (optional); returns its teardown. Best-effort. */
+  startRecording?: () => Promise<() => Promise<void>>;
+  /** The transcription engine (the BotPipeline). Its start() failure is non-fatal + retried. */
+  engine: Pipeline;
+  /** Loud fault sink — which stage failed + the raw error (wired to console.error(serr) + publishFault). */
+  onFault: (stage: LiveStage, e: unknown) => void;
+  /** Bounded retry for engine start (the pyannote model load). Default 3 attempts, 2s apart. */
+  retry?: { attempts: number; delayMs: number };
+}
+
+/**
+ * The LIVE pipeline (composition-root seam) — THE #593 FIX. Wraps the page-side capture + recording
+ * attach and the transcription-engine start into ONE Pipeline whose `start()` ALWAYS RESOLVES.
+ *
+ * Once the bot is admitted, a post-admission subsystem failure — a page-side capture/MediaRecorder
+ * throw, or the mixed-lane pyannote model load rejecting (empty HF cache / no egress) — must DEGRADE
+ * LOUDLY, never propagate out of `start()`. The orchestrator's backstop maps ANY `pipeline.start()`
+ * throw to `leave('pipeline_start_failed')` + `join_failure` (correct for a truly unrecoverable
+ * pipeline, and deliberately preserved), so keeping every recoverable failure INSIDE this seam is
+ * what stops the ~120 ms self-evict. Every failure routes to `onFault` (→ console + the transcript
+ * fault publisher → meeting-page banner) so "admitted but not transcribing" is loud, not silent.
+ *
+ * Browser-free BY CONSTRUCTION (takes thunks; imports no playwright/DOM) so it is L2-unit-provable
+ * offline — the admitted→capture-start seam no unit covered before (#593 A4). index.ts binds the
+ * thunks to the live page.
+ */
+export function createLivePipeline(deps: LivePipelineDeps): Pipeline {
+  const { startCapture, startRecording, engine, onFault } = deps;
+  const maxAttempts = Math.max(1, deps.retry?.attempts ?? 3);
+  const delayMs = Math.max(0, deps.retry?.delayMs ?? 2000);
+
+  let stopCapture: (() => Promise<void>) | null = null;
+  let stopRecording: (() => Promise<void>) | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+
+  // Engine start with bounded background retry: the FIRST attempt is awaited by start() (so start()
+  // resolves promptly — the bot is already seated); later attempts fire on a timer without ever
+  // rejecting start(). A transient/slow model load thus self-heals without evicting the bot.
+  const tryEngineStart = async (attempt: number): Promise<void> => {
+    try {
+      await engine.start();
+    } catch (e) {
+      onFault('engine-start', e);
+      if (stopped || attempt >= maxAttempts) return;   // give up (already published loud); bot STAYS
+      retryTimer = setTimeout(() => { retryTimer = null; void tryEngineStart(attempt + 1); }, delayMs);
+    }
+  };
+
+  return {
+    async start(): Promise<void> {
+      // capture-start — best-effort (a page media Event / exposeFunction reject must not evict).
+      try { stopCapture = await startCapture(); }
+      catch (e) { onFault('capture-start', e); }
+      // recording-start — best-effort.
+      if (startRecording) {
+        try { stopRecording = await startRecording(); }
+        catch (e) { onFault('recording-start', e); }
+      }
+      // engine-start — non-fatal degrade + bounded retry (the pyannote model load; #593 root cause).
+      await tryEngineStart(1);
+      // NOTHING rethrows ⇒ the orchestrator never sees a pipeline.start() throw ⇒ no self-evict.
+    },
+    async stop(): Promise<void> {
+      stopped = true;
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      const sc = stopCapture; stopCapture = null;
+      if (sc) await sc().catch(() => { /* best-effort — page may be closing */ });
+      const sr = stopRecording; stopRecording = null;
+      if (sr) await sr().catch(() => { /* best-effort — flush the final chunk → master assembly */ });
+      await engine.stop().catch(() => { /* best-effort; idempotent across double-stop */ });
+    },
+  };
 }

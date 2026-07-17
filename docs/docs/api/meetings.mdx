@@ -97,6 +97,41 @@ curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
 
 Both answer `404` for a record you don't own and `409` once the bot lifecycle owns the record.
 
+The same edit/delete is also reachable **by native key** — `PATCH`/`DELETE
+/meetings/{platform}/{native_meeting_id}` — which resolves `(platform, native_meeting_id)` to your
+newest owned row and applies the same rules (`404` unknown/unowned, `409` once FSM-owned). Use it
+when you address meetings by their join-link identity rather than the record id; `DELETE` answers
+`200` on this path (the by-record-id `DELETE` answers `204`).
+
+## api.v1 native-id support (per route)
+
+`api.v1` is sealed as a **file hash** (`contracts.seal.json`), which pins the schema document, not
+the running implementation. This table states, per route, whether the `(platform,
+native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
+
+| Route | Native-id keying in 0.12 |
+|---|---|
+| `PATCH /meetings/{platform}/{native_meeting_id}` | **Yes** — resolves to your newest owned row. |
+| `DELETE /meetings/{platform}/{native_meeting_id}` | **Yes** — `200` on success (by-id path is `204`). |
+| `GET /bots/status` | **Yes** — body carries both `running_bots` (0.10) and `running`/`count` (0.12). |
+| `POST /transcripts/{platform}/{native_meeting_id}/share` | **Aliased** to the moved `POST /meetings/{platform}/{native_meeting_id}/share` mint. The response is the capability-token share (`{id, token, mode, expires_at}`), not the 0.10 public-URL `TranscriptShareResponse` — the public-URL-share backend is not in the 0.12 core. |
+| `GET /recordings/{recording_id}/media/{media_file_id}/download` | **Aliased** to the `.../raw` master byte stream (Range-capable). |
+| `GET /bots/{platform}/{native_meeting_id}/chat` | **Restored, empty** — the owner boundary is real; the message list is always empty (0.12 does not persist in-meeting chat server-side; chat flows live over the WS `va:…:chat` channel). |
+| `POST /bots/{platform}/{native_meeting_id}/chat` | **Not implemented** — no bot-command (send) backend in the 0.12 core. |
+| `POST /meetings/{meeting_id}/transcribe` | **Not implemented** — no on-demand re-transcribe backend in the 0.12 core. |
+
+<Note>
+**What the seal enforces now.** Because the file hash pins the *document* and not the *running
+implementation*, CI now also runs a **reverse** conformance check (`gate:contract-conformance`): for
+every `(path, method)` `api.v1` declares, the shipped gateway + meeting-api must serve it — otherwise
+the route must be recorded in the audited `core/gateway/contracts/api.v1/KNOWN_GAPS.json` ledger (with
+a reason + issue link), which the gate prints loudly on every run. A sealed endpoint renamed or dropped
+without a ledger entry fails CI. The frozen golden examples are also driven against the real responses,
+so a renamed response field (e.g. `running_bots` → `running`) fails too. The two **Not implemented**
+rows above and the share **response-shape** divergence are the current recorded gaps — a client can rely
+on the seal meaning "served, or explicitly listed as a gap", not merely "the schema file didn't change".
+</Note>
+
 ## Auto-join
 
 A `scheduled` meeting **with a link** is joined automatically: a background sweep sends the bot
@@ -237,6 +272,17 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
 ```
 
+### List rows are slim; detail is full
+
+The two list endpoints — `GET /bots` and `GET /meetings` — return **lightweight rows**. Each row keeps
+its light metadata (id, status, times, `title`, connected docs) but **omits the heavy `data` detail
+keys**: `speaker_events`, `bot_logs`, `recordings`, `status_transition`, `chat_messages`,
+`error_details`, and `last_error`. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the
+detail endpoint is unaffected and still returns every key.
+
+The list is also **paged**: with no `limit`, a default page size of `50` applies (pass `limit`/`offset`
+to page explicitly). `GET /bots` returns `has_more: true` when more rows remain past the current page.
+
 ## Speaker-attributed transcripts
 
 Each segment is **diarized** — attributed to a speaker (a bound display name, or a provisional label
@@ -267,7 +313,9 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"
 ```
 
 The master metadata returns a `raw_url` pointing at the byte stream
-`GET /recordings/{recording_id}/media/{media_file_id}/raw`, which the player loads.
+`GET /recordings/{recording_id}/media/{media_file_id}/raw`, which the player loads. The `/raw` endpoint
+honours a `Range` header and returns `206 Partial Content` with `Content-Range` and `Accept-Ranges` —
+these are preserved **through the gateway**, not only on a direct hit, so browser playback and seeking work.
 
 ---
 

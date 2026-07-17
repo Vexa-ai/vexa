@@ -1,0 +1,47 @@
+# merge-card — choke point 1 of the delivery constitution, enforced. MAIN accepts a PR only when
+# BOTH its value and its diff are accepted (the merge bar): value-fsm green + `state: value-signed`
+# (value), and a fresh non-author review approval (diff). This is a required status check on main
+# (added to branch protection alongside `gates`), so the merge queue will not merge without it.
+#
+# Runs on pull_request + pull_request_review (PR-entry) and merge_group (the queue re-check, where
+# the PR number is parsed from the queue ref). See scripts/merge-card-gate.mjs and ADR-0029.
+name: merge-card
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+# a superseded run's verdict is worthless
+concurrency:
+  group: merge-card-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  merge-card:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Pin to main so the gate runs TRUSTED code, never a PR branch's version of the script.
+      # (For pull_request the workflow definition already comes from the base branch; this pins
+      # the checked-out script too.) The gate inspects PR state via the API, not the tree.
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Value AND diff accepted (the merge card)
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBERS: ${{ github.event.pull_request.number }}
+          MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          set -o pipefail   # the script's non-zero exit must fail the check, not be masked by tee
+          node scripts/merge-card-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"

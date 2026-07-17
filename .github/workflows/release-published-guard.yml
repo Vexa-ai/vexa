@@ -1,0 +1,66 @@
+# release-published-guard — closes the manual-release bypass (guarantee lines 7 + 8).
+#
+# promote is gated (witness-gate + value-gate + the release-promote Environment), but a GitHub
+# *Release* is created by a human with `gh release create` and could be cut without the pass. The
+# delivery constitution's rule is explicit: "A release published unwitnessed is retracted to
+# pre-release until the pass is met." This workflow enforces exactly that — on every published,
+# non-prerelease v0.12.* release it re-checks the witness receipt and the batch value acceptance,
+# and if either is absent it **flips the release back to draft** and fails loudly (an incident).
+#
+# The receipt lives on main (committed after the witness pass, after the tag), so this checks out
+# main — not the tag's tree (which predates the witness).
+name: release-published-guard
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # flip an unwitnessed release back to draft
+
+jobs:
+  verify:
+    # stable releases only (any vX.Y.Z with no prerelease suffix) — rc/prereleases are exempt.
+    # Generic pattern, not a pinned minor, so a v0.13/v1.0 release can never silently skip the guard.
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RELEASE_VERSION: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Only stable vX.Y.Z tags are guarded
+        id: scope
+        run: |
+          if [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "guard=yes" >> "$GITHUB_OUTPUT"
+          else echo "guard=no ($RELEASE_VERSION is not a stable vX.Y.Z tag) — skipping" >> "$GITHUB_STEP_SUMMARY"; echo "guard=no" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        if: steps.scope.outputs.guard == 'yes'
+        with: { ref: main }   # the witness receipt is committed to main after the tag
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.guard == 'yes'
+        with: { node-version: 22 }
+      # Distinguish a DEFINITIVE breach (exit 1 → retract) from "could not evaluate" (exit 3 or any
+      # other non-zero → alert, do NOT retract — a transient API error must never draft a good
+      # release). Exit codes captured without a pipe so correctness does not depend on pipefail.
+      - name: Witness + value gates for the published tag
+        id: gates
+        if: steps.scope.outputs.guard == 'yes'
+        run: |
+          node scripts/release-witness-gate.mjs >> "$GITHUB_STEP_SUMMARY" 2>&1; w=$?
+          node scripts/release-value-gate.mjs  >> "$GITHUB_STEP_SUMMARY" 2>&1; v=$?
+          echo "witness_exit=$w" >> "$GITHUB_OUTPUT"; echo "value_exit=$v" >> "$GITHUB_OUTPUT"
+          echo "witness_exit=$w value_exit=$v" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retract to draft ONLY on a definitive breach (exit 1)
+        if: steps.scope.outputs.guard == 'yes' && (steps.gates.outputs.witness_exit == '1' || steps.gates.outputs.value_exit == '1')
+        run: |
+          echo "::error ::$RELEASE_VERSION was PUBLISHED unwitnessed/unaccepted (witness=${{ steps.gates.outputs.witness_exit }} value=${{ steps.gates.outputs.value_exit }}) — retracting to draft (ship bar)."
+          gh release edit "$RELEASE_VERSION" --draft --repo "$GITHUB_REPOSITORY"
+          echo "· $RELEASE_VERSION flipped to draft. Complete the witness pass (releases/$RELEASE_VERSION/witness.json) + accept the batch, then re-publish." >> "$GITHUB_STEP_SUMMARY"
+      - name: Alert (could not evaluate) — do NOT retract
+        if: ${{ steps.scope.outputs.guard == 'yes' && ((steps.gates.outputs.witness_exit != '0' && steps.gates.outputs.witness_exit != '1') || (steps.gates.outputs.value_exit != '0' && steps.gates.outputs.value_exit != '1')) }}
+        run: |
+          echo "::warning ::release-published-guard could not conclusively evaluate $RELEASE_VERSION (witness=${{ steps.gates.outputs.witness_exit }} value=${{ steps.gates.outputs.value_exit }}) — NOT retracting; investigate (transient API error or unaccounted commits)."
+      - name: Fail the check if not fully green
+        if: steps.scope.outputs.guard == 'yes' && (steps.gates.outputs.witness_exit != '0' || steps.gates.outputs.value_exit != '0')
+        run: exit 1

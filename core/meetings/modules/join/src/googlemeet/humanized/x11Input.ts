@@ -17,11 +17,14 @@ export interface X11InputOptions {
   display?: string;
   /** When true, commands are recorded instead of executed (unit tests). */
   dryRun?: boolean;
+  /** Maximum time an individual xdotool/xclip command may block. */
+  commandTimeoutMs?: number;
 }
 
 export class X11Input {
   private display: string;
   private dryRun: boolean;
+  private commandTimeoutMs: number;
   /** Recorded argv lines when dryRun is on. */
   readonly log: string[][] = [];
   /** Simulated pointer position, maintained only in dryRun for faithful tests. */
@@ -30,6 +33,7 @@ export class X11Input {
   constructor(opts: X11InputOptions = {}) {
     this.display = opts.display ?? process.env.DISPLAY ?? ":99";
     this.dryRun = opts.dryRun ?? false;
+    this.commandTimeoutMs = opts.commandTimeoutMs ?? 5000;
   }
 
   private run(args: string[], stdin?: Buffer): Promise<string> {
@@ -41,7 +45,10 @@ export class X11Input {
       const child = execFile(
         args[0],
         args.slice(1),
-        { env: { ...process.env, DISPLAY: this.display } },
+        {
+          env: { ...process.env, DISPLAY: this.display },
+          timeout: this.commandTimeoutMs,
+        },
         (err, stdout) => {
           if (err) reject(err);
           else resolve(stdout);
