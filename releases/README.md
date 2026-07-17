@@ -10,6 +10,22 @@ required-reviewer approval — a committed file cannot forge a human approval, s
 Publish and promote are **separate acts**; neither the moving tag `:v012` nor a published GitHub
 Release happens before the witness pass is signed.
 
+0. **Version-bump (before you tag)** — advance `appVersion` in
+   `deploy/helm/charts/vexa/Chart.yaml`, advance the matching `docs-reflects:` stamp (and the visible
+   line) in `docs/docs/changelog.mdx` so `gate:docs-version` stays green, and **assemble the changelog
+   fragments** that PRs dropped since the last release (the towncrier pattern —
+   [`docs/changelog.d/`](../docs/changelog.d/README.md)):
+
+   ```bash
+   node scripts/changelog-collect.mjs --check   # preview pending fragments (exit 3 if any pending)
+   node scripts/changelog-collect.mjs           # fold them into the ## <MAJOR>.<MINOR>.x section, remove them
+   ```
+
+   The collector appends each `docs/changelog.d/<pr>-<slug>.md` bullet into the current version
+   section and deletes the consumed fragments; it does **not** touch the `docs-reflects:` stamp (you
+   just advanced it). Commit the bumped `Chart.yaml` + assembled `changelog.mdx` + emptied
+   `changelog.d/` together, then tag.
+
 1. **Publish + validate** — push tag `vX.Y.Z`. `release-images` builds and publishes the versioned
    `:vX.Y.Z` images and runs `release-validate` with **`promote: false`** — the L4 legs prove the
    published bytes, but `:v012` does **not** move. The release candidate now exists to be witnessed.
