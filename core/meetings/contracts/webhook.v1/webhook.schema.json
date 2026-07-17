@@ -23,7 +23,7 @@
       "properties": {
         "event_id": {
           "type": "string",
-          "description": "unique per delivery: `evt_<hex>` (idempotency key for the receiver)"
+          "description": "stable identity of the logical event (`evt_<hex>`); delivery is at-least-once and the receiver dedupes on this key. The SAME logical event carries the SAME event_id across every (re)delivery — see the webhook.v1 README 'Delivery semantics'."
         },
         "event_type": { "$ref": "#/$defs/EventType" },
         "api_version": {

@@ -26,6 +26,8 @@ the conformance harness — the conformance assertions therefore drive THIS ship
 """
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -37,6 +39,71 @@ from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
 from .lifecycle.machine import LifecycleSink, MeetingStore
 from .obs import TraceMiddleware
+
+
+def _xpending_total(summary) -> "Optional[int]":
+    """Total DELIVERED-but-un-acked count for the group from an XPENDING SUMMARY reply (#636).
+    redis-py returns a dict ``{'pending': N, 'min', 'max', 'consumers'}``; the raw protocol reply is
+    a list ``[N, min, max, consumers]``. Returns the integer total, or None when unrecognizable."""
+    if isinstance(summary, dict):
+        v = summary.get("pending")
+        return int(v) if isinstance(v, int) else None
+    if isinstance(summary, (list, tuple)) and summary:
+        try:
+            return int(summary[0])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+async def _pipeline_health(app) -> "tuple[dict, bool]":
+    """#527/#636: derive pipeline liveness from the per-loop heartbeats + collector-group lag +
+    pending-entry (PEL) depth, and decide whether to DEGRADE. A loop hung inside an await stops
+    stamping, so its tick_age_s climbs past PIPELINE_TICK_STALE_S even while the process and the
+    live-WS path look healthy — the 2026-04-26 silent hang. A crashed replica's delivered-but-un-acked
+    batch is NOT lag (it was delivered) and NOT a stale heartbeat on the survivor, so #636 surfaces it
+    as ``pending_depth``. Returns ``({loops, consumer_lag, pending_depth}, degraded)``.
+
+    The probe MUST NOT itself hang (that would defeat the point): the XINFO/XPENDING calls are each
+    bounded by a 2s wait_for and any failure degrades that field to ``"unavailable"`` — never blocks."""
+    st = app.state
+    now = time.monotonic()
+    stale_s = getattr(st, "pipeline_tick_stale_s", 120.0)
+    lag_alarm = getattr(st, "pipeline_lag_alarm", 500)
+    pending_alarm = getattr(st, "pipeline_pending_alarm", 100)
+    loops = {name: round(now - ts, 1) for name, ts in (st.pipeline_ticks or {}).items()}
+    degraded = any(age > stale_s for age in loops.values())
+
+    lag = None
+    pending_depth = None
+    redis = getattr(st, "pipeline_redis", None)
+    if redis is not None:
+        try:
+            groups = await asyncio.wait_for(redis.xinfo_groups(st.pipeline_stream), timeout=2.0)
+            for g in groups or []:
+                name = g.get("name") if isinstance(g, dict) else None
+                name = name.decode() if isinstance(name, (bytes, bytearray)) else name
+                if name == st.pipeline_group:
+                    lag = g.get("lag")
+                    break
+        except Exception:
+            lag = "unavailable"  # a dead/absent group is itself a signal, never a hang
+        # #636: PEL depth — a bounded XPENDING SUMMARY. A delivered-but-un-acked orphan is invisible
+        # to lag; a SUSTAINED non-zero total is the orphan signal (steady state acks within a tick).
+        try:
+            summary = await asyncio.wait_for(
+                redis.xpending(st.pipeline_stream, st.pipeline_group), timeout=2.0
+            )
+            pending_depth = _xpending_total(summary)
+            if pending_depth is None:
+                pending_depth = "unavailable"
+        except Exception:
+            pending_depth = "unavailable"  # never block the probe on a pending read
+    if isinstance(lag, int) and lag > lag_alarm:
+        degraded = True
+    if isinstance(pending_depth, int) and pending_depth > pending_alarm:
+        degraded = True
+    return {"loops": loops, "consumer_lag": lag, "pending_depth": pending_depth}, degraded
 
 
 def create_app(
@@ -85,7 +152,19 @@ def create_app(
     async def health():
         from .config_preflight import capability_health
 
-        return {"status": "ok", "service": "meeting-api", "capabilities": capability_health()}
+        body = {"status": "ok", "service": "meeting-api", "capabilities": capability_health()}
+        # #527: additive `pipeline` section — present ONLY when the background loops are wired
+        # (build_production_app sets app.state.pipeline_ticks). On the bare app-factory path (unit
+        # tests, conformance) the section is omitted and status stays "ok" — existing /health
+        # consumers are unchanged. A stale loop or a lag over threshold flips status→degraded + 503,
+        # so a dead pipeline that keeps the live-WS path flowing no longer looks healthy.
+        if getattr(app.state, "pipeline_ticks", None) is not None:
+            pipeline, degraded = await _pipeline_health(app)
+            body["pipeline"] = pipeline
+            if degraded:
+                body["status"] = "degraded"
+                return JSONResponse(body, status_code=503)
+        return body
 
     # --- bot_spawn ports (resolved FIRST: the meeting_repo is also the lifecycle-persistence target) ---
     if meeting_repo is None:

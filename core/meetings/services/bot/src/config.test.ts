@@ -10,7 +10,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseInvocation, loadInvocation, InvocationError } from './config.js';
+import { parseInvocation, loadInvocation, InvocationError, speakerStreamConfigFromEnv } from './config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GOLDEN_DIR = join(HERE, '..', '..', '..', 'contracts', 'invocation.v1', 'golden');
@@ -69,3 +69,24 @@ for (const g of goldens) {
 
 if (failed) { console.error(`\n❌ config (L1/L2): ${failed} check(s) FAILED.`); process.exit(1); }
 console.log('\n✅ config (L1/L2): the goldens parse, the env helper round-trips, and off-contract input fails fast (ajv ≡ invocation.v1).');
+
+// ── speaker-stream env tuning ─────────────────────────────────────────────────
+{
+  const warnings: string[] = [];
+  const config = speakerStreamConfigFromEnv({
+    BOT_SPEAKER_MIN_AUDIO_SEC: '1',
+    BOT_SPEAKER_SUBMIT_INTERVAL_SEC: '1.5',
+    BOT_SPEAKER_CONFIRM_THRESHOLD: '1',
+    BOT_SPEAKER_MAX_BUFFER_SEC: '30',
+    BOT_SPEAKER_IDLE_TIMEOUT_SEC: '15',
+  }, (message) => warnings.push(message));
+  check('speaker-stream env values reach the config', config?.minAudioDuration === 1 && config.submitInterval === 1.5 && config.confirmThreshold === 1 && config.maxBufferDuration === 30 && config.idleTimeoutSec === 15);
+  check('valid speaker-stream env emits no warnings', warnings.length === 0, warnings.join('; '));
+
+  const invalidWarnings: string[] = [];
+  const invalid = speakerStreamConfigFromEnv({
+    BOT_SPEAKER_MIN_AUDIO_SEC: 'nope',
+    BOT_SPEAKER_CONFIRM_THRESHOLD: '1.5',
+  }, (message) => invalidWarnings.push(message));
+  check('invalid speaker-stream values fall back loudly', invalid === undefined && invalidWarnings.length === 2, invalidWarnings.join('; '));
+}

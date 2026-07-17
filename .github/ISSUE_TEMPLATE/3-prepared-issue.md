@@ -7,14 +7,14 @@ labels: ["state: prepared"]
 <!-- The body IS the delivery constitution applied (docs/docs/governance/delivery.mdx D5/D6/D10).
      A maintainer stamps `state: ready` only when every section below holds. -->
 
-### Why this matters
-<!-- Dry, factual business stakes: what a user loses, what depends on it, what was observed and where. No drama. -->
-
 ### Value this issue delivers
 > <!-- ONE sentence a human can witness: the smallest holistic thing someone recognizes as "this delivers value to me".
      D5b: if this ONE code change delivers several values (one root cause, several reports), state EACH value as its
      own sentence here — and give each its own acceptance row + preferred validator below. Never bundle values that
      need different code changes; record those as a `same-setup` note instead. -->
+
+### Why this matters
+<!-- Dry, factual business stakes: what a user loses, what depends on it, what was observed and where. No drama. -->
 
 ### Where we are (honest)
 <!-- Current-code facts, file:line where known. Old reports contribute symptoms only. -->

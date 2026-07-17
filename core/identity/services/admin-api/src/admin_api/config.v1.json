@@ -1,0 +1,99 @@
+{
+ "contract": "config.v1",
+ "service": "admin-api",
+ "keys": [
+  {
+   "key": "INTERNAL_API_SECRET",
+   "class": "required-explicit",
+   "secret": true,
+   "description": "shared internal secret the /internal/validate endpoint requires (fail-closed guard, main.py). Unset, gateway's validation hop 503s and every API-key check fails — so the boot refuses instead of coming up green and rejecting every call (the 2026-04-23 failure shape, #526)."
+  },
+  {
+   "key": "ADMIN_API_TOKEN",
+   "class": "defaulted",
+   "default": "changeme",
+   "secret": true,
+   "description": "admin bearer for the privileged admin surface; stock surfaces default it (compose 'changeme', helm/lite from env). Change it for any real deploy."
+  },
+  {
+   "key": "DB_HOST",
+   "class": "defaulted",
+   "default": "postgres",
+   "description": "PostgreSQL host (the users/tokens store)"
+  },
+  {
+   "key": "DB_PORT",
+   "class": "defaulted",
+   "default": "5432",
+   "description": "PostgreSQL port"
+  },
+  {
+   "key": "DB_NAME",
+   "class": "defaulted",
+   "default": "vexa",
+   "description": "PostgreSQL database name"
+  },
+  {
+   "key": "DB_USER",
+   "class": "defaulted",
+   "default": "postgres",
+   "description": "PostgreSQL user"
+  },
+  {
+   "key": "DB_PASSWORD",
+   "class": "defaulted",
+   "default": "postgres",
+   "secret": true,
+   "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+  },
+  {
+   "key": "DATABASE_URL",
+   "class": "defaulted",
+   "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD)",
+   "secret": true,
+   "description": "explicit SQLAlchemy URL override; when unset the URL is built from the DB_* parts. Provided as a lite entrypoint export, not a per-surface env.",
+   "targets": []
+  },
+  {
+   "key": "DB_POOL_SIZE",
+   "class": "defaulted",
+   "default": "5",
+   "description": "SQLAlchemy async-engine pool_size (persistent connections per pod). Pure runtime override — reconcile with deploy/db-budget.json (Σ replicas × (pool_size + max_overflow) + reserved ≤ max_connections) on managed Postgres. #635.",
+   "targets": []
+  },
+  {
+   "key": "DB_MAX_OVERFLOW",
+   "class": "defaulted",
+   "default": "10",
+   "description": "SQLAlchemy async-engine max_overflow (burst connections above pool_size per pod). Pure runtime override — reconcile with deploy/db-budget.json. #635.",
+   "targets": []
+  },
+  {
+   "key": "DEV_MODE",
+   "class": "defaulted",
+   "default": "false",
+   "description": "dev conveniences toggle; does NOT relax the INTERNAL_API_SECRET requirement (a missing secret refuses boot even in dev — the 04-23 lesson).",
+   "targets": []
+  },
+  {
+   "key": "LOG_LEVEL",
+   "class": "defaulted",
+   "default": "info",
+   "description": "log verbosity"
+  },
+  {
+   "key": "HOST",
+   "class": "defaulted",
+   "default": "0.0.0.0",
+   "description": "uvicorn bind host",
+   "targets": ["lite"]
+  },
+  {
+   "key": "PORT",
+   "class": "defaulted",
+   "default": "8001",
+   "description": "uvicorn bind port",
+   "targets": ["lite"]
+  }
+ ]
+}

@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createOrchestrator } from './orchestrator.js';
+import { createLivePipeline } from './pipeline.js';
 import { canTransition, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
 import type { JoinDriver, JoinOutcome, Pipeline, LifecycleSink, ActsSource, TranscriptSink } from './ports.js';
 import type { Invocation } from './config.js';
@@ -280,6 +281,43 @@ async function main(): Promise<void> {
     const res = await runP;
     check('active-stop: completed(stopped) via the active-leave path (unchanged)', res.status === 'completed' && last(lc.events).completion_reason === 'stopped');
     check('active-stop: withdraw NOT invoked (active leave, not a waiting-room withdraw)', withdrew === 0, `withdrew=${withdrew}`);
+  }
+
+  // ── #593 A4: a post-admission subsystem failure does NOT self-evict (the createLivePipeline seam) ──
+  // Wire a REAL createLivePipeline whose page-side capture AND engine start both throw, into the
+  // orchestrator. Before the fix (inline pipeline, three bare awaits) the first throw rejected
+  // pipeline.start() → orchestrator catch → leave('pipeline_start_failed') + failed(active/join_failure)
+  // ~immediately (the ~120 ms self-evict). After: start() resolves (faults surfaced loud), the bot
+  // reaches active and STAYS until a normal end. NB this deliberately COEXISTS with the earlier
+  // "pipeline.start genuinely throws ⇒ leave (no ghost)" test — that invariant is preserved; what
+  // changed is that createLivePipeline no longer lets a recoverable subsystem failure BECOME a throw.
+  {
+    const lc = recordingSink();
+    const leaveReasons: string[] = [];
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const join: JoinDriver = {
+      async join(report) { await report('awaiting_admission'); await report('active'); return 'admitted'; },
+      onRemoval() { return () => {}; },
+      async leave(reason) { leaveReasons.push(String(reason)); },
+      async withdraw() { /* */ },
+    };
+    const faults: string[] = [];
+    const engine: Pipeline = { async start() { throw new Error('from_pretrained rejected (empty HF cache)'); }, async stop() { /* */ } };
+    const pipeline = createLivePipeline({
+      startCapture: async () => { throw { isTrusted: true, type: 'error' }; },   // the misdirecting page event
+      engine,
+      onFault: (stage) => faults.push(stage),
+      retry: { attempts: 1, delayMs: 0 },
+    });
+    const o = createOrchestrator(inv({ platform: 'teams' }), { lifecycle: lc, join, pipeline, acts: noopActs((f) => { fireLeave = f; }) });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 10);
+    const res = await runP;
+    check('#593: reached active (post-admission capture handoff did not evict)', seq(lc.events).includes('active'), JSON.stringify(seq(lc.events)));
+    check('#593: never emitted failed (no self-evict)', !seq(lc.events).includes('failed'), JSON.stringify(seq(lc.events)));
+    check('#593: leave NEVER called with pipeline_start_failed', !leaveReasons.includes('pipeline_start_failed'), leaveReasons.join(','));
+    check('#593: ended cleanly via the leave act → completed(stopped)', res.status === 'completed' && last(lc.events).completion_reason === 'stopped', JSON.stringify(last(lc.events)));
+    check('#593: both subsystem faults surfaced loud (capture + engine)', faults.includes('capture-start') && faults.includes('engine-start'), faults.join(','));
   }
 
   if (failed) { console.error(`\n❌ orchestrator (L2): ${failed} check(s) FAILED.`); process.exit(1); }

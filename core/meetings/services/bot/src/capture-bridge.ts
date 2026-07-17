@@ -122,6 +122,34 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     // inline fallback below. Never fatal at launch.
   });
 
+  // #593 A1: a page-context global fault logger, installed at document-start on EVERY frame/nav so
+  // gmeet + teams + zoom all inherit it. Before this, the only error-shaped line on the bot's stdout
+  // for a Teams join was the platform's OWN `Unhandled rejection {isTrusted:true}` — a bare DOM Event
+  // that misdirected #593 (it's Teams' VQE worklet, unrelated to our Node throw). This handler names
+  // the actual reason (message + stack) AND, for a bare Event, its type/target — so the {isTrusted}
+  // line is finally identified rather than mistaken for the cause. Non-fatal at launch (like neighbors).
+  await context.addInitScript(`(() => {
+    var report = function (m) { try { (window.logBot || console.error)('[page-fault] ' + m); } catch (e) {} };
+    window.addEventListener('unhandledrejection', function (ev) {
+      var r = ev && ev.reason;
+      var msg = (r && (r.message || r.name)) ? ((r.name || 'Error') + ': ' + (r.message || '')) : String(r);
+      var stack = (r && r.stack) ? r.stack : '(no stack)';
+      report('unhandledrejection: ' + msg + ' :: ' + stack);
+    });
+    window.addEventListener('error', function (ev) {
+      var msg;
+      if (ev && ev.error && (ev.error.message || ev.error.stack)) {
+        msg = (ev.error.name || 'Error') + ': ' + (ev.error.message || '') + ' :: ' + (ev.error.stack || '(no stack)');
+      } else {
+        var t = ev && ev.target;
+        var tag = t && (t.tagName || t.nodeName);
+        var src = t && (t.src || t.href || t.currentSrc);
+        msg = 'event type=' + (ev && ev.type) + (tag ? ' target=' + tag : '') + (src ? ' src=' + src : '') + ' isTrusted=' + (ev && ev.isTrusted);
+      }
+      report('error: ' + msg);
+    });
+  })();`).catch(() => { /* never fatal at launch */ });
+
   // Zoom/Teams expose NO per-participant <audio> in the DOM — install the WebRTC hook so each
   // remote audio track is mirrored into a hidden <audio> element (→ __vexaCapturedRemoteAudioStreams)
   // the mixed lane combines. Jitsi rides the same hook: its remote audio also arrives as WebRTC
@@ -316,13 +344,25 @@ export async function startCaptureBridge(
  * The MediaRecorder loop lives in @vexa/record-chunker (bundled into window.VexaBrowserUtils, like
  * the capture bricks). It records the meeting's combined audio mix, base64-encodes each timeslice,
  * and hands it to `onChunk`. We bridge those chunks over the Playwright boundary to `recording.chunk`
- * using the SAME key the orchestrator closes with (`platform/native`), so the assembler groups them
- * and the final chunk (on stop) assembles the master. Started post-admission (on the live meeting
- * page, where the participant <audio> elements exist), exactly like the capture bridge.
+ * using the SAME key the orchestrator closes with (`platform/native`); the sink uploads each chunk to
+ * meeting-api the moment it arrives (#491/#412 — every finished part is durable before the meeting
+ * ends), and the master is assembled server-side on read. The trailing empty is_final chunk (on
+ * stop) is the COMPLETED signal. Started post-admission (on the live meeting page, where the
+ * participant <audio> elements exist), exactly like the capture bridge.
  */
 export async function startRecording(page: Page, inv: Invocation, recording: BotRecordingSink): Promise<() => Promise<void>> {
   const key = `${inv.platform}/${inv.nativeMeetingId ?? inv.connectionId ?? 'session'}`;
-  // Node-side: decode one base64 recording.v1 chunk → the assembler. mimeType→master format.
+  // Recording part interval (ms): the MediaRecorder timeslice = the durable-upload granularity.
+  // Env-overridable (VEXA_RECORDING_TIMESLICE_MS) so a live multi-part run can shrink it to land
+  // ≥2 parts in a short meeting (#509 A5); default 15000 (production parity). Each timeslice is a
+  // chunk uploaded the moment it is produced (recording.ts sink), so a SIGKILL leaves every
+  // finished part durable (#412). Invalid / non-positive values fall back to the default.
+  const timesliceMs = ((): number => {
+    const raw = process.env.VEXA_RECORDING_TIMESLICE_MS;
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 15000;
+  })();
+  // Node-side: decode one base64 recording.v1 chunk → the per-chunk upload sink. mimeType→format.
   await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string): void => {
     const bytes = base64 ? new Uint8Array(Buffer.from(base64, 'base64')) : new Uint8Array(0);
     const format: RecordingMasterFormat = /wav/i.test(mimeType) ? 'wav' : 'webm';
@@ -330,11 +370,11 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
   // Page-side: start the generic recording tap (finds + combines the page audio elements).
-  await page.evaluate(async () => {
+  await page.evaluate(async (timesliceMs) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
-        timesliceMs: 15000,
+        timesliceMs,
         onChunk: async (c: { base64: string; chunkSeq: number; isFinal: boolean; mimeType: string }) => {
           try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType); return true; }
           catch { return false; }
@@ -342,7 +382,7 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
       });
       await w.__vexaRecordingTap.start();
     }
-  }).catch((e) => { console.error(`[bot] recording bridge: page-side start failed: ${String(e)}`); });
+  }, timesliceMs).catch((e) => { console.error(`[bot] recording bridge: page-side start failed: ${String(e)}`); });
 
   // Stop fn: stop the recorder so it flushes the final (isFinal) chunk → master assembly.
   return async () => {

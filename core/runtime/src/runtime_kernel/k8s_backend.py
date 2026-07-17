@@ -16,6 +16,43 @@ from .profiles import Runnable
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
 
+# The runtime's OWN scheduling constraints, serialized as JSON by the chart from
+# global.tolerations / global.nodeSelector (see deployment-runtime.yaml). A spawned workload is a bare
+# `kubectl run` Pod — NOT a Deployment child — so it inherits none of the runtime Deployment's
+# scheduling directives; on an all-tainted pool it sits Pending forever and the meeting silently fails.
+# These knobs let the spawn override carry the runtime's own constraints so the Pod schedules wherever
+# the runtime itself is allowed to run.
+TOLERATIONS_ENV = "RUNTIME_K8S_TOLERATIONS"      # JSON array of toleration objects
+NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label selectors
+
+
+def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[object]:
+    """Parse one scheduling knob (``key``) from ``env`` as JSON of ``expected`` shape. Unset or empty
+    (the chart's default ``[]`` / ``{}`` serialize to ``"[]"`` / ``"{}"``) ⇒ None (no constraint,
+    today's behaviour). Malformed JSON or a wrong shape is FATAL (raise) — a scheduling constraint
+    silently dropped is exactly the bug this fixes (a stranded Pending Pod, a silent meeting failure),
+    so it must fail loud at spawn, never fail open like the workspace mount set."""
+    raw = env.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"{key} is not valid JSON: {exc}") from exc
+    if not isinstance(value, expected):
+        raise ValueError(
+            f"{key} must be a JSON {expected.__name__}, got {type(value).__name__}: {raw!r}"
+        )
+    return value or None                                 # empty [] / {} ⇒ treat as unset
+
+
+def _runtime_scheduling_env() -> dict[str, str]:
+    """The runtime's own scheduling knobs from its PROCESS env (set by the chart on the runtime
+    Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
+    carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
+    an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
+    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV) if os.environ.get(k)}
+
 
 def _kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     r = subprocess.run(["kubectl", *args], capture_output=True, text=True)
@@ -36,22 +73,41 @@ def _stop_grace_sec() -> int:
 
 
 def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]:
-    """The ``kubectl run --overrides`` spec that mounts the workspace store into the worker Pod — the k8s
-    twin of the docker backend's ``Binds``, from the SAME env. The store PVC (``VEXA_WORKSPACE_MOUNT_SOURCE``
-    = the claim name on k8s) is bound at the store root (``VEXA_WORKSPACE_MOUNT_TARGET``), exposing the WHOLE
-    active mount set (WP-A1.1) — every in-store workspace lives under the root. Returns None when no store
-    is configured (no override needed). Pure/env-driven → unit-tested offline (no kubectl)."""
+    """The ``kubectl run --overrides`` spec for a spawned Pod, built from the SAME env. It carries two
+    independent seams:
+
+      * the workspace store mount set (WP-A1.1): the store PVC (``VEXA_WORKSPACE_MOUNT_SOURCE`` = the
+        claim name on k8s) exposes every in-store workspace via per-mount subPath volumeMounts;
+      * the runtime's scheduling constraints (``RUNTIME_K8S_TOLERATIONS`` / ``RUNTIME_K8S_NODE_SELECTOR``)
+        so the bare ``kubectl run`` Pod — which inherits none of the runtime Deployment's scheduling —
+        lands where the runtime itself is allowed to run instead of stranding Pending on a tainted pool.
+
+    The spec is built whenever EITHER seam is present; returns None only when neither is (no override
+    needed). Building it for scheduling alone is load-bearing: a plain meeting bot has no workspace PVC,
+    so a volumes-only early return would silently drop its tolerations and re-create the bug. Pure/
+    env-driven → unit-tested offline (no kubectl)."""
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
-    if not volumes:
+    tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
+    node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
+    if not volumes and not tolerations and not node_selector:
         return None
-    return {
-        "spec": {
-            "containers": [{"name": container_name, "volumeMounts": volume_mounts}],
-            "volumes": volumes,
-        }
-    }
+    # ``kubectl run --overrides`` merges the containers LIST by replacement (json-merge, not
+    # strategic), so a containers entry here wipes the generated container — image, env, command —
+    # and the API server rejects the Pod (`spec.containers[0].image: Required value`), killing the
+    # spawn instantly. Emit ``containers`` ONLY when volumeMounts force it (the workspace-store
+    # seam); pod-level fields (tolerations/nodeSelector) merge fine without touching the list.
+    spec: dict = {}
+    if volume_mounts:
+        spec["containers"] = [{"name": container_name, "volumeMounts": volume_mounts}]
+    if volumes:
+        spec["volumes"] = volumes
+    if tolerations:
+        spec["tolerations"] = tolerations
+    if node_selector:
+        spec["nodeSelector"] = node_selector
+    return {"spec": spec}
 
 
 class K8sBackend:
@@ -80,10 +136,12 @@ class K8sBackend:
         ]
         for k, v in env.items():
             args += [f"--env={k}={v}"]
-        # Workspace mount set (WP-A1.1): the store PVC is bound at the store root via --overrides,
-        # exposing every active workspace (they live under the root). The container name kubectl uses
-        # for a `run` Pod is the Pod name, so the volumeMount targets that container.
-        overrides = pod_overrides(env, container_name=name)
+        # The --overrides spec carries the workspace mount set (WP-A1.1: the store PVC bound per-mount,
+        # container name = Pod name for a `run` Pod) AND the runtime's own scheduling constraints. The
+        # latter live in the runtime's PROCESS env (the chart sets them on the runtime Deployment), not
+        # in the per-workload spec.env, so overlay them here; the workload's own --env (above) is left
+        # untouched — scheduling shapes the Pod, it is not container config.
+        overrides = pod_overrides({**env, **_runtime_scheduling_env()}, container_name=name)
         if overrides:
             args += ["--overrides", json.dumps(overrides)]
         if runnable.command:

@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -22,6 +23,32 @@ from runtime_kernel.profiles import Runnable
 
 def _py(code: str) -> Runnable:
     return Runnable(command=[sys.executable, "-c", code])
+
+
+def _sh(script: str) -> Runnable:
+    return Runnable(command=["sh", "-c", script])
+
+
+def _alive(pid: int) -> bool:
+    """True while `pid` exists (signal 0 probes without delivering)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours to signal
+
+
+def _wait_dead(pids, timeout: float = 5.0) -> None:
+    """Poll until every pid is gone (a SIGKILL'd child is reaped asynchronously)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline and any(_alive(p) for p in pids):
+        time.sleep(0.02)
+
+
+def _read_pids(*paths) -> list[int]:
+    return [int(p.read_text().strip()) for p in paths]
 
 
 def _start_and_wait(backend: ProcessBackend, workload_id: str, runnable: Runnable):
@@ -112,6 +139,80 @@ def test_unwritable_log_dir_falls_back_to_devnull(monkeypatch, tmp_path, caplog)
     assert any("cannot capture output" in r.getMessage() for r in caplog.records)
     errors = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(errors) == 1 and "not captured" in errors[0].getMessage()
+
+
+# ── group-scoped teardown (#546) ────────────────────────────────────────────────────────────────
+# Each workload is spawned as its own process-group leader (start_new_session=True). Every path that
+# ends a workload must reap the whole GROUP, not just the leader — otherwise a self-exiting or stopped
+# bot orphans every child it spawned onto the shared Lite host. These fixtures are #486's verbatim,
+# with pid capture so any survivor is arithmetic (RED on base a6ef9e23, GREEN after the fix).
+
+def test_self_exit_reaps_whole_group(monkeypatch, tmp_path, caplog):
+    """A1 (V1) — a workload that exits on its own leaves NO children. The leader forks two long
+    sleeps and exits 1; once exit_code() first observes the exit (plus cleanup), both captured child
+    pids are dead. On base (leader-only signal) both sleeps survive — RED."""
+    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path))
+    f1, f2 = tmp_path / "c1.pid", tmp_path / "c2.pid"
+    backend = ProcessBackend()
+    h = backend.start(
+        "w-orphan",
+        _sh(f"sleep 600 & echo $! > {f1}; sleep 600 & echo $! > {f2}; exit 1"),
+        {},
+    )
+    h._impl.wait(timeout=10)                     # leader gone; children reparented to PID 1
+    while not (f1.exists() and f2.exists()):
+        time.sleep(0.01)
+    child_pids = _read_pids(f1, f2)
+    assert all(_alive(p) for p in child_pids)    # precondition: children outlived the leader
+
+    with caplog.at_level(logging.ERROR, logger="runtime_kernel.process"):
+        assert backend.exit_code(h) == 1         # first observation triggers the group sweep
+    backend.cleanup(h)
+
+    _wait_dead(child_pids)
+    assert not any(_alive(p) for p in child_pids), f"orphaned children survived: {child_pids}"
+
+
+def test_stop_path_reaps_whole_group(monkeypatch, tmp_path):
+    """A2 (V2) — the kernel.stop() shape (terminate → grace → kill) tears down the whole tree, not
+    just the leader. The leader waits on its children (never self-exits), so only a group signal can
+    end them. On base (leader-only terminate/kill) both sleeps survive — RED."""
+    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path))
+    f1, f2 = tmp_path / "s1.pid", tmp_path / "s2.pid"
+    backend = ProcessBackend()
+    h = backend.start(
+        "w-stopgrp",
+        _sh(f"sleep 600 & echo $! > {f1}; sleep 600 & echo $! > {f2}; wait"),
+        {},
+    )
+    while not (f1.exists() and f2.exists()):
+        time.sleep(0.01)
+    child_pids = _read_pids(f1, f2)
+    assert all(_alive(p) for p in child_pids)
+
+    # mirror kernel.stop(): graceful terminate, brief grace, then force kill()
+    backend.terminate(h)
+    deadline = time.time() + 1.0
+    while backend.exit_code(h) is None and time.time() < deadline:
+        time.sleep(0.02)
+    if backend.exit_code(h) is None:
+        backend.kill(h)
+    backend.cleanup(h)
+
+    _wait_dead(child_pids)
+    assert not any(_alive(p) for p in child_pids), f"children survived stop: {child_pids}"
+
+
+def test_childless_workload_reap_is_silent(monkeypatch, tmp_path, caplog):
+    """Edge: a workload with no children (the common, well-behaved case). The group sweep finds an
+    empty/gone group (ProcessLookupError) and stays silent — no error log, no crash."""
+    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path))
+    backend = ProcessBackend()
+    h = _start_and_wait(backend, "w-lonely", _py("import sys; sys.exit(0)"))
+    with caplog.at_level(logging.ERROR, logger="runtime_kernel.process"):
+        assert backend.exit_code(h) == 0
+        backend.cleanup(h)
+    assert not [r for r in caplog.records if r.levelno == logging.ERROR]
 
 
 def test_workload_env_still_layered_over_process_env(monkeypatch, tmp_path):

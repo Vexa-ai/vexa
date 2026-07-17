@@ -12,8 +12,11 @@
 #                     vexa/meet-join-env:dev base, so it uses the classic docker driver
 #     sbom            per-release SPDX SBOM from the tagged source (npm + pip + baked model
 #                     weights) — uploaded as an artifact; `validate` gates on it (ADR-0004)
-#     validate        calls release-validate.yml (manifest verify · image-identity ·
-#                     validate legs · promote) with promote: true — the full ship chain
+#     validate        calls release-validate.yml (manifest verify · image-identity · validate
+#                     legs) with promote: FALSE — publish + prove only. This builds the versioned
+#                     :vX.Y.Z candidate so it can be WITNESSED; it never moves :v012. Promotion is
+#                     a separate, human-gated release-validate dispatch after the witness pass +
+#                     value acceptance (guarantee lines 7 + 8; ADR-0029).
 #
 # Constitutional guard: this chain NEVER moves vexaai/vexa-bot:dev or vexaai/vexa-bot:latest —
 # the 0.10 line publishes there and live 0.10 deployments pull them at spawn time. It also never
@@ -36,11 +39,9 @@ on:
         description: "Image tag to build + publish (vX.Y.Z[-suffix], e.g. v0.12.0-rc.1). Base version must match Chart.yaml appVersion + package.json."
         required: true
         type: string
-      promote_latest:
-        description: "Also move :latest (never automatic; never vexa-bot; stable versions only)"
-        required: false
-        default: false
-        type: boolean
+      # No promote_latest here: this workflow never promotes (see the validate handoff, promote:false).
+      # Moving :v012 (and, by explicit ruling, :latest) is a separate release-validate dispatch that
+      # clears the witness + value gates and the release-promote Environment.
 
 concurrency:
   group: release-images-${{ inputs.version || github.ref_name }}
@@ -222,8 +223,8 @@ jobs:
   # can audit"). Generated from the TAGGED source that built the images: the npm tree (pnpm's
   # licence index, same source gate:licenses uses) + the pip inventory (committed uv.locks) +
   # the baked model weights (onnx-community/pyannote-segmentation-3.0 — the piece gate:licenses
-  # cannot see, since it is not a dependency). `validate` NEEDS this, so no release reaches the
-  # promote chain without an SBOM in the run's artifacts.
+  # cannot see, since it is not a dependency). `validate` NEEDS this, so no release publishes
+  # without an SBOM in the run's artifacts.
   sbom:
     needs: preflight
     runs-on: ubuntu-latest
@@ -257,16 +258,24 @@ jobs:
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
-  # The other half (#551): manifest verify → image-identity ∥ validate legs → promote.
+  # The other half (#551): manifest verify → image-identity ∥ validate legs. NO promote here.
   # Re-runnable standalone via release-validate's own workflow_dispatch — from any branch,
   # against this already-published version — when a validate-harness fix needs iterating.
+  #
+  # promote is DELIBERATELY not requested on the tag-push path (guarantee lines 7 + 8, the
+  # delivery constitution's ship bar: "publish and promote… neither happens before the witness
+  # pass is signed"). This job builds + publishes the versioned :vX.Y.Z images and proves them
+  # (L4), so the release candidate EXISTS to be witnessed — but it never moves :v012. Promotion
+  # is a separate, human-gated act: after the witness pass is signed (releases/<version>/
+  # witness.json) and every batch change is accepted (release-value-gate), a maintainer dispatches
+  # release-validate with promote:true, which then clears the witness-gate + value-gate and pauses
+  # on the `release-promote` Environment for the owner's approval before :v012 moves.
   validate:
     needs: [preflight, build, build-bot, sbom]
     uses: ./.github/workflows/release-validate.yml
     with:
       version: ${{ needs.preflight.outputs.version }}
-      promote: true
-      promote_latest: ${{ inputs.promote_latest == true }}
+      promote: false
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
