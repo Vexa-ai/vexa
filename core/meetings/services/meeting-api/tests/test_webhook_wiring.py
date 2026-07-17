@@ -277,3 +277,76 @@ def _json_dumps(rec):
     import json as _json
 
     return _json.dumps(rec)
+
+# ── SYSTEM post-meeting hooks (POST_MEETING_HOOKS) ───────────────────────────────────────────────
+
+def _system_wired_client(*, with_user_hook=False):
+    """A stack with system hooks configured (the hosted billing wiring) and a per-user hook
+    only when asked — proving system delivery is independent of any user webhook config."""
+    repo = InMemoryMeetingRepo()
+    user_sink, system_sink = _CaptureSink(), _CaptureSink()
+    data = {}
+    if with_user_hook:
+        data = {"webhook_url": "https://hook.example/x", "webhook_secret": "s3cr3t",
+                "webhook_events": dict(_ALL_EVENTS)}
+    _seed(repo, session_uid="sess-uid", data=data)
+    app = create_app(
+        meeting_repo=repo, webhook_sink=user_sink,
+        system_hooks=["http://webapp:3000/api/hooks/meeting-completed"],
+        system_hook_secret="internal-secret",
+        system_webhook_sink=system_sink,
+    )
+    return TestClient(app), user_sink, system_sink
+
+
+def test_system_hook_fires_on_completion_only(goldens):
+    client, _user, system = _system_wired_client()
+    _post(client, goldens["joining"])
+    _post(client, goldens["active"])
+    assert system.calls == []                       # nothing before completion
+    _post(client, goldens["completed-stopped"])
+    assert len(system.calls) == 1
+    c = system.calls[0]
+    assert c["url"] == "http://webapp:3000/api/hooks/meeting-completed"
+    assert c["event_type"] == "meeting.completed"
+    assert c["secret"] == "internal-secret"         # signed with INTERNAL_API_SECRET
+    m = c["envelope"]["data"]["meeting"]
+    assert m["status"] == "completed"
+    assert m["user_id"] == 1                        # billing resolves the email from this
+    assert m["start_time"] and m["end_time"]        # billing derives duration from these
+
+
+def test_system_hook_independent_of_user_hook(goldens):
+    """The system hook fires even when the user configured their own webhook, and the user's
+    endpoint never receives the system delivery (separate sinks, separate scopes)."""
+    client, user, system = _system_wired_client(with_user_hook=True)
+    _post(client, goldens["joining"])
+    _post(client, goldens["active"])
+    _post(client, goldens["completed-stopped"])
+    assert len(system.calls) == 1
+    assert all(c["url"] != "http://webapp:3000/api/hooks/meeting-completed" for c in user.calls)
+    assert any(c["event_type"] == "meeting.completed" for c in user.calls)
+
+
+def test_system_scope_skips_ssrf_guard():
+    """scope='system' targets are operator config — cluster-internal URLs must deliver, not be
+    blocked by the SSRF guard that protects the per-client path."""
+    from meeting_api.webhooks import WebhookSink
+
+    delivered = []
+
+    async def transport(url, body, headers):
+        delivered.append((url, body, headers))
+        class R:  # noqa: N801 — minimal response stub
+            status_code = 200
+        return R()
+
+    sink = WebhookSink(transport)
+    env = {"event_id": "evt_x", "event_type": "meeting.completed",
+           "api_version": "2026-03-01", "created_at": "2026-01-01T00:00:00Z",
+           "data": {"meeting": {"id": 1}}}
+    per_client = asyncio.run(sink.deliver("http://10.0.0.5:3000/hook", env, "s"))
+    assert per_client.status == "blocked"           # the guard still protects user URLs
+    system = asyncio.run(sink.deliver("http://10.0.0.5:3000/hook", env, "s", scope="system"))
+    assert system.status == "delivered"
+    assert delivered and delivered[0][2]["X-Webhook-Signature"].startswith("sha256=")

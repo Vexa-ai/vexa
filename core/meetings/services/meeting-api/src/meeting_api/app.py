@@ -124,6 +124,14 @@ def create_app(
     command_publisher: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
+    # SYSTEM post-meeting hooks (parent's POST_MEETING_HOOKS): operator-configured URLs that get the
+    # typed `meeting.completed` envelope on every completion, signed with the internal secret and
+    # delivered scope="system" (SSRF-exempt — targets are in-cluster platform services, e.g. the
+    # hosted billing hook). Delivered via `system_webhook_sink` (a sink whose transport is NOT
+    # IP-pinned); falls back to `webhook_sink` when unset.
+    system_hooks: Optional[list] = None,
+    system_hook_secret: Optional[str] = None,
+    system_webhook_sink: Optional["object"] = None,
     # completion finalizer — awaited with the NUMERIC meeting id when the FSM lands on a TERMINAL
     # status (completed/failed). Production wires collector/db_writer.finalize_meeting: flush the
     # meeting's remaining redis segments to Postgres + persist the processed doc into meeting.data,
@@ -179,7 +187,9 @@ def create_app(
     app.state.webhook_sink = webhook_sink
     # The lifecycle callback publishes each persisted FSM advance to bm:meeting:{id}:status so the
     # gateway /ws (which SUBSCRIBEs that channel) forwards a ws.v1 BotStatus frame to the dashboard.
-    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer)
+    _mount_lifecycle(app, sink, meeting_repo, webhook_sink, redis, transcript_finalizer,
+                     system_hooks=system_hooks, system_hook_secret=system_hook_secret,
+                     system_webhook_sink=system_webhook_sink or webhook_sink)
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
     app.include_router(_bot_spawn.build_router(meeting_repo, runtime))
@@ -232,6 +242,10 @@ def _mount_lifecycle(
     webhook_sink: "object" = None,
     redis: "object" = None,
     transcript_finalizer: "object" = None,
+    *,
+    system_hooks: Optional[list] = None,
+    system_hook_secret: Optional[str] = None,
+    system_webhook_sink: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -454,6 +468,30 @@ def _mount_lifecycle(
                     except Exception as e:  # noqa: BLE001 — delivery is best-effort
                         log_event("webhook_deliver_failed", audience="system", level="warning",
                                   span="lifecycle.callback", fields={"error": str(e)})
+        # SYSTEM post-meeting hooks (parent's POST_MEETING_HOOKS): the typed meeting.completed
+        # envelope goes to every operator-configured URL, signed with the internal secret and
+        # delivered scope="system" (no per-user filter, SSRF-exempt — see WebhookSink.deliver).
+        # The hosted billing layer meters bot minutes off exactly this event. Best-effort (P3a);
+        # a 5xx enqueues to the system retry queue via the sink.
+        if (
+            system_hooks
+            and system_webhook_sink is not None
+            and typed_envelope is not None
+            and typed_envelope.get("event_type") == "meeting.completed"
+            and isinstance(meeting_row, dict)
+        ):
+            for hook_url in system_hooks:
+                try:
+                    await system_webhook_sink.deliver(
+                        hook_url, typed_envelope, system_hook_secret,
+                        scope="system",
+                        label=f"system:meeting:{meeting_row.get('id')}",
+                        metadata={"scope": "system"},
+                    )
+                except Exception as e:  # noqa: BLE001 — delivery is best-effort
+                    log_event("system_hook_deliver_failed", audience="system", level="warning",
+                              span="lifecycle.callback",
+                              fields={"url": hook_url, "error": str(e)})
         # Publish each persisted FSM advance to bm:meeting:{id}:status in the canonical 0.10.6 WS
         # contract shape (the source of truth; api-gateway forwards the redis payload verbatim):
         #   {type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id, ts}

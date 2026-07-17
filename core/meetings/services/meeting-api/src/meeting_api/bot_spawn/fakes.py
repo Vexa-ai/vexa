@@ -16,6 +16,8 @@ fully in-process.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from typing import Any, Optional
 
 from .ports import (
@@ -240,6 +242,13 @@ class InMemoryMeetingRepo:
             row["data"]["failure_stage"] = failure_stage
         for k, v in (data or {}).items():
             row["data"][k] = v
+        # Mirror the real adapter's time stamping: start on active, end on terminal — the
+        # meeting.completed envelope carries both (consumers derive duration from them).
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        if status == "active" and row.get("start_time") is None:
+            row["start_time"] = now
+        if status in ("completed", "failed") and row.get("end_time") is None:
+            row["end_time"] = now
         return dict(row)
 
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
