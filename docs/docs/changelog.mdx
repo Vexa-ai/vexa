@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.9 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.10 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.9`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.10`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -155,6 +155,16 @@ probe), not inferred from planning docs.
 - **Lite: terminal transcription env wired (#628).** In `deploy/lite`, the `[program:terminal]`
   worker now receives the STT and internal-secret environment it needs, so speech-to-text works in
   the single-container lite deploy. See [Deployment](/deployment).
+
+- **Webhooks: crash-safe retry drain (#520).** The retry drain now uses a Redis reliable-queue, so failed webhook deliveries survive a storage outage and are still delivered after recovery instead of being lost.
+
+- **Google Meet: stop silence hallucinations (#617).** Added ja/tr phrase lists plus a near-silent submit gate, so near-silent audio windows are no longer sent to Whisper — killing the phantom phrases Whisper emits for near-silence.
+
+- **Google Meet: empirical hallucination harvester (#617 follow-up).** A single script that harvests hallucination phrase-lists empirically across every Whisper language — groundwork for the broader silence-hallucination work (#622).
+- **Credits (v0.12.10).** @waqaskhan137 — the orphan-process-group diagnosis (#486) and the
+  transcription-model findings whose regression rows now live in #522/#525; @m-tauqueer — driving
+  the leave-when-alone value (#270) whose spec is now #545. Superseded PRs are credited on their
+  threads; findings are contributions.
 
 ## Versioning
 
