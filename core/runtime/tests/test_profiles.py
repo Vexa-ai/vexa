@@ -42,7 +42,10 @@ def test_registry_resolves_meeting_bot_and_agent():
     for name in ("meeting-bot", "agent"):
         runnable = reg.resolve(name)
         assert isinstance(runnable, Runnable)
-        assert runnable.command  # both have a launch command
+    # The agent carries an explicit launch argv; the meeting-bot deliberately carries NO command so
+    # every container backend execs the shipped bot image's own ENTRYPOINT (#675).
+    assert reg.resolve("agent").command == ["python", "-m", "worker"]
+    assert reg.resolve("meeting-bot").command is None
     assert reg.resolve("does-not-exist") is None
 
 
@@ -52,6 +55,17 @@ def test_meeting_bot_uses_browser_image_from_env(monkeypatch):
     assert reg.resolve("meeting-bot").image == "registry.example.com/vexa-bot:0.12"
     # Lifetime is managed externally (idle_timeout 0 ⇒ enforcement skips it).
     assert reg.get("meeting-bot").idle_timeout_sec == 0
+
+
+def test_meeting_bot_forwards_speaker_stream_tuning(monkeypatch):
+    monkeypatch.setenv("BOT_SPEAKER_MIN_AUDIO_SEC", "1")
+    monkeypatch.setenv("BOT_SPEAKER_CONFIRM_THRESHOLD", "1")
+    monkeypatch.delenv("BOT_SPEAKER_SUBMIT_INTERVAL_SEC", raising=False)
+    reg = default_registry()
+    assert reg.get("meeting-bot").base_env == {
+        "BOT_SPEAKER_MIN_AUDIO_SEC": "1",
+        "BOT_SPEAKER_CONFIRM_THRESHOLD": "1",
+    }
 
 
 def test_meeting_bot_env_is_a_valid_invocation():
@@ -150,7 +164,7 @@ def test_command_overrides_noop_without_env(monkeypatch):
     monkeypatch.delenv("BOT_COMMAND", raising=False)
     monkeypatch.delenv("AGENT_WORKER_COMMAND", raising=False)
     reg = apply_command_overrides(default_registry())
-    assert reg.resolve("meeting-bot").command == ["/app/vexa-bot/entrypoint.sh"]
+    assert reg.resolve("meeting-bot").command is None  # image ENTRYPOINT is authoritative (#675)
     assert reg.resolve("agent").command == ["python", "-m", "worker"]
 
 
@@ -171,5 +185,5 @@ def test_command_overrides_ignore_blank_env(monkeypatch):
     monkeypatch.setenv("BOT_COMMAND", "")
     monkeypatch.setenv("AGENT_WORKER_COMMAND", "   ")
     reg = apply_command_overrides(default_registry())
-    assert reg.resolve("meeting-bot").command == ["/app/vexa-bot/entrypoint.sh"]
+    assert reg.resolve("meeting-bot").command is None  # image ENTRYPOINT is authoritative (#675)
     assert reg.resolve("agent").command == ["python", "-m", "worker"]

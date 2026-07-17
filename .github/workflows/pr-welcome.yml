@@ -1,0 +1,39 @@
+# pr-welcome — a one-time, friendly nudge for first-time contributors to come explain their change
+# on Discord. HIGHLY RECOMMENDED, NEVER REQUIRED: this only posts a comment, gates nothing, and
+# fires only for a contributor's first PR so regulars aren't pinged. The merge bar is the
+# merge-card gate (value + diff); this is hospitality, not enforcement.
+name: pr-welcome
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write   # post one welcome comment; no code checkout (safe under pull_request_target)
+
+jobs:
+  welcome:
+    # only a contributor's first interaction with the repo — don't nudge members/regulars
+    if: ${{ contains(fromJSON('["FIRST_TIME_CONTRIBUTOR","FIRST_TIMER","NONE"]'), github.event.pull_request.author_association) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              `👋 Thanks for opening your first PR to Vexa, @${context.payload.pull_request.user.login}!`,
+              ``,
+              `**Highly recommended (not required):** hop into our [Discord](https://discord.gg/Ga9duGkVz9)`,
+              `and tell us in a sentence or two **what** this change does and **why**. It helps us review`,
+              `your value bundle faster and connects you with the reporter and maintainers.`,
+              ``,
+              `Your PR is judged on its evidence — the observation bundle + the diff — not on whether you`,
+              `show up. But showing up makes the whole thing smoother. See`,
+              `[the delivery guide](https://docs.vexa.ai/governance/delivery) for how a PR reaches merge.`,
+            ].join("\n");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });

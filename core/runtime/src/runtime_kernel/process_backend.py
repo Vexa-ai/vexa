@@ -5,11 +5,21 @@ Output capture: each workload's stdout+stderr goes to a per-workload log file un
 ``PROCESS_LOG_DIR`` (default ``<tempdir>/vexa-workloads``) — the process analog of ``docker logs``.
 A workload that exits nonzero gets its log tail surfaced at ERROR level through the runtime's own
 logs the first time the exit is observed, so a crashed worker (e.g. an ImportError at startup) is
-diagnosable from the runtime service logs instead of vanishing into /dev/null."""
+diagnosable from the runtime service logs instead of vanishing into /dev/null.
+
+Group-scoped teardown: each workload is spawned as its own process-group leader
+(``start_new_session=True`` → leader pid == pgid). Every path that ends a workload — an observed
+self-exit, ``kill``/``cleanup``, and the kernel's stop sequence — signals the whole *group*
+(``os.killpg``), so a workload's children (e.g. the bot's Chromium tree) are reaped with it instead
+of being reparented to PID 1 and stranded on the shared host. Declared limitation: descendants that
+detach into their OWN process group (the join module's debug-view x11vnc/websockify, spawned
+``detached: true``) are out of any group signal's reach — a container/host restart still clears
+those."""
 from __future__ import annotations
 
 import logging
 import os
+import signal
 import subprocess
 import tempfile
 from typing import Optional
@@ -38,6 +48,25 @@ def _tail(path: str, limit: int = _TAIL_BYTES) -> str:
             return f.read().decode("utf-8", errors="replace").strip()
     except OSError:
         return ""
+
+
+def _signal_group(pgid: int, sig: int) -> bool:
+    """Signal a whole process group by its pgid, which for our workloads equals the leader pid
+    (spawned ``start_new_session=True``, so the leader IS the group leader — pid == pgid, and stays
+    the pgid even after the leader dies, as long as any group member lives). Returns True if the
+    signal was delivered, False if the group is already gone (``ProcessLookupError`` = the common,
+    well-behaved case: every member already exited — nothing to reap). A non-root runtime that
+    cannot reach a per-subject-uid group degrades LOUDLY (the module's stated convention) and never
+    crashes the caller."""
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError as e:
+        log.error("workload group %d: cannot signal (%s) — orphans may survive (non-root runtime?)",
+                  pgid, e)
+        return False
 
 
 class ProcessBackend:
@@ -101,14 +130,28 @@ class ProcessBackend:
         finally:
             if out_fh is not None:
                 out_fh.close()  # the child holds its own fd; ours would only leak
-        self._capture[workload_id] = {"log_path": log_path, "reported": False}
+        self._capture[workload_id] = {"log_path": log_path, "reported": False, "reaped": False}
         return WorkloadHandle(id=workload_id, impl=proc)
 
     def exit_code(self, h: WorkloadHandle) -> Optional[int]:
         code = h._impl.poll()  # type: ignore[attr-defined]
-        if code is not None and code != 0:
-            self._report_failure(h.id, code)
+        if code is not None:
+            # A workload that ended — for ANY reason, clean or not — reaps its group on first
+            # observation (P22: teardown is guaranteed at the boundary, not hoped for). The leader
+            # is gone, so its children are already orphaned; SIGKILL the group with no grace. The
+            # one-shot guard mirrors the failure-report pattern: exit_code is polled repeatedly.
+            self._reap_group_once(h)
+            if code != 0:
+                self._report_failure(h.id, code)
         return code
+
+    def _reap_group_once(self, h: WorkloadHandle) -> None:
+        """Sweep the workload's process group exactly once, on first observation of its exit."""
+        state = self._capture.get(h.id)
+        if state is None or state["reaped"]:
+            return
+        state["reaped"] = True
+        _signal_group(h._impl.pid, signal.SIGKILL)  # type: ignore[attr-defined]
 
     def _report_failure(self, workload_id: str, code: int) -> None:
         """Log the failed workload's output tail — once per workload (exit_code is polled)."""
@@ -130,14 +173,19 @@ class ProcessBackend:
             state["reported"] = True
 
     def terminate(self, h: WorkloadHandle) -> None:
+        # Leader-only SIGTERM (fork B1): the bot's graceful-leave contract runs on the leader's
+        # SIGTERM handler; a group-wide SIGTERM would also hit Chromium mid-leave. The group sweep
+        # rides the observed exit (exit_code) and the kill() escalation, so children never survive.
         if h._impl.poll() is None:  # type: ignore[attr-defined]
             self._suppress_report(h.id)
             h._impl.terminate()  # type: ignore[attr-defined]
 
     def kill(self, h: WorkloadHandle) -> None:
-        if h._impl.poll() is None:  # type: ignore[attr-defined]
-            self._suppress_report(h.id)
-            h._impl.kill()  # type: ignore[attr-defined]
+        # Force path: SIGKILL the whole group, not just the leader — this is what reaps a child tree
+        # the leader would otherwise strand (the grace-expiry escalation of kernel.stop, and
+        # cleanup). The leader is a member of its own group, so this covers it too.
+        self._suppress_report(h.id)
+        _signal_group(h._impl.pid, signal.SIGKILL)  # type: ignore[attr-defined]
 
     def cleanup(self, h: WorkloadHandle) -> None:
         self.kill(h)

@@ -53,3 +53,29 @@ node gateway/contracts/api.v1/validate.mjs
 A **deliberate** main API bump → re-capture `api.schema.json` + `pnpm seal:contracts` on a
 `lane:contract` human-reviewed PR (a breaking change opens `api.v2`, leaving v1 until no
 consumer pins it). The frozen bytes are the spec; never edit them to match an implementation.
+
+## What "sealed" enforces — and what it does not (#591)
+
+The seal in `contracts.seal.json` freezes the **bytes** of `api.schema.json` — it guarantees the
+*document* cannot silently change. It does **not**, by itself, guarantee the shipped services still
+*serve* the routes the document declares: 0.12 renamed/dropped six sealed endpoints and the
+one-directional conformance (impl ⊆ contract) stayed green. `gate:contract-conformance` now closes
+that gap with the **reverse** check (contract ⊆ impl) plus a **golden-shape** check:
+
+- **Implementation presence (contract ⊆ impl).** For every `(path, method)` this document declares,
+  the union of the shipped gateway edge + meeting-api must register it — or the route is recorded in
+  the audited **[`KNOWN_GAPS.json`](KNOWN_GAPS.json)** ledger (see below). A sealed route renamed or
+  dropped and *not* audited turns CI RED, listed by name.
+- **Response shapes (golden-driven).** The frozen golden examples (`golden/*.example.json`) are driven
+  against the **real** responses, so a renamed field (e.g. `BotStatusResponse.running_bots` →
+  `running`) fails — not just a removed path.
+
+**`KNOWN_GAPS.json` is the audited exception path.** It records, with a reason + issue link for each
+row, the sealed routes the 0.12 core genuinely cannot serve yet (`known_gaps`: e.g. `POST .../chat`
+send, `POST /meetings/{id}/transcribe`, the bot-command avatar/screen/speak routes) and the prefixes
+owned by *other* services (`owned_elsewhere`: `/admin` → admin-api, `/api` → agent-api, `/mcp` → the
+mcp service, …). The gate prints every entry loudly (`SEALED-BUT-WAIVED` / `OWNED-ELSEWHERE`) on each
+run. Adding a row is a **deliberate, diff-visible change in this sealed dir** — and because the file is
+not a `*.schema.json`, it does **not** move the api.v1 seal hash, so the seal stays frozen while the
+gap lives in the ledger. Closing a gap means implementing the route (delete its row) or re-versioning
+the contract in a `lane:contract` PR.

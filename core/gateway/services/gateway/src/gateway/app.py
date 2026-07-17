@@ -36,7 +36,26 @@ from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
-from .ports import Authorizer, DownstreamClient, RedisBus
+from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
+
+# #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
+# 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
+# emits a TYPED, non-empty auth-infra log line (FM02: the old path swallowed the failure in a
+# silent `except`, erasing the one signal that would have named this incident for what it was).
+def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
+    log_event(
+        "auth_infra_unavailable",
+        audience="system",
+        level="error",
+        span=span,
+        fields={"reason": type(exc).__name__, "detail": str(exc)},
+    )
+    return Response(
+        content=json.dumps({"detail": "Authentication temporarily unavailable, retry"}),
+        status_code=503,
+        media_type="application/json",
+        headers={"Retry-After": "1"},
+    )
 
 # Route-prefix → required scope set. Mirrors main.py ROUTE_SCOPES (main.py:59-65) for the CORE
 # surface the gateway lane carves; multi-scope tokens pass for any of their domains.
@@ -105,7 +124,10 @@ def create_app(
         if not api_key:
             return Response(content=json.dumps({"detail": "Missing API key"}),
                             status_code=401, media_type="application/json")
-        user_data = await authorizer.resolve(api_key)
+        try:
+            user_data = await authorizer.resolve(api_key)
+        except AuthUnavailable as e:
+            return _auth_unavailable_response(e, span="auth")  # #495: infra down → 503, not 401
         if not user_data:
             return Response(content=json.dumps({"detail": "Invalid API key"}),
                             status_code=401, media_type="application/json")
@@ -131,7 +153,12 @@ def create_app(
                 media_type="application/json",
             )
 
-        user_data = await authorizer.resolve(client_key)
+        try:
+            user_data = await authorizer.resolve(client_key)
+        except AuthUnavailable as e:
+            # #495: the validation hop is unreachable/faulted — tell the caller the truth (503,
+            # retry), never 401. A valid key must not be reported as invalid because we are slow.
+            return None, _auth_unavailable_response(e, span="auth")
         if not user_data:
             return None, Response(
                 content=json.dumps({"detail": "Invalid API key"}),
@@ -259,7 +286,22 @@ def create_app(
             media_type = resp_headers.get("content-type", "application/json")
         except Exception:
             pass
-        return Response(content=resp.content, status_code=resp.status_code, media_type=media_type)
+        # Preserve the END-TO-END headers a media/range response needs. The buffered proxy
+        # otherwise returns a 206 with no Content-Range, which browsers treat as a protocol
+        # violation and abort — breaking recording playback (<audio>/<video> Range streaming).
+        # Length/encoding headers are intentionally NOT copied: Starlette recomputes
+        # Content-Length from the (already httpx-decoded) body; a stale one would corrupt it.
+        passthrough = {
+            k: resp_headers[k]
+            for k in ("content-range", "accept-ranges", "content-disposition")
+            if k in resp_headers
+        }
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type=media_type,
+            headers=passthrough,
+        )
 
     def _meeting(path: str) -> str:
         return f"{meeting_api_url}{path}"
@@ -302,6 +344,16 @@ def create_app(
     async def accept_transcript_share(request: Request):
         return await _forward("POST", _meeting("/transcripts/share/accept"), request)
 
+    # native-keyed share MINT alias (#579 C3): the 0.10 api.v1 share path. The mint MOVED to
+    # POST /meetings/{platform}/{native}/share in 0.12; alias the old transcripts path to it so a
+    # 0.10 client no longer 404s. NOTE (signed): the 0.12 mint returns the capability-token share
+    # shape ({id, token, mode, expires_at}), NOT the sealed TranscriptShareResponse public-URL shape
+    # ({share_id, url, expires_at, expires_in_seconds}) — the public-URL-share backend is gone; only
+    # the capability-token share exists. See the PR's "signed gaps" section.
+    @app.post("/transcripts/{platform}/{native_meeting_id}/share")
+    async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+
     @app.get("/transcripts/{platform}/{native_meeting_id}")
     async def transcript(platform: str, native_meeting_id: str, request: Request):
         return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)
@@ -323,6 +375,15 @@ def create_app(
     # The master byte stream the recording player loads (the master metadata's raw_url points here).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/raw")
     async def get_recording_media_raw(recording_id: int, media_file_id: int, request: Request):
+        return await _forward(
+            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
+        )
+
+    # native download alias (#579 C3): the sealed api.v1 media-download path a 0.10 client calls.
+    # 0.12 renamed the media byte route to .../raw (finalize-on-read master stream); alias .../download
+    # to it so recording playback no longer 404s. Forwarded verbatim (Range headers preserved).
+    @app.get("/recordings/{recording_id}/media/{media_file_id}/download")
+    async def get_recording_media_download(recording_id: int, media_file_id: int, request: Request):
         return await _forward(
             "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
         )
@@ -367,6 +428,26 @@ def create_app(
         return await _forward(
             "PUT", _meeting(f"/meetings/{platform}/{native_meeting_id}/intent"), request
         )
+
+    # native-keyed mutate (#579 C1): the sealed api.v1 PATCH/DELETE a 0.10 client (incl. the shipped
+    # dashboard) calls by (platform, native_meeting_id). Thin passthrough — meeting-api resolves
+    # (platform, native) → the caller's newest OWNED row and forwards to the same row-id handler
+    # (unknown/unowned native → 404, FSM-owned row → 409). Additive: the by-ROW-id int routes above
+    # are unchanged; these 2-segment paths never shadow them (FastAPI matches on segment count).
+    @app.patch("/meetings/{platform}/{native_meeting_id}")
+    async def patch_native_meeting(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("PATCH", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+
+    @app.delete("/meetings/{platform}/{native_meeting_id}")
+    async def delete_native_meeting(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("DELETE", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+
+    # native-keyed chat READ (#579 C3): the sealed api.v1 GET the 0.10 dashboard's chat panel calls.
+    # Thin passthrough to meeting-api's honest empty-list restore (0.12 does not persist in-meeting
+    # chat server-side). The POST (send) half is a SIGNED GAP — no bot-command backend in 0.12.
+    @app.get("/bots/{platform}/{native_meeting_id}/chat")
+    async def read_meeting_chat(platform: str, native_meeting_id: str, request: Request):
+        return await _forward("GET", _meeting(f"/bots/{platform}/{native_meeting_id}/chat"), request)
 
     # ---- user self-serve webhook config (main.py:1080 set_user_webhook_proxy) ----
     # Identity OWNS the config (user.data JSONB via admin-api); the gateway is the public edge for
@@ -528,7 +609,21 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
     # front (the SAME resolver /auth/me + the proxy use — ports.py resolve / app.py:96-99,119-125)
     # so we can auto-subscribe the socket to its USER-SCOPED channel. Fail-closed like the proxy:
     # a present-but-invalid key → invalid_api_key + close 4401, not a silently half-open socket.
-    user_data = await authorizer.resolve(api_key)
+    try:
+        user_data = await authorizer.resolve(api_key)
+    except AuthUnavailable as e:
+        # #495: resolve() now RAISES when the validation hop is unreachable/faulted. On the REST
+        # surface that becomes a 503; on this already-accepted socket the truthful equivalent is a
+        # typed error frame + a distinct retryable close code (4503 ≈ HTTP 503), NOT 4401 (which
+        # asserts the key is bad) and NOT an uncaught raise (which drops the socket 1006/1011 with
+        # no signal). A valid key must not be told it is invalid because our auth path is down.
+        log_event("auth_infra_unavailable", audience="system", level="error", span="ws",
+                  fields={"reason": type(e).__name__, "detail": str(e)})
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "auth_unavailable"}))
+        finally:
+            await ws.close(code=4503)  # retry later — auth infrastructure unavailable
+        return
     if not user_data:
         try:
             await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))

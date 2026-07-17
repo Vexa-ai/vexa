@@ -21,6 +21,8 @@ The ``:mutable`` payload mirrors the bot's live publisher
 from __future__ import annotations
 
 import json
+import os
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,7 +31,23 @@ from .ports import RedisBus, TranscriptStore
 # Stream / consumer-group defaults (parent ``collector/config.py``).
 STREAM_NAME = "transcription_segments"
 CONSUMER_GROUP = "collector_group"
-CONSUMER_NAME = "collector-main"
+# #636: the consumer name must be UNIQUE per replica, else every meeting-api pod joins the group
+# under one identity and a crashed pod's delivered-but-un-acked batch is orphaned forever (no peer
+# can distinguish — or reclaim — it). Derive it from pod identity: in k8s the pod name IS the
+# hostname, so ``collector-<hostname>`` is distinct per replica; keep ``COLLECTOR_CONSUMER_NAME`` as
+# an explicit override (and to pin a deterministic name in single-process tests).
+CONSUMER_NAME = os.environ.get("COLLECTOR_CONSUMER_NAME") or f"collector-{socket.gethostname()}"
+# #636: how long a delivered-but-un-acked entry must sit idle before another replica may reclaim it.
+# The gate is what keeps reclaim from STEALING a live peer's in-flight batch (which is pending only
+# for the sub-second between XREADGROUP and XACK) — only a genuinely orphaned batch idles past this.
+RECLAIM_MIN_IDLE_MS = int(os.environ.get("COLLECTOR_RECLAIM_MIN_IDLE_MS", "60000"))
+# #660: how long an ABANDONED consumer (a per-recreate ``collector-<hostname>`` ghost) may sit in the
+# group before the reclaim sweep prunes it. A container recreate mints a NEW consumer name and leaves
+# the old one in ``collector_group`` forever (pending 0, never read again) — nothing else removes it.
+# The floor is set WELL above RECLAIM_MIN_IDLE_MS (default 30 min) so a merely-quiet LIVE replica —
+# which re-registers on its very next XREADGROUP — is never mistaken for a ghost. The ``pending == 0``
+# guard is the load-bearing safety: a consumer still holding an in-flight batch is NEVER pruned.
+CONSUMER_TTL_MS = int(os.environ.get("COLLECTOR_CONSUMER_TTL_MS", str(30 * 60 * 1000)))
 
 
 def _mutable_channel(meeting_id: int) -> str:
@@ -266,3 +284,89 @@ async def consume_segments(
     if acked:
         await redis.ack(group=group, stream=stream, message_ids=acked)
     return total
+
+
+async def reclaim_segments(
+    store: TranscriptStore,
+    redis: RedisBus,
+    *,
+    stream: str = STREAM_NAME,
+    group: str = CONSUMER_GROUP,
+    consumer: str = CONSUMER_NAME,
+    min_idle_ms: int = RECLAIM_MIN_IDLE_MS,
+    ttl_ms: int = CONSUMER_TTL_MS,
+    count: int = 10,
+) -> int:
+    """#636: reclaim ORPHANED entries — a crashed replica's delivered-but-un-acked batch that sits
+    in its PEL with no surviving owner — and drain them through the SAME ``ingest`` → ``ack`` path
+    ``consume_segments`` uses, so at-least-once delivery holds across replicas.
+
+    One bounded ``XAUTOCLAIM`` per call (``min_idle_ms`` gated). The gate is load-bearing: an entry
+    that a LIVE peer merely holds in-flight (pending for the sub-second between its XREADGROUP and
+    XACK) idles far less than ``min_idle_ms`` and is therefore NEVER stolen — only a genuinely
+    orphaned batch (idle past the threshold) is reclaimed. A single call with a bounded ``count`` is
+    sufficient: XAUTOCLAIM returns a continuation cursor and the NEXT tick continues from it, so this
+    never loops-to-exhaustion inside one tick (which would reintroduce a hang surface). Returns the
+    total segments persisted from the reclaimed batch."""
+    reclaimed = await redis.reclaim_orphans(
+        group=group, stream=stream, consumer=consumer, min_idle_ms=min_idle_ms, count=count
+    )
+    total = 0
+    acked: list[str] = []
+    for message_id, fields in reclaimed:
+        total += await ingest(store, redis, fields)
+        acked.append(message_id)
+    if acked:
+        await redis.ack(group=group, stream=stream, message_ids=acked)
+    # #660: same sweep, second sub-step — prune abandoned per-recreate ghost consumers so the group
+    # tracks only live replicas. Kept AFTER the reclaim so we never delete a consumer whose orphaned
+    # batch we might still be draining this tick.
+    await prune_idle_consumers(
+        redis, stream=stream, group=group, consumer=consumer, ttl_ms=ttl_ms
+    )
+    return total
+
+
+async def prune_idle_consumers(
+    redis: RedisBus,
+    *,
+    stream: str = STREAM_NAME,
+    group: str = CONSUMER_GROUP,
+    consumer: str = CONSUMER_NAME,
+    ttl_ms: int = CONSUMER_TTL_MS,
+) -> int:
+    """#660: remove ABANDONED consumers from ``group``. A container recreate (compose
+    ``--force-recreate``, a k8s pod restart, a rolling deploy) mints a NEW ``collector-<hostname>``
+    and orphans the OLD name in the group forever: it read its last message, will never read
+    another, and no other path removes it. Left unchecked the group fills with dead names that
+    inflate operator ``XINFO`` reads and muddy ``/health``.
+
+    Enumerate ``XINFO CONSUMERS group`` and ``XGROUP DELCONSUMER`` any consumer that is BOTH:
+
+      * ``pending == 0`` — holds no delivered-but-un-acked batch. This is load-bearing: a consumer
+        with an in-flight batch is NEVER pruned (deleting it would abandon a real batch — that is
+        what the #636 orphan-reclaim exists to recover, and pruning must not manufacture orphans).
+      * ``idle > ttl_ms`` — quiet far longer than any live replica, which re-registers on its next
+        ``XREADGROUP``. The high floor (default 30 min ≫ RECLAIM_MIN_IDLE_MS) keeps a briefly-quiet
+        live replica safe.
+
+    Never prunes ``consumer`` (self): the running replica is live by definition and re-registers
+    every tick. Idempotent and self-healing. On a Redis without ``XINFO CONSUMERS`` / ``XGROUP
+    DELCONSUMER`` (or an older server that rejects them) ``list_consumers`` degrades to ``[]`` — the
+    same no-op-on-unsupported contract ``reclaim_orphans`` uses — so this becomes a no-op and the
+    consume path is untouched. Returns the number of consumers pruned."""
+    consumers = await redis.list_consumers(group=group, stream=stream)
+    pruned = 0
+    for info in consumers:
+        name = info.get("name")
+        if not name or name == consumer:
+            continue
+        if int(info.get("pending") or 0) != 0:
+            continue
+        if int(info.get("idle") or 0) <= ttl_ms:
+            continue
+        # DELCONSUMER returns the pending count it held (0 for a ghost we just gated on) — the delete
+        # happens regardless of that number, so count the prune here, not on the (falsy) return.
+        await redis.delete_consumer(group=group, stream=stream, consumer=name)
+        pruned += 1
+    return pruned

@@ -27,10 +27,22 @@ def build_production_app():
     """Configure the DB engine + assemble the app; converge the schema on startup."""
     from .app import db as app_db
     from .app.main import create_app
+    from .config_preflight import preflight
     from .schema.models import Base
     from .schema.sync import ensure_schema
 
-    app_db.configure(_database_url())
+    # #526: refuse to boot a misconfigured deploy — a missing INTERNAL_API_SECRET makes the
+    # fail-closed /internal/validate guard 503 every gateway validation hop, but the process would
+    # otherwise come up green (the 2026-04-23 shape: 23 meetings failed while monitors stayed green).
+    preflight()
+
+    # #635: per-pod pool ceiling from env so an operator can fit managed Postgres' max_connections
+    # (the mitigation the 2026-04-21 outage required). Defaults 5/10 match deploy/db-budget.json:7.
+    app_db.configure(
+        _database_url(),
+        pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
+    )
     app = create_app()
 
     @app.on_event("startup")

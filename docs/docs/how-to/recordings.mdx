@@ -5,8 +5,9 @@ description: "List recordings and stream the audio — from your own object stor
 
 <Note>
 Recording retrieval is **API-only today** — the terminal has no built-in player yet. The endpoints below
-are live and covered by service tests; the full live loop (in-meeting capture → object storage →
-playback) has not been validated end-to-end. See the [capability truth table](/roadmap/status#capability-truth-table).
+are live and covered by service tests. Browser playback and seeking work **through the gateway**: a `Range`
+request returns a `206 Partial Content` with its `Content-Range` and `Accept-Ranges` headers intact.
+See the [capability truth table](/roadmap/status#capability-truth-table).
 </Note>
 
 Alongside the diarized transcript, each meeting's **audio recording** is uploaded to object storage — on a
@@ -40,6 +41,20 @@ The response carries a `raw_url` of the form
 ```bash
 curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recordings/42/media/<media_file_id>/raw" -o meeting-42.audio
+```
+
+### Range requests (playback and seek)
+
+The `/raw` endpoint honours HTTP `Range` — a partial request returns `206 Partial Content` carrying
+`Content-Range` and `Accept-Ranges: bytes`, **preserved through the gateway** front door. This is what
+lets a browser `<audio>`/`<video>` element stream and seek the recording instead of aborting the fetch:
+
+```bash
+curl -I -H "X-API-Key: $API_KEY" -H "Range: bytes=0-1023" \
+  "$API_BASE/recordings/42/media/<media_file_id>/raw?type=audio"
+# HTTP/1.1 206 Partial Content
+# Accept-Ranges: bytes
+# Content-Range: bytes 0-1023/<total>
 ```
 
 ## Where it's stored
