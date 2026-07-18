@@ -1,0 +1,192 @@
+{
+  "version": "v0.12.12",
+  "candidate": "v0.12.12",
+  "generated_from": "v0.12.10...v0.12.12",
+  "witnessed_by": "Dmitriy Grankin (@DmitriyG228)",
+  "witnessed_at": "2026-07-18",
+  "deployment": "lite (throwaway Linode VM 100928608, LOCAL_STT=1, image index sha256:1a835cfc3e98feb16efda64c2944e1d5035aa411ef3750d6cea0a9726ccd6969 (linux/amd64 image sha256:ea043dafd6fa9bb179d217f7401515b22cc5a1481f1cfdf1c425b1bf46c12e9c))",
+  "witness_deployment": {
+    "url": "http://172.239.175.28:3001",
+    "provisioned_by": "linode-cli throwaway VM 100928608 (us-sea, g6-standard-4), lite runbook `make -C deploy/lite up LOCAL_STT=1` from the PUBLISHED vexaai/vexa-lite:v0.12.12 \u2014 autonomously provisioned + prevalidated, human walked it live",
+    "prevalidated": [
+      "front doors: gateway :8056 / agent-api :8100 / terminal :3001 all \u2713 (make -C deploy/lite test)",
+      "gateway /health 200; terminal :3001 200 text/html",
+      "auth: unauthenticated /meetings 401; minted key GET /meetings 200",
+      "local STT smoke: 'The quick brown fox jump over the lazy dog.' \u2713",
+      "boot log scan: zero application tracebacks on v0.12.12 (recordings/runtime/terminal all changed in-batch)"
+    ]
+  },
+  "values": [
+    {
+      "pr": "630",
+      "title": "feat(release): native arm64 smoke in release-validate",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/release-validate.yml (CI leg)"
+    },
+    {
+      "pr": "704",
+      "title": "fix(db-budget-gate): the pool scan counts production source \u2014 make the test filter express it (stacked on #703)",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/gates.yml (CI leg), scripts/gates.mjs (gate)"
+    },
+    {
+      "pr": "705",
+      "title": "test(admin-api): inline the pool literals \u2014 the budget gate excludes tests by contract (#702)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/identity/services/admin-api/tests/test_db_pool.py"
+    },
+    {
+      "pr": "709",
+      "title": "governance(D-L4): the witness walks a DELIVERED deployment \u2014 enforced at the receipt",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "scripts/release-witness-gate.mjs witness_deployment enforcement \u2014 this receipt satisfies it (url + provisioned_by + prevalidated present); the gate red-on-absent is #709's own test"
+    },
+    {
+      "pr": "711",
+      "title": "release: v0.12.10 witness receipt \u2014 SIGNED (human witnessed the assembled value)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "release bookkeeping: the signed v0.12.10 receipt itself (releases/v0.12.10/witness.json, gate-green on main)"
+    },
+    {
+      "pr": "719",
+      "title": "governance: merge-card acceptance row \u2014 Closes cannot silently drop delivery legs",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/merge-card-comment.yml (CI leg), .github/workflows/merge-card.yml (CI leg)"
+    },
+    {
+      "pr": "720",
+      "title": "fix(release-witness-gate): full 64-hex image digests or no pass \u2014 truncation rule + v0.12.10 record-completion",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "scripts/release-witness-gate.test.mjs (21 self-tests, run green on main) \u2014 and this receipt itself: both digests carried full 64-hex per the rule #720 installed"
+    },
+    {
+      "pr": "721",
+      "title": "docs(releases): step 4 \u2014 the publish act joins the runbook (gh release create + the guard it triggers)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "releases/README.md:77 \u2014 step 4 (the publish act) verified present on main; this release executes the documented flow end-to-end"
+    },
+    {
+      "pr": "726",
+      "title": "harness: least-privilege env for the model subprocess (scrub REDIS_URL + dispatch token)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/agent/tests/test_llm_claude_code.py"
+    },
+    {
+      "pr": "755",
+      "title": "feat(transcription): STT model id rides invocation.v1 \u2014 every OpenAI-compatible backend selectable per deployment (#522)",
+      "visibility": "user-visible",
+      "witness_step": "LIVE \u2014 witness the delivered value: feat(transcription): STT model id rides invocation.v1 \u2014 every OpenAI-compatible backend selectable per deployment (#522). (Fill the exact action + what you observe.)",
+      "pass": "default path (TRANSCRIPTION_MODEL unset) behaves byte-identically: live transcription works unchanged through the modified client",
+      "witnessed": true,
+      "observation": "Live transcript text flowed in the terminal UI on the delivered deployment through the changed whisper client on the default whisper-1 path; local STT smoke transcribed the fixture sentence. The Groq selectable-model live leg deliberately stays open on #522 (W1) \u2014 not claimed by this receipt.",
+      "evidence": "whisper model.test.ts + bot pipeline.test.ts (wire-level, red on base) + live walk on the delivered deployment",
+      "platform": "gmeet+teams"
+    },
+    {
+      "pr": "758",
+      "title": "fix(gmeet): leave click's browser-context fallbacks were dead \u2014 ':has-text()' fed to querySelector; one canonical in-page clicker + a gate lane that sees the class (#542)",
+      "visibility": "user-visible",
+      "platform": "gmeet",
+      "witness_step": "LIVE \u2014 witness the delivered value: fix(gmeet): leave click's browser-context fallbacks were dead \u2014 ':has-text()' fed to querySelector; one canonical in-page clicker + a gate lane that sees the class (#542). (Fill the exact action + what you observe.)",
+      "pass": "on stop/leave the bot actually exits the Meet call, including when a confirmation dialog appears",
+      "witnessed": true,
+      "observation": "Human witness: the gmeet bot exited the call on stop \u2014 the leave path whose browser-context dialog fallbacks were dead code pre-fix. (Teams sibling #759/#782 rides the next release; today's Teams meeting does not claim it.)",
+      "evidence": "join module leave.test.ts jsdom suite + real-Chromium probe (agent-run) + live human walk"
+    },
+    {
+      "pr": "760",
+      "title": "feat(gmeet): every segment carries the STT-detected window language (#523)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/modules/gmeet-pipeline/src/pipeline-conformance.test.ts"
+    },
+    {
+      "pr": "761",
+      "title": "fix(terminal): error truth at every surface \u2014 presentError seam + WS-gated bot controls (#533, #674)",
+      "visibility": "user-visible",
+      "witness_step": "LIVE \u2014 witness the delivered value: fix(terminal): error truth at every surface \u2014 presentError seam + WS-gated bot controls (#533, #674). (Fill the exact action + what you observe.)",
+      "pass": "error/status surfaces name what actually happened in user language; a WS-disconnected/ended meeting offers no stale controls",
+      "witnessed": true,
+      "observation": "Human witness: after stopping the bot, the meeting header followed the real WS state \u2014 no stale actionable 'Stop bot', no raw JSON toast. Witness noted minor caveats, to be filed as follow-up issues (recorded on the release thread).",
+      "evidence": "terminal suite on branch (50 files/364 tests era) + live human walk",
+      "platform": "terminal"
+    },
+    {
+      "pr": "762",
+      "title": "fix(meetings): pre-active teardown attributes the reason from the status (#598)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/meetings/services/meeting-api/tests/test_runtime_destroy_terminal_e2e.py"
+    },
+    {
+      "pr": "763",
+      "title": "ci(pr-value): lite-smoke leg \u2014 build the PR lite image, boot it, smoke the front doors (#581)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/pr-value.yml (CI leg), scripts/gates.mjs (gate)"
+    },
+    {
+      "pr": "764",
+      "title": "feat(deploy): make probe \u2014 standing full-journey smoke probe per surface (#690)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/compose/tests/probe_wiring_test.py"
+    },
+    {
+      "pr": "765",
+      "title": "fix(api.v1): 61 secured ops referenced a nonexistent APIKeyHeader scheme \u2014 resolve to ApiKeyAuth/AdminApiKeyAuth (#531)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "contracts.seal.json (seal gate)"
+    },
+    {
+      "pr": "772",
+      "title": "release: fold #765's fragment \u2014 v0.12.11 batch completion",
+      "visibility": "docs",
+      "witnessed": "by-proxy",
+      "evidence": "release bookkeeping: fragment fold verified by gate:docs-version green on main and the assembled 0.12.x changelog section"
+    },
+    {
+      "pr": "775",
+      "title": "fix(runtime): kernel merges Profile.base_env into the spawn env \u2014 chart-set BOT_SPEAKER_* tuning reaches the bot (#771)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "core/runtime/tests/test_lifecycle.py"
+    },
+    {
+      "pr": "776",
+      "title": "fix(recordings): master is re-assemblable \u2014 mid-meeting reads can't freeze it, chunk listing paginates to exhaustion (#768 #769)",
+      "visibility": "user-visible",
+      "witness_step": "LIVE \u2014 witness the delivered value: fix(recordings): master is re-assemblable \u2014 mid-meeting reads can't freeze it, chunk listing paginates to exhaustion (#768 #769). (Fill the exact action + what you observe.)",
+      "pass": "a master read while recording must NOT freeze assembly: the post-completion master strictly contains audio captured after the mid-meeting read",
+      "witnessed": true,
+      "observation": "Mid-meeting GET /recordings/496243155886/master at 13:29Z (the exact pre-fix freeze trigger) assembled a 6,959,152-byte audio/webm from the ~30 chunks then present; the human kept the meeting talking and stopped it; post-completion GET re-assembled 8,117,085 bytes \u2014 +1,157,933 bytes of post-mid-read audio present; cmp confirms different bytes (pre-fix stacks would serve the identical frozen partial).",
+      "evidence": "meeting-api tests/test_recordings.py (mid-read re-assembly + pagination, red on base) + live instrumented walk on the delivered deployment",
+      "platform": "teams (recordings path platform-agnostic)"
+    },
+    {
+      "pr": "777",
+      "title": "feat(helm): topologySpreadConstraints (global + per-component, own-selector injected) \u00b7 agent-api Recreate on RWO workspace PVC (#770 #774)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/helm/tests/test_template.sh"
+    },
+    {
+      "pr": "780",
+      "title": "fix(lite-smoke): bounded wait for internal admin-api \u2014 the leg's first real firing raced the boot",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "deploy/lite/tests/concurrent-bots.sh"
+    }
+  ],
+  "signed_off": true
+}
