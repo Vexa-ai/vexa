@@ -8,6 +8,15 @@
 // by the detectors' try/catch loops (dead selectors). All `text*="foo"`
 // entries were replaced with the unquoted substring form on 2026-07-04;
 // src/shared/selector-validity.test.ts now gates every selector array.
+//
+// EXECUTION-CONTEXT SEMANTICS: Playwright engines (`text=`, `:has-text()`)
+// exist ONLY on the Playwright side (page.locator). Anything shipped into
+// page.evaluate runs through document.querySelector, which understands plain
+// CSS and nothing else — a Playwright-only entry there throws SyntaxError on
+// every call. Arrays consumed in browser context are declared in
+// browserContextSelectorArrays (bottom of this file); the validity gate
+// CSS-parses each declared entry, and text-labelled buttons are expressed as
+// `{ text: … }` matcher fields, matched in-page against textContent.
 
 export const googleInitialAdmissionIndicators: string[] = [
   // DOM fallback selectors — only indicators that do NOT appear in the lobby.
@@ -207,43 +216,6 @@ export const googleParticipantContainerSelectors: string[] = [
   '[jsname="BOHaEe"]' // Google Meet meeting container
 ];
 
-// Leave button selectors (used in browser context via page.evaluate)
-export const googlePrimaryLeaveButtonSelectors: string[] = [
-  // Primary Google Meet leave button
-  'button[aria-label="Leave call"]',
-  
-  // Alternative leave button patterns
-  'button[aria-label*="Leave"]',
-  'button[aria-label*="leave"]',
-  'button[aria-label*="End meeting"]',
-  'button[aria-label*="end meeting"]',
-  'button[aria-label*="Hang up"]',
-  'button[aria-label*="hang up"]',
-  
-  // Toolbar-based selectors
-  '[role="toolbar"] button[aria-label*="Leave"]'
-];
-
-export const googleSecondaryLeaveButtonSelectors: string[] = [
-  // Confirmation dialog leave buttons
-  'button:has-text("Leave meeting")',
-  'button:has-text("Just leave the meeting")',
-  'button:has-text("Leave")',
-  'button:has-text("End meeting")',
-  'button:has-text("Hang up")',
-  'button:has-text("End call")',
-  'button:has-text("Leave call")',
-  
-  // Dialog-specific selectors
-  '[role="dialog"] button:has-text("Leave")',
-  '[role="dialog"] button:has-text("End meeting")',
-  '[role="alertdialog"] button:has-text("Leave")',
-  
-  // Generic confirmation patterns
-  'button[aria-label*="confirm"]:has-text("Leave")',
-  'button[aria-label*="confirm"]:has-text("End")'
-];
-
 // Google Meet name selectors for participant identification
 export const googleNameSelectors: string[] = [
   // Google Meet specific name selectors
@@ -363,41 +335,54 @@ export const googleParticipantIdSelectors: string[] = [
   '[jsinstance]'
 ];
 
-// Google Meet comprehensive leave selectors (stateless - covers all scenarios)
-export const googleLeaveSelectors: string[] = [
-  // WORKING SELECTORS FIRST - Google Meet primary leave button
-  'button[aria-label="Leave call"]', // ✅ Primary Google Meet leave button
-  
+// Browser-context button matcher: `css` scopes candidates via
+// document.querySelectorAll (plain CSS ONLY — this shape is consumed inside
+// page.evaluate, where Playwright engines like `:has-text()` do not exist);
+// `text` filters those candidates by whitespace-normalized, case-insensitive
+// substring of textContent (the semantics `:has-text()` applies in Playwright
+// contexts). At least one field must be present; `css` alone means "first
+// visible match", `text` alone scopes to any button-like element.
+export type BrowserContextButtonMatcher = { css?: string; text?: string };
+
+// Google Meet comprehensive leave matchers (stateless - covers all scenarios).
+// BROWSER CONTEXT: consumed inside page.evaluate via document.querySelector —
+// declared in browserContextSelectorArrays below, so the validity gate
+// CSS-parses every `css` field. Tried in order; first visible match wins.
+export const googleLeaveButtonMatchers: BrowserContextButtonMatcher[] = [
+  // Primary Google Meet leave button
+  { css: 'button[aria-label="Leave call"]' },
+
   // Alternative leave patterns
-  'button[aria-label*="Leave"]',
-  'button[aria-label*="leave"]',
-  '[role="toolbar"] button[aria-label*="Leave"]',
-  
+  { css: 'button[aria-label*="Leave"]' },
+  { css: 'button[aria-label*="leave"]' },
+  { css: '[role="toolbar"] button[aria-label*="Leave"]' },
+
   // End meeting alternatives
-  'button[aria-label*="End meeting"]',
-  'button:has-text("End meeting")',
-  'button[aria-label*="Hang up"]',
-  'button:has-text("Hang up")',
-  
+  { css: 'button[aria-label*="End meeting"]' },
+  { text: 'End meeting' },
+  { text: 'End call' },
+  { css: 'button[aria-label*="Hang up"]' },
+  { text: 'Hang up' },
+
   // Confirmation dialog buttons (secondary)
-  'button:has-text("Leave meeting")',
-  'button:has-text("Just leave the meeting")',
-  'button:has-text("Leave")',
-  
+  { text: 'Leave meeting' },
+  { text: 'Just leave the meeting' },
+  { text: 'Leave' },
+
   // Dialog-specific patterns
-  '[role="dialog"] button:has-text("Leave")',
-  '[role="dialog"] button:has-text("End meeting")',
-  '[role="alertdialog"] button:has-text("Leave")',
-  
+  { css: '[role="dialog"] button', text: 'Leave' },
+  { css: '[role="dialog"] button', text: 'End meeting' },
+  { css: '[role="alertdialog"] button', text: 'Leave' },
+
   // Generic close/cancel patterns
-  'button:has-text("Close")',
-  'button[aria-label="Close"]',
-  'button:has-text("Cancel")',
-  'button[aria-label="Cancel"]',
-  
+  { text: 'Close' },
+  { css: 'button[aria-label="Close"]' },
+  { text: 'Cancel' },
+  { css: 'button[aria-label="Cancel"]' },
+
   // Fallback patterns
-  'input[type="button"][value="Leave"]',
-  'input[type="submit"][value="Leave"]'
+  { css: 'input[type="button"][value="Leave"]' },
+  { css: 'input[type="submit"][value="Leave"]' }
 ];
 
 // Google Meet people/participant panel selectors
@@ -422,4 +407,13 @@ export const googlePeopleButtonSelectors: string[] = [
   'button[data-tooltip*="participants"]',
   'button[data-tooltip*="Participants"]'
 ];
+
+// EXECUTION-CONTEXT DECLARATION — consumed by src/shared/selector-validity.test.ts.
+// Arrays named here ship into page.evaluate and run through
+// document.querySelector, so the gate additionally CSS-parses them: a
+// Playwright parse alone would let `:has-text()` — invalid in that context —
+// ship green as a dead selector. Entries may be plain CSS strings or
+// BrowserContextButtonMatcher objects (`css` field parsed as CSS; `text`
+// fields are raw strings, not selectors).
+export const browserContextSelectorArrays: string[] = ['googleLeaveButtonMatchers'];
 

@@ -96,7 +96,7 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       // best-effort:
       //  1. Click the platform's cancel/leave affordance. The stateless leave-click helpers already
       //     include the waiting-room selectors: Teams' teamsLeaveSelectors carry the "Cancel" buttons
-      //     "(for awaiting admission/waiting room)", and googleLeaveSelectors include Cancel/Close. On
+      //     "(for awaiting admission/waiting room)", and googleLeaveButtonMatchers include Cancel/Close. On
       //     Zoom the web client shows no reliable pre-admit cancel, so step 2 is the withdraw there.
       //  2. GUARANTEED DROP: close the page. Google Meet's lobby often exposes no clickable Cancel
       //     (just "Asking to join…"), so closing the tab is the reliable way to abandon the request;

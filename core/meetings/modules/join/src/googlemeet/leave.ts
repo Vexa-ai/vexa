@@ -2,8 +2,66 @@ import { Page } from "playwright";
 import { log, callLeaveCallback } from "../_host";
 import { logJSON } from "../_host";
 import { BotConfig } from "../_host";
-import { googleLeaveSelectors } from "./selectors";
+import { googleLeaveButtonMatchers, BrowserContextButtonMatcher } from "./selectors";
 import { stopGoogleRecording } from "../_host";
+
+// The leave click that runs INSIDE the page (shipped through page.evaluate by
+// both consumers below — ONE canonical routine, so the injected hook and the
+// direct leave can never drift, and the no-browser fixture test drives exactly
+// the function production serializes into the browser).
+//
+// Self-contained by contract: it is serialized into the browser context, where
+// module scope does not exist — DOM globals and its argument only.
+// document.querySelector understands plain CSS (no Playwright engines), so
+// text-labelled buttons are expressed as `text` fields and matched here by
+// whitespace-normalized, case-insensitive substring of textContent — the
+// semantics `:has-text()` applies in Playwright contexts. Matchers are tried
+// in order; the first visible match is clicked.
+export async function googleLeaveBrowserClick(
+  matchers: BrowserContextButtonMatcher[],
+): Promise<boolean> {
+  // Serialization contract: esbuild-family compilers (tsx — the debug harness
+  // lane) emit nested function expressions wrapped in a `__name` helper that
+  // does not exist inside the page. Define an identity fallback BEFORE any
+  // nested function is created, so the serialized source is self-contained
+  // under every compiler (tsc emits none of this; the line is then inert).
+  (globalThis as any).__name = (globalThis as any).__name || ((f: unknown) => f);
+  const blog = (m: string) => { try { (window as any).logBot?.(m); } catch { /* logging is best-effort */ } };
+  const normalize = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const isVisible = (el: Element) => {
+    const rect = el.getBoundingClientRect();
+    const cs = getComputedStyle(el as HTMLElement);
+    return rect.width > 0 && rect.height > 0
+      && cs.display !== "none" && cs.visibility !== "hidden" && cs.opacity !== "0";
+  };
+  for (const matcher of matchers) {
+    const scope = matcher.css ?? 'button, [role="button"]';
+    let candidates: Element[];
+    try {
+      candidates = Array.from(document.querySelectorAll(scope));
+    } catch (e: any) {
+      // The selector-validity gate CSS-parses every declared browser-context
+      // entry, so this only fires on drift — loudly, never silently.
+      blog(`[leave] selector failed in browser context: ${scope} — ${e?.message}`);
+      continue;
+    }
+    const needle = matcher.text === undefined ? null : normalize(matcher.text);
+    const button = candidates.find(
+      (el) => (needle === null || normalize(el.textContent || "").includes(needle)) && isVisible(el),
+    ) as HTMLElement | undefined;
+    if (!button) continue;
+    button.scrollIntoView({ behavior: "smooth", block: "center" });
+    await new Promise((r) => setTimeout(r, 300));
+    button.click();
+    await new Promise((r) => setTimeout(r, 800));
+    const via = [matcher.css, matcher.text === undefined ? undefined : `text~"${matcher.text}"`]
+      .filter(Boolean).join(" ");
+    blog(`[leave] clicked leave button via ${via}`);
+    return true;
+  }
+  blog("[leave] no visible leave button matched any matcher");
+  return false;
+}
 
 // Prepare for recording by exposing necessary functions
 export async function prepareForRecording(page: Page, botConfig: BotConfig): Promise<void> {
@@ -15,83 +73,35 @@ export async function prepareForRecording(page: Page, botConfig: BotConfig): Pro
   // Expose bot config for callback functions
   await page.exposeFunction("getBotConfig", (): BotConfig => botConfig);
 
-  // Ensure leave function is available even before admission
-  await page.evaluate((selectorsData) => {
+  // Node-side binding backing the browser-context leave hook: it drives the
+  // same canonical googleLeaveBrowserClick through page.evaluate, so the hook
+  // needs no in-page copy of the click logic. The binding survives
+  // navigations; the hook below is re-armed per document like before.
+  await page.exposeFunction("__vexaGoogleLeaveClick", async (): Promise<boolean> => {
+    try {
+      return Boolean(await page.evaluate(googleLeaveBrowserClick, googleLeaveButtonMatchers));
+    } catch (err: any) {
+      log(`[performLeaveAction] browser leave click failed: ${err?.message}`);
+      return false;
+    }
+  });
+
+  // Ensure leave function is available even before admission. The leave
+  // callback to meeting-api is sent from the Node side (leaveGoogleMeet), not
+  // from this hook.
+  await page.evaluate(() => {
     if (typeof (window as any).performLeaveAction !== "function") {
       (window as any).performLeaveAction = async () => {
         try {
-          // Call leave callback first to notify meeting-api
-          (window as any).logBot?.("🔥 Calling leave callback before attempting to leave...");
-          try {
-            const botConfig = (window as any).getBotConfig?.();
-            if (botConfig) {
-              // We need to call the callback from Node.js context, not browser context
-              // This will be handled by the Node.js side when leaveGoogleMeet is called
-              (window as any).logBot?.("📡 Leave callback will be sent from Node.js context");
-            }
-          } catch (callbackError: any) {
-            (window as any).logBot?.(`⚠️ Warning: Could not prepare leave callback: ${callbackError.message}`);
-          }
-
-          // Use directly injected selectors (stateless approach)
-          const leaveSelectors = selectorsData.googleLeaveSelectors || [];
-
-          (window as any).logBot?.("🔍 Starting stateless Google Meet leave button detection...");
-          (window as any).logBot?.(`📋 Will try ${leaveSelectors.length} selectors until one works`);
-          
-          // Try each selector until one works (stateless iteration)
-          for (let i = 0; i < leaveSelectors.length; i++) {
-            const selector = leaveSelectors[i];
-            try {
-              (window as any).logBot?.(`🔍 [${i + 1}/${leaveSelectors.length}] Trying selector: ${selector}`);
-              
-              const button = document.querySelector(selector) as HTMLElement;
-              if (button) {
-                // Check if button is visible and clickable
-                const rect = button.getBoundingClientRect();
-                const computedStyle = getComputedStyle(button);
-                const isVisible = rect.width > 0 && rect.height > 0 && 
-                                computedStyle.display !== 'none' && 
-                                computedStyle.visibility !== 'hidden' &&
-                                computedStyle.opacity !== '0';
-                
-                if (isVisible) {
-                  const ariaLabel = button.getAttribute('aria-label');
-                  const textContent = button.textContent?.trim();
-                  
-                  (window as any).logBot?.(`✅ Found clickable button: aria-label="${ariaLabel}", text="${textContent}"`);
-                  
-                  // Scroll into view and click
-                  button.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  await new Promise((resolve) => setTimeout(resolve, 500));
-                  
-                  (window as any).logBot?.(`🖱️ Clicking Google Meet button...`);
-                  button.click();
-                  await new Promise((resolve) => setTimeout(resolve, 1000));
-                  
-                  (window as any).logBot?.(`✅ Successfully clicked button with selector: ${selector}`);
-                  return true;
-                } else {
-                  (window as any).logBot?.(`ℹ️ Button found but not visible for selector: ${selector}`);
-                }
-              } else {
-                (window as any).logBot?.(`ℹ️ No button found for selector: ${selector}`);
-              }
-            } catch (e: any) {
-              (window as any).logBot?.(`❌ Error with selector ${selector}: ${e.message}`);
-              continue;
-            }
-          }
-          
-          (window as any).logBot?.("❌ No working leave/cancel button found - tried all selectors");
-          return false;
+          (window as any).logBot?.("🔥 Leave requested from browser context — clicking the leave path...");
+          return await (window as any).__vexaGoogleLeaveClick();
         } catch (err: any) {
-          (window as any).logBot?.(`Error during Google Meet leave attempt: ${err.message}`);
+          (window as any).logBot?.(`Error during Google Meet leave attempt: ${err?.message}`);
           return false;
         }
       };
     }
-  }, { googleLeaveSelectors });
+  });
 }
 
 // --- ADDED: Exported function to trigger leave from Node.js ---
@@ -148,30 +158,9 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
   }
 
   try {
-    // Inline the leave-click (self-contained): try each leave selector and click the first visible
-    // match. Self-contained so it never depends on a separately-injected window.performLeaveAction.
-    const result = await page.evaluate(async (selectors: string[]) => {
-      const blog = (m: string) => { try { (window as any).logBot?.(m); } catch { /* */ } };
-      for (const selector of selectors) {
-        try {
-          const button = document.querySelector(selector) as HTMLElement | null;
-          if (!button) continue;
-          const rect = button.getBoundingClientRect();
-          const cs = getComputedStyle(button);
-          const visible = rect.width > 0 && rect.height > 0
-            && cs.display !== "none" && cs.visibility !== "hidden" && cs.opacity !== "0";
-          if (!visible) continue;
-          button.scrollIntoView({ behavior: "smooth", block: "center" });
-          await new Promise((r) => setTimeout(r, 300));
-          button.click();
-          await new Promise((r) => setTimeout(r, 800));
-          blog(`[leave] clicked leave button via ${selector}`);
-          return true;
-        } catch { /* try the next selector */ }
-      }
-      blog("[leave] no visible leave button matched any selector");
-      return false;
-    }, googleLeaveSelectors);
+    // Ship the canonical leave click into the page directly (self-contained:
+    // never depends on the separately-injected window.performLeaveAction).
+    const result = await page.evaluate(googleLeaveBrowserClick, googleLeaveButtonMatchers);
     logJSON({
       level: "info",
       msg: "[leaveGoogleMeet] Browser leave action complete",
@@ -179,14 +168,14 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
       leave_reason: reason,
     });
     // Contract: this function is typed Promise<boolean>. page.evaluate can return
-    // undefined (e.g. a black/captcha page where performLeaveAction never resolves a
+    // undefined (e.g. a black/captcha page where the click routine never resolves a
     // value), which otherwise propagates as `result: undefined` to callers that treat
     // it as a tri-state. Coerce to match the declared boolean (and the log above).
     return Boolean(result);
   } catch (error: any) {
     logJSON({
       level: "error",
-      msg: "[leaveGoogleMeet] Error calling performLeaveAction in browser",
+      msg: "[leaveGoogleMeet] Error calling the browser leave click",
       error_message: error?.message,
       error_name: error?.name,
       leave_reason: reason,
