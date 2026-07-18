@@ -1,0 +1,1 @@
+- merge-card: concurrency group scoped per trigger event — near-simultaneous approval + label events no longer cancel each other's runs, leaving a stale red required check on the final mile (#798)

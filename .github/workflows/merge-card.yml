@@ -22,9 +22,11 @@ permissions:
   checks: read
   issues: read   # the acceptance row reads closing-issue bodies; unlisted scopes drop to none
 
-# a superseded run's verdict is worthless
+# a superseded run's verdict is worthless — but only within the SAME event
+# stream: a review-triggered run must never cancel (or be cancelled by) a
+# label/push-triggered one, or the survivor's stale verdict blocks the final mile (#798)
 concurrency:
-  group: merge-card-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
+  group: merge-card-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
