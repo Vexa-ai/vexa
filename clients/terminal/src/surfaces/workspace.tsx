@@ -17,6 +17,7 @@ import { MdxDoc } from "../ui-kit/MdxDoc";
 // proven in isolation by workspaceApi.test.ts.
 import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readWorkspaceGitDiff, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, mintInvite, listSharedMemberships, setSharedActive, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
 import { manageTabDescriptor } from "./workspaceManage";
+import { presentError } from "./apiClient";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -190,7 +191,7 @@ function MountSection({ mount }: { mount: ActiveMount }) {
     if (!open) return;
     const load = () => void listWorkspaceTree({ hidden: false, slug: mount.slug })
       .then((t) => { setTree((prev) => (JSON.stringify(prev) === JSON.stringify(t) ? prev : t)); setError(null); })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => setError(presentError(e).headline));
     load();
     const id = setInterval(() => { if (!document.hidden) load(); }, 8000);
     window.addEventListener("focus", load);
@@ -292,7 +293,7 @@ export function FilesList() {  // exported for the surface test
             const t = await listWorkspaceTree({ hidden: false, slug: home.slug });
             setTree((prev) => (JSON.stringify(prev) === JSON.stringify(t) ? prev : t));
             setError(null);
-          } catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+          } catch (e: unknown) { setError(presentError(e).headline); }
         } else { setTree([]); setError(null); }
         // fetch each extra mount's full tree so the search index spans every active workspace
         const entries = await Promise.all(mounts.map(async (m) => {
@@ -301,7 +302,7 @@ export function FilesList() {  // exported for the surface test
         }));
         setMountTrees(Object.fromEntries(entries));
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => setError(presentError(e).headline));
     load();
     const id = setInterval(() => { if (!document.hidden) load(); }, 5000);
     window.addEventListener("focus", load);
@@ -485,7 +486,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const [rowMenu, setRowMenu] = useState<{ slug: string; display: string; x: number; y: number } | null>(null);  // per-row … menu (archive/delete)
   const [showArchived, setShowArchived] = useState(false);  // the collapsed 'Archived' group
   const load = () => {
-    void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+    void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(presentError(e).headline));
     void readActiveSet().then((s) => setActiveSet(s.active)).catch(() => { /* active-set is additive UI; a failure just leaves the toggles at the baseline */ });
     void listSharedMemberships().then(setSharedMemberships).catch(() => { /* shared list is additive; ignore */ });
   };
@@ -502,7 +503,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const toggleActive = async (slug: string, mounted: boolean) => {
     setBusy(true); setErr(null);
     try { if (mounted) { await deactivateWorkspace(slug); } else { await activateWorkspace({ slug }); } load(); onSwapped(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -510,7 +511,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const doAttach = async (repo: string, ref?: string, token?: string) => {
     setBusy(true); setErr(null);
     try { await activateWorkspace({ repo, ref, token }); load(); onSwapped(); setForm(null); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -520,7 +521,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const doNewWorkspace = async () => {
     setBusy(true); setErr(null);
     try { await createWorkspace(); load(); onSwapped(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -531,14 +532,14 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const doPublish = async (f: { name: string; priv: boolean; token: string; remoteUrl?: string }) => {
     setBusy(true); setErr(null);
     try { setPublished(await publishWorkspace(f.name.trim(), f.priv, f.token.trim(), f.remoteUrl)); setPubForm(null); load(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
   const doRename = async (slug: string, name: string) => {
     setBusy(true); setErr(null);
     try { setView(await renameWorkspace(slug, name.trim())); setRenaming(null); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); setRenaming(null); }
+    catch (e) { setErr(presentError(e).headline); setRenaming(null); }
     finally { setBusy(false); }
   };
 
@@ -547,7 +548,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     if (typeof window !== "undefined" && !window.confirm(`Stop sharing "${workspaceId}"? Other members will lose access; it becomes a private workspace of yours.`)) return;
     setBusy(true); setErr(null);
     try { await unshareWorkspace(workspaceId); load(); onSwapped(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -555,7 +556,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const doArchive = async (slug: string, archived: boolean) => {
     setBusy(true); setErr(null);
     try { await archiveWorkspace(slug, archived); load(); onSwapped(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
   // Delete one of your workspaces — irreversible (hard confirm).
@@ -563,7 +564,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     if (typeof window !== "undefined" && !window.confirm(`Delete "${display}"? This permanently removes the workspace and all its data.`)) return;
     setBusy(true); setErr(null);
     try { await deleteWorkspace(slug); load(); onSwapped(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -571,7 +572,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const toggleShared = async (workspaceId: string, active: boolean) => {
     setBusy(true); setErr(null);
     try { await setSharedActive(workspaceId, active); load(); onSwapped(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -583,7 +584,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
       const { workspace_id } = await shareEnableWorkspace(slug);
       load(); onSwapped();
       setShare({ wsId: workspace_id, role: "contributor", mode: "open", emails: "", ttlDays: 7, link: null });
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -599,7 +600,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
       });
       const link = `${window.location.origin}/?invite=${encodeURIComponent(minted.token)}`;
       setShare({ ...s, link });
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -861,7 +862,7 @@ function GitSection() {
               .flatMap(({ m, g }) => g.commits.map((c) => ({ ...c, slug: m.slug, ws: m.name || m.slug }))),
         ].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)).slice(0, 12);
         setFeed(merged);
-      } catch (e: unknown) { setGitError(e instanceof Error ? e.message : String(e)); }
+      } catch (e: unknown) { setGitError(presentError(e).headline); }
     };
     void load();
     const id = setInterval(() => void load(), 5000);  // reflect commits as they land, across workspaces
@@ -1059,7 +1060,7 @@ function DocTab({ id, params }: TabProps) {
         const d = await readWorkspaceGitDiff({ sha: c.sha, slug, path });
         setDiff(d.diff || "(no textual changes)");
       })
-      .catch((e: unknown) => setDiff(`⚠ ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e: unknown) => setDiff(`⚠ ${presentError(e).headline}`));
   };
   const show = (p: string) => layout.retargetTab(id, docTab(p, slug));
   const navigate: DocNavigate = (detail) => {

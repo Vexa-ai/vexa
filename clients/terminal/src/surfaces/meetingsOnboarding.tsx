@@ -18,6 +18,7 @@ import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
+import { presentError } from "./apiClient";
 import { refreshMeetings } from "./liveMeetings";
 import { getCalendarConfig, setCalendarConfig, syncCalendarNow, type CalendarSyncStamp } from "./plannedApi";
 import { prepDraftTabDescriptor } from "./meetingPrep";
@@ -72,13 +73,13 @@ function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; o
       // paste → an ANSWER, not a silent wait (same rule as the sidebar connect)
       let stamp: CalendarSyncStamp = {};
       try { stamp = await syncCalendarNow(); } catch (e) {
-        stamp = { last_error: e instanceof Error ? e.message : String(e) };
+        stamp = { last_error: presentError(e).detail };  // data stays raw (telemetry) — UI renders the presented stamp
       }
       refreshMeetings();
       setDone(connectOutcome(stamp));
       onConnected();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(presentError(e).headline);
     } finally {
       setBusy(false);
     }

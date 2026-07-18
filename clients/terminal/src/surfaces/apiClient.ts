@@ -19,6 +19,54 @@ export class ApiError extends Error {
   }
 }
 
+/** What a surface renders for a failure: the user-truth headline + the full plumbing string.
+ *  `headline` is user vocabulary; `detail` is the untranslated fault (ApiError.message / the raw
+ *  error text) for the operator channel — a `title=` affordance and the browser console. */
+export interface PresentedError { headline: string; detail: string }
+
+const NETWORK_HEADLINE = "Couldn't reach the Vexa server — check that the stack is running.";
+const GENERIC_HEADLINE = "Something went wrong — details are in the browser console.";
+
+// A fetch()-level network failure surfaces as one of these engine-specific messages.
+const NETWORK_MESSAGE = /failed to fetch|networkerror|load failed|network request failed/i;
+
+/** Is a backend `detail` a human sentence we can show verbatim (the backend's own user-facing
+ *  reason), rather than a serialized payload? Deliberately conservative: prose has a space and
+ *  doesn't open like JSON/markup. */
+function isProse(detail: string): boolean {
+  const t = detail.trim();
+  return t.length > 0 && t.length <= 300 && !/^[{[<]/.test(t) && t.includes(" ");
+}
+
+/** The presenter seam (issue #533): every terminal surface renders `presentError(e).headline`,
+ *  never `e.message`. Maps the STRUCTURED fields of an `ApiError` to user vocabulary; the typed
+ *  plumbing is preserved intact on the returned `detail` AND echoed to the console (P18's
+ *  observable channel keeps the full string — presentation never mutates the error). */
+export function presentError(e: unknown): PresentedError {
+  if (e instanceof ApiError) {
+    const detail = e.message;
+    console.warn("api failure", detail);
+    if (e.status === 0) return { headline: NETWORK_HEADLINE, detail };
+    if (e.status === 502 || e.status === 504) return { headline: "The Vexa server can't reach a backend service right now.", detail };
+    if (e.status === 401) return { headline: "Your API key was rejected — sign in again.", detail };
+    if (e.status === 403) return { headline: "Your key doesn't have access to this.", detail };
+    if (e.status === 429) return { headline: "Rate limit hit — try again in a moment.", detail };
+    // Remaining 4xx/5xx: a prose `detail` is the backend's own user-facing reason — pass it
+    // through VERBATIM (e.g. a typed transcription 503). A payload-shaped detail stays operator-only.
+    if (isProse(e.detail)) return { headline: e.detail.trim(), detail };
+    return { headline: `The request failed (${e.status}).`, detail };
+  }
+  if (e instanceof Error) {
+    const detail = e.message || String(e);
+    console.warn("api failure", detail);
+    if (NETWORK_MESSAGE.test(detail)) return { headline: NETWORK_HEADLINE, detail };
+    return isProse(detail) ? { headline: detail.trim(), detail } : { headline: GENERIC_HEADLINE, detail };
+  }
+  const detail = String(e);
+  console.warn("api failure", detail);
+  return { headline: GENERIC_HEADLINE, detail };
+}
+
 /** GET/POST… JSON, loud on failure. status 0 = the request never completed (network/DNS/abort). */
 export async function getJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method || "GET").toUpperCase();

@@ -88,6 +88,16 @@ The bot is capturing audio, but transcription isn't configured — or the bot wa
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
   `GET /api/meeting/relay-health` rather than as silent dead air.
 
+## What terminal errors look like — and where the technical details live
+
+Terminal error surfaces speak user vocabulary ("Couldn't reach the Vexa server — check that the
+stack is running.", "Your API key was rejected — sign in again.", or the backend's own reason when
+it sent one). The full technical string — proxied URL, HTTP status, backend exception detail, e.g.
+`/api/vexa/user/calendar → 502: upstream unreachable: ConnectError` — is never lost: it is written
+verbatim to the **browser console** (`api failure …` / `meeting action failed …` warnings) on every
+presented error. Support and self-hosters debug from the console line; the on-screen headline tells
+the user which layer to suspect.
+
 ## Authentication failures
 
 | Symptom | Cause | Fix |
