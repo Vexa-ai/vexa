@@ -321,6 +321,35 @@ export const googleNameInputSelectors: string[] = [
   'input[placeholder*="Name"]'
 ];
 
+// Authenticated-lobby primary CTA — "Join now" / "Switch here" / "Ask to join"
+// or any localized equivalent. Locale-agnostic structural selectors FIRST
+// (the English-literal failure class of ids 13951/13952/14018/14153 above):
+// the CTA is the jsname-tagged <button> with a text span and no aria-label,
+// which excludes the icon-only mic/camera toggles and the aria-labelled
+// 3-dot menu. English text kept as last-resort fallbacks only.
+export const googleAuthJoinCtaSelectors: string[] = [
+  'button[jsname]:not([aria-label]):has(span)',
+  'div[jscontroller] button[jsname]:not([aria-label]):has(span)',
+  // English fallbacks.
+  'button:has-text("Join now")',
+  'button:has-text("Switch here")',
+  'button:has-text("Ask to join")'
+];
+
+// Signed-out guard probe (authenticated mode): a guest lobby renders a name
+// input; a signed-in lobby never does, in any locale. Structural selectors
+// FIRST so signed-out detection cannot fail open on a non-English lobby; the
+// English aria-label is a fallback only. Kept narrower than
+// googleNameInputSelectors on purpose — a false positive here refuses a
+// legitimate authenticated join, so the broad bare input[type="text"] catch-all
+// is excluded.
+export const googleSignedOutLobbyProbeSelectors: string[] = [
+  'input[jsname][type="text"]',
+  'div[jscontroller] input[type="text"]',
+  // English fallback.
+  'input[type="text"][aria-label="Your name"]'
+];
+
 // Google Meet meeting container selectors
 export const googleMeetingContainerSelectors: string[] = [
   '[jsname="BOHaEe"]', // Primary Google Meet container

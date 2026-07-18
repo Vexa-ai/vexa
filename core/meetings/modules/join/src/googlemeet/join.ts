@@ -5,17 +5,35 @@ import {
   googleNameInputSelectors,
   googleJoinButtonSelectors,
   googleMicrophoneButtonSelectors,
-  googleCameraButtonSelectors
+  googleCameraButtonSelectors,
+  googleAuthJoinCtaSelectors,
+  googleSignedOutLobbyProbeSelectors
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 
 /** Error thrown when authenticated mode detects a signed-out browser profile. */
-class AuthSessionError extends Error {
+export class AuthSessionError extends Error {
   readonly outcome = "auth_session_missing" as const;
   constructor(message: string) {
     super(message);
     this.name = "AuthSessionError";
   }
+}
+
+/**
+ * Signed-out guard probe (authenticated mode): a guest lobby renders a name
+ * input; a signed-in lobby never does, in any locale. Structural
+ * (jsname/attribute) selectors carry the detection so it cannot fail open on a
+ * non-English lobby. A probe error on one selector never breaks the guard —
+ * the remaining selectors still get their chance.
+ */
+export async function isGoogleSignedOutLobby(page: Page): Promise<boolean> {
+  for (const sel of googleSignedOutLobbyProbeSelectors) {
+    try {
+      if (await page.locator(sel).first().isVisible()) return true;
+    } catch { /* try the next probe selector */ }
+  }
+  return false;
 }
 
 // Google Meet now blocks browser-synthetic input (Playwright/CDP clicks have
@@ -171,58 +189,34 @@ export async function joinGoogleMeeting(
       log("Camera already off or not found.");
     }
 
-    // Authenticated users may see different buttons:
-    // - "Join now" — standard authenticated join
-    // - "Switch here" — same account already in the meeting
-    // - "Ask to join" — two cases:
-    //   a) Guest lobby (name input visible) → browser profile signed out → fail closed
-    //   b) Signed-in account not pre-admitted (no name input) → proceed
-    const joinNowSelector = 'button:has-text("Join now")';
-    const switchHereSelector = 'button:has-text("Switch here")';
-    // Text-matched directly: googleJoinButtonSelectors[0] is :not([aria-label]) and the
-    // real "Ask to join" button carries an aria-label, so [0] never matches it here.
-    const askToJoinSelector = 'button:has-text("Ask to join")';
+    // Authenticated lobby: one primary CTA — "Join now" (standard join),
+    // "Switch here" (same account already in the call) or "Ask to join"
+    // (host approval required) — or any localized equivalent. The CTA is
+    // located structurally (googleAuthJoinCtaSelectors, locale-agnostic first),
+    // so the branch works on non-English lobbies; waitForAnySelector fails
+    // LOUD (screenshot + selector list) if no CTA appears.
+    const { handle: ctaHandle, selector: ctaSelector } = await waitForAnySelector(
+      page,
+      googleAuthJoinCtaSelectors,
+      30000,
+      "authenticated join CTA"
+    );
 
-    try {
-      // Race: wait for any join button
-      const joinButton = await Promise.race([
-        page.waitForSelector(joinNowSelector, { timeout: 30000 }).then(el => ({ el, type: 'join_now' as const })),
-        page.waitForSelector(switchHereSelector, { timeout: 30000 }).then(el => ({ el, type: 'switch_here' as const })),
-        page.waitForSelector(askToJoinSelector, { timeout: 30000 }).then(el => ({ el, type: 'ask_to_join' as const })),
-      ]);
-
-      if (joinButton.type === 'join_now') {
-        await clickHandle(joinButton.el!, "join_now");
-        log("Bot joined Google Meet as authenticated user (Join now).");
-      } else if (joinButton.type === 'switch_here') {
-        await clickHandle(joinButton.el!, "switch_here");
-        log("Bot joined Google Meet as authenticated user (Switch here — same account already in call).");
-      } else {
-        // "Ask to join" in authenticated mode — determine whether this is a signed-out guest lobby
-        // (name input visible) or a signed-in account not pre-admitted (no name input).
-        const nameField = await page.$(googleNameInputSelectors[0]).catch(() => null);
-        if (nameField && (await nameField.isVisible?.() ?? true)) {
-          // Guest lobby detected — browser profile is signed out, fail closed.
-          // Take a diagnostic screenshot before throwing so the operator can see the lobby state.
-          await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-signed-out.png', fullPage: true });
-          log("📸 Screenshot: authenticated mode but browser profile is signed out (guest lobby).");
-          throw new AuthSessionError(
-            "Browser profile signed out — cannot authenticate with Google. Re-authenticate the profile and retry."
-          );
-        }
-        // Signed-in account not pre-admitted (host approval required) — proceed
-        log("Authenticated account not pre-admitted — knocking via 'Ask to join'.");
-        await clickHandle(joinButton.el!, "ask_to_join");
-        log("Bot requested to join Google Meet (Ask to join) as the signed-in account.");
-      }
-    } catch (e) {
-      // Re-throw auth-session errors without masking them as "button not found".
-      if (e instanceof AuthSessionError) throw e;
-      // No join button found — take diagnostic screenshot and fail
-      await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-failed.png', fullPage: true });
-      log("📸 Screenshot: No join button found after 30s (or join button vanished before click).");
-      throw e;
+    // Signed-out guard: a guest lobby (name input rendered) means the persisted
+    // browser profile is signed out — fail closed with a typed error instead of
+    // silently joining as an anonymous guest. The probe is structural, so the
+    // guard holds on non-English lobbies too. A signed-in account that is
+    // merely not pre-admitted shows no name input and proceeds to knock.
+    if (await isGoogleSignedOutLobby(page)) {
+      await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-auth-signed-out.png', fullPage: true });
+      log("📸 Screenshot: authenticated mode but browser profile is signed out (guest lobby).");
+      throw new AuthSessionError(
+        "Browser profile signed out — cannot authenticate with Google. Re-authenticate the profile and retry."
+      );
     }
+
+    await clickHandle(ctaHandle, "authenticated_join");
+    log(`Bot clicked the authenticated join CTA (via ${ctaSelector}).`);
 
     await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-after-join-now.png', fullPage: true });
     log("📸 Screenshot taken: After join click (authenticated)");
