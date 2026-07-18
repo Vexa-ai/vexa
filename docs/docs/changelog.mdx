@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.12 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.13 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.12`** — the latest released control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.13`** — the latest released control-plane. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -289,6 +289,79 @@ probe), not inferred from planning docs.
   RollingUpdate (`maxSurge:1`) made any pod-spec-changing `helm upgrade` stall on a Multi-Attach
   error. agent-api now renders `strategy: Recreate` under an RWO workspace (the same opt-out redis
   already carries), and keeps RollingUpdate when the workspace is `ReadWriteMany`.
+
+- **Teams bot speaker attribution: segments carry who spoke, not `seg_N` (#498).** The bot now
+  bundles the Teams voice-level-outline speaker watcher (`@vexa/teams-capture` — the same module
+  the desktop extension runs) into its browser bundle and wires it to the transcriber: hints cross
+  the page→Node boundary under Teams' true `dom-outline` kind (previously erased to Zoom's
+  `dom-active`), on one epoch-ms clock with a loud skew guard, and a periodic
+  `hint-counters` log line names the exact hop if a name ever goes missing again. A headless
+  boundary CI test pins the wiring so the regression cannot ship silently.
+
+- **Bots fail fast when the control plane is unreachable, instead of an opaque crashloop (#530).** On a
+  freshly autoscaled k8s node whose network hasn't converged, a bot's first callback to meeting-api can
+  be unreachable. The bot now makes its first `joining` lifecycle emit load-bearing: if the meeting-api
+  callback is unreachable it probes redis, and only if BOTH control-plane channels are down does it
+  refuse to join — terminating in under a few seconds with a dedicated exit code (3) and an attributed
+  terminal (`failure_stage: requested`, `infra_fault: control_plane_unreachable`) rather than a generic
+  `join_failure` or a stuck-`requested` meeting. A reachable control plane adds zero latency (the
+  secondary channel is never probed). Operators can now tell "broken node" from "broken join" in one
+  `kubectl describe`. See [Kubernetes deployment](/deployment-kubernetes) and [Troubleshooting](/troubleshooting).
+
+- **Zoom transcripts now name who spoke (#538).** The Zoom active-speaker watcher
+  (`createZoomSpeakers`) is wired into the bot's page-side capture bundle: active-speaker
+  transitions cross to the name binder as `dom-active` hints, so Zoom bot segments carry the
+  real participant's name instead of `seg_N` placeholders — the same attribution Google Meet
+  and Jitsi already deliver. Flicker-debounced (a single ~250 ms tile blip never mislabels a
+  turn); screen-share layouts and nameless tiles emit no hint rather than a wrong one.
+
+- **Google Meet authenticated join: fail closed on signed-out browser profile (#607).** When
+  `authenticated: true` the bot refuses to degrade to an anonymous join if the browser profile
+  is signed out — the guard throws a typed `AuthSessionError` (an `AdmissionError` subclass with
+  outcome `auth_session_missing`) which the join driver maps to the new permanent
+  `auth_session_missing` completion reason: the control plane records the truth and never
+  re-spawns against the dead profile. `auth_session_missing` is added to the lifecycle.v1 and
+  api.v1 completion-reason enums (api.v1 also gains the previously missing `startup_alone`;
+  contracts re-sealed, lane:contract). The guard distinguishes a signed-out guest lobby (name
+  input visible) from a signed-in-but-not-pre-admitted account (no name input), which still
+  knocks via "Ask to join".
+
+- **Authenticated bots: the user flow exists end to end (#724).** Provision a signed-in bot session
+  with one command (`make login` — sign in once, the session lands in the deployment's userdata
+  storage), then set `BOT_AUTHENTICATED=true` on meeting-api and every stock `POST /bots` spawns
+  signed-in under the account identity. A failed session restore is now a typed, attributed
+  `session-restore` error instead of an unattributed pre-launch death. See
+  [Authenticated bots](/authenticated-bots).
+
+- **Authenticated bots: sessions survive use (#725).** The bot writes the rotated browser session
+  back to the userdata store on clean teardown, so the next spawn restores the freshest state
+  instead of a decaying snapshot; a second concurrent spawn against the same stored session is
+  refused with a 409 naming the conflict (one identity, one live bot). The session-lifetime levers
+  are documented on [Authenticated bots](/authenticated-bots).
+
+- **Google Meet auth-session guard is now pinned by an offline test (#756).** `session.test.ts`
+  drives `joinGoogleMeeting`'s authenticated branch against fabricated lobby fixtures: a
+  signed-out guest lobby must throw the typed `auth_session_missing` refusal and a signed-in
+  not-pre-admitted lobby must knock. Deleting the guard turns the join module's suite red —
+  the guard is no longer carried only by the live leg.
+
+- **Signed-out detection on Google Meet no longer depends on English UI text (#757).** The
+  authenticated lobby's join CTA and the signed-out guest-lobby probe are now located by
+  structural (jsname/attribute) selectors first, with English text as last-resort fallbacks —
+  so a non-English lobby still fails closed with the actionable `auth_session_missing` error
+  instead of a misleading "no join button found" timeout. Both selector arrays are covered by
+  the selector-validity gate.
+
+- **Teams bot leave — dead browser-context fallbacks revived (#759).** The Microsoft Teams
+  leave path ran its fallback list through the browser's `document.querySelector`, but 10 of the
+  25 entries were Playwright-only `:has-text()` locators — invalid CSS that threw on every call,
+  so every text-labelled button (all three leave-confirmation dialog buttons included) was
+  silently un-clickable and each leave attempt logged 10 "not a valid selector" errors. The array
+  is now a `{ css | text }` matcher list driven by the same shared in-page clicker as Google Meet
+  (#542), and it joins the selector-validity gate's browser-context lane so the class fails loudly
+  for Teams too.
+
+- **Governance: four D-book amendments from the v0.12.12 retro (#785).** TAKE verdicts now name the head sha they examined (a later push makes the endorsement historical); one rule governs sealed-contract re-stamps (a back-compatible re-seal may ride a `lane:contract` PR whose merge is the ruling, breaking changes get an issue-recorded ruling first); the closure mechanism gains mechanism-vs-tree verification over open prepared issues (catching deliveries no link sweep sees); and the incoming-report template now requires the deployed version / verified tag. See [Delivery](/governance/delivery).
 
 ## Versioning
 
