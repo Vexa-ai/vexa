@@ -364,7 +364,7 @@ async function main(): Promise<void> {
     };
     const res = await createOrchestrator(inv(), {
       lifecycle: gateSink, join: spyJoin, pipeline: noopPipeline(), acts: noopActs(),
-      reachability: { async probeSecondary() { return false; } },
+      aloneness: noopAloneness(), reachability: { async probeSecondary() { return false; } },
     }).run();
     check('gate both-down: NO join attempted (refused before meeting navigation)', joinCalls === 0, `joinCalls=${joinCalls}`);
     check('gate both-down: exit code 3 (dedicated infra signal)', res.exitCode === CONTROL_PLANE_UNREACHABLE_EXIT, String(res.exitCode));
@@ -393,7 +393,7 @@ async function main(): Promise<void> {
     let fireLeave: (a: { action: 'leave' }) => void = () => {};
     const o = createOrchestrator(inv(), {
       lifecycle: gateSink, join: spyJoin, pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }),
-      reachability: { async probeSecondary() { return true; } },   // redis up
+      aloneness: noopAloneness(), reachability: { async probeSecondary() { return true; } },   // redis up
     });
     const runP = o.run();
     setTimeout(() => fireLeave({ action: 'leave' }), 5);
@@ -414,7 +414,7 @@ async function main(): Promise<void> {
     let fireLeave: (a: { action: 'leave' }) => void = () => {};
     const o = createOrchestrator(inv(), {
       lifecycle: gateSink, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }),
-      reachability: { async probeSecondary() { secondaryProbed++; return false; } },
+      aloneness: noopAloneness(), reachability: { async probeSecondary() { secondaryProbed++; return false; } },
     });
     const runP = o.run();
     setTimeout(() => fireLeave({ action: 'leave' }), 5);
