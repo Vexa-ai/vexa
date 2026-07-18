@@ -19,6 +19,8 @@
 #                   publish and the first validate signal
 #   validate-*      compose / mock-FSM / v010-compat / bot-spawn / lite / helm-k3s — each leg
 #                   PULLS the published :vX.Y.Z images (proves the artifacts, not the tree)
+#   validate-arm64  native ubuntu-24.04-arm smoke (#564): image-identity probes for matrix
+#                   images (skip vexa-bot) + lite front-door checks; no QEMU
 #   promote         moving tag :v012 once every leg AND image-identity are green — stable
 #                   versions only, and only when the caller asked for it (promote: true)
 #
@@ -460,6 +462,88 @@ jobs:
           docker ps -a
           docker logs vexa-lite --tail 300 || true
 
+  # ──────────────────────────────────────────────────────────────────────────────────────────
+  # Native arm64 smoke (#564) — execute published arm64 images on ubuntu-24.04-arm (no QEMU).
+  # Identity probes cover matrix images only (vexa-bot stays amd64-only). Lite front doors only
+  # (concurrent-bots needs the bot image). Gates promote + guarantees with the amd64 legs.
+  validate-arm64:
+    needs: resolve
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Image-identity probes on arm64 (matrix images; skip bot)
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          [ "$ARCH" = "aarch64" ] || { echo "::error ::validate-arm64 must run on native aarch64 (got $ARCH)"; exit 1; }
+          echo "✓ runner arch=$ARCH"
+          probe() {
+            local ref="$1"; shift
+            docker run --rm --entrypoint "" "$ref" "$@" \
+              || { echo "::error title=validate-arm64::$ref FAILED its identity probe ($*) — the published arm64 image does not contain what its name promises"; exit 1; }
+          }
+          for img in $ALL_IMAGES; do
+            if [ "$img" = "vexaai/vexa-bot" ]; then
+              echo "== $img:$VERSION (skipped — amd64-only)"
+              continue
+            fi
+            ref="$img:$VERSION"
+            echo "== $ref"
+            docker pull -q --platform linux/arm64 "$ref"
+            case "$img" in
+              vexaai/v012-admin-api)    probe "$ref" python -c "import admin_api" ;;
+              vexaai/v012-runtime)      probe "$ref" python -c "import runtime_kernel" ;;
+              vexaai/v012-agent-worker)
+                probe "$ref" python -c "import worker, llm"
+                CMD="$(docker inspect --format '{{json .Config.Cmd}}' "$ref")"
+                if [ "$CMD" != '["python","-m","worker"]' ]; then
+                  echo "::error title=validate-arm64::$ref CMD is $CMD, expected [\"python\",\"-m\",\"worker\"] — the published agent-worker is NOT the worker build (core/agent/worker/Dockerfile)"
+                  exit 1
+                fi
+                ;;
+              vexaai/v012-agent-api)    probe "$ref" python -c "import control_plane.api" ;;
+              vexaai/v012-meeting-api)  probe "$ref" python -c "import meeting_api" ;;
+              vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
+              vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
+              vexaai/v012-terminal)     probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')" ;;
+              vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
+              *)
+                echo "::error title=validate-arm64::no identity assertion for $img — every matrix image must state what proves its contents match its name"
+                exit 1
+                ;;
+            esac
+            echo "   ✓ $ref contents match its name (arm64)"
+            docker image rm -f "$ref" >/dev/null 2>&1 || true
+          done
+          echo "✓ arm64 identity probes green (bot excluded)"
+      - name: Point lite at the published image
+        run: |
+          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env
+      - name: Bring lite up (pulls vexaai/vexa-lite:$VERSION arm64)
+        run: make -C deploy/lite up init-db
+      - name: Probe the front doors (make test exits non-zero on failure)
+        run: |
+          for i in $(seq 1 10); do
+            make -C deploy/lite test && exit 0
+            echo "…front doors not all up yet (attempt $i/10)"; sleep 15
+          done
+          echo "::error ::arm64 lite front-door probes failed after 10 attempts"
+          exit 1
+      - name: Arm64 / lite state on failure
+        if: failure()
+        run: |
+          uname -m
+          docker ps -a
+          docker logs vexa-lite --tail 300 || true
+
   validate-helm-k3s:
     needs: resolve
     runs-on: ubuntu-latest
@@ -528,6 +612,7 @@ jobs:
       - validate-v010-compat
       - validate-bot-spawn
       - validate-lite
+      - validate-arm64
       - validate-helm-k3s
     if: always()
     runs-on: ubuntu-latest
@@ -545,6 +630,7 @@ jobs:
           R_V010: ${{ needs.validate-v010-compat.result }}
           R_BOTSPAWN: ${{ needs.validate-bot-spawn.result }}
           R_LITE: ${{ needs.validate-lite.result }}
+          R_ARM64: ${{ needs.validate-arm64.result }}
           R_HELM: ${{ needs.validate-helm-k3s.result }}
         run: |
           set -euo pipefail
@@ -570,6 +656,7 @@ jobs:
             echo "| 4 | A fresh machine with nothing on it succeeds | ⚠️ fresh-VM leg runs outside this workflow — attach its evidence to the notes or state unclaimed |"
             echo "| 5 | Nothing that worked before broke | v010-compat $(m "$R_V010") · bot-spawn $(m "$R_BOTSPAWN") |"
             echo "| 6 | Every image contains what its name promises | $(m "$R_IDENTITY") image-identity |"
+            echo "| 6b | Published arm64 images execute on native ARM | $(m "$R_ARM64") validate-arm64 |"
             echo "| 7 | A human witnessed the assembled value | ⛔ ENFORCED — witness-gate requires releases/$VERSION/witness.json AND the release-promote Environment requires the owner's approval; promote cannot run without both |"
             echo "| 8 | Every batch change individually proven before entry | ⛔ ENFORCED — value-gate blocks promote unless every batch PR is pr-value-green on its head or state: value-signed |"
             echo "| 9 | The notes tell the truth about coverage | this table IS the mechanism — generated from run results, gaps stated above |"
@@ -637,6 +724,7 @@ jobs:
       - validate-v010-compat
       - validate-bot-spawn
       - validate-lite
+      - validate-arm64
       - validate-helm-k3s
       - witness-gate      # guarantee line 7 — no signature, no release
       - value-gate        # guarantee line 8 — every batch change accepted
