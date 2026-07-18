@@ -10,12 +10,14 @@ import {
   googleSignedOutLobbyProbeSelectors
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
+import { AdmissionError } from "../shared/admission";
 
-/** Error thrown when authenticated mode detects a signed-out browser profile. */
-export class AuthSessionError extends Error {
-  readonly outcome = "auth_session_missing" as const;
+/** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
+ *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
+ *  PERMANENT completion reason instead of re-raising into a transient (retried) join_failure. */
+export class AuthSessionError extends AdmissionError {
   constructor(message: string) {
-    super(message);
+    super("auth_session_missing", message);
     this.name = "AuthSessionError";
   }
 }

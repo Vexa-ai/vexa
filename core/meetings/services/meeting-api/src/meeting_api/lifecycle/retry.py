@@ -11,7 +11,8 @@ transient/permanent split):
 
   * **TRANSIENT → retry**: ``awaiting_admission_timeout``, ``join_failure`` (network / transient error).
   * **PERMANENT → no retry → failed**: ``awaiting_admission_rejected``, ``evicted``,
-    ``validation_error``, ``max_bot_time_exceeded``, and the user terminal ``stopped``.
+    ``validation_error``, ``max_bot_time_exceeded``, ``auth_session_missing`` (a re-spawn hits the
+    same signed-out profile), and the user terminal ``stopped``.
 
 Bounded to a few attempts (config, default 3). Each attempt is its OWN ``meeting_session`` (a fresh
 ``connectionId``) — the scheduler fires a ``POST /bots`` re-spawn request for the next attempt.
@@ -46,6 +47,7 @@ _PERMANENT: frozenset[CompletionReason] = frozenset(
         CompletionReason.VALIDATION_ERROR,
         CompletionReason.MAX_BOT_TIME_EXCEEDED,
         CompletionReason.STOPPED,        # user stop is terminal — never retried
+        CompletionReason.AUTH_SESSION_MISSING,  # signed-out profile — a re-spawn hits the same dead profile
         CompletionReason.STARTUP_ALONE,  # alone-on-start is a real outcome, not a transient fault
         CompletionReason.LEFT_ALONE,     # a normal completion, not a failure
     }

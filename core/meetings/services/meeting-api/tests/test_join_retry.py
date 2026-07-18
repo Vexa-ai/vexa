@@ -41,6 +41,7 @@ def test_transient_reasons(reason):
     CompletionReason.VALIDATION_ERROR,
     CompletionReason.MAX_BOT_TIME_EXCEEDED,
     CompletionReason.STOPPED,
+    CompletionReason.AUTH_SESSION_MISSING,
 ])
 def test_permanent_reasons(reason):
     assert not is_transient(reason)

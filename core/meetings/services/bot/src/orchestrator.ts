@@ -69,6 +69,7 @@ const OUTCOME_FAIL: Record<Exclude<JoinOutcome, 'admitted'>, CompletionReason> =
   rejected: 'awaiting_admission_rejected',
   timeout: 'awaiting_admission_timeout',
   blocked: 'join_failure',
+  auth_missing: 'auth_session_missing',
   error: 'join_failure',
 };
 
