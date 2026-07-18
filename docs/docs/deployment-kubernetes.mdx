@@ -106,6 +106,34 @@ an in-image executable against the published images, so a profile that diverges 
 fails the release rather than a customer's install.
 </Warning>
 
+### Autoscaling and bot bursts — the fresh-node reachability gate
+
+Because every bot is its own bare Pod, a burst of meeting requests can push the cluster autoscaler to
+add nodes, and bots get scheduled onto them the moment they report `Ready`. But a brand-new node's
+network can take up to a few minutes to fully converge *after* `Ready` — the CNI/NetworkPolicy
+programming, kube-proxy, and DNS warmup all lag node readiness. A bot scheduled into that window can
+find its control plane (its meeting-api callback URL and redis) unreachable on its first outbound hop.
+
+The bot handles this with a **pre-join reachability gate**: it makes its first `joining` lifecycle
+emit load-bearing. If the meeting-api callback is reachable (any HTTP response), it joins immediately —
+zero added latency. If not, it probes redis; **if either channel is up it proceeds** (it can still
+report), and **only if both are down does it refuse to join**, terminating fast (< a few seconds) with:
+
+- **Pod exit code `3`** — the attributable terminal signal (`kubectl describe pod <bot>` →
+  `Last State: Terminated, Exit Code: 3`). Distinct from a real join failure (exit `1`).
+- a `failed` lifecycle event carrying `failure_stage: requested` and `infra_fault:
+  control_plane_unreachable` on whichever channel recovers (often none — the exit code is the signal).
+
+This converts an opaque CrashLoop / stuck-`requested` meeting into a fast, attributed failure an
+operator can read in one `kubectl describe`. See
+[Troubleshooting → exit code 3](/troubleshooting).
+
+**What stays cluster-side (not solved by the gate):** the node-readiness window itself. Consider
+pre-pulling the bot image onto new nodes (a cold pull can itself take minutes and mask the network
+window), and treat node `Ready` as insufficient for scheduling network-dependent work — the gate
+fails fast and, on k8s, the exit lets the operator (or an autoscaler policy) reschedule onto a warmed
+node.
+
 ## Scaling meeting-api
 
 `meetingApi.replicaCount` defaults to `2`, and that is safe for the segment consumer.

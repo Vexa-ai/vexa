@@ -22,6 +22,7 @@
  * terminal `failed` (join_failure) rather than crashing the root — same disposability as the
  * lazy redis connect.
  */
+import { createClient } from 'redis';
 import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
 import type { Act, LifecycleEvent } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
@@ -123,6 +124,26 @@ function voiceHandler(speak: SpeakController): (act: Act) => Promise<void> {
   };
 }
 
+/**
+ * Probe the SECONDARY control-plane channel (redis) for the reachability gate (#530). A fresh,
+ * short-lived connection with a bounded connect timeout and NO reconnection — a single yes/no on
+ * whether redis answers a PING. Never throws: any fault resolves to `false` (unreachable). Uses a
+ * throwaway client (not the lazy transcript/acts clients) so the probe can't disturb their state.
+ */
+async function pingRedis(redisUrl: string, timeoutMs = 3000): Promise<boolean> {
+  const client = createClient({ url: redisUrl, socket: { connectTimeout: timeoutMs, reconnectStrategy: false } });
+  client.on('error', () => { /* swallow — the probe's verdict is the return value, not a throw */ });
+  try {
+    await client.connect();
+    const pong = await client.ping();
+    return pong === 'PONG';
+  } catch {
+    return false;
+  } finally {
+    await client.disconnect().catch(() => { /* best-effort */ });
+  }
+}
+
 export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number> {
   // ── validate config (P14: fail fast) ──
   let inv: Invocation;
@@ -222,12 +243,20 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     acts = liveActs;
   }
 
+  // Reachability gate (#530): only meaningful under a control plane (a callback URL is set). When
+  // present, the orchestrator makes the first `joining` emit load-bearing and, if the callback is
+  // unreachable, probes redis before refusing to join. Self-host (no callback) has no gate.
+  const reachability = inv.meetingApiCallbackUrl
+    ? { probeSecondary: () => pingRedis(inv.redisUrl) }
+    : undefined;
+
   const orchestrator = createOrchestrator(inv, {
     lifecycle,
     join,
     pipeline,
     acts,
     recording: recording as RecordingSink | undefined,
+    reachability,
   });
 
   // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →

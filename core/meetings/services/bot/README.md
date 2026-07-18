@@ -22,6 +22,24 @@ composition root (`src/index.ts`).
 | produces | meeting-api | HTTP POST → `inv.recordingUploadUrl` | assembled recording master (multipart) |
 | consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`) |
 
+### Pre-join reachability gate (#530)
+
+Before any meeting navigation, the orchestrator makes the FIRST `joining` emit **load-bearing**
+(`orchestrator.ts` → `emitJoining`): the HTTP sink's `emitReachable` reports whether the meeting-api
+callback answered at all (any HTTP status = reachable; only an all-attempts network failure — the
+fresh-node CNI-lag signature — is `unreachable`). Reachable ⇒ the join proceeds with **zero added
+latency** (the secondary channel is never probed). Unreachable ⇒ it probes the secondary channel
+(redis PING); **either channel up ⇒ proceed** (the bot can still report), **both down ⇒ refuse to
+join** and terminate fast with a typed, attributed outcome instead of an opaque crashloop.
+
+**Exit codes** (the terminal signal on k8s, where each bot is a bare Pod, `--restart=Never`):
+
+| Code | Meaning |
+|---|---|
+| `0` | clean terminal (`completed`, or a user `stop` withdraw) |
+| `1` | join / runtime failure (`join_failure`, `validation_error`, admission rejected/timeout) |
+| `3` | **control plane unreachable** — both the meeting-api callback and redis were unreachable at boot; the bot refused to join (`failed`, `failure_stage: requested`, `infra_fault: control_plane_unreachable`). Distinguishes a **broken node** from a **broken join** in one `kubectl describe`. |
+
 ## Contracts
 
 **Owns:** none — the bot is a worker that implements published meetings contracts.
@@ -34,8 +52,10 @@ in `src/contracts.ts` and validated against the sealed registry goldens (`contra
 ## Isolated evaluation
 
 Unit/integration: `pnpm test` (chained `tsx` runs — no build step). Levels:
-**L1** config ajv goldens · **L2** orchestrator `lifecycle.v1` state machine (fake ports) ·
-**L3** transport adapters (lifecycle-http · transcript-redis · acts-redis), pipeline lane, recording
+**L1** config ajv goldens · **L2** orchestrator `lifecycle.v1` state machine (fake ports) — incl. the
+#530 reachability gate (both-channels-down ⇒ no join, exit 3, `control_plane_unreachable`; either-channel
+up ⇒ proceed) · **L3** transport adapters (lifecycle-http `emitReachable` reachability verdict ·
+transcript-redis · acts-redis), pipeline lane, recording
 assembler, replay tape. **L4** (browser/capture/speak/upload legs) runs via the standalone harness in
 [`eval/`](./eval): `make -C eval run MEETING=<id>` drives a live Meet with synthetic speakers and an
 autonomous PASS/FAIL verdict (`make -C eval verify` for the offline oracle self-test).

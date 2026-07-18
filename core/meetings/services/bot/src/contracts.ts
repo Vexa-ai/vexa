@@ -46,6 +46,14 @@ export interface LifecycleEvent {
   bot_logs?: string[];
   bot_resources?: { peak_memory_bytes?: number; cpu_usage_usec?: number; [k: string]: unknown };
   speaker_events?: unknown[];
+  /** Machine-readable infra-fault tag on a pre-join control-plane-unreachable abort (#530).
+   *  Additive field: lifecycle.v1 ingests liberally (additionalProperties:true), so this rides
+   *  the SEALED contract WITHOUT a schema/seal bump — it carries the attribution the sealed
+   *  CompletionReason enum does not (see orchestrator.ts CONTROL_PLANE_UNREACHABLE). */
+  infra_fault?: string;
+  /** The control-plane channels found unreachable when `infra_fault` is set (e.g. the
+   *  meeting-api callback and/or redis). Additive; same liberal-ingestion rationale. */
+  unreachable_channels?: string[];
 }
 
 /** The legal transitions — the machine the bot MUST obey (lifecycle.v1/README.md). */

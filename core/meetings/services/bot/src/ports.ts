@@ -49,10 +49,32 @@ export interface TranscriptSink {
   publish(segment: TranscriptSegment): Promise<void>;
 }
 
+/** The reachability verdict of the FIRST (load-bearing) lifecycle emit (#530). `reachable` iff
+ *  the primary control-plane channel answered AT ALL — a 2xx OR a non-2xx HTTP response both
+ *  prove the channel is up (P18's "can I reach my dependency?" answered yes); only when EVERY
+ *  attempt fails at the network layer (no response — the CNI-programming-lag signature) is it
+ *  `unreachable`. */
+export type PrimaryReachability = 'reachable' | 'unreachable';
+
 /** lifecycle.v1 egress — the orchestrator emits one status report per transition. The real
  *  adapter POSTs to meeting-api's callback; the L2 fake records the sequence to assert. */
 export interface LifecycleSink {
   emit(event: LifecycleEvent): Promise<void>;
+  /** Emit the LOAD-BEARING first `joining` event AND report whether the primary control-plane
+   *  channel is reachable — the reachability gate (#530, P18). Reachable ⇒ the orchestrator
+   *  proceeds with ZERO added latency (the secondary channel is never probed). OPTIONAL: sinks
+   *  that don't implement it (the console/self-host sink, most test fakes) are treated as always
+   *  reachable — no gate, so nothing that lacks a control plane is ever blocked from joining. */
+  emitReachable?(event: LifecycleEvent): Promise<PrimaryReachability>;
+}
+
+/** The SECONDARY control-plane channel probe (#530) — consulted ONLY when the first `joining`
+ *  emit is `unreachable` on the primary channel. The live adapter PINGs redis; `true` iff up.
+ *  Either-channel-up ⇒ the bot can still report ⇒ proceed; BOTH down ⇒ refuse to join. */
+export interface ControlPlaneProbe {
+  /** Probe the secondary channel (redis). Returns `true` iff reachable. MUST NOT throw — a probe
+   *  fault resolves to `false` (unreachable) at the adapter. */
+  probeSecondary(): Promise<boolean>;
 }
 
 /** acts.v1 ingress — the control plane's command bus. The real adapter subscribes to the
