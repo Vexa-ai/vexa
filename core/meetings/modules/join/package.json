@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/shared/selector-validity.test.ts && tsx src/googlemeet/admission.test.ts && tsx src/googlemeet/humanized/humanized.test.ts && tsx src/msteams/modals.test.ts && tsx src/zoom/join.test.ts && tsx src/jitsi/join.test.ts && tsx src/jitsi/password.test.ts && tsx src/jitsi/admission.test.ts",
+    "test": "tsx src/shared/selector-validity.test.ts && tsx src/googlemeet/admission.test.ts && tsx src/googlemeet/leave.test.ts && tsx src/googlemeet/humanized/humanized.test.ts && tsx src/msteams/modals.test.ts && tsx src/zoom/join.test.ts && tsx src/jitsi/join.test.ts && tsx src/jitsi/password.test.ts && tsx src/jitsi/admission.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "jsdom": "^29.1.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }

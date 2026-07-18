@@ -17,9 +17,18 @@ builtins, so the package is provably standalone).
 
 ## Depends on
 `playwright` (the `Page`/automation) + Node builtins only. `playwright-extra` +
-`puppeteer-extra-plugin-stealth` are used by the debug harness (`scripts/`). Verified by
-`pnpm --filter @vexa/join check:isolation` (gate:isolation, P2). CommonJS by design — see
-`tsconfig.json`; ESM consumers import it via Node interop.
+`puppeteer-extra-plugin-stealth` are used by the debug harness (`scripts/`); `jsdom` is
+test-only (real CSS engine for the no-browser fixtures + the selector-validity gate).
+Verified by `pnpm --filter @vexa/join check:isolation` (gate:isolation, P2). CommonJS by
+design — see `tsconfig.json`; ESM consumers import it via Node interop.
+
+## Selector conventions
+Selector validity is **per execution context**, not per engine: Playwright engines
+(`text=`, `:has-text()`) exist only on the locator side; anything shipped into
+`page.evaluate` runs through `document.querySelector` and must be **plain CSS**. Declare
+browser-context arrays in `browserContextSelectorArrays` (per-platform `selectors.ts`) so
+`src/shared/selector-validity.test.ts` CSS-parses them; text-labelled buttons are
+`{ text: … }` matcher fields, matched in-page against `textContent`.
 
 ## Prove it
 - `pnpm --filter @vexa/join build` · `pnpm --filter @vexa/join test` (L1/L2 admission oracle — DOM fixtures, no browser)
