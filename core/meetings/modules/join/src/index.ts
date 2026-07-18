@@ -125,11 +125,14 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
 }
 
 export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent, prepareForRecording, leaveGoogleMeet, startGoogleRemovalMonitor };
-// AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure). It is THROWN by the
-// admission wait; the JoinDriver adapter catches it and maps the outcome → a JoinOutcome so a host DENIAL
-// is recorded as a permanent `rejected`, not collapsed into a transient (retried) `join_failure` (G1).
+// AdmissionError carries a TYPED `outcome` (denial / lobby_timeout / join_failure / auth_session_missing).
+// It is THROWN by the join/admission path; the JoinDriver adapter catches it and maps the outcome → a
+// JoinOutcome so a host DENIAL is recorded as a permanent `rejected` — and a signed-out profile
+// (AuthSessionError, an AdmissionError subclass) as the permanent `auth_session_missing` — never
+// collapsed into a transient (retried) `join_failure` (G1).
 export { AdmissionError } from "./shared/admission";
 export type { AdmissionOutcome } from "./shared/admission";
+export { AuthSessionError } from "./googlemeet/join";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };

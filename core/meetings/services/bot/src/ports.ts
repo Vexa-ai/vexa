@@ -17,7 +17,7 @@ import type { BotStatus, LifecycleEvent, Act, TranscriptSegment } from './contra
 
 /** The outcome of the join+admission attempt (an Anti-Corruption verdict, P5 — the
  *  platform's many failure modes translated into the bot's vocabulary). */
-export type JoinOutcome = 'admitted' | 'rejected' | 'timeout' | 'blocked' | 'error';
+export type JoinOutcome = 'admitted' | 'rejected' | 'timeout' | 'blocked' | 'auth_missing' | 'error';
 
 /** Drives the platform join. The real adapter wraps @vexa/join.joinMeeting + admission
  *  watchers + the removal monitor over a @vexa/remote-browser page. */

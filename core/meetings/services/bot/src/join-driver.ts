@@ -25,15 +25,18 @@ import type { JoinDriver, JoinOutcome } from './ports.js';
  * (`lifecycle/retry.py`) RE-SPAWNS a bot that was actually DENIED, burning quota. Mapping the outcome
  * keeps the truth: a `denial` → `rejected` → `awaiting_admission_rejected` (PERMANENT, no retry); a
  * `lobby_timeout` → `timeout` → `awaiting_admission_timeout` (transient, a legit retry); a `join_failure`
- * stays `error` → `join_failure` (transient). NB: a distinct `blocked` reason needs a sealed-contract
+ * stays `error` → `join_failure` (transient); an `auth_session_missing` (signed-out profile in
+ * authenticated mode) → `auth_missing` → `auth_session_missing` (PERMANENT — a re-spawn against a dead
+ * profile can never succeed). NB: a distinct `blocked` reason needs a sealed-contract
  * `CompletionReason` value (lane:contract) — until then a detected block surfaces via this same path.
  */
 export function admissionOutcomeToJoinOutcome(outcome: AdmissionOutcome): JoinOutcome {
   switch (outcome) {
-    case 'denial':        return 'rejected';
-    case 'lobby_timeout': return 'timeout';
-    case 'join_failure':  return 'error';
-    default:              return 'error';
+    case 'denial':               return 'rejected';
+    case 'lobby_timeout':        return 'timeout';
+    case 'auth_session_missing': return 'auth_missing';
+    case 'join_failure':         return 'error';
+    default:                     return 'error';
   }
 }
 

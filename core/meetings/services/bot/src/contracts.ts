@@ -28,6 +28,7 @@ export type CompletionReason =
   | 'awaiting_admission_timeout'
   | 'awaiting_admission_rejected'
   | 'join_failure'
+  | 'auth_session_missing'
   | 'validation_error'
   | 'max_bot_time_exceeded';
 

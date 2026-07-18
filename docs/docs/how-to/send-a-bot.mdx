@@ -105,6 +105,13 @@ returns `404`. Set `language` and `task` on the `POST /bots` spawn. See the
 The audio **recording** lands in your object storage — retrieve it via `GET /recordings`
 ([Meetings API](/api/meetings#recordings)).
 
+## Authenticated mode
+
+When `authenticated: true` is set in the request, the bot uses a persistent browser profile to join
+the call as your Google account. If the profile is signed out (session expired, cookies cleared), the
+bot **refuses to join** with an `auth_session_missing` error — it never silently degrades to an anonymous
+join. Re-authenticate the browser profile and retry.
+
 ## Next
 
 The transcript compiles into your [workspace](/concepts#workspace), where agents act on it. Turn that into

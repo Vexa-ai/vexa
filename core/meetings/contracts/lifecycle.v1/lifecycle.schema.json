@@ -9,7 +9,7 @@
     },
     "CompletionReason": {
       "description": "Why a `completed` run ended (operator-facing).",
-      "enum": ["stopped", "left_alone", "startup_alone", "evicted", "awaiting_admission_timeout", "awaiting_admission_rejected", "join_failure", "validation_error", "max_bot_time_exceeded"]
+      "enum": ["stopped", "left_alone", "startup_alone", "evicted", "awaiting_admission_timeout", "awaiting_admission_rejected", "join_failure", "auth_session_missing", "validation_error", "max_bot_time_exceeded"]
     },
     "FailureStage": {
       "description": "Furthest stage reached, for `failed` attribution.",
