@@ -159,9 +159,10 @@ class Runtime:
         if existing is not None and existing.state in (RuntimeState.starting, RuntimeState.running):
             return existing
 
-        runnable = self.profiles.resolve(spec.profile)
-        if runnable is None:
+        profile = self.profiles.get(spec.profile)
+        if profile is None:
             raise ValueError(f"unknown profile: {spec.profile!r}")
+        runnable = profile.runnable
 
         # Quota check (O-RT-2): reject the N+1th active workload for this owner.
         if self.owner_quota is not None:
@@ -176,7 +177,12 @@ class Runtime:
         self._persist(spec, status)
         self._emit(spec.workloadId, RuntimeState.starting)
         try:
-            self._handles[spec.workloadId] = self.backend.start(spec.workloadId, runnable, spec.env)
+            # The profile's base_env is the deployment-wide floor (e.g. meeting-bot's BOT_SPEAKER_*
+            # tuning, rendered onto the runtime pod by the chart); the per-workload spec.env is
+            # layered on top so an explicit spec value always wins. Without this merge the base_env
+            # never reaches the spawned pod and chart-set tuning is dead config (issue #771).
+            effective_env = {**profile.base_env, **spec.env}
+            self._handles[spec.workloadId] = self.backend.start(spec.workloadId, runnable, effective_env)
         except Exception:
             status.state = RuntimeState.stopped
             status.stopReason = StopReason.start_failed

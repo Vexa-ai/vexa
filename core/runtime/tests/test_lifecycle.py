@@ -72,10 +72,12 @@ class _FakeBackend:
 
     def __init__(self) -> None:
         self.starts: list[str] = []
+        self.envs: dict[str, dict[str, str]] = {}
         self.exit_codes: dict[str, int | None] = {}
 
     def start(self, workload_id, runnable, env):
         self.starts.append(workload_id)
+        self.envs[workload_id] = dict(env)
         self.exit_codes[workload_id] = None
         return WorkloadHandle(id=workload_id, impl=workload_id)
 
@@ -125,6 +127,31 @@ def test_create_respawns_after_self_exit():
     respawned = rt.create(WorkloadSpec(workloadId="w1", profile="test", env={}))
     assert respawned.state is RuntimeState.running
     assert be.starts == ["w1", "w1"]                    # exit-reflection let the re-create spawn
+
+
+def test_profile_base_env_reaches_the_spawn_env():
+    """A profile's base_env (e.g. meeting-bot's BOT_SPEAKER_* tuning rendered onto the runtime pod)
+    must be merged into the spawned workload's env, with the per-workload spec.env layered on top
+    (spec wins). Without the merge the chart's tuning never reaches the bot pod (issue #771)."""
+    from runtime_kernel.profiles import Profile, ProfileRegistry, Runnable
+
+    reg = ProfileRegistry({
+        "meeting-bot": Profile(
+            name="meeting-bot",
+            runnable=Runnable(image="bot:img", command=None),
+            base_env={"BOT_SPEAKER_MIN_AUDIO_SEC": "1.5", "BOT_SPEAKER_MAX_BUFFER_SEC": "8"},
+        )
+    })
+    be = _FakeBackend()
+    rt = Runtime(backend=be, profiles=reg)
+    rt.create(WorkloadSpec(
+        workloadId="w1", profile="meeting-bot",
+        env={"VEXA_BOT_CONFIG": "{}", "BOT_SPEAKER_MAX_BUFFER_SEC": "12"},
+    ))
+    spawned = be.envs["w1"]
+    assert spawned["BOT_SPEAKER_MIN_AUDIO_SEC"] == "1.5"   # base_env floor reaches the pod
+    assert spawned["VEXA_BOT_CONFIG"] == "{}"              # spec.env preserved
+    assert spawned["BOT_SPEAKER_MAX_BUFFER_SEC"] == "12"   # spec.env wins over base_env
 
 
 def test_create_touches_across_a_runtime_restart():
