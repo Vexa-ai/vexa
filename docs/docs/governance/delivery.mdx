@@ -162,7 +162,7 @@ to an item. **[TO BUILD: coverage check]**
 **D2b — Coverage is a promise with an SLA: world feedback becomes a ready bundle in 3 days.**
 Every incoming signal is triaged and converted into a prepared issue within **3 days**, then
 seeded onto the roadmap. Nothing we know stays unrepresented; no report dead-ends as a raw ticket.
-(`state: needs-info` pauses the clock when only the reporter can unblock.) · *Source:* lead-time
+(`state: needs-info` pauses the clock when only the reporter can unblock.) The incoming-report template asks **"observed on which deployed version / verified against which tag?"** as a required field — a report anchored to a deleted tree earns a fast re-anchor verdict instead of a phantom fix (of seven same-day prod reports, the two that stamped their era got correct fast verdicts, #779/#783). · *Source:* lead-time
 SLA / class-of-service (Kanban). · *Gate:* intake bot ages `state: incoming` items; >3 days
 without `prepared` alarms. **[TO BUILD: intake bot]**
 
@@ -702,6 +702,8 @@ also the onboarding.
 
 #### Step 6 — The verdict (exactly one)
 
+Every verdict names the **head sha it examined** — a later push renders the endorsement visibly historical, the same way GitHub dismisses stale approvals (#621: a TAKE praised a head the author replaced hours later, and the stale endorsement stood while the architecture changed underneath it).
+
 - **Floor met + diff sound** → arrange the value validation: a **non-author** runs it live
   (preferred signer: the originating reporter, D16/D9), multichannel evidence corroborating,
   attestation naming setup + build provenance (D12b). On the signature: merge, label
@@ -827,11 +829,13 @@ touches a runtime surface** — the machine contract between every PR and main
 ([the live map](/governance/arch-compliance)). **Merge is the promise to the contributor,
 honored.**
 
+**One rule for sealed-contract re-stamps.** A back-compatible re-seal MAY ride the delivering PR when (a) the PR carries `lane:contract`, (b) the seal hunk is named in the PR body, and (c) a maintainer performs the merge — the merge IS the ruling. Breaking changes and cross-contract mirror divergences (the api.v1 `MeetingCompletionReason` case, #607) always get an explicit issue-recorded ruling first. (One day, three contract acts, three ad-hoc treatments — #755 re-sealed in-PR, #607 ruled human-only, #765 held for an explicit maintainer act — all defensible; the inconsistency was the defect.)
+
 **`Closes` asserts the full acceptance table is delivered; a partial delivery links
 `Part of #N` (a plain reference, not a closing keyword). The merge card enforces it** —
 a `Closes`-target issue with undelivered acceptance legs is a ❌ row on the card
 (choke point 1), so a dropped leg is a decision on record, never a GitHub-keyword
-side-effect.
+side-effect. Cross-reference sweeps miss what was never referenced, so the closure mechanism (#712) carries a second detection mode: **periodic mechanism-vs-tree verification over open prepared issues** — reading whether the tree already delivers an issue, not whether a PR happens to link it (one night surfaced eleven stale-open issues, five of them delivered by PRs that named no issue at all — invisible to any link sweep).
 
 ## Release — the ship bar
 
