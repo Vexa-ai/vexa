@@ -16,7 +16,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 cd "$HERE"
 
-envv() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//'; }
+envv() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//' || true; }
 
 GW_PORT="$(envv API_GATEWAY_HOST_PORT)"; GW_PORT="${GW_PORT:-18056}"
 ADMIN_PORT="$(envv ADMIN_API_PORT)";     ADMIN_PORT="${ADMIN_PORT:-18057}"
