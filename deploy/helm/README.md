@@ -66,6 +66,10 @@ Docker to build the images. It proves the control plane stands up and `/health` 
   class for the store PVC (NFS/Longhorn; k3s `local-path` is RWO-only — single node works), with
   `agentApi.workspaces.accessMode: ReadWriteMany`.
 - The `runtime` image bundles `kubectl` for the k8s backend; the docker/process backends ignore it.
+- **`TRANSCRIPTION_MODEL` is not values-plumbed yet** (#522 ships the env on compose + Lite): to
+  point k8s bots at a validating STT backend (Groq/vLLM), add the env to the meeting-api (and
+  terminal) deployment via `extraEnv` for now; first-class `transcription.model` values plumbing is
+  a declared follow-up.
 
 ## Contracts
 

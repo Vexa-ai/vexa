@@ -103,6 +103,16 @@
    "description": "bearer token for the STT service (must match that unit's API_TOKEN)"
   },
   {
+   "key": "TRANSCRIPTION_MODEL",
+   "class": "defaulted",
+   "default": "(unset — the whisper client sends whisper-1)",
+   "description": "STT model id bot_spawn threads into the invocation (the OpenAI-compatible `model` form part) — required by backends that validate model ids (Groq, vLLM); ignored by the bundled deploy/transcription unit. Helm plumbing is a declared follow-up (deploy/helm/README.md) — use extraEnv there for now",
+   "targets": [
+    "compose",
+    "lite"
+   ]
+  },
+  {
    "key": "TRANSCRIBE_ENABLED",
    "class": "defaulted",
    "default": "true",

@@ -60,6 +60,20 @@ def test_invocation_carries_stt_creds_when_provided():
     assert "transcriptionServiceUrl" not in build_invocation(**base)
 
 
+def test_invocation_carries_stt_model_when_provided():
+    """#522: a validating OpenAI-compatible backend (Groq, vLLM) needs its served model id on
+    every request. The deployment's choice rides the sealed invocation; absent → omitted, and
+    the whisper client falls back to whisper-1 (today's wire)."""
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    base = dict(meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/abc-defg-hij",
+                bot_name="VexaBot", token=token, native_meeting_id="abc-defg-hij",
+                connection_id="conn-1", redis_url="redis://redis:6379/0")
+    inv = build_invocation(**base, transcription_model="whisper-large-v3-turbo")
+    conforms_invocation(inv)
+    assert inv["transcriptionModel"] == "whisper-large-v3-turbo"
+    assert "transcriptionModel" not in build_invocation(**base)
+
+
 def test_workload_spec_conforms_to_runtime_v1():
     inv = build_invocation(
         meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/x",
@@ -227,6 +241,8 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
         assert user_id == USER
         return {"url": "https://stt-mine.example.com"}
 
+    monkeypatch.setenv("TRANSCRIPTION_MODEL", "env-model")
+
     monkeypatch.setattr(spawn_service, "_resolve_transcription_backend", fake_resolve)
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
@@ -236,6 +252,7 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["transcriptionServiceUrl"] == "https://stt-mine.example.com"
     assert "transcriptionServiceToken" not in inv  # env token does NOT leak to the custom backend
+    assert "transcriptionModel" not in inv  # env model names the ENV backend's model — same rule
 
 
 async def test_request_bot_env_transcription_stays_without_settings(monkeypatch):
@@ -253,6 +270,30 @@ async def test_request_bot_env_transcription_stays_without_settings(monkeypatch)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["transcriptionServiceUrl"] == "https://stt-env.vexa.ai"
     assert inv["transcriptionServiceToken"] == "tok-env"
+
+
+async def test_request_bot_env_transcription_model_rides_invocation(monkeypatch):
+    """#522 V1: ``TRANSCRIPTION_MODEL`` set on the deployment reaches every bot's invocation;
+    unset → the field is omitted and the whisper client sends whisper-1 (today's wire)."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-env")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+
+    monkeypatch.setenv("TRANSCRIPTION_MODEL", "whisper-large-v3-turbo")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["transcriptionModel"] == "whisper-large-v3-turbo"
+
+    monkeypatch.delenv("TRANSCRIPTION_MODEL", raising=False)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert "transcriptionModel" not in inv
 
 
 # ── route: meeting_url passthrough is SSRF-validated at entry (jitsi/zoom, TAKE on #543) ─────────

@@ -305,8 +305,10 @@ services:
       - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
       # STT the spawned bot transcribes with — bot_spawn threads these into the invocation (registry
       # `stt` resource; the funded internal@vexa.ai token). Unset → bot joins+captures but no transcript.
+      # MODEL is the id validating backends require (Groq/vLLM); unset → whisper-1.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
       # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
       # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
       # capture-only bots instead of 503-ing every default POST /bots.
@@ -462,8 +464,10 @@ services:
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       # Composer mic dictation (/api/stt) — same STT service the meeting pipeline uses; token stays
       # server-side. Empty → the mic button reports "not configured" instead of failing silently.
+      # MODEL rides along so dictation hits a validating backend with the same id as the bots.
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
       # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
       # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.

@@ -174,12 +174,16 @@ async def request_bot(
     #     env-only capability check.
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
+    transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
     configured = await _resolve_transcription_backend(user_id)
     if configured.get("url"):
         transcription_service_url = configured["url"]
         # A configured backend's token replaces the env token even when empty — the env token
-        # belongs to the ENV backend, never to a user-supplied endpoint.
+        # belongs to the ENV backend, never to a user-supplied endpoint. Same rule for the
+        # model id: the env model names the ENV backend's served model, so a configured
+        # backend carries its own (unset → the client's whisper-1 default).
         transcription_service_token = configured.get("token") or None
+        transcription_model = configured.get("model") or None
     if transcribe_enabled and not transcription_service_url:
         raise TranscriptionNotConfigured(
             "no transcription backend configured — set it in Settings or environment variables "
@@ -263,7 +267,7 @@ async def request_bot(
         "INTERNAL_API_SECRET"
     )
     # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
-    # transcription_service_url/token flow into the invocation below. Without either the bot
+    # transcription_service_url/token/model flow into the invocation below. Without either the bot
     # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset
     # (transcribe still gated by transcribe_enabled, which step 1b refuses when unresolvable).
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
@@ -290,6 +294,7 @@ async def request_bot(
         transcribe_enabled=transcribe_enabled,
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
+        transcription_model=transcription_model,
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",

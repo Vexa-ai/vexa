@@ -91,6 +91,14 @@ TRANSCRIPTION_SERVICE_URL=http://<gpu-host>:8083   # base URL; client appends /v
 TRANSCRIPTION_SERVICE_TOKEN=<same as the unit's API_TOKEN>
 ```
 
+**Which model id goes where:** the stack sends `TRANSCRIPTION_MODEL` as the OpenAI-compatible
+`model` field on every request (unset → `whisper-1`). The **bundled unit ignores it** — pick its
+model with the unit's own `MODEL_SIZE`. Backends that **validate** the field need the right id:
+**Groq** → `whisper-large-v3-turbo`, **OpenAI** → `whisper-1` / `gpt-4o-transcribe`,
+**vLLM/LiteLLM** → the exact served model name. Any OpenAI-compatible
+`/v1/audio/transcriptions` endpoint works: set `TRANSCRIPTION_SERVICE_URL` to its base URL,
+`TRANSCRIPTION_SERVICE_TOKEN` to its key, and `TRANSCRIPTION_MODEL` to the id it expects.
+
 Now bots transcribe end-to-end: **bot → transcription service → segments → meeting-api `collector`
 → live fan-out**. Scale by adding workers (one GPU each) in the unit's `docker-compose.yml` +
 `nginx.conf`.

@@ -28,6 +28,7 @@ from pathlib import Path
 
 DG_TTS = "https://api.deepgram.com/v1/speak"
 # STT endpoint is configurable; point VEXA_TX_URL at any OpenAI-compatible /audio/transcriptions.
+# VEXA_TX_MODEL (or TRANSCRIPTION_MODEL) picks the model id for backends that validate it.
 STT = os.environ.get("VEXA_TX_URL", "http://127.0.0.1:18056/v1/audio/transcriptions")
 # A few Deepgram Aura voices, one per speaker (matches the eval roster).
 VOICES = {"A": "aura-asteria-en", "B": "aura-orion-en", "V": "aura-luna-en", "C": "aura-stella-en"}
@@ -72,7 +73,8 @@ def stt(wav: bytes) -> dict:
     parts = []
     for name, val, extra in [("file", wav, b'; filename="a.wav"\r\nContent-Type: audio/wav')]:
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"".encode() + extra + b"\r\n\r\n" + val + b"\r\n")
-    for name, val in [("model", "whisper-1"), ("response_format", "verbose_json")]:
+    model = os.environ.get("VEXA_TX_MODEL") or os.environ.get("TRANSCRIPTION_MODEL") or "whisper-1"
+    for name, val in [("model", model), ("response_format", "verbose_json")]:
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{val}\r\n".encode())
     body = b"".join(parts) + f"--{boundary}--\r\n".encode()
     key = os.environ.get("TX_KEY") or os.environ.get("TRANSCRIPTION_SERVICE_TOKEN")
