@@ -4,7 +4,8 @@
  * real as content lands — "an artifact exists only when gate-green" (P9).
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
- *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|all]
+ *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
+ *                                lite-makefile|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -983,7 +984,31 @@ function gateDbBudget() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+// gate:lite-makefile (#581) — no comment line inside a `\`-continued recipe block in
+// deploy/lite/Makefile. A bare `#` recipe line without a trailing `\` ENDS the continuation, so
+// make runs the rest in a separate shell where the block's variables are lost (the empty-$IMG
+// class: `docker run … $IMG` with no image); with a trailing `\` the shell comment swallows the
+// continued line instead. Either way the block silently breaks — commentary belongs ABOVE the
+// recipe, in `##` doc lines. Green-on-empty if the Makefile is absent.
+function gateLiteMakefile() {
+  const f = join(ROOT, "deploy", "lite", "Makefile");
+  if (!existsSync(f)) { console.log("  ✓ gate:lite-makefile — no deploy/lite/Makefile (green-on-empty)"); return true; }
+  const lines = readFileSync(f, "utf8").split("\n");
+  const errs = [];
+  let cont = false;  // the previous RECIPE line ended with `\` — we are inside a continued block
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const recipe = line.startsWith("\t");
+    if (recipe && cont && line.trim().startsWith("#"))
+      errs.push(`deploy/lite/Makefile:${i + 1} — comment line inside a \`\\\`-continued recipe block (orphans the rest of the block's shell state; move it above the recipe as a \`##\` doc line)`);
+    cont = recipe && line.replace(/\s+$/, "").endsWith("\\");
+  }
+  if (errs.length) return fail(["lite-makefile (#581, the empty-$IMG class):", ...errs.map((e) => "   " + e)]);
+  console.log("  ✓ gate:lite-makefile — no comment lines inside continued recipe blocks (deploy/lite/Makefile)");
+  return true;
+}
+
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.
