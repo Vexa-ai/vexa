@@ -68,7 +68,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # runs build-browser-utils.mjs, which esbuild-bundles these bricks' dist into
 # window.VexaBrowserUtils (the global capture-bridge.ts injects via addInitScript) —
 # so their dist/ must already exist when the bot build runs.
-RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" --filter "@vexa/jitsi-capture" --filter "@vexa/teams-capture" run build
+RUN pnpm --filter "@vexa/capture-codec" --filter "@vexa/gmeet-capture" --filter "@vexa/mixed-capture-core" --filter "@vexa/record-chunker" --filter "@vexa/jitsi-capture" --filter "@vexa/teams-capture" --filter "@vexa/zoom-capture" run build
 
 # Build @vexa/bot and everything it depends on (the `...` selector pulls the deps;
 # pnpm runs them in topological order, each package's own `build` = tsc → dist/).

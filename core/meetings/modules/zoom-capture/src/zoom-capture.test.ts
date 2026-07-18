@@ -138,5 +138,67 @@ const speakerTile = (name: string) =>
   sp.destroy();
 }
 
+// ── The fixture range (view layouts + edges): the watcher's predicate per layout ──
+{
+  // Gallery/speaker-bar layout: the active tile is marked by the
+  // `--active` modifier on the bar frame (the second known container selector).
+  setDoc(e('body', {}, [
+    e('div', { class: 'speaker-bar-container__video-frame' }, [
+      e('div', { class: 'video-avatar__avatar-footer' }, [ t('span', 'Grace') ]),
+    ]),
+    e('div', { class: 'speaker-bar-container__video-frame speaker-bar-container__video-frame--active' }, [
+      e('div', { class: 'video-avatar__avatar-footer' }, [ t('span', 'Hector') ]),
+    ]),
+  ]));
+  const changes: (string | null)[] = [];
+  const sp = createZoomSpeakers({ pollMs: 10, onSpeakerChange: (n) => changes.push(n) });
+  tickN(2);
+  check('range(gallery bar): the --active tile names the speaker', sp.getActiveSpeaker() === 'Hector');
+  check('range(gallery bar): the unlit tile never emits', !changes.includes('Grace'));
+  sp.destroy();
+}
+{
+  // Screen-share layout: no active-speaker frame in the DOM at all →
+  // NO hint is emitted, never a wrong one (the no-signal pin).
+  setDoc(e('body', {}, [
+    e('div', { class: 'sharee-container' }, [
+      e('div', { class: 'video-avatar__avatar-footer' }, [ t('span', 'Presenter P.') ]),
+    ]),
+  ]));
+  const changes: (string | null)[] = [];
+  const sp = createZoomSpeakers({ pollMs: 10, onSpeakerChange: (n) => changes.push(n) });
+  tickN(4);
+  check('range(screen share): no active frame → no speaker, no emission', sp.getActiveSpeaker() === null && changes.length === 0);
+  sp.destroy();
+}
+{
+  // Active frame present but the name footer is empty → emit nothing (a
+  // nameless hint would hijack downstream binding worse than silence).
+  setDoc(e('body', {}, [
+    e('div', { class: 'speaker-active-container__video-frame' }, [
+      e('div', { class: 'video-avatar__avatar-footer' }, [ t('span', '') ]),
+    ]),
+  ]));
+  const changes: (string | null)[] = [];
+  const sp = createZoomSpeakers({ pollMs: 10, onSpeakerChange: (n) => changes.push(n) });
+  tickN(4);
+  check('range(empty footer): active frame with no name → no emission', sp.getActiveSpeaker() === null && changes.length === 0);
+  sp.destroy();
+}
+{
+  // A held handover (Alice → Bob for CONFIRM_POLLS) DOES emit — the debounce
+  // drops flicker, never a real transition (the pair to the flicker pin above).
+  setDoc(e('body', {}, [ speakerTile('Alice') ]));
+  const changes: (string | null)[] = [];
+  const sp = createZoomSpeakers({ pollMs: 10, onSpeakerChange: (n) => changes.push(n) });
+  tickN(2);                                         // commit Alice
+  setDoc(e('body', {}, [ speakerTile('Bob') ]));
+  tickN(2);                                         // Bob holds for CONFIRM_POLLS
+  check('range(handover): a held transition commits Bob', sp.getActiveSpeaker() === 'Bob');
+  check('range(handover): both transitions emitted in order',
+    changes.filter((c) => c === 'Alice').length === 1 && changes[changes.length - 1] === 'Bob');
+  sp.destroy();
+}
+
 if (failed) { console.error(`\n❌ zoom-capture: ${failed} checks FAILED.`); process.exit(1); }
 console.log(`\n✅ zoom-capture: chat sender/body extraction + active-speaker flicker confirmation pass. (DOM capture is live-validated.)`);
