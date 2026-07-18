@@ -34,6 +34,22 @@ helm install vexa deploy/helm/charts/vexa -f deploy/helm/charts/vexa/values.yaml
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
 
+### Is this install actually working? — `make probe SURFACE=helm`
+
+The standing full-journey smoke probe drives spawn → schedule → boot → join → transcribe →
+live-view → stop through the gateway front door, then sweeps every deployment's logs once. Each
+stage prints Expected / Actual / Verdict; a red stage names where the journey broke and fails the
+command, so you get a truthful install verdict in minutes with no meeting and no humans.
+
+```bash
+make probe SURFACE=helm                                        # port-forwards gateway + admin-api
+GATEWAY_URL=http://<node>:<nodePort> make probe SURFACE=helm   # or drive a NodePort directly
+```
+
+It mints its API key from the release secret's `ADMIN_API_TOKEN` (or pass `VEXA_API_KEY`). The
+same journey runs on the other surfaces: `make probe` (compose, the fast default) and
+`make probe SURFACE=lite`.
+
 ## The runtime on Kubernetes
 
 The runtime kernel owns one `runtime.v1` lifecycle (`starting → running → stopping → stopped →

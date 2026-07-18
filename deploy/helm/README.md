@@ -71,3 +71,14 @@ Docker to build the images. It proves the control plane stands up and `/health` 
 
 This is a composition layer — it owns no service code and consumes none of the `*.v1` schemas
 directly (each service vendors its own). It mirrors the [`deploy/compose`](../compose/) env contract.
+
+## Smoke probe — "is this install actually working?"
+
+```bash
+make probe SURFACE=helm          # from the repo root; port-forwards if GATEWAY_URL is unset
+GATEWAY_URL=http://<node>:<nodePort> make probe SURFACE=helm   # drive a NodePort directly
+```
+
+The full-journey smoke (spawn → schedule → boot → join → transcribe → live-view → stop) plus a
+one-shot `kubectl logs` sweep of every deployment. Mints its API key through the release secret's
+`ADMIN_API_TOKEN` unless `VEXA_API_KEY` is given. See `deploy/helm/probe.sh`.
