@@ -15,11 +15,12 @@ from __future__ import annotations
 import ipaddress
 import os
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ..collector.meeting_link import parse_meeting_url
 from .env_flags import env_flag
 from .ports import (
     AuthSessionBusy,
@@ -157,6 +158,21 @@ def _resolve_max_concurrent(x_user_limits: Optional[str]) -> Optional[int]:
     return None
 
 
+def _passcode_from_url(meeting_url: str) -> Optional[str]:
+    """The passcode a meeting URL itself carries — zoom's ``?pwd=`` / teams' ``?p=`` query param.
+    Consulted only on the derive path (url-only body) and only when the body sent no explicit
+    ``passcode``; anything else returns None."""
+    try:
+        query = parse_qs(urlparse(meeting_url).query)
+    except Exception:
+        return None
+    for key in ("pwd", "p"):
+        values = query.get(key)
+        if values and values[0]:
+            return values[0]
+    return None
+
+
 def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` ports."""
     router = APIRouter()
@@ -196,6 +212,36 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
         # (zoom/jitsi) — validate at the point of entry (SSRF hygiene, 422 on violation).
         if meeting_url is not None:
             meeting_url = _validate_meeting_url(meeting_url)
+        passcode = body.get("passcode")
+        # api.v1 promise: a meeting_url provided WITHOUT native_meeting_id is parsed to extract
+        # platform, native_meeting_id, and passcode (collector.meeting_link — the same parser the
+        # planned-meeting routes use). An underivable URL is a typed 422, NEVER a persisted ''
+        # key: (platform, native_meeting_id) is the only user-facing address for stop/transcripts,
+        # so an empty id would be a 201 that creates a meeting no API call can reach again.
+        # Runs AFTER the SSRF validator (derivation never bypasses the URL guard) and only when
+        # the explicit id is absent — a supplied native_meeting_id is authoritative.
+        if not native_meeting_id and meeting_url:
+            derived = parse_meeting_url(meeting_url)
+            if derived is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "'native_meeting_id' is required: it could not be derived from "
+                        f"meeting_url '{meeting_url}' (unrecognized meeting link)"
+                    ),
+                )
+            derived_platform, native_meeting_id = derived
+            if platform and platform != derived_platform:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"platform '{platform}' disagrees with meeting_url "
+                        f"(which is a '{derived_platform}' link) — drop one or make them agree"
+                    ),
+                )
+            platform = derived_platform
+            if not passcode:
+                passcode = _passcode_from_url(meeting_url)
         if not platform or (not native_meeting_id and not meeting_url):
             raise HTTPException(
                 status_code=422,
@@ -225,7 +271,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 platform=platform,
                 native_meeting_id=native_meeting_id,
                 bot_name=body.get("bot_name"),
-                passcode=body.get("passcode"),
+                passcode=passcode,
                 meeting_url=meeting_url,
                 language=body.get("language"),
                 task=body.get("task"),

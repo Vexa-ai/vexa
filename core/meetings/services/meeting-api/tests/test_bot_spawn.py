@@ -347,3 +347,123 @@ def test_post_bots_zoom_shares_meeting_url_guard(monkeypatch):
                        json={"platform": "zoom", "native_meeting_id": "123456",
                              "meeting_url": "https://192.168.1.10/j/123456"})
     assert r.status_code == 422, r.text
+
+
+# ── route: meeting_url-only bodies derive the addressing key, or refuse typed (#792) ─────────────
+#
+# api.v1's `meeting_url` description promises: "When provided without native_meeting_id, the URL is
+# parsed to extract platform, native_meeting_id, and passcode automatically." A url-only body must
+# therefore yield an ADDRESSABLE meeting (id derived via collector.meeting_link.parse_meeting_url)
+# or a typed 422 — never a 201 persisting native_meeting_id='' (the unaddressable orphan).
+
+def _spawn_env(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+
+
+def test_post_bots_url_only_derives_native_id(monkeypatch):
+    """Row 1: platform + meeting_url, no native id → 201 with the id derived from the URL."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"platform": "google_meet",
+                                 "meeting_url": "https://meet.google.com/abc-defg-hij"})
+    assert r.status_code == 201, r.text
+    assert r.json()["native_meeting_id"] == "abc-defg-hij"
+    row = repo._meetings[1]
+    assert row["native_meeting_id"] == "abc-defg-hij"
+
+
+def test_post_bots_url_only_meeting_is_stop_addressable(monkeypatch):
+    """Row 2: a url-only spawn can be stopped via DELETE /bots/{platform}/{derived_id}."""
+    from fastapi import FastAPI
+
+    from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router
+
+    _spawn_env(monkeypatch)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    app = FastAPI()
+    app.include_router(build_router(repo, runtime))
+    app.include_router(build_stop_router(repo, InMemoryCommandPublisher(), runtime))
+    client = TestClient(app)
+    assert client.post("/bots", headers=HEADERS,
+                       json={"platform": "google_meet",
+                             "meeting_url": "https://meet.google.com/abc-defg-hij"}).status_code == 201
+    r = client.delete("/bots/google_meet/abc-defg-hij", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "stopping"
+
+
+def test_post_bots_underivable_url_422_no_row(monkeypatch):
+    """Row 3: https URL that passes the SSRF guard but yields no id → typed 422, nothing persisted."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"platform": "google_meet",
+                                 "meeting_url": "https://example.com/not-a-meet-link"})
+    assert r.status_code == 422, r.text
+    assert "native_meeting_id" in r.json()["detail"]
+    assert repo._meetings == {}  # never persist the '' orphan
+
+
+def test_post_bots_url_only_no_platform_derives_both(monkeypatch):
+    """Row 4: the report's literal body — meeting_url alone → platform AND id derived."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"meeting_url": "https://meet.google.com/abc-defg-hij"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["platform"] == "google_meet"
+    assert body["native_meeting_id"] == "abc-defg-hij"
+
+
+def test_post_bots_platform_url_mismatch_422(monkeypatch):
+    """Row 5: supplied platform disagrees with the URL-derived one → 422 naming both."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"platform": "teams",
+                                 "meeting_url": "https://meet.google.com/abc-defg-hij"})
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "teams" in detail and "google_meet" in detail
+    assert repo._meetings == {}
+
+
+def test_post_bots_url_only_jitsi_derives_room(monkeypatch):
+    """F2: jitsi derivation accepted — the room (+host scope) becomes the native id, URL rides along."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"meeting_url": "https://meet.example.org/daily"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["platform"] == "jitsi"
+    assert body["native_meeting_id"] == "daily@meet.example.org"
+
+
+def test_post_bots_url_only_derives_passcode(monkeypatch):
+    """F4: the contract sentence also promises passcode extraction — zoom ?pwd= rides into the
+    invocation when the body carries none."""
+    _spawn_env(monkeypatch)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    r = _client(repo, runtime).post("/bots", headers=HEADERS,
+                                    json={"meeting_url": "https://us02web.zoom.us/j/1234567890?pwd=sEcReT123"})
+    assert r.status_code == 201, r.text
+    assert r.json()["native_meeting_id"] == "1234567890"
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["passcode"] == "sEcReT123"
+
+
+def test_post_bots_explicit_native_id_unchanged_by_url(monkeypatch):
+    """Row 6 companion: an explicit native_meeting_id is NEVER overridden by the URL (derivation
+    only fills the gap; the valid 0.12 body is byte-identical)."""
+    _spawn_env(monkeypatch)
+    repo = InMemoryMeetingRepo()
+    r = _client(repo).post("/bots", headers=HEADERS,
+                           json={"platform": "google_meet", "native_meeting_id": "xyz-explicit-id",
+                                 "meeting_url": "https://meet.google.com/abc-defg-hij"})
+    assert r.status_code == 201, r.text
+    assert repo._meetings[1]["native_meeting_id"] == "xyz-explicit-id"

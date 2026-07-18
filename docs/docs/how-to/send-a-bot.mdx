@@ -45,6 +45,20 @@ The only thing that changes between platforms is the `platform` value.
 
 `native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet, the room name for
 Jitsi), not the whole URL.
+
+Have only the URL? Send `meeting_url` alone — the API parses it to extract `platform`,
+`native_meeting_id`, and (for Zoom/Teams links that embed one) the passcode:
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"meeting_url":"https://meet.google.com/abc-defg-hij","bot_name":"Vexa"}'
+```
+
+A URL that isn't a recognizable meeting link is refused with a `422` naming the missing
+`native_meeting_id`; if you supply both `platform` and `meeting_url` and they disagree, that's a
+`422` too. An explicit `native_meeting_id` always wins — the URL never overrides it.
+
 Optional: `language` (ISO code) and `task` (`transcribe` default, or `translate`). Language works in
 two modes:
 
