@@ -377,6 +377,17 @@ _PRE_ACTIVE_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
 _WAS_ACTIVE_STATUSES = frozenset({"stopping", "active", "needs_help"})
 
 
+def _pre_active_completion_reason(status: Optional[str]) -> str:
+    """Attribute a pre-active teardown to the stage the bot died in: a bot whose workload is torn
+    down while it sits in the waiting room (``awaiting_admission``) was never admitted →
+    ``awaiting_admission_timeout``; any earlier pre-active stage (``requested``/``joining``) died
+    before it could join → ``join_failure``. Keyed on ``awaiting_admission`` EXPLICITLY: an
+    escalation state like ``needs_help`` is not an admission wait and must never earn the
+    admission-timeout reason. Both values are TRANSIENT (see ``retry.py``), so attribution never
+    changes the retry class."""
+    return "awaiting_admission_timeout" if status == "awaiting_admission" else "join_failure"
+
+
 async def synthesize_terminal_for_dead_workload(
     repo: Any,
     workload_id: Optional[str],
@@ -424,8 +435,12 @@ async def synthesize_terminal_for_dead_workload(
             "connection_id": info["session_uid"],
             "status": "failed",
             "failure_stage": status,                    # the stage the bot died IN (requested/joining/…)
-            "completion_reason": "join_failure",        # workload died before the bot could join/report
-            "reason": f"workload {state} before the bot reported (never started)",
+            "completion_reason": _pre_active_completion_reason(status),
+            "reason": (
+                f"workload {state} while awaiting admission (never admitted)"
+                if status == "awaiting_admission"
+                else f"workload {state} before the bot reported (never started)"
+            ),
         }
     elif status in _WAS_ACTIVE_STATUSES:
         # It reached the meeting and its workload is now runtime-confirmed gone with no terminal callback
