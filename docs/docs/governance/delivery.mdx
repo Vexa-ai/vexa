@@ -783,7 +783,7 @@ rungs, and where the machinery runs them:
 |---|---|---|---|
 | **L1/L2 — sound** | isolation, contracts, units, licenses, build | `gates` | every PR push, ~5 min |
 | **L3 — delivers** | the PR's own tree assembles and drives the full product FSM — join lifecycle, failure attribution, transcript-segment emission, concurrent bots, acts — through the **real** backend (mock bot: real orchestrator + real adapters; only join/audio faked) | `pr-value` | every runtime-surface PR, ~10–15 min |
-| **L3.5 — transcribes** *(to build)* | fixture audio → real pipeline → real CPU STT → **golden words** land via the API — no Meet, no human | wav→words leg | PRs touching the transcription path; every release |
+| **L3.5 — transcribes** | fixture audio → real pipeline → real CPU STT → **golden words** land via the API — no Meet, no human (committed counting fixture, 1..N oracle, per-stage attribution + STT-down negative control) | `pr-value-stt` / `validate-counting-stt` (`make -C core/meetings/eval counting-ci`) | PRs touching the transcription path; every release |
 | **L4 — artifact truth** | the *published* images deliver on every deployment shape (compose · mock-FSM · 0.10-compat · bot-spawn · lite · helm) + fresh-VM concurrent-bots | `release-validate` + VM leg | every release, ≤10 min re-runnable |
 | **L5 — witnessed value** | a real Meet, real audio, real admission → words a human saw land, plus the batch's user-visible values walked once | the release **witness script** over the eval lane (`bot/eval/run.sh`: autonomous verdict; human acts: admit + speak + walk the script, ~10 min) | once per release — the combined pass |
 

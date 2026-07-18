@@ -1,0 +1,4 @@
+{"turn": 0, "speaker": "A", "numbers": [1, 2, 3, 4, 5], "start": 0.0}
+{"turn": 1, "speaker": "B", "numbers": [6, 7, 8, 9, 10], "start": 2.83}
+{"turn": 2, "speaker": "A", "numbers": [11, 12, 13, 14, 15], "start": 5.85}
+{"turn": 3, "speaker": "B", "numbers": [16, 17, 18, 19, 20], "start": 9.63}

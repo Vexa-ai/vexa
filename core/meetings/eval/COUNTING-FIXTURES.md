@@ -55,6 +55,7 @@ the repo); regenerate any time with `counting_fixture.py`.
 ### In-repo committed fixtures (small, tracked — for offline gates)
 | fixture | shape | drives | gate |
 |---|---|---|---|
+| `eval/counting-fixture/` | **stage-1 counting audio** — 4 WAVs (1..20, speakers A/B every 5, `silence`) + `truth.jsonl` + `manifest.json`, ~284K | the **L3.5 wav→words leg** (#560): local CPU whisper (`deploy/transcription/docker-compose.cpu.yml`) → collector → API-served words, per-stage attribution + STT-down negative control | `make -C core/meetings/eval counting-ci` (`deploy/compose/tests/counting_stt_test.py`; CI: `pr-value-stt` + `validate-counting-stt`) |
 | `eval/replay-fixture/session.captured-signal.jsonl` | **captured-signal.v1** — 36 frames raw per-speaker PCM, Alice→Bob→Alice gmeet | the **real gmeet pipeline** (capture→diarization→segmentation) | `gate:replay` (`services/bot/src/replay.test.ts`) |
 | `eval/replay-fixture/transcript-misattr.json` | transcript.v1 w/ a PLANTED mis-attribution | the O-TEL-3 auto-flagger | `analyze.mjs --flag-issues` |
 | `core/agent/eval/replay/gamestop-allin.jsonl` | stage-3 segments (transcript.v1, real meeting slice) | the copilot offline (notes/cards) | cookbook L3 / `replay_transcript.py` |

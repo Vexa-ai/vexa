@@ -460,6 +460,40 @@ jobs:
           docker ps -a
           docker logs vexa-lite --tail 300 || true
 
+  # The L3.5 wav→words leg (#560): committed counting audio → local CPU whisper (built from the
+  # tree — the transcription service is not in the published set) → the PUBLISHED collector/API
+  # images → words served by GET /transcripts, 1..N oracle with per-stage attribution + the
+  # STT-down negative control. This is guarantee row 3's machine proof, at its honest scope:
+  # local CPU STT audio→words — NOT real-Meet admission, NOT hosted-STT capacity.
+  validate-counting-stt:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: astral-sh/setup-uv@v5
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Seed compose .env
+        run: cp deploy/compose/.env.example deploy/compose/.env
+      - name: L3.5 counting leg from published images
+        env:
+          COMPOSE_NO_BUILD: "1"
+          IMAGE_TAG: ${{ needs.resolve.outputs.version }}
+          COUNTING_STT_MODEL: tiny
+        run: make -C core/meetings/eval counting-ci
+      - name: Compose state on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
+          docker compose -p vexa-counting-stt -f deploy/transcription/docker-compose.cpu.yml logs --no-color --tail 100 || true
+
   validate-helm-k3s:
     needs: resolve
     runs-on: ubuntu-latest
@@ -529,6 +563,7 @@ jobs:
       - validate-bot-spawn
       - validate-lite
       - validate-helm-k3s
+      - validate-counting-stt
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -546,6 +581,7 @@ jobs:
           R_BOTSPAWN: ${{ needs.validate-bot-spawn.result }}
           R_LITE: ${{ needs.validate-lite.result }}
           R_HELM: ${{ needs.validate-helm-k3s.result }}
+          R_COUNTING: ${{ needs.validate-counting-stt.result }}
         run: |
           set -euo pipefail
           m() { [ "$1" = "success" ] && echo "✅" || echo "❌ ($1)"; }
@@ -566,7 +602,7 @@ jobs:
             echo "|---|---|---|"
             echo "| 1 | Every artifact users pull is the artifact we proved | $(m "$R_RESOLVE") manifests resolve; every leg pulls published bytes only |"
             echo "| 2 | Every documented install path stands up and is exercised to its leg's scope (NOT full end-to-end — real audio→words is row 3) | compose $(s "$R_COMPOSE" "installs + API/data-plane wiring, synthetic transcript; real bot in row 5") · FSM $(s "$R_MOCKFSM" "meeting-lifecycle FSM via mock bot, no real browser/STT") · lite $(s "$R_LITE" "front doors + ≥2 concurrent real-bot spawn, no meeting/STT assertion") · helm $(s "$R_HELM" "installs + healthy, bot/meeting/STT not exercised") |"
-            echo "| 3 | Real audio → correct, speaker-attributed words | ⚠️ NOT machine-proven in this run — witness-pass only until the wav→words leg (#560) ships |"
+            echo "| 3 | Real audio → correct, speaker-attributed words | counting-stt $(s "$R_COUNTING" "fixture wav→words through LOCAL CPU whisper → published collector/API, ground-truth speakers (#560); no real-Meet admission, no hosted-STT capacity") |"
             echo "| 4 | A fresh machine with nothing on it succeeds | ⚠️ fresh-VM leg runs outside this workflow — attach its evidence to the notes or state unclaimed |"
             echo "| 5 | Nothing that worked before broke | v010-compat $(m "$R_V010") · bot-spawn $(m "$R_BOTSPAWN") |"
             echo "| 6 | Every image contains what its name promises | $(m "$R_IDENTITY") image-identity |"
@@ -638,6 +674,7 @@ jobs:
       - validate-bot-spawn
       - validate-lite
       - validate-helm-k3s
+      - validate-counting-stt
       - witness-gate      # guarantee line 7 — no signature, no release
       - value-gate        # guarantee line 8 — every batch change accepted
     # Stable releases only, and only when the caller asked — an rc rehearsal or a standalone

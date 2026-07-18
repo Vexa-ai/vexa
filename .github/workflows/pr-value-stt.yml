@@ -1,0 +1,68 @@
+# pr-value-stt — the per-PR L3.5 wav→words value leg (#560), the transcription-path sibling of
+# pr-value. Native path filtering keeps it scoped: it runs ONLY when the PR touches the
+# transcription path (bot pipeline/STT client · transcription service · meeting-api collector ·
+# the leg's own fixture/harness). Everything else keeps pr-value as its only value machinery.
+#
+# What it proves that pr-value cannot: committed counting-fixture AUDIO through a REAL local CPU
+# whisper (deploy/transcription/docker-compose.cpu.yml, model tiny) → transcript.v1 → the real
+# collector → the words served by GET /transcripts, with the 1..N oracle attributing any drop to
+# its stage, plus the STT-down negative control. Honest scope: local CPU STT audio→words only —
+# NOT real-Meet admission (release bar / eval lane) and NOT hosted-STT capacity (ops).
+name: pr-value-stt
+
+on:
+  pull_request:
+    paths:
+      - "core/meetings/services/bot/src/**"        # pipeline + STT/WhisperLive client
+      - "core/meetings/services/transcription/**"  # the whisper service itself
+      - "core/meetings/services/meeting-api/**"    # collector + transcripts API
+      - "deploy/transcription/**"
+      - "core/meetings/eval/counting-fixture/**"
+      - "core/meetings/eval/Makefile"
+      - "deploy/compose/tests/counting_stt_test.py"
+
+concurrency:
+  group: pr-value-stt-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  counting-stt:
+    runs-on: ubuntu-latest
+    # Budget (issue #560 A5): ≤15 min steady-state — whisper `tiny`, 4 wavs, stack from registry
+    # build-cache. The timeout leaves headroom for a cold cache, not for a hung leg.
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: astral-sh/setup-uv@v5
+      # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
+      - name: Seed compose .env
+        run: cp deploy/compose/.env.example deploy/compose/.env
+      - name: L3.5 counting leg (wav → local CPU whisper → collector → API-served words)
+        env:
+          # registry build-cache overlay: untouched services become cache hits (same as pr-value)
+          COMPOSE_EXTRA_FILES: ${{ github.workspace }}/deploy/compose/docker-compose.ci-cache.yml
+          COUNTING_STT_MODEL: tiny
+        run: make -C core/meetings/eval counting-ci
+      - name: Present the leg's row (job summary)
+        if: always()
+        run: |
+          {
+            echo "## pr-value-stt — the L3.5 wav→words leg (#560)"
+            echo
+            echo "Verdict: **${{ job.status }}** — committed counting audio (1..20, speakers A/B) →"
+            echo "local CPU whisper (tiny) → real collector → API-served segments, per-stage"
+            echo "attribution + STT-down negative control."
+            echo
+            echo "Scope: proves audio→words through local CPU STT; does NOT claim real-Meet"
+            echo "admission or hosted-STT capacity."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Compose state on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker compose -p vexa-compose-gate -f deploy/compose/docker-compose.yml logs --no-color --tail 200 || true
+          docker compose -p vexa-counting-stt -f deploy/transcription/docker-compose.cpu.yml logs --no-color --tail 100 || true
