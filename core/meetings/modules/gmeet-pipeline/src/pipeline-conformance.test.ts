@@ -76,6 +76,13 @@ async function run() {
   check("sealed snake_case shape: segment_id + speaker_key strings",
     segments.every((s) => typeof s.segment_id === "string" && typeof s.speaker_key === "string"));
 
+  // The fixture-range rule (P8 / D-A2): `language` is nullable in the schema, so schema
+  // conformance alone never discriminates on it — this golden REQUIRES the populated case.
+  // The stub STT detects "en" per window; every emitted segment must carry that detection.
+  check("every segment carries the STT-detected window language (\"en\", not null/undefined)",
+    segments.every((s) => s.language === "en"),
+    JSON.stringify(segments.map((s) => [s.speaker, s.language])));
+
   if (failed) { console.error(`\n❌ pipeline-conformance: ${failed} checks FAILED.`); process.exit(1); }
   console.log(`\n✅ pipeline-conformance: gmeet pipeline emits SEALED transcript.v1 offline — names carried, source/confidence correct, every segment schema-valid.`);
 }

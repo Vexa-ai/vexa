@@ -45,7 +45,16 @@ The only thing that changes between platforms is the `platform` value.
 
 `native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet, the room name for
 Jitsi), not the whole URL.
-Optional: `language` (ISO code, omit to auto-detect) and `task` (`transcribe` default, or `translate`).
+Optional: `language` (ISO code) and `task` (`transcribe` default, or `translate`). Language works in
+two modes:
+
+- **Auto (omit `language`)** — the STT unit detects the language of each transcription window
+  independently, and every segment carries the detected code in its `language` field.
+- **Forced (`language: "es"`)** — every STT call is pinned to that language; every segment carries it.
+
+Detection is **per window** (one STT call, a few seconds of one speaker's audio), not per word:
+code-switching *within* a window takes the window's language; switching between utterances lands on
+the segment boundary. A window whose language could not be determined has `language: null`.
 
 On Meet and Teams the bot may wait in the lobby until a host admits it; a Jitsi room with the
 lobby enabled behaves the same way.
@@ -82,14 +91,16 @@ of polling, subscribe over **WebSocket** — see the [Meetings API](/api/meeting
 ## 3. Manage and stop
 
 ```bash
-# switch to live Spanish translation mid-call
-curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"language":"es","task":"translate"}'
-
 # stop the bot / leave the call
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
 ```
+
+<Note>
+Mid-call reconfiguration (`PUT …/config`, change language/task while the bot is in the call) rides
+the live bot-control plane and is **not yet wired in the v0.12 open-core stack** — it currently
+returns `404`. Set `language` and `task` on the `POST /bots` spawn. See the
+[Meetings API](/api/meetings#manage-the-bot).
+</Note>
 
 The audio **recording** lands in your object storage — retrieve it via `GET /recordings`
 ([Meetings API](/api/meetings#recordings)).

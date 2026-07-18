@@ -72,6 +72,8 @@ runs GPU-free and anywhere, and the STT service is its own deploy unit at
 [`deploy/transcription`](https://github.com/Vexa-ai/vexa/tree/main/deploy/transcription)
 ([`core/meetings/services/transcription`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/services/transcription)
 is the brick — faster-whisper / CTranslate2 behind an OpenAI-compatible `/v1/audio/transcriptions`).
+Language is detected per transcription window and stamped on each segment; force a single language
+via the bot request's `language` (see [Send a bot](/how-to/send-a-bot)).
 
 Stand it up wherever a GPU lives (the same host or a dedicated GPU box):
 
