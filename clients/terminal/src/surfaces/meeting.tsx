@@ -11,7 +11,8 @@ import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { type MeetingMock } from "./meetingModel";
-import { useLiveMeetings, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
+import { ApiError, presentError } from "./apiClient";
+import { useLiveMeetings, useLiveMeetingsConnection, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
@@ -55,7 +56,7 @@ function ShareSessionButton({ platform, native }: { platform: string; native: st
         params.set("invite", inv.token);
       }
       setLink(`${window.location.origin}/?${params.toString()}`);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
   const fieldStyle = { fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" } as const;
@@ -278,27 +279,37 @@ type MeetingActionFailure = { actionId: string; actionLabel: string; native: str
 type MeetingActionFailureHandler = (failure: MeetingActionFailure) => void;
 type RowAction = { id: string; label: string; tone: "accent" | "live" | "muted"; run: (onFailure?: MeetingActionFailureHandler) => Promise<void> | void };
 
-function failureMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string" && error.trim()) return error.trim();
-  return "Request failed";
+/** A non-ok action response as a STRUCTURED failure (status + backend detail), never a raw body. */
+async function readFailure(r: Response): Promise<ApiError> {
+  let detail = "";
+  try {
+    const b = (await r.json()) as { detail?: unknown; error?: unknown };
+    const d = b?.detail ?? b?.error;
+    detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
+  } catch { /* body wasn't JSON — the status alone is the signal */ }
+  return new ApiError(r.status, detail, r.url);
 }
 
-async function readFailure(r: Response): Promise<string> {
-  const detail = (await r.text().catch(() => "")).trim().replace(/\s+/g, " ");
-  const status = `${r.status}${r.statusText ? ` ${r.statusText}` : ""}`;
-  if (!detail) return status;
-  return `${status}: ${detail.slice(0, 180)}`;
+/** User-truth message for a failed bot/row action (issue #674): a `404` means the backend no
+ *  longer has this meeting — the list re-snapshot (runMeetingAction's `finally`) reconciles the
+ *  control, so say that; a `409` is the duplicate/already case. Everything else goes through the
+ *  presenter seam. Exported (additive) so the action test pins the vocabulary. */
+export function presentMeetingActionFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 404) return "This meeting is no longer active — refreshing the list.";
+    if (error.status === 409) return "That meeting already has a bot.";
+  }
+  return presentError(error).headline;
 }
 
 async function runMeetingAction(action: Omit<MeetingActionFailure, "message">, request: Promise<Response>, onFailure?: MeetingActionFailureHandler): Promise<void> {
   try {
     const r = await request;
-    if (!r.ok) throw new Error(await readFailure(r));
+    if (!r.ok) throw await readFailure(r);
   } catch (error) {
-    const message = failureMessage(error);
-    console.warn("meeting action failed", { ...action, message });
-    onFailure?.({ ...action, message });
+    // Operator channel keeps the full plumbing (P18); the UI channel gets the presented truth.
+    console.warn("meeting action failed", { ...action, message: String(error instanceof Error ? error.message : error) });
+    onFailure?.({ ...action, message: presentMeetingActionFailure(error) });
   } finally {
     refreshMeetings();
   }
@@ -527,7 +538,7 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
   const syncNow = async () => {
     setSyncing(true); setErr(null);
     try { setStamp(await syncCalendarNow()); refreshMeetings(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setSyncing(false); }
   };
   // the row skin needs the connected-state up front (it hides once connected)
@@ -551,7 +562,7 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
       if (body.ics_url) await syncNow();              // paste → an ANSWER, not a silent wait
       if (body.ics_url === null) setStamp(null);
     }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
   if (variant === "row" && cfg?.ics_url_set) return null;   // connected → manage via the header icon
@@ -658,13 +669,12 @@ function MeetingsList() {
         refreshMeetings(); setTimeout(refreshMeetings, 2000); setTimeout(refreshMeetings, 6000);
       } else {
         // Surface the REAL reason, not a generic "bad link" (the cap/dup/auth cases are common).
-        const detail = (await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
         setSent("err");
         setErrMsg(
           r.status === 429 ? "You're at your meeting limit — stop one first."
             : r.status === 409 ? "That meeting already has a bot."
               : r.status === 401 ? "Not signed in — sign in and retry."
-                : `Couldn't send (${r.status})${detail ? `: ${detail}` : ""}`,
+                : presentError(await readFailure(r)).headline,
         );
       }
     } catch { setSent("err"); setErrMsg("Couldn't reach the server."); }
@@ -745,18 +755,25 @@ function ModelChips() {
  *  is in the call, Re-send once it stopped/completed/failed. Reuses the row-action map verbatim
  *  (same endpoints, same status vocabulary) — only bot actions surface here; row management
  *  (schedule/cancel/delete) stays in the sidebar menu. */
-function BotControls({ m }: { m: MeetingMock }) {
+export function BotControls({ m, connected = true }: { m: MeetingMock; connected?: boolean }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const acts = actionsFor(m).filter((a) => a.id === "stop" || a.id === "resend" || a.id === "send");
   if (acts.length === 0) return null;
+  // The control's enabled-ness is a pure function of (row status, WS-connected): while the live
+  // `meeting.status` stream is down the row may be a stale snapshot, so a state-bearing control
+  // degrades to indeterminate/disabled — never an actionable "Stop bot" for a meeting the backend
+  // may no longer have (issue #674).
+  const disabled = busy || !connected;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flex: "none" }}>
       {acts.map((a) => {
         const danger = a.tone === "live";
         return (
-          <button key={a.id} disabled={busy}
+          <button key={a.id} disabled={disabled}
+            title={!connected ? "Live connection lost — reconnecting…" : undefined}
             onClick={() => {
+              if (disabled) return;
               setErr(null); setBusy(true);
               void Promise.resolve(a.run((f) => setErr(f.message))).finally(() => setBusy(false));
             }}
@@ -764,7 +781,7 @@ function BotControls({ m }: { m: MeetingMock }) {
               border: `1px solid ${danger ? "var(--danger)" : "var(--line2)"}`,
               color: danger ? "var(--danger)" : "var(--accent)",
               borderRadius: 7, padding: "4px 11px", fontSize: 12, fontWeight: 600,
-              cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}>
+              cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1 }}>
             {a.id === "stop" ? "Stop bot" : "Send bot again"}
           </button>
         );
@@ -774,33 +791,45 @@ function BotControls({ m }: { m: MeetingMock }) {
   );
 }
 
+/** Header state as a pure function of (row, WS-connected) — the badge and the bot controls both
+ *  derive from it, so a stale-live snapshot can never present as Live while the authoritative
+ *  `meeting.status` stream is down (issue #674). Exported for the behavioral test. */
+export function meetingHeaderState(m: MeetingMock | undefined, connected: boolean): "live" | "reconnecting" | "recap" | "connecting" {
+  if (!m) return "connecting";
+  if (m.status !== "live") return "recap";
+  return connected ? "live" : "reconnecting";
+}
+
 function MeetingTab({ params }: TabProps) {
   const liveList = useLiveMeetings();
+  const connected = useLiveMeetingsConnection();
   const requestedMeetingId = params.meetingId as string;
   // ONE resolver, shared with the canvas body (useMeeting.resolveMeeting): the real meetings list is the
   // only source of truth — a mock never shadows a real id, and a real id never falls back to a mock. While
   // the async list is still loading the row is simply not-yet-resolved; we render the canvas bound to the
   // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
   const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
-  const live = m?.status === "live";
+  const header = meetingHeaderState(m, connected);
 
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
       <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 13, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
-            {live
+            {header === "live"
               ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
-              : m
-                ? <span style={{ display: "inline-flex", alignItems: "center", color: "var(--violet)", background: "var(--violetbg)", fontWeight: 600, letterSpacing: ".06em", fontSize: 10.5, textTransform: "uppercase", borderRadius: 999, padding: "2px 9px", flex: "none" }}>Recap</span>
-                : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>Connecting…</span>}
+              : header === "reconnecting"
+                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--accent)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }} title="Live connection lost — the last known state may be stale"><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", boxShadow: "0 0 0 3px var(--accentbg)" }} />Reconnecting…</span>
+                : header === "recap"
+                  ? <span style={{ display: "inline-flex", alignItems: "center", color: "var(--violet)", background: "var(--violetbg)", fontWeight: 600, letterSpacing: ".06em", fontSize: 10.5, textTransform: "uppercase", borderRadius: 999, padding: "2px 9px", flex: "none" }}>Recap</span>
+                  : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>Connecting…</span>}
             <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)", flex: "none" }} />
             <span style={{ color: "var(--t1)", fontWeight: 550, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m ? (m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "")) : "Meeting"}</span>
             {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
             {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
           </div>
           <div style={{ flex: 1 }} />
-          {m && <BotControls m={m} />}
+          {m && <BotControls m={m} connected={connected} />}
           {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
           <ModelChips />
         </div>

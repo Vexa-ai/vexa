@@ -195,4 +195,30 @@ deferred to an L4 eval with a frozen transcript fixture.
   expected:
     deterministic_half: turn_streams_and_commits_doc_at_expected_path
     judge_half: doc_is_correct_sourced_summary
+
+# ── Error presentation + control gating (issue #533 / #674 rows) ──────────────
+- id: terminal-error-presentation-user-truth
+  status: green
+  seam: "ApiError {status,detail,url} -> presentError -> surface alert regions (8 surface files)"
+  module_probe: clients/terminal/src/surfaces/__tests__/presentError.test.ts  # fixture range: network 0, 502/504, 401, 403, 422-json, 429, typed 503 prose (verbatim pass-through), empty detail
+  seam_probe: clients/terminal/src/surfaces/__tests__/errorPresentation.guard.test.ts  # grep-guard: no surface renders the raw `e instanceof Error ? e.message : String(e)` idiom
+  expected:
+    headline: user_vocabulary_never_transport_plumbing   # no url/status/exception-name in the rendered line
+    typed_backend_detail: passes_through_verbatim        # a prose 4xx/5xx detail is the backend's own user-facing reason
+    plumbing: preserved_on_detail_and_console            # P18's observable channel keeps the full string; the error object is never mutated
+  note: >
+    The presenter seam lives beside ApiError (apiClient.ts). Surfaces render presentError(e),
+    never e.message; the grep-guard makes the 46th raw site impossible to land silently.
+
+- id: terminal-header-botcontrol-follows-ws
+  status: green
+  seam: "ws.v1 meeting.status connectivity -> liveMeetings store (useLiveMeetingsConnection) -> meeting header BotControls"
+  module_probe: clients/terminal/src/surfaces/__tests__/liveMeetings.store.test.tsx  # (e) open->true, close->false, reopen->true + re-snapshot
+  seam_probe: clients/terminal/src/surfaces/__tests__/meetingHeaderControls.test.tsx  # header state pure fn + disabled "Stop bot" while disconnected
+  expected:
+    connected_active: stop_enabled
+    disconnected: indeterminate_disabled_reconnecting    # a stale-live snapshot can never present an actionable "Stop bot"
+    action_404: human_message_plus_reconciling_resnapshot  # never the raw JSON body (meetingActions.test.tsx)
+    action_409: human_already_has_bot_line
+
 ```

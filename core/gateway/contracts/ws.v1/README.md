@@ -39,6 +39,11 @@ SDKs, and any client build against.
 | `meetings/services/meeting-api` (+ collector) | publishes the data shapes to the redis channels above |
 | any client | subscribe + consume the type-tagged stream |
 
+`meeting.status` is the **authoritative state channel** for a client's bot/meeting-state
+controls: while this stream is not connected, a client MUST degrade state-bearing controls
+(Stop/Send bot) to indeterminate/disabled — a cached REST snapshot is display-only, never a
+basis for an actionable control.
+
 ## Re-verify / re-seal
 Shapes are pinned by main's gate test. To re-verify: `node gateway/contracts/ws.v1/validate.mjs`
 (goldens ≡ `$defs`). A deliberate main change → update the schema/goldens + `pnpm seal:contracts`

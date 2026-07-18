@@ -18,6 +18,7 @@ import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
 import { useLiveMeetings, refreshMeetings } from "./liveMeetings";
 import type { MeetingMock } from "./meetingModel";
+import { presentError } from "./apiClient";
 import { createPlannedMeeting, updatePlannedMeeting, deletePlannedMeeting } from "./plannedApi";
 import { createSharedWorkspace, listSharedMemberships, listWorkspaceTree, mintInvite, readWorkspaceFile, type Membership } from "./workspaceApi";
 import { findBriefNote, isExampleNote } from "./briefNote";
@@ -227,7 +228,7 @@ function MeetingPrepTab({ params }: TabProps) {
       if (!id) return;
       await updatePlannedMeeting(id, body); refreshMeetings();
     }
-    catch (e) { if (mounted.current) setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { if (mounted.current) setErr(presentError(e).headline); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -242,7 +243,7 @@ function MeetingPrepTab({ params }: TabProps) {
       });
       if (!r.ok) throw new Error((await r.text().catch(() => "")).slice(0, 180) || `${r.status}`);
       refreshMeetings();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -252,7 +253,7 @@ function MeetingPrepTab({ params }: TabProps) {
     try {
       const inv = await mintInvite({ workspace_id: m.workspace_id, role: "contributor", mode: "open", expires_in_sec: 7 * 86400, max_uses: 50 });
       setInviteLink(`${window.location.origin}/?invite=${inv.token}`);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 
@@ -276,7 +277,7 @@ function MeetingPrepTab({ params }: TabProps) {
       window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
         detail: { prompt: `I just created the shared workspace "${ws.workspace_id}" for the meeting "${m.title_custom || title || headline}" — it is brand-new (empty) and exists so the other participants and I can collaborate on this meeting and its series. Scaffold it now: write its README as the team brief (audience = everyone in the room, so keep my private context out unless I confirm it), set up whatever structure the series needs, and interview me for what you can't know from my records.${carry} Write early and keep updating as we talk — the README renders live on the meeting page.` },
       }));
-    } catch (e) { if (mounted.current) setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { if (mounted.current) setErr(presentError(e).headline); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -298,7 +299,7 @@ function MeetingPrepTab({ params }: TabProps) {
       window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
         detail: { prompt: `Interview me to build the brief for "${name}" — ask what you can't know from my records (who's in the room, what I want out of it, what the notetaker should listen for), research the attendees in my knowledge and public sources, then write the brief as this meeting's note in my own workspace (no shared workspace) so it can be reused across this meeting's series.${key} Write the note EARLY and keep updating it as we talk — it renders live on the meeting page.` },
       }));
-    } catch (e) { if (mounted.current) setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { if (mounted.current) setErr(presentError(e).headline); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -308,7 +309,7 @@ function MeetingPrepTab({ params }: TabProps) {
     if (typeof window !== "undefined" && !window.confirm("Delete this planned meeting?")) return;
     setBusy(true);
     try { await deletePlannedMeeting(m.id); refreshMeetings(); layout.closeTab(`prep:${m.id}`); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(presentError(e).headline); }
     finally { setBusy(false); }
   };
 

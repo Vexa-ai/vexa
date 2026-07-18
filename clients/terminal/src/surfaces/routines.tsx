@@ -12,6 +12,7 @@ import { usePreviewPinTab } from "./previewPinTab";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by routinesApi.test.ts.
 import { listRoutines, deleteRoutine, setRoutineEnabled, type Routine } from "./routinesApi";
+import { presentError } from "./apiClient";
 
 const BOARD: TabDescriptor = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
 
@@ -36,10 +37,10 @@ function RoutinesBoard() {
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);  // fail-loud (P18): a load/mutation error is shown, never swallowed
-  useEffect(() => { void listRoutines().then((rs) => { setRoutines(rs); setError(null); }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))); }, []);
+  useEffect(() => { void listRoutines().then((rs) => { setRoutines(rs); setError(null); }).catch((e: unknown) => setError(presentError(e).headline)); }, []);
   const del = async (id: string) => {
     try { await deleteRoutine(id); setRoutines((rs) => rs.filter((r) => r.id !== id)); }
-    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+    catch (e: unknown) { setError(presentError(e).headline); }
   };
   const toggle = async (routine: Routine) => {
     const nextEnabled = !routine.enabled;
@@ -47,7 +48,7 @@ function RoutinesBoard() {
     try {
       await setRoutineEnabled(routine.name, nextEnabled);  // throws on a backend error (fail-loud)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(presentError(e).headline);
       setRoutines((rs) => rs.map((r) => (r.id === routine.id && r.enabled === nextEnabled ? { ...r, enabled: routine.enabled } : r)));
     }
   };
