@@ -346,9 +346,11 @@ async def _item_from_store(
             if turns is None:
                 return None
             languages = {
-                segment.get("language")
+                language.strip()
                 for segment in transcript.get("segments", [])
-                if isinstance(segment, dict) and isinstance(segment.get("language"), str)
+                if isinstance(segment, dict)
+                and isinstance((language := segment.get("language")), str)
+                and 2 <= len(language.strip()) <= 35
             }
             content = {
                 "format": "speaker_turns",

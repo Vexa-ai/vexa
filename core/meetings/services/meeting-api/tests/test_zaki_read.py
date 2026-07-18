@@ -585,6 +585,22 @@ def test_metadata_backed_items_do_not_materialize_transcript_segments(item_id: s
     _contract_validator("ItemResponse").validate(response.json())
 
 
+@pytest.mark.parametrize("language", ["", "x", "x" * 36])
+def test_transcript_omits_language_outside_the_sealed_bounds(language: str):
+    store = _store()
+    store._meetings[41]["segments"]["turn-1"]["language"] = language
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/transcript:41",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _contract_validator("ItemResponse").validate(body)
+    assert "language" not in body["item"]["content"]
+
+
 def test_turn_schema_bound_is_distinct_from_aggregate_content_cap():
     invalid_store = _store()
     invalid_store._meetings[41]["segments"]["turn-1"]["text"] = "x" * 65_537
