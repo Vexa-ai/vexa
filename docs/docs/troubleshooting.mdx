@@ -23,6 +23,25 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 
+## Authenticated bot fails or joins signed-out
+
+Applies only to deployments with `BOT_AUTHENTICATED=true` (see
+[Authenticated bots](/authenticated-bots)).
+
+- **`session-restore` failure at spawn** — the bot could not download the stored session (wrong
+  `BOT_S3_ENDPOINT`, bad scoped credentials, or the `aws` CLI missing from a custom image). The bot
+  log names the step and endpoint; the meeting fails rather than joining signed-out. Fix the config
+  and respawn.
+- **503 on `POST /bots`** — `BOT_AUTHENTICATED` is set but `BOT_USERDATA_S3_PATH` /
+  `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` are incomplete. The error names what is missing.
+- **409 "authenticated session in use"** — one stored session runs one bot at a time; the message
+  names the meeting holding it. Wait for it to finish, stop it, or provision another identity.
+- **The session decayed (signed-out on join)** — re-provision with `make login`; the next spawn
+  picks the fresh session up automatically. If this fires soon after provisioning rather than
+  after weeks of use, check write-back and the
+  [session-lifetime levers](/authenticated-bots#3-session-lifetime--the-session-stays-alive-because-it-is-used)
+  instead of re-provisioning in a loop.
+
 ## A scheduled meeting didn't auto-join
 
 Auto-join sends the bot ~60 s before the scheduled time (see

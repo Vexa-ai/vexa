@@ -27,6 +27,7 @@
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
+  syncBrowserDataToS3,
   cleanStaleLocks,
   getAuthenticatedBrowserArgs,
   makeEphemeralProfileDir,
@@ -129,14 +130,18 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
   // Authenticated: restore the S3 userdata into this bot's dir before launch (index.ts:2313–2347).
   const dataDir = makeEphemeralProfileDir();
+  const s3Config = {
+    userdataS3Path: inv.userdataS3Path,
+    s3Endpoint: inv.s3Endpoint,
+    s3Bucket: inv.s3Bucket,
+    s3AccessKey: inv.s3AccessKey,
+    s3SecretKey: inv.s3SecretKey,
+  };
   if (inv.authenticated && inv.userdataS3Path) {
-    syncBrowserDataFromS3({
-      userdataS3Path: inv.userdataS3Path,
-      s3Endpoint: inv.s3Endpoint,
-      s3Bucket: inv.s3Bucket,
-      s3AccessKey: inv.s3AccessKey,
-      s3SecretKey: inv.s3SecretKey,
-    }, dataDir);
+    // Fail-loud restore: an unreachable/misconfigured store surfaces as a typed SessionSyncError
+    // naming the session-restore step (the composition root drives it to a clean terminal failed)
+    // — an authenticated bot never silently proceeds to join signed-out on a failed restore.
+    syncBrowserDataFromS3(s3Config, dataDir);
     cleanStaleLocks(dataDir);
   }
 
@@ -209,6 +214,18 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     page,
     async close() {
       await context.close().catch(() => { /* best-effort */ });
+      // Write-back on clean teardown (#725): Google rotates session cookies during use, so the
+      // durable copy is refreshed from the LIVE profile dir after the context flushes — the next
+      // spawn restores the freshest state instead of a decaying snapshot. Clean teardown only:
+      // a SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
+      // Failures are attributed warnings, bounded per upload — teardown never hangs on S3.
+      if (inv.authenticated && inv.userdataS3Path) {
+        try {
+          syncBrowserDataToS3(s3Config, dataDir);
+        } catch (e) {
+          console.error(`[bot] session write-back failed (durable copy stays at last restore): ${String(e)}`);
+        }
+      }
       removeProfileDir(dataDir);   // per-bot dir — leaking one per bot fills the disk in vexa-lite
     },
   };

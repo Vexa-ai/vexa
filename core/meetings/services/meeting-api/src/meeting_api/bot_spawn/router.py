@@ -21,7 +21,16 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .env_flags import env_flag
-from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
+from .ports import (
+    AuthSessionBusy,
+    AuthSessionNotConfigured,
+    MaxBotsExceeded,
+    MeetingRepo,
+    QuotaExceeded,
+    RuntimeClient,
+    SpawnFailed,
+    TranscriptionNotConfigured,
+)
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
 
@@ -234,6 +243,14 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
             )
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))
+        except AuthSessionNotConfigured as e:
+            # Deployment misconfiguration (BOT_AUTHENTICATED without a complete userdata store) —
+            # a service-side 503 like the transcription gate, never a silent anonymous join.
+            raise HTTPException(status_code=503, detail=str(e))
+        except AuthSessionBusy as e:
+            # One stored session, one live bot: the second concurrent authenticated spawn is
+            # refused naming the conflicting meeting (per-identity serialization, #725).
+            raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:

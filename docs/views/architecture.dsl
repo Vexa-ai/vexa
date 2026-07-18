@@ -35,6 +35,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset bot-commands [writers: meeting-api]
   database segments-table [writers: meeting-api]
   data-asset recording-blob [writers: bot, meeting-api]
+  data-asset userdata-blob [writers: remote-browser, bot]
 
 system agent  # copilot; owns the processed (cleaned) transcript + signals
   service agent-api
@@ -92,6 +93,8 @@ edges:
   terminal -read-> proc-stream
   terminal -read-> out-stream
   bot -write-> recording-blob
+  bot -read-write-> userdata-blob  # restore session before launch (read) + write rotated session back on clean teardown (write)
+  remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands

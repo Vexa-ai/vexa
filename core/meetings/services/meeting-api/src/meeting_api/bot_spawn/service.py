@@ -28,8 +28,11 @@ import uuid
 from typing import Any, Optional
 
 from ..obs import log_event
+from .env_flags import env_flag
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
 from .ports import (
+    AuthSessionBusy,
+    AuthSessionNotConfigured,
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingRepo,
@@ -190,6 +193,33 @@ async def request_bot(
             "TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN"
         )
 
+    # 1c. Authenticated-bot mode (#724, deployment-scoped knob — Q1-A): when BOT_AUTHENTICATED is
+    #     set, EVERY spawn carries the sealed invocation.v1 auth block, so the bot restores the
+    #     deployment's provisioned browser session (`make login`) and joins signed-in. Config is
+    #     gated loud BEFORE any DB write (the TranscriptionNotConfigured precedent) — a half-
+    #     configured knob must never spawn a bot that silently joins anonymous. Env vocabulary
+    #     matches the provisioning CLI: BOT_USERDATA_S3_PATH + BOT_S3_{ENDPOINT,BUCKET,ACCESS_KEY,
+    #     SECRET_KEY} (scoped userdata credentials — never the deployment's admin S3 creds; they
+    #     ride the invocation env into the bot container, so their blast radius must stay the
+    #     userdata prefix).
+    authenticated = env_flag("BOT_AUTHENTICATED", False)
+    auth_userdata_path: Optional[str] = None
+    auth_s3: dict[str, Optional[str]] = {}
+    if authenticated:
+        auth_userdata_path = os.getenv("BOT_USERDATA_S3_PATH") or None
+        auth_s3 = {
+            "s3_endpoint": os.getenv("BOT_S3_ENDPOINT") or None,
+            "s3_bucket": os.getenv("BOT_S3_BUCKET") or None,
+            "s3_access_key": os.getenv("BOT_S3_ACCESS_KEY") or None,
+            "s3_secret_key": os.getenv("BOT_S3_SECRET_KEY") or None,
+        }
+        if not (auth_userdata_path and auth_s3["s3_endpoint"] and auth_s3["s3_bucket"]):
+            raise AuthSessionNotConfigured(
+                "BOT_AUTHENTICATED is set but the userdata store is incomplete — set "
+                "BOT_USERDATA_S3_PATH + BOT_S3_ENDPOINT + BOT_S3_BUCKET (and scoped "
+                "BOT_S3_ACCESS_KEY/BOT_S3_SECRET_KEY); provision the session with `make login`"
+            )
+
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
     #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
     #     stays a plain query — the reused-row path reopens an existing terminal row (no NEW active row
@@ -208,6 +238,22 @@ async def request_bot(
     #     real adapter serializes per-user with a pg advisory lock + a unique partial index backstop;
     #     the fake has no await between the check and the insert). The continue_meeting (reused-
     #     terminal-row) path reopens an existing row and is unchanged.
+    # 2d. Per-identity serialization (#725 C2): one stored session = one live bot. Refuse a
+    #     second concurrent authenticated spawn against the same userdata path with a typed 409
+    #     naming the conflicting meeting. Control-plane pre-check against the tracked active set
+    #     (the issue's default); it runs just before the row insert, so the remaining window is a
+    #     single request interleaving — the storage-side lock fork stays available if a multi-
+    #     replica deployment ever witnesses it.
+    if authenticated and auth_userdata_path:
+        conflict = await repo.find_active_by_userdata(auth_userdata_path)
+        if conflict is not None and (reused_row is None or conflict["id"] != reused_row["id"]):
+            log_event(
+                "bot_spawn_auth_session_busy", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"conflicting_meeting_id": conflict["id"]},
+            )
+            raise AuthSessionBusy(conflict["id"], auth_userdata_path)
+
     if reused_row is not None:
         # continue_meeting reopens an EXISTING terminal row (no new active row inserted), so it is not
         # part of the fresh-insert TOCTOU window — but the per-user cap still applies (a continued run
@@ -234,6 +280,9 @@ async def request_bot(
             meeting_data["constructed_meeting_url"] = constructed_url
         meeting_data["transcribe_enabled"] = transcribe_enabled
         meeting_data["recording_enabled"] = recording_enabled
+        # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
+        if authenticated and auth_userdata_path:
+            meeting_data["auth_userdata_path"] = auth_userdata_path
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback). These
         # are stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS).
         if webhook_url:
@@ -298,6 +347,12 @@ async def request_bot(
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
+        authenticated=True if authenticated else None,
+        userdata_s3_path=auth_userdata_path,
+        s3_endpoint=auth_s3.get("s3_endpoint"),
+        s3_bucket=auth_s3.get("s3_bucket"),
+        s3_access_key=auth_s3.get("s3_access_key"),
+        s3_secret_key=auth_s3.get("s3_secret_key"),
         # A human-in-the-loop dashboard join needs a forgiving lobby window so a late admit does not
         # fail the meeting; everyoneLeftTimeout matches the O6 config.
         automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 900000},
