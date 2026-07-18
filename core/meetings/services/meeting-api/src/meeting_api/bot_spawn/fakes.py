@@ -50,6 +50,15 @@ class InMemoryMeetingRepo:
                 return dict(m)
         return None
 
+    async def find_active_by_userdata(self, userdata_s3_path) -> Optional[dict]:
+        for m in self._meetings.values():
+            if (
+                m["status"] in _ACTIVE_STATUSES
+                and m.get("data", {}).get("auth_userdata_path") == userdata_s3_path
+            ):
+                return dict(m)
+        return None
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         rows = [
             m for m in self._meetings.values()

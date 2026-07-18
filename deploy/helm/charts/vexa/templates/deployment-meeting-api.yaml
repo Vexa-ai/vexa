@@ -98,6 +98,19 @@ spec:
               value: {{ .Values.meetingApi.minioSecure | default "false" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
+            # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots.
+            - name: BOT_AUTHENTICATED
+              value: {{ .Values.meetingApi.botAuthenticated | default "false" | quote }}
+            - name: BOT_USERDATA_S3_PATH
+              value: {{ .Values.meetingApi.botUserdataS3Path | default "" | quote }}
+            - name: BOT_S3_ENDPOINT
+              value: {{ .Values.meetingApi.botS3Endpoint | default "" | quote }}
+            - name: BOT_S3_BUCKET
+              value: {{ .Values.meetingApi.botS3Bucket | default "" | quote }}
+            - name: BOT_S3_ACCESS_KEY
+              value: {{ .Values.meetingApi.botS3AccessKey | default "" | quote }}
+            - name: BOT_S3_SECRET_KEY
+              value: {{ .Values.meetingApi.botS3SecretKey | default "" | quote }}
             {{- with .Values.meetingApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

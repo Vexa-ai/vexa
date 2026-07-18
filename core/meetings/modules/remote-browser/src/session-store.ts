@@ -109,6 +109,34 @@ const AUTH_ESSENTIAL_DIRS = [
 
 // ── S3 backend (production) ───────────────────────────────────────────────
 
+/**
+ * A typed, attributed S3-session-sync failure. The restore half THROWS this (an authenticated
+ * bot whose session cannot be restored must fail loud with the step named — never die on an
+ * unattributed execSync, never silently join signed-out); the save half only WARNS (teardown
+ * must never hang or fail the exit on a flaky upload — the durable copy simply stays at the
+ * last restore).
+ */
+export class SessionSyncError extends Error {
+  constructor(
+    public readonly step: 'session-restore' | 'session-save',
+    detail: string,
+    public readonly cause?: unknown,
+  ) {
+    super(`[session-store] ${step} failed: ${detail}`);
+    this.name = 'SessionSyncError';
+  }
+}
+
+/** Attribute an `aws` execSync failure: a missing CLI (shell 127 / ENOENT) is named as such —
+ *  the deployment's image must ship the aws CLI — anything else carries the exit status. */
+function describeAwsFailure(err: any): string {
+  const status = err?.status ?? err?.code;
+  if (status === 127 || err?.code === 'ENOENT') {
+    return 'aws CLI not found on PATH — the bot image (or provisioning host) must ship it';
+  }
+  return `aws exited with ${String(status ?? 'unknown')}: ${String(err?.message ?? err)}`;
+}
+
 function getS3Env(config: S3Config): Record<string, string> {
   return {
     ...process.env as Record<string, string>,
@@ -124,48 +152,69 @@ export function s3Sync(localDir: string, s3Path: string, config: S3Config, direc
   const deleteArg = '';
   const [src, dst] = direction === 'down' ? [s3Uri, `${localDir}/`] : [`${localDir}/`, s3Uri];
   console.log(`[s3-sync] S3 sync ${direction}: ${src} → ${dst}`);
-  execSync(
-    `aws s3 sync "${src}" "${dst}" --endpoint-url "${config.s3Endpoint}" ${deleteArg} ${excludeArgs}`,
-    { env: getS3Env(config), stdio: 'inherit', timeout: 300000 }
-  );
+  try {
+    execSync(
+      `aws s3 sync "${src}" "${dst}" --endpoint-url "${config.s3Endpoint}" ${deleteArg} ${excludeArgs}`,
+      { env: getS3Env(config), stdio: 'inherit', timeout: 300000 }
+    );
+  } catch (err: any) {
+    // Attributed, typed failure naming the sync step + target (#724 C3). The pre-guard shape —
+    // an unguarded execSync — killed the process before Chromium launched with nothing on the
+    // log naming the step (the #461 signature).
+    throw new SessionSyncError(
+      direction === 'down' ? 'session-restore' : 'session-save',
+      `${describeAwsFailure(err)} (endpoint ${config.s3Endpoint}, path ${s3Path})`,
+      err,
+    );
+  }
 }
 
 export function syncBrowserDataFromS3(config: S3Config, dataDir: string = BROWSER_DATA_DIR): void {
   s3Sync(dataDir, `${config.userdataS3Path}/browser-data`, config, 'down', BROWSER_CACHE_EXCLUDES);
 }
 
-export function syncBrowserDataToS3(config: S3Config): void {
-  if (!config.userdataS3Path || !config.s3Endpoint || !config.s3Bucket) return;
+/**
+ * Upload the auth-essential subset of a LIVE profile dir to the durable S3 copy — the write-back
+ * half of restore→use→write-back (#725 C1). `dataDir` names the profile the browser actually ran
+ * on (a per-bot ephemeral `${BROWSER_DATA_DIR}-XXXXXX` dir — symmetric with
+ * `syncBrowserDataFromS3(config, dataDir)`). Per-item failures are attributed warnings, never a
+ * throw and never unbounded (each call carries its own timeout) — a flaky upload on teardown
+ * leaves the durable copy at the last restore, it never hangs the exit. Returns the number of
+ * items uploaded (0 ⇒ nothing durable changed — provisioning treats that as failure).
+ */
+export function syncBrowserDataToS3(config: S3Config, dataDir: string = BROWSER_DATA_DIR): number {
+  if (!config.userdataS3Path || !config.s3Endpoint || !config.s3Bucket) return 0;
   const s3Base = `s3://${config.s3Bucket}/${config.userdataS3Path}/browser-data`;
   const env = getS3Env(config);
   const endpoint = `--endpoint-url "${config.s3Endpoint}"`;
   let uploaded = 0;
 
-  console.log(`[s3-sync] S3 save (auth-essential files only)...`);
+  console.log(`[s3-sync] S3 save (auth-essential files only) from ${dataDir}...`);
 
   for (const file of AUTH_ESSENTIAL_FILES) {
-    const local = join(BROWSER_DATA_DIR, file);
+    const local = join(dataDir, file);
     if (!existsSync(local)) continue;
     try {
       execSync(`aws s3 cp "${local}" "${s3Base}/${file}" ${endpoint}`, { env, stdio: 'pipe', timeout: 10000 });
       uploaded++;
     } catch (err: any) {
-      console.log(`[s3-sync] Warning: failed to upload ${file}: ${err.message}`);
+      console.log(`[s3-sync] Warning: failed to upload ${file}: ${describeAwsFailure(err)}`);
     }
   }
 
   for (const dir of AUTH_ESSENTIAL_DIRS) {
-    const local = join(BROWSER_DATA_DIR, dir);
+    const local = join(dataDir, dir);
     if (!existsSync(local)) continue;
     try {
       execSync(`aws s3 sync "${local}/" "${s3Base}/${dir}/" ${endpoint}`, { env, stdio: 'pipe', timeout: 10000 });
       uploaded++;
     } catch (err: any) {
-      console.log(`[s3-sync] Warning: failed to sync ${dir}: ${err.message}`);
+      console.log(`[s3-sync] Warning: failed to sync ${dir}: ${describeAwsFailure(err)}`);
     }
   }
 
   console.log(`[s3-sync] Uploaded ${uploaded} auth-essential items`);
+  return uploaded;
 }
 
 // ── Local backend (desktop/dev, no S3 creds) ─────────────────────────────

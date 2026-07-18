@@ -1012,6 +1012,33 @@
       ]
     },
     {
+      "unique-id": "userdata-blob",
+      "node-type": "data-asset",
+      "name": "userdata bucket (blob)",
+      "description": "authenticated-bot browser sessions (auth-essential profile subset): remote-browser's provisioning login uploads the signed-in session; the bot restores it before launch and writes the rotated session back on clean teardown",
+      "controls": {
+        "ownership": {
+          "description": "two writers by design: remote-browser=provisioning upload, bot=write-back on teardown",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "remote-browser",
+                  "bot"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "stage": "session"
+        }
+      ]
+    },
+    {
       "unique-id": "runtime",
       "node-type": "service",
       "name": "runtime",
@@ -1259,7 +1286,8 @@
             "u-meetings",
             "bot-commands",
             "segments-table",
-            "recording-blob"
+            "recording-blob",
+            "userdata-blob"
           ]
         }
       }
@@ -1504,6 +1532,46 @@
           }
         }
       },
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "bot-userdata",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "bot"
+          },
+          "destination": {
+            "node": "userdata-blob"
+          }
+        }
+      },
+      "description": "restore session before launch (read) + write rotated session back on clean teardown (write)",
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "access": "read-write"
+        }
+      ]
+    },
+    {
+      "unique-id": "remote-browser-userdata",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "remote-browser"
+          },
+          "destination": {
+            "node": "userdata-blob"
+          }
+        }
+      },
+      "description": "provisioning login uploads the confirmed signed-in session",
+      "protocol": "HTTPS",
       "metadata": [
         {
           "access": "write"

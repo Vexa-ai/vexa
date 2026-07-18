@@ -177,6 +177,15 @@ meetingApi:
     type: ClusterIP
     port: 8080
   transcriptionServiceUrl: ""   # STT endpoint the spawned bot transcribes against (empty ⇒ capture only)
+  # Authenticated-bot mode (deployment-scoped; docs: /authenticated-bots): botAuthenticated "true"
+  # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
+  # values are SCOPED userdata-store credentials, never the deployment's admin S3 creds.
+  botAuthenticated: "false"
+  botUserdataS3Path: ""
+  botS3Endpoint: ""
+  botS3Bucket: ""
+  botS3AccessKey: ""
+  botS3SecretKey: ""
   minioSecure: "false"
   logLevel: "info"
   resources:

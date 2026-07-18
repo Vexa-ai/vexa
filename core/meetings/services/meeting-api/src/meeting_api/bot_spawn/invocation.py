@@ -142,6 +142,12 @@ def build_invocation(
     transcription_service_url: Optional[str] = None,
     transcription_service_token: Optional[str] = None,
     transcription_model: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+    userdata_s3_path: Optional[str] = None,
+    s3_endpoint: Optional[str] = None,
+    s3_bucket: Optional[str] = None,
+    s3_access_key: Optional[str] = None,
+    s3_secret_key: Optional[str] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
@@ -171,6 +177,16 @@ def build_invocation(
         "meetingApiCallbackUrl": meeting_api_callback_url,
         "internalSecret": internal_secret,
         "automaticLeave": automatic_leave,
+        # Authenticated-bot mode (sealed invocation.v1 auth block): the bot restores the stored
+        # browser session from the userdata store before launch and joins signed-in. Deployment-
+        # scoped — set by the BOT_AUTHENTICATED knob in ``request_bot``; None-stripped otherwise
+        # so anonymous invocations carry no auth fields at all.
+        "authenticated": authenticated,
+        "userdataS3Path": userdata_s3_path,
+        "s3Endpoint": s3_endpoint,
+        "s3Bucket": s3_bucket,
+        "s3AccessKey": s3_access_key,
+        "s3SecretKey": s3_secret_key,
     }
     invocation = {k: v for k, v in invocation.items() if v is not None}
     conforms_invocation(invocation)

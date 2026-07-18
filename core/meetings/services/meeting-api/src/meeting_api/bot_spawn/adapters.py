@@ -67,6 +67,23 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def find_active_by_userdata(self, userdata_s3_path) -> Optional[dict]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.status.in_(["requested", "joining", "awaiting_admission", "active", "stopping"]),
+                    Meeting.data["auth_userdata_path"].astext == userdata_s3_path,
+                )
+                .order_by(Meeting.created_at.desc())
+            )
+            m = (await db.execute(stmt)).scalars().first()
+            return _row_to_dict(m) if m else None
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select
 

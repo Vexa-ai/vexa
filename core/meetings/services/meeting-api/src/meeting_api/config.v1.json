@@ -140,6 +140,68 @@
    ]
   },
   {
+   "key": "BOT_AUTHENTICATED",
+   "class": "defaulted",
+   "default": "false",
+   "description": "deployment-scoped authenticated-bot knob: when true, EVERY POST /bots spawn carries the invocation.v1 auth block so the bot restores the provisioned browser session (make login) and joins signed-in. Demands the BOT_USERDATA_S3_PATH + BOT_S3_* keys — incomplete config answers a typed 503 (never a silent anonymous join).",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_USERDATA_S3_PATH",
+   "class": "defaulted",
+   "default": "(unset — required when BOT_AUTHENTICATED=true; the userdata prefix holding the provisioned session, e.g. userdata/bot-identity-1)",
+   "description": "stored-session prefix; also the per-identity serialization key (one live authenticated bot per prefix)",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_ENDPOINT",
+   "class": "defaulted",
+   "default": "(unset — required when BOT_AUTHENTICATED=true)",
+   "description": "userdata store endpoint, as reachable FROM the bot containers (e.g. http://minio:9000)",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_BUCKET",
+   "class": "defaulted",
+   "default": "(unset — required when BOT_AUTHENTICATED=true)",
+   "description": "userdata store bucket",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_ACCESS_KEY",
+   "class": "defaulted",
+   "default": "(unset)",
+   "secret": true,
+   "description": "SCOPED userdata-store access key — never the deployment's admin S3 credentials; rides the invocation env into the bot container, so its blast radius must be the userdata prefix only",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
+   "key": "BOT_S3_SECRET_KEY",
+   "class": "defaulted",
+   "default": "(unset)",
+   "secret": true,
+   "description": "scoped userdata-store secret key (see BOT_S3_ACCESS_KEY)",
+   "targets": [
+    "compose",
+    "helm"
+   ]
+  },
+  {
    "key": "MINIO_ENDPOINT",
    "class": "defaulted",
    "default": "minio:9000",
@@ -326,7 +388,11 @@
    "class": "defaulted",
    "default": "(unset — calendar sync no-ops and the auto-join sweep cannot resolve the per-user cap, so it fails closed and refuses to spawn unless AUTO_JOIN_ALLOW_UNCAPPED=1)",
    "description": "admin-api base URL for the internal edges the background sweeps call (/internal/users/{id}/bot-context, /internal/calendar-configs). Required on every deploy surface so calendar sync runs and auto-join spawns stay capped (#656).",
-   "targets": ["compose", "helm", "lite"]
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
   },
   {
    "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
