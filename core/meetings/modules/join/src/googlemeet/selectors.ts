@@ -335,14 +335,11 @@ export const googleParticipantIdSelectors: string[] = [
   '[jsinstance]'
 ];
 
-// Browser-context button matcher: `css` scopes candidates via
-// document.querySelectorAll (plain CSS ONLY — this shape is consumed inside
-// page.evaluate, where Playwright engines like `:has-text()` do not exist);
-// `text` filters those candidates by whitespace-normalized, case-insensitive
-// substring of textContent (the semantics `:has-text()` applies in Playwright
-// contexts). At least one field must be present; `css` alone means "first
-// visible match", `text` alone scopes to any button-like element.
-export type BrowserContextButtonMatcher = { css?: string; text?: string };
+// Browser-context button matcher — the canonical shape lives in
+// ../shared/leave-click (shared with msteams); imported for local use below
+// and re-exported so this module's existing importers keep their reference.
+import type { BrowserContextButtonMatcher } from "../shared/leave-click";
+export type { BrowserContextButtonMatcher };
 
 // Google Meet comprehensive leave matchers (stateless - covers all scenarios).
 // BROWSER CONTEXT: consumed inside page.evaluate via document.querySelector —
