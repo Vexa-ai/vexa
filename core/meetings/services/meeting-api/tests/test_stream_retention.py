@@ -71,3 +71,33 @@ async def test_no_group_does_not_blind_trim():
     # no consumer group created → the trim must NOT drop entries it can't prove are consumed
     await _trim_segments_stream(r, RETENTION_S, NOW_MS)
     assert len(await _ids(r)) == 3
+
+
+async def test_reclaimed_orphan_lets_trim_advance():
+    """#636 · A3 (trim unblocks). A crashed replica's un-acked (orphaned) entry pins the trim floor
+    via XPENDING oldest-pending (``db_writer._trim_segments_stream``), so the stream grows without
+    bound around it — the quiet second consequence of the orphan. After a survivor reclaims + acks it,
+    the floor un-pins and the aged entries trim away.
+
+    Negative control (inline): with the orphan LEFT un-reclaimed, the trim cannot advance — XLEN
+    stays at N across the tick (unbounded growth). RED on head, where no reclaim path exists."""
+    from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
+    from meeting_api.collector.ingest import reclaim_segments
+
+    r = fake_aioredis.FakeRedis(decode_responses=True)
+    ids = await _seed(r, 5)  # 5 aged entries; group created at 0
+    # a dead consumer delivers all 5 and never acks → all 5 pending; the oldest pins the trim floor.
+    msgs = await r.xreadgroup(CONSUMER_GROUP, "collector-dead", {STREAM_NAME: ">"}, count=5)
+    assert len(msgs[0][1]) == 5
+
+    # CONTROL: the un-reclaimed orphan pins the floor — nothing is trimmed even though all are aged.
+    await _trim_segments_stream(r, RETENTION_S, NOW_MS)
+    assert len(await _ids(r)) == 5, "an un-reclaimed pending entry pins the trim floor (unbounded)"
+
+    # a survivor reclaims + acks the orphan, then the aged entries trim away (floor un-pinned).
+    bus = FakeRedisBus(r)
+    store = InMemoryTranscriptStore()
+    await reclaim_segments(store, bus, consumer="collector-live", min_idle_ms=0)
+    await _trim_segments_stream(r, RETENTION_S, NOW_MS)
+    assert len(await _ids(r)) == 0, "after reclaim+ack the trim advances past the (now consumed) floor"
+    assert ids  # (seeded)

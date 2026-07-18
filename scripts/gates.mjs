@@ -75,6 +75,28 @@ function gateReadme() {
   return true;
 }
 
+// gate:docs-version (D6c) — the docs DECLARE which release they reflect, and it must equal the
+// released control-plane. The `docs-reflects:` marker in docs/docs/changelog.mdx is asserted equal
+// to Chart.yaml appVersion, so a release version-bump that forgets to advance the docs stamp reds
+// CI — the docs cannot silently lag the release.
+function gateDocsVersion() {
+  const chart = join(ROOT, "deploy", "helm", "charts", "vexa", "Chart.yaml");
+  const changelog = join(ROOT, "docs", "docs", "changelog.mdx");
+  if (!existsSync(chart)) return fail(["gate:docs-version — Chart.yaml not found"]);
+  if (!existsSync(changelog)) return fail(["gate:docs-version — docs/docs/changelog.mdx not found"]);
+  const appV = (readFileSync(chart, "utf8").match(/^appVersion:\s*"?([^"\s]+)"?/m) || [])[1];
+  const docsV = (readFileSync(changelog, "utf8").match(/docs-reflects:\s*([0-9A-Za-z.\-]+)/) || [])[1];
+  if (!appV) return fail(["gate:docs-version — could not read appVersion from Chart.yaml"]);
+  if (!docsV) return fail(["gate:docs-version — no `docs-reflects: <version>` marker in docs/docs/changelog.mdx"]);
+  if (docsV !== appV) return fail([
+    `gate:docs-version — docs reflect ${docsV} but the released appVersion is ${appV}.`,
+    "   Update the `docs-reflects:` marker (+ the visible line) in docs/docs/changelog.mdx to match,",
+    "   as part of the release version-bump — the docs must not lag the release.",
+  ]);
+  console.log(`  ✓ gate:docs-version — docs reflect v${docsV}, matching Chart.yaml appVersion`);
+  return true;
+}
+
 // gate:exports (P6) — every LIBRARY package locks its front door with "exports".
 // "private": true packages are not published libraries (CLI tools, harnesses, apps) → exempt.
 function gateExports() {
@@ -405,14 +427,22 @@ function gateAccess() {
   return true;
 }
 
-// gate:contract-conformance (P8) — the SHIPPED meeting-api conforms to the sealed api.v1. gate:schema
-// proves goldens≡schema and gate:contract-version freezes the seal, but neither proves the RUNNING
-// service implements the contract it serves — and it drifted (api.v1 declares routes meeting-api never
-// implemented; the conformance harness drove a FAKE that masked it). This is the OFFLINE STRUCTURAL half:
-// a pytest imports the real create_app(), enumerates app.routes, and asserts every implemented api.v1
-// route matches a declared (path, method) AND every declared route is implemented OR on an explicit,
-// reasoned waiver list (known drift bounded + documented; NEW unwaived drift → RED). Discovers the proof
-// by filename (mirrors gate:access). RED if the proof is absent — an ungated contract is the gap this closes.
+// gate:contract-conformance (P8) — the SHIPPED impl conforms to the sealed api.v1, BOTH directions.
+// gate:schema proves goldens≡schema and gate:contract-version freezes the seal, but neither proves the
+// RUNNING service implements the contract it serves — and it drifted BOTH ways (api.v1 declares routes
+// meeting-api never implemented; the conformance harness drove a FAKE that masked it). This is the
+// OFFLINE STRUCTURAL check, discovered by filename (mirrors gate:access), asserting per service:
+//   • forward (impl ⊆ contract): every api.v1 route the real create_app() registers matches a declared
+//     (path, method) — a route that drifts from the contract's spelling is a bug; and
+//   • REVERSE (contract ⊆ impl, #591): for EVERY (path, method) the sealed api.v1 declares, the UNION of
+//     the gateway edge + meeting-api it forwards to registers it, OR the route is audited in
+//     core/gateway/contracts/api.v1/KNOWN_GAPS.json (owned-elsewhere prefix / reasoned known-gap, each
+//     reported LOUDLY). A sealed route that is renamed/dropped and NOT audited → RED, listed by name.
+//   • golden RESPONSE-SHAPE: the frozen golden examples drive the REAL response so a field RENAME
+//     (running_bots → running) fails, not just a path removal.
+// The KNOWN_GAPS.json ledger is the audited exception path: adding a row is a deliberate, diff-visible
+// change in the sealed contracts dir (it is NOT a *.schema.json, so it does not move the api.v1 seal hash).
+// RED if the proof is absent — an ungated contract is the gap this closes.
 // L4 extension (bbb): live input-fuzzing (schemathesis vs the running OpenAPI) is the dynamic half.
 function gateContractConformance() {
   const pkgs = pyPackages().filter((d) => existsSync(join(d, "tests", "test_contract_conformance.py")));
@@ -421,7 +451,7 @@ function gateContractConformance() {
     try { execSync("uv run pytest -q tests/test_contract_conformance.py", { cwd: d, stdio: "pipe" }); }
     catch (e) { return fail([`contract-conformance ${rel(d)}:\n${(e.stdout || e.stderr || e).toString().slice(-1500)}`]); }
   }
-  console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (routes ≡ contract; drift waived + documented)`);
+  console.log(`  ✓ gate:contract-conformance — ${pkgs.length} service(s) conform to the sealed api.v1 (impl⊆contract + contract⊆impl + golden shapes; gaps audited in KNOWN_GAPS.json)`);
   return true;
 }
 
@@ -869,10 +899,14 @@ function gateDbSchema() {
 // service that constructs a Postgres engine must be in deploy/db-budget.json; Σ(helm replicas ×
 // per-service pool ceiling) + reserved must fit max_connections; and no service's code may set a
 // pool_size/max_overflow HIGHER than its declared ceiling (so the budget can't silently under-count).
+// Both scans below read the COMMITTED tree via `git grep --untracked` — tracked files plus new
+// not-yet-added ones, never gitignored paths. The .venv/site-packages trees gate:python materializes
+// under core/ match both patterns (numpy fixtures set pool_size=; sqlalchemy defines
+// create_async_engine) and must not enter the budget. --untracked keeps a brand-new .py in scope.
 function _dbHoldingServices() {
   let out;
   try {
-    out = execSync("grep -rl --include='*.py' create_async_engine core", { cwd: ROOT }).toString();
+    out = execSync("git grep --untracked -l create_async_engine -- 'core/*.py'", { cwd: ROOT }).toString();
   } catch { return new Set(); }  // grep exit 1 = no matches
   const svcs = new Set();
   for (const path of out.split("\n")) {
@@ -888,7 +922,7 @@ function _explicitPool(service) {
   // the framework default (the "silent default" the issue names). Used to reject an under-stated budget.
   let out = "";
   try {
-    out = execSync(`grep -rhoE --include='*.py' '(pool_size|max_overflow) *= *[0-9]+' core 2>/dev/null | grep -v test || true`, { cwd: ROOT }).toString();
+    out = execSync(`git grep --untracked -hoE '(pool_size|max_overflow) *= *[0-9]+' -- 'core/*.py' 2>/dev/null | grep -v test || true`, { cwd: ROOT }).toString();
   } catch { out = ""; }
   const found = {};
   for (const line of out.split("\n")) {
@@ -949,7 +983,7 @@ function gateDbBudget() {
   return true;
 }
 
-const GATES = { readme: gateReadme, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+const GATES = { readme: gateReadme, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

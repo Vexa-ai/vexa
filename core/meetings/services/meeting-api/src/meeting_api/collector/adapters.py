@@ -19,12 +19,36 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
 from .ports import RedisBus, TranscriptStore
+
+log = logging.getLogger("meeting_api.collector.adapters")
+
+
+def _decode_claimed(resp) -> "list[tuple[str, dict]]":
+    """Normalize an XAUTOCLAIM response to ``[(message_id, fields), ...]`` (#636).
+
+    redis-py returns ``[cursor, claimed]`` (older) or ``[cursor, claimed, deleted]`` (Redis 7+),
+    where ``claimed`` is ``[(id, {field: value}), ...]``. Ids/keys/values are decoded from bytes so
+    the drained fields match ``read_segments``' shape (``ingest`` reads ``fields['payload']``)."""
+    if not resp or len(resp) < 2:
+        return []
+    claimed = resp[1] or []
+    out: list[tuple[str, dict]] = []
+    for message_id, fields in claimed:
+        mid = message_id.decode() if isinstance(message_id, bytes) else message_id
+        decoded = {
+            (k.decode() if isinstance(k, bytes) else k):
+            (v.decode() if isinstance(v, bytes) else v)
+            for k, v in (fields or {}).items()
+        }
+        out.append((mid, decoded))
+    return out
 
 
 def _sha(s: str) -> str:
@@ -385,11 +409,12 @@ class SqlAlchemyTranscriptStore:
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
         return await self._merge_live_segments(pg)
 
-    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None):
+    async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None, member_workspaces=None, list_view=False):
         from sqlalchemy import cast, func, or_, select
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
+        from .projection import DEFAULT_LIST_LIMIT, project_list_data
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -406,13 +431,29 @@ class SqlAlchemyTranscriptStore:
             if platform:
                 stmt = stmt.where(Meeting.platform == platform)
             stmt = stmt.order_by(Meeting.created_at.desc())
-            if limit:
-                stmt = stmt.limit(limit)
-            if offset:
-                stmt = stmt.offset(offset)
-            rows = (await db.execute(stmt)).scalars().all()
-            return [
-                {
+            if list_view:
+                # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
+                # with a default page size (an explicit `limit` still wins) and over-fetch one row past
+                # the page to compute `has_more` without a second COUNT query.
+                effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
+                if offset:
+                    stmt = stmt.offset(offset)
+                stmt = stmt.limit(effective_limit + 1)
+                rows = (await db.execute(stmt)).scalars().all()
+                has_more = len(rows) > effective_limit
+                rows = rows[:effective_limit]
+            else:
+                # Internal enumeration (get-by-id filter, /bots/status, calendar sync): unchanged —
+                # explicit `limit` only, NO default cap, full `data` retained below.
+                if limit:
+                    stmt = stmt.limit(limit)
+                if offset:
+                    stmt = stmt.offset(offset)
+                rows = (await db.execute(stmt)).scalars().all()
+                has_more = False
+
+            def _row(m):
+                row = {
                     "id": m.id,
                     "user_id": m.user_id,
                     "platform": m.platform,
@@ -423,13 +464,19 @@ class SqlAlchemyTranscriptStore:
                     "bot_container_id": m.bot_container_id,
                     "start_time": m.start_time.isoformat() if m.start_time else None,
                     "end_time": m.end_time.isoformat() if m.end_time else None,
-                    "data": m.data if isinstance(m.data, dict) else {},
                     "shared": m.user_id != user_id,   # surfaced via a share/membership, not owned by the caller
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                     "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                    # #584: the LIST drops the heavy detail keys (speaker_events/bot_logs/recordings/… —
+                    # the 4.6 MB / event-loop-wedge cause) but keeps the light metadata it renders
+                    # (title/docs/flags). Internal callers (get-by-id, /bots/status, calendar sync) get
+                    # full `data`, so the detail view and reconciliation are unchanged.
+                    "data": project_list_data(m.data) if list_view else (m.data if isinstance(m.data, dict) else {}),
                 }
-                for m in rows
-            ]
+                return row
+
+            result = [_row(m) for m in rows]
+            return (result, has_more) if list_view else result
 
     async def authorize_subscribe(self, user_id, platform, native_meeting_id, member_workspaces=None) -> Optional[int]:
         """Authorize a live-transcript subscribe → the meeting ROW id, or None. TWO branches:
@@ -954,6 +1001,8 @@ class RedisStreamBus:
 
     def __init__(self, client):
         self._client = client
+        self._reclaim_unsupported = False  # #636: log-once latch when the Redis lacks XAUTOCLAIM
+        self._prune_unsupported = False  # #660: log-once latch when the Redis lacks XINFO CONSUMERS
 
     async def read_segments(self, *, group, consumer, stream, count=10):
         try:
@@ -974,6 +1023,82 @@ class RedisStreamBus:
                 }
                 out.append((mid, decoded))
         return out
+
+    async def reclaim_orphans(self, *, group, stream, consumer, min_idle_ms, count=10):
+        """#636: XAUTOCLAIM idle (crashed-replica) entries from the group's PEL into ``consumer``.
+        Bounded (single call, ``count`` cap) — the returned cursor lets the next tick continue.
+
+        XAUTOCLAIM needs **Redis >= 6.2**. On an older server (e.g. Redis 6.0, which the Lite image
+        bundled — the #636 regression the v0.12.5 witness caught) the command is unknown; rather than
+        crash the segment-consumer loop every tick, degrade to a **no-op** (return no reclaimed
+        entries). The normal consume path (XREADGROUP) is unaffected; only cross-replica orphan
+        recovery is unavailable until Redis is upgraded. Logged once."""
+        from redis.exceptions import ResponseError
+
+        try:
+            await self._client.xgroup_create(name=stream, groupname=group, id="0", mkstream=True)
+        except Exception:
+            pass  # BUSYGROUP — group already exists
+        try:
+            resp = await self._client.xautoclaim(
+                name=stream, groupname=group, consumername=consumer,
+                min_idle_time=min_idle_ms, start_id="0-0", count=count,
+            )
+        except ResponseError as e:
+            msg = str(e).lower()
+            if "unknown command" in msg or "xautoclaim" in msg:
+                if not self._reclaim_unsupported:
+                    self._reclaim_unsupported = True
+                    log.warning(
+                        "XAUTOCLAIM unsupported on this Redis (needs >= 6.2) — #636 orphan reclaim "
+                        "disabled; normal segment consumption is unaffected. Upgrade Redis to re-enable."
+                    )
+                return []
+            raise
+        return _decode_claimed(resp)
+
+    async def list_consumers(self, *, group, stream):
+        """#660: XINFO CONSUMERS → ``[{"name", "pending", "idle"}, ...]`` (idle in ms), the seam the
+        reclaim sweep uses to find abandoned per-recreate ghost consumers.
+
+        Degrades to ``[]`` on a Redis that rejects the command (NOGROUP before the group exists, or an
+        ``unknown command`` on a server without XINFO CONSUMERS) — the SAME no-op-on-unsupported
+        contract ``reclaim_orphans`` uses for XAUTOCLAIM, so consumer-pruning being unavailable never
+        breaks the normal XREADGROUP consume path. Logged once."""
+        from redis.exceptions import ResponseError
+
+        try:
+            resp = await self._client.xinfo_consumers(stream, group)
+        except ResponseError as e:
+            msg = str(e).lower()
+            if "unknown command" in msg or "xinfo" in msg:
+                if not self._prune_unsupported:
+                    self._prune_unsupported = True
+                    log.warning(
+                        "XINFO CONSUMERS unsupported on this Redis — #660 ghost-consumer prune "
+                        "disabled; normal segment consumption is unaffected. Upgrade Redis to re-enable."
+                    )
+                return []
+            if "nogroup" in msg:
+                return []  # group not created yet — nothing to prune
+            raise
+        out: list[dict] = []
+        for entry in resp or []:
+            info = {
+                (k.decode() if isinstance(k, bytes) else k): v
+                for k, v in entry.items()
+            }
+            name = info.get("name")
+            out.append({
+                "name": name.decode() if isinstance(name, bytes) else name,
+                "pending": int(info.get("pending") or 0),
+                "idle": int(info.get("idle") or 0),
+            })
+        return out
+
+    async def delete_consumer(self, *, group, stream, consumer):
+        """#660: XGROUP DELCONSUMER — returns the pending count the consumer held (0 for a ghost)."""
+        return await self._client.xgroup_delconsumer(stream, group, consumer)
 
     async def ack(self, *, group, stream, message_ids):
         if message_ids:
@@ -999,8 +1124,9 @@ def build_production_app(
     without those runtime deps installed in the gate venv.
     """
     import redis.asyncio as aioredis
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ..db import build_engine
     from .app import create_app
 
     database_url = database_url or os.getenv(
@@ -1008,7 +1134,7 @@ def build_production_app(
     )
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     # #528: hardened Redis client (see meeting_api/__main__.py) — bounded timeouts + keepalive +
     # health checks so a Redis blip self-heals within socket_timeout instead of hanging the consumer.

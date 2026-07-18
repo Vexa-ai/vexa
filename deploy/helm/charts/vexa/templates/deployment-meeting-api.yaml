@@ -59,6 +59,13 @@ spec:
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: RUNTIME_API_URL
               value: "http://{{ include "vexa.componentName" (list . "runtime") }}:{{ .Values.runtime.service.port }}"
+            - name: MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
+            # Required for calendar sync + capped auto-join: the sweep fetches the per-user
+            # spawn context (max-bots cap + webhook config) from admin-api's internal edge.
+            # Mirrors compose (docker-compose.yml ADMIN_API_URL=http://admin-api:8001).
+            - name: ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:

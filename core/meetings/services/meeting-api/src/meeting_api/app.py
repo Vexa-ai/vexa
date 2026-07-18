@@ -41,22 +41,41 @@ from .lifecycle.machine import LifecycleSink, MeetingStore
 from .obs import TraceMiddleware
 
 
-async def _pipeline_health(app) -> "tuple[dict, bool]":
-    """#527: derive pipeline liveness from the per-loop heartbeats + collector-group lag, and decide
-    whether to DEGRADE. A loop hung inside an await stops stamping, so its tick_age_s climbs past
-    PIPELINE_TICK_STALE_S even while the process and the live-WS path look healthy — exactly the
-    2026-04-26 silent hang. Returns ``({loops, consumer_lag}, degraded)``.
+def _xpending_total(summary) -> "Optional[int]":
+    """Total DELIVERED-but-un-acked count for the group from an XPENDING SUMMARY reply (#636).
+    redis-py returns a dict ``{'pending': N, 'min', 'max', 'consumers'}``; the raw protocol reply is
+    a list ``[N, min, max, consumers]``. Returns the integer total, or None when unrecognizable."""
+    if isinstance(summary, dict):
+        v = summary.get("pending")
+        return int(v) if isinstance(v, int) else None
+    if isinstance(summary, (list, tuple)) and summary:
+        try:
+            return int(summary[0])
+        except (TypeError, ValueError):
+            return None
+    return None
 
-    The probe MUST NOT itself hang (that would defeat the point): the XINFO call is bounded by a 2s
-    wait_for and any failure degrades to ``consumer_lag: "unavailable"`` rather than blocking."""
+
+async def _pipeline_health(app) -> "tuple[dict, bool]":
+    """#527/#636: derive pipeline liveness from the per-loop heartbeats + collector-group lag +
+    pending-entry (PEL) depth, and decide whether to DEGRADE. A loop hung inside an await stops
+    stamping, so its tick_age_s climbs past PIPELINE_TICK_STALE_S even while the process and the
+    live-WS path look healthy — the 2026-04-26 silent hang. A crashed replica's delivered-but-un-acked
+    batch is NOT lag (it was delivered) and NOT a stale heartbeat on the survivor, so #636 surfaces it
+    as ``pending_depth``. Returns ``({loops, consumer_lag, pending_depth}, degraded)``.
+
+    The probe MUST NOT itself hang (that would defeat the point): the XINFO/XPENDING calls are each
+    bounded by a 2s wait_for and any failure degrades that field to ``"unavailable"`` — never blocks."""
     st = app.state
     now = time.monotonic()
     stale_s = getattr(st, "pipeline_tick_stale_s", 120.0)
     lag_alarm = getattr(st, "pipeline_lag_alarm", 500)
+    pending_alarm = getattr(st, "pipeline_pending_alarm", 100)
     loops = {name: round(now - ts, 1) for name, ts in (st.pipeline_ticks or {}).items()}
     degraded = any(age > stale_s for age in loops.values())
 
     lag = None
+    pending_depth = None
     redis = getattr(st, "pipeline_redis", None)
     if redis is not None:
         try:
@@ -69,9 +88,22 @@ async def _pipeline_health(app) -> "tuple[dict, bool]":
                     break
         except Exception:
             lag = "unavailable"  # a dead/absent group is itself a signal, never a hang
+        # #636: PEL depth — a bounded XPENDING SUMMARY. A delivered-but-un-acked orphan is invisible
+        # to lag; a SUSTAINED non-zero total is the orphan signal (steady state acks within a tick).
+        try:
+            summary = await asyncio.wait_for(
+                redis.xpending(st.pipeline_stream, st.pipeline_group), timeout=2.0
+            )
+            pending_depth = _xpending_total(summary)
+            if pending_depth is None:
+                pending_depth = "unavailable"
+        except Exception:
+            pending_depth = "unavailable"  # never block the probe on a pending read
     if isinstance(lag, int) and lag > lag_alarm:
         degraded = True
-    return {"loops": loops, "consumer_lag": lag}, degraded
+    if isinstance(pending_depth, int) and pending_depth > pending_alarm:
+        degraded = True
+    return {"loops": loops, "consumer_lag": lag, "pending_depth": pending_depth}, degraded
 
 
 def create_app(

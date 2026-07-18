@@ -19,6 +19,8 @@ are public.
 |---|---|---|
 | `TRANSCRIPTION_SERVICE_URL` | — | STT service **base URL** (the client appends `/v1/audio/transcriptions`), e.g. `http://<gpu-host>:8083`. Point it at the bundled service you deploy separately (`deploy/transcription`) or a hosted endpoint. Unset → bots join and record but produce no transcript. |
 | `TRANSCRIPTION_SERVICE_TOKEN` | — | STT auth token — must match the `API_TOKEN` of your `deploy/transcription` unit, or a token from `vexa.ai/account`. |
+| `TRANSCRIBE_ENABLED` | `true` | Deployment-level default for a spawn's transcription when `POST /bots` does not say. Set `false` for a deliberately no-STT deployment: bots spawn **capture-only** instead of answering 503. Leaving it **empty means `true`** — only an explicit `false`/`0`/`no`/`off` opts out. |
+| `RECORDING_ENABLED` | `true` | Deployment-level default for a spawn's recording when `POST /bots` does not say. Same empty-means-default rule as above. |
 | `BOT_SPEAKER_MIN_AUDIO_SEC` | `2` | Google Meet minimum audio window before submitting to STT. Lower values reduce first-transcript latency but increase request frequency. |
 | `BOT_SPEAKER_SUBMIT_INTERVAL_SEC` | `2` | Google Meet speaker-stream submission interval. |
 | `BOT_SPEAKER_CONFIRM_THRESHOLD` | `2` | Consecutive matching STT results required to confirm a segment. `1` lowers latency but reduces LocalAgreement protection against corrections. |
@@ -28,6 +30,13 @@ are public.
 The STT service is the **GPU workload, deployed separately** from this stack — see
 [Deployment → Transcription](/deployment#transcription-the-separate-gpu-unit). The main stack
 stays GPU-free and reaches it over the network via the two variables above.
+
+<Warning>
+**Never put a comment on the same line as a value in `.env`.** Write it on its own line above the
+key. Compose tolerates a trailing `# comment`, but `docker run --env-file` (which Vexa Lite uses)
+does **not** strip it — the comment becomes part of the value, so `TERMINAL_PORT=13000  # the UI`
+sets the port to the literal string `13000  # the UI`.
+</Warning>
 
 ## Secrets & identity
 
@@ -45,6 +54,15 @@ stays GPU-free and reaches it over the network via the two variables above.
 |---|---|---|
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `vexa` / `postgres` / `postgres` | Postgres credentials (metadata). |
 | `POSTGRES_HOST_PORT` | `5458` | Host port mapped to Postgres. |
+| `DB_POOL_SIZE` | `5` | SQLAlchemy async-engine `pool_size` — persistent connections **per pod** — read by admin-api and meeting-api and applied to each service's engine. |
+| `DB_MAX_OVERFLOW` | `10` | SQLAlchemy async-engine `max_overflow` — burst connections above `pool_size`, per pod. Ceiling per pod is `pool_size + max_overflow` (default `15`). |
+
+<Note>
+`DB_POOL_SIZE` / `DB_MAX_OVERFLOW` are pure runtime overrides. On managed Postgres with a hard
+`max_connections`, reconcile them with the per-service connection budget in `deploy/db-budget.json`,
+whose accounting is `Σ (replicas × (pool_size + max_overflow)) + reserved ≤ max_connections`.
+The defaults (`5` / `10`) match that budget.
+</Note>
 | `MINIO_ENDPOINT` | `minio:9000` | Object storage endpoint (recordings + workspaces). |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | MinIO credentials. |
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `vexa-access-key` / `vexa-secret-key` | MinIO root credentials. |
@@ -186,7 +204,9 @@ IP → one global bucket shared by all clients (one abuser throttles everyone). 
 | `GUARD_WS_ENABLED` | `false` | Opt-in `/ws` connect guard. In-memory per-process — does **not** share ban/rate state with the Redis-backed HTTP layer, and under `uvicorn --workers N>1` each worker keeps an independent WS ban set. |
 
 <Note>
-With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the WS per-process ceiling above applies to the WS path independently).
+With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the WS per-process ceiling above applies to the WS path independently). The same applies across multiple gateway **replicas** without Redis — each is its own process.
+
+**Safe configurations:** the shipped gateway runs a **single** uvicorn worker, so the default (`GUARD_ENABLE_REDIS=true`, one worker) enforces the limit globally. If you scale to multiple workers **or** replicas, keep `GUARD_ENABLE_REDIS=true` — Redis-backed state is what shares the buckets and bans across processes. `GUARD_ENABLE_REDIS=false` is only safe with a single worker **and** a single replica; if you must run without Redis at higher concurrency, divide `GUARD_RATE_LIMIT_RPM` by the process count to hold the aggregate cap (note this still will not propagate bans).
 </Note>
 
 The guard fails open (`fail_secure=false`): a guard-check bug or a redis outage returns the request to

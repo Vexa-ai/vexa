@@ -6,7 +6,7 @@
 
 **Open-source, self-hosted meeting bot & transcription API.**
 
-A bot joins your Google Meet, Microsoft Teams, and Zoom calls and streams speaker-attributed
+A bot joins your Google Meet, Microsoft Teams, Zoom, and Jitsi calls and streams speaker-attributed
 transcripts in real time through an API *you* host — then feeds sandboxed agents that build a
 Markdown knowledge base your team owns. Self-hosted, Apache-2.0, air-gap-ready.
 
@@ -29,7 +29,7 @@ your meetings become.
 
 No one else has all three:
 
-1. **Vexa is *in* the meeting.** A real bot joins Meet, Teams, and Zoom and streams
+1. **Vexa is *in* the meeting.** A real bot joins Meet, Teams, Zoom, and Jitsi and streams
    speaker-attributed transcripts live. That bot fleet is the genuinely hard part — every
    "chat with your docs" tool starts *after* a transcript exists. Vexa produces it.
 
@@ -336,7 +336,7 @@ Against the tools developers actually weigh for meeting capture:
 |---|:---:|:---:|:---:|
 | Self-hosted / own your data | ✅ | ❌ their cloud | ✅ |
 | Real-time transcript API | ✅ | ✅ | 🟡 build it |
-| Joins **Meet + Teams + Zoom** | ✅ | 🟡 varies | ❌ enormous effort |
+| Joins **Meet + Teams + Zoom + Jitsi** | ✅ | 🟡 varies | ❌ enormous effort |
 | Speaker attribution | ✅ | ✅ | 🟡 build it |
 | Knowledge as files you own | ✅ | ❌ | 🟡 build it |
 | Agents over your workspace | ✅ | ❌ | ❌ |
@@ -368,7 +368,7 @@ Companion** on the axes they structurally can't move:
 | Models | Vendor-hosted, fixed | **Bring your own** — local or hosted LLMs |
 | Commercial model | Rented, per-seat subscription | **Owned** — Apache-2.0, no per-seat tax |
 | Adaptable | Generic; no custom vocabulary; vendor roadmap queue | **Your engineers extend it directly** — domain vocabulary, underserved languages, custom workflows |
-| Meeting platforms | Teams-only / Zoom-only | **Meet + Teams + Zoom** |
+| Meeting platforms | Teams-only / Zoom-only | **Meet + Teams + Zoom + Jitsi** |
 | Data control | Transits the vendor's cloud | **Never leaves your perimeter** |
 | Extensibility | Closed black box | Open source, API-first |
 

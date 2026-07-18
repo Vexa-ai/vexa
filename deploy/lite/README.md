@@ -27,6 +27,25 @@ host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 `TRANSCRIPTION_SERVICE_TOKEN` in the repo-root `.env` for transcripts (get a token at
 `vexa.ai/account`, or self-host the transcription service on a GPU).
 
+### Transcripts with no token and no GPU — `LOCAL_STT=1`
+
+```bash
+make -C deploy/lite up LOCAL_STT=1
+```
+
+Runs a bundled **faster-whisper CPU server on the tiny model** (`vexa-lite-whisper`) on the same
+network and **auto-wires `TRANSCRIPTION_SERVICE_URL`** to it — real transcripts out of the box,
+slower than a GPU but zero setup. This is also how a **witness / human-eval box** always comes up
+with transcription ready. Verify it end-to-end (synthesize speech → transcribe):
+
+```bash
+make -C deploy/lite stt-smoke        # ✓ local STT transcribes (model=whisper-1 → words)
+```
+
+Override the model or image for more accuracy: `WHISPER_MODEL=Systran/faster-whisper-small.en`, or
+a GPU image via `WHISPER_IMAGE=...`. (The client sends `model=whisper-1`, the OpenAI id;
+faster-whisper-server accepts it and serves `WHISPER_MODEL`.)
+
 After it finishes:
 
 - **Terminal:** `http://YOUR_IP:3001` (the agent-domain browser-CLI workbench)
@@ -85,9 +104,13 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 
 | Variable | Default | Description |
 |---|---|---|
-| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key. Unset → bots capture, no transcript |
+| `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key, shared by the bot transcript pipeline and the terminal composer mic (dictation `/api/stt`). Unset → bots capture, no transcript; composer mic returns 503 "not configured" |
 | `ADMIN_TOKEN` | `changeme` | admin API token (the stack's shared admin secret) |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
+
+`make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
+`WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When
+`LOCAL_STT=1`, the bundled server overrides `TRANSCRIPTION_SERVICE_URL` for you.
 
 Agent inference is BYO — point the runtime at your endpoint via `ANTHROPIC_*` / `VEXA_AGENT_MODEL`
 in `.env`; the runtime brokers credentials into spawned workers (nothing leaves the network).

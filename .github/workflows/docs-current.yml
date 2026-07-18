@@ -1,0 +1,36 @@
+# docs-current — D6c enforced. A PR touching a user-facing product surface must make a conscious
+# docs decision: update docs/**, or carry the `docs: none` label. Required status check on main
+# (add to branch protection alongside `gates`). See scripts/docs-current-gate.mjs and ADR-0032.
+name: docs-current
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: docs-current-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-current:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }   # trusted gate code, never the PR head
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: "Docs ride the change (update docs/ or confirm `docs: none`)"
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBERS: ${{ github.event.pull_request.number }}
+          MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          set -o pipefail
+          node scripts/docs-current-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"

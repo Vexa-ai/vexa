@@ -2,6 +2,11 @@
      the OBSERVATION BUNDLE answers "is the value real?"; the DIFF answers "is it correct and safe?".
      A diff with no bundle is not reviewable. -->
 
+> 👋 **Highly recommended (not required): say hi on [Discord](https://discord.gg/Ga9duGkVz9)** and
+> tell us, in a sentence or two, **what** you're changing and **why** — the story behind the diff.
+> It makes reviewing your value bundle faster and connects you to the reporter and the maintainers.
+> Your PR is judged on its evidence, not on whether you show up — but showing up helps a lot.
+
 **Delivers issue:** #
 
 ## Observation bundle (the record of your harnessed loop)
