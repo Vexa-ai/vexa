@@ -144,6 +144,12 @@ export interface ChunkedTranscriberCallbacks {
    *  degrades gracefully, but the host gets the fault to make it observable instead of
    *  a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
   onError?: (fault: unknown) => void;
+  /** Instantaneous per-hint outcome (the hint-hop instrument): 'matched' when the
+   *  hint names/claims a turn at the moment it arrives (or re-asserts the open
+   *  turn's already-resolved name); 'missed' when no turn overlaps it yet. A
+   *  'missed' hint is still recorded in the binder and may window-match a later
+   *  commit — this reports the hop's immediate fate, not the final binding. */
+  onHintOutcome?: (o: { name: string; kind: HintKind; tMs: number; outcome: 'matched' | 'missed' }) => void;
 }
 
 interface RingFrame { pcm: Float32Array; tMs: number }
@@ -322,6 +328,13 @@ export class ChunkedTranscriber {
   recordHint(name: string, kind: HintKind, tMs: number, isEnd = false): void {
     this.binder.recordHint({ name, tMs, kind, isEnd });
     if (!name) return;
+    // Hint-hop instrument: did this hint find a turn RIGHT NOW? Emitted once per
+    // start-hint at every exit below (end-hints close windows, they don't bind).
+    let matchedNow = false;
+    const report = (): void => {
+      if (isEnd || !this.cb.onHintOutcome) return;
+      this.cb.onHintOutcome({ name, kind, tMs, outcome: matchedNow ? 'matched' : 'missed' });
+    };
     // Faster attribution of an UNATTRIBUTED open turn: a just-arrived hint may now
     // name it — resolve immediately so its pending repaints under the right speaker
     // instead of showing seg_N until the next tick. STICKY: only while unattributed
@@ -331,7 +344,8 @@ export class ChunkedTranscriber {
     if (this.turn && !this.turn.resolvedName && (this.turn.pendingTail.length > 0 || this.turn.allConfirmed.length > 0)) {
       this.resolveName(this.turn);
     }
-    if (this.unresolved.length === 0) return;
+    if (this.turn?.resolvedName === name) matchedNow = true;   // named (now or already) the open turn
+    if (this.unresolved.length === 0) { report(); return; }
     // Two passes for turns that committed before their hint arrived:
     //  1. window-match — a hint whose lag-shifted window overlaps the turn names it
     //     (re-resolve casts the vote → onClusterRename repaints). Preferred.
@@ -344,11 +358,12 @@ export class ChunkedTranscriber {
     for (const u of this.unresolved) {
       const blocked = u.blockedNames ?? new Set<string>();
       const m = this.binder.matchWindow({ clusterId: u.clusterId, tStartMs: u.t0, tEndMs: u.t1 });
-      if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); continue; }   // window-matched → repaint, drop
-      if (u.t1 >= claimFrom && !blocked.has(name)) this.claimTurn(u.clusterId, name);      // late-box gap → claim for this speaker
+      if (m && !blocked.has(m.name)) { this.claimTurn(u.clusterId, m.name); matchedNow = true; continue; }   // window-matched → repaint, drop
+      if (u.t1 >= claimFrom && !blocked.has(name)) { this.claimTurn(u.clusterId, name); matchedNow = true; } // late-box gap → claim for this speaker
       else still.push(u);
     }
     this.unresolved = still.slice(-MAX_UNRESOLVED);
+    report();
   }
 
   /** Late-box claim: repaint a provisional turn's published segments under `name`
