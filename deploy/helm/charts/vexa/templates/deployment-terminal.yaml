@@ -121,4 +121,7 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.terminal "terminal")) }}
+      {{- . | nindent 6 }}
+      {{- end }}
 {{- end }}

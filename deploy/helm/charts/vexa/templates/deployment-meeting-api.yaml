@@ -134,4 +134,7 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with (include "vexa.topologySpreadConstraints" (list . .Values.meetingApi "meeting-api")) }}
+      {{- . | nindent 6 }}
+      {{- end }}
 {{- end }}

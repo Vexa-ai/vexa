@@ -19,6 +19,19 @@ global:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Pod topology spread — applied to EVERY component Deployment (gateway, admin-api, meeting-api,
+  # runtime, agent-api, terminal). Empty by default → nothing rendered (single-node / k3s installs
+  # keep working unchanged). Each constraint you add here is stamped onto every component; when a
+  # constraint omits `labelSelector`, the chart injects THAT component's own pod selector
+  # (name + instance + component), so the constraint means "spread this component's replicas". A
+  # per-component `<component>.topologySpreadConstraints` overrides this global default for that one
+  # component. Use ScheduleAnyway (not DoNotSchedule) so a full/small cluster still schedules.
+  # Example — spread each component's replicas one-per-node, best-effort:
+  #   topologySpreadConstraints:
+  #     - maxSkew: 1
+  #       topologyKey: kubernetes.io/hostname
+  #       whenUnsatisfiable: ScheduleAnyway
+  topologySpreadConstraints: []
   podSecurityContext: {}
   # Hardened defaults: block privilege escalation, drop all caps. Images run non-root via their
   # Dockerfile USER. Override per-component only if a workload genuinely needs a cap back.
@@ -116,6 +129,12 @@ gateway:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 512Mi }
   extraEnv: []
+  # Per-component override of global.topologySpreadConstraints (same shape). Omit `labelSelector`
+  # and the gateway's own pod selector is injected — spread gateway replicas across nodes:
+  #   topologySpreadConstraints:
+  #     - maxSkew: 1
+  #       topologyKey: kubernetes.io/hostname
+  #       whenUnsatisfiable: ScheduleAnyway
 
 # Identity / tokens (compose: admin-api → :8001).
 adminApi:
@@ -164,6 +183,9 @@ meetingApi:
     requests: { cpu: 200m, memory: 512Mi }
     limits:   { cpu: 1000m, memory: 1Gi }
   extraEnv: []
+  # Per-component override of global.topologySpreadConstraints (same shape). Omit `labelSelector`
+  # and the meeting-api's own pod selector is injected. See global.topologySpreadConstraints.
+  # topologySpreadConstraints: []
 
 # Runtime kernel — spawns bot + agent-worker workloads (compose: runtime → :8090).
 runtime:
@@ -195,6 +217,11 @@ runtime:
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }
+  # Per-component override of global.topologySpreadConstraints (same shape). Applies to the runtime
+  # Deployment's OWN pods (not the bot/agent Pods it spawns — those carry runtime.tolerations/
+  # nodeSelector via the RUNTIME_K8S_* env below). Omit `labelSelector` and the runtime's own pod
+  # selector is injected. See global.topologySpreadConstraints.
+  # topologySpreadConstraints: []
   # Scheduling for the Pods the runtime SPAWNS (backend=k8s). A `kubectl run` bot/agent Pod is NOT a
   # child of the runtime Deployment, so it does NOT inherit global.nodeSelector/global.tolerations —
   # on an all-tainted pool (dedicated / spot / GPU node pools) every spawn strands Pending and the
