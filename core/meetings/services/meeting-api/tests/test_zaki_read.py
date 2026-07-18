@@ -547,6 +547,44 @@ def test_summary_variant_respects_the_stored_summary_retention_scope():
     assert response.json()["error"]["code"] == "unknown_item"
 
 
+def test_denied_full_transcript_does_not_materialize_sensitive_segments():
+    store = _store()
+    store._meetings[41]["data"]["zaki_retention"]["scope_expiries"]["transcript"] = (
+        "2026-07-17T11:59:59+00:00"
+    )
+
+    async def reject_transcript_read(*_args, **_kwargs):
+        raise AssertionError("retention must be authorized before transcript segments are loaded")
+
+    store.get_transcript_by_id = reject_transcript_read
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/transcript:41",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "unknown_item"
+
+
+@pytest.mark.parametrize("item_id", ["meeting:41", "summary:41"])
+def test_metadata_backed_items_do_not_materialize_transcript_segments(item_id: str):
+    store = _store()
+
+    async def reject_transcript_read(*_args, **_kwargs):
+        raise AssertionError("metadata-backed items must not load transcript segments")
+
+    store.get_transcript_by_id = reject_transcript_read
+
+    response = _client(store).get(
+        f"/api/zaki/read/v1/{USER_ID}/item/{item_id}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    _contract_validator("ItemResponse").validate(response.json())
+
+
 def test_turn_schema_bound_is_distinct_from_aggregate_content_cap():
     invalid_store = _store()
     invalid_store._meetings[41]["segments"]["turn-1"]["text"] = "x" * 65_537

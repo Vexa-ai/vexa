@@ -284,11 +284,6 @@ async def _item_from_store(
     )
     if meeting is None:
         return None
-    transcript = None
-    if kind != "transcript" or variant != "summary":
-        transcript = await store.get_transcript_by_id(user_id, row_id)
-        if transcript is None:
-            return None
     data = meeting.get("data") if isinstance(meeting.get("data"), dict) else {}
     notice = _capture_notice(data, now)
     occurred_at = meeting.get("start_time") or meeting.get("created_at")
@@ -300,6 +295,8 @@ async def _item_from_store(
         or occurred_time > now
         or _parse_time(updated_at) is None
     ):
+        return None
+    if kind == "transcript" and _retention(data, "transcript", now) is None:
         return None
     meeting_id = f"meeting:{row_id}"
     base = {
@@ -342,6 +339,7 @@ async def _item_from_store(
                 return None
             content = {"format": "summary", "text": summary[0]}
         else:
+            transcript = await store.get_transcript_by_id(user_id, row_id)
             if transcript is None:
                 return None
             turns = _turns(transcript)
