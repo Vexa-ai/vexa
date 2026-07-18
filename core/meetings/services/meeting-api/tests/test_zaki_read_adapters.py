@@ -68,7 +68,12 @@ async def test_postgres_read_metadata_projection_is_owner_scoped_and_body_free()
     assert session.params == {"user_id": 7}
     assert "WHERE m.user_id = :user_id" in session.sql
     assert "FROM transcriptions t" in session.sql
-    assert "char_length(btrim(t.text)) BETWEEN 1 AND 65536" in session.sql
+    assert "t.text ~ '[^[:space:]]'" in session.sql
+    assert "char_length(t.text) <= 65536" in session.sql
+    assert "(attendee #>> '{}') !~ '[^[:space:]]'" in session.sql
+    assert "(m.data->>'summary') ~ '[^[:space:]]'" in session.sql
+    assert "jsonb_typeof(m.data->'title') = 'string'" in session.sql
+    assert "jsonb_typeof(m.data->'name') = 'string'" in session.sql
     assert "platform_specific_id" not in session.sql
     assert "m.data," not in session.sql
     assert rows == [{

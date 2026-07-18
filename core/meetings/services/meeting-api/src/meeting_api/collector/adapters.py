@@ -430,8 +430,14 @@ class SqlAlchemyTranscriptStore:
                 m.status,
                 m.start_time,
                 m.end_time,
-                m.data->>'title' AS title,
-                m.data->>'name' AS name,
+                CASE
+                    WHEN jsonb_typeof(m.data->'title') = 'string'
+                    THEN m.data->>'title'
+                END AS title,
+                CASE
+                    WHEN jsonb_typeof(m.data->'name') = 'string'
+                    THEN m.data->>'name'
+                END AS name,
                 CASE
                     WHEN jsonb_typeof(m.data->'zaki_capture') = 'object'
                     THEN jsonb_build_object(
@@ -470,13 +476,16 @@ class SqlAlchemyTranscriptStore:
                             SELECT 1
                             FROM jsonb_array_elements(m.data->'attendees') AS attendee
                             WHERE jsonb_typeof(attendee) <> 'string'
-                               OR btrim(attendee #>> '{}') = ''
+                               OR (attendee #>> '{}') !~ '[^[:space:]]'
                         )
                 END AS meeting_available,
                 COALESCE((
                     SELECT
                         count(*) BETWEEN 1 AND 4096
-                        AND bool_and(char_length(btrim(t.text)) BETWEEN 1 AND 65536)
+                        AND bool_and(
+                            t.text ~ '[^[:space:]]'
+                            AND char_length(t.text) <= 65536
+                        )
                         AND bool_and(t.end_time >= t.start_time)
                         AND bool_and(t.speaker IS NULL OR char_length(t.speaker) <= 200)
                     FROM transcriptions t
@@ -485,12 +494,12 @@ class SqlAlchemyTranscriptStore:
                 (
                     (
                         jsonb_typeof(m.data->'summary') = 'string'
-                        AND btrim(m.data->>'summary') <> ''
+                        AND (m.data->>'summary') ~ '[^[:space:]]'
                     )
                     OR (
                         jsonb_typeof(m.data->'summary') = 'object'
                         AND jsonb_typeof(m.data->'summary'->'text') = 'string'
-                        AND btrim(m.data->'summary'->>'text') <> ''
+                        AND (m.data->'summary'->>'text') ~ '[^[:space:]]'
                     )
                     OR EXISTS (
                         SELECT 1
@@ -502,16 +511,16 @@ class SqlAlchemyTranscriptStore:
                             END
                         ) AS candidate
                         WHERE jsonb_typeof(candidate->'text') = 'string'
-                          AND btrim(candidate->>'text') <> ''
+                          AND (candidate->>'text') ~ '[^[:space:]]'
                     )
                 ) AS summary_available,
                 CASE
                     WHEN jsonb_typeof(m.data->'summary') = 'string'
-                         AND btrim(m.data->>'summary') <> ''
+                         AND (m.data->>'summary') ~ '[^[:space:]]'
                     THEN m.updated_at::text
                     WHEN jsonb_typeof(m.data->'summary') = 'object'
                          AND jsonb_typeof(m.data->'summary'->'text') = 'string'
-                         AND btrim(m.data->'summary'->>'text') <> ''
+                         AND (m.data->'summary'->>'text') ~ '[^[:space:]]'
                     THEN COALESCE(m.data->'summary'->>'updated_at', m.updated_at::text)
                     ELSE COALESCE((
                         SELECT candidate->>'updated_at'
@@ -523,7 +532,7 @@ class SqlAlchemyTranscriptStore:
                             END
                         ) AS candidate
                         WHERE jsonb_typeof(candidate->'text') = 'string'
-                          AND btrim(candidate->>'text') <> ''
+                          AND (candidate->>'text') ~ '[^[:space:]]'
                         LIMIT 1
                     ), m.updated_at::text)
                 END AS summary_updated_at
