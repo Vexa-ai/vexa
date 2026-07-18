@@ -142,3 +142,14 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 | Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
 | Agent ↔ gateway | the agent control plane is reached directly on `:8100` (gateway-fronting is roadmap) |
+
+## Smoke probe — "is this install actually working?"
+
+```bash
+make probe SURFACE=lite          # from the repo root, against a running `make lite`
+```
+
+The full-journey smoke (spawn → schedule → boot → join → transcribe → live-view → stop + a
+one-shot log sweep of the container and every bot workload log), driven through the published
+gateway. Lite runs the real bot, so the dead-URL journey's truthful terminal is a NAMED
+failure — never a fake green. See `deploy/lite/probe.sh`.
