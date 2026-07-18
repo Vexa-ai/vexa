@@ -13,6 +13,7 @@
  *  including the two field-tested traps (public-vs-secret address, Workspace-admin lock), and
  *  answers immediately on connect — sync-now runs and reports what it found. */
 import { useEffect, useState, type CSSProperties } from "react";
+import { defaultBotName } from "./defaultBotName";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
@@ -147,7 +148,7 @@ function DropBotInline() {
       const r = await fetch("/api/bots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: parsed.platform, native_meeting_id: parsed.native_meeting_id, meeting_url: u, bot_name: "Vexa" }),
+        body: JSON.stringify({ platform: parsed.platform, native_meeting_id: parsed.native_meeting_id, meeting_url: u, bot_name: defaultBotName() }),
       });
       if (r.ok) {
         setSent("ok"); setUrl("");

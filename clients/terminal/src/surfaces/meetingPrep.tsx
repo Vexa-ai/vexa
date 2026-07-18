@@ -23,6 +23,7 @@ import { createPlannedMeeting, updatePlannedMeeting, deletePlannedMeeting } from
 import { createSharedWorkspace, listSharedMemberships, listWorkspaceTree, mintInvite, readWorkspaceFile, type Membership } from "./workspaceApi";
 import { findBriefNote, isExampleNote } from "./briefNote";
 import { manageTabDescriptor } from "./workspaceManage";
+import { defaultBotName } from "./defaultBotName";
 import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 const field = {
@@ -239,7 +240,7 @@ function MeetingPrepTab({ params }: TabProps) {
       const platformSlug = m.platform === "Google Meet" ? "google_meet" : m.platform.toLowerCase().replace(/\s+/g, "_");
       const r = await fetch("/api/bots", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: platformSlug, native_meeting_id: m.native_id, ...(m.meeting_url ? { meeting_url: m.meeting_url } : {}), bot_name: "Vexa" }),
+        body: JSON.stringify({ platform: platformSlug, native_meeting_id: m.native_id, ...(m.meeting_url ? { meeting_url: m.meeting_url } : {}), bot_name: defaultBotName() }),
       });
       if (!r.ok) throw new Error((await r.text().catch(() => "")).slice(0, 180) || `${r.status}`);
       refreshMeetings();
