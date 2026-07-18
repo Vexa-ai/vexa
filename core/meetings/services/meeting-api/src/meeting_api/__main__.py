@@ -347,7 +347,7 @@ def _attach_background_loops(
     async def _webhook_drain_loop() -> None:
         import httpx
 
-        from .webhooks.retry import SYSTEM_RETRY_QUEUE_KEY, drain_retry_queue
+        from .webhooks.retry import SYSTEM_PROCESSING_KEY, SYSTEM_RETRY_QUEUE_KEY, drain_retry_queue
         from .webhooks.ssrf import build_pinned_transport
 
         # The injected Transport: POST the signed envelope; return the response (its .status_code
@@ -375,7 +375,11 @@ def _attach_background_loops(
             except Exception:
                 log.exception("webhook retry-drain tick failed")
             try:
-                await drain_retry_queue(redis_client, _plain_transport, key=SYSTEM_RETRY_QUEUE_KEY)
+                await drain_retry_queue(
+                    redis_client, _plain_transport,
+                    key=SYSTEM_RETRY_QUEUE_KEY,
+                    processing_key=SYSTEM_PROCESSING_KEY,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
