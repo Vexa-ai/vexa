@@ -49,6 +49,13 @@ sets the port to the literal string `13000  # the UI`.
 | `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
 
+## Bot participant name
+
+The terminal client uses `NEXT_PUBLIC_DEFAULT_BOT_NAME` at build time and falls back to
+`Vexa`. The meeting-api uses `DEFAULT_BOT_NAME` for raw `POST /bots` callers and falls back to
+`VexaBot-{random}`. Direct `joinMeeting` callers use the same variable and fall back to
+`Vexa Join Layer`. An explicit `bot_name` in the request takes precedence over these defaults.
+
 ## Database & storage
 
 | Variable | Default | Purpose |
@@ -119,6 +126,7 @@ stack still boots.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `DEFAULT_BOT_NAME` | — | Bot participant name used when the caller omits `bot_name` in `POST /bots`. Falls back to `VexaBot-{random}` if unset. |
 | `AUTO_JOIN_SWEEP_INTERVAL_S` | `30` | How often scheduled meetings are checked for a due start. |
 | `AUTO_JOIN_LEAD_S` | `60` | The bot is sent this many seconds *before* the scheduled time. |
 | `AUTO_JOIN_GRACE_S` | `600` | A meeting whose start passed longer ago than this is skipped — never joined hours late. |

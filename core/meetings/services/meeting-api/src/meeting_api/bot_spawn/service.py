@@ -329,7 +329,7 @@ async def request_bot(
         meeting_id=meeting_id,
         platform=platform,
         meeting_url=constructed_url,
-        bot_name=bot_name or f"VexaBot-{uuid.uuid4().hex[:6]}",
+        bot_name=bot_name or (os.getenv("DEFAULT_BOT_NAME") or f"VexaBot-{uuid.uuid4().hex[:6]}"),
         passcode=passcode,
         token=token,
         native_meeting_id=native_meeting_id,

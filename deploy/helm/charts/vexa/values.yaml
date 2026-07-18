@@ -176,6 +176,7 @@ meetingApi:
   service:
     type: ClusterIP
     port: 8080
+  defaultBotName: ""        # server-side fallback when POST /bots omits bot_name
   transcriptionServiceUrl: ""   # STT endpoint the spawned bot transcribes against (empty ⇒ capture only)
   # Authenticated-bot mode (deployment-scoped; docs: /authenticated-bots): botAuthenticated "true"
   # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
