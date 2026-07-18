@@ -53,7 +53,8 @@ sets the port to the literal string `13000  # the UI`.
 
 The terminal client uses `NEXT_PUBLIC_DEFAULT_BOT_NAME` at build time and falls back to
 `Vexa`. The meeting-api uses `DEFAULT_BOT_NAME` for raw `POST /bots` callers and falls back to
-`VexaBot-{random}`. An explicit `bot_name` in the request takes precedence over both defaults.
+`VexaBot-{random}`. Direct `joinMeeting` callers use the same variable and fall back to
+`Vexa Join Layer`. An explicit `bot_name` in the request takes precedence over these defaults.
 
 ## Database & storage
 

@@ -4,7 +4,7 @@
  * Run: npx tsx core/meetings/modules/join/src/__tests__/defaultBotName.test.ts
  */
 
-import { defaultBotName } from '../index';
+import { defaultBotName, joinMeeting } from '../index';
 
 let passed = 0;
 let failed = 0;
@@ -57,5 +57,36 @@ function withCleanup(): () => void {
   restore();
 }
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+async function verifyJoinMeetingWiring(): Promise<void> {
+  const restore = withCleanup();
+  process.env.DEFAULT_BOT_NAME = 'Wired Name';
+  const visited: string[] = [];
+  const page: any = {
+    on: () => {},
+    goto: async (url: string) => { visited.push(url); },
+    waitForTimeout: async () => {},
+    evaluate: async () => 'joined',
+  };
+
+  await joinMeeting(page, {
+    meetingUrl: 'https://meet.jit.si/wiring-test',
+    platform: 'jitsi',
+  });
+
+  assert(
+    'joinMeeting passes the call-time default to the join flow',
+    visited[0]?.includes('%22Wired%20Name%22') === true,
+    true,
+  );
+  restore();
+}
+
+verifyJoinMeetingWiring()
+  .then(() => {
+    console.log(`\n${passed} passed, ${failed} failed`);
+    if (failed > 0) process.exit(1);
+  })
+  .catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
