@@ -28,7 +28,10 @@ Selector validity is **per execution context**, not per engine: Playwright engin
 `page.evaluate` runs through `document.querySelector` and must be **plain CSS**. Declare
 browser-context arrays in `browserContextSelectorArrays` (per-platform `selectors.ts`) so
 `src/shared/selector-validity.test.ts` CSS-parses them; text-labelled buttons are
-`{ text: … }` matcher fields, matched in-page against `textContent`.
+`{ text: … }` matcher fields, matched in-page against `textContent`. The one canonical
+in-page leave clicker (`src/shared/leave-click.ts`, `leaveBrowserClick`) is shared across
+platforms — Google Meet and MS Teams both serialize it through `page.evaluate` — so the
+walker cannot drift between the injected hook and the direct leave.
 
 ## Prove it
 - `pnpm --filter @vexa/join build` · `pnpm --filter @vexa/join test` (L1/L2 admission oracle — DOM fixtures, no browser)

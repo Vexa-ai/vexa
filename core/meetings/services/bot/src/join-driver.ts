@@ -95,7 +95,7 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
       // Bug 2 — cancel a PENDING join from the waiting room / pre-join screen. Two-step, both
       // best-effort:
       //  1. Click the platform's cancel/leave affordance. The stateless leave-click helpers already
-      //     include the waiting-room selectors: Teams' teamsLeaveSelectors carry the "Cancel" buttons
+      //     include the waiting-room selectors: Teams' teamsLeaveButtonMatchers carry the "Cancel" buttons
       //     "(for awaiting admission/waiting room)", and googleLeaveButtonMatchers include Cancel/Close. On
       //     Zoom the web client shows no reliable pre-admit cancel, so step 2 is the withdraw there.
       //  2. GUARANTEED DROP: close the page. Google Meet's lobby often exposes no clickable Cancel
