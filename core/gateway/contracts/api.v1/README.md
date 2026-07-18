@@ -54,6 +54,16 @@ A **deliberate** main API bump → re-capture `api.schema.json` + `pnpm seal:con
 `lane:contract` human-reviewed PR (a breaking change opens `api.v2`, leaving v1 until no
 consumer pins it). The frozen bytes are the spec; never edit them to match an implementation.
 
+One deliberate spec-bug correction has been applied to the captured bytes (#62 → #531): the
+1.5.0 capture referenced an undefined `APIKeyHeader` security scheme on all 61 secured
+operations — invalid OpenAPI, so Swagger UI could not attach the key and generated clients
+never sent it. The per-operation `security` references were repointed to the document's own
+defined schemes (`ApiKeyAuth` for client ops, `AdminApiKeyAuth` for the `/admin/{path}` ops —
+the headers the runtime already honors); no other bytes changed, and the seal was re-issued on
+a `lane:contract` review per the policy above. This was not an implementation-appeasing edit:
+the document was internally invalid, and `validate.mjs` now pins referential integrity
+(referenced ⊆ defined) so a re-capture can never re-import the bug.
+
 ## What "sealed" enforces — and what it does not (#591)
 
 The seal in `contracts.seal.json` freezes the **bytes** of `api.schema.json` — it guarantees the

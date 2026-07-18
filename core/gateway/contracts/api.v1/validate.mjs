@@ -37,7 +37,30 @@ const CORE = [
 ];
 for (const [p, m] of CORE) check(`${m.toUpperCase()} ${p}`, !!oas.paths?.[p]?.[m]);
 
-// ── 3) GOLDENS — example messages conform to the frozen component schemas ─────
+// ── 3) SECURITY — every referenced scheme resolves to components.securitySchemes ──
+{
+  const defined = new Set(Object.keys(oas.components?.securitySchemes ?? {}));
+  const dangling = [];
+  let refs = 0;
+  const scan = (reqs, where) => {
+    for (const req of reqs ?? []) for (const scheme of Object.keys(req)) {
+      refs++;
+      if (!defined.has(scheme)) dangling.push(`${where} -> ${scheme}`);
+    }
+  };
+  scan(oas.security, "(top-level)");
+  for (const [p, item] of Object.entries(oas.paths ?? {}))
+    for (const [m, op] of Object.entries(item ?? {}))
+      if (op && typeof op === "object") scan(op.security, `${m.toUpperCase()} ${p}`);
+  const first = dangling.slice(0, 5).join(", ");
+  check(
+    `security refs resolve (${refs} ref(s), defined: [${[...defined].join(", ")}])` +
+    (dangling.length ? ` — ${dangling.length} dangling: ${first}${dangling.length > 5 ? ", …" : ""}` : ""),
+    dangling.length === 0,
+  );
+}
+
+// ── 4) GOLDENS — example messages conform to the frozen component schemas ─────
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 addFormats(ajv);
 const BASE = "https://vexa.ai/contracts/api.v1";
