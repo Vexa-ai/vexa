@@ -286,7 +286,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, isTeams, botName }) => {
+  await page.evaluate(async ({ isMixed, isJitsi, isTeams, isZoom, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -354,6 +354,26 @@ export async function startCaptureBridge(
           });
         }
       }
+      if (isZoom) {
+        // Zoom contributes the WHO signal the mixed audio can't carry: the active-speaker
+        // DOM watcher (poll + flicker debounce lives in @vexa/zoom-capture) emits name
+        // transitions → __vexaSpeakerHint → pipeline.recordHint, which labels them
+        // 'dom-active' (Zoom's true kind — the mixed lane's DOM-active lag model).
+        // Timestamps are page Date.now() = epoch ms, the same clock Node stamps with.
+        if (w.VexaBrowserUtils?.createZoomSpeakers && !w.__vexaZoomSpeakers) {
+          let lastActive: string | null = null;
+          w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
+            selfName: botName,
+            log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
+            onSpeakerChange: (name: string | null) => {
+              const tMs = Date.now();
+              if (name) w.__vexaSpeakerHint?.(name, tMs, false);           // start / heartbeat re-assert
+              else if (lastActive) w.__vexaSpeakerHint?.(lastActive, tMs, true); // nobody lit → close the turn
+              lastActive = name;
+            },
+          });
+        }
+      }
       return;
     }
     // gmeet lane: per-channel capture + glow attribution (the SAME module the extension runs).
@@ -373,7 +393,7 @@ export async function startCaptureBridge(
       });
       await w.__vexaGmeetCapture.start();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', isZoom: inv.platform === 'zoom', botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 
@@ -386,6 +406,7 @@ export async function startCaptureBridge(
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
+      try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
       try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }
       try { w.__vexaMixCtx?.close?.(); } catch { /* best-effort */ }
