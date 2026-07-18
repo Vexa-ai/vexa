@@ -25,10 +25,13 @@ X() { docker exec "$APP" "$@"; }
 if [ -z "${VEXA_API_KEY:-}" ]; then
   # admin-api port moved between images (8057 → 8001) — autodetect, don't assume.
   ADMIN_PORT=""
-  for p in 8001 8057; do
-    code="$(X curl -s -m 3 -o /dev/null -w '%{http_code}' "http://localhost:$p/admin/users" \
-            -H "X-Admin-API-Key: $ADMIN_TOKEN" 2>/dev/null || true)"
-    case "$code" in 2*|4*) ADMIN_PORT="$p"; break;; esac
+  for attempt in $(seq 1 24); do
+    for p in 8001 8057; do
+      code="$(X curl -s -m 3 -o /dev/null -w '%{http_code}' "http://localhost:$p/admin/users" \
+              -H "X-Admin-API-Key: $ADMIN_TOKEN" 2>/dev/null || true)"
+      case "$code" in 2*|4*) ADMIN_PORT="$p"; break 2;; esac
+    done
+    sleep 5   # admin-api is internal — no front-door probe waits for it, so this one must
   done
   [ -n "$ADMIN_PORT" ] || { echo "probe: admin-api not reachable on 8001/8057 inside $APP" >&2; exit 1; }
   ADMIN="http://localhost:$ADMIN_PORT"
